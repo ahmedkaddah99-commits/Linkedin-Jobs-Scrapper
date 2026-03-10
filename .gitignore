@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+bc_automation
+
+# Ignore the entire folder
+generated_docs/*
+# But do not ignore the assets folder inside it
+!generated_docs/_assets/
+
+working-file.xlsx
+
