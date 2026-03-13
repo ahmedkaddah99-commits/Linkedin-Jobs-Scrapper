@@ -4,14 +4,35 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
+DEFAULT_USER_CONFIG_DIR = "user_config"
+DEFAULT_CONFIG_FILE_NAME = "job_seeker_config.json"
+DEFAULT_CONFIG_PATH = Path(DEFAULT_USER_CONFIG_DIR) / DEFAULT_CONFIG_FILE_NAME
+LEGACY_CONFIG_PATH = Path(DEFAULT_CONFIG_FILE_NAME)
+DEFAULT_ENV_PATH = Path(DEFAULT_USER_CONFIG_DIR) / ".env"
+LEGACY_ENV_PATH = Path(".env")
+
 
 DEFAULT_JOB_SEEKER_CONFIG = {
     "candidate": {
         "name": "Kaddah Ahmed",
         "email": "ahmed.kaddah@tutamail.com",
-        "cv_path": "cv_master.txt",
+        "cv_path": "user_config/cv_master.txt",
         "cv_docx_path": "Ahmed Kaddah CV.docx",
         "profile_image_path": "",
+        "profile_links": {
+            "linkedin": {
+                "url": "",
+                "text": "",
+                "icon": "in",
+                "logo_path": "",
+            },
+            "github": {
+                "url": "",
+                "text": "",
+                "icon": "GH",
+                "logo_path": "",
+            },
+        },
         "cv_font": "Calibri",
         "languages": [
             "Arabic - Native",
@@ -70,9 +91,10 @@ DEFAULT_JOB_SEEKER_CONFIG = {
             "input_json": "highly_curated_jobs.json",
             "output_json": "stage2_filtered_local.json",
             "rejected_output_json": "stage2_rejected_local.json",
-            "german_special_char_threshold": 20,
+            "german_special_char_threshold": 9999,
             "french_special_char_threshold": 0,
             "spanish_special_char_threshold": 0,
+            "max_german_level": "B2",
         },
         "stage3": {
             "input_json": "stage2_filtered_local.json",
@@ -83,9 +105,10 @@ DEFAULT_JOB_SEEKER_CONFIG = {
             "sleep_seconds": 3.0,
             "retries": 3,
             "retry_sleep_seconds": 3.0,
-            "german_special_char_threshold": 20,
+            "german_special_char_threshold": 9999,
             "french_special_char_threshold": 0,
             "spanish_special_char_threshold": 0,
+            "max_german_level": "B2",
             "force_reprocess": False,
         },
         "stage4": {
@@ -119,8 +142,8 @@ DEFAULT_JOB_SEEKER_CONFIG = {
                 "Evaluate every job in the list.\n\n"
                 "Rules:\n"
                 "- APPROVE a job ONLY IF:\n"
-                "  1) The title is written in English\n"
-                "  2) The title is relevant to my CV (Business Transformation, AI, Project/Product Management, Consulting, Data/Business Analysis)\n\n"
+                "  1) The title is relevant to my CV (Business Transformation, AI, Project/Product Management, Consulting, Data/Business Analysis)\n"
+                "  2) The title can be English or German\n\n"
                 "OUTPUT FORMAT (IMPORTANT):\n"
                 "Return ONLY raw JSON (no markdown, no extra text), shaped EXACTLY like this:\n\n"
                 "{\n"
@@ -128,7 +151,7 @@ DEFAULT_JOB_SEEKER_CONFIG = {
                 "  \"excluded\": [\n"
                 "    {\n"
                 "      \"id\": \"789\",\n"
-                "      \"reason\": \"German title\"\n"
+                "      \"reason\": \"Not relevant\"\n"
                 "    },\n"
                 "    {\n"
                 "      \"id\": \"1011\",\n"
@@ -136,7 +159,7 @@ DEFAULT_JOB_SEEKER_CONFIG = {
                 "    },\n"
                 "    {\n"
                 "      \"id\": \"1213\",\n"
-                "      \"reason\": \"German title + Not relevant\"\n"
+                "      \"reason\": \"Not relevant\"\n"
                 "    }\n"
                 "  ]\n"
                 "}\n"
@@ -150,7 +173,7 @@ DEFAULT_JOB_SEEKER_CONFIG = {
                 "{{JOBS_JSON}}\n\n"
                 "Evaluate every job and reject when any of these are true:\n"
                 "1) Role is not suitable for this candidate profile. Reject clearly unrelated functions (HR, accounting, recruitment, sales) and highly specialized senior jobs not aligned with candidate experience.\n"
-                "2) Posting is not in English\n\n"
+                "2) Job explicitly requires German above B2 (e.g., C1/C2, fluent/native, verhandlungssicher).\n\n"
                 "Output requirements:\n"
                 "- Return only raw JSON\n"
                 "- Do not return markdown\n"
@@ -159,7 +182,7 @@ DEFAULT_JOB_SEEKER_CONFIG = {
                 "  \"approved_ids\": [\"123\", \"456\"],\n"
                 "  \"excluded\": [\n"
                 "    {\"id\": \"789\", \"reason\": \"Not suitable for profile\"},\n"
-                "    {\"id\": \"1000\", \"reason\": \"Not suitable for profile\"}\n"
+                "    {\"id\": \"1000\", \"reason\": \"German requirement above B2\"}\n"
                 "  ]\n"
                 "}\n"
             ),
@@ -191,7 +214,11 @@ def _resolve_config_path(path_override: str = "") -> Path:
     env_path = os.getenv("JOB_SEEKER_CONFIG_PATH", "").strip()
     if env_path:
         return Path(env_path)
-    return Path("")
+    if DEFAULT_CONFIG_PATH.exists():
+        return DEFAULT_CONFIG_PATH
+    if LEGACY_CONFIG_PATH.exists():
+        return LEGACY_CONFIG_PATH
+    return DEFAULT_CONFIG_PATH
 
 
 def _deep_merge(base: Any, override: Any):
@@ -210,7 +237,7 @@ def load_job_seeker_config(path_override: str = "") -> dict:
     config_path = _resolve_config_path(path_override=path_override)
     base = copy.deepcopy(DEFAULT_JOB_SEEKER_CONFIG)
 
-    if config_path and str(config_path).strip() and config_path.exists():
+    if config_path and str(config_path).strip() and config_path.exists() and config_path.is_file():
         try:
             loaded = json.loads(config_path.read_text(encoding="utf-8"))
         except Exception:
@@ -219,6 +246,18 @@ def load_job_seeker_config(path_override: str = "") -> dict:
             return _deep_merge(base, loaded)
         return base
     return base
+
+
+def load_project_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+    except Exception:
+        return
+
+    if DEFAULT_ENV_PATH.exists() and DEFAULT_ENV_PATH.is_file():
+        load_dotenv(dotenv_path=DEFAULT_ENV_PATH)
+    if LEGACY_ENV_PATH.exists() and LEGACY_ENV_PATH.is_file():
+        load_dotenv(dotenv_path=LEGACY_ENV_PATH)
 
 
 def cfg_get(config: dict, path: Iterable[str], default=None):

@@ -20,35 +20,26 @@ DEFAULT_SPANISH_SPECIAL_CHAR_THRESHOLD = 0
 TITLE_GENDER_MARKER_PATTERN = re.compile(
     r"(?i)\b(?:m/w/d|w/m/d|d/m/w|m\|w\|d|w\|m\|d|d\|m\|w|all genders)\b"
 )
-GERMAN_REQUIREMENT_PATTERNS = [
-    (re.compile(r"\bfluent(?:\s+in)?\s+german\b", re.IGNORECASE), "Requires fluent German"),
-    (re.compile(r"\bnative\s+german\b", re.IGNORECASE), "Requires native German"),
-    (
-        re.compile(
-            r"\b(german\s+(?:language\s+)?(?:required|mandatory|essential))\b",
-            re.IGNORECASE,
-        ),
-        "German language required",
-    ),
-    (
-        re.compile(
-            r"\b(?:must|need to|required to)\s+(?:speak|write)\s+german\b",
-            re.IGNORECASE,
-        ),
-        "German language required",
-    ),
-    (
-        re.compile(
-            r"\b(?:business fluent|professional|excellent|very good|good)\s+german\b",
-            re.IGNORECASE,
-        ),
-        "High German proficiency required",
-    ),
-    (re.compile(r"\bc[12]\s+german\b", re.IGNORECASE), "C-level German required"),
-    (re.compile(r"\bdeutschkenntnisse\b", re.IGNORECASE), "German language required"),
-    (re.compile(r"\bverhandlungssicher(?:e|en)?\s+deutschkenntnisse\b", re.IGNORECASE), "German language required"),
-    (re.compile(r"\bdeutsch(?:\s+in\s+wort\s+und\s+schrift)?\b", re.IGNORECASE), "German language required"),
-    (re.compile(r"\bgerman-speaking\b", re.IGNORECASE), "German-speaking role"),
+CEFR_LEVEL_ORDER = {
+    "A1": 1,
+    "A2": 2,
+    "B1": 3,
+    "B2": 4,
+    "C1": 5,
+    "C2": 6,
+}
+
+GERMAN_LEVEL_REQUIREMENT_PATTERNS = [
+    (re.compile(r"\bc2(?:\s*[-/]?\s*level)?\s*(?:in\s+)?(?:german|deutsch)\b", re.IGNORECASE), "C2"),
+    (re.compile(r"\bc1(?:\s*[-/]?\s*level)?\s*(?:in\s+)?(?:german|deutsch)\b", re.IGNORECASE), "C1"),
+    (re.compile(r"\b(?:mindestens|min\.?)\s*c1\s*(?:in\s+)?(?:german|deutsch)\b", re.IGNORECASE), "C1"),
+    (re.compile(r"\bfluent(?:\s+in)?\s+german\b", re.IGNORECASE), "C1"),
+    (re.compile(r"\bnative\s+german\b", re.IGNORECASE), "C2"),
+    (re.compile(r"\bmuttersprach(?:lich(?:e|en|er)?)?\s*(?:deutsch|german)\b", re.IGNORECASE), "C2"),
+    (re.compile(r"\bverhandlungssicher(?:e|en)?\s+deutschkenntnisse\b", re.IGNORECASE), "C1"),
+    (re.compile(r"\bflie(?:ss|ß)end(?:e|en|er)?\s+deutschkenntnisse\b", re.IGNORECASE), "C1"),
+    (re.compile(r"\bsehr\s+gute\s+deutschkenntnisse\b", re.IGNORECASE), "C1"),
+    (re.compile(r"\bprofessional(?:\s+level)?\s+german\b", re.IGNORECASE), "C1"),
 ]
 
 
@@ -75,11 +66,17 @@ def normalize_title_for_language_rules(title: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+def normalize_cefr_level(raw_level: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", str(raw_level or "").upper())
+    return cleaned if cleaned in CEFR_LEVEL_ORDER else "B2"
+
+
 def detect_reasons(
     job: Dict,
     german_special_char_threshold: int,
     french_special_char_threshold: int,
     spanish_special_char_threshold: int,
+    max_german_level: str,
 ) -> List[str]:
     title = str(job.get("title") or "")
     description = str(job.get("full_description") or "")
@@ -87,8 +84,11 @@ def detect_reasons(
     combined_text = f"{normalized_title}\n{description}"
 
     reasons: List[str] = []
+    allowed_german_level = normalize_cefr_level(max_german_level)
+    max_level_rank = CEFR_LEVEL_ORDER[allowed_german_level]
+
     german_char_count = count_german_special_chars(combined_text)
-    if german_char_count > german_special_char_threshold:
+    if german_special_char_threshold >= 0 and german_char_count > german_special_char_threshold:
         reasons.append(
             "Text contains German-specific letters above threshold "
             f"({german_char_count}>{german_special_char_threshold})"
@@ -108,9 +108,11 @@ def detect_reasons(
             f"({spanish_char_count}>{spanish_special_char_threshold})"
         )
 
-    for pattern, reason in GERMAN_REQUIREMENT_PATTERNS:
-        if pattern.search(combined_text):
-            reasons.append(reason)
+    for pattern, required_level in GERMAN_LEVEL_REQUIREMENT_PATTERNS:
+        if pattern.search(combined_text) and CEFR_LEVEL_ORDER[required_level] > max_level_rank:
+            reasons.append(
+                f"German level requirement ({required_level}) is above configured maximum ({allowed_german_level})"
+            )
 
     return list(dict.fromkeys(reasons))
 
@@ -120,6 +122,7 @@ def split_python_prefilter_language_chars(
     german_special_char_threshold: int,
     french_special_char_threshold: int,
     spanish_special_char_threshold: int,
+    max_german_level: str,
 ) -> Tuple[List[Dict], List[Dict]]:
     approved_jobs: List[Dict] = []
     rejected_jobs: List[Dict] = []
@@ -130,6 +133,7 @@ def split_python_prefilter_language_chars(
             german_special_char_threshold,
             french_special_char_threshold,
             spanish_special_char_threshold,
+            max_german_level,
         )
         if reasons:
             rejected_jobs.append(
@@ -258,6 +262,11 @@ def main() -> int:
             DEFAULT_SPANISH_SPECIAL_CHAR_THRESHOLD,
         ),
     )
+    default_stage3_max_german_level = cfg_str(
+        config,
+        ("runtime", "stage3", "max_german_level"),
+        cfg_str(config, ("runtime", "stage2", "max_german_level"), "B2"),
+    )
 
     parser = argparse.ArgumentParser(
         description="Stage 3 local filtering on top of stage2-filtered jobs."
@@ -310,6 +319,11 @@ def main() -> int:
         default=max(0, int(default_stage3_spanish_special_char_threshold)),
         help="Reject only if Spanish special-character count in title/description is above this threshold.",
     )
+    parser.add_argument(
+        "--max-german-level",
+        default=default_stage3_max_german_level,
+        help="Maximum accepted German CEFR level (A1, A2, B1, B2, C1, C2). Jobs requiring higher are rejected.",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -327,6 +341,7 @@ def main() -> int:
         max(0, int(args.german_special_char_threshold)),
         max(0, int(args.french_special_char_threshold)),
         max(0, int(args.spanish_special_char_threshold)),
+        args.max_german_level,
     )
     approved_jobs = sort_and_rank_jobs(jobs, max(0, args.low_applicant_threshold))
     save_json_file(Path(args.output), approved_jobs)
@@ -338,6 +353,7 @@ def main() -> int:
     print(f"German special-char threshold: {max(0, int(args.german_special_char_threshold))}")
     print(f"French special-char threshold: {max(0, int(args.french_special_char_threshold))}")
     print(f"Spanish special-char threshold: {max(0, int(args.spanish_special_char_threshold))}")
+    print(f"Max German level: {normalize_cefr_level(args.max_german_level)}")
     return 0
 
 

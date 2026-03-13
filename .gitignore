@@ -2,8 +2,9 @@
 __pycache__/
 *.pyc
 .env
+user_config/.env
 bc_automation
-
+final_jobs_with_docs.xlsx
 # Ignore the entire folder
 generated_docs/*
 # But do not ignore the assets folder inside it

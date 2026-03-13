@@ -1,0 +1,101 @@
+{
+  "candidate": {
+    "name": "Ahmed Kaddah",
+    "email": "ahmed.kaddah@tutamail.com",
+    "cv_path": "user_config/cv_master.txt",
+    "cv_docx_path": "Ahmed Kaddah CV.docx",
+    "profile_image_path": "user_config/_profile_from_cv.png",
+    "profile_links": {
+      "linkedin": {
+        "url": "https://github.com/ahmedkaddah99-commits?tab=repositories",
+        "text": "Ahmed Kaddah",
+        "icon": "in",
+        "logo_path": "user_config/linkedin_logo.png"
+      },
+      "github": {
+        "url": "https://github.com/ahmedkaddah99-commits?tab=repositories",
+        "text": "Ahmed Kaddah",
+        "icon": "GH",
+        "logo_path": "user_config/github_logo.jpg"
+      }
+    },
+    "cv_font": "Calibri",
+    "languages": [
+      "Arabic — Native",
+      "English — C1",
+      "German — B1/B2"
+    ]
+  },
+  "job_search": {
+    "keywords": [
+      "analyst",
+      "consultant",
+      "product manager",
+      "project manager",
+      "business process manager"
+    ],
+    "linkedin_geo_id": "101282230",
+    "time_posted_seconds": 86400,
+    "experience_levels": [
+      2,
+      3
+    ],
+    "forbidden_title_keywords": [
+      "senior",
+      "engineer",
+      "sr",
+      "sr.",
+      "lead",
+      "principal",
+      "head",
+      "director",
+      "intern",
+      "werkstudent"
+    ],
+    "priority": {
+      "low_applicant_threshold": 80
+    }
+  },
+  "ai": {
+    "models": {
+      "stage1_title_filter": "deepseek-chat",
+      "stage1_title_filter_deepseek": "deepseek-chat",
+      "stage3_filter": "gemini-2.5-flash-lite",
+      "stage4_docs_deepseek": "deepseek-chat",
+      "stage4_docs_fallback_gemini": "gemini-2.5-flash"
+    },
+    "prompts": {
+      "stage1_extra_instructions": "",
+      "stage1_prompt_override": "You are an expert career assistant. I will give you my CV summary and a list of job titles.\n\nMY CV SUMMARY:\n{{CV_SUMMARY}}\n\nJOB LIST:\n{{JOB_LIST}}\n\nYOUR TASK:\nEvaluate every job in the list.\n\nRules:\n- APPROVE a job ONLY IF:\n  1) The title is relevant to my CV (Business Transformation, AI, Project/Product Management, Consulting, Data/Business Analysis)\n  2) The title can be English or German\n\nOUTPUT FORMAT (IMPORTANT):\nReturn ONLY raw JSON (no markdown, no extra text), shaped EXACTLY like this:\n\n{\n  \"approved_ids\": [\"123\", \"456\"],\n  \"excluded\": [\n    {\n      \"id\": \"789\",\n      \"reason\": \"Not relevant\"\n    },\n    {\n      \"id\": \"1011\",\n      \"reason\": \"Not relevant\"\n    },\n    {\n      \"id\": \"1213\",\n      \"reason\": \"Not relevant\"\n    }\n  ]\n}\n",
+      "stage3_extra_instructions": "",
+      "stage3_prompt_override": "You are a strict career-job screening assistant.\n\nCandidate CV summary:\n{{CV_SUMMARY}}\n\nJobs to evaluate (JSON):\n{{JOBS_JSON}}\n\nEvaluate every job and reject when any of these are true:\n1) Role is not suitable for this candidate profile. Reject clearly unrelated functions (HR, accounting, recruitment, sales) and highly specialized senior jobs not aligned with candidate experience.\n2) Job explicitly requires German above B2 (e.g., C1/C2, fluent/native, verhandlungssicher).\n\nOutput requirements:\n- Return only raw JSON\n- Do not return markdown\n- Keep schema exactly:\n{\n  \"approved_ids\": [\"123\", \"456\"],\n  \"excluded\": [\n    {\"id\": \"789\", \"reason\": \"Not suitable for profile\"},\n    {\"id\": \"1000\", \"reason\": \"German requirement above B2\"}\n  ]\n}\n",
+      "stage4_extra_instructions": "",
+      "stage4_prompt_override": ""
+    }
+  },
+  "runtime": {
+    "stage1": {
+      "scrape_snapshot_json": "stage1_scrape_snapshot.json",
+      "reuse_scrape_snapshot": false,
+      "excluded_output_json": "deepseek_excluded_jobs.json"
+    },
+    "stage2": {
+      "german_special_char_threshold": 9999,
+      "french_special_char_threshold": 0,
+      "spanish_special_char_threshold": 0,
+      "max_german_level": "B2"
+    },
+    "stage3": {
+      "rejected_output_json": "stage3_rejected_local.json",
+      "german_special_char_threshold": 9999,
+      "french_special_char_threshold": 0,
+      "spanish_special_char_threshold": 0,
+      "max_german_level": "B2"
+    }
+  },
+  "outputs": {
+    "stage4_json": "stage4_documents.json",
+    "stage4_xlsx": "final_jobs_with_docs.xlsx",
+    "docs_dir": "generated_docs"
+  }
+}

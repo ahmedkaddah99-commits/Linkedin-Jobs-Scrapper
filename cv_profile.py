@@ -4,7 +4,7 @@ from pathlib import Path
 from job_seeker_config import cfg_str, load_job_seeker_config, normalize_windows_env_path
 
 
-DEFAULT_CV_PATH = "cv_master.txt"
+DEFAULT_CV_PATH = "user_config/cv_master.txt"
 DEFAULT_CV_DOCX_PATH = "Ahmed Kaddah CV.docx"
 FALLBACK_CV_TEXT = "Ahmed Kaddah - Business Transformation and AI Specialist."
 

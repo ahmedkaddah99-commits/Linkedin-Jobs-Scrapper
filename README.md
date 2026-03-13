@@ -27,7 +27,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Create `.env` in repo root:
+Create `user_config/.env`:
 ```env
 SCRAPEOPS_API_KEY=your_scrapeops_key
 DEEPSEEK_API_KEY=your_deepseek_key
@@ -45,7 +45,7 @@ Run full pipeline (Stage 1 -> 4):
 
 ## Most Important: How To Customize For Different Job Targets
 
-Edit `job_seeker_config.py` (or `job_seeker_config.json`) and adjust:
+Edit `user_config/job_seeker_config.json` and adjust:
 
 ### 1) Job target rules
 - `job_search.keywords`: add/remove target roles.
@@ -59,8 +59,12 @@ Edit `job_seeker_config.py` (or `job_seeker_config.json`) and adjust:
 - Keep JSON schema exactly as required by the script.
 
 ### 3) Candidate profile used for CV generation
-- `candidate.cv_path`: path to your master CV text file (default `cv_master.txt`).
+- `candidate.cv_path`: path to your master CV text file (default `user_config/cv_master.txt`).
 - `candidate.name`, `candidate.email`, `candidate.languages`: used in generated CV header.
+- `candidate.profile_links.linkedin.*` and `candidate.profile_links.github.*`: optional top-of-CV hyperlinks.
+  - `url`: target URL (leave empty to hide that link)
+  - `text`: clickable text shown next to the icon
+  - `icon`: short icon label (for example `in` or `GH`)
 
 ### 4) Profile image
 - Use **PNG only**.
@@ -71,7 +75,7 @@ Edit `job_seeker_config.py` (or `job_seeker_config.json`) and adjust:
 
 The generator parses your master CV text and expects clear section structure.
 
-Recommended section labels in `cv_master.txt`:
+Recommended section labels in `user_config/cv_master.txt`:
 - `PROFESSIONAL EXPERIENCE`
 - `PROJECTS`
 - `SKILLS`
@@ -92,7 +96,7 @@ Formatting guidance:
 - Can still be changed:
   - bullet points may be tailored/reworded for each job.
 - Fallback behavior:
-  - if AI does not provide matched bullets, baseline bullets from `cv_master.txt` are kept.
+  - if AI does not provide matched bullets, baseline bullets from `user_config/cv_master.txt` are kept.
 
 ### Hardcoded output section titles in generated CV DOCX
 The generated CV currently prints these section headings:

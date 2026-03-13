@@ -9,11 +9,18 @@ from pathlib import Path
 
 import requests as std_requests
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
 from scrapeops_python_requests.scrapeops_requests import ScrapeOpsRequests
 
 from cv_profile import load_cv_text
-from job_seeker_config import cfg_bool, cfg_float, cfg_int, cfg_list, cfg_str, load_job_seeker_config
+from job_seeker_config import (
+    cfg_bool,
+    cfg_float,
+    cfg_int,
+    cfg_list,
+    cfg_str,
+    load_job_seeker_config,
+    load_project_dotenv,
+)
 
 
 DEFAULT_KEYWORDS = [
@@ -348,12 +355,15 @@ def call_deepseek_title_filter(api_key: str, model: str, prompt: str):
 
 
 def build_clients():
-    load_dotenv()
+    load_project_dotenv()
     scrapeops_api_key = os.getenv("SCRAPEOPS_API_KEY")
     deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 
     if not scrapeops_api_key or not deepseek_api_key:
-        print("ERROR: Missing API keys in .env (SCRAPEOPS_API_KEY and DEEPSEEK_API_KEY are required).")
+        print(
+            "ERROR: Missing API keys in environment/user_config/.env "
+            "(SCRAPEOPS_API_KEY and DEEPSEEK_API_KEY are required)."
+        )
         raise SystemExit(1)
 
     scrapeops_logger = ScrapeOpsRequests(

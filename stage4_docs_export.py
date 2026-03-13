@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from dotenv import load_dotenv
 from google import genai
 import requests
 
@@ -23,6 +22,7 @@ from job_seeker_config import (
     cfg_list,
     cfg_str,
     load_job_seeker_config,
+    load_project_dotenv,
     normalize_windows_env_path,
 )
 
@@ -994,11 +994,26 @@ def resolve_profile_image_path(raw_path: str):
     return image_path if image_path.exists() and image_path.is_file() else None
 
 
+def resolve_optional_image_path(raw_path: str):
+    candidate = normalize_windows_env_path(raw_path)
+    if not candidate:
+        return None
+    image_path = Path(candidate)
+    return image_path if image_path.exists() and image_path.is_file() else None
+
+
 def resolve_assets_profile_png(docs_dir: Path):
+    user_config_preferred = Path("user_config") / "_profile_from_cv.png"
+    if user_config_preferred.exists() and user_config_preferred.is_file():
+        return user_config_preferred
+
     assets_dir = docs_dir / "_assets"
     preferred = assets_dir / "_profile_from_cv.png"
     if preferred.exists() and preferred.is_file():
         return preferred
+    user_config_png_files = sorted((Path("user_config")).glob("*.png")) if Path("user_config").exists() else []
+    if user_config_png_files:
+        return user_config_png_files[0]
     png_files = sorted(assets_dir.glob("*.png")) if assets_dir.exists() else []
     return png_files[0] if png_files else None
 
@@ -1050,9 +1065,11 @@ def create_cv_document(
     cv_font_name: str,
     languages: List[str],
     profile_image_path,
+    profile_links: List[Dict[str, str]],
 ) -> str:
     try:
         from docx import Document
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
         from docx.shared import Inches, Pt
@@ -1086,6 +1103,61 @@ def create_cv_document(
     section.bottom_margin = margin
     section.left_margin = margin
     section.right_margin = margin
+
+    def add_hyperlink(paragraph, text: str, url: str, font_size_pt: float = 11.0):
+        if not (text and url):
+            return
+        try:
+            relationship_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+            hyperlink = OxmlElement("w:hyperlink")
+            hyperlink.set(qn("r:id"), relationship_id)
+
+            run = OxmlElement("w:r")
+            run_properties = OxmlElement("w:rPr")
+
+            color = OxmlElement("w:color")
+            color.set(qn("w:val"), "0563C1")
+            run_properties.append(color)
+
+            no_underline = OxmlElement("w:u")
+            no_underline.set(qn("w:val"), "none")
+            run_properties.append(no_underline)
+
+            font_size = OxmlElement("w:sz")
+            font_size.set(qn("w:val"), str(int(font_size_pt * 2)))
+            run_properties.append(font_size)
+
+            font_size_cs = OxmlElement("w:szCs")
+            font_size_cs.set(qn("w:val"), str(int(font_size_pt * 2)))
+            run_properties.append(font_size_cs)
+
+            run.append(run_properties)
+            text_node = OxmlElement("w:t")
+            text_node.text = text
+            run.append(text_node)
+            hyperlink.append(run)
+            paragraph._p.append(hyperlink)
+        except Exception:
+            fallback_run = paragraph.add_run(text)
+            fallback_run.font.color.rgb = None
+
+    valid_profile_links = []
+    for item in profile_links or []:
+        if not isinstance(item, dict):
+            continue
+        link_url = str(item.get("url") or "").strip()
+        if not link_url:
+            continue
+        link_text = str(item.get("text") or "").strip()
+        if not link_text:
+            continue
+        valid_profile_links.append(
+            {
+                "text": link_text,
+                "url": link_url,
+                "logo_path": item.get("logo_path"),
+            }
+        )
 
     name_paragraph = doc.add_paragraph()
     name_paragraph.paragraph_format.space_before = Pt(0)
@@ -1173,6 +1245,29 @@ def create_cv_document(
             float_picture_right(image_run, inline_shape, top_offset_inches=0.45)
         except Exception:
             pass
+
+    if valid_profile_links:
+        links_paragraph = doc.add_paragraph()
+        links_paragraph.paragraph_format.space_before = Pt(0)
+        links_paragraph.paragraph_format.space_after = Pt(2)
+        icon_size_inches = 16 / 96.0
+        for link_index, link_item in enumerate(valid_profile_links):
+            if link_index > 0:
+                links_paragraph.add_run("   ")
+            logo_path = link_item.get("logo_path")
+            if logo_path:
+                try:
+                    logo_run = links_paragraph.add_run()
+                    logo_run.add_picture(str(logo_path), width=Inches(icon_size_inches), height=Inches(icon_size_inches))
+                    links_paragraph.add_run(" ")
+                except Exception:
+                    pass
+            add_hyperlink(
+                links_paragraph,
+                text=link_item["text"],
+                url=link_item["url"],
+                font_size_pt=11.0,
+            )
 
     def add_section_separator() -> None:
         # Use a subtle horizontal rule instead of long dash text.
@@ -1558,7 +1653,7 @@ def save_to_excel(records: List[Dict], output_path: Path, excel_mode: str, sheet
 
 
 def main() -> int:
-    load_dotenv()
+    load_project_dotenv()
     config = load_job_seeker_config()
 
     default_input_json = cfg_str(config, ("runtime", "stage4", "input_json"), "stage3_filtered_ai.json")
@@ -1586,6 +1681,22 @@ def main() -> int:
     default_profile_image = cfg_str(config, ("candidate", "profile_image_path"), "") or os.getenv(
         "CV_PROFILE_IMAGE_PATH",
         "",
+    )
+    default_linkedin_profile_url = cfg_str(config, ("candidate", "profile_links", "linkedin", "url"), "")
+    default_linkedin_profile_text = cfg_str(config, ("candidate", "profile_links", "linkedin", "text"), "LinkedIn")
+    default_linkedin_profile_icon = cfg_str(config, ("candidate", "profile_links", "linkedin", "icon"), "in")
+    default_linkedin_logo_path = (
+        cfg_str(config, ("candidate", "profile_links", "linkedin", "logo_path"), "")
+        or cfg_str(config, ("candidate", "profile_links", "linkedin", "icon_path"), "")
+        or cfg_str(config, ("candidate", "profile_links", "linkedin", "image_path"), "")
+    )
+    default_github_profile_url = cfg_str(config, ("candidate", "profile_links", "github", "url"), "")
+    default_github_profile_text = cfg_str(config, ("candidate", "profile_links", "github", "text"), "GitHub")
+    default_github_profile_icon = cfg_str(config, ("candidate", "profile_links", "github", "icon"), "GH")
+    default_github_logo_path = (
+        cfg_str(config, ("candidate", "profile_links", "github", "logo_path"), "")
+        or cfg_str(config, ("candidate", "profile_links", "github", "icon_path"), "")
+        or cfg_str(config, ("candidate", "profile_links", "github", "image_path"), "")
     )
     default_cv_font = cfg_str(config, ("candidate", "cv_font"), DEFAULT_CV_FONT) or DEFAULT_CV_FONT
     default_languages = [str(item) for item in cfg_list(config, ("candidate", "languages"), DEFAULT_LANGUAGES)]
@@ -1731,7 +1842,7 @@ def main() -> int:
     deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not deepseek_api_key and not gemini_api_key:
-        print("ERROR: Both DEEPSEEK_API_KEY and GEMINI_API_KEY are missing in environment/.env")
+        print("ERROR: Both DEEPSEEK_API_KEY and GEMINI_API_KEY are missing in environment/user_config/.env")
         return 1
 
     input_path = Path(args.input)
@@ -1767,6 +1878,28 @@ def main() -> int:
             print(f"INFO: using profile photo from assets PNG: {profile_image_path}")
         else:
             print("WARNING: no PNG profile image found in docs _assets folder.")
+
+    profile_links: List[Dict[str, str]] = []
+    if default_linkedin_profile_url:
+        linkedin_logo_path = resolve_optional_image_path(default_linkedin_logo_path)
+        profile_links.append(
+            {
+                "icon": default_linkedin_profile_icon,
+                "text": default_linkedin_profile_text or default_linkedin_profile_icon or "LinkedIn",
+                "url": default_linkedin_profile_url,
+                "logo_path": linkedin_logo_path,
+            }
+        )
+    if default_github_profile_url:
+        github_logo_path = resolve_optional_image_path(default_github_logo_path)
+        profile_links.append(
+            {
+                "icon": default_github_profile_icon,
+                "text": default_github_profile_text or default_github_profile_icon or "GitHub",
+                "url": default_github_profile_url,
+                "logo_path": github_logo_path,
+            }
+        )
 
     cv_text = load_cv_text()
     gemini_client = genai.Client(api_key=gemini_api_key) if gemini_api_key else None
@@ -1835,6 +1968,7 @@ def main() -> int:
                         cv_font_name=cv_font_name,
                         languages=languages,
                         profile_image_path=profile_image_path,
+                        profile_links=profile_links,
                     )
                     existing_record["cv_docx"] = cv_doc_path
                     existing_record["tailored_cv_docx"] = cv_doc_path
@@ -1895,6 +2029,7 @@ def main() -> int:
                 cv_font_name=cv_font_name,
                 languages=languages,
                 profile_image_path=profile_image_path,
+                profile_links=profile_links,
             )
             try:
                 cv_pdf_path = convert_docx_to_pdf(cv_doc_path)
