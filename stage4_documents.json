@@ -21,17 +21,16 @@
         "priority_tier": 1,
         "priority_bucket": "tier1_newest_non_easy_low_applicants",
         "priority_rule": "1)newest+non_easy+low_applicants,2)newest+easy+low_applicants,3)newest+non_easy+high_or_unknown_applicants,4)newest+easy+high_or_unknown_applicants",
-        "cv_professional_summary": "Highly analytical and process-driven professional with a strong foundation in biotechnology-relevant research methodologies, data analysis, and structured project execution. My academic research developed a rigorous, multi-stage analytical framework for identifying high-potential opportunities, directly applicable to systematic drug discovery and preclinical development. At Allianz, I honed my skills in stakeholder consultation, cross-functional collaboration, and the precise design and evaluation of technical solutions, ensuring alignment between complex capabilities and organizational needs. I am adept at managing detailed experimental workflows, analyzing data with precision, and contributing to team-based scientific projects, as demonstrated through my hands-on experience in AI-driven tool development and process optimization. My structured working style, motivation for impactful work, and ability to independently execute while collaborating effectively make me a strong candidate for the Research Associate role at Silence Therapeutics.",
+        "cv_professional_summary": "Research Associate with a strong foundation in structured scientific methodology, data-driven analysis, and collaborative project execution, seeking to apply my systematic approach to the Drug Design team at Silence Therapeutics. My background combines a Master's in Entrepreneurship with hands-on experience in developing and evaluating novel frameworks, mirroring the innovative and methodical R&D environment required for siRNA therapeutic development. At Allianz, I co-developed and rigorously evaluated Proof-of-Concept AI tools, measuring impact through automated KPI assessments—a process directly analogous to preclinical assay validation and data documentation. My experience in designing multi-stage analysis pipelines for my Master's thesis, which integrated bibliometric mapping and feasibility screening to identify high-potential opportunities, demonstrates the precise, analytical mindset needed for supporting experiment design and data interpretation. I am highly motivated to contribute my skills in structured documentation, independent problem-solving, and collaborative teamwork to support the Molecular Design Department's mission of developing novel RNAi-based therapeutics.",
         "cv_professional_experience": [
             {
                 "role_title": "Technology Transformation and Strategy Consultant",
                 "company": "Allianz Technology (Internship)",
                 "period": "May 2025 - Sep 2025 (4-day-workweek)",
                 "bullets": [
-                    "Designed and implemented structured workflows to embed AI capabilities, driving measurable productivity gains and optimizing resource utilization within complex technical environments.",
-                    "Conducted detailed use case analysis and solution design for AI and cloud consulting projects, ensuring technical solutions met specific business requirements.",
-                    "Assisted in developing data migration and transition strategies, integrating systems into future platforms with a focus on governance and data integrity.",
-                    "Developed an Enterprise Architecture Operating Model to standardize architecture data, improving organizational clarity and stakeholder alignment through structured documentation."
+                    "Applied structured methodologies to design and implement workflows within complex technical environments, ensuring clarity and stakeholder alignment.",
+                    "Assisted in strategic data migration and transition projects, requiring meticulous planning and documentation akin to laboratory data management.",
+                    "Developed operating models to standardize architecture data, demonstrating ability to create reproducible and structured frameworks for complex systems."
                 ]
             },
             {
@@ -39,11 +38,9 @@
                 "company": "Allianz SE (Internship)",
                 "period": "Nov 2024 - Apr 2025 (fulltime)",
                 "bullets": [
-                    "Conducted stakeholder consultations and business analysis to identify and validate high-potential use cases for AI-driven automation and process optimization.",
-                    "Co-developed and rigorously evaluated Proof-of-Concept (PoC) AI tools, measuring impact through automated KPI assessments and performance analysis.",
-                    "Designed Agentic AI Minimum Viable Products (MVPs) for applications in project management, focusing on iterative development and functional testing.",
-                    "Ensured tight alignment between AI capabilities and organizational needs by facilitating cross-functional workshops and requirement-gathering sessions.",
-                    "Built an AI-driven tool to enhance Jira functionality, successfully bridging abstract business requirements with concrete technical implementation."
+                    "Co-developed and rigorously evaluated Proof-of-Concept (PoC) tools, measuring specific impacts through automated KPI assessments—a process mirroring experimental validation in R&D.",
+                    "Conducted detailed stakeholder consultations and business analysis to identify and prioritize high-value use cases, demonstrating systematic problem-solving.",
+                    "Ensured alignment between technical capabilities and project requirements through cross-functional workshops, highlighting strong collaborative and communication skills."
                 ]
             },
             {
@@ -62,11 +59,9 @@
                 "company": "Roxy Mobility GmbH",
                 "period": "Dec 2020 - Oct 2024 (fulltime)",
                 "bullets": [
-                    "Directed full-scale operations, managing a team and coordinating with thousands of customers and regulatory authorities, demonstrating high organizational and stakeholder management skills.",
-                    "Negotiated and secured key business development agreements with major partners including Deutsche Bahn, requiring detailed analysis and persuasive communication.",
-                    "Developed and pitched complex mobility solutions, resulting in a 4x increase in parking utilization through strategic planning and data-driven proposals.",
-                    "Reduced operational costs by 50% and increased revenue by 25% through continuous process improvement and efficiency optimization initiatives.",
-                    "Achieved #1 rankings for Fastest Action Time and Customer Satisfaction in the city, demonstrating a commitment to quality, precision, and excellent outcomes."
+                    "Directed full operations, managing a team and coordinating with multiple external partners and authorities, demonstrating project leadership and organizational skills.",
+                    "Developed and executed operational strategies that significantly increased efficiency and reduced costs, showcasing analytical and process optimization capabilities.",
+                    "Achieved top performance metrics in action time and customer satisfaction through systematic process improvements and data-driven management."
                 ]
             }
         ],
@@ -75,10 +70,9 @@
                 "degree_title": "M.A. Entrepreneurship and Innovation - Katholische Universitaet Eichstaett-Ingolstadt",
                 "thesis_title": "Master Thesis (Strategic Opportunity Discovery Framework): Data-Driven Framework for Identifying High-Potential Startup Opportunities",
                 "thesis_bullets": [
-                    "Developed a structured, multi-stage decision framework for identifying commercially viable opportunities, analogous to systematic target identification in drug discovery.",
-                    "Built an analysis pipeline combining bibliometric science mapping (literature review), market adoption indicators, and regulatory feasibility screening to evaluate innovation potential.",
-                    "Applied the framework to assess specific opportunity spaces, identifying areas with strong potential but low market saturation through rigorous data analysis.",
-                    "Implemented reproducible analysis workflows and economic feasibility modeling to quantitatively assess commercialization potential and project outcomes."
+                    "Developed a structured, multi-stage decision framework for identifying viable opportunities, combining bibliometric science mapping, market indicators, and regulatory screening.",
+                    "Built and implemented reproducible analysis pipelines and economic feasibility models to assess commercialization potential, demonstrating rigorous methodological approach.",
+                    "Applied the framework to evaluate specific opportunity spaces, identifying areas with strong innovation potential—a process analogous to target identification and validation in drug discovery."
                 ]
             },
             {
@@ -89,33 +83,33 @@
         ],
         "cv_skills": [
             "Data Analysis",
+            "Structured Documentation",
             "MS Office",
-            "Documentation",
-            "Structured Working Style",
-            "Project Management",
+            "Excel",
             "Process Optimization",
-            "Stakeholder Management",
-            "Requirements Engineering",
-            "Cross-functional Collaboration",
-            "Strategic Planning",
-            "Use Case Analysis",
-            "Solution Design",
-            "KPI Assessment",
-            "Experimental Workflow Design",
-            "Proof-of-Concept (PoC) Development",
             "Method Development",
-            "Quality Assurance",
-            "Operational Efficiency",
-            "Team Coordination",
+            "Project Management",
+            "Stakeholder Management",
+            "Strategic Planning",
+            "KPI Assessment",
+            "Proof-of-Concept (PoC) Evaluation",
+            "Framework Design",
+            "Systematic Methodology",
+            "Collaborative Teamwork",
             "Independent Work",
-            "Agile Methodologies",
+            "High Motivation",
+            "Process Improvement",
+            "Requirements Analysis",
+            "Data-Driven Decision Making",
             "Technical Documentation",
-            "Business Analysis",
-            "Process Improvement"
+            "Problem-Solving",
+            "Analytical Thinking",
+            "Agile/Scrum",
+            "Product Lifecycle"
         ],
-        "tailored_cv": "Professional Summary: Highly analytical and process-driven professional with a strong foundation in biotechnology-relevant research methodologies, data analysis, and structured project execution. My academic research developed a rigorous, multi-stage analytical framework for identifying high-potential opportunities, directly applicable to systematic drug discovery and preclinical development. At Allianz, I honed my skills in stakeholder consultation, cross-functional collaboration, and the precise design and evaluation of technical solutions, ensuring alignment between complex capabilities and organizational needs. I am adept at managing detailed experimental workflows, analyzing data with precision, and contributing to team-based scientific projects, as demonstrated through my hands-on experience in AI-driven tool development and process optimization. My structured working style, motivation for impactful work, and ability to independently execute while collaborating effectively make me a strong candidate for the Research Associate role at Silence Therapeutics.\n\nProfessional Experience:\nTechnology Transformation and Strategy Consultant at Allianz Technology (Internship) | Allianz Technology | May 2025 - Sep 2025\n- Designed and implemented structured workflows to embed AI capabilities, driving measurable productivity gains and optimizing resource utilization within complex technical environments.\n- Conducted detailed use case analysis and solution design for AI and cloud consulting projects, ensuring technical solutions met specific business requirements.\n- Assisted in developing data migration and transition strategies, integrating systems into future platforms with a focus on governance and data integrity.\n- Developed an Enterprise Architecture Operating Model to standardize architecture data, improving organizational clarity and stakeholder alignment through structured documentation.\nGenAI Associate for Business Transformation at Allianz SE (Internship) | Allianz SE | Nov 2024 - Apr 2025\n- Conducted stakeholder consultations and business analysis to identify and validate high-potential use cases for AI-driven automation and process optimization.\n- Co-developed and rigorously evaluated Proof-of-Concept (PoC) AI tools, measuring impact through automated KPI assessments and performance analysis.\n- Designed Agentic AI Minimum Viable Products (MVPs) for applications in project management, focusing on iterative development and functional testing.\n- Ensured tight alignment between AI capabilities and organizational needs by facilitating cross-functional workshops and requirement-gathering sessions.\n- Built an AI-driven tool to enhance Jira functionality, successfully bridging abstract business requirements with concrete technical implementation.\nOperations Lead and Co-Founder | Roxy Mobility GmbH | Dec 2020 - Oct 2024\n- Directed full-scale operations, managing a team and coordinating with thousands of customers and regulatory authorities, demonstrating high organizational and stakeholder management skills.\n- Negotiated and secured key business development agreements with major partners including Deutsche Bahn, requiring detailed analysis and persuasive communication.\n- Developed and pitched complex mobility solutions, resulting in a 4x increase in parking utilization through strategic planning and data-driven proposals.\n- Reduced operational costs by 50% and increased revenue by 25% through continuous process improvement and efficiency optimization initiatives.\n- Achieved #1 rankings for Fastest Action Time and Customer Satisfaction in the city, demonstrating a commitment to quality, precision, and excellent outcomes.\n\nSkills:\n- Data Analysis\n- MS Office\n- Documentation\n- Structured Working Style\n- Project Management\n- Process Optimization\n- Stakeholder Management\n- Requirements Engineering\n- Cross-functional Collaboration\n- Strategic Planning\n- Use Case Analysis\n- Solution Design\n- KPI Assessment\n- Experimental Workflow Design\n- Proof-of-Concept (PoC) Development\n- Method Development\n- Quality Assurance\n- Operational Efficiency\n- Team Coordination\n- Independent Work\n- Agile Methodologies\n- Technical Documentation\n- Business Analysis\n- Process Improvement\n\nEducation:\nM.A. Entrepreneurship and Innovation - Katholische Universitaet Eichstaett-Ingolstadt\nMaster Thesis (Strategic Opportunity Discovery Framework): Data-Driven Framework for Identifying High-Potential Startup Opportunities\n- Developed a structured, multi-stage decision framework for identifying commercially viable opportunities, analogous to systematic target identification in drug discovery.\n- Built an analysis pipeline combining bibliometric science mapping (literature review), market adoption indicators, and regulatory feasibility screening to evaluate innovation potential.\n- Applied the framework to assess specific opportunity spaces, identifying areas with strong potential but low market saturation through rigorous data analysis.\n- Implemented reproducible analysis workflows and economic feasibility modeling to quantitatively assess commercialization potential and project outcomes.\nB.Sc. Business Administration and Management - Debrecen University",
+        "tailored_cv": "Professional Summary: Research Associate with a strong foundation in structured scientific methodology, data-driven analysis, and collaborative project execution, seeking to apply my systematic approach to the Drug Design team at Silence Therapeutics. My background combines a Master's in Entrepreneurship with hands-on experience in developing and evaluating novel frameworks, mirroring the innovative and methodical R&D environment required for siRNA therapeutic development. At Allianz, I co-developed and rigorously evaluated Proof-of-Concept AI tools, measuring impact through automated KPI assessments—a process directly analogous to preclinical assay validation and data documentation. My experience in designing multi-stage analysis pipelines for my Master's thesis, which integrated bibliometric mapping and feasibility screening to identify high-potential opportunities, demonstrates the precise, analytical mindset needed for supporting experiment design and data interpretation. I am highly motivated to contribute my skills in structured documentation, independent problem-solving, and collaborative teamwork to support the Molecular Design Department's mission of developing novel RNAi-based therapeutics.\n\nProfessional Experience:\nTechnology Transformation and Strategy Consultant | Allianz Technology | May 2025 - Sep 2025\n- Applied structured methodologies to design and implement workflows within complex technical environments, ensuring clarity and stakeholder alignment.\n- Assisted in strategic data migration and transition projects, requiring meticulous planning and documentation akin to laboratory data management.\n- Developed operating models to standardize architecture data, demonstrating ability to create reproducible and structured frameworks for complex systems.\nGenAI Associate for Business Transformation | Allianz SE | Nov 2024 - Apr 2025\n- Co-developed and rigorously evaluated Proof-of-Concept (PoC) tools, measuring specific impacts through automated KPI assessments—a process mirroring experimental validation in R&D.\n- Conducted detailed stakeholder consultations and business analysis to identify and prioritize high-value use cases, demonstrating systematic problem-solving.\n- Ensured alignment between technical capabilities and project requirements through cross-functional workshops, highlighting strong collaborative and communication skills.\nOperations Lead and Co-Founder | Roxy Mobility GmbH | Dec 2020 - Oct 2024\n- Directed full operations, managing a team and coordinating with multiple external partners and authorities, demonstrating project leadership and organizational skills.\n- Developed and executed operational strategies that significantly increased efficiency and reduced costs, showcasing analytical and process optimization capabilities.\n- Achieved top performance metrics in action time and customer satisfaction through systematic process improvements and data-driven management.\n\nSkills:\n- Data Analysis\n- Structured Documentation\n- MS Office\n- Excel\n- Process Optimization\n- Method Development\n- Project Management\n- Stakeholder Management\n- Strategic Planning\n- KPI Assessment\n- Proof-of-Concept (PoC) Evaluation\n- Framework Design\n- Systematic Methodology\n- Collaborative Teamwork\n- Independent Work\n- High Motivation\n- Process Improvement\n- Requirements Analysis\n- Data-Driven Decision Making\n- Technical Documentation\n- Problem-Solving\n- Analytical Thinking\n- Agile/Scrum\n- Product Lifecycle\n\nEducation:\nM.A. Entrepreneurship and Innovation - Katholische Universitaet Eichstaett-Ingolstadt\nMaster Thesis (Strategic Opportunity Discovery Framework): Data-Driven Framework for Identifying High-Potential Startup Opportunities\n- Developed a structured, multi-stage decision framework for identifying viable opportunities, combining bibliometric science mapping, market indicators, and regulatory screening.\n- Built and implemented reproducible analysis pipelines and economic feasibility models to assess commercialization potential, demonstrating rigorous methodological approach.\n- Applied the framework to evaluate specific opportunity spaces, identifying areas with strong innovation potential—a process analogous to target identification and validation in drug discovery.\nB.Sc. Business Administration and Management - Debrecen University",
         "run_date": "2026-03-14",
-        "run_timestamp": "2026-03-14T00:11:26",
+        "run_timestamp": "2026-03-14T00:18:46",
         "cv_strategic_initiatives": [
             {
                 "title": "AI-Driven Job Application Automation Pipeline | 2026",
@@ -147,9 +141,9 @@
                 ]
             }
         ],
-        "cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-14\\Kaddah_Ahmed_Research_Associate_Silence_Therapeutics_plc_4383967265_CV.docx",
-        "cv_pdf": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-14\\Kaddah_Ahmed_Research_Associate_Silence_Therapeutics_plc_4383967265_CV.pdf",
-        "tailored_cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-14\\Kaddah_Ahmed_Research_Associate_Silence_Therapeutics_plc_4383967265_CV.docx",
+        "cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-14\\Ahmed_Kaddah_Research_Associate_Silence_Therapeutics_plc_4383967265_CV.docx",
+        "cv_pdf": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-14\\Ahmed_Kaddah_Research_Associate_Silence_Therapeutics_plc_4383967265_CV.pdf",
+        "tailored_cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-14\\Ahmed_Kaddah_Research_Associate_Silence_Therapeutics_plc_4383967265_CV.docx",
         "pdf_generation_error": null,
         "doc_generation_error": null
     }
