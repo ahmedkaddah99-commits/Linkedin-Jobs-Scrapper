@@ -179,19 +179,27 @@ Content rules:
   - if Allianz Technology appears in the CV, include it explicitly
   - never include projects/initiatives in this section
 - skills:
-  - 16 to 25 ATS-friendly skills relevant to the job description
-  - include realistic adjacent skills when useful
+  - Keep section labels and format exactly like the CV: "Programming Skills:", "Technical Skills:", "Standards:", "Soft Skills:"
+  - Keep all existing skills from the CV exactly as written (do not rewrite or remove them)
+  - You may append additional job-relevant skills to any existing section only
+  - Return "skills" as a list where each item is one full section line, for example:
+    - "Programming Skills: skill1, skill2"
+    - "Technical Skills: skill1, skill2"
+    - "Standards: item1, item2"
+    - "Soft Skills: item1, item2"
 - if referencing EDUCATION content from the candidate CV:
   - keep degree/thesis titles exactly as written in the CV
   - do not rename or paraphrase degree/thesis titles
   - preserve the same education item order as in the candidate CV
-  - you may only reword thesis bullet wording to fit the target role
-  - if referencing PROJECTS from the candidate CV:
+
+- if referencing PROJECTS from the candidate CV:
   - keep project titles exactly as written in the CV
   - preserve the same project order as in the candidate CV
   - only reword supporting bullet wording to better match the target job
   - never include professional job roles in this section
-Do not produce a motivation letter, cover letter, greeting, or signature.
+- Online Courses & Certifications:
+    - Keep as they are in the CV.
+  Do not produce a motivation letter, cover letter, greeting, or signature.
 """.strip()
     if extra_instructions:
         prompt = f"{prompt}\n\nAdditional user preferences:\n{extra_instructions.strip()}"
@@ -293,10 +301,7 @@ def generate_docs_for_job(
             experiences_raw = parsed.get("professional_experience", [])
             education_raw = parsed.get("education", [])
 
-            if isinstance(skills_raw, list):
-                skills = [str(item).strip() for item in skills_raw if str(item).strip()]
-            else:
-                skills = split_bullets(str(skills_raw))
+            skills = merge_sectioned_skills(cv_text=cv_text, ai_skills_raw=skills_raw)
 
             experiences = []
             if isinstance(experiences_raw, list):
@@ -393,6 +398,90 @@ def split_bullets(text: str) -> List[str]:
         line = re.sub(r"^[\-\*\u2022]+\s*", "", line)
         lines.append(line)
     return lines
+
+
+def _split_csv_values(text: str) -> List[str]:
+    return [part.strip() for part in (text or "").split(",") if part.strip()]
+
+
+def _parse_skills_section_lines(lines: List[str]) -> Dict[str, List[str]]:
+    parsed: Dict[str, List[str]] = {}
+    for raw in lines or []:
+        line = compact_whitespace(str(raw))
+        if not line:
+            continue
+        match = re.match(r"^([^:]+):\s*(.*)$", line)
+        if not match:
+            continue
+        section = match.group(1).strip()
+        values = _split_csv_values(match.group(2))
+        if section not in parsed:
+            parsed[section] = []
+        for value in values:
+            if value not in parsed[section]:
+                parsed[section].append(value)
+    return parsed
+
+
+def _extract_base_skills_from_cv(cv_text: str) -> List[str]:
+    lines = []
+    in_skills = False
+    for raw in (cv_text or "").splitlines():
+        line = raw.strip()
+        normalized = normalize_compare_token(line)
+        if normalized == "skills":
+            in_skills = True
+            continue
+        if not in_skills:
+            continue
+        if normalized in {
+            "education",
+            "professional experience",
+            "projects",
+            "online courses certifications",
+            "professional summary",
+        }:
+            break
+        if not line:
+            continue
+        cleaned = re.sub(r"^[\-\*\u2022]+\s*", "", line).strip()
+        if ":" in cleaned:
+            lines.append(cleaned)
+    return lines
+
+
+def merge_sectioned_skills(cv_text: str, ai_skills_raw: object) -> List[str]:
+    base_lines = _extract_base_skills_from_cv(cv_text)
+    base_parsed = _parse_skills_section_lines(base_lines)
+    if not base_parsed:
+        if isinstance(ai_skills_raw, list):
+            return [str(item).strip() for item in ai_skills_raw if str(item).strip()]
+        return split_bullets(str(ai_skills_raw))
+
+    if isinstance(ai_skills_raw, list):
+        ai_lines = [str(item).strip() for item in ai_skills_raw if str(item).strip()]
+    else:
+        ai_lines = split_bullets(str(ai_skills_raw))
+    ai_parsed = _parse_skills_section_lines(ai_lines)
+
+    merged: Dict[str, List[str]] = {section: list(values) for section, values in base_parsed.items()}
+    for section, values in ai_parsed.items():
+        if section not in merged:
+            continue
+        for value in values:
+            if value not in merged[section]:
+                merged[section].append(value)
+
+    ordered_sections = [line.split(":", 1)[0].strip() for line in base_lines if ":" in line]
+    result: List[str] = []
+    seen_sections = set()
+    for section in ordered_sections:
+        if section in seen_sections:
+            continue
+        seen_sections.add(section)
+        values = merged.get(section, [])
+        result.append(f"{section}: {', '.join(values)}" if values else f"{section}:")
+    return result
 
 
 def split_paragraphs(text: str) -> List[str]:
@@ -621,6 +710,8 @@ def extract_cv_strategic_initiatives(cv_text: str) -> List[Dict]:
 
     initiatives: List[Dict] = []
     current = None
+    online_courses_title = "Online Courses & Certifications"
+    online_courses_key = normalize_compare_token(online_courses_title)
 
     for raw in lines[start_index:]:
         line = raw.strip()
@@ -631,11 +722,35 @@ def extract_cv_strategic_initiatives(cv_text: str) -> List[Dict]:
 
         if re.match(r"^[\-\*\u2022]+\s*", line):
             bullet = re.sub(r"^[\-\*\u2022]+\s*", "", line).strip()
+            bullet_key = normalize_compare_token(bullet)
+            marker_pos = bullet_key.find(online_courses_key)
+            if marker_pos >= 0:
+                marker_text_match = re.search(r"online\s+courses\s*&?\s*certifications", bullet, flags=re.IGNORECASE)
+                if marker_text_match:
+                    before = bullet[: marker_text_match.start()].strip(" .:-")
+                    if before and current is not None:
+                        current["bullets"].append(compact_whitespace(before))
+                    if current is not None:
+                        initiatives.append(current)
+                    current = {"title": online_courses_title, "bullets": []}
+                    continue
             if bullet and current is not None:
                 current["bullets"].append(bullet)
             continue
 
+        if normalize_compare_token(line) == online_courses_key:
+            if current is not None:
+                initiatives.append(current)
+            current = {"title": online_courses_title, "bullets": []}
+            continue
+
         if current is not None:
+            # Wrapped lines in project bullets should stay under the previous bullet
+            # instead of being treated as a new project title.
+            has_project_header_signal = ("|" in line) or bool(re.search(r"\d{2}/\d{4}\s*-\s*\d{2}/\d{4}", line))
+            if current.get("bullets") and not has_project_header_signal:
+                current["bullets"][-1] = compact_whitespace(f"{current['bullets'][-1]} {line}")
+                continue
             initiatives.append(current)
         current = {"title": compact_whitespace(line), "bullets": []}
 
@@ -646,10 +761,10 @@ def extract_cv_strategic_initiatives(cv_text: str) -> List[Dict]:
 
 
 def merge_unique_bullets(existing: List[str], additions: List[str]) -> List[str]:
-    merged = [str(item).strip() for item in (existing or []) if str(item).strip()]
+    merged = [compact_whitespace(str(item).strip()) for item in (existing or []) if str(item).strip()]
     seen = {normalize_compare_token(item) for item in merged}
     for bullet in additions or []:
-        cleaned = str(bullet).strip()
+        cleaned = compact_whitespace(str(bullet).strip())
         if not cleaned:
             continue
         key = normalize_compare_token(cleaned)
@@ -739,8 +854,17 @@ def extract_cv_education(cv_text: str) -> List[Dict]:
             )
             continue
 
+        # Non-bullet text under an existing degree should remain its description,
+        # not become a new degree heading.
         if current_item is not None:
-            education_items.append(current_item)
+            existing_lines = current_item.get("thesis_bullets", [])
+            if existing_lines:
+                existing_lines[-1] = compact_whitespace(f"{existing_lines[-1]} {line}")
+                current_item["thesis_bullets"] = existing_lines
+            else:
+                current_item["thesis_bullets"] = [compact_whitespace(line)]
+            continue
+
         current_item = {
             "degree_title": compact_whitespace(line),
             "thesis_title": "",
@@ -909,9 +1033,8 @@ def ensure_structured_cv_fields(record: Dict, candidate_name: str, cv_text: str)
                     matched_generated = gen_item
                     break
 
+            # Keep baseline education description text from the CV to avoid AI over-expansion.
             thesis_bullets = base_thesis_bullets
-            if matched_generated and matched_generated.get("thesis_bullets"):
-                thesis_bullets = merge_unique_bullets([], matched_generated.get("thesis_bullets", []))
 
             final_education.append(
                 {
@@ -933,9 +1056,9 @@ def ensure_structured_cv_fields(record: Dict, candidate_name: str, cv_text: str)
                 item_title = compact_whitespace(str(item.get("title", "")).strip())
                 bullets_raw = item.get("bullets", [])
                 if isinstance(bullets_raw, list):
-                    item_bullets = [str(b).strip() for b in bullets_raw if str(b).strip()]
+                    item_bullets = [compact_whitespace(str(b).strip()) for b in bullets_raw if str(b).strip()]
                 else:
-                    item_bullets = split_bullets(str(bullets_raw))
+                    item_bullets = [compact_whitespace(b) for b in split_bullets(str(bullets_raw)) if compact_whitespace(b)]
                 if item_title:
                     normalized_generated_initiatives.append({"title": item_title, "bullets": item_bullets})
             elif isinstance(item, str):
@@ -963,7 +1086,7 @@ def ensure_structured_cv_fields(record: Dict, candidate_name: str, cv_text: str)
         for base_item in baseline_initiatives:
             base_title = compact_whitespace(str(base_item.get("title", "")))
             base_key = normalize_compare_token(base_title)
-            base_bullets = [str(b).strip() for b in base_item.get("bullets", []) if str(b).strip()]
+            base_bullets = [compact_whitespace(str(b).strip()) for b in base_item.get("bullets", []) if str(b).strip()]
             selected_bullets = initiatives_by_baseline_title.get(base_key) or base_bullets
             final_initiatives.append({"title": base_title, "bullets": selected_bullets})
         record["cv_strategic_initiatives"] = final_initiatives
@@ -978,7 +1101,7 @@ def ensure_structured_cv_fields(record: Dict, candidate_name: str, cv_text: str)
             deduped_initiatives.append(
                 {
                     "title": compact_whitespace(str(item.get("title", ""))),
-                    "bullets": [str(b).strip() for b in item.get("bullets", []) if str(b).strip()],
+                    "bullets": [compact_whitespace(str(b).strip()) for b in item.get("bullets", []) if str(b).strip()],
                 }
             )
         record["cv_strategic_initiatives"] = deduped_initiatives
@@ -1317,7 +1440,18 @@ def create_cv_document(
     run_initiatives = heading_initiatives.add_run("PROJECTS")
     run_initiatives.bold = True
     initiatives = record.get("cv_strategic_initiatives") or []
+    online_courses_items = []
+    project_items = []
     for item in initiatives:
+        if not isinstance(item, dict):
+            continue
+        initiative_title = str(item.get("title") or "").strip()
+        if normalize_compare_token(initiative_title) == "online courses certifications":
+            online_courses_items.append(item)
+        else:
+            project_items.append(item)
+
+    for item in project_items:
         if not isinstance(item, dict):
             continue
         initiative_title = str(item.get("title") or "").strip()
@@ -1325,16 +1459,49 @@ def create_cv_document(
             ini_header = doc.add_paragraph(initiative_title)
             ini_header.runs[0].bold = True
         for bullet in item.get("bullets", []):
-            if str(bullet).strip():
-                doc.add_paragraph(str(bullet).strip(), style="List Bullet")
+            cleaned_bullet = compact_whitespace(str(bullet).strip())
+            if cleaned_bullet:
+                doc.add_paragraph(cleaned_bullet, style="List Bullet")
     add_section_separator()
+
+    if online_courses_items:
+        heading_courses = doc.add_paragraph()
+        run_courses = heading_courses.add_run("Online Courses & Certifications")
+        run_courses.bold = True
+        for item in online_courses_items:
+            for bullet in item.get("bullets", []):
+                cleaned_bullet = compact_whitespace(str(bullet).strip())
+                if cleaned_bullet:
+                    doc.add_paragraph(cleaned_bullet, style="List Bullet")
+        add_section_separator()
 
     heading_skills = doc.add_paragraph()
     run_skills = heading_skills.add_run("SKILLS")
     run_skills.bold = True
     skills = record.get("cv_skills") or []
     if skills:
-        doc.add_paragraph(", ".join([str(skill).strip() for skill in skills if str(skill).strip()]))
+        normalized_skill_lines: List[str] = []
+        section_markers = "Programming Skills|Technical Skills|Standards|Soft Skills|Languages"
+        section_split_regex = re.compile(rf",\s*(?=(?:{section_markers})\s*:)")
+        for skill_line in skills:
+            chunks = section_split_regex.split(str(skill_line))
+            for chunk in chunks:
+                cleaned_chunk = chunk.strip()
+                if cleaned_chunk:
+                    normalized_skill_lines.append(cleaned_chunk)
+
+        for skill_line in normalized_skill_lines:
+            text = str(skill_line).strip()
+            if not text:
+                continue
+            match = re.match(r"^([^:]+):\s*(.*)$", text)
+            if match:
+                paragraph = doc.add_paragraph(style="List Bullet")
+                label_run = paragraph.add_run(f"{match.group(1).strip()}: ")
+                label_run.bold = True
+                paragraph.add_run(match.group(2).strip())
+            else:
+                doc.add_paragraph(text, style="List Bullet")
     add_section_separator()
 
     heading_education = doc.add_paragraph()
@@ -1346,14 +1513,17 @@ def create_cv_document(
             continue
         degree_title = str(item.get("degree_title") or "").strip()
         thesis_title = str(item.get("thesis_title") or "").strip()
+        thesis_bullets = [str(b).strip() for b in item.get("thesis_bullets", []) if str(b).strip()]
         if degree_title:
             degree_paragraph = doc.add_paragraph(degree_title)
             degree_paragraph.runs[0].bold = True
+        description_parts = []
         if thesis_title:
-            doc.add_paragraph(thesis_title)
-        for bullet in item.get("thesis_bullets", []):
-            if str(bullet).strip():
-                doc.add_paragraph(str(bullet).strip(), style="List Bullet")
+            description_parts.append(thesis_title)
+        if thesis_bullets:
+            description_parts.append(" ".join(thesis_bullets))
+        if description_parts:
+            doc.add_paragraph(compact_whitespace(" ".join(description_parts)))
     add_section_separator()
 
     doc.save(cv_path)

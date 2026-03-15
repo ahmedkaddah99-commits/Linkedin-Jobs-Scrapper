@@ -253,6 +253,12 @@ def save_jobs_snapshot(path_value: str, jobs):
         json.dump(jobs, file, indent=4, ensure_ascii=False)
 
 
+def save_jobs_output(path_value: str, jobs) -> None:
+    path = Path(path_value or "").expanduser()
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(jobs, file, indent=4, ensure_ascii=False)
+
+
 def extract_first_json_object(text: str) -> str:
     payload = text or ""
     start = payload.find("{")
@@ -984,6 +990,8 @@ def main() -> int:
 
     if not unique_jobs_list:
         print("[Stage1] no jobs available before AI filter, exiting.")
+        save_jobs_output(args.output, [])
+        print(f"[Stage1] wrote empty output to {args.output}")
         return 0
 
     existing_job_signatures = load_existing_job_signatures_from_excel(args.existing_jobs_excel)
@@ -1004,6 +1012,8 @@ def main() -> int:
 
     if not unique_jobs_list:
         print("[Stage1] no new jobs left after Excel prefilter, exiting.")
+        save_jobs_output(args.output, [])
+        print(f"[Stage1] wrote empty output to {args.output}")
         return 0
 
     ai_approved_jobs, _ = filter_with_ai(
@@ -1017,6 +1027,8 @@ def main() -> int:
     )
     if not ai_approved_jobs:
         print("[Stage1] no jobs passed AI title filter, exiting.")
+        save_jobs_output(args.output, [])
+        print(f"[Stage1] wrote empty output to {args.output}")
         return 0
 
     if args.max_enrich_jobs >= 0:
@@ -1072,8 +1084,7 @@ def main() -> int:
             "4)newest+easy+high_or_unknown_applicants"
         )
 
-    with open(args.output, "w", encoding="utf-8") as file:
-        json.dump(final_output, file, indent=4, ensure_ascii=False)
+    save_jobs_output(args.output, final_output)
 
     print(f"[Stage1] done. saved {len(final_output)} jobs to {args.output}")
     print(f"[Stage1] excluded jobs file: {args.excluded_output}")

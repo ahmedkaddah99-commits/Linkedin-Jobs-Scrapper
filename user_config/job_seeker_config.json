@@ -1,38 +1,43 @@
 {
   "candidate": {
-    "name": "Ahmed Kaddah",
-    "email": "ahmed.kaddah@tutamail.com",
+    "name": "Abdelrahman Elsissy",
+    "email": "abdelrahmanelsissy1@gmail.com",
     "cv_path": "user_config/cv_master.txt",
-    "cv_docx_path": "Ahmed Kaddah CV.docx",
+    "cv_docx_path": "Abdelrahman Elsissy CV.docx",
     "profile_image_path": "user_config/_profile_from_cv.png",
     "profile_links": {
       "linkedin": {
-        "url": "https://github.com/ahmedkaddah99-commits?tab=repositories",
-        "text": "Ahmed Kaddah",
+        "url": "https://www.linkedin.com/in/abdelrahman-elsissy-a2866722a/",
+        "text": "Abdelrahman Elsissy",
         "icon": "in",
         "logo_path": "user_config/linkedin_logo.png"
       },
       "github": {
-        "url": "https://github.com/ahmedkaddah99-commits?tab=repositories",
-        "text": "Ahmed Kaddah",
+        "url": "https://github.com/AbdelrahmanElsissy",
+        "text": "Abdelrahman Elsissy",
         "icon": "GH",
         "logo_path": "user_config/github_logo.jpg"
       }
     },
     "cv_font": "Calibri",
     "languages": [
-      "Arabic — Native",
+      "Arabic — C2",
       "English — C1",
-      "German — B1/B2"
+      "German — B2"
     ]
   },
   "job_search": {
     "keywords": [
-      "analyst",
-      "consultant",
-      "product manager",
-      "project manager",
-      "business process manager"
+      "Systems Engineer",
+      "⁠hardware development engineer",
+      "⁠firmware engineer",
+      "⁠embedded software development engineer",
+      "⁠system testing Engineer",
+      "⁠software testing engineer",
+      "⁠testing engineer",
+      "⁠verification engineer",
+      "⁠quality assurance engineer",
+      "⁠quality engineer"
     ],
     "linkedin_geo_id": "101282230",
     "time_posted_seconds": 86400,
@@ -42,7 +47,6 @@
     ],
     "forbidden_title_keywords": [
       "senior",
-      "engineer",
       "sr",
       "sr.",
       "lead",
@@ -53,7 +57,7 @@
       "werkstudent"
     ],
     "priority": {
-      "low_applicant_threshold": 80
+      "low_applicant_threshold": 40
     }
   },
   "ai": {
