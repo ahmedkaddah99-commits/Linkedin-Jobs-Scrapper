@@ -30,6 +30,7 @@ from job_seeker_config import (
 DEFAULT_CANDIDATE_NAME = "Kaddah Ahmed"
 DEFAULT_CANDIDATE_EMAIL = "ahmed.kaddah@tutamail.com"
 DEFAULT_CV_FONT = "Calibri"
+DEFAULT_HEADER_LOCATION = "Munich (Open to Relocate)"
 DEFAULT_LANGUAGES = [
     "Arabic \u2014 Native", "English \u2014 C1", "German \u2014 B1/B2",
 ]
@@ -89,14 +90,8 @@ def extract_city_from_job(job: Dict) -> str:
     return "Germany"
 
 
-def format_header_location(job: Dict) -> str:
-    city = extract_city_from_job(job)
-    if not city or city.strip().lower() == "germany":
-        return "Germany"
-    city_clean = city.strip()
-    if city_clean.lower().endswith(", germany"):
-        return city_clean
-    return f"{city_clean}, Germany"
+def format_header_location(_job: Dict) -> str:
+    return DEFAULT_HEADER_LOCATION
 
 
 def build_docs_prompt(

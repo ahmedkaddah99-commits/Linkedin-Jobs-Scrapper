@@ -47,69 +47,37 @@ between conditions.
 
 Skills
 
-• Programming Skills: C, Embedded C, Python, SQL, R, Firmware Development, CAPL Scripting
-• Technical Skills: Circuit Design (KiCad, Eagle, Altium), Microcontrollers, Hardware-in-the-Loop (HiL) Testing,
-Requirements Traceability (Polarion ALM), Verification & Validation (V&V), Medical Device Risk Management,
-STM32CubeIDE, Soldering, Electronics Diagnostics and Troubleshooting, CANoe (Testing & Simulation), Polarion,
-NI-Multisim, SOLIDWORKS, Git, MATLAB, Simulink, Matplotlib, NumPy, Pandas, SciPy, Scikit-learn, Data Analysis,
-Signal Processing, Machine Learning, Codesys, TIA Portal, LabVIEW, MS Office
-• Standards: IEC 62304, ISO 13485, IEC 60601
-• Soft Skills: Fast Learning, Problem-Solving, Teamwork, Active Listening, Analytical Thinking
+• Programming Skills: C, Embedded C, Python (NumPy/Pandas/Scikit-learn), R, SQL, CAPL.
+• V&V & Standards: ISO 13485, IEC 62304/60601/14971, Polarion ALM, HiL Testing, CANoe.
+• Hardware/ECAD: Altium, KiCad, STM32, PCB Design, Signal Processing, Oscilloscopes.
+• Tools: MATLAB/Simulink, Git, LabVIEW, SOLIDWORKS.
+
 
 
 Education
 
 MSc Biomedical Engineering and Medical Physics | Technical University of Munich | 2023-2025
-
-Graduated with an overall grade of 1.7. Throughout my studies, I gained solid expertise in biosensors, signals and systems,
-signal processing, measurement and filtering of electrical signals, data analysis, circuit design, PCB development, and
-electronics diagnostics, with additional focus on biosensors, neuroprosthetics and bionics, medical devices, and medical
-technology
+Graduated with an overall grade of 1.7 and among Top Students in my class.
 
 BSc Mechatronics Engineering | University of Debrecen | 2019-2023
-Graduated with a bachelor’s degree in Mechatronics Engineering as the highest-ranking student in my class with an
-outstanding overall grade.
+Highest-ranking student in my class with an outstanding overall grade.
 
 Projects
 
 Real-time Wireless 12-Channel Electrocardiogram (ECG) system | Technical University of Munich | 07/2024-08/2025
 
-• Designing the schematic and PCB layout of the analog and digital circuits of the 12-Channel ECG system.
-• Soldering the components on the PCB
-• Planning and executing tests for the PCB, as well as performing electrical debugging and troubleshooting.
-• Developing the firmware for the acquisition system to read patient data and transmit it with Wi-Fi to a user interface.
+• Analog/Digital PCB Design; Firmware Development (Wi-Fi); Electrical Debugging & Troubleshooting.
 
 Measurement and Filtering of Bioelectrical Signals | Technical University of Munich | 02/2024-04/2024
 
-• Reading and generating signals and applying Discrete Fourier Transform for signal analysis and interpretation using MATLAB.
-• Designing and implementing a first-order high-pass filter and a second-order low-pass filter RC circuits and measuring the
-frequency response of the system.
-• Implementing digital filters to remove noise interference from electrocardiogram (ECG) signals while retaining the critical frequency
-components and pathological features inherent to the ECG data.
+• MATLAB Signal Analysis (DFT); RC Filter Design & Implementation; Digital ECG Noise Filtering.
 
 Neuroprosthetics: Cochlear Implants | Technical University of Munich | 10/2023-02/2024
 
-• Signal generation, plotting, and interpretation in the time and frequency domains using Python.
-• Implementing different differential equation solvers and solving differential equations with implemented DEQ solvers, deriving a
-differential equation of a human cell equivalent circuit, and plotting the slope fields.
-• Implementing a Leaky Integrate and Fire Model and simulating for different input currents, plotting and interpreting the results.
-• Implementing the Hodgkin-Huxley neuron model and running it with different temperatures and input currents, signal plotting,
-and signal analysis.
+• Python Signal Simulation; Neural Modeling (Hodgkin-Huxley & LIF); Differential Equation Solvers.
 
 Integrating and implementing Biosensors in Social Robots | University of Debrecen | 02/2022-05/2022
 
-• Different biosensors were integrated to be used in one main system via user modules and collect and analyze results to ensure the
-system’s validity.
-• Designed an Arduino-compatible PCB with the same functions and applications as an Arduino microcontroller with a programming
-connection.
-• Performed hands-on soldering of electronic components to assemble the PCB and ensure proper functionality.
-• Results were accessible to be viewed on purpose by saving and loading data for each user so patients can keep track of their
-health.
-• Development of a friendly GUI suitable for acquiring vital signals.
-
+• Multi-sensor System Integration; Custom Arduino-compatible PCB Design; Vital Signal GUI Development.
 Online Courses & Certifications
-• Embedded Software Development with C Specialization (September. 2025-January. 2026) - EDUCBA (Coursera)
-• Learning Python for Data Science (Oct. 2023-May. 2024) - Harvard University edX
-• Complete Linear Algebra: Theory and Implementation in Code (Apr. 2024) - Udemy
-• Signal Processing Problems, Solved in Matlab and in Python (12. 2023) - Udemy
-• Signals and Systems (Nov. 2023) - Udemy
+• Embedded C (Coursera), Python for Data Science (Harvard/edX), Signal Processing, Signals & Systems, Linear Algebra.
