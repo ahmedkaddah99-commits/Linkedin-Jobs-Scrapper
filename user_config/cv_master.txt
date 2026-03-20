@@ -1,92 +1,77 @@
-Ahmed Kaddah
-Munich, Germany | Email: ahmed.kaddah@tutamail.com
-Arabic (Native), English (C1), German (B1/2)
+Mohamed Elhelpawy
+Hamburg, Germany | +49 176 84654260 | melhelbawy@outlook.com | linkedin.com/in/melhelpawy
+English (C1), German (B2), Arabic (Native)
 
 Professional Summary
 
-Business Transformation and AI Specialist with experience in IT strategy, AI adoption, and process optimization. Skilled in aligning business needs with technical solutions to deliver measurable results in digital transformation and SDLC optimization.
+Performance-driven Chemical and Bioprocess Engineer with international operational experience and a proven track record of process optimization within Ingredion. Currently completing an M.Sc. at TUHH, combining a deep technical foundation in chemical engineering with hands-on expertise in digital data modeling, multi-functional project coordination, and continuous improvement methodologies in manufacturing and laboratory environments. Fluent in English, German, and Arabic. Eager to leverage strong analytical problem-solving and cross-functional leadership skills within the Ingredion Global Talent for Operations (GTO) Trainee program.
 
 
 Professional Experience
 
-Technology Transformation and Strategy Consultant at Allianz Technology (Internship) | Germany | May 2025 - Sep 2025 (4-day-workweek)
+Process Engineer Working Student at Ingredion GmbH | Hamburg, Germany | Feb 2025 - Present
 
-- Contributed to AIA4IT, embedding AI across the SDLC by designing workflows to drive measurable productivity gains and ensure optimal license utilization.
-- Deliver AI and cloud consulting solutions through use case analysis, asset governance, and solution design.
-- Assisted in data strategy for migration, decommissioning, and transition, integrating Allianz OEs into the Future Cloud Data platforms.
-- Designed and developed an Enterprise Architecture organization Operating Model to standardize and structure architecture data, improving clarity and stakeholder alignment.
+- Process Optimization & Continuous Improvement: Support high-impact digitalization and operations projects to optimize manufacturing processes; conduct technical measurement series on production lines to enhance operational efficiency.
+- Data Modeling & Analytics: Analyze critical manufacturing parameters (cook time, moisture, viscosity, protein concentration) and spectroscopic data. Build, validate, and deploy chemometric models that correlate sensor readings with product quality, reducing analysis time.
+- Cross-Functional Collaboration: Partner directly with Production, Quality Assurance, and external suppliers to identify root causes of process deviations and implement data-driven continuous improvements.
+- Technical Documentation & Training: Authored and facilitated the release of critical operational documents (Work Instructions, Operating Procedures, and Forms) and conducted hands-on spectroscopy training for plant operators. Developed internal process monitoring dashboards using Excel and VBA for project handovers.
 
-GenAI Associate for Business Transformation at Allianz SE (Internship) | Germany | Nov 2024 - Apr 2025 (fulltime)
+Chemical Analyst Working Student at Eurofins Consumer Product Testing GmbH | Hamburg, Germany | Aug 2024 - Jan 2025
 
-- Conducted AI business analysis and stakeholder consultations to identify use cases for AI-driven automation.
-- Co-developed and evaluated PoC AI tools, measuring impact through automated KPI assessments.
-- Designed Agentic AI MVPs for applications in project management and process optimization.
-- Ensured alignment between AI capabilities and organizational needs through cross-functional workshops.
-- Built an AI-driven Jira enhancement tool, bridging business requirements with AI implementation.
+- Product Compliance & Labeling: Ensured strict regulatory compliance by managing label checks and quality parameters for cosmetics, detergents, and hygiene products for major retail clients.
+- Analytical Testing & Data Management: Verified incoming physical samples against rigorous quality metrics (e.g., typesetting, dimensions) and maintained precise database entry of external laboratory results with near 100% accuracy.
+- Project Coordination: Supported project managers in cross-functional environments by creating test plans, drafting project summaries, and maintaining rigorous technical documentation.
+- Performance Excellence: Officially commended in the final evaluation for exceptional analytical thinking, goal-oriented precision, and the readiness to independently assume additional responsibilities while maintaining high-quality output in high-pressure situations.
 
-Contractor - Zeus Scooters GmbH | Germany | Dec 2023 - Jul 2024 (fulltime)
+R&D Working Student at Vivere GmbH | Hamburg, Germany | Oct 2023 - Jul 2024
 
-- Managed shared e-scooter operations across 7 cities in Germany, overseeing a fleet of 1,600+ vehicles.
-- Recruited, trained, and managed a team of 15 ground operators.
-- Secured financing for 7 transporter vehicles without traditional bank support.
-- Developed operational strategies projecting a 5% increase in revenue and efficiency.
-
-Operations Lead and Co-Founder - Roxy Mobility GmbH | Freiburg | Dec 2020 - Oct 2024 (fulltime)
-
-- Directed operations in Freiburg, managing a team of 5 and coordinating with thousands of customers and city authorities.
-- Negotiated business development agreements with 5 partners, including Deutsche Bahn, VAG, and leading hotels.
-- Pitched mobility solutions for 50 major European capitals, increasing parking utilization by 4x.
-- Reduced operational costs by 50% and increased revenue by 25%.
-- Achieved #1 Fastest Action Time and #1 Customer Satisfaction in the city.
+- Product Development & Scale-Up: Formulated personal, home, and pet care prototypes for the FMCG sector, leading rigorous periodic stability assessments to ensure consumer safety; collaborated with cross-functional teams to successfully scale production from laboratory bench to manufacturing.
+- Troubleshooting & Root Cause Analysis: Resolved critical product instability issues through advanced data analysis, ensuring product viability and reducing formulation waste.
+- Project Documentation: Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate technical progress reports.
 
 Skills
 
-Technical and Digital
+Operations & Engineering
 
-Office 365, Azure, Celonis, Vibe Coding, Jira, Confluence, Power BI, Miro, SDLC, API Integration (REST/GraphQL), GenAI Tools (OpenAI, Hugging Face, LangChain)
+Process Optimization, Continuous Improvement, Root Cause Analysis, Production Scale-up, Manufacturing Operations
 
-Business and Project Skills
+Leadership & Strategy
 
-Project Management, Agile/Scrum, Product Lifecycle, Requirements Engineering, Process Improvement
+Analytical Problem Solving, Cross-functional Coordination, Project Management, Time Management, Technical Reporting, Team Leadership
 
-Analytical and Consulting Skills
+Digital & Technical Tools
 
-Data Analysis, Strategic Planning, Stakeholder Management, Business Model Design, E2E Process Automation (Python & Various Tech Stacks)
+Data Modeling, Chemometric Analysis, Advanced MS Excel (VBA, Power Query), Odoo, SAP (Basic)
 
 Education
 
-M.A. Entrepreneurship and Innovation - Katholische Universitaet Eichstaett-Ingolstadt
+M.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)
 
-Master Thesis (Strategic Opportunity Discovery Framework): Data-Driven Framework for Identifying High-Potential Startup Opportunities
--- Developed a structured decision framework to identify commercially viable startup niches using market, technology, and regulatory signals.
--- Built a multi-stage analysis pipeline combining bibliometric science mapping, market adoption indicators, and regulatory feasibility screening.
--- Applied the framework to evaluate opportunity spaces and identify areas with strong innovation potential but low market saturation.
--- Implemented reproducible analysis workflows and economic feasibility modeling to assess commercialization potential.
-GitHub: github.com/ahmedkaddah99-commits/MedTech_Thesis_Pipeline
+Master's Thesis (Optimization of Heat Exchanger Performance): Optimization of Heat Exchanger performance to maximize energy efficiency in industrial manufacturing environments.
+-- Focus Areas: General Process Engineering, Process Systems Engineering, Multiphase Flow, Industrial Thermodynamics.
 
-B.Sc. Business Administration and Management - Debrecen University
+B.Sc. Chemical Engineering - University of Debrecen
+
+-- Awards & Leadership: Stipendium Hungaricum Scholarship recipient (Merit-based). Acted as Student Mentor (HOOK), guiding incoming international students with academic onboarding and cultural integration. Co-founded an international education agency, leading marketing initiatives and managing daily operations.
 
 Projects
 
-AI-Driven Job Application Automation Pipeline | 2026
+Process Development for Extraction of Beta-galactosidase | TUHH
 
-• Designed an end-to-end automation system for LinkedIn job discovery, screening, and document generation.
-• Built a four-stage pipeline (scraping → rule-based filtering → AI screening → automated document creation).
-• Integrated semantic AI evaluation to assess profile–job fit and prioritize high-probability applications.
-• Developed modular orchestration with configurable settings and checkpoint-based execution.
-• Automated CV tailoring and structured output generation (.docx, .pdf, JSON, Excel).
+• Designed an Aqueous Two-Phase System (ATPS); performed mass balances and phase diagram interpretations.
+• Conducted comprehensive environmental impact analyses and generated a detailed CAPEX report.
 
-ERP Growth Strategy for Odoo Implementation Partner | 2026
+Metabolic Engineering of E. coli | TUHH
 
-• Developed market positioning and client acquisition strategy for an ERP consulting partner within the Odoo ecosystem.
-• Designed niche-based differentiation model aligned with Odoo partner tier dynamics and lead distribution mechanics.
-• Structured revenue model optimizing implementation margins, custom development, and recurring support services.
-• Built a client acquisition framework combining consultative selling, content positioning, and low-risk entry offers.
+• Engineered E. coli JG472 for enhanced 2,3-butanediol production.
+• Applied PCR, electroporation, HPLC data analysis, and VP tests to monitor growth kinetics and metabolic stress.
 
-AI-Powered Learning Platform | Product Lead | 2025
+Process Development for Production of L-lysine | TUHH
 
-• Conceived an AI-enabled platform transforming user-selected video content into contextual, interactive learning workflows.
-• Defined product vision, target users, MVP scope, and feature prioritization.
-• Designed user journeys integrating video, transcripts, and AI-assisted contextual explanations.
-• Conducted market and competitor analysis to identify gaps in traditional curriculum-based learning platforms.
-• Collaborated with engineering on technical feasibility and iterative product development.
+• Selected high-yield microorganisms and optimized continuous processes to increase manufacturing efficiency.
+• Utilized advanced Excel for data modeling and reporting.
+
+Thermodynamic Data Modeling | TUHH
+
+• Conducted phase equilibria and activity coefficient calculations using UNIFAC and COSMO-RS models.
+• Refined process layouts and delivered accurate technical reports.

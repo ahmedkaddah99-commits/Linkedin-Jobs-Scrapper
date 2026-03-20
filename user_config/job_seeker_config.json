@@ -28,11 +28,17 @@
   },
   "job_search": {
     "keywords": [
-      "analyst",
-      "consultant",
-      "product manager",
-      "project manager",
-      "business process manager"
+      "Process Engineer",
+      "Bioprocess Engineer",
+      "Project Engineer",
+      "Operations Trainee",
+      "Continuous Improvement Engineer",
+      "Process Data Analyst",
+      "Digital Transformation Engineer",
+      "Quality Engineer",
+      "R&D Engineer",
+      "Betriebsingenieur",
+      "Nachwuchsführungskraft"
     ],
     "linkedin_geo_id": "101282230",
     "time_posted_seconds": 86400,
@@ -42,7 +48,6 @@
     ],
     "forbidden_title_keywords": [
       "senior",
-      "engineer",
       "sr",
       "sr.",
       "lead",
