@@ -1,83 +1,78 @@
-Abdelrahman Elsissy
-Munich, Germany | Email: abdelrahmanelsissy1@gmail.com
-Arabic (Native), English (C1), German (B2)
+Mohamed Elnaggar
+Stuttgart, Germany | Email: mmohamed9032@gmail.com | Phone: +4915755114125
+Arabic (Native), English (C1), German (A2)
 
 Professional Summary
 
-Biomedical Engineer specializing in medical device verification, embedded systems, and biosignal processing. Experienced in verification & validation (V&V) of safety-critical electromechanical medical devices, including hardware-in-the-loop testing, requirements traceability, and regulatory compliance with IEC 62304, ISO 13485, and IEC 60601. Strong background in embedded programming, PCB design, signal processing, and data analysis, with hands-on experience developing test systems and validating complex medical technologies.
+I am currently working as a student assistant and writing my research paper at the Institute for Electrical Energy Conversion, more specifically in the Smart Converters Group. I use LTspice, Python, Inventor, and MATLAB for simulations and to set up customized test environments. I also have experience with power electronics circuits and Altium Designer, as I used them frequently in my electronics design course.
 
 Professional Experience
 
-Verification Engineer (Consultant at LivaNova) (T&S Sevices GmbH) | Munich, Germany |  08/2025 - Present
+Student Research Assistant (HiWi) | Max Planck Institute for Intelligent Systems | Stuttgart, Germany | Nov 2025 – Present
+• Developed a novel ultra-high-voltage (multi-kilovolt), ultra-low-current power conversion circuit specifically for piezoelectric actuator-based robots.
+• Achieved high conversion efficiency within a highly compact and lightweight design to meet the portability requirements of small-scale robotics.
+• Significantly outperformed existing high-voltage drivers by optimizing both power efficiency and overall physical footprint.
 
-• Led verification activities for software-controlled electromechanical medical device modules, ensuring traceability between
-requirements, risk controls, and verification tests.
-• Developed verification strategies, test protocols, and reports compliant with ISO 13485, IEC 60601-1, and IEC 62304 processes
-• Planned and executed functional and system-level verification tests for medical device subsystems
-• Designed and implemented automated test setups and hardware-in-the-loop (HiL) environments for validation of system behaviour
-• Performed requirements verification and traceability management using Polarion ALM
-• Supported risk management activities according to ISO 14971, verifying risk control measures through test evidence
-• Collaborated closely with software, electronics, and system engineers to resolve defects and improve system reliability
-• Produced high-quality regulatory documentation supporting design verification and product release stakeholder alignment.
+Student Research Assistant (HiWi) | Smart Converters Group | Stuttgart, Germany | July 2025 – Present
 
-R&D Validation and Verification Engineer (LivaNova GmbH) | Munich, Germany |  11/2024 - 07/2025
+• Program and control amplifier operation using function generator, operational amplifiers, and PC interface (sine, square, and arbitrary signals).
+• Develop and automate temperature measurement systems (OpSens Solutions, Python) to ensure fast and precise data acquisition.
+• Design and fabricate test fixtures for multilayer capacitors using Inventor software, including 3D-printed sample holders and electrical contact setups.
+• Program and calibrate TEC controllers for adjustable heating/cooling plate experiments.
+• Evaluate experimental results and contribute to research on electrocaloric polymers for emission-free mobility within the EU EIC project COOPOL.
 
-• Developed and executed verification and validation test cases at system and subsystem level for heart-lung machine platforms
-• Defined test procedures and acceptance criteria based on system requirements and risk analysis
-• Executed HiL-based testing and functional validation on full medical device systems
-• Designed and maintained custom test benches and measurement setups
-• Developed a high-precision pressure simulation system (1 mmHg resolution) for verification of physiological control algorithms
-• Documented test results and defect reports in compliance with medical device development processes
+Electronics Design Intern | National Telecommunication Institute | Cairo, Egypt | Feb 2024 – May 2024
 
-R&D Engineering - Wearable Biosensors (Noxon GmbH)  | Munich, Germany | 06/2024 - 11/2024
+• Designed and implemented analog signal conditioning filters and operational amplifier circuits.
+• Created and tested PCB layouts for electronic devices using Altium Designer.
+• Gained hands-on experience with oscillators and their practical applications.
+• Performed circuit analysis and simulations using engineering software tools.
+• Maintained technical documentation for components and design specifications.
 
-• Designed and developed analog and digital circuits for sensors, utilizing KiCad and Altium for PCB layout and schematic design.
-• Developed firmware for sensor interfaces and embedded systems, focusing on SPI, I2C, and UART communication protocols.
-• Debugged and troubleshooted hardware issues in real-time using oscilloscopes, logic analyzers, and multimeters.
-• Implemented sensor data acquisition systems, including signal conditioning, filtering, and amplification for precision measurements.
-• Performed hands-on soldering of electronic components to assemble the PCB and ensure proper functionality.
+Graduate Teaching Assistant | Arab Academy for Science, Technology and Maritime Transport (AAST) | Cairo, Egypt | Oct 2022 – Aug 2024
 
-Research assistant (Munich Institute of Neural Cell Biology) | Munich, Germany | 03/2024 - 11/2024
+• Provided one-on-one tutoring to students.
+• Led weekly review sessions, assisted with grading assignments, and maintained documentation.
+• 3 years of experience as a teaching assistant at the undergraduate level in the Electronics and Communication department.
 
-• Performed brain tissue slicing and immunohistochemical staining to visualize spine density.
-• Conducted detailed staining and analysis of mouse brain samples under different CNMO conditions (CCNMO, acute, subacute).
-• Collaborated with my supervisor to develop methods for quantifying dendrites and highlighting differences in spine density
-between conditions.
-• Gained experience in data analysis and interpretation using R, ensuring statistical rigor in the analysis of spine density
+Programming Engineer | Armed Forces College of Medicine | Cairo, Egypt | Nov 2022 – Nov 2023
 
-Skills
+• Developed 2 software applications from scratch.
+• Optimized code for performance and scalability, resulting in improved application efficiency.
+• Collaborated with cross-functional teams to design and implement software solutions.
+• Utilized programming languages such as SQL, Python, and Java to create efficient code.
 
-• Programming Skills: C, Embedded C, Python (NumPy/Pandas/Scikit-learn), R, SQL, CAPL.
-• V&V & Standards: ISO 13485, IEC 62304/60601/14971, Polarion ALM, HiL Testing, CANoe.
-• Hardware/ECAD: Altium, KiCad, STM32, PCB Design, Signal Processing, Oscilloscopes.
-• Tools: MATLAB/Simulink, Git, LabVIEW, SOLIDWORKS.
+Analog Integrated Systems Design Internship | Siemens EDA | Cairo, Egypt | Feb 2022 – Feb 2022
 
-
+• Developed a SAR ADC using Cadence.
+• Designed, analyzed, and reviewed system architecture.
+• Designed and simulated analog integrated circuits using CAD tools.
+• Characterized and tested analog integrated circuits in a lab setting.
+• Worked on layout and physical design of analog integrated circuits.
+• Created all necessary technical documents, data sheets, and design specifications.
 
 Education
 
-MSc Biomedical Engineering and Medical Physics | Technical University of Munich | 2023-2025
-Graduated with an overall grade of 1.7 and among Top Students in my class.
+University of Stuttgart | Stuttgart, Germany
+Master of Science (M.Sc.) in Electrical Engineering — Major: Smart Signals Processing | April 2025 – Present
 
-BSc Mechatronics Engineering | University of Debrecen | 2019-2023
-Highest-ranking student in my class with an outstanding overall grade.
+Arab Academy for Science, Technology and Maritime Transport | Cairo, Egypt
+Bachelor's Degree in Electronics and Communication Engineering | Oct 2017 – Jul 2022
+GPA: 3.73 (Excellent with Honor & First of my Class)
 
-Projects
+Arab Academy for Science, Technology and Maritime Transport | Cairo, Egypt
+Minor Degree in Marketing and International Business | Sep 2020 – Jul 2022
 
-Real-time Wireless 12-Channel Electrocardiogram (ECG) system | Technical University of Munich | 07/2024-08/2025
+Skills
 
-• Analog/Digital PCB Design; Firmware Development (Wi-Fi); Electrical Debugging & Troubleshooting.
+• Simulation & Design Tools: MATLAB / Simulink, LTspice, Cadence, CST, Altium Designer, Inventor, KiCad
+• Programming: Python, C Programming, SQL, HTML, CSS, SCIPI Commands
+• Other Tools: Microsoft Office
+• Domains: Power Electronics, Analog/Digital Circuit Design, PCB Layout, Test & Measurement, Embedded Systems
 
-Measurement and Filtering of Bioelectrical Signals | Technical University of Munich | 02/2024-04/2024
 
-• MATLAB Signal Analysis (DFT); RC Filter Design & Implementation; Digital ECG Noise Filtering.
+Languages
 
-Neuroprosthetics: Cochlear Implants | Technical University of Munich | 10/2023-02/2024
-
-• Python Signal Simulation; Neural Modeling (Hodgkin-Huxley & LIF); Differential Equation Solvers.
-
-Integrating and implementing Biosensors in Social Robots | University of Debrecen | 02/2022-05/2022
-
-• Multi-sensor System Integration; Custom Arduino-compatible PCB Design; Vital Signal GUI Development.
-Online Courses & Certifications
-• Embedded C (Coursera), Python for Data Science (Harvard/edX), Signal Processing, Signals & Systems, Linear Algebra.
+• Arabic — Native (C2)
+• English — Advanced (C1)
+• German — Elementary (A2)

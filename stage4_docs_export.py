@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import json
 import os
 import re
@@ -30,7 +30,7 @@ from job_seeker_config import (
 DEFAULT_CANDIDATE_NAME = "Kaddah Ahmed"
 DEFAULT_CANDIDATE_EMAIL = "ahmed.kaddah@tutamail.com"
 DEFAULT_CV_FONT = "Calibri"
-DEFAULT_HEADER_LOCATION = "Munich (Open to Relocate)"
+DEFAULT_HEADER_LOCATION = "Stuttgart (Open to Relocate)"
 DEFAULT_LANGUAGES = [
     "Arabic \u2014 Native", "English \u2014 C1", "German \u2014 B1/B2",
 ]
@@ -493,8 +493,22 @@ def parse_cv_role_header(role_line: str, fallback_company: str = "") -> Dict:
         return {"role_title": "", "company": fallback_company, "period": ""}
 
     parts = [part.strip() for part in cleaned.split("|") if part.strip()]
+
+    # Format: role | company | location | period  (3+ parts)
+    # Treat parts[0] as role, parts[-1] as period, everything in between as company.
+    if len(parts) >= 3:
+        role_title = parts[0]
+        company = " | ".join(parts[1:-1])
+        period = parts[-1]
+        return {
+            "role_title": role_title,
+            "company": company,
+            "period": period,
+        }
+
+    # Handle 0, 1, or 2 parts
     role_company_part = parts[0] if parts else cleaned
-    period = parts[-1] if len(parts) > 1 else ""
+    period = parts[-1] if len(parts) == 2 else "" # Only assign period if there are exactly 2 parts
 
     role_title = ""
     company = fallback_company
@@ -1129,11 +1143,9 @@ def resolve_assets_profile_png(docs_dir: Path):
     preferred = assets_dir / "_profile_from_cv.png"
     if preferred.exists() and preferred.is_file():
         return preferred
-    user_config_png_files = sorted((Path("user_config")).glob("*.png")) if Path("user_config").exists() else []
-    if user_config_png_files:
-        return user_config_png_files[0]
-    png_files = sorted(assets_dir.glob("*.png")) if assets_dir.exists() else []
-    return png_files[0] if png_files else None
+
+    # Do NOT fall back to any arbitrary .png in user_config (e.g. linkedin_logo.png)
+    return None
 
 
 def find_cv_docx_source_path():
@@ -1187,6 +1199,7 @@ def create_cv_document(
 ) -> str:
     try:
         from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.opc.constants import RELATIONSHIP_TYPE as RT
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
@@ -1407,7 +1420,8 @@ def create_cv_document(
     run_summary = heading_summary.add_run("PROFESSIONAL SUMMARY")
     run_summary.bold = True
     run_summary.font.color.rgb = None
-    doc.add_paragraph(str(record.get("cv_professional_summary") or "").strip())
+    summary_para = doc.add_paragraph(str(record.get("cv_professional_summary") or "").strip())
+    summary_para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     add_section_separator()
 
     heading_exp = doc.add_paragraph()
@@ -1422,42 +1436,34 @@ def create_cv_document(
         role_title = str(item.get("role_title") or "").strip()
         exp_company = str(item.get("company") or "").strip()
         period = str(item.get("period") or "").strip()
-        headline_parts = [part for part in [role_title, exp_company, period] if part]
-        if headline_parts:
-            exp_header = doc.add_paragraph(" | ".join(headline_parts))
-            exp_header.runs[0].bold = True
+        if role_title:
+            exp_header = doc.add_paragraph()
+            exp_header.paragraph_format.space_after = Pt(0)
+            title_run = exp_header.add_run(role_title)
+            title_run.bold = True
+        sub_parts = [part for part in [exp_company, period] if part]
+        if sub_parts:
+            sub_line = doc.add_paragraph(" | ".join(sub_parts))
+            sub_line.paragraph_format.space_before = Pt(0)
+            sub_line.paragraph_format.space_after = Pt(1)
+            for run in sub_line.runs:
+                run.italic = True
+                run.font.size = Pt(10)
         for bullet in item.get("bullets", []):
             if str(bullet).strip():
                 doc.add_paragraph(str(bullet).strip(), style="List Bullet")
     add_section_separator()
 
-    heading_initiatives = doc.add_paragraph()
-    run_initiatives = heading_initiatives.add_run("PROJECTS")
-    run_initiatives.bold = True
+    # PROJECTS section removed per user request.
+    # Collect online_courses_items from initiatives for the section below.
     initiatives = record.get("cv_strategic_initiatives") or []
     online_courses_items = []
-    project_items = []
     for item in initiatives:
         if not isinstance(item, dict):
             continue
         initiative_title = str(item.get("title") or "").strip()
         if normalize_compare_token(initiative_title) == "online courses certifications":
             online_courses_items.append(item)
-        else:
-            project_items.append(item)
-
-    for item in project_items:
-        if not isinstance(item, dict):
-            continue
-        initiative_title = str(item.get("title") or "").strip()
-        if initiative_title:
-            ini_header = doc.add_paragraph(initiative_title)
-            ini_header.runs[0].bold = True
-        for bullet in item.get("bullets", []):
-            cleaned_bullet = compact_whitespace(str(bullet).strip())
-            if cleaned_bullet:
-                doc.add_paragraph(cleaned_bullet, style="List Bullet")
-    add_section_separator()
 
     if online_courses_items:
         heading_courses = doc.add_paragraph()
