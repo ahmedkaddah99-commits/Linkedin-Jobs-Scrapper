@@ -471,25 +471,41 @@ def filter_with_ai(
     excluded_output: str,
     extra_instructions: str = "",
     prompt_override: str = "",
+    ai_batch_size: int = 30,
 ):
 
     if not jobs_list:
         return [], []
 
-    print("[Stage1] sending job titles to AI filter")
-
-    job_inventory = "\n".join(
-        [f"ID: {job['job_id']} | Title: {job['title']} | Company: {job['company']}" for job in jobs_list]
+    safe_batch_size = max(1, int(ai_batch_size))
+    total_jobs = len(jobs_list)
+    total_batches = (total_jobs + safe_batch_size - 1) // safe_batch_size
+    print(
+        f"[Stage1] sending job titles to AI filter in batches "
+        f"(batch_size={safe_batch_size}, total_jobs={total_jobs}, batches={total_batches})"
     )
 
-    if prompt_override.strip():
-        prompt = (
-            prompt_override.strip()
-            .replace("{{CV_SUMMARY}}", cv_summary)
-            .replace("{{JOB_LIST}}", job_inventory)
+    all_approved_ids: set[str] = set()
+    excluded_map: dict[str, str] = {}
+
+    for batch_index in range(total_batches):
+        start = batch_index * safe_batch_size
+        end = min(start + safe_batch_size, total_jobs)
+        batch_jobs = jobs_list[start:end]
+        print(f"[Stage1] AI title filter batch {batch_index + 1}/{total_batches}: jobs {start + 1}-{end}")
+
+        job_inventory = "\n".join(
+            [f"ID: {job['job_id']} | Title: {job['title']} | Company: {job['company']}" for job in batch_jobs]
         )
-    else:
-        prompt = f"""
+
+        if prompt_override.strip():
+            prompt = (
+                prompt_override.strip()
+                .replace("{{CV_SUMMARY}}", cv_summary)
+                .replace("{{JOB_LIST}}", job_inventory)
+            )
+        else:
+            prompt = f"""
 You are an expert career assistant. I will give you my CV summary and a list of job titles.
 
 MY CV SUMMARY:
@@ -527,43 +543,58 @@ Return ONLY raw JSON (no markdown, no extra text), shaped EXACTLY like this:
   ]
 }}
 """.strip()
-    if extra_instructions:
-        prompt = f"{prompt}\n\nAdditional user preferences:\n{extra_instructions.strip()}"
+        if extra_instructions:
+            prompt = f"{prompt}\n\nAdditional user preferences:\n{extra_instructions.strip()}"
 
-    parsed = None
-    attempts = [
-        prompt,
-        (
-            f"{prompt}\n\n"
-            "Return strict JSON only. Ensure valid escaping for all strings. "
-            "Do not include markdown fences or commentary."
-        ),
-    ]
-    for attempt_index, attempt_prompt in enumerate(attempts, start=1):
-        try:
-            parsed = call_deepseek_title_filter(
-                api_key=deepseek_api_key,
-                model=model,
-                prompt=attempt_prompt,
-            )
-            break
-        except Exception as exc:
-            if attempt_index == len(attempts):
-                print(f"[Stage1] AI filtering failed: {exc}. Returning 0 approved jobs to protect credits.")
-                return [], []
-            print(f"[Stage1] AI JSON parse failed (attempt {attempt_index}/{len(attempts)}): {exc}. Retrying...")
+        parsed = None
+        attempts = [
+            prompt,
+            (
+                f"{prompt}\n\n"
+                "Return strict JSON only. Ensure valid escaping for all strings. "
+                "Do not include markdown fences or commentary."
+            ),
+        ]
+        for attempt_index, attempt_prompt in enumerate(attempts, start=1):
+            try:
+                parsed = call_deepseek_title_filter(
+                    api_key=deepseek_api_key,
+                    model=model,
+                    prompt=attempt_prompt,
+                )
+                break
+            except Exception as exc:
+                if attempt_index == len(attempts):
+                    print(
+                        f"[Stage1] AI filtering failed for batch {batch_index + 1}/{total_batches}: {exc}. "
+                        "Marking this batch as excluded."
+                    )
+                    parsed = {
+                        "approved_ids": [],
+                        "excluded": [
+                            {
+                                "id": str(job["job_id"]),
+                                "reason": "AI filter failed (invalid/truncated response)",
+                            }
+                            for job in batch_jobs
+                        ],
+                    }
+                else:
+                    print(
+                        f"[Stage1] AI JSON parse failed in batch {batch_index + 1}/{total_batches} "
+                        f"(attempt {attempt_index}/{len(attempts)}): {exc}. Retrying..."
+                    )
 
-    approved_ids = {str(item) for item in parsed.get("approved_ids", [])}
-    excluded_map = {
-        str(item.get("id")): item.get("reason", "Excluded")
-        for item in parsed.get("excluded", [])
-        if isinstance(item, dict) and item.get("id") is not None
-    }
+        batch_approved_ids = {str(item) for item in parsed.get("approved_ids", [])}
+        all_approved_ids.update(batch_approved_ids)
+        for item in parsed.get("excluded", []):
+            if isinstance(item, dict) and item.get("id") is not None:
+                excluded_map[str(item.get("id"))] = item.get("reason", "Excluded")
 
-    approved_jobs = [job for job in jobs_list if str(job["job_id"]) in approved_ids]
+    approved_jobs = [job for job in jobs_list if str(job["job_id"]) in all_approved_ids]
     excluded_jobs = []
     for job in jobs_list:
-        if str(job["job_id"]) not in approved_ids:
+        if str(job["job_id"]) not in all_approved_ids:
             excluded_jobs.append({**job, "reason": excluded_map.get(str(job["job_id"]), "Excluded by DeepSeek")})
 
     with open(excluded_output, "w", encoding="utf-8") as file:
@@ -812,6 +843,11 @@ def main() -> int:
         ("runtime", "stage1", "max_enrich_jobs"),
         int(os.getenv("STAGE1_MAX_ENRICH_JOBS", "30")),
     )
+    default_stage1_ai_batch_size = cfg_int(
+        config,
+        ("runtime", "stage1", "ai_filter_batch_size"),
+        int(os.getenv("STAGE1_AI_BATCH_SIZE", "30")),
+    )
     default_stage1_output = cfg_str(
         config,
         ("runtime", "stage1", "output_json"),
@@ -860,6 +896,12 @@ def main() -> int:
         type=int,
         default=default_stage1_max_enrich_jobs,
         help="Use -1 to enrich all approved jobs.",
+    )
+    parser.add_argument(
+        "--ai-batch-size",
+        type=int,
+        default=default_stage1_ai_batch_size,
+        help="Number of jobs per AI title-filter request.",
     )
     parser.add_argument("--keywords", nargs="*", default=default_keywords)
     parser.add_argument("--geo-id", default=default_geo_id, help="LinkedIn geoId to search in.")
@@ -1014,6 +1056,7 @@ def main() -> int:
         excluded_output=args.excluded_output,
         extra_instructions=args.stage1_extra_prompt,
         prompt_override=args.stage1_prompt_override,
+        ai_batch_size=args.ai_batch_size,
     )
     if not ai_approved_jobs:
         print("[Stage1] no jobs passed AI title filter, exiting.")

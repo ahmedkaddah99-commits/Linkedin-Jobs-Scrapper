@@ -35,7 +35,8 @@
       "business process manager"
     ],
     "linkedin_geo_id": "101282230",
-    "time_posted_seconds": 86400,
+    "time_posted_seconds": "86400",
+    "time_posted_seconds_comment": "1d:86400, 2d:172800, 1w:604800, 2w:1209600, 1mo:2592000",
     "experience_levels": [
       2,
       3
@@ -77,6 +78,7 @@
     "stage1": {
       "scrape_snapshot_json": "stage1_scrape_snapshot.json",
       "reuse_scrape_snapshot": false,
+      "ai_filter_batch_size": 30,
       "excluded_output_json": "deepseek_excluded_jobs.json"
     },
     "stage2": {
