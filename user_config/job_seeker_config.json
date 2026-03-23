@@ -1,20 +1,20 @@
 {
   "candidate": {
-    "name": "Ahmed Kaddah",
-    "email": "ahmed.kaddah@tutamail.com",
+    "name": "Mohamed Elhelpawy",
+    "email": "melhelbawy@outlook.com",
     "cv_path": "user_config/cv_master.txt",
-    "cv_docx_path": "Ahmed Kaddah CV.docx",
+    "cv_docx_path": "Mohamed Elhelpawy CV.docx",
     "profile_image_path": "user_config/_profile_from_cv.png",
     "profile_links": {
       "linkedin": {
-        "url": "https://github.com/ahmedkaddah99-commits?tab=repositories",
-        "text": "Ahmed Kaddah",
+        "url": "https://www.linkedin.com/in/melhelpawy/",
+        "text": "Mohamed Elhelpawy",
         "icon": "in",
         "logo_path": "user_config/linkedin_logo.png"
       },
       "github": {
-        "url": "https://github.com/ahmedkaddah99-commits?tab=repositories",
-        "text": "Ahmed Kaddah",
+        "url": "",
+        "text": "",
         "icon": "GH",
         "logo_path": "user_config/github_logo.jpg"
       }
@@ -23,7 +23,7 @@
     "languages": [
       "Arabic — Native",
       "English — C1",
-      "German — B1/B2"
+      "German — B2"
     ]
   },
   "job_search": {

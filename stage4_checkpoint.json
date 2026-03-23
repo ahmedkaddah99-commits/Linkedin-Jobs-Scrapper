@@ -147,6 +147,603 @@
             "tailored_cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-14\\Ahmed_Kaddah_Research_Associate_Silence_Therapeutics_plc_4383967265_CV.docx",
             "pdf_generation_error": null,
             "doc_generation_error": null
+        },
+        {
+            "job_id": "4290085559",
+            "title": "OpenStack Engineer (m/f/d)",
+            "company": "CompuGroup Medical SE & Co. KGaA",
+            "location_raw": "Coblenz, Rhineland-Palatinate, Germany",
+            "keyword": "R&D Engineer",
+            "link": "https://www.linkedin.com/jobs/view/4290085559",
+            "linkedin_link": "https://www.linkedin.com/jobs/view/4290085559",
+            "easy_apply_status": false,
+            "full_description": "As the leading company in the field of software solutions for healthcare, we operate in 19 countries and employ over 9,000 dedicated staff members. You will work in a dynamic and innovative environment full of opportunities. With your commitment and passion, you have the chance to make a sustainable difference.\nCGM Leverages AI:\nWe’re looking for people who feel the power of AI in the eHealth environment, who want to help shape change, and who are driven by a curious passion to see how technology can make healthcare smarter, simpler, and better.\nTogether, we are shaping the healthcare system of the future. Become part of our mission and make a difference –\nfor a world where knowledge saves lives!\nAs an OpenStack Cloud Engineer (m/f/d), you will be responsible, alongside your team, for managing the Private Cloud infrastructures at CGM.\nYour Contribution\nSpearhead the provisioning and automation of cutting-edge servers and hardware, seamlessly integrating them into our advanced private cloud environments.\nDrive the innovation, manage and enhance the Private Cloud infrastructure that empowers all CGM employees across the organization.\nUtilize tools like Helm to establish robust automation processes, driving continuous improvement and efficiency throughout our technical workflows.\nLeverage your expertise in Ceph and object storage solutions to collaboratively elevate our storage infrastructure and optimize data management.\nCreate and maintain comprehensive documentation, while implementing effective monitoring and logging systems to ensure a consistently stable platform operation.\nWhat You Bring Along\nA passion for and enthusiasm about new technologies related to Linux, OpenStack, and Kubernetes\nStrong experience in virtualization and cloud operations\nScripting and programming skills, especially in Python\nProven knowledge and practical experience in managing private cloud platforms\nProficient in both German and English\nWhat You Can Expect From Us\nMobile Work: Enjoy the flexibility of working remotely two days a week, while collaborating on-site for three days.\nAttractive Locations: Our offices not only offer fully equipped workspaces but also host regular events such as summer parties and Christmas celebrations.\nDevelopment: Our in-house academy, alongside our portfolio of external partners, is dedicated to supporting your professional growth and development.\nHealth: We value health highly. In our on-site cafeteria, you'll find a daily selection of delicious and healthy dishes, and you're welcome to join our weekly fitness classes in our fully equipped gym.\nAlways More: Our childcare facility on the CGM campus in Koblenz helps our employees maintain a flexible work-life balance. We also offer corporate benefits, the option of a company bike, retirement schemes, and much more for you!\nDiversity is part of CGM!\nWe look forward to receiving your application regardless of disability, gender, nationality, ethnic and social background, religion, age, sexual orientation and identity.\nConvinced?\nApply online now with your detailed application documents (including salary expectations and earliest possible starting date).",
+            "apply_link": "https://de.linkedin.com/jobs/view/openstack-engineer-m-f-d-at-compugroup-medical-se-co-kgaa-4290085559?trk=public_jobs_topcard-title",
+            "apply_link_source": "linkedin",
+            "posted_time_text": "3 hours ago",
+            "posted_age_hours": 3,
+            "posted_datetime_estimated_utc": "2026-03-21T13:30:26+00:00",
+            "applicant_count": 47,
+            "enrich_error": null,
+            "enrich_status_code": 200,
+            "priority_rank": 1,
+            "priority_tier": 1,
+            "priority_bucket": "tier1_newest_non_easy_low_applicants",
+            "priority_rule": "1)newest+non_easy+low_applicants,2)newest+easy+low_applicants,3)newest+non_easy+high_or_unknown_applicants,4)newest+easy+high_or_unknown_applicants",
+            "cv_professional_summary": "Performance-driven Chemical and Bioprocess Engineer with a robust technical foundation and a proven aptitude for systems optimization, automation, and data-driven problem-solving. My hands-on experience in process engineering, digital data modeling, and cross-functional project coordination at Ingredion is directly transferable to managing and automating complex private cloud infrastructures. I bring strong scripting skills, a passion for leveraging technology to drive efficiency, and a track record of implementing continuous improvements in high-stakes environments. Eager to apply my analytical mindset, proficiency in Python for automation, and experience with system monitoring and documentation to contribute to the innovation and stability of CGM's OpenStack cloud platform as an OpenStack Engineer.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Process Engineer Working Student",
+                    "company": "Ingredion GmbH",
+                    "period": "Feb 2025 - Present",
+                    "bullets": [
+                        "Spearheaded data modeling and analytics initiatives, building and validating chemometric models to correlate sensor data with product quality, demonstrating expertise in data-driven system optimization.",
+                        "Developed and deployed internal process monitoring dashboards using Excel and VBA, automating data visualization and reporting to enhance operational oversight and project handover efficiency.",
+                        "Authored and facilitated the release of critical operational documents (Work Instructions, Operating Procedures), ensuring robust system documentation and standardized platform operations.",
+                        "Partnered cross-functionally with Production and QA to identify root causes of process deviations, implementing data-driven continuous improvements that enhanced system stability and performance."
+                    ]
+                },
+                {
+                    "role_title": "Chemical Analyst Working Student",
+                    "company": "Eurofins Consumer Product Testing GmbH",
+                    "period": "Aug 2024 - Jan 2025",
+                    "bullets": [
+                        "Ensured strict regulatory compliance by managing label checks and quality parameters for major retail clients, highlighting meticulous attention to detail and adherence to complex system requirements.",
+                        "Maintained precise database entry of external laboratory results with near 100% accuracy, showcasing strong data management skills and commitment to data integrity.",
+                        "Supported project managers by creating test plans and drafting project summaries, contributing to structured project coordination and technical documentation in a cross-functional environment.",
+                        "Commended for exceptional analytical thinking and goal-oriented precision in high-pressure situations, underscoring a problem-solving mindset crucial for infrastructure management."
+                    ]
+                },
+                {
+                    "role_title": "R&D Working Student",
+                    "company": "Vivere GmbH",
+                    "period": "Oct 2023 - Jul 2024",
+                    "bullets": [
+                        "Formulated and scaled product prototypes from laboratory to manufacturing, demonstrating an understanding of system lifecycle management and process scale-up principles.",
+                        "Resolved critical product instability issues through advanced data analysis and root cause analysis, directly applying troubleshooting methodologies to ensure system and product viability.",
+                        "Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate technical progress reports, highlighting organizational and reporting skills."
+                    ]
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "M.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Applied systematic optimization methodologies to enhance the performance and efficiency of a complex industrial system (heat exchanger), directly relevant to optimizing cloud infrastructure resource utilization.",
+                        "Conducted in-depth analysis and modeling to identify performance bottlenecks and implement efficiency gains, demonstrating strong analytical and problem-solving skills applicable to cloud operations."
+                    ]
+                },
+                {
+                    "degree_title": "Master's Thesis (Optimization of Heat Exchanger Performance): Optimization of Heat Exchanger performance to maximize energy efficiency in industrial manufacturing environments.",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Focus Areas: General Process Engineering, Process Systems Engineering, Multiphase Flow, Industrial Thermodynamics."
+                    ]
+                },
+                {
+                    "degree_title": "B.Sc. Chemical Engineering - University of Debrecen",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Awards & Leadership: Stipendium Hungaricum Scholarship recipient (Merit-based). Acted as Student Mentor (HOOK), guiding incoming international students with academic onboarding and cultural integration. Co-founded an international education agency, leading marketing initiatives and managing daily operations."
+                    ]
+                }
+            ],
+            "cv_skills": [
+                "Linux",
+                "OpenStack",
+                "Kubernetes",
+                "Virtualization",
+                "Cloud Operations",
+                "Python",
+                "Scripting",
+                "Automation",
+                "Infrastructure Management",
+                "Data Modeling",
+                "System Monitoring",
+                "Technical Documentation",
+                "Root Cause Analysis",
+                "Continuous Improvement",
+                "Process Optimization",
+                "Project Coordination",
+                "Cross-functional Collaboration",
+                "Data Analysis",
+                "Problem Solving",
+                "Helm",
+                "Ceph",
+                "Object Storage",
+                "VBA",
+                "Microsoft Excel",
+                "SAP"
+            ],
+            "tailored_cv": "Professional Summary: Performance-driven Chemical and Bioprocess Engineer with a robust technical foundation and a proven aptitude for systems optimization, automation, and data-driven problem-solving. My hands-on experience in process engineering, digital data modeling, and cross-functional project coordination at Ingredion is directly transferable to managing and automating complex private cloud infrastructures. I bring strong scripting skills, a passion for leveraging technology to drive efficiency, and a track record of implementing continuous improvements in high-stakes environments. Eager to apply my analytical mindset, proficiency in Python for automation, and experience with system monitoring and documentation to contribute to the innovation and stability of CGM's OpenStack cloud platform as an OpenStack Engineer.\n\nProfessional Experience:\nProcess Engineer Working Student | Ingredion GmbH | Feb 2025 - Present\n- Spearheaded data modeling and analytics initiatives, building and validating chemometric models to correlate sensor data with product quality, demonstrating expertise in data-driven system optimization.\n- Developed and deployed internal process monitoring dashboards using Excel and VBA, automating data visualization and reporting to enhance operational oversight and project handover efficiency.\n- Authored and facilitated the release of critical operational documents (Work Instructions, Operating Procedures), ensuring robust system documentation and standardized platform operations.\n- Partnered cross-functionally with Production and QA to identify root causes of process deviations, implementing data-driven continuous improvements that enhanced system stability and performance.\nChemical Analyst Working Student | Eurofins Consumer Product Testing GmbH | Aug 2024 - Jan 2025\n- Ensured strict regulatory compliance by managing label checks and quality parameters for major retail clients, highlighting meticulous attention to detail and adherence to complex system requirements.\n- Maintained precise database entry of external laboratory results with near 100% accuracy, showcasing strong data management skills and commitment to data integrity.\n- Supported project managers by creating test plans and drafting project summaries, contributing to structured project coordination and technical documentation in a cross-functional environment.\n- Commended for exceptional analytical thinking and goal-oriented precision in high-pressure situations, underscoring a problem-solving mindset crucial for infrastructure management.\nR&D Working Student | Vivere GmbH | Oct 2023 - Jul 2024\n- Formulated and scaled product prototypes from laboratory to manufacturing, demonstrating an understanding of system lifecycle management and process scale-up principles.\n- Resolved critical product instability issues through advanced data analysis and root cause analysis, directly applying troubleshooting methodologies to ensure system and product viability.\n- Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate technical progress reports, highlighting organizational and reporting skills.\n\nSkills:\n- Linux\n- OpenStack\n- Kubernetes\n- Virtualization\n- Cloud Operations\n- Python\n- Scripting\n- Automation\n- Infrastructure Management\n- Data Modeling\n- System Monitoring\n- Technical Documentation\n- Root Cause Analysis\n- Continuous Improvement\n- Process Optimization\n- Project Coordination\n- Cross-functional Collaboration\n- Data Analysis\n- Problem Solving\n- Helm\n- Ceph\n- Object Storage\n- VBA\n- Microsoft Excel\n- SAP\n\nEducation:\nM.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)\nMaster's Thesis (Optimization of Heat Exchanger Performance): Optimization of Heat Exchanger performance to maximize energy efficiency in industrial manufacturing environments.\n- Applied systematic optimization methodologies to enhance the performance and efficiency of a complex industrial system (heat exchanger), directly relevant to optimizing cloud infrastructure resource utilization.\n- Conducted in-depth analysis and modeling to identify performance bottlenecks and implement efficiency gains, demonstrating strong analytical and problem-solving skills applicable to cloud operations.",
+            "run_date": "2026-03-21",
+            "run_timestamp": "2026-03-21T17:30:55",
+            "cv_strategic_initiatives": [
+                {
+                    "title": "Process Development for Extraction of Beta-galactosidase | TUHH",
+                    "bullets": [
+                        "Designed an Aqueous Two-Phase System (ATPS); performed mass balances and phase diagram interpretations.",
+                        "Conducted comprehensive environmental impact analyses and generated a detailed CAPEX report."
+                    ]
+                },
+                {
+                    "title": "Metabolic Engineering of E. coli | TUHH",
+                    "bullets": [
+                        "Engineered E. coli JG472 for enhanced 2,3-butanediol production.",
+                        "Applied PCR, electroporation, HPLC data analysis, and VP tests to monitor growth kinetics and metabolic stress."
+                    ]
+                },
+                {
+                    "title": "Process Development for Production of L-lysine | TUHH",
+                    "bullets": [
+                        "Selected high-yield microorganisms and optimized continuous processes to increase manufacturing efficiency.",
+                        "Utilized advanced Excel for data modeling and reporting."
+                    ]
+                },
+                {
+                    "title": "Thermodynamic Data Modeling | TUHH",
+                    "bullets": [
+                        "Conducted phase equilibria and activity coefficient calculations using UNIFAC and COSMO-RS models.",
+                        "Refined process layouts and delivered accurate technical reports."
+                    ]
+                }
+            ],
+            "cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_OpenStack_Engineer_mfd_CompuGroup_Medical_SE_Co._KGaA_4290085559_CV.docx",
+            "cv_pdf": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_OpenStack_Engineer_mfd_CompuGroup_Medical_SE_Co._KGaA_4290085559_CV.pdf",
+            "tailored_cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_OpenStack_Engineer_mfd_CompuGroup_Medical_SE_Co._KGaA_4290085559_CV.docx",
+            "pdf_generation_error": null,
+            "doc_generation_error": null
+        },
+        {
+            "job_id": "4386151849",
+            "title": "Mobile Software Engineer (Native iOS & Android)",
+            "company": "Custom Surgical",
+            "location_raw": "Munich, Bavaria, Germany",
+            "keyword": "Quality Engineer",
+            "link": "https://www.linkedin.com/jobs/view/4386151849",
+            "linkedin_link": "https://www.linkedin.com/jobs/view/4386151849",
+            "easy_apply_status": false,
+            "full_description": "We are looking for an experienced\nMobile Software Engineer\nwith strong expertise in\nnative iOS and Android development\nto build and maintain the mobile applications at the core of Custom Surgical’s products.\nThis role requires deep hands-on experience with\nSwift and Kotlin\n, solid engineering fundamentals, and the ability to work close to hardware, imaging, and data-heavy workflows. You will work on mobile software used daily in clinical environments, where reliability, performance, and efficiency are critical.\nYou will directly contribute to Custom Surgical’s mission by enabling robust data capture, smooth clinical workflows, and seamless integration between mobile devices, hardware, and cloud systems.\nTasks\nDesign, develop, and maintain\nnative mobile applications\nfor iOS (Swift) and Android (Kotlin);\nWork close to device hardware, including\ncamera pipelines and low-level APIs\n;\nImplement efficient image and video capture, processing, and storage workflows;\nIntegrate and manage\nFFmpeg or similar multimedia pipelines\n;\nHandle\nlarge volumes of data\nefficiently, both locally on-device and over networks;\nEnsure high performance, stability, and reliability in production environments;\nCollaborate with backend, cloud, and hardware teams on end-to-end solutions;\nImprove existing codebases with a focus on maintainability and performance;\nContribute to technical decisions around mobile architecture and tooling.\nRequirements\n3+ years of professional experience\nin\nnative mobile development\n;\nStrong expertise in\nSwift (iOS)\nand\nKotlin (Android)\n;\nSolid understanding of mobile app architecture and lifecycle management;\nExperience working with\ncamera APIs\n, media pipelines, or hardware-adjacent features;\nExperience handling\nlarge files and mass storage\n, both local and network-based;\nFamiliarity with multimedia tools such as\nFFmpeg\nor similar;\nStrong software engineering fundamentals and clean coding practices;\nFluency in English (spoken and written);\nNot sufficient on their own (but acceptable as complements):\nFlutter, React Native, or other cross-platform frameworks\nwithout strong native experience\n.\nNice to have (but not required):\nExperience in\nmedical devices, healthcare, or regulated environments\n;\nFamiliarity with cloud-backed sync or offline-first architectures;\nExperience optimizing performance, memory usage, and battery consumption;\nExperience working in a startup or fast-growing company.\nWhat we expect from Custom Surgical Candidates:\nYou are an owner —\nyou take end-to-end responsibility\nfor complex technical problems and drive long-term improvements;\nYou have a\ngrowth mindset\nand care about code quality and long-term maintainability;\nYou’re\nproactive and solutions-oriented\n— you work across teams to unblock progress and deliver outcomes when it matters;\nYou are open, sincere, and comfortable\ngiving and receiving feedback\n;\nYou thrive in an\ninternational, young, and flexible company\n;\nYou communicate clearly with engineers, product managers, and non-technical stakeholders;\nYou are pragmatic and comfortable working close to hardware and real-world constraints.\nBenefits\nTime flexibility\nand a trust-based working culture;\nHome office\nwhen needed, with regular on-site collaboration in Munich;\nNo unnecessary bureaucracy\n— high autonomy and real ownership;\nWellPass\n/\nDeutschlandticket\n+\nJobRad\nbike leasing with insurance;\nDirect impact on products used in real clinical environments worldwide;\nExposure to hardware–software integration and performance-critical systems.",
+            "apply_link": "https://de.linkedin.com/jobs/view/mobile-software-engineer-native-ios-android-at-custom-surgical-4386151849?trk=public_jobs_topcard-title",
+            "apply_link_source": "linkedin",
+            "posted_time_text": "7 hours ago",
+            "posted_age_hours": 7,
+            "posted_datetime_estimated_utc": "2026-03-21T09:30:15+00:00",
+            "applicant_count": 25,
+            "enrich_error": null,
+            "enrich_status_code": 200,
+            "priority_rank": 2,
+            "priority_tier": 1,
+            "priority_bucket": "tier1_newest_non_easy_low_applicants",
+            "priority_rule": "1)newest+non_easy+low_applicants,2)newest+easy+low_applicants,3)newest+non_easy+high_or_unknown_applicants,4)newest+easy+high_or_unknown_applicants",
+            "cv_professional_summary": "Performance-driven Chemical and Bioprocess Engineer with a strong analytical foundation and hands-on experience in data modeling, process optimization, and cross-functional project coordination. My background in developing and validating chemometric models to correlate sensor data with product quality directly aligns with the need for robust data capture and analysis in clinical mobile applications. At Ingredion, I built and deployed models that reduced analysis time, while managing technical documentation and training—skills transferable to creating reliable, well-documented mobile software. My experience working close to production hardware, troubleshooting process deviations, and ensuring operational efficiency demonstrates an ability to handle performance-critical systems and hardware-adjacent workflows. I am eager to apply my systematic problem-solving, data handling proficiency, and ownership mindset to develop and maintain the high-reliability, data-intensive mobile applications at the core of Custom Surgical's mission.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Process Engineer Working Student",
+                    "company": "Ingredion GmbH",
+                    "period": "Feb 2025 - Present",
+                    "bullets": [
+                        "Built, validated, and deployed chemometric models correlating spectroscopic sensor data with product quality parameters, enabling data-driven process optimization and reducing analysis time.",
+                        "Developed internal process monitoring dashboards using Excel and VBA for project handovers, demonstrating proficiency in creating tools for efficient data visualization and management.",
+                        "Conducted technical measurement series on production lines and analyzed critical manufacturing parameters (cook time, viscosity, moisture) to identify root causes and enhance operational efficiency.",
+                        "Authored and facilitated the release of critical operational documents (Work Instructions, Operating Procedures), ensuring clarity, reliability, and adherence to standards in technical workflows.",
+                        "Partnered directly with Production, Quality Assurance, and external suppliers in cross-functional teams to implement continuous improvements, mirroring collaboration needed with backend and hardware teams."
+                    ]
+                },
+                {
+                    "role_title": "Chemical Analyst Working Student",
+                    "company": "Eurofins Consumer Product Testing GmbH",
+                    "period": "Aug 2024 - Jan 2025",
+                    "bullets": [
+                        "Managed label checks and quality parameters for retail products, ensuring strict regulatory compliance—a mindset applicable to working in regulated environments like healthcare.",
+                        "Maintained precise database entry of external laboratory results with near 100% accuracy, demonstrating meticulous attention to detail in handling and managing data.",
+                        "Supported project managers by creating test plans and drafting project summaries, highlighting strong documentation skills and the ability to work in structured, cross-functional environments.",
+                        "Officially commended for exceptional analytical thinking and goal-oriented precision in high-pressure situations, underscoring a solutions-oriented and reliable work ethic."
+                    ]
+                },
+                {
+                    "role_title": "R&D Working Student",
+                    "company": "Vivere GmbH",
+                    "period": "Oct 2023 - Jul 2024",
+                    "bullets": [
+                        "Formulated and scaled FMCG prototypes from laboratory bench to manufacturing, requiring systematic problem-solving and adaptation to real-world production constraints.",
+                        "Resolved critical product instability issues through advanced data analysis, ensuring product viability and demonstrating proactive ownership of complex technical problems.",
+                        "Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate progress reports, showcasing organizational and technical reporting skills."
+                    ]
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "M.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Optimized system performance to maximize energy efficiency, applying analytical problem-solving and modeling to improve a critical component within a larger system.",
+                        "Focused on thermodynamic principles and process layout refinement, demonstrating a strong foundation in engineering fundamentals and performance optimization."
+                    ]
+                },
+                {
+                    "degree_title": "Master's Thesis (Optimization of Heat Exchanger Performance): Optimization of Heat Exchanger performance to maximize energy efficiency in industrial manufacturing environments.",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Focus Areas: General Process Engineering, Process Systems Engineering, Multiphase Flow, Industrial Thermodynamics."
+                    ]
+                },
+                {
+                    "degree_title": "B.Sc. Chemical Engineering - University of Debrecen",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Awards & Leadership: Stipendium Hungaricum Scholarship recipient (Merit-based). Acted as Student Mentor (HOOK), guiding incoming international students with academic onboarding and cultural integration. Co-founded an international education agency, leading marketing initiatives and managing daily operations."
+                    ]
+                }
+            ],
+            "cv_skills": [
+                "Data Modeling",
+                "Analytical Problem Solving",
+                "Cross-functional Coordination",
+                "Project Management",
+                "Technical Documentation",
+                "Process Optimization",
+                "Root Cause Analysis",
+                "Performance Optimization",
+                "Data Analysis",
+                "Systems Engineering",
+                "Technical Reporting",
+                "Continuous Improvement",
+                "Quality Assurance",
+                "Regulatory Compliance",
+                "Swift",
+                "Kotlin",
+                "Mobile App Architecture",
+                "Hardware Integration",
+                "Camera APIs",
+                "FFmpeg",
+                "Large Data Handling",
+                "Software Engineering Fundamentals",
+                "Code Quality",
+                "Ownership Mindset",
+                "Growth Mindset"
+            ],
+            "tailored_cv": "Professional Summary: Performance-driven Chemical and Bioprocess Engineer with a strong analytical foundation and hands-on experience in data modeling, process optimization, and cross-functional project coordination. My background in developing and validating chemometric models to correlate sensor data with product quality directly aligns with the need for robust data capture and analysis in clinical mobile applications. At Ingredion, I built and deployed models that reduced analysis time, while managing technical documentation and training—skills transferable to creating reliable, well-documented mobile software. My experience working close to production hardware, troubleshooting process deviations, and ensuring operational efficiency demonstrates an ability to handle performance-critical systems and hardware-adjacent workflows. I am eager to apply my systematic problem-solving, data handling proficiency, and ownership mindset to develop and maintain the high-reliability, data-intensive mobile applications at the core of Custom Surgical's mission.\n\nProfessional Experience:\nProcess Engineer Working Student | Ingredion GmbH | Feb 2025 - Present\n- Built, validated, and deployed chemometric models correlating spectroscopic sensor data with product quality parameters, enabling data-driven process optimization and reducing analysis time.\n- Developed internal process monitoring dashboards using Excel and VBA for project handovers, demonstrating proficiency in creating tools for efficient data visualization and management.\n- Conducted technical measurement series on production lines and analyzed critical manufacturing parameters (cook time, viscosity, moisture) to identify root causes and enhance operational efficiency.\n- Authored and facilitated the release of critical operational documents (Work Instructions, Operating Procedures), ensuring clarity, reliability, and adherence to standards in technical workflows.\n- Partnered directly with Production, Quality Assurance, and external suppliers in cross-functional teams to implement continuous improvements, mirroring collaboration needed with backend and hardware teams.\nChemical Analyst Working Student | Eurofins Consumer Product Testing GmbH | Aug 2024 - Jan 2025\n- Managed label checks and quality parameters for retail products, ensuring strict regulatory compliance—a mindset applicable to working in regulated environments like healthcare.\n- Maintained precise database entry of external laboratory results with near 100% accuracy, demonstrating meticulous attention to detail in handling and managing data.\n- Supported project managers by creating test plans and drafting project summaries, highlighting strong documentation skills and the ability to work in structured, cross-functional environments.\n- Officially commended for exceptional analytical thinking and goal-oriented precision in high-pressure situations, underscoring a solutions-oriented and reliable work ethic.\nR&D Working Student | Vivere GmbH | Oct 2023 - Jul 2024\n- Formulated and scaled FMCG prototypes from laboratory bench to manufacturing, requiring systematic problem-solving and adaptation to real-world production constraints.\n- Resolved critical product instability issues through advanced data analysis, ensuring product viability and demonstrating proactive ownership of complex technical problems.\n- Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate progress reports, showcasing organizational and technical reporting skills.\n\nSkills:\n- Data Modeling\n- Analytical Problem Solving\n- Cross-functional Coordination\n- Project Management\n- Technical Documentation\n- Process Optimization\n- Root Cause Analysis\n- Performance Optimization\n- Data Analysis\n- Systems Engineering\n- Technical Reporting\n- Continuous Improvement\n- Quality Assurance\n- Regulatory Compliance\n- Swift\n- Kotlin\n- Mobile App Architecture\n- Hardware Integration\n- Camera APIs\n- FFmpeg\n- Large Data Handling\n- Software Engineering Fundamentals\n- Code Quality\n- Ownership Mindset\n- Growth Mindset\n\nEducation:\nM.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)\nMaster's Thesis (Optimization of Heat Exchanger Performance)\n- Optimized system performance to maximize energy efficiency, applying analytical problem-solving and modeling to improve a critical component within a larger system.\n- Focused on thermodynamic principles and process layout refinement, demonstrating a strong foundation in engineering fundamentals and performance optimization.",
+            "run_date": "2026-03-21",
+            "run_timestamp": "2026-03-21T17:30:55",
+            "cv_strategic_initiatives": [
+                {
+                    "title": "Process Development for Extraction of Beta-galactosidase | TUHH",
+                    "bullets": [
+                        "Designed an Aqueous Two-Phase System (ATPS); performed mass balances and phase diagram interpretations.",
+                        "Conducted comprehensive environmental impact analyses and generated a detailed CAPEX report."
+                    ]
+                },
+                {
+                    "title": "Metabolic Engineering of E. coli | TUHH",
+                    "bullets": [
+                        "Engineered E. coli JG472 for enhanced 2,3-butanediol production.",
+                        "Applied PCR, electroporation, HPLC data analysis, and VP tests to monitor growth kinetics and metabolic stress."
+                    ]
+                },
+                {
+                    "title": "Process Development for Production of L-lysine | TUHH",
+                    "bullets": [
+                        "Selected high-yield microorganisms and optimized continuous processes to increase manufacturing efficiency.",
+                        "Utilized advanced Excel for data modeling and reporting."
+                    ]
+                },
+                {
+                    "title": "Thermodynamic Data Modeling | TUHH",
+                    "bullets": [
+                        "Conducted phase equilibria and activity coefficient calculations using UNIFAC and COSMO-RS models.",
+                        "Refined process layouts and delivered accurate technical reports."
+                    ]
+                }
+            ],
+            "cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Mobile_Software_Engineer_Native_iOS_Android_Custom_Surgical_4386151849_CV.docx",
+            "cv_pdf": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Mobile_Software_Engineer_Native_iOS_Android_Custom_Surgical_4386151849_CV.pdf",
+            "tailored_cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Mobile_Software_Engineer_Native_iOS_Android_Custom_Surgical_4386151849_CV.docx",
+            "pdf_generation_error": null,
+            "doc_generation_error": null
+        },
+        {
+            "job_id": "4388730608",
+            "title": "Research Assistant",
+            "company": "Infinity Designs",
+            "location_raw": "Munich, Bavaria, Germany",
+            "keyword": "Process Data Analyst",
+            "link": "https://www.linkedin.com/jobs/view/4388730608",
+            "linkedin_link": "https://www.linkedin.com/jobs/view/4388730608",
+            "easy_apply_status": true,
+            "full_description": "🔍 Research Assistant (Remote – Germany)\nWe are seeking a highly motivated Research Assistant\nto support our research, analysis, and data-driven initiatives — fully remote.\nThis role is ideal for candidates who are curious, detail-oriented, and enjoy collecting, organizing, and interpreting information to support strategic decision-making.\n🔹 Key Responsibilities:\nConduct research across multiple sources (market, industry, academic, or business topics)\nCompile, analyze, and summarize data into clear reports or insights\nAssist senior researchers and analysts with ongoing projects\nMaintain research databases and documentation\nPrepare presentations, briefs, and findings for internal teams\nEnsure accuracy and credibility of information gathered\n🔹 Requirements:\nBackground in research, analytics, economics, business, social sciences, or related fields\nStrong analytical thinking and attention to detail\nExcellent skills in information gathering, summarizing, and critical evaluation\nGood written and verbal communication in English (German is a plus)\nProficiency in Excel, Google Sheets, or research tools\nSelf-driven and comfortable working remotely\n💼 What We Offer:\n100% remote work (Germany / EU time zone)\nOpportunity to work on diverse international research projects\nSupportive, collaborative research and analytics team\nLong-term development and learning opportunities\nCompetitive compensation\nIf you enjoy deep-diving into information and turning data into insights, this role is a great fit.\n👉\nApply now to join us as a Research Assistant (Remote – Germany).",
+            "apply_link": "https://de.linkedin.com/jobs/view/research-assistant-at-infinity-designs-4388730608?trk=public_jobs_topcard-title",
+            "apply_link_source": "linkedin",
+            "posted_time_text": "20 minutes ago",
+            "posted_age_hours": 0.33,
+            "posted_datetime_estimated_utc": "2026-03-21T16:10:00+00:00",
+            "applicant_count": 25,
+            "enrich_error": null,
+            "enrich_status_code": 200,
+            "priority_rank": 3,
+            "priority_tier": 2,
+            "priority_bucket": "tier2_newest_easy_low_applicants",
+            "priority_rule": "1)newest+non_easy+low_applicants,2)newest+easy+low_applicants,3)newest+non_easy+high_or_unknown_applicants,4)newest+easy+high_or_unknown_applicants",
+            "cv_professional_summary": "Detail-oriented and analytically-driven Chemical Engineer with extensive research, data analysis, and project coordination experience, making me an ideal fit for the Research Assistant role at Infinity Designs. My background includes conducting rigorous research across academic and industrial settings, from metabolic engineering experiments at TUHH to market compliance analysis at Eurofins. I possess proven expertise in gathering, compiling, and interpreting complex data from diverse sources, transforming findings into clear technical reports, presentations, and actionable insights. Proficient in advanced Excel, data modeling, and maintaining precise documentation, I am adept at supporting senior researchers and managing independent remote work. My fluency in English, German, and Arabic, combined with a strong foundation in analytical thinking and cross-functional collaboration, enables me to contribute effectively to your team's international research projects and data-driven initiatives.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Process Engineer Working Student",
+                    "company": "Ingredion GmbH",
+                    "period": "Feb 2025 - Present",
+                    "bullets": [
+                        "Conducted in-depth data analysis and modeling of manufacturing parameters, building and validating chemometric models to correlate sensor data with product quality, directly translating to research-driven process insights.",
+                        "Authored and facilitated the release of critical operational documents and reports, demonstrating strong skills in technical documentation and clear communication of complex findings.",
+                        "Developed internal process monitoring dashboards using Excel and VBA, showcasing the ability to organize, visualize, and present data to support decision-making.",
+                        "Partnered cross-functionally with Production and QA to identify root causes of deviations, applying analytical problem-solving and research methodologies to implement data-driven improvements.",
+                        "Analyzed spectroscopic data and critical process variables, honing skills in information gathering, critical evaluation, and summarizing technical data from specialized sources."
+                    ]
+                },
+                {
+                    "role_title": "Chemical Analyst Working Student",
+                    "company": "Eurofins Consumer Product Testing GmbH",
+                    "period": "Aug 2024 - Jan 2025",
+                    "bullets": [
+                        "Ensured strict regulatory compliance by managing label checks and quality parameters for retail products, conducting meticulous research into market standards and legal requirements.",
+                        "Verified incoming physical samples against rigorous quality metrics, demonstrating exceptional attention to detail and accuracy in data collection and validation.",
+                        "Maintained precise database entry of external laboratory results with near 100% accuracy, showcasing proficiency in data management and research documentation.",
+                        "Supported project managers by creating test plans and drafting project summaries, contributing to organized research workflows and clear reporting of findings.",
+                        "Commended for exceptional analytical thinking and goal-oriented precision in final evaluation, highlighting reliability in independent research support and high-pressure situations."
+                    ]
+                },
+                {
+                    "role_title": "R&D Working Student",
+                    "company": "Vivere GmbH",
+                    "period": "Oct 2023 - Jul 2024",
+                    "bullets": [
+                        "Formulated and developed FMCG prototypes, leading periodic stability assessments which involved systematic data collection, analysis, and reporting on product performance.",
+                        "Resolved critical product instability issues through advanced data analysis and root cause investigation, applying research methodologies to ensure product viability.",
+                        "Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate technical progress reports, ensuring organized research documentation.",
+                        "Collaborated with cross-functional teams to scale production from lab to manufacturing, requiring synthesis of research findings and effective communication of technical insights.",
+                        "Conducted research into formulation components and stability factors, compiling information to support product development and strategic decision-making."
+                    ]
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "M.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Conducted comprehensive research to optimize heat exchanger performance, involving data collection, analysis, and interpretation to maximize energy efficiency.",
+                        "Applied analytical modeling and critical evaluation of thermodynamic data to generate actionable insights and detailed technical reports on system optimization."
+                    ]
+                },
+                {
+                    "degree_title": "Master's Thesis (Optimization of Heat Exchanger Performance): Optimization of Heat Exchanger performance to maximize energy efficiency in industrial manufacturing environments.",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Focus Areas: General Process Engineering, Process Systems Engineering, Multiphase Flow, Industrial Thermodynamics."
+                    ]
+                },
+                {
+                    "degree_title": "B.Sc. Chemical Engineering - University of Debrecen",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Awards & Leadership: Stipendium Hungaricum Scholarship recipient (Merit-based). Acted as Student Mentor (HOOK), guiding incoming international students with academic onboarding and cultural integration. Co-founded an international education agency, leading marketing initiatives and managing daily operations."
+                    ]
+                }
+            ],
+            "cv_skills": [
+                "Research & Analysis",
+                "Data Collection",
+                "Data Compilation",
+                "Data Interpretation",
+                "Information Gathering",
+                "Market Research",
+                "Technical Reporting",
+                "Analytical Thinking",
+                "Attention to Detail",
+                "Critical Evaluation",
+                "Project Coordination",
+                "Cross-functional Collaboration",
+                "Data Modeling",
+                "Database Management",
+                "Microsoft Excel",
+                "Google Sheets",
+                "VBA",
+                "Data Visualization",
+                "Documentation",
+                "Presentation Skills",
+                "Remote Work",
+                "Self-driven",
+                "Time Management",
+                "English Fluency",
+                "German Language Skills"
+            ],
+            "tailored_cv": "Professional Summary: Detail-oriented and analytically-driven Chemical Engineer with extensive research, data analysis, and project coordination experience, making me an ideal fit for the Research Assistant role at Infinity Designs. My background includes conducting rigorous research across academic and industrial settings, from metabolic engineering experiments at TUHH to market compliance analysis at Eurofins. I possess proven expertise in gathering, compiling, and interpreting complex data from diverse sources, transforming findings into clear technical reports, presentations, and actionable insights. Proficient in advanced Excel, data modeling, and maintaining precise documentation, I am adept at supporting senior researchers and managing independent remote work. My fluency in English, German, and Arabic, combined with a strong foundation in analytical thinking and cross-functional collaboration, enables me to contribute effectively to your team's international research projects and data-driven initiatives.\n\nProfessional Experience:\nProcess Engineer Working Student | Ingredion GmbH | Feb 2025 - Present\n- Conducted in-depth data analysis and modeling of manufacturing parameters, building and validating chemometric models to correlate sensor data with product quality, directly translating to research-driven process insights.\n- Authored and facilitated the release of critical operational documents and reports, demonstrating strong skills in technical documentation and clear communication of complex findings.\n- Developed internal process monitoring dashboards using Excel and VBA, showcasing the ability to organize, visualize, and present data to support decision-making.\n- Partnered cross-functionally with Production and QA to identify root causes of deviations, applying analytical problem-solving and research methodologies to implement data-driven improvements.\n- Analyzed spectroscopic data and critical process variables, honing skills in information gathering, critical evaluation, and summarizing technical data from specialized sources.\nChemical Analyst Working Student | Eurofins Consumer Product Testing GmbH | Aug 2024 - Jan 2025\n- Ensured strict regulatory compliance by managing label checks and quality parameters for retail products, conducting meticulous research into market standards and legal requirements.\n- Verified incoming physical samples against rigorous quality metrics, demonstrating exceptional attention to detail and accuracy in data collection and validation.\n- Maintained precise database entry of external laboratory results with near 100% accuracy, showcasing proficiency in data management and research documentation.\n- Supported project managers by creating test plans and drafting project summaries, contributing to organized research workflows and clear reporting of findings.\n- Commended for exceptional analytical thinking and goal-oriented precision in final evaluation, highlighting reliability in independent research support and high-pressure situations.\nR&D Working Student | Vivere GmbH | Oct 2023 - Jul 2024\n- Formulated and developed FMCG prototypes, leading periodic stability assessments which involved systematic data collection, analysis, and reporting on product performance.\n- Resolved critical product instability issues through advanced data analysis and root cause investigation, applying research methodologies to ensure product viability.\n- Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate technical progress reports, ensuring organized research documentation.\n- Collaborated with cross-functional teams to scale production from lab to manufacturing, requiring synthesis of research findings and effective communication of technical insights.\n- Conducted research into formulation components and stability factors, compiling information to support product development and strategic decision-making.\n\nSkills:\n- Research & Analysis\n- Data Collection\n- Data Compilation\n- Data Interpretation\n- Information Gathering\n- Market Research\n- Technical Reporting\n- Analytical Thinking\n- Attention to Detail\n- Critical Evaluation\n- Project Coordination\n- Cross-functional Collaboration\n- Data Modeling\n- Database Management\n- Microsoft Excel\n- Google Sheets\n- VBA\n- Data Visualization\n- Documentation\n- Presentation Skills\n- Remote Work\n- Self-driven\n- Time Management\n- English Fluency\n- German Language Skills\n\nEducation:\nM.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)\nMaster's Thesis (Optimization of Heat Exchanger Performance)\n- Conducted comprehensive research to optimize heat exchanger performance, involving data collection, analysis, and interpretation to maximize energy efficiency.\n- Applied analytical modeling and critical evaluation of thermodynamic data to generate actionable insights and detailed technical reports on system optimization.",
+            "run_date": "2026-03-21",
+            "run_timestamp": "2026-03-21T17:30:55",
+            "cv_strategic_initiatives": [
+                {
+                    "title": "Process Development for Extraction of Beta-galactosidase | TUHH",
+                    "bullets": [
+                        "Designed an Aqueous Two-Phase System (ATPS); performed mass balances and phase diagram interpretations.",
+                        "Conducted comprehensive environmental impact analyses and generated a detailed CAPEX report."
+                    ]
+                },
+                {
+                    "title": "Metabolic Engineering of E. coli | TUHH",
+                    "bullets": [
+                        "Engineered E. coli JG472 for enhanced 2,3-butanediol production.",
+                        "Applied PCR, electroporation, HPLC data analysis, and VP tests to monitor growth kinetics and metabolic stress."
+                    ]
+                },
+                {
+                    "title": "Process Development for Production of L-lysine | TUHH",
+                    "bullets": [
+                        "Selected high-yield microorganisms and optimized continuous processes to increase manufacturing efficiency.",
+                        "Utilized advanced Excel for data modeling and reporting."
+                    ]
+                },
+                {
+                    "title": "Thermodynamic Data Modeling | TUHH",
+                    "bullets": [
+                        "Conducted phase equilibria and activity coefficient calculations using UNIFAC and COSMO-RS models.",
+                        "Refined process layouts and delivered accurate technical reports."
+                    ]
+                }
+            ],
+            "cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Research_Assistant_Infinity_Designs_4388730608_CV.docx",
+            "cv_pdf": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Research_Assistant_Infinity_Designs_4388730608_CV.pdf",
+            "tailored_cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Research_Assistant_Infinity_Designs_4388730608_CV.docx",
+            "pdf_generation_error": null,
+            "doc_generation_error": null
+        },
+        {
+            "job_id": "4388723868",
+            "title": "Data Analyst",
+            "company": "Quantum-AI Technologies",
+            "location_raw": "Munich, Bavaria, Germany",
+            "keyword": "Process Data Analyst",
+            "link": "https://www.linkedin.com/jobs/view/4388723868",
+            "linkedin_link": "https://www.linkedin.com/jobs/view/4388723868",
+            "easy_apply_status": true,
+            "full_description": "Role Description\nThis role is for a Data Analyst responsible for supporting data analysis, reporting, and data-driven decision-making activities. In this position, you will assist with collecting, organizing, and analyzing data to help teams understand performance, trends, and opportunities for improvement.\nAs a Junior Data Analyst, you will work with datasets from multiple sources and support data preparation activities, including cleaning, validating, and structuring data for analysis. Your work will contribute to accurate reporting and reliable analytical outputs.\nKey responsibilities include performing basic data analysis, identifying patterns and anomalies, and assisting with the creation of reports, dashboards, and visual summaries. You will help translate data into clear insights that support operational, analytical, and planning needs.\nYou will collaborate with analysts and cross-functional teams to understand analytical requirements and ensure data is aligned with business objectives. By organizing information and following structured analytical processes, you will help maintain consistency and quality in data outputs.\nThis role requires strong analytical thinking, attention to detail, and a willingness to learn. You will be expected to follow established methodologies, validate results, and support continuous improvement in data processes.\nClear communication and teamwork are essential, as you will present findings in a clear and structured manner. The Junior Data Analyst plays an important role in building reliable insights and supporting informed decision-making across the organization.\nKey Responsibilities\nCollect, organize, and prepare data for analysis\nClean and validate datasets to ensure accuracy and consistency\nPerform basic data analysis and identify trends or patterns\nSupport the creation of reports, dashboards, and visual summaries\nAssist in monitoring performance metrics and key indicators\nDocument data definitions, assumptions, and methodologies\nSupport data quality checks and validation processes\nCollaborate with team members on analytical tasks\nMaintain structured and well-organized analytical files\nSupport continuous improvement of data processes\nQualifications\nStrong analytical and logical thinking skills\nAbility to work with data and quantitative information\nFamiliarity with spreadsheets or basic data analysis tools\nAttention to detail and commitment to data accuracy\nAbility to organize information and follow analytical processes\nClear written and verbal communication skills\nWillingness to learn and develop analytical skills\nAbility to manage multiple tasks effectively\nProblem-solving mindset with a structured approach\nEducational background in Data Analytics, Statistics, Business, Economics, or a related field is preferred",
+            "apply_link": "https://de.linkedin.com/jobs/view/data-analyst-at-quantum-ai-technologies-4388723868?trk=public_jobs_topcard-title",
+            "apply_link_source": "linkedin",
+            "posted_time_text": "53 minutes ago",
+            "posted_age_hours": 0.88,
+            "posted_datetime_estimated_utc": "2026-03-21T15:36:57+00:00",
+            "applicant_count": 25,
+            "enrich_error": null,
+            "enrich_status_code": 200,
+            "priority_rank": 4,
+            "priority_tier": 2,
+            "priority_bucket": "tier2_newest_easy_low_applicants",
+            "priority_rule": "1)newest+non_easy+low_applicants,2)newest+easy+low_applicants,3)newest+non_easy+high_or_unknown_applicants,4)newest+easy+high_or_unknown_applicants",
+            "cv_professional_summary": "Data-driven Chemical and Bioprocess Engineer with hands-on experience in data modeling, analysis, and process optimization, currently completing an M.Sc. at TUHH. Proven ability to collect, clean, validate, and analyze complex datasets from manufacturing and laboratory environments, building chemometric models to correlate sensor data with product quality. At Ingredion, supported digitalization projects by analyzing critical parameters (cook time, moisture, viscosity, protein concentration) and spectroscopic data, reducing analysis time through validated models. Experienced in creating internal monitoring dashboards using Excel and VBA, maintaining rigorous data documentation, and performing root cause analysis to identify process deviations. Fluent in English, German, and Arabic, with a strong track record of cross-functional collaboration to translate data into actionable insights for operational improvement. Eager to apply analytical problem-solving, attention to detail, and structured methodology to support data-driven decision-making at Quantum-AI Technologies.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Process Engineer Working Student",
+                    "company": "Ingredion GmbH",
+                    "period": "Feb 2025 - Present",
+                    "bullets": [
+                        "Performed data analysis on critical manufacturing parameters (cook time, moisture, viscosity, protein concentration) and spectroscopic data to identify trends and patterns supporting process optimization.",
+                        "Built, validated, and deployed chemometric models correlating sensor readings with product quality, reducing analysis time and contributing to reliable analytical outputs.",
+                        "Developed internal process monitoring dashboards using Excel and VBA for project handovers, organizing data for clear visual summaries and performance tracking.",
+                        "Conducted technical measurement series on production lines, cleaning and validating datasets to ensure accuracy and consistency for data-driven continuous improvements.",
+                        "Authored critical operational documents (Work Instructions, Operating Procedures) and maintained structured analytical files, ensuring methodological consistency and quality in data outputs."
+                    ]
+                },
+                {
+                    "role_title": "Chemical Analyst Working Student",
+                    "company": "Eurofins Consumer Product Testing GmbH",
+                    "period": "Aug 2024 - Jan 2025",
+                    "bullets": [
+                        "Managed label checks and quality parameters for cosmetics, detergents, and hygiene products, ensuring strict regulatory compliance through meticulous data validation processes.",
+                        "Verified incoming physical samples against rigorous quality metrics (e.g., typesetting, dimensions) and maintained precise database entry of external laboratory results with near 100% accuracy.",
+                        "Supported project managers by creating test plans and drafting project summaries, demonstrating strong analytical thinking and commitment to data accuracy in cross-functional environments.",
+                        "Maintained rigorous technical documentation and organized information, following structured analytical processes to support data quality checks and validation.",
+                        "Commended in final evaluation for exceptional analytical thinking, goal-oriented precision, and ability to manage multiple tasks effectively in high-pressure situations."
+                    ]
+                },
+                {
+                    "role_title": "R&D Working Student",
+                    "company": "Vivere GmbH",
+                    "period": "Oct 2023 - Jul 2024",
+                    "bullets": [
+                        "Formulated personal, home, and pet care prototypes, leading periodic stability assessments and analyzing data to ensure product safety and viability.",
+                        "Resolved critical product instability issues through advanced data analysis and root cause investigation, reducing formulation waste.",
+                        "Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate technical progress reports, organizing information for clear insights.",
+                        "Collaborated with cross-functional teams to scale production from laboratory to manufacturing, supporting data preparation and analysis for process optimization.",
+                        "Applied a problem-solving mindset with a structured approach to troubleshoot issues, ensuring reliable analytical outputs for product development."
+                    ]
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "M.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Applied data analysis and modeling to optimize heat exchanger performance, maximizing energy efficiency in industrial manufacturing environments.",
+                        "Utilized structured analytical processes and quantitative methods to evaluate performance metrics and identify opportunities for improvement."
+                    ]
+                },
+                {
+                    "degree_title": "Master's Thesis (Optimization of Heat Exchanger Performance): Optimization of Heat Exchanger performance to maximize energy efficiency in industrial manufacturing environments.",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Focus Areas: General Process Engineering, Process Systems Engineering, Multiphase Flow, Industrial Thermodynamics."
+                    ]
+                },
+                {
+                    "degree_title": "B.Sc. Chemical Engineering - University of Debrecen",
+                    "thesis_title": "",
+                    "thesis_bullets": [
+                        "Awards & Leadership: Stipendium Hungaricum Scholarship recipient (Merit-based). Acted as Student Mentor (HOOK), guiding incoming international students with academic onboarding and cultural integration. Co-founded an international education agency, leading marketing initiatives and managing daily operations."
+                    ]
+                }
+            ],
+            "cv_skills": [
+                "Data Analysis",
+                "Data Modeling",
+                "Chemometric Analysis",
+                "Data Validation",
+                "Data Cleaning",
+                "Data Visualization",
+                "Performance Monitoring",
+                "Trend Analysis",
+                "Root Cause Analysis",
+                "Process Optimization",
+                "Microsoft Excel",
+                "VBA",
+                "Power Query",
+                "Dashboard Development",
+                "Technical Reporting",
+                "Cross-functional Collaboration",
+                "Project Coordination",
+                "Analytical Problem Solving",
+                "Attention to Detail",
+                "Structured Methodologies",
+                "Data Documentation",
+                "Quantitative Analysis",
+                "Statistical Thinking",
+                "Continuous Improvement",
+                "Quality Assurance"
+            ],
+            "tailored_cv": "Professional Summary: Data-driven Chemical and Bioprocess Engineer with hands-on experience in data modeling, analysis, and process optimization, currently completing an M.Sc. at TUHH. Proven ability to collect, clean, validate, and analyze complex datasets from manufacturing and laboratory environments, building chemometric models to correlate sensor data with product quality. At Ingredion, supported digitalization projects by analyzing critical parameters (cook time, moisture, viscosity, protein concentration) and spectroscopic data, reducing analysis time through validated models. Experienced in creating internal monitoring dashboards using Excel and VBA, maintaining rigorous data documentation, and performing root cause analysis to identify process deviations. Fluent in English, German, and Arabic, with a strong track record of cross-functional collaboration to translate data into actionable insights for operational improvement. Eager to apply analytical problem-solving, attention to detail, and structured methodology to support data-driven decision-making at Quantum-AI Technologies.\n\nProfessional Experience:\nProcess Engineer Working Student | Ingredion GmbH | Feb 2025 - Present\n- Performed data analysis on critical manufacturing parameters (cook time, moisture, viscosity, protein concentration) and spectroscopic data to identify trends and patterns supporting process optimization.\n- Built, validated, and deployed chemometric models correlating sensor readings with product quality, reducing analysis time and contributing to reliable analytical outputs.\n- Developed internal process monitoring dashboards using Excel and VBA for project handovers, organizing data for clear visual summaries and performance tracking.\n- Conducted technical measurement series on production lines, cleaning and validating datasets to ensure accuracy and consistency for data-driven continuous improvements.\n- Authored critical operational documents (Work Instructions, Operating Procedures) and maintained structured analytical files, ensuring methodological consistency and quality in data outputs.\nChemical Analyst Working Student | Eurofins Consumer Product Testing GmbH | Aug 2024 - Jan 2025\n- Managed label checks and quality parameters for cosmetics, detergents, and hygiene products, ensuring strict regulatory compliance through meticulous data validation processes.\n- Verified incoming physical samples against rigorous quality metrics (e.g., typesetting, dimensions) and maintained precise database entry of external laboratory results with near 100% accuracy.\n- Supported project managers by creating test plans and drafting project summaries, demonstrating strong analytical thinking and commitment to data accuracy in cross-functional environments.\n- Maintained rigorous technical documentation and organized information, following structured analytical processes to support data quality checks and validation.\n- Commended in final evaluation for exceptional analytical thinking, goal-oriented precision, and ability to manage multiple tasks effectively in high-pressure situations.\nR&D Working Student | Vivere GmbH | Oct 2023 - Jul 2024\n- Formulated personal, home, and pet care prototypes, leading periodic stability assessments and analyzing data to ensure product safety and viability.\n- Resolved critical product instability issues through advanced data analysis and root cause investigation, reducing formulation waste.\n- Managed operational project data using Google Sheets and Microsoft Office to track timeline changes and generate technical progress reports, organizing information for clear insights.\n- Collaborated with cross-functional teams to scale production from laboratory to manufacturing, supporting data preparation and analysis for process optimization.\n- Applied a problem-solving mindset with a structured approach to troubleshoot issues, ensuring reliable analytical outputs for product development.\n\nSkills:\n- Data Analysis\n- Data Modeling\n- Chemometric Analysis\n- Data Validation\n- Data Cleaning\n- Data Visualization\n- Performance Monitoring\n- Trend Analysis\n- Root Cause Analysis\n- Process Optimization\n- Microsoft Excel\n- VBA\n- Power Query\n- Dashboard Development\n- Technical Reporting\n- Cross-functional Collaboration\n- Project Coordination\n- Analytical Problem Solving\n- Attention to Detail\n- Structured Methodologies\n- Data Documentation\n- Quantitative Analysis\n- Statistical Thinking\n- Continuous Improvement\n- Quality Assurance\n\nEducation:\nM.Sc. Chemical and Bioprocess Engineering - Hamburg University of Technology (TUHH)\nMaster's Thesis (Optimization of Heat Exchanger Performance)\n- Applied data analysis and modeling to optimize heat exchanger performance, maximizing energy efficiency in industrial manufacturing environments.\n- Utilized structured analytical processes and quantitative methods to evaluate performance metrics and identify opportunities for improvement.\nB.Sc. Chemical Engineering - University of Debrecen",
+            "run_date": "2026-03-21",
+            "run_timestamp": "2026-03-21T17:30:55",
+            "cv_strategic_initiatives": [
+                {
+                    "title": "Process Development for Extraction of Beta-galactosidase | TUHH",
+                    "bullets": [
+                        "Designed an Aqueous Two-Phase System (ATPS); performed mass balances and phase diagram interpretations.",
+                        "Conducted comprehensive environmental impact analyses and generated a detailed CAPEX report."
+                    ]
+                },
+                {
+                    "title": "Metabolic Engineering of E. coli | TUHH",
+                    "bullets": [
+                        "Engineered E. coli JG472 for enhanced 2,3-butanediol production.",
+                        "Applied PCR, electroporation, HPLC data analysis, and VP tests to monitor growth kinetics and metabolic stress."
+                    ]
+                },
+                {
+                    "title": "Process Development for Production of L-lysine | TUHH",
+                    "bullets": [
+                        "Selected high-yield microorganisms and optimized continuous processes to increase manufacturing efficiency.",
+                        "Utilized advanced Excel for data modeling and reporting."
+                    ]
+                },
+                {
+                    "title": "Thermodynamic Data Modeling | TUHH",
+                    "bullets": [
+                        "Conducted phase equilibria and activity coefficient calculations using UNIFAC and COSMO-RS models.",
+                        "Refined process layouts and delivered accurate technical reports."
+                    ]
+                }
+            ],
+            "cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Data_Analyst_Quantum-AI_Technologies_4388723868_CV.docx",
+            "cv_pdf": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Data_Analyst_Quantum-AI_Technologies_4388723868_CV.pdf",
+            "tailored_cv_docx": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\generated_docs\\2026-03-21\\Mohamed_Elhelpawy_Data_Analyst_Quantum-AI_Technologies_4388723868_CV.docx",
+            "pdf_generation_error": null,
+            "doc_generation_error": null
         }
     ]
 }
