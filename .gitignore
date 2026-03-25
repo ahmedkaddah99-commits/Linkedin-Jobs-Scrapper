@@ -5,6 +5,14 @@ __pycache__/
 user_config/.env
 bc_automation
 final_jobs_with_docs.xlsx
+deepseek_excluded_jobs.json
+highly_curated_jobs.json
+stage1_scrape_snapshot.json
+stage2_filtered_local.json
+stage2_rejected_local.json
+stage3_filtered_ai.json
+stage4_checkpoint.json
+stage4_documents.json
 # Ignore the entire folder
 generated_docs/*
 # But do not ignore the assets folder inside it
