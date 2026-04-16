@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from scrapeops_python_requests.scrapeops_requests import ScrapeOpsRequests
 
 from cv_profile import load_cv_text
+from job_models import FILTER_STATUS_PENDING, SOURCE_TYPE_LINKEDIN_SEARCH
 from job_seeker_config import (
     cfg_bool,
     cfg_float,
@@ -44,6 +45,15 @@ FORBIDDEN_WORDS = [
     "werkstudent",
 ]
 DEFAULT_LOW_APPLICANT_THRESHOLD = int(os.getenv("STAGE1_LOW_APPLICANT_THRESHOLD", "80"))
+LINKEDIN_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
 
@@ -354,17 +364,14 @@ def call_deepseek_title_filter(api_key: str, model: str, prompt: str):
     return parse_ai_filter_payload(content)
 
 
-def build_clients():
+def build_scrape_requests_client():
     load_project_dotenv()
     scrapeops_api_key = os.getenv("SCRAPEOPS_API_KEY")
-    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-
-    if not scrapeops_api_key or not deepseek_api_key:
-        print(
-            "ERROR: Missing API keys in environment/user_config/.env "
-            "(SCRAPEOPS_API_KEY and DEEPSEEK_API_KEY are required)."
+    if not scrapeops_api_key:
+        raise RuntimeError(
+            "Missing SCRAPEOPS_API_KEY in environment/user_config/.env. "
+            "LinkedIn scraping requires ScrapeOps."
         )
-        raise SystemExit(1)
 
     scrapeops_logger = ScrapeOpsRequests(
         scrapeops_api_key=scrapeops_api_key,
@@ -372,6 +379,20 @@ def build_clients():
         job_name="Germany-AI-Filtered",
     )
     so_requests = scrapeops_logger.RequestsWrapper()
+    return scrapeops_api_key, so_requests
+
+
+def build_clients():
+    scrapeops_api_key, so_requests = build_scrape_requests_client()
+    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+
+    if not deepseek_api_key:
+        print(
+            "ERROR: Missing API keys in environment/user_config/.env "
+            "(SCRAPEOPS_API_KEY and DEEPSEEK_API_KEY are required)."
+        )
+        raise SystemExit(1)
+
     return scrapeops_api_key, deepseek_api_key, so_requests
 
 def fetch_initial_list(
@@ -451,6 +472,9 @@ def fetch_initial_list(
                         "keyword": keyword,
                         "link": f"https://www.linkedin.com/jobs/view/{job_id}",
                         "linkedin_link": f"https://www.linkedin.com/jobs/view/{job_id}",
+                        "source_url": f"https://www.linkedin.com/jobs/view/{job_id}",
+                        "source_type": SOURCE_TYPE_LINKEDIN_SEARCH,
+                        "filter_status": FILTER_STATUS_PENDING,
                     }
                 )
 
@@ -605,6 +629,194 @@ Return ONLY raw JSON (no markdown, no extra text), shaped EXACTLY like this:
     return approved_jobs, excluded_jobs
 
 
+def fetch_linkedin_job_posting_response(
+    job_id: str,
+    so_requests,
+    scrapeops_api_key: str,
+    use_proxy_fallback: bool,
+):
+    target_url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
+    attempts = []
+
+    resp = so_requests.get(target_url, headers=LINKEDIN_REQUEST_HEADERS, timeout=45)
+    attempts.append(("so_requests", resp.status_code))
+
+    if resp.status_code != 200:
+        resp = std_requests.get(target_url, headers=LINKEDIN_REQUEST_HEADERS, timeout=45)
+        attempts.append(("direct", resp.status_code))
+
+    if resp.status_code != 200 and use_proxy_fallback:
+        proxy_url = "https://proxy.scrapeops.io/v1/"
+        params = {
+            "api_key": scrapeops_api_key,
+            "url": target_url,
+            "residential": "true",
+            "render_js": "true",
+        }
+        resp = std_requests.get(proxy_url, params=params, headers=LINKEDIN_REQUEST_HEADERS, timeout=45)
+        attempts.append(("scrapeops_proxy", resp.status_code))
+
+    return target_url, resp, attempts
+
+
+def extract_linkedin_job_header_fields(soup: BeautifulSoup):
+    title_selectors = [
+        "h2.top-card-layout__title",
+        "h1.top-card-layout__title",
+        "h1",
+    ]
+    company_selectors = [
+        "a.topcard__org-name-link",
+        "span.topcard__flavor",
+        "a.top-card-layout__company-url",
+        "span.top-card-layout__second-subline a",
+    ]
+    location_selectors = [
+        "span.topcard__flavor--bullet",
+        "span.top-card-layout__first-subline",
+        "span.top-card-layout__second-subline",
+    ]
+
+    def extract_text(selectors):
+        for selector in selectors:
+            for node in soup.select(selector):
+                text = compact_whitespace(node.get_text(separator=" ", strip=True))
+                if text:
+                    return text
+        return ""
+
+    title = extract_text(title_selectors)
+    company = extract_text(company_selectors)
+    location_raw = extract_text(location_selectors)
+
+    if location_raw and " ago" in location_raw.lower():
+        location_raw = ""
+
+    return {
+        "title": title,
+        "company": company,
+        "location_raw": location_raw,
+    }
+
+
+def parse_linkedin_job_posting_html(job_id: str, html: str):
+    html_lower = html.lower()
+    soup = BeautifulSoup(html, "html.parser")
+    page_text = compact_whitespace(soup.get_text(separator=" ", strip=True))
+    header_fields = extract_linkedin_job_header_fields(soup)
+
+    primary_apply = soup.select_one(
+        ".top-card-layout__cta--primary[data-tracking-control-name*='public_jobs_apply-link']"
+    )
+    apply_trackings = [
+        (el.get("data-tracking-control-name") or "").lower()
+        for el in soup.select("[data-tracking-control-name*='public_jobs_apply-link']")
+    ]
+    primary_text = primary_apply.get_text(separator=" ", strip=True).lower() if primary_apply else ""
+
+    if "easy apply" in primary_text or "einfach bewerben" in primary_text:
+        easy_apply_status = True
+    elif any("easy_apply" in item for item in apply_trackings):
+        easy_apply_status = True
+    elif any("onsite" in item for item in apply_trackings):
+        easy_apply_status = True
+    elif any("offsite" in item for item in apply_trackings):
+        easy_apply_status = False
+    elif "easy apply" in html_lower or "einfach bewerben" in html_lower:
+        easy_apply_status = True
+    elif "apply on company website" in html_lower:
+        easy_apply_status = False
+    else:
+        easy_apply_status = "unknown"
+
+    desc_tag = (
+        soup.find("div", {"class": "show-more-less-html__markup"})
+        or soup.find("div", {"class": "description__text"})
+        or soup.select_one("section.show-more-less-html")
+    )
+    description = desc_tag.get_text(separator="\n", strip=True) if desc_tag else None
+
+    def normalize_href(raw_href: str):
+        href = (raw_href or "").strip()
+        if not href or href == "#" or href.lower().startswith("javascript:"):
+            return None
+        if href.startswith("//"):
+            href = f"https:{href}"
+        elif href.startswith("/"):
+            href = f"https://www.linkedin.com{href}"
+        return href
+
+    def decode_session_redirect(url: str):
+        try:
+            parsed = urlparse(url)
+            redirect_value = parse_qs(parsed.query).get("session_redirect", [None])[0]
+            if redirect_value:
+                return unquote(redirect_value)
+        except Exception:
+            pass
+        return url
+
+    linkedin_default = f"https://www.linkedin.com/jobs/view/{job_id}"
+    external_apply_link = None
+    linkedin_apply_link = None
+
+    apply_elements = soup.select("[data-tracking-control-name*='public_jobs_apply-link'], [data-apply-url], a[href]")
+    for element in apply_elements:
+        tracking = (element.get("data-tracking-control-name") or "").lower()
+        href = normalize_href(
+            element.get("href") or element.get("data-apply-url") or element.get("data-test-apply-url")
+        )
+        if not href:
+            continue
+
+        if "linkedin.com/login" in href.lower() or "/uas/login" in href.lower():
+            href = decode_session_redirect(href)
+
+        href_lower = href.lower()
+        is_apply_candidate = "apply" in tracking or "apply" in href_lower or "jobs/view" in href_lower
+        if not is_apply_candidate:
+            continue
+
+        if "linkedin.com" not in href_lower:
+            external_apply_link = href
+            break
+
+        if "linkedin.com/jobs/view" in href_lower and not linkedin_apply_link:
+            linkedin_apply_link = href
+
+    if external_apply_link:
+        apply_link = external_apply_link
+        apply_link_source = "external"
+    elif linkedin_apply_link:
+        apply_link = linkedin_apply_link
+        apply_link_source = "linkedin"
+    else:
+        apply_link = linkedin_default
+        apply_link_source = "linkedin_fallback"
+
+    posted_time_text = extract_posted_time_text(soup, page_text)
+    posted_age_hours = parse_posted_age_hours(posted_time_text)
+    applicant_count = extract_applicant_count(soup, page_text)
+    posted_datetime_estimated_utc = None
+    if posted_age_hours is not None:
+        posted_datetime_estimated_utc = (
+            datetime.now(timezone.utc) - timedelta(hours=float(posted_age_hours))
+        ).isoformat(timespec="seconds")
+
+    return {
+        **header_fields,
+        "easy_apply_status": easy_apply_status,
+        "description": description,
+        "apply_link": apply_link,
+        "apply_link_source": apply_link_source,
+        "posted_time_text": posted_time_text,
+        "posted_age_hours": posted_age_hours,
+        "posted_datetime_estimated_utc": posted_datetime_estimated_utc,
+        "applicant_count": applicant_count,
+        "enrich_error": None if description else "Description container not found",
+    }
+
+
 def enrich_job(
     job_id: str,
     so_requests,
@@ -612,37 +824,13 @@ def enrich_job(
     debug_enrich_blocks: bool,
     use_proxy_fallback: bool,
 ):
-    target_url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
     try:
-        attempts = []
-        resp = so_requests.get(target_url, headers=headers, timeout=45)
-        attempts.append(("so_requests", resp.status_code))
-
-        if resp.status_code != 200:
-            resp = std_requests.get(target_url, headers=headers, timeout=45)
-            attempts.append(("direct", resp.status_code))
-
-        if resp.status_code != 200 and use_proxy_fallback:
-            proxy_url = "https://proxy.scrapeops.io/v1/"
-            params = {
-                "api_key": scrapeops_api_key,
-                "url": target_url,
-                "residential": "true",
-                "render_js": "true",
-            }
-            resp = std_requests.get(proxy_url, params=params, headers=headers, timeout=45)
-            attempts.append(("scrapeops_proxy", resp.status_code))
+        target_url, resp, attempts = fetch_linkedin_job_posting_response(
+            job_id=job_id,
+            so_requests=so_requests,
+            scrapeops_api_key=scrapeops_api_key,
+            use_proxy_fallback=use_proxy_fallback,
+        )
 
         if resp.status_code != 200:
             if debug_enrich_blocks:
@@ -655,134 +843,27 @@ def enrich_job(
             return {
                 "easy_apply_status": "unknown",
                 "description": None,
+                "title": "",
+                "company": "",
+                "location_raw": "",
                 "apply_link": f"https://www.linkedin.com/jobs/view/{job_id}",
                 "apply_link_source": "linkedin_fallback",
                 "enrich_error": f"Failed (Status {resp.status_code}) | Attempts={attempts}",
                 "status_code": resp.status_code,
             }
 
-        html_lower = resp.text.lower()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        page_text = compact_whitespace(soup.get_text(separator=" ", strip=True))
-
-        primary_apply = soup.select_one(
-            ".top-card-layout__cta--primary[data-tracking-control-name*='public_jobs_apply-link']"
-        )
-        apply_trackings = [
-            (el.get("data-tracking-control-name") or "").lower()
-            for el in soup.select("[data-tracking-control-name*='public_jobs_apply-link']")
-        ]
-        primary_text = primary_apply.get_text(separator=" ", strip=True).lower() if primary_apply else ""
-
-        if "easy apply" in primary_text or "einfach bewerben" in primary_text:
-            easy_apply_status = True
-        elif any("easy_apply" in item for item in apply_trackings):
-            easy_apply_status = True
-        elif any("onsite" in item for item in apply_trackings):
-            easy_apply_status = True
-        elif any("offsite" in item for item in apply_trackings):
-            easy_apply_status = False
-        elif "easy apply" in html_lower or "einfach bewerben" in html_lower:
-            easy_apply_status = True
-        elif "apply on company website" in html_lower:
-            easy_apply_status = False
-        else:
-            easy_apply_status = "unknown"
-
-        desc_tag = (
-            soup.find("div", {"class": "show-more-less-html__markup"})
-            or soup.find("div", {"class": "description__text"})
-            or soup.select_one("section.show-more-less-html")
-        )
-        description = desc_tag.get_text(separator="\n", strip=True) if desc_tag else None
-
-        def normalize_href(raw_href: str):
-            href = (raw_href or "").strip()
-            if not href or href == "#" or href.lower().startswith("javascript:"):
-                return None
-            if href.startswith("//"):
-                href = f"https:{href}"
-            elif href.startswith("/"):
-                href = f"https://www.linkedin.com{href}"
-            return href
-
-        def decode_session_redirect(url: str):
-            try:
-                parsed = urlparse(url)
-                redirect_value = parse_qs(parsed.query).get("session_redirect", [None])[0]
-                if redirect_value:
-                    return unquote(redirect_value)
-            except Exception:
-                pass
-            return url
-
-        linkedin_default = f"https://www.linkedin.com/jobs/view/{job_id}"
-        external_apply_link = None
-        linkedin_apply_link = None
-
-        apply_elements = soup.select("[data-tracking-control-name*='public_jobs_apply-link'], [data-apply-url], a[href]")
-        for element in apply_elements:
-            tracking = (element.get("data-tracking-control-name") or "").lower()
-            href = normalize_href(
-                element.get("href") or element.get("data-apply-url") or element.get("data-test-apply-url")
-            )
-            if not href:
-                continue
-
-            if "linkedin.com/login" in href.lower() or "/uas/login" in href.lower():
-                href = decode_session_redirect(href)
-
-            href_lower = href.lower()
-            is_apply_candidate = (
-                "apply" in tracking
-                or "apply" in href_lower
-                or "jobs/view" in href_lower
-            )
-            if not is_apply_candidate:
-                continue
-
-            if "linkedin.com" not in href_lower:
-                external_apply_link = href
-                break
-
-            if "linkedin.com/jobs/view" in href_lower and not linkedin_apply_link:
-                linkedin_apply_link = href
-
-        if external_apply_link:
-            apply_link = external_apply_link
-            apply_link_source = "external"
-        elif linkedin_apply_link:
-            apply_link = linkedin_apply_link
-            apply_link_source = "linkedin"
-        else:
-            apply_link = linkedin_default
-            apply_link_source = "linkedin_fallback"
-
-        posted_time_text = extract_posted_time_text(soup, page_text)
-        posted_age_hours = parse_posted_age_hours(posted_time_text)
-        applicant_count = extract_applicant_count(soup, page_text)
-        posted_datetime_estimated_utc = None
-        if posted_age_hours is not None:
-            posted_datetime_estimated_utc = (
-                datetime.now(timezone.utc) - timedelta(hours=float(posted_age_hours))
-            ).isoformat(timespec="seconds")
-
+        parsed = parse_linkedin_job_posting_html(job_id=job_id, html=resp.text)
         return {
-            "easy_apply_status": easy_apply_status,
-            "description": description,
-            "apply_link": apply_link,
-            "apply_link_source": apply_link_source,
-            "posted_time_text": posted_time_text,
-            "posted_age_hours": posted_age_hours,
-            "posted_datetime_estimated_utc": posted_datetime_estimated_utc,
-            "applicant_count": applicant_count,
-            "enrich_error": None if description else "Description container not found",
+            **parsed,
             "status_code": resp.status_code,
         }
     except Exception as exc:
         return {
             "easy_apply_status": "unknown",
             "description": None,
+            "title": "",
+            "company": "",
+            "location_raw": "",
             "apply_link": f"https://www.linkedin.com/jobs/view/{job_id}",
             "apply_link_source": "linkedin_fallback",
             "posted_time_text": "",
@@ -982,6 +1063,15 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    try:
+        run_stage1_pipeline(args)
+    except Exception as exc:
+        print(f"[Stage1] failed: {exc}")
+        return 1
+    return 0
+
+
+def run_stage1_pipeline(args):
     scrapeops_api_key, deepseek_api_key, so_requests = build_clients()
     cv_summary = load_cv_text()
 
@@ -991,15 +1081,11 @@ def main() -> int:
         forbidden_title_words = [str(item).lower() for item in FORBIDDEN_WORDS]
 
     if args.reuse_scrape_snapshot:
-        try:
-            unique_jobs_list = load_jobs_snapshot(args.scrape_snapshot_json)
-            print(
-                f"[Stage1] reusing scrape snapshot: {args.scrape_snapshot_json} "
-                f"({len(unique_jobs_list)} jobs)"
-            )
-        except Exception as exc:
-            print(f"[Stage1] failed to load scrape snapshot '{args.scrape_snapshot_json}': {exc}")
-            return 1
+        unique_jobs_list = load_jobs_snapshot(args.scrape_snapshot_json)
+        print(
+            f"[Stage1] reusing scrape snapshot: {args.scrape_snapshot_json} "
+            f"({len(unique_jobs_list)} jobs)"
+        )
     else:
         all_raw_jobs = []
         for keyword in args.keywords:
@@ -1026,7 +1112,7 @@ def main() -> int:
 
     if not unique_jobs_list:
         print("[Stage1] no jobs available before AI filter, exiting.")
-        return 0
+        return []
 
     existing_job_signatures = load_existing_job_signatures_from_excel(args.existing_jobs_excel)
     if existing_job_signatures:
@@ -1046,7 +1132,7 @@ def main() -> int:
 
     if not unique_jobs_list:
         print("[Stage1] no new jobs left after Excel prefilter, exiting.")
-        return 0
+        return []
 
     ai_approved_jobs, _ = filter_with_ai(
         jobs_list=unique_jobs_list,
@@ -1060,7 +1146,7 @@ def main() -> int:
     )
     if not ai_approved_jobs:
         print("[Stage1] no jobs passed AI title filter, exiting.")
-        return 0
+        return []
 
     if args.max_enrich_jobs >= 0:
         ai_approved_jobs = ai_approved_jobs[: args.max_enrich_jobs]
@@ -1088,6 +1174,12 @@ def main() -> int:
         job["applicant_count"] = enrich["applicant_count"]
         job["enrich_error"] = enrich["enrich_error"]
         job["enrich_status_code"] = enrich["status_code"]
+        if enrich.get("title"):
+            job["title"] = enrich["title"]
+        if enrich.get("company"):
+            job["company"] = enrich["company"]
+        if enrich.get("location_raw"):
+            job["location_raw"] = enrich["location_raw"]
         final_output.append(job)
 
         jd_ok = "OK" if job["full_description"] else "NO"
@@ -1120,7 +1212,7 @@ def main() -> int:
 
     print(f"[Stage1] done. saved {len(final_output)} jobs to {args.output}")
     print(f"[Stage1] excluded jobs file: {args.excluded_output}")
-    return 0
+    return final_output
 
 
 if __name__ == "__main__":

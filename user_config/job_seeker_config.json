@@ -7,14 +7,15 @@
     "profile_image_path": "user_config/_profile_from_cv.png",
     "profile_links": {
       "linkedin": {
-        "url": "https://github.com/ahmedkaddah99-commits?tab=repositories",
-        "text": "Ahmed Kaddah",
+        "url": "https://www.linkedin.com/in/ahmed-kaddah-3a1a88183/",
+        "text": "LinkedIn",
         "icon": "in",
         "logo_path": "user_config/linkedin_logo.png"
       },
       "github": {
         "url": "https://github.com/ahmedkaddah99-commits?tab=repositories",
-        "text": "Ahmed Kaddah",
+        "text": "GitHub",
+        "icon": "h",
         "icon": "GH",
         "logo_path": "user_config/github_logo.jpg"
       }

@@ -123,6 +123,13 @@ DEFAULT_JOB_SEEKER_CONFIG = {
             "run_date": "",
             "force_regenerate": False,
         },
+        "manual_urls": {
+            "input_file": "user_config/manual_job_urls.txt",
+            "output_json": "manual_url_jobs.json",
+            "failed_output_json": "manual_url_failures.json",
+            "request_timeout_seconds": 45,
+            "dedupe_against_tracker": True,
+        },
     },
     "ai": {
         "models": {

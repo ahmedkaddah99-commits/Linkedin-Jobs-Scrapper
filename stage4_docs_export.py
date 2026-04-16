@@ -1839,21 +1839,50 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    try:
+        run_stage4_pipeline(args, config=config)
+    except Exception as exc:
+        print(f"Stage 4 failed: {exc}")
+        return 1
+    return 0
+
+
+def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None) -> List[Dict]:
+    load_project_dotenv()
+    if config is None:
+        config = load_job_seeker_config()
+
+    default_linkedin_profile_url = cfg_str(config, ("candidate", "profile_links", "linkedin", "url"), "")
+    default_linkedin_profile_text = cfg_str(config, ("candidate", "profile_links", "linkedin", "text"), "LinkedIn")
+    default_linkedin_profile_icon = cfg_str(config, ("candidate", "profile_links", "linkedin", "icon"), "in")
+    default_linkedin_logo_path = (
+        cfg_str(config, ("candidate", "profile_links", "linkedin", "logo_path"), "")
+        or cfg_str(config, ("candidate", "profile_links", "linkedin", "icon_path"), "")
+        or cfg_str(config, ("candidate", "profile_links", "linkedin", "image_path"), "")
+    )
+    default_github_profile_url = cfg_str(config, ("candidate", "profile_links", "github", "url"), "")
+    default_github_profile_text = cfg_str(config, ("candidate", "profile_links", "github", "text"), "GitHub")
+    default_github_profile_icon = cfg_str(config, ("candidate", "profile_links", "github", "icon"), "GH")
+    default_github_logo_path = (
+        cfg_str(config, ("candidate", "profile_links", "github", "logo_path"), "")
+        or cfg_str(config, ("candidate", "profile_links", "github", "icon_path"), "")
+        or cfg_str(config, ("candidate", "profile_links", "github", "image_path"), "")
+    )
+
     deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not deepseek_api_key and not gemini_api_key:
-        print("ERROR: Both DEEPSEEK_API_KEY and GEMINI_API_KEY are missing in environment/user_config/.env")
-        return 1
+        raise RuntimeError("Both DEEPSEEK_API_KEY and GEMINI_API_KEY are missing in environment/user_config/.env")
 
-    input_path = Path(args.input)
-    if not input_path.exists():
-        print(f"ERROR: Input file not found: {input_path}")
-        return 1
-
-    jobs = load_json_file(input_path)
-    if not isinstance(jobs, list):
-        print("ERROR: Input JSON must be a list of jobs.")
-        return 1
+    if jobs is None:
+        input_path = Path(args.input)
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+        jobs = load_json_file(input_path)
+        if not isinstance(jobs, list):
+            raise ValueError("Input JSON must be a list of jobs.")
+    else:
+        jobs = list(jobs)
 
     if args.max_jobs > 0:
         jobs = jobs[: args.max_jobs]
@@ -1918,7 +1947,6 @@ def main() -> int:
             generated_by_id[job_id] = record
 
     total_jobs = len(jobs)
-
     checkpoint_changed = False
 
     for index, job in enumerate(jobs, start=1):
@@ -1934,6 +1962,10 @@ def main() -> int:
                 "priority_tier",
                 "priority_bucket",
                 "priority_rule",
+                "source_type",
+                "filter_status",
+                "source_url",
+                "manual_approved",
             ]:
                 if passthrough_key in job and existing_record.get(passthrough_key) != job.get(passthrough_key):
                     existing_record[passthrough_key] = job.get(passthrough_key)
@@ -2107,7 +2139,7 @@ def main() -> int:
     print(f"Generation errors: {failed_count}")
     print(f"PDF conversion errors: {pdf_failed_count}")
     print(f"Checkpoint saved: {checkpoint_path}")
-    return 0
+    return final_records
 
 
 if __name__ == "__main__":
