@@ -17,7 +17,7 @@ from job_models import (
     PipelineJob,
     stable_manual_job_id,
 )
-from stage1_scrape_enrich import build_scrape_requests_client, enrich_job
+from backend.capabilities.white_collar.linkedin_connector import build_scrape_requests_client, enrich_job
 
 
 LOGGER = logging.getLogger(__name__)

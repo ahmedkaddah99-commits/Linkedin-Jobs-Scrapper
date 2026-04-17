@@ -1,8 +1,9 @@
 import argparse
 import logging
 
+from backend import create_backend
 from job_seeker_config import load_job_seeker_config, load_project_dotenv
-from pipeline_runner import build_main_defaults, run_mode_pipeline
+from pipeline_runner import build_main_defaults
 
 
 def main() -> int:
@@ -138,7 +139,19 @@ def main() -> int:
     )
 
     try:
-        run_mode_pipeline(config, args)
+        application = create_backend()
+        workspace_id = {
+            "linkedin": "white_collar_linkedin",
+            "manual_urls": "white_collar_manual_urls",
+            "combined": "white_collar_combined",
+        }[args.mode]
+        run = application.start_run(
+            workspace_id,
+            run_input_overrides={key: value for key, value in vars(args).items() if key != "log_level"},
+            requested_by="main_cli",
+        )
+        if run.status != "completed":
+            raise RuntimeError(f"Run {run.id} did not complete successfully. Status={run.status}")
     except Exception as exc:
         logging.getLogger(__name__).exception("Pipeline execution failed")
         print(f"ERROR: {exc}")

@@ -1,0 +1,167 @@
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background: #f8f9ff;
+  color: #0b1c30;
+  font-family: "Plus Jakarta Sans", sans-serif;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html.dark body {
+  background: #07111f;
+  color: #e6eefc;
+}
+
+html.dark .bg-background,
+html.dark.bg-background {
+  background-color: #07111f !important;
+}
+
+html.dark .bg-surface,
+html.dark.bg-surface {
+  background-color: #0c1b30 !important;
+}
+
+html.dark .bg-surface-container-lowest,
+html.dark.bg-surface-container-lowest,
+html.dark .bg-white {
+  background-color: #10233d !important;
+}
+
+html.dark .bg-surface-container-low,
+html.dark.bg-surface-container-low {
+  background-color: #122844 !important;
+}
+
+html.dark .bg-surface-container,
+html.dark.bg-surface-container {
+  background-color: #16304f !important;
+}
+
+html.dark .bg-surface-container-high,
+html.dark.bg-surface-container-high {
+  background-color: #1b3b60 !important;
+}
+
+html.dark .bg-surface-container-highest,
+html.dark.bg-surface-container-highest,
+html.dark .bg-surface-variant,
+html.dark.bg-surface-variant {
+  background-color: #23486f !important;
+}
+
+html.dark .text-on-surface,
+html.dark.text-on-surface,
+html.dark .text-\[\#0d1c2f\] {
+  color: #e6eefc !important;
+}
+
+html.dark .text-on-surface-variant,
+html.dark.text-on-surface-variant,
+html.dark .text-slate-500 {
+  color: #9bb3d1 !important;
+}
+
+html.dark .text-outline,
+html.dark.text-outline {
+  color: #88a1c0 !important;
+}
+
+html.dark .border-outline-variant\/10,
+html.dark.border-outline-variant\/10 {
+  border-color: rgba(118, 146, 182, 0.24) !important;
+}
+
+html.dark .border-outline-variant\/20,
+html.dark.border-outline-variant\/20,
+html.dark .border-slate-200 {
+  border-color: rgba(118, 146, 182, 0.35) !important;
+}
+
+html.dark .divide-outline-variant\/10 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(118, 146, 182, 0.24) !important;
+}
+
+html.dark .border-surface-container {
+  border-color: rgba(118, 146, 182, 0.28) !important;
+}
+
+html.dark .shadow-soft {
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28) !important;
+}
+
+html.dark .from-surface-container-low {
+  --tw-gradient-from: #122844 var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgba(18, 40, 68, 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+html.dark .to-surface-container-high {
+  --tw-gradient-to: #1b3b60 var(--tw-gradient-to-position) !important;
+}
+
+html.dark .hover\:bg-surface-container-low:hover,
+html.dark .hover\:bg-surface-container-low\/50:hover {
+  background-color: #16304f !important;
+}
+
+html.dark .hover\:bg-surface-container-high:hover,
+html.dark .hover\:bg-surface-container-high\/50:hover {
+  background-color: #23486f !important;
+}
+
+html.dark .hover\:bg-surface-variant:hover {
+  background-color: #2a537e !important;
+}
+
+html.dark .hover\:text-on-surface:hover {
+  color: #ffffff !important;
+}
+
+html.dark .backdrop-blur-\[20px\] {
+  background-color: rgba(16, 35, 61, 0.86) !important;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(187, 202, 198, 0.55);
+  border-radius: 9999px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background-color: rgba(118, 146, 182, 0.55);
+}

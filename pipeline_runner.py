@@ -136,7 +136,7 @@ def run_stage3_pipeline(jobs: list[dict[str, Any]], cli_args) -> tuple[list[dict
 
 
 def run_linkedin_pipeline(config: dict, cli_args) -> list[dict[str, Any]]:
-    from stage1_scrape_enrich import run_stage1_pipeline
+    from backend.capabilities.white_collar.acquisition import run_stage1_pipeline
 
     stage1_args = build_stage1_args(config, cli_args)
     stage1_jobs = run_stage1_pipeline(stage1_args)
@@ -213,7 +213,7 @@ def merge_source_jobs(
 
 
 def run_mode_pipeline(config: dict, cli_args) -> list[dict[str, Any]]:
-    from stage4_docs_export import run_stage4_pipeline
+    from backend.capabilities.white_collar.documents import run_stage4_pipeline
 
     linkedin_jobs: list[dict[str, Any]] = []
     manual_jobs: list[dict[str, Any]] = []

@@ -19,4 +19,14 @@ generated_docs/*
 !generated_docs/_assets/
 
 working-file.xlsx
+.backend_data/
+.backend_data_test/
+.backend_test_tmp/
+.backend_auth_cli_test/
+.backend_data_cli_test/
+frontend/node_modules/
+frontend/dist/
+manual_url_jobs.json
+manual_url_failures.json
+stage3_checkpoint.json
 
