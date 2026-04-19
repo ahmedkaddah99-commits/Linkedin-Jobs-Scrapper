@@ -36,10 +36,16 @@ def _workspace_summary(workspace) -> dict:
     return {
         "id": workspace.id,
         "name": workspace.name,
+        "description": workspace.description,
         "workflow_template_id": workspace.workflow_template_id,
         "workspace_type": workspace.workspace_type,
+        "automation_flow": str(workspace.metadata.get("automation_flow") or workspace.settings.get("automation_flow") or ""),
+        "settings": dict(workspace.settings),
         "feature_flags": workspace.feature_flags,
+        "profiles": [profile.to_dict() for profile in workspace.profiles],
+        "prompt_sets": [prompt_set.to_dict() for prompt_set in workspace.prompt_sets],
         "sources": [source.to_dict() for source in workspace.sources],
+        "metadata": dict(workspace.metadata),
     }
 
 
@@ -84,7 +90,12 @@ def _run_summary(run) -> dict:
 
 
 def _workspace_option(workspace) -> dict:
-    return {"id": workspace.id, "name": workspace.name, "workspace_type": workspace.workspace_type}
+    return {
+        "id": workspace.id,
+        "name": workspace.name,
+        "workspace_type": workspace.workspace_type,
+        "automation_flow": str(workspace.metadata.get("automation_flow") or workspace.settings.get("automation_flow") or ""),
+    }
 
 
 def _build_settings_payload(application, user) -> dict:
@@ -579,6 +590,10 @@ def build_handler(application):
                     self._require_workspace_access(workspace_id=segments[1], required_scope=TOKEN_SCOPE_WORKSPACES_READ)
                     self._send_json(application.get_workspace(segments[1]).to_dict())
                     return
+                if segments == ["workspace-builder", "catalog"]:
+                    self._require_scope(TOKEN_SCOPE_WORKSPACES_READ)
+                    self._send_json(application.get_workspace_builder_catalog())
+                    return
                 if segments == ["workflow-templates"]:
                     self._require_scope(TOKEN_SCOPE_TEMPLATES_READ)
                     limit = _parse_int_param(query, "limit", default=50, maximum=500)
@@ -786,6 +801,13 @@ def build_handler(application):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                     self._send_json(application.upsert_workspace(payload).to_dict(), status=HTTPStatus.CREATED)
                     return
+                if segments == ["workspace-builder", "workspaces"]:
+                    self._require_scope(TOKEN_SCOPE_WORKSPACES_WRITE)
+                    self._send_json(
+                        application.create_workspace_from_scratch(payload).to_dict(),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
                 if segments == ["workflow-templates"]:
                     self._require_scope(TOKEN_SCOPE_TEMPLATES_WRITE)
                     self._send_json(application.upsert_workflow_template(payload).to_dict(), status=HTTPStatus.CREATED)
@@ -955,6 +977,16 @@ def build_handler(application):
                     refreshed_user = application.get_user(user.user_id)
                     self._send_json(_build_settings_payload(application, refreshed_user), status=HTTPStatus.OK)
                     return
+                if segments[:2] == ["workspace-builder", "workspaces"] and len(segments) == 3:
+                    self._require_workspace_access(
+                        workspace_id=segments[2],
+                        required_scope=TOKEN_SCOPE_WORKSPACES_WRITE,
+                    )
+                    self._send_json(
+                        application.update_workspace_from_scratch(segments[2], payload).to_dict(),
+                        status=HTTPStatus.OK,
+                    )
+                    return
                 if segments[:1] == ["users"] and len(segments) == 2:
                     self._require_scope(TOKEN_SCOPE_USERS_WRITE)
                     payload["user_id"] = segments[1]
@@ -1058,6 +1090,12 @@ def build_handler(application):
                     self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_REVIEWS_WRITE)
                     application.delete_review(segments[3])
                     self._send_json({"deleted": segments[3], "run_id": segments[1]}, status=HTTPStatus.OK)
+                    return
+                if segments[:1] == ["runs"] and len(segments) == 2:
+                    run = application.get_run(segments[1])
+                    self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                    application.delete_run(segments[1])
+                    self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)
                     return
 
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")

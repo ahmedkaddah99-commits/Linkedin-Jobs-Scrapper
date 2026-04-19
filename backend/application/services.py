@@ -36,6 +36,7 @@ from backend.domain.models import (
     utc_plus_seconds,
     utc_now_iso,
 )
+from backend.orchestration import build_workspace_from_scratch, workspace_builder_catalog
 from backend.security import issue_api_token, resolve_secret_references, token_has_scope, token_is_expired, verify_token_value
 
 
@@ -95,6 +96,54 @@ class BackendApplication:
 
     def list_renderers(self):
         return [descriptor for _, descriptor in self.registries.renderer_registry.list_items()]
+
+    def get_workspace_builder_catalog(self) -> dict[str, Any]:
+        catalog = workspace_builder_catalog().to_dict()
+        catalog["connectors"] = [
+            {
+                "id": descriptor.id,
+                "kind": descriptor.kind,
+                "name": descriptor.name,
+                "description": descriptor.description,
+                "metadata": dict(descriptor.metadata),
+            }
+            for descriptor in self.list_connectors()
+        ]
+        catalog["generations"] = [
+            {
+                "id": descriptor.id,
+                "kind": descriptor.kind,
+                "name": descriptor.name,
+                "description": descriptor.description,
+                "metadata": dict(descriptor.metadata),
+            }
+            for descriptor in self.list_generations()
+        ]
+        catalog["renderers"] = [
+            {
+                "id": descriptor.id,
+                "kind": descriptor.kind,
+                "name": descriptor.name,
+                "description": descriptor.description,
+                "metadata": dict(descriptor.metadata),
+            }
+            for descriptor in self.list_renderers()
+        ]
+        return catalog
+
+    def create_workspace_from_scratch(self, payload: Mapping[str, Any]) -> WorkspaceDefinition:
+        workflow_template, workspace = build_workspace_from_scratch(dict(payload))
+        self.upsert_workflow_template(workflow_template)
+        return self.upsert_workspace(workspace)
+
+    def update_workspace_from_scratch(self, workspace_id: str, payload: Mapping[str, Any]) -> WorkspaceDefinition:
+        existing_workspace = self.get_workspace(workspace_id)
+        builder_payload = dict(payload)
+        builder_payload["workspace_id"] = existing_workspace.id
+        builder_payload.setdefault("workflow_template_id", existing_workspace.workflow_template_id)
+        workflow_template, workspace = build_workspace_from_scratch(builder_payload)
+        self.upsert_workflow_template(workflow_template)
+        return self.upsert_workspace(workspace)
 
     def list_users(self) -> list[UserRecord]:
         return self.repositories.auth_repository.list_users()
@@ -285,6 +334,36 @@ class BackendApplication:
 
     def get_run(self, run_id: str) -> RunRecord:
         return self.repositories.run_repository.get(run_id)
+
+    def delete_run(self, run_id: str) -> None:
+        run = self.repositories.run_repository.get(run_id)
+        deletable_statuses = {
+            RUN_STATUS_PLANNED,
+            RUN_STATUS_QUEUED,
+            RUN_STATUS_CANCELLED,
+            RUN_STATUS_FAILED,
+        }
+        if run.status not in deletable_statuses:
+            raise ValueError(
+                "only planned, queued, failed, or cancelled runs can be deleted",
+            )
+
+        self.repositories.job_store.clear_run(run_id)
+        self.repositories.artifact_store.clear_run(run_id)
+
+        for review in self.list_reviews(run_id=run_id, limit=100000, offset=0):
+            self.repositories.review_store.delete_review(review.review_id)
+
+        for worker in self.list_workers(limit=1000, offset=0, status=""):
+            if worker.current_run_id != run_id:
+                continue
+            worker.current_run_id = ""
+            worker.status = WORKER_STATUS_IDLE
+            worker.last_heartbeat_at = utc_now_iso()
+            worker.lease_expires_at = worker.last_heartbeat_at
+            self.repositories.worker_store.upsert_worker(worker)
+
+        self.repositories.run_repository.delete(run_id)
 
     def list_runs(self, *, limit: int = 50, offset: int = 0, status: str = "", workspace_id: str = ""):
         repository = self.repositories.run_repository

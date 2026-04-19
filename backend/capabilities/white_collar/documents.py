@@ -7,8 +7,7 @@ from typing import Dict, List, Optional
 
 from google import genai
 
-from cv_profile import load_cv_text
-from job_seeker_config import (
+from backend.config.job_seeker import (
     cfg_bool,
     cfg_float,
     cfg_int,
@@ -18,6 +17,7 @@ from job_seeker_config import (
     load_project_dotenv,
     normalize_windows_env_path,
 )
+from backend.profiles.cv_text import load_cv_text
 
 from .common import load_json_file, save_json_file
 from .cv_structuring import ensure_structured_cv_fields

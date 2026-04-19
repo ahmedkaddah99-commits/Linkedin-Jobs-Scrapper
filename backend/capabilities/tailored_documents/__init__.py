@@ -1,0 +1,15 @@
+from backend.capabilities.white_collar.acquisition import *  # noqa: F401,F403
+from backend.capabilities.white_collar.cv_structuring import *  # noqa: F401,F403
+from backend.capabilities.white_collar.documents import *  # noqa: F401,F403
+from backend.capabilities.white_collar.generation import *  # noqa: F401,F403
+from backend.capabilities.white_collar.language_rules import *  # noqa: F401,F403
+from backend.capabilities.white_collar.linkedin_connector import *  # noqa: F401,F403
+from backend.capabilities.white_collar.manual_urls import *  # noqa: F401,F403
+from backend.capabilities.white_collar.prioritization import *  # noqa: F401,F403
+from backend.capabilities.white_collar.rendering import *  # noqa: F401,F403
+from backend.capabilities.white_collar.runtime import *  # noqa: F401,F403
+from backend.capabilities.white_collar.screening import *  # noqa: F401,F403
+from backend.capabilities.white_collar.snapshotting import *  # noqa: F401,F403
+from backend.capabilities.white_collar.title_filter import *  # noqa: F401,F403
+from backend.capabilities.white_collar.tracker_export import *  # noqa: F401,F403
+from backend.capabilities.white_collar.workflow import *  # noqa: F401,F403

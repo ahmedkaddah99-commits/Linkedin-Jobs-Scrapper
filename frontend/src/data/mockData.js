@@ -147,33 +147,33 @@ export const dashboardCards = [
 
 export const dashboardRuns = [
   { id: "Run-1042B", workspace: "Alpha", status: "Completed", stage: "Exported", attempts: "1/2" },
-  { id: "Run-1043C", workspace: "Blue Collar DE", status: "Running", stage: "Classify", attempts: "1/1" },
-  { id: "Run-1038A", workspace: "Manual URLs", status: "Queued", stage: "Waiting", attempts: "0/1" },
+  { id: "Run-1043C", workspace: "Board Collection Germany", status: "Running", stage: "Classify", attempts: "1/1" },
+  { id: "Run-1038A", workspace: "Curated URLs", status: "Queued", stage: "Waiting", attempts: "0/1" },
 ];
 
 export const workspaces = [
   {
-    name: "White-Collar LinkedIn",
-    type: "white_collar",
-    description: "LinkedIn discovery with enrichment, filtering, ranking, and document generation.",
+    name: "Search And Apply",
+    type: "custom",
+    description: "Listing discovery with enrichment, screening, ranking, and tailored document generation.",
     profile: "Professional CV v3",
-    promptFamily: "white_collar_default",
+    promptFamily: "tailored_documents",
     sources: ["LinkedIn Search"],
   },
   {
-    name: "White-Collar Manual URLs",
-    type: "manual_url",
-    description: "Manual URL ingestion with filtering bypass and direct document production.",
+    name: "Curated URLs",
+    type: "custom",
+    description: "Manual job URL ingestion with screening bypass and direct document production.",
     profile: "Professional CV v3",
     promptFamily: "manual_curated",
     sources: ["Manual URLs"],
   },
   {
-    name: "Blue-Collar Germany",
-    type: "blue_collar",
-    description: "Multi-portal blue-collar acquisition with role classification and packaging.",
-    profile: "Blue Collar Baseline",
-    promptFamily: "blue_collar_default",
+    name: "Reusable Packages Germany",
+    type: "custom",
+    description: "Multi-board acquisition with role classification and reusable application packaging.",
+    profile: "Operations Baseline",
+    promptFamily: "reusable_packages",
     sources: ["Indeed", "LinkedIn", "StepStone"],
   },
 ];
@@ -222,11 +222,11 @@ export const adminCollections = {
   ],
   secrets: [
     { name: "openai_api_key", provider: "stored", scope: "global", valueState: "Value present" },
-    { name: "scrapeops_api_key", provider: "env", scope: "white_collar_linkedin", valueState: "ENV backed" },
+    { name: "scrapeops_api_key", provider: "env", scope: "search_apply_workspace", valueState: "ENV backed" },
   ],
   templates: [
-    { name: "white_collar_linkedin_v1", stages: "4", defaultMode: "queued" },
-    { name: "blue_collar_default_v1", stages: "5", defaultMode: "queued" },
+    { name: "search_apply_v1", stages: "4", defaultMode: "queued" },
+    { name: "board_package_v1", stages: "5", defaultMode: "queued" },
   ],
   workers: [
     { id: "worker_service_a", status: "running", currentRun: "Run-1043C", heartbeat: "just now" },

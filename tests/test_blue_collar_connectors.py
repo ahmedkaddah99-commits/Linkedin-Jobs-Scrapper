@@ -2,8 +2,8 @@ import unittest
 
 import bc_automation.blue_collar_portals as legacy_blue_collar_portals
 
-from backend.capabilities.blue_collar import support as blue_support
-from backend.connectors.blue_collar import (
+from backend.capabilities.reusable_packages import support as blue_support
+from backend.connectors.job_boards import (
     collect_jobs_from_portals,
     compact_whitespace,
     list_portal_strategy_ids,

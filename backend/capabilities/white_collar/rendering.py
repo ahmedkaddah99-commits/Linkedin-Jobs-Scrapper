@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List
 
-from job_seeker_config import cfg_str, load_job_seeker_config, normalize_windows_env_path
+from backend.config.job_seeker import cfg_str, load_job_seeker_config, normalize_windows_env_path
 
 from .common import sanitize_filename
 from .generation import format_header_location

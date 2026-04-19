@@ -8,8 +8,8 @@ import requests as std_requests
 from bs4 import BeautifulSoup
 from scrapeops_python_requests.scrapeops_requests import ScrapeOpsRequests
 
-from job_models import FILTER_STATUS_PENDING, SOURCE_TYPE_LINKEDIN_SEARCH
-from job_seeker_config import load_project_dotenv
+from backend.config.job_seeker import load_project_dotenv
+from backend.domain.pipeline_jobs import FILTER_STATUS_PENDING, SOURCE_TYPE_LINKEDIN_SEARCH
 
 from .common import compact_whitespace
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from backend.adapters import register_legacy_stage_adapters
 from backend.application import BackendApplication
-from backend.connectors.blue_collar import list_portal_strategy_ids
+from backend.connectors.job_boards import list_portal_strategy_ids
 from backend.orchestration import BackendRegistries, ComponentDescriptor, Registry, StageEngine
 from backend.repositories import (
     BackendRepositories,
@@ -34,12 +34,31 @@ def _build_registries() -> BackendRegistries:
     renderer_registry = Registry(kind="renderer")
 
     connector_registry.register(
+        "linkedin_jobs",
+        ComponentDescriptor(
+            id="linkedin_jobs",
+            kind="connector",
+            name="LinkedIn Job Search",
+            description="Search-driven job discovery and enrichment using LinkedIn listings.",
+        ),
+    )
+    connector_registry.register(
         "linkedin_search",
         ComponentDescriptor(
             id="linkedin_search",
             kind="connector",
-            name="LinkedIn Search Connector",
-            description="LinkedIn guest job discovery and enrichment pipeline.",
+            name="LinkedIn Job Search (Legacy Alias)",
+            description="Compatibility alias for the LinkedIn search connector.",
+            metadata={"alias_for": "linkedin_jobs"},
+        ),
+    )
+    connector_registry.register(
+        "curated_job_urls",
+        ComponentDescriptor(
+            id="curated_job_urls",
+            kind="connector",
+            name="Curated Job URLs",
+            description="Manual job URL ingestion and normalization for curated opportunities.",
         ),
     )
     connector_registry.register(
@@ -47,8 +66,19 @@ def _build_registries() -> BackendRegistries:
         ComponentDescriptor(
             id="manual_url",
             kind="connector",
-            name="Manual URL Connector",
-            description="Manual job URL ingestion and normalization.",
+            name="Curated Job URLs (Legacy Alias)",
+            description="Compatibility alias for curated job URL ingestion.",
+            metadata={"alias_for": "curated_job_urls"},
+        ),
+    )
+    connector_registry.register(
+        "job_board_collection",
+        ComponentDescriptor(
+            id="job_board_collection",
+            kind="connector",
+            name="Job Board Collection",
+            description="Collect jobs across multiple job boards and portals.",
+            metadata={"portal_strategy_ids": list_portal_strategy_ids()},
         ),
     )
     connector_registry.register(
@@ -56,9 +86,19 @@ def _build_registries() -> BackendRegistries:
         ComponentDescriptor(
             id="blue_collar_portals",
             kind="connector",
-            name="Blue-Collar Multi-Portal Connector",
-            description="Blue-collar portal collection across Indeed, LinkedIn, Arbeitsagentur, and StepStone.",
-            metadata={"portal_strategy_ids": list_portal_strategy_ids()},
+            name="Job Board Collection (Legacy Alias)",
+            description="Compatibility alias for multi-portal job-board collection.",
+            metadata={"alias_for": "job_board_collection", "portal_strategy_ids": list_portal_strategy_ids()},
+        ),
+    )
+    connector_registry.register(
+        "job_board_indeed",
+        ComponentDescriptor(
+            id="job_board_indeed",
+            kind="connector",
+            name="Indeed Board Source",
+            description="Indeed source strategy within the generic job-board collection layer.",
+            metadata={"portal": "indeed", "group": "job_boards"},
         ),
     )
     connector_registry.register(
@@ -66,9 +106,19 @@ def _build_registries() -> BackendRegistries:
         ComponentDescriptor(
             id="blue_collar_indeed",
             kind="connector",
-            name="Indeed Connector",
-            description="Blue-collar Indeed Germany source strategy.",
-            metadata={"portal": "indeed", "group": "blue_collar"},
+            name="Indeed Board Source (Legacy Alias)",
+            description="Compatibility alias for the Indeed source strategy.",
+            metadata={"alias_for": "job_board_indeed", "portal": "indeed", "group": "job_boards"},
+        ),
+    )
+    connector_registry.register(
+        "job_board_arbeitsagentur",
+        ComponentDescriptor(
+            id="job_board_arbeitsagentur",
+            kind="connector",
+            name="Arbeitsagentur Board Source",
+            description="Bundesagentur fuer Arbeit source strategy within the generic job-board collection layer.",
+            metadata={"portal": "arbeitsagentur", "group": "job_boards"},
         ),
     )
     connector_registry.register(
@@ -76,9 +126,19 @@ def _build_registries() -> BackendRegistries:
         ComponentDescriptor(
             id="blue_collar_arbeitsagentur",
             kind="connector",
-            name="Arbeitsagentur Connector",
-            description="Blue-collar Bundesagentur fuer Arbeit source strategy.",
-            metadata={"portal": "arbeitsagentur", "group": "blue_collar"},
+            name="Arbeitsagentur Board Source (Legacy Alias)",
+            description="Compatibility alias for the Arbeitsagentur source strategy.",
+            metadata={"alias_for": "job_board_arbeitsagentur", "portal": "arbeitsagentur", "group": "job_boards"},
+        ),
+    )
+    connector_registry.register(
+        "job_board_stepstone",
+        ComponentDescriptor(
+            id="job_board_stepstone",
+            kind="connector",
+            name="StepStone Board Source",
+            description="StepStone source strategy within the generic job-board collection layer.",
+            metadata={"portal": "stepstone", "group": "job_boards"},
         ),
     )
     connector_registry.register(
@@ -86,9 +146,19 @@ def _build_registries() -> BackendRegistries:
         ComponentDescriptor(
             id="blue_collar_stepstone",
             kind="connector",
-            name="StepStone Connector",
-            description="Blue-collar StepStone Germany source strategy.",
-            metadata={"portal": "stepstone", "group": "blue_collar"},
+            name="StepStone Board Source (Legacy Alias)",
+            description="Compatibility alias for the StepStone source strategy.",
+            metadata={"alias_for": "job_board_stepstone", "portal": "stepstone", "group": "job_boards"},
+        ),
+    )
+    connector_registry.register(
+        "job_board_linkedin",
+        ComponentDescriptor(
+            id="job_board_linkedin",
+            kind="connector",
+            name="LinkedIn Board Source",
+            description="LinkedIn source strategy within the generic job-board collection layer.",
+            metadata={"portal": "linkedin", "group": "job_boards"},
         ),
     )
     connector_registry.register(
@@ -96,19 +166,38 @@ def _build_registries() -> BackendRegistries:
         ComponentDescriptor(
             id="blue_collar_linkedin",
             kind="connector",
-            name="LinkedIn Connector",
-            description="Blue-collar LinkedIn guest jobs source strategy.",
-            metadata={"portal": "linkedin", "group": "blue_collar"},
+            name="LinkedIn Board Source (Legacy Alias)",
+            description="Compatibility alias for the LinkedIn board source strategy.",
+            metadata={"alias_for": "job_board_linkedin", "portal": "linkedin", "group": "job_boards"},
         ),
     )
 
+    generation_registry.register(
+        "tailored_application_documents",
+        ComponentDescriptor(
+            id="tailored_application_documents",
+            kind="generation",
+            name="Tailored Application Documents",
+            description="Generate tailored application documents for accepted jobs.",
+        ),
+    )
     generation_registry.register(
         "white_collar_cv_generation",
         ComponentDescriptor(
             id="white_collar_cv_generation",
             kind="generation",
-            name="White-Collar CV Generation",
-            description="AI-tailored CV generation for white-collar jobs.",
+            name="Tailored Application Documents (Legacy Alias)",
+            description="Compatibility alias for tailored application document generation.",
+            metadata={"alias_for": "tailored_application_documents"},
+        ),
+    )
+    generation_registry.register(
+        "reusable_role_profiles",
+        ComponentDescriptor(
+            id="reusable_role_profiles",
+            kind="generation",
+            name="Reusable Role Profiles",
+            description="Generate reusable role-based profile documents for grouped jobs.",
         ),
     )
     generation_registry.register(
@@ -116,18 +205,38 @@ def _build_registries() -> BackendRegistries:
         ComponentDescriptor(
             id="blue_collar_role_cv_generation",
             kind="generation",
-            name="Blue-Collar Role CV Builder",
-            description="Reusable role-based CV generation for blue-collar categories.",
+            name="Reusable Role Profiles (Legacy Alias)",
+            description="Compatibility alias for reusable role-based profile generation.",
+            metadata={"alias_for": "reusable_role_profiles"},
         ),
     )
 
+    renderer_registry.register(
+        "application_document_export",
+        ComponentDescriptor(
+            id="application_document_export",
+            kind="renderer",
+            name="Application Document Export",
+            description="Export tailored application documents to Word, PDF, and tracker outputs.",
+        ),
+    )
     renderer_registry.register(
         "docx_pdf_renderer",
         ComponentDescriptor(
             id="docx_pdf_renderer",
             kind="renderer",
-            name="DOCX/PDF Renderer",
-            description="Exports tailored CVs to Word and PDF plus tracker files.",
+            name="Application Document Export (Legacy Alias)",
+            description="Compatibility alias for the document export renderer.",
+            metadata={"alias_for": "application_document_export"},
+        ),
+    )
+    renderer_registry.register(
+        "application_package_export",
+        ComponentDescriptor(
+            id="application_package_export",
+            kind="renderer",
+            name="Application Package Export",
+            description="Export packaged application assets, reusable bundles, and email drafts.",
         ),
     )
     renderer_registry.register(
@@ -135,8 +244,9 @@ def _build_registries() -> BackendRegistries:
         ComponentDescriptor(
             id="blue_collar_package_renderer",
             kind="renderer",
-            name="Blue-Collar Package Renderer",
-            description="Copies assigned CVs, writes email drafts, and exports packaging artifacts.",
+            name="Application Package Export (Legacy Alias)",
+            description="Compatibility alias for the application packaging renderer.",
+            metadata={"alias_for": "application_package_export"},
         ),
     )
 

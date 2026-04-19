@@ -5,6 +5,10 @@ import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
+function canStopRun(status) {
+  return ["planned", "queued", "running", "cancel_requested"].includes(String(status || "").trim());
+}
+
 function StageCard({ stage, isLast }) {
   const tone = stage.status === "failed" ? "warning" : stage.status === "completed" ? "success" : "primary";
   const icon = stage.status === "failed" ? "warning" : stage.status === "completed" ? "check_circle" : "hourglass_top";
@@ -213,14 +217,16 @@ export default function RunDetailPage() {
               <span className="material-symbols-outlined text-sm">restart_alt</span>
               {primaryAction.label}
             </button>
-            <button
-              className="flex flex-1 items-center justify-center gap-2 rounded bg-surface-container-high px-5 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-variant md:flex-none"
-              onClick={() => performAction("cancel")}
-              type="button"
-            >
-              <span className="material-symbols-outlined text-sm">stop_circle</span>
-              Cancel
-            </button>
+            {canStopRun(run?.status) ? (
+              <button
+                className="flex flex-1 items-center justify-center gap-2 rounded bg-surface-container-high px-5 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-variant md:flex-none"
+                onClick={() => performAction("cancel")}
+                type="button"
+              >
+                <span className="material-symbols-outlined text-sm">stop_circle</span>
+                Stop
+              </button>
+            ) : null}
           </div>
         </div>
       </section>

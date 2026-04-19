@@ -1,15 +1,26 @@
 # Unified Backend Architecture
 
 ## Goal
-This repo now has a first-pass unified backend that treats:
+This repo now has a first-pass unified backend that treats job automation as a composition of:
 
-- white-collar LinkedIn
-- white-collar manual URLs
-- blue-collar
+- job sources
+- screening modules
+- prioritization/classification modules
+- profile generation strategies
+- document/package output modules
 
-as **workspace/workflow configurations**, not separate backend code silos.
+Workspaces are created from those building blocks instead of being hardcoded product modes.
 
 The backend is organized around reusable capabilities and a stage engine. The existing scripts remain in place as migration adapters.
+
+Shared config, CV loading, pipeline job schema, and dedupe helpers now also live inside `backend/`:
+
+- [backend/config/job_seeker.py](./backend/config/job_seeker.py)
+- [backend/profiles/cv_text.py](./backend/profiles/cv_text.py)
+- [backend/domain/pipeline_jobs.py](./backend/domain/pipeline_jobs.py)
+- [backend/domain/job_identity.py](./backend/domain/job_identity.py)
+
+The old root files with those names are now compatibility wrappers only.
 
 ## What Was Added
 
@@ -40,9 +51,9 @@ Located under [backend/orchestration](./backend/orchestration):
 - `BaseStage`
 - `StageOutcome`
 - stage/component registries
-- seeded workflow templates and seeded workspaces
+- starter workflow templates and workspace-builder helpers
 
-Plain language: a run is now executed by one central engine that reads a workflow definition and calls the required stages in order.
+Plain language: a run is now executed by one central engine that reads a workflow definition and calls the required stages in order. New databases start with starter templates only; end users are expected to create their own workspaces from scratch.
 
 ### Repository layer
 Located under [backend/repositories](./backend/repositories):
@@ -90,36 +101,36 @@ Plain language: the frontend or operator can point workspace/run settings at a s
 ### Legacy stage adapters
 Located under [backend/adapters/legacy_stages.py](./backend/adapters/legacy_stages.py).
 
-White-collar stages are now called in-process through dedicated backend capability modules:
+Tailored-document stages are now consumed through generic backend capability packages:
 
-- [backend/capabilities/white_collar/acquisition.py](./backend/capabilities/white_collar/acquisition.py)
-- [backend/capabilities/white_collar/documents.py](./backend/capabilities/white_collar/documents.py)
+- [backend/capabilities/tailored_documents/acquisition.py](./backend/capabilities/tailored_documents/acquisition.py)
+- [backend/capabilities/tailored_documents/documents.py](./backend/capabilities/tailored_documents/documents.py)
 
-White-collar helper capabilities are now split further into focused modules:
+Tailored-document helper capabilities are split into focused modules:
 
-- [backend/capabilities/white_collar/common.py](./backend/capabilities/white_collar/common.py)
-- [backend/capabilities/white_collar/snapshotting.py](./backend/capabilities/white_collar/snapshotting.py)
-- [backend/capabilities/white_collar/title_filter.py](./backend/capabilities/white_collar/title_filter.py)
-- [backend/capabilities/white_collar/linkedin_connector.py](./backend/capabilities/white_collar/linkedin_connector.py)
-- [backend/capabilities/white_collar/generation.py](./backend/capabilities/white_collar/generation.py)
-- [backend/capabilities/white_collar/cv_structuring.py](./backend/capabilities/white_collar/cv_structuring.py)
-- [backend/capabilities/white_collar/rendering.py](./backend/capabilities/white_collar/rendering.py)
-- [backend/capabilities/white_collar/tracker_export.py](./backend/capabilities/white_collar/tracker_export.py)
+- [backend/capabilities/tailored_documents/common.py](./backend/capabilities/tailored_documents/common.py)
+- [backend/capabilities/tailored_documents/snapshotting.py](./backend/capabilities/tailored_documents/snapshotting.py)
+- [backend/capabilities/tailored_documents/title_filter.py](./backend/capabilities/tailored_documents/title_filter.py)
+- [backend/capabilities/tailored_documents/linkedin_connector.py](./backend/capabilities/tailored_documents/linkedin_connector.py)
+- [backend/capabilities/tailored_documents/generation.py](./backend/capabilities/tailored_documents/generation.py)
+- [backend/capabilities/tailored_documents/cv_structuring.py](./backend/capabilities/tailored_documents/cv_structuring.py)
+- [backend/capabilities/tailored_documents/rendering.py](./backend/capabilities/tailored_documents/rendering.py)
+- [backend/capabilities/tailored_documents/tracker_export.py](./backend/capabilities/tailored_documents/tracker_export.py)
 
 `documents.py` is now a thin Stage 4 orchestrator over those modules rather than the place where prompt building, CV structuring, rendering, and export logic live.
 
-Blue-collar stages are now called in-process through dedicated backend capability modules:
+Reusable-package stages are now consumed through generic backend capability packages:
 
-- [backend/capabilities/blue_collar/acquisition.py](./backend/capabilities/blue_collar/acquisition.py)
-- [backend/capabilities/blue_collar/filtering.py](./backend/capabilities/blue_collar/filtering.py)
-- [backend/capabilities/blue_collar/classification.py](./backend/capabilities/blue_collar/classification.py)
-- [backend/capabilities/blue_collar/role_cvs.py](./backend/capabilities/blue_collar/role_cvs.py)
-- [backend/capabilities/blue_collar/packaging.py](./backend/capabilities/blue_collar/packaging.py)
+- [backend/capabilities/reusable_packages/acquisition.py](./backend/capabilities/reusable_packages/acquisition.py)
+- [backend/capabilities/reusable_packages/filtering.py](./backend/capabilities/reusable_packages/filtering.py)
+- [backend/capabilities/reusable_packages/classification.py](./backend/capabilities/reusable_packages/classification.py)
+- [backend/capabilities/reusable_packages/reusable_profiles.py](./backend/capabilities/reusable_packages/reusable_profiles.py)
+- [backend/capabilities/reusable_packages/packaging.py](./backend/capabilities/reusable_packages/packaging.py)
 
-Blue-collar source collection now lives in backend connector modules rather than the legacy `bc_automation` folder:
+Job-board source collection now lives in generic backend connector packages rather than the legacy `bc_automation` folder:
 
-- [backend/connectors/blue_collar/strategies.py](./backend/connectors/blue_collar/strategies.py)
-- [backend/connectors/blue_collar/collector.py](./backend/connectors/blue_collar/collector.py)
+- [backend/connectors/job_boards/strategies.py](./backend/connectors/job_boards/strategies.py)
+- [backend/connectors/job_boards/collector.py](./backend/connectors/job_boards/collector.py)
 
 The root and `bc_automation` stage scripts are now thin CLI wrappers only:
 
@@ -132,7 +143,7 @@ The root and `bc_automation` stage scripts are now thin CLI wrappers only:
 - `stage4_build_role_cvs.py`
 - `stage5_generate_blue_collar_docs.py`
 
-Plain language: the real business logic now lives in backend service modules, and the old script files are just entrypoints for manual/legacy CLI use.
+Plain language: the active backend import surface is now generic (`tailored_documents`, `reusable_packages`, `job_boards`), while the older `white_collar` / `blue_collar` module paths remain only as internal compatibility layers during migration.
 
 ### API
 Located under [backend/api/server.py](./backend/api/server.py).
@@ -173,6 +184,8 @@ Endpoints:
 - `POST /workflow-templates`
 - `PUT /workflow-templates/{id}`
 - `DELETE /workflow-templates/{id}`
+- `GET /workspace-builder/catalog`
+- `POST /workspace-builder/workspaces`
 - `GET /workspaces`
 - `GET /workspaces/{id}`
 - `POST /workspaces`
@@ -244,52 +257,44 @@ This is the generic entrypoint for:
 - processing one queued run or running a lease-aware worker loop
 - serving the API
 
-## Seeded Workspaces
+## Starter Templates And Scratch Workspaces
 
-The backend seeds these default workspaces:
+The backend now seeds starter workflow templates, not default customer workspaces. The starter templates are:
 
-- `white_collar_linkedin`
-- `white_collar_manual_urls`
-- `white_collar_combined`
-- `blue_collar_default`
+- `search_apply_v1`
+- `curated_apply_v1`
+- `blended_sources_apply_v1`
+- `board_package_v1`
 
-These definitions live in [backend/orchestration/seeded_workspaces.py](./backend/orchestration/seeded_workspaces.py).
+End-user workspaces are created through the scratch builder in:
+
+- [backend/orchestration/workspace_builder.py](./backend/orchestration/workspace_builder.py)
+- `GET /workspace-builder/catalog`
+- `POST /workspace-builder/workspaces`
+
+These definitions live in [backend/orchestration/seeded_workspaces.py](./backend/orchestration/seeded_workspaces.py) and [backend/orchestration/workspace_builder.py](./backend/orchestration/workspace_builder.py).
 
 ## Current Execution Model
 
-### White-collar LinkedIn
-Workflow:
+### Tailored Document Flow
+Typical workflow:
 
-1. LinkedIn acquisition and enrichment
-2. local filter
-3. ranking/final filter
-4. CV generation + document export
+1. acquire listings or ingest curated URLs
+2. optionally merge and deduplicate sources
+3. run screening
+4. optionally prioritize surviving jobs
+5. generate tailored application documents
 
-### White-collar Manual URLs
-Workflow:
+### Reusable Package Flow
+Typical workflow:
 
-1. manual URL ingestion
-2. dedupe
-3. CV generation + document export
+1. collect jobs from job boards
+2. run screening
+3. classify jobs into reusable role groups
+4. generate reusable role/profile outputs
+5. package application exports
 
-### White-collar Combined
-Workflow:
-
-1. LinkedIn acquisition
-2. local filter
-3. ranking/final filter
-4. manual URL ingestion
-5. merge + dedupe
-6. CV generation + document export
-
-### Blue-collar
-Workflow:
-
-1. portal scrape
-2. local filter
-3. role classification
-4. reusable role CV generation
-5. package/export
+Some internal compatibility folders still retain legacy names, but the product-facing backend packages, stage types, connectors, templates, and workspace builder now use generic terminology.
 
 ## Commands
 
@@ -302,7 +307,7 @@ List workspaces:
 Dry-run a workspace plan:
 
 ```powershell
-.venv\Scripts\python.exe workspace_runner.py run --workspace white_collar_combined --dry-run
+.venv\Scripts\python.exe workspace_runner.py run --workspace my_custom_workspace --dry-run
 ```
 
 List backend connectors:
@@ -311,10 +316,10 @@ List backend connectors:
 .venv\Scripts\python.exe workspace_runner.py list-connectors
 ```
 
-Run blue-collar through the unified backend:
+Run a reusable-package workspace through the unified backend:
 
 ```powershell
-.venv\Scripts\python.exe workspace_runner.py run --workspace blue_collar_default
+.venv\Scripts\python.exe workspace_runner.py run --workspace my_custom_workspace
 ```
 
 Start the API:
@@ -326,7 +331,7 @@ Start the API:
 Queue a run:
 
 ```powershell
-.venv\Scripts\python.exe workspace_runner.py run --workspace white_collar_manual_urls --queue
+.venv\Scripts\python.exe workspace_runner.py run --workspace my_custom_workspace --queue
 ```
 
 Process the next queued run:
@@ -360,6 +365,14 @@ Use the legacy file-backed repositories explicitly:
 .venv\Scripts\python.exe workspace_runner.py --storage file list-workspaces
 ```
 
+Legacy top-level launchers are now compatibility shims:
+
+- [main.py](./main.py)
+- [orchestrator.py](./orchestrator.py)
+- [bc_automation/orchestrator_blue_collar.py](./bc_automation/orchestrator_blue_collar.py)
+
+They no longer own business logic or define product structure.
+
 ## Migration Direction
 
 This is the intended next sequence:
@@ -367,7 +380,7 @@ This is the intended next sequence:
 1. add session/login flows and externalize auth beyond bootstrap bearer-token issuance
 2. move from local persisted secrets to an external secret manager in production deployments
 3. add richer audit history, rate limits, and operational dashboards on top of the worker/API surfaces
-4. retire direct script orchestration once all legacy stages have service equivalents
+4. retire the remaining compatibility scripts once downstream operators and docs no longer rely on them
 
 ## Important Constraint
 The backend should continue to gain capabilities without adding new top-level product silos. New customer experiences should be new workspace/workflow data, new strategies, or new stage adapters, not new parallel code universes.

@@ -1,22 +1,133 @@
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
+function canDeleteRun(status) {
+  return ["planned", "queued", "failed", "cancelled"].includes(String(status || "").trim());
+}
+
+function canStopRun(status) {
+  return ["queued", "running", "cancel_requested", "planned"].includes(String(status || "").trim());
+}
+
 export default function RunsPage() {
   const { request } = useSession();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [actionState, setActionState] = useState({
+    runId: "",
+    action: "",
+    busy: false,
+    message: "",
+    error: "",
+  });
   const workspaceId = searchParams.get("workspace_id") || "";
   const status = searchParams.get("status") || "";
 
   const { data, loading, error, refresh } = useApiResource(
     () =>
-      request(`/runs?limit=100&workspace_id=${encodeURIComponent(workspaceId)}&status=${encodeURIComponent(status)}`),
+      request(
+        `/runs?limit=100&workspace_id=${encodeURIComponent(workspaceId)}&status=${encodeURIComponent(status)}`,
+      ),
     [request, workspaceId, status],
   );
 
   const runs = data?.runs || [];
+  const queuedRuns = runs.filter((run) => String(run.status || "").trim() === "queued");
+
+  async function deleteRun(runId) {
+    const confirmed = window.confirm(
+      "Delete this run and its stored test data? This is meant for queued or failed test runs.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setActionState({ runId, action: "delete", busy: true, message: "", error: "" });
+    try {
+      await request(`/runs/${runId}`, { method: "DELETE" });
+      setActionState({
+        runId,
+        action: "delete",
+        busy: false,
+        message: `Deleted ${runId}`,
+        error: "",
+      });
+      refresh().catch(() => undefined);
+    } catch (deleteError) {
+      setActionState({
+        runId,
+        action: "delete",
+        busy: false,
+        message: "",
+        error: deleteError.message || "Unable to delete run.",
+      });
+    }
+  }
+
+  async function cancelRun(runId) {
+    const confirmed = window.confirm(
+      "Stop this run? If it is already running, the backend will stop it at the next safe cancellation point.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setActionState({ runId, action: "cancel", busy: true, message: "", error: "" });
+    try {
+      await request(`/runs/${runId}/cancel`, { method: "POST", body: {} });
+      setActionState({
+        runId,
+        action: "cancel",
+        busy: false,
+        message: `Stop requested for ${runId}`,
+        error: "",
+      });
+      refresh().catch(() => undefined);
+    } catch (cancelError) {
+      setActionState({
+        runId,
+        action: "cancel",
+        busy: false,
+        message: "",
+        error: cancelError.message || "Unable to stop run.",
+      });
+    }
+  }
+
+  async function deleteAllQueuedRuns() {
+    if (!queuedRuns.length) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete all queued runs in this view? This will remove ${queuedRuns.length} queued run(s).`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setActionState({ runId: "bulk", action: "bulk_delete", busy: true, message: "", error: "" });
+    try {
+      await Promise.all(
+        queuedRuns.map((run) => request(`/runs/${run.id}`, { method: "DELETE" })),
+      );
+      setActionState({
+        runId: "bulk",
+        action: "bulk_delete",
+        busy: false,
+        message: `Deleted ${queuedRuns.length} queued run(s).`,
+        error: "",
+      });
+      refresh().catch(() => undefined);
+    } catch (bulkDeleteError) {
+      setActionState({
+        runId: "bulk",
+        action: "bulk_delete",
+        busy: false,
+        message: "",
+        error: bulkDeleteError.message || "Unable to delete all queued runs.",
+      });
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -30,7 +141,7 @@ export default function RunsPage() {
       </header>
 
       <section className="rounded-xl bg-surface-container-low p-4">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <input
             className="rounded border border-outline-variant/20 bg-surface-container-lowest px-4 py-2.5 text-sm"
             onChange={(event) => {
@@ -68,8 +179,31 @@ export default function RunsPage() {
           >
             Refresh
           </button>
+          <button
+            className="rounded bg-surface-container-lowest px-4 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error-container hover:text-on-error-container disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!queuedRuns.length || actionState.busy}
+            onClick={deleteAllQueuedRuns}
+            type="button"
+          >
+            {actionState.busy && actionState.action === "bulk_delete"
+              ? "Deleting queued..."
+              : "Delete All Queued"}
+          </button>
         </div>
       </section>
+
+      {actionState.message || actionState.error ? (
+        <section
+          className={[
+            "rounded-xl px-4 py-3 text-sm",
+            actionState.error
+              ? "bg-error-container text-on-error-container"
+              : "bg-surface-container-low text-on-surface",
+          ].join(" ")}
+        >
+          {actionState.error || actionState.message}
+        </section>
+      ) : null}
 
       <section className="overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest">
         <div className="overflow-x-auto">
@@ -108,14 +242,46 @@ export default function RunsPage() {
                     <td className="px-6 py-4 text-on-surface-variant">
                       {labelize(run.current_stage_id || "not_started")}
                     </td>
-                    <td className="px-6 py-4 text-on-surface-variant">{formatDateTime(run.updated_at)}</td>
+                    <td className="px-6 py-4 text-on-surface-variant">
+                      {formatDateTime(run.updated_at)}
+                    </td>
                     <td className="px-6 py-4 text-right">
-                      <Link
-                        className="text-sm font-medium text-primary transition-colors hover:text-primary-container"
-                        to={`/runs/${run.id}`}
-                      >
-                        Open
-                      </Link>
+                      <div className="flex justify-end gap-3">
+                        <Link
+                          className="text-sm font-medium text-primary transition-colors hover:text-primary-container"
+                          to={`/runs/${run.id}`}
+                        >
+                          Open
+                        </Link>
+                        {canDeleteRun(run.status) ? (
+                          <button
+                            className="text-sm font-medium text-error transition-colors hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={actionState.busy && actionState.runId === run.id}
+                            onClick={() => deleteRun(run.id)}
+                            type="button"
+                          >
+                            {actionState.busy &&
+                            actionState.runId === run.id &&
+                            actionState.action === "delete"
+                              ? "Deleting..."
+                              : "Delete"}
+                          </button>
+                        ) : null}
+                        {canStopRun(run.status) ? (
+                          <button
+                            className="text-sm font-medium text-primary transition-colors hover:text-primary-container disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={actionState.busy && actionState.runId === run.id}
+                            onClick={() => cancelRun(run.id)}
+                            type="button"
+                          >
+                            {actionState.busy &&
+                            actionState.runId === run.id &&
+                            actionState.action === "cancel"
+                              ? "Stopping..."
+                              : "Stop"}
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))

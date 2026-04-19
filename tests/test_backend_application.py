@@ -81,47 +81,117 @@ class BackendApplicationTests(unittest.TestCase):
                 "id": "custom_workspace",
                 "name": "Custom Workspace",
                 "workflow_template_id": "custom_template_v1",
-                "workspace_type": "white_collar",
+                "workspace_type": "custom",
                 "settings": {"dedupe_against_tracker": True},
                 "feature_flags": {"manual_mode": True},
-                "sources": [{"id": "manual_source", "connector_id": "manual_url"}],
+                "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
             }
         )
         return app, temp_dir
 
-    def test_seeded_workspaces_are_available(self):
-        temp_dir = self._workspace_tempdir("seeded_workspaces")
+    def test_default_backend_starts_with_starter_templates_and_no_workspaces(self):
+        temp_dir = self._workspace_tempdir("starter_templates")
         app = create_backend(temp_dir)
         self.assertTrue((temp_dir / "backend.sqlite3").exists())
-        workspace_ids = {workspace.id for workspace in app.list_workspaces()}
-        self.assertIn("white_collar_linkedin", workspace_ids)
-        self.assertIn("white_collar_manual_urls", workspace_ids)
-        self.assertIn("white_collar_combined", workspace_ids)
-        self.assertIn("blue_collar_default", workspace_ids)
+        self.assertEqual(app.list_workspaces(), [])
+        template_ids = {template.id for template in app.list_workflow_templates()}
+        self.assertIn("search_apply_v1", template_ids)
+        self.assertIn("board_package_v1", template_ids)
 
-    def test_dry_run_creates_run_plan_without_execution(self):
-        temp_dir = self._workspace_tempdir("dry_run_plan")
+    def test_builder_can_create_workspace_and_dry_run_plan(self):
+        temp_dir = self._workspace_tempdir("builder_dry_run")
         app = create_backend(temp_dir)
+        workspace = app.create_workspace_from_scratch(
+            {
+                "name": "My Search Workspace",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs", "curated_job_urls"],
+                "module_ids": [
+                    "screening_filter",
+                    "priority_ranking",
+                    "tailored_document_generation",
+                ],
+                "prompt_family": "tailored_documents",
+                "profile_label": "Primary Job Seeker Profile",
+                "settings": {
+                    "keywords": ["analyst", "consultant"],
+                    "geo_id": "101282230",
+                    "experience_levels": [2, 3],
+                    "low_applicant_threshold": 60,
+                    "stage4_max_jobs": 15,
+                },
+            }
+        )
         run = app.start_run(
-            "white_collar_combined",
+            workspace.id,
             run_input_overrides={"manual_urls_file": "user_config/manual_job_urls.txt"},
             execute=False,
             requested_by="test",
         )
         self.assertEqual(run.status, "planned")
         self.assertIsNotNone(run.run_plan)
-        self.assertEqual(run.run_plan.workflow_template_id, "white_collar_combined_v1")
+        self.assertEqual(run.run_plan.workflow_template_id, f"{workspace.id}_workflow")
         self.assertEqual(
             run.run_plan.resolved_run_settings["manual_urls_file"],
             "user_config/manual_job_urls.txt",
         )
+        self.assertEqual(run.run_plan.resolved_run_settings["keywords"], ["analyst", "consultant"])
+        self.assertEqual(run.run_plan.resolved_run_settings["stage4_max_jobs"], 15)
         self.assertTrue((temp_dir / "backend.sqlite3").exists())
+
+    def test_builder_can_update_existing_workspace(self):
+        temp_dir = self._workspace_tempdir("builder_update")
+        app = create_backend(temp_dir)
+        workspace = app.create_workspace_from_scratch(
+            {
+                "name": "My Search Workspace",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs"],
+                "module_ids": [
+                    "screening_filter",
+                    "priority_ranking",
+                    "tailored_document_generation",
+                ],
+                "settings": {
+                    "keywords": ["analyst"],
+                    "stage4_max_jobs": 10,
+                },
+            }
+        )
+
+        updated_workspace = app.update_workspace_from_scratch(
+            workspace.id,
+            {
+                "name": "Updated Search Workspace",
+                "description": "Updated description",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs", "curated_job_urls"],
+                "module_ids": [
+                    "screening_filter",
+                    "priority_ranking",
+                    "tailored_document_generation",
+                ],
+                "settings": {
+                    "keywords": ["analyst", "consultant"],
+                    "stage4_max_jobs": 20,
+                    "low_applicant_threshold": 50,
+                },
+            },
+        )
+
+        self.assertEqual(updated_workspace.id, workspace.id)
+        self.assertEqual(updated_workspace.name, "Updated Search Workspace")
+        self.assertEqual(updated_workspace.description, "Updated description")
+        self.assertEqual(updated_workspace.settings["keywords"], ["analyst", "consultant"])
+        self.assertEqual(updated_workspace.settings["stage4_max_jobs"], 20)
+        self.assertEqual(updated_workspace.metadata["source_ids"], ["linkedin_jobs", "curated_job_urls"])
 
     def test_file_storage_backend_can_still_be_requested(self):
         temp_dir = self._workspace_tempdir("file_storage_backend")
         app = create_backend(temp_dir, storage_backend="file")
-        workspace_ids = {workspace.id for workspace in app.list_workspaces()}
-        self.assertIn("white_collar_linkedin", workspace_ids)
+        self.assertEqual(app.list_workspaces(), [])
+        template_ids = {template.id for template in app.list_workflow_templates()}
+        self.assertIn("search_apply_v1", template_ids)
         self.assertTrue((temp_dir / "workflow_templates.json").exists())
         self.assertTrue((temp_dir / "workspaces.json").exists())
 
@@ -139,11 +209,11 @@ class BackendApplicationTests(unittest.TestCase):
         generation_ids = {item.id for item in app.list_generations()}
         renderer_ids = {item.id for item in app.list_renderers()}
 
-        self.assertIn("linkedin_search", connector_ids)
-        self.assertIn("blue_collar_portals", connector_ids)
-        self.assertIn("blue_collar_indeed", connector_ids)
-        self.assertIn("white_collar_cv_generation", generation_ids)
-        self.assertIn("docx_pdf_renderer", renderer_ids)
+        self.assertIn("linkedin_jobs", connector_ids)
+        self.assertIn("job_board_collection", connector_ids)
+        self.assertIn("job_board_indeed", connector_ids)
+        self.assertIn("tailored_application_documents", generation_ids)
+        self.assertIn("application_document_export", renderer_ids)
 
     def test_queue_worker_retry_and_resource_crud(self):
         app, _ = self._create_app_with_test_workflow("queue_worker_flow")
@@ -220,6 +290,17 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(resumed_run.status, "queued")
         completed_run = app.process_next_queued_run(auto_retry_failed=False)
         self.assertEqual(completed_run.status, "completed")
+
+    def test_delete_run_removes_queued_test_run(self):
+        app, _ = self._create_app_with_test_workflow("delete_run")
+
+        queued_run = app.enqueue_run("custom_workspace", requested_by="test-delete")
+        self.assertEqual(queued_run.status, "queued")
+
+        app.delete_run(queued_run.id)
+
+        with self.assertRaises(KeyError):
+            app.get_run(queued_run.id)
 
     def test_auth_token_and_secret_resolution(self):
         app, _ = self._create_app_with_test_workflow("auth_secrets")

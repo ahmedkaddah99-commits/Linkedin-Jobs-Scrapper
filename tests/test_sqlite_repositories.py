@@ -35,15 +35,16 @@ class SqliteRepositoryTests(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(path.parent, ignore_errors=True))
         return path
 
-    def test_workspace_repository_seeds_templates_and_workspaces(self):
+    def test_workspace_repository_seeds_starter_templates_without_default_workspaces(self):
         db_path = self._db_path("sqlite_seed")
         repository = SqliteWorkspaceRepository(db_path)
 
         template_ids = {item.id for item in repository.list_workflow_templates()}
         workspace_ids = {item.id for item in repository.list_workspaces()}
 
-        self.assertIn("white_collar_linkedin_v1", template_ids)
-        self.assertIn("blue_collar_default", workspace_ids)
+        self.assertIn("search_apply_v1", template_ids)
+        self.assertIn("board_package_v1", template_ids)
+        self.assertEqual(workspace_ids, set())
 
     def test_run_job_artifact_and_review_persistence(self):
         db_path = self._db_path("sqlite_runtime")
@@ -56,8 +57,8 @@ class SqliteRepositoryTests(unittest.TestCase):
         worker_store = SqliteWorkerStore(db_path)
 
         run = RunRecord.create(
-            workspace_id="white_collar_linkedin",
-            workflow_template_id="white_collar_linkedin_v1",
+            workspace_id="custom_workspace",
+            workflow_template_id="search_apply_v1",
             requested_by="test",
             max_attempts=2,
         )

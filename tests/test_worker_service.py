@@ -55,7 +55,7 @@ class WorkerServiceTests(unittest.TestCase):
                 "id": "worker_workspace",
                 "name": "Worker Workspace",
                 "workflow_template_id": "worker_template_v1",
-                "workspace_type": "white_collar",
+                "workspace_type": "custom",
                 "sources": [],
             }
         )

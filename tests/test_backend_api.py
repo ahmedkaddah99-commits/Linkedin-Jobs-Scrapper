@@ -63,8 +63,8 @@ class BackendApiTests(unittest.TestCase):
                 "id": "api_workspace",
                 "name": "API Workspace",
                 "workflow_template_id": "api_template_v1",
-                "workspace_type": "white_collar",
-                "sources": [{"id": "manual_source", "connector_id": "manual_url"}],
+                "workspace_type": "custom",
+                "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
             }
         )
         self.user = self.app.upsert_user(
@@ -144,6 +144,22 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(reviews_payload["reviews"]), 1)
 
+    def test_api_supports_deleting_queued_run(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+
+        status, delete_payload = self._request("DELETE", f"/runs/{run_payload['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(delete_payload["deleted"], run_payload["id"])
+
+        status, missing_payload = self._request("GET", f"/runs/{run_payload['id']}")
+        self.assertEqual(status, 404)
+        self.assertEqual(missing_payload["error"]["code"], "not_found")
+
     def test_api_supports_workspace_and_template_crud(self):
         status, template_payload = self._request(
             "POST",
@@ -160,7 +176,7 @@ class BackendApiTests(unittest.TestCase):
                 "id": "api_custom_workspace",
                 "name": "API Custom Workspace",
                 "workflow_template_id": "api_custom_template",
-                "workspace_type": "white_collar",
+                "workspace_type": "custom",
                 "sources": [],
             },
         )
@@ -171,6 +187,59 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         status, _ = self._request("DELETE", "/workflow-templates/api_custom_template")
         self.assertEqual(status, 200)
+
+    def test_api_supports_workspace_builder_catalog_and_create(self):
+        status, catalog_payload = self._request("GET", "/workspace-builder/catalog")
+        self.assertEqual(status, 200)
+        self.assertTrue(catalog_payload["flows"])
+        self.assertTrue(catalog_payload["sources"])
+        self.assertTrue(catalog_payload["modules"])
+        self.assertTrue(catalog_payload["configuration_fields"])
+
+        status, workspace_payload = self._request(
+            "POST",
+            "/workspace-builder/workspaces",
+            {
+                "name": "Builder Workspace",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs"],
+                "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+                "settings": {
+                    "keywords": ["analyst"],
+                    "geo_id": "101282230",
+                    "time_posted_seconds": 86400,
+                    "experience_levels": [2, 3],
+                },
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(workspace_payload["workspace_type"], "custom")
+        self.assertEqual(workspace_payload["metadata"]["automation_flow"], "tailored_documents")
+        self.assertEqual(workspace_payload["settings"]["keywords"], ["analyst"])
+        self.assertEqual(workspace_payload["settings"]["experience_levels"], [2, 3])
+
+        status, updated_workspace_payload = self._request(
+            "PUT",
+            f"/workspace-builder/workspaces/{workspace_payload['id']}",
+            {
+                "name": "Builder Workspace Updated",
+                "description": "Updated through API",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs", "curated_job_urls"],
+                "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+                "settings": {
+                    "keywords": ["designer"],
+                    "stage4_max_jobs": 8,
+                    "low_applicant_threshold": 55,
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated_workspace_payload["id"], workspace_payload["id"])
+        self.assertEqual(updated_workspace_payload["name"], "Builder Workspace Updated")
+        self.assertEqual(updated_workspace_payload["description"], "Updated through API")
+        self.assertEqual(updated_workspace_payload["settings"]["keywords"], ["designer"])
+        self.assertEqual(updated_workspace_payload["metadata"]["source_ids"], ["linkedin_jobs", "curated_job_urls"])
 
     def test_api_supports_user_and_secret_admin_endpoints(self):
         status, users_payload = self._request("GET", "/users")

@@ -2,8 +2,7 @@ import argparse
 import json
 import os
 
-from cv_profile import load_cv_text
-from job_seeker_config import (
+from backend.config.job_seeker import (
     cfg_bool,
     cfg_float,
     cfg_int,
@@ -11,6 +10,7 @@ from job_seeker_config import (
     cfg_str,
     load_job_seeker_config,
 )
+from backend.profiles.cv_text import load_cv_text
 
 from .linkedin_connector import (
     build_clients,

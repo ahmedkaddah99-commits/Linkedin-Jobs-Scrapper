@@ -5,10 +5,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-from backend.capabilities.blue_collar import filtering as stage2_module
-from backend.capabilities.blue_collar import packaging as stage5_module
-from backend.capabilities.blue_collar import role_cvs as stage4_module
-from backend.capabilities.blue_collar.support import load_blue_collar_config
+from backend.capabilities.reusable_packages import filtering as stage2_module
+from backend.capabilities.reusable_packages import packaging as stage5_module
+from backend.capabilities.reusable_packages import reusable_profiles as stage4_module
+from backend.capabilities.reusable_packages.support import load_blue_collar_config
 
 
 class BlueCollarServiceTests(unittest.TestCase):

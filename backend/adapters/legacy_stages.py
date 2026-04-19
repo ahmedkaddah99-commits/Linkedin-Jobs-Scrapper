@@ -5,19 +5,27 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from backend.capabilities.blue_collar.acquisition import build_stage1_args as build_blue_stage1_args
-from backend.capabilities.blue_collar.acquisition import run_stage1_pipeline as run_blue_stage1_pipeline
-from backend.capabilities.blue_collar.classification import build_stage3_args as build_blue_stage3_args
-from backend.capabilities.blue_collar.classification import run_stage3_pipeline as run_blue_stage3_pipeline
-from backend.capabilities.blue_collar.filtering import build_stage2_args as build_blue_stage2_args
-from backend.capabilities.blue_collar.filtering import run_stage2_pipeline as run_blue_stage2_pipeline
-from backend.capabilities.blue_collar.packaging import build_stage5_args as build_blue_stage5_args
-from backend.capabilities.blue_collar.packaging import run_stage5_pipeline as run_blue_stage5_pipeline
-from backend.capabilities.blue_collar.role_cvs import build_stage4_args as build_blue_stage4_args
-from backend.capabilities.blue_collar.role_cvs import run_stage4_pipeline as run_blue_stage4_pipeline
-from backend.capabilities.blue_collar.support import load_blue_collar_config
-from backend.capabilities.white_collar.acquisition import run_stage1_pipeline as run_white_stage1_pipeline
-from backend.capabilities.white_collar.documents import run_stage4_pipeline as run_white_stage4_pipeline
+from backend.capabilities.reusable_packages.acquisition import build_stage1_args as build_blue_stage1_args
+from backend.capabilities.reusable_packages.acquisition import run_stage1_pipeline as run_blue_stage1_pipeline
+from backend.capabilities.reusable_packages.classification import build_stage3_args as build_blue_stage3_args
+from backend.capabilities.reusable_packages.classification import run_stage3_pipeline as run_blue_stage3_pipeline
+from backend.capabilities.reusable_packages.filtering import build_stage2_args as build_blue_stage2_args
+from backend.capabilities.reusable_packages.filtering import run_stage2_pipeline as run_blue_stage2_pipeline
+from backend.capabilities.reusable_packages.packaging import build_stage5_args as build_blue_stage5_args
+from backend.capabilities.reusable_packages.packaging import run_stage5_pipeline as run_blue_stage5_pipeline
+from backend.capabilities.reusable_packages.reusable_profiles import build_stage4_args as build_blue_stage4_args
+from backend.capabilities.reusable_packages.reusable_profiles import run_stage4_pipeline as run_blue_stage4_pipeline
+from backend.capabilities.reusable_packages.support import load_blue_collar_config
+from backend.capabilities.tailored_documents.acquisition import run_stage1_pipeline as run_white_stage1_pipeline
+from backend.capabilities.tailored_documents.documents import run_stage4_pipeline as run_white_stage4_pipeline
+from backend.capabilities.tailored_documents.prioritization import run_stage3_pipeline as run_white_stage3_pipeline
+from backend.capabilities.tailored_documents.runtime import (
+    build_main_defaults,
+    build_stage1_args as build_white_stage1_args,
+    build_stage4_args as build_white_stage4_args,
+)
+from backend.capabilities.tailored_documents.screening import run_stage2_pipeline as run_white_stage2_pipeline
+from backend.capabilities.tailored_documents.workflow import run_manual_pipeline
 from backend.domain.models import ArtifactRecord, JobRecord, StageContext, StageDefinition
 from backend.orchestration.engine import BaseStage, StageOutcome
 
@@ -48,8 +56,7 @@ def _resolved_settings(context: StageContext, definition: StageDefinition) -> di
 
 
 def _build_root_cli_args(context: StageContext, definition: StageDefinition):
-    from job_seeker_config import load_job_seeker_config, load_project_dotenv
-    from pipeline_runner import build_main_defaults
+    from backend.config.job_seeker import load_job_seeker_config, load_project_dotenv
 
     load_project_dotenv()
     config = load_job_seeker_config()
@@ -63,14 +70,12 @@ class LinkedInAcquireStage(BaseStage):
         return True
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
-        from pipeline_runner import build_stage1_args
-
         connector_id = str(definition.config.get("connector_id") or "")
         if connector_id:
             context.registries.connector_registry.get(connector_id)
 
         config, cli_args = _build_root_cli_args(context, definition)
-        stage_args = build_stage1_args(config, cli_args)
+        stage_args = build_white_stage1_args(config, cli_args)
         jobs = run_white_stage1_pipeline(stage_args)
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(jobs)},
@@ -84,8 +89,6 @@ class ManualUrlIngestionStage(BaseStage):
         return True
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
-        from pipeline_runner import run_manual_pipeline
-
         connector_id = str(definition.config.get("connector_id") or "")
         if connector_id:
             context.registries.connector_registry.get(connector_id)
@@ -113,11 +116,9 @@ class WhiteCollarLocalFilterStage(BaseStage):
         return bool(definition.input_keys and context.get_job_set(definition.input_keys[0]))
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
-        from pipeline_runner import run_stage2_pipeline
-
         _, cli_args = _build_root_cli_args(context, definition)
         input_jobs = context.get_job_dicts(definition.input_keys[0])
-        approved, rejected = run_stage2_pipeline(input_jobs, cli_args)
+        approved, rejected = run_white_stage2_pipeline(input_jobs, cli_args)
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(approved)},
             data={f"{definition.stage_id}_rejected": rejected},
@@ -134,11 +135,9 @@ class WhiteCollarRankStage(BaseStage):
         return bool(definition.input_keys and context.get_job_set(definition.input_keys[0]))
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
-        from pipeline_runner import run_stage3_pipeline
-
         _, cli_args = _build_root_cli_args(context, definition)
         input_jobs = context.get_job_dicts(definition.input_keys[0])
-        approved, rejected = run_stage3_pipeline(input_jobs, cli_args)
+        approved, rejected = run_white_stage3_pipeline(input_jobs, cli_args)
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(approved)},
             data={f"{definition.stage_id}_rejected": rejected},
@@ -150,12 +149,30 @@ class WhiteCollarRankStage(BaseStage):
         )
 
 
+class GenericScreeningStage(BaseStage):
+    def __init__(self) -> None:
+        self._tailored_stage = WhiteCollarLocalFilterStage()
+        self._reusable_stage = BlueCollarStage2()
+
+    def can_run(self, context: StageContext, definition: StageDefinition) -> bool:
+        strategy = str(definition.config.get("screening_strategy") or "").strip()
+        if strategy == "reusable_packages":
+            return self._reusable_stage.can_run(context, definition)
+        return self._tailored_stage.can_run(context, definition)
+
+    def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
+        strategy = str(definition.config.get("screening_strategy") or "").strip()
+        if strategy == "reusable_packages":
+            return self._reusable_stage.execute(context, definition)
+        return self._tailored_stage.execute(context, definition)
+
+
 class MergeJobSetsStage(BaseStage):
     def can_run(self, context: StageContext, definition: StageDefinition) -> bool:
         return any(context.get_job_set(key) for key in definition.input_keys)
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
-        from job_dedupe import dedupe_job_records, load_existing_tracker_identity_keys
+        from backend.domain.job_identity import dedupe_job_records, load_existing_tracker_identity_keys
 
         _, cli_args = _build_root_cli_args(context, definition)
         merged_input: list[dict[str, Any]] = []
@@ -184,8 +201,6 @@ class WhiteCollarDocsStage(BaseStage):
         return bool(definition.input_keys and context.get_job_set(definition.input_keys[0]))
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
-        from pipeline_runner import build_stage4_args
-
         generation_id = str(definition.config.get("generation_id") or "")
         renderer_id = str(definition.config.get("renderer_id") or "")
         if generation_id:
@@ -194,7 +209,7 @@ class WhiteCollarDocsStage(BaseStage):
             context.registries.renderer_registry.get(renderer_id)
 
         config, cli_args = _build_root_cli_args(context, definition)
-        stage4_args = build_stage4_args(cli_args)
+        stage4_args = build_white_stage4_args(cli_args)
         jobs = context.get_job_dicts(definition.input_keys[0])
         if not jobs:
             Path(stage4_args.output_json).write_text("[]", encoding="utf-8")
@@ -359,13 +374,23 @@ class BlueCollarStage5(BaseStage):
 
 def register_legacy_stage_adapters(stage_registry) -> None:
     stage_registry.register("legacy.linkedin.acquire", LinkedInAcquireStage())
+    stage_registry.register("jobs.acquire.search_listings", LinkedInAcquireStage())
     stage_registry.register("legacy.manual_url.ingest", ManualUrlIngestionStage())
+    stage_registry.register("jobs.ingest.curated_urls", ManualUrlIngestionStage())
     stage_registry.register("legacy.white_collar.local_filter", WhiteCollarLocalFilterStage())
+    stage_registry.register("jobs.screen.filter", GenericScreeningStage())
     stage_registry.register("legacy.white_collar.rank", WhiteCollarRankStage())
+    stage_registry.register("jobs.prioritize.rank", WhiteCollarRankStage())
     stage_registry.register("legacy.jobs.merge", MergeJobSetsStage())
+    stage_registry.register("jobs.merge.dedupe", MergeJobSetsStage())
     stage_registry.register("legacy.white_collar.docs", WhiteCollarDocsStage())
+    stage_registry.register("applications.generate.documents", WhiteCollarDocsStage())
     stage_registry.register("legacy.blue_collar.stage1", BlueCollarStage1())
+    stage_registry.register("jobs.acquire.job_boards", BlueCollarStage1())
     stage_registry.register("legacy.blue_collar.stage2", BlueCollarStage2())
     stage_registry.register("legacy.blue_collar.stage3", BlueCollarStage3())
+    stage_registry.register("jobs.classify.roles", BlueCollarStage3())
     stage_registry.register("legacy.blue_collar.stage4", BlueCollarStage4())
+    stage_registry.register("profiles.generate.reusable", BlueCollarStage4())
     stage_registry.register("legacy.blue_collar.stage5", BlueCollarStage5())
+    stage_registry.register("applications.package.export", BlueCollarStage5())

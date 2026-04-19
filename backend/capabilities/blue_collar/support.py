@@ -20,7 +20,7 @@ from blue_collar_config import (  # type: ignore[import-not-found]
     resolve_path,
 )
 from blue_collar_cv_profile import load_baseline_cv_text  # type: ignore[import-not-found]
-from backend.connectors.blue_collar import collect_jobs_from_portals, compact_whitespace
+from backend.connectors.job_boards import collect_jobs_from_portals, compact_whitespace
 
 
 def load_json_file(path: Path):
