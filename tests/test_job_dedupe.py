@@ -1,6 +1,6 @@
 import unittest
 
-from job_dedupe import canonicalize_url, dedupe_job_records, title_company_signature
+from backend.domain.job_identity import canonicalize_url, dedupe_job_records, title_company_signature
 
 
 class JobDedupeTests(unittest.TestCase):

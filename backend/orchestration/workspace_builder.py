@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
+from urllib.parse import urlparse
 
 from backend.domain.models import JobSource, ProfileRef, PromptSetRef, StageDefinition, WorkflowTemplate, WorkspaceDefinition
 
@@ -12,6 +14,7 @@ FLOW_REUSABLE_PACKAGES = "reusable_packages"
 
 SOURCE_LINKEDIN_SEARCH = "linkedin_jobs"
 SOURCE_CURATED_URLS = "curated_job_urls"
+SOURCE_COMPANY_CAREER_SITES = "company_career_sites"
 SOURCE_MULTI_PORTAL = "job_board_collection"
 
 MODULE_SCREENING = "screening_filter"
@@ -50,8 +53,25 @@ def _configuration_fields() -> list[dict]:
             "description": "Keywords the system should search for when discovering jobs.",
             "type": "tag_list",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_MULTI_PORTAL],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_COMPANY_CAREER_SITES, SOURCE_MULTI_PORTAL],
             "placeholder": "analyst, consultant, product manager",
+        },
+        {
+            "id": "target_roles",
+            "label": "Target Roles",
+            "description": "Pick one primary role or blend up to three role families that should shape search keywords and document emphasis.",
+            "type": "multi_select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES, SOURCE_MULTI_PORTAL],
+            "options": [
+                {"value": "Product Manager", "label": "Product Manager"},
+                {"value": "Business Analyst", "label": "Business Analyst"},
+                {"value": "Project Manager", "label": "Project Manager"},
+                {"value": "Consultant", "label": "Consultant"},
+                {"value": "Product Designer", "label": "Product Designer"},
+                {"value": "Frontend Engineer", "label": "Frontend Engineer"},
+                {"value": "Data Analyst", "label": "Data Analyst"},
+            ],
         },
         {
             "id": "geo_id",
@@ -92,12 +112,92 @@ def _configuration_fields() -> list[dict]:
             ],
         },
         {
+            "id": "manual_url_seed_list",
+            "label": "Pasted Job URLs",
+            "description": "Paste one job URL per line so this workspace can ingest curated postings without editing any files.",
+            "type": "url_list",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_CURATED_URLS],
+            "placeholder": "https://company.example/jobs/123",
+        },
+        {
+            "id": "company_career_sites",
+            "label": "Company Career Sites",
+            "description": "One company per line in the format Company Name | Career Site URL.",
+            "type": "company_site_list",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_COMPANY_CAREER_SITES],
+            "placeholder": "Acme | https://careers.acme.com/jobs",
+        },
+        {
+            "id": "company_site_max_jobs_per_site",
+            "label": "Company Jobs Per Site",
+            "description": "Maximum job links to follow from each company career site during one run.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_COMPANY_CAREER_SITES],
+            "placeholder": "10",
+        },
+        {
+            "id": "forbidden_title_keywords",
+            "label": "Forbidden Title Keywords",
+            "description": "Jobs whose title contains any of these words will be excluded before AI screening.",
+            "type": "tag_list",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "placeholder": "senior, director, intern, werkstudent",
+        },
+        {
+            "id": "max_german_level",
+            "label": "Max German Language Level",
+            "description": "Reject jobs that require German above this level (e.g. B2 rejects C1/C2 jobs).",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "options": [
+                {"value": "A1", "label": "A1 — Beginner"},
+                {"value": "A2", "label": "A2 — Elementary"},
+                {"value": "B1", "label": "B1 — Intermediate"},
+                {"value": "B2", "label": "B2 — Upper Intermediate"},
+                {"value": "C1", "label": "C1 — Advanced"},
+                {"value": "C2", "label": "C2 — Proficient"},
+                {"value": "any", "label": "Any (no language filter)"},
+            ],
+            "default": "B2",
+        },
+        {
+            "id": "reject_french",
+            "label": "Reject French-language Jobs",
+            "description": "Exclude jobs that appear to be written primarily in French.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "options": [
+                {"value": "yes", "label": "Yes — exclude French jobs"},
+                {"value": "no", "label": "No — allow French jobs"},
+            ],
+            "default": "yes",
+        },
+        {
+            "id": "reject_spanish",
+            "label": "Reject Spanish-language Jobs",
+            "description": "Exclude jobs that appear to be written primarily in Spanish.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "options": [
+                {"value": "yes", "label": "Yes — exclude Spanish jobs"},
+                {"value": "no", "label": "No — allow Spanish jobs"},
+            ],
+            "default": "yes",
+        },
+        {
             "id": "low_applicant_threshold",
             "label": "Priority Applicant Threshold",
             "description": "Listings below this applicant count get boosted during prioritization.",
             "type": "number",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
             "placeholder": "80",
         },
         {
@@ -106,7 +206,7 @@ def _configuration_fields() -> list[dict]:
             "description": "Optional cap on how many jobs should reach document generation in one run.",
             "type": "number",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
             "placeholder": "25",
         },
         {
@@ -198,6 +298,13 @@ def workspace_builder_catalog() -> BuilderCatalog:
                 "connector_id": "curated_job_urls",
                 "name": "Curated Job URLs",
                 "description": "Ingest job URLs supplied manually by the user and normalize them into the shared job schema.",
+                "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            },
+            {
+                "id": SOURCE_COMPANY_CAREER_SITES,
+                "connector_id": "company_career_sites",
+                "name": "Company Career Sites",
+                "description": "Discover open roles directly from specific company career pages and push them through the shared screening flow.",
                 "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             },
             {
@@ -307,7 +414,7 @@ def _default_modules_for_flow(flow_id: str) -> list[str]:
     ]
 
 
-def _normalize_tag_list(raw_value: Any) -> list[str]:
+def _normalize_tag_list(raw_value: "Any") -> list[str]:
     if isinstance(raw_value, str):
         values = raw_value.split(",")
     elif isinstance(raw_value, (list, tuple, set)):
@@ -317,7 +424,7 @@ def _normalize_tag_list(raw_value: Any) -> list[str]:
     return [str(item).strip() for item in values if str(item).strip()]
 
 
-def _normalize_multi_select(raw_value: Any) -> list[Any]:
+def _normalize_multi_select(raw_value: "Any") -> list["Any"]:
     if isinstance(raw_value, str):
         values = [item.strip() for item in raw_value.split(",") if item.strip()]
     elif isinstance(raw_value, (list, tuple, set)):
@@ -336,12 +443,79 @@ def _normalize_multi_select(raw_value: Any) -> list[Any]:
     return normalized
 
 
-def _normalize_setting_value(field_definition: dict, raw_value: Any) -> Any:
+def _normalize_url_list(raw_value: "Any") -> list[str]:
+    if isinstance(raw_value, str):
+        values = [line.strip() for line in raw_value.splitlines() if line.strip()]
+    elif isinstance(raw_value, (list, tuple, set)):
+        values = [str(item).strip() for item in raw_value if str(item).strip()]
+    else:
+        return []
+    deduped: list[str] = []
+    seen = set()
+    for value in values:
+        parsed = urlparse(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc.strip():
+            continue
+        if value in seen:
+            continue
+        deduped.append(value)
+        seen.add(value)
+    return deduped
+
+
+def _normalize_company_site_list(raw_value: "Any") -> list[dict[str, str]]:
+    if isinstance(raw_value, str):
+        values = [line.strip() for line in raw_value.splitlines() if line.strip()]
+    elif isinstance(raw_value, (list, tuple, set)):
+        values = list(raw_value)
+    else:
+        return []
+
+    normalized: list[dict[str, str]] = []
+    seen_urls = set()
+    for value in values:
+        company_name = ""
+        url = ""
+        if isinstance(value, dict):
+            company_name = str(value.get("company_name") or value.get("company") or "").strip()
+            url = str(value.get("url") or "").strip()
+        else:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            if "|" in text:
+                left, right = [part.strip() for part in text.split("|", 1)]
+                if right.startswith("http://") or right.startswith("https://"):
+                    company_name, url = left, right
+                elif left.startswith("http://") or left.startswith("https://"):
+                    company_name, url = right, left
+                else:
+                    company_name, url = left, right
+            else:
+                url = text
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc.strip():
+            continue
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        normalized.append({"company_name": company_name, "url": url})
+    return normalized
+
+
+def _normalize_setting_value(field_definition: dict, raw_value: "Any") -> "Any":
     field_type = str(field_definition.get("type") or "").strip()
     if field_type == "tag_list":
         return _normalize_tag_list(raw_value)
     if field_type == "multi_select":
-        return _normalize_multi_select(raw_value)
+        normalized = _normalize_multi_select(raw_value)
+        if str(field_definition.get("id") or "") == "target_roles":
+            return normalized[:3]
+        return normalized
+    if field_type == "url_list":
+        return _normalize_url_list(raw_value)
+    if field_type == "company_site_list":
+        return _normalize_company_site_list(raw_value)
     if field_type == "number":
         text = str(raw_value or "").strip()
         if not text:
@@ -356,7 +530,7 @@ def _normalize_setting_value(field_definition: dict, raw_value: Any) -> Any:
     return text or None
 
 
-def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_settings: dict[str, Any]) -> dict[str, Any]:
+def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_settings: dict[str, "Any"]) -> dict[str, "Any"]:
     field_map = {field["id"]: field for field in _configuration_fields()}
     selected_source_ids = set(source_ids)
     settings: dict[str, Any] = {}
@@ -419,6 +593,20 @@ def _build_source_stages(source_ids: list[str]) -> tuple[list[StageDefinition], 
         )
         output_keys.append("source_curated_jobs")
         sources.append(JobSource(id="source_curated_urls", connector_id="curated_job_urls"))
+
+    if SOURCE_COMPANY_CAREER_SITES in source_ids:
+        stages.append(
+            StageDefinition(
+                stage_id="source_company_career_sites",
+                stage_type="jobs.acquire.company_sites",
+                name="Acquire Company Career Site Jobs",
+                description="Scrape configured company career pages for matching open roles.",
+                output_key="source_company_career_jobs",
+                config={"connector_id": "company_career_sites"},
+            )
+        )
+        output_keys.append("source_company_career_jobs")
+        sources.append(JobSource(id="source_company_career_sites", connector_id="company_career_sites"))
 
     if SOURCE_MULTI_PORTAL in source_ids:
         stages.append(

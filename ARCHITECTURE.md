@@ -11,7 +11,7 @@ This repo now has a first-pass unified backend that treats job automation as a c
 
 Workspaces are created from those building blocks instead of being hardcoded product modes.
 
-The backend is organized around reusable capabilities and a stage engine. The existing scripts remain in place as migration adapters.
+The backend is organized around reusable capabilities and a stage engine. The active runtime surface now lives in `backend/` plus `workspace_runner.py`.
 
 Shared config, CV loading, pipeline job schema, and dedupe helpers now also live inside `backend/`:
 
@@ -20,7 +20,7 @@ Shared config, CV loading, pipeline job schema, and dedupe helpers now also live
 - [backend/domain/pipeline_jobs.py](./backend/domain/pipeline_jobs.py)
 - [backend/domain/job_identity.py](./backend/domain/job_identity.py)
 
-The old root files with those names are now compatibility wrappers only.
+The old root wrappers were removed after the generic backend surface became authoritative.
 
 ## What Was Added
 
@@ -98,8 +98,8 @@ Secrets are stored separately from workspace definitions and can be referenced i
 
 Plain language: the frontend or operator can point workspace/run settings at a secret reference, and the backend resolves it only at execution time instead of baking the raw value into workspace config or run responses.
 
-### Legacy stage adapters
-Located under [backend/adapters/legacy_stages.py](./backend/adapters/legacy_stages.py).
+### Stage adapters
+Located under [backend/adapters/stage_adapters.py](./backend/adapters/stage_adapters.py).
 
 Tailored-document stages are now consumed through generic backend capability packages:
 
@@ -127,23 +127,12 @@ Reusable-package stages are now consumed through generic backend capability pack
 - [backend/capabilities/reusable_packages/reusable_profiles.py](./backend/capabilities/reusable_packages/reusable_profiles.py)
 - [backend/capabilities/reusable_packages/packaging.py](./backend/capabilities/reusable_packages/packaging.py)
 
-Job-board source collection now lives in generic backend connector packages rather than the legacy `bc_automation` folder:
+Job-board source collection now lives in generic backend connector packages:
 
 - [backend/connectors/job_boards/strategies.py](./backend/connectors/job_boards/strategies.py)
 - [backend/connectors/job_boards/collector.py](./backend/connectors/job_boards/collector.py)
 
-The root and `bc_automation` stage scripts are now thin CLI wrappers only:
-
-- `stage1_scrape_enrich.py`
-- `stage4_docs_export.py`
-
-- `stage1_scrape_blue_collar.py`
-- `stage2_filter_blue_collar.py`
-- `stage3_classify_blue_collar.py`
-- `stage4_build_role_cvs.py`
-- `stage5_generate_blue_collar_docs.py`
-
-Plain language: the active backend import surface is now generic (`tailored_documents`, `reusable_packages`, `job_boards`), while the older `white_collar` / `blue_collar` module paths remain only as internal compatibility layers during migration.
+Plain language: the active backend import surface is now generic (`tailored_documents`, `reusable_packages`, `job_boards`), and the older silo module paths and wrapper scripts have been removed.
 
 ### API
 Located under [backend/api/server.py](./backend/api/server.py).
@@ -294,7 +283,7 @@ Typical workflow:
 4. generate reusable role/profile outputs
 5. package application exports
 
-Some internal compatibility folders still retain legacy names, but the product-facing backend packages, stage types, connectors, templates, and workspace builder now use generic terminology.
+The product-facing backend packages, stage types, connectors, templates, and workspace builder now use generic terminology.
 
 ## Commands
 
@@ -365,13 +354,7 @@ Use the legacy file-backed repositories explicitly:
 .venv\Scripts\python.exe workspace_runner.py --storage file list-workspaces
 ```
 
-Legacy top-level launchers are now compatibility shims:
-
-- [main.py](./main.py)
-- [orchestrator.py](./orchestrator.py)
-- [bc_automation/orchestrator_blue_collar.py](./bc_automation/orchestrator_blue_collar.py)
-
-They no longer own business logic or define product structure.
+The obsolete top-level launcher scripts were removed. `workspace_runner.py` is now the single supported operator entrypoint.
 
 ## Migration Direction
 
@@ -380,7 +363,7 @@ This is the intended next sequence:
 1. add session/login flows and externalize auth beyond bootstrap bearer-token issuance
 2. move from local persisted secrets to an external secret manager in production deployments
 3. add richer audit history, rate limits, and operational dashboards on top of the worker/API surfaces
-4. retire the remaining compatibility scripts once downstream operators and docs no longer rely on them
+4. keep expanding capabilities through generic stages, strategies, and workspace data rather than reintroducing product silos
 
 ## Important Constraint
 The backend should continue to gain capabilities without adding new top-level product silos. New customer experiences should be new workspace/workflow data, new strategies, or new stage adapters, not new parallel code universes.

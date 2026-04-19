@@ -1,15 +1,13 @@
-from backend.capabilities.white_collar.acquisition import *  # noqa: F401,F403
-from backend.capabilities.white_collar.cv_structuring import *  # noqa: F401,F403
-from backend.capabilities.white_collar.documents import *  # noqa: F401,F403
-from backend.capabilities.white_collar.generation import *  # noqa: F401,F403
-from backend.capabilities.white_collar.language_rules import *  # noqa: F401,F403
-from backend.capabilities.white_collar.linkedin_connector import *  # noqa: F401,F403
-from backend.capabilities.white_collar.manual_urls import *  # noqa: F401,F403
-from backend.capabilities.white_collar.prioritization import *  # noqa: F401,F403
-from backend.capabilities.white_collar.rendering import *  # noqa: F401,F403
-from backend.capabilities.white_collar.runtime import *  # noqa: F401,F403
-from backend.capabilities.white_collar.screening import *  # noqa: F401,F403
-from backend.capabilities.white_collar.snapshotting import *  # noqa: F401,F403
-from backend.capabilities.white_collar.title_filter import *  # noqa: F401,F403
-from backend.capabilities.white_collar.tracker_export import *  # noqa: F401,F403
-from backend.capabilities.white_collar.workflow import *  # noqa: F401,F403
+from .acquisition import run_stage1_pipeline
+from .documents import run_stage4_pipeline
+from .manual_urls import fetch_manual_jobs_from_file
+from .prioritization import run_stage3_pipeline
+from .screening import run_stage2_pipeline
+
+__all__ = [
+    "fetch_manual_jobs_from_file",
+    "run_stage1_pipeline",
+    "run_stage2_pipeline",
+    "run_stage3_pipeline",
+    "run_stage4_pipeline",
+]

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 
@@ -9,6 +9,46 @@ const settingsTabs = [
   "Review Preferences",
   "Account",
 ];
+
+const PROFILE_PLACEHOLDER_URL =
+  "https://lh3.googleusercontent.com/aida-public/AB6AXuCEbDDRgu4_REnkpR4gbSify0khawEFxHuQHLBm7Xbd6BmM7LDM-dlp8wOKL0QkSDuiFg7g9UDpYPZnV2uV8Qmu5cxn1MBriXeVmXUz8EGMsgieO36lJEpcY5FCDph2ooQGzwpKRq5qwQluOCY4JB_gfySIUY2T0ozlVp3DEmdnT9aCfADFkC1BXeteFPTxYhtUsABzZLWUOD6fNpuVFVFLjuxpQaEgkpVd_bvuz61H_FfJkq5V_4CESVQjz3tEa3rwtGfzcKHXwJE";
+
+async function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Unable to read selected image."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Unable to load selected image."));
+    image.src = src;
+  });
+}
+
+async function cropImageToSquare(file) {
+  const dataUrl = await readFileAsDataUrl(file);
+  const image = await loadImageElement(dataUrl);
+  const size = Math.min(image.width, image.height);
+  const startX = Math.floor((image.width - size) / 2);
+  const startY = Math.floor((image.height - size) / 2);
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  context.drawImage(image, startX, startY, size, size, 0, 0, 512, 512);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 0.95));
+  if (!blob) {
+    throw new Error("Unable to prepare cropped image.");
+  }
+  const outputFileName = file.name.replace(/\.[^.]+$/, "") || "profile-photo";
+  return new File([blob], `${outputFileName}.png`, { type: "image/png" });
+}
 
 function SectionField({ label, children, hint = "" }) {
   return (
@@ -133,12 +173,13 @@ function ExperienceEditor({ items, onChange }) {
 function ProfileTab({ draft, updateSection }) {
   const profile = draft.profile;
   const competenciesText = (profile.competencies || []).join("\n");
+  const languagesText = (profile.languages || []).join("\n");
 
   return (
     <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8">
       <div className="space-y-6">
         <div className="grid gap-6 md:grid-cols-2">
-          <SectionField label="Full Name">
+          <SectionField label={<>Full Name <span className="text-error">*</span></>}>
             <TextInput
               onChange={(event) => updateSection("profile", { name: event.target.value })}
               value={profile.name || ""}
@@ -153,7 +194,7 @@ function ProfileTab({ draft, updateSection }) {
         </div>
 
         <div className="grid gap-6 md:grid-cols-3">
-          <SectionField label="Email">
+          <SectionField label={<>Email <span className="text-error">*</span></>}>
             <TextInput
               onChange={(event) => updateSection("profile", { email: event.target.value })}
               value={profile.email || ""}
@@ -173,6 +214,31 @@ function ProfileTab({ draft, updateSection }) {
           </SectionField>
         </div>
 
+        <div className="grid gap-6 md:grid-cols-2">
+          <SectionField label="LinkedIn URL" hint="Used when generating application documents.">
+            <div className="relative">
+              <span className="material-symbols-outlined absolute left-3 top-3 text-[18px] text-on-surface-variant">link</span>
+              <TextInput
+                className="pl-10"
+                onChange={(event) => updateSection("profile", { linkedin_url: event.target.value })}
+                placeholder="https://linkedin.com/in/yourname"
+                value={profile.linkedin_url || ""}
+              />
+            </div>
+          </SectionField>
+          <SectionField label="GitHub URL" hint="Embedded as a clickable link in your CV.">
+            <div className="relative">
+              <span className="material-symbols-outlined absolute left-3 top-3 text-[18px] text-on-surface-variant">code</span>
+              <TextInput
+                className="pl-10"
+                onChange={(event) => updateSection("profile", { github_url: event.target.value })}
+                placeholder="https://github.com/yourusername"
+                value={profile.github_url || ""}
+              />
+            </div>
+          </SectionField>
+        </div>
+
         <SectionField label="Avatar URL" hint="Used by the frontend card view.">
           <TextInput
             onChange={(event) => updateSection("profile", { avatar_url: event.target.value })}
@@ -180,7 +246,10 @@ function ProfileTab({ draft, updateSection }) {
           />
         </SectionField>
 
-        <SectionField label="Professional Summary">
+        <SectionField
+          label={<>Professional Summary <span className="text-error">*</span></>}
+          hint="This is used both in your profile card and as context for AI document generation."
+        >
           <TextArea
             onChange={(event) => updateSection("profile", { summary: event.target.value })}
             value={profile.summary || ""}
@@ -201,6 +270,23 @@ function ProfileTab({ draft, updateSection }) {
               })
             }
             value={competenciesText}
+          />
+        </SectionField>
+
+        <SectionField
+          label="Languages"
+          hint="One language per line, e.g. German - B2. Used in CV generation and job language filtering."
+        >
+          <TextArea
+            onChange={(event) =>
+              updateSection("profile", {
+                languages: event.target.value
+                  .split("\n")
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+              })
+            }
+            value={languagesText}
           />
         </SectionField>
 
@@ -302,12 +388,155 @@ function DefaultsTab({ draft, updateSection }) {
   );
 }
 
+function TemplateCard({ template, selected, onSelect }) {
+  return (
+    <button
+      className={[
+        "rounded-xl border p-4 text-left transition-all",
+        selected
+          ? "border-primary bg-primary/10 shadow-soft"
+          : "border-outline-variant/20 bg-surface hover:border-primary/30 hover:bg-surface-container-low",
+      ].join(" ")}
+      onClick={onSelect}
+      type="button"
+    >
+      <div className="mb-3 h-28 rounded-lg border border-outline-variant/10 bg-surface-container-low p-3">
+        <div className="mb-2 h-3 w-20 rounded-full bg-primary/50" />
+        <div className="mb-3 h-1.5 w-full rounded-full bg-outline-variant/30" />
+        <div className="space-y-2">
+          <div className="h-2 w-full rounded-full bg-outline-variant/20" />
+          <div className="h-2 w-4/5 rounded-full bg-outline-variant/20" />
+          <div className="h-2 w-5/6 rounded-full bg-outline-variant/20" />
+        </div>
+      </div>
+      <div className="text-sm font-semibold text-on-surface">{template.label}</div>
+      <div className="mt-1 text-xs leading-6 text-on-surface-variant">{template.description}</div>
+    </button>
+  );
+}
+
+function ColorSchemeButton({ scheme, selected, onSelect }) {
+  return (
+    <button
+      className={[
+        "flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all",
+        selected
+          ? "border-primary bg-primary/10 shadow-soft"
+          : "border-outline-variant/20 bg-surface hover:border-primary/30 hover:bg-surface-container-low",
+      ].join(" ")}
+      onClick={onSelect}
+      type="button"
+    >
+      <div className="flex items-center gap-2">
+        <span className="h-5 w-5 rounded-full border border-black/10" style={{ backgroundColor: `#${scheme.primary}` }} />
+        <span className="h-5 w-5 rounded-full border border-black/10" style={{ backgroundColor: `#${scheme.accent}` }} />
+        <span className="h-5 w-5 rounded-full border border-black/10" style={{ backgroundColor: `#${scheme.surface}` }} />
+      </div>
+      <div>
+        <div className="text-sm font-semibold text-on-surface">{scheme.label}</div>
+        <div className="text-xs text-on-surface-variant">Primary, accent, and surface tones</div>
+      </div>
+    </button>
+  );
+}
+
+function CvPreviewCard({ documents, profile, options }) {
+  const template =
+    (options.cv_templates || []).find((item) => item.id === documents.cv_template) ||
+    options.cv_templates?.[0] ||
+    { label: "Classic" };
+  const scheme =
+    (options.cv_color_schemes || []).find((item) => item.id === documents.cv_color_scheme) ||
+    options.cv_color_schemes?.[0] ||
+    { primary: "1F3A5F", accent: "2EC4B6", surface: "EAF3FF", label: "Classic Navy" };
+
+  return (
+    <div className="rounded-xl border border-outline-variant/20 bg-surface p-5">
+      <div className="mb-4 flex items-start justify-between gap-4 rounded-xl p-4" style={{ backgroundColor: `#${scheme.surface}` }}>
+        <div style={{ fontFamily: documents.cv_font || "inherit" }}>
+          <div className="text-lg font-bold" style={{ color: `#${scheme.primary}` }}>
+            {profile.name || "Candidate Name"}
+          </div>
+          <div className="text-sm" style={{ color: `#${scheme.accent}` }}>
+            {profile.role_title || template.label}
+          </div>
+        </div>
+        {documents.include_photo ? (
+          <img
+            alt="Profile preview"
+            className="h-14 w-14 rounded-full border-4 border-surface object-cover"
+            src={profile.photo_data_url || profile.avatar_url || PROFILE_PLACEHOLDER_URL}
+          />
+        ) : null}
+      </div>
+      <div className="space-y-4" style={{ fontFamily: documents.cv_font || "inherit" }}>
+        {["Professional Summary", "Experience", "Skills"].map((label) => (
+          <div key={label}>
+            <div
+              className="text-xs font-bold tracking-[0.18em]"
+              style={{ color: `#${scheme.primary}` }}
+            >
+              {template.id === "classic" || template.id === "compact" ? label.toUpperCase() : label}
+            </div>
+            <div className="mt-1 h-px w-full" style={{ backgroundColor: `#${scheme.primary}` }} />
+            <div className="mt-2 space-y-2">
+              <div className="h-2 rounded-full bg-outline-variant/20" />
+              <div className="h-2 w-5/6 rounded-full bg-outline-variant/20" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DocumentsTab({ draft, updateSection }) {
   const documents = draft.documents;
   const options = draft.options;
   return (
     <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8">
-      <div className="space-y-4">
+      <div className="space-y-8">
+        <div className="grid gap-4 lg:grid-cols-2">
+          {(options.cv_templates || []).map((template) => (
+            <TemplateCard
+              key={template.id}
+              onSelect={() => updateSection("documents", { cv_template: template.id })}
+              selected={documents.cv_template === template.id}
+              template={template}
+            />
+          ))}
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          {(options.cv_color_schemes || []).map((scheme) => (
+            <ColorSchemeButton
+              key={scheme.id}
+              onSelect={() => updateSection("documents", { cv_color_scheme: scheme.id })}
+              scheme={scheme}
+              selected={documents.cv_color_scheme === scheme.id}
+            />
+          ))}
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,360px)]">
+          <div className="space-y-4">
+            <div className="max-w-md">
+              <SectionField label="CV Font">
+                <select
+                  className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                  onChange={(event) => updateSection("documents", { cv_font: event.target.value })}
+                  value={documents.cv_font || ""}
+                >
+                  {(options.cv_fonts || []).map((font) => (
+                    <option key={font.id} value={font.id}>
+                      {font.label}
+                    </option>
+                  ))}
+                </select>
+              </SectionField>
+            </div>
+
+            <div className="space-y-4">
         <ToggleRow
           checked={Boolean(documents.generate_docx)}
           description="Generate Microsoft Word application files for each produced artifact."
@@ -332,22 +561,39 @@ function DocumentsTab({ draft, updateSection }) {
           label="Export Package"
           onChange={(value) => updateSection("documents", { export_package: value })}
         />
-      </div>
+        <ToggleRow
+          checked={Boolean(documents.include_photo)}
+          description="Embed your uploaded square profile photo in the top-right of generated CVs."
+          label="Include Photo In CV"
+          onChange={(value) => updateSection("documents", { include_photo: value })}
+        />
+            </div>
 
-      <div className="mt-6 max-w-md">
-        <SectionField label="File Naming Strategy">
-          <select
-            className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-            onChange={(event) => updateSection("documents", { file_naming: event.target.value })}
-            value={documents.file_naming || ""}
-          >
-            {(options.document_naming_modes || []).map((mode) => (
-              <option key={mode.id} value={mode.id}>
-                {mode.label}
-              </option>
-            ))}
-          </select>
-        </SectionField>
+            <div className="max-w-md">
+              <SectionField label="File Naming Strategy">
+                <select
+                  className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                  onChange={(event) => updateSection("documents", { file_naming: event.target.value })}
+                  value={documents.file_naming || ""}
+                >
+                  {(options.document_naming_modes || []).map((mode) => (
+                    <option key={mode.id} value={mode.id}>
+                      {mode.label}
+                    </option>
+                  ))}
+                </select>
+              </SectionField>
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-3 text-sm font-semibold text-on-surface">Live Preview</div>
+            <CvPreviewCard documents={documents} options={options} profile={draft.profile} />
+            <p className="mt-3 text-xs leading-6 text-on-surface-variant">
+              This preview is approximate. The generated DOCX uses the selected template, palette, font, and photo toggle.
+            </p>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -443,10 +689,14 @@ function AccountTab({ draft, updateSection }) {
 }
 
 export default function SettingsPage() {
-  const { request } = useSession();
+  const { request, apiBaseUrl, accessToken } = useSession();
   const [activeTab, setActiveTab] = useState("Profile");
   const [draft, setDraft] = useState(null);
   const [saveState, setSaveState] = useState({ message: "", error: "" });
+  const [cvUploadState, setCvUploadState] = useState({ uploading: false, message: "", error: "" });
+  const [photoUploadState, setPhotoUploadState] = useState({ uploading: false, message: "", error: "" });
+  const cvFileInputRef = useRef(null);
+  const photoFileInputRef = useRef(null);
 
   const { data, loading, error, refresh } = useApiResource(() => request("/settings"), [request]);
 
@@ -490,6 +740,98 @@ export default function SettingsPage() {
       refresh().catch(() => undefined);
     } catch (saveError) {
       setSaveState({ message: "", error: saveError.message || "Unable to save settings." });
+    }
+  }
+
+  async function handleCvUpload(file) {
+    if (!file) return;
+    setCvUploadState({ uploading: true, message: "", error: "" });
+    try {
+      const formData = new FormData();
+      formData.append("cv_file", file, file.name);
+      const res = await fetch(`${apiBaseUrl}/cv-upload`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: formData,
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json?.error?.message || "Upload failed");
+      }
+      const parsed = json.parsed || {};
+      // Auto-fill profile fields from parsed CV sections
+      setDraft((current) => ({
+        ...current,
+        profile: {
+          ...(current?.profile || {}),
+          ...(parsed.summary ? { summary: parsed.summary } : {}),
+          ...(parsed.competencies?.length ? { competencies: parsed.competencies } : {}),
+        },
+      }));
+      setCvUploadState({
+        uploading: false,
+        message: `CV uploaded (${json.char_count?.toLocaleString()} chars). Profile fields pre-filled — review and save.`,
+        error: "",
+      });
+      // Switch to Profile tab so user can review pre-filled fields
+      setActiveTab("Profile");
+    } catch (uploadError) {
+      setCvUploadState({
+        uploading: false,
+        message: "",
+        error: uploadError.message || "Upload failed.",
+      });
+    }
+  }
+
+  async function handlePhotoUpload(file) {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setPhotoUploadState({
+        uploading: false,
+        message: "",
+        error: "Profile photo must be 2MB or smaller.",
+      });
+      return;
+    }
+    setPhotoUploadState({ uploading: true, message: "", error: "" });
+    try {
+      const croppedFile = await cropImageToSquare(file);
+      const formData = new FormData();
+      formData.append("photo_file", croppedFile, croppedFile.name);
+      const res = await fetch(`${apiBaseUrl}/profile-photo-upload`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: formData,
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json?.error?.message || "Profile photo upload failed");
+      }
+      setDraft((current) => ({
+        ...current,
+        profile: {
+          ...(current?.profile || {}),
+          photo_data_url: json.photo_data_url || "",
+          avatar_url: json.photo_data_url || current?.profile?.avatar_url || "",
+        },
+      }));
+      setPhotoUploadState({
+        uploading: false,
+        message: "Profile photo uploaded and saved.",
+        error: "",
+      });
+      refresh().catch(() => undefined);
+    } catch (uploadError) {
+      setPhotoUploadState({
+        uploading: false,
+        message: "",
+        error: uploadError.message || "Profile photo upload failed.",
+      });
     }
   }
 
@@ -550,15 +892,31 @@ export default function SettingsPage() {
               <div className="absolute left-0 top-0 h-24 w-full bg-gradient-to-br from-surface-container-low to-surface-container-high" />
               <div className="relative z-10 mb-6">
                 <div className="relative mx-auto w-fit">
+                  <input
+                    accept="image/png,image/jpeg"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) handlePhotoUpload(file);
+                      event.target.value = "";
+                    }}
+                    ref={photoFileInputRef}
+                    type="file"
+                  />
                   <img
                     alt={profile.name || account.display_name}
                     className="mx-auto h-28 w-28 rounded-full border-4 border-surface-container-lowest object-cover shadow-sm"
                     src={
+                      profile.photo_data_url ||
                       profile.avatar_url ||
-                      "https://lh3.googleusercontent.com/aida-public/AB6AXuCEbDDRgu4_REnkpR4gbSify0khawEFxHuQHLBm7Xbd6BmM7LDM-dlp8wOKL0QkSDuiFg7g9UDpYPZnV2uV8Qmu5cxn1MBriXeVmXUz8EGMsgieO36lJEpcY5FCDph2ooQGzwpKRq5qwQluOCY4JB_gfySIUY2T0ozlVp3DEmdnT9aCfADFkC1BXeteFPTxYhtUsABzZLWUOD6fNpuVFVFLjuxpQaEgkpVd_bvuz61H_FfJkq5V_4CESVQjz3tEa3rwtGfzcKHXwJE"
+                      PROFILE_PLACEHOLDER_URL
                     }
                   />
-                  <button className="absolute bottom-0 right-0 rounded-full border border-outline-variant/20 bg-surface-container-lowest p-2 text-on-surface-variant shadow-sm transition-colors hover:text-primary">
+                  <button
+                    className="absolute bottom-0 right-0 rounded-full border border-outline-variant/20 bg-surface-container-lowest p-2 text-on-surface-variant shadow-sm transition-colors hover:text-primary"
+                    onClick={() => photoFileInputRef.current?.click()}
+                    type="button"
+                  >
                     <span className="material-symbols-outlined text-[18px]">edit</span>
                   </button>
                 </div>
@@ -585,6 +943,16 @@ export default function SettingsPage() {
                   {profile.website || "No website configured"}
                 </div>
               </div>
+              {photoUploadState.message ? (
+                <p className="relative z-10 mt-4 rounded-lg bg-primary/10 px-3 py-2 text-xs leading-5 text-primary">
+                  {photoUploadState.message}
+                </p>
+              ) : null}
+              {photoUploadState.error ? (
+                <p className="relative z-10 mt-4 rounded-lg bg-error-container px-3 py-2 text-xs leading-5 text-on-error-container">
+                  {photoUploadState.error}
+                </p>
+              ) : null}
             </section>
 
             <section className="rounded-xl bg-surface-container-low p-6">
@@ -592,14 +960,48 @@ export default function SettingsPage() {
                 Quick Document Actions
               </h3>
               <div className="flex flex-col gap-3">
-                <button className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-primary to-primary-container px-4 py-3 text-sm font-medium text-white shadow-sm transition-all hover:saturate-150 active:scale-[0.98]">
-                  <span className="material-symbols-outlined text-[20px]">upload_file</span>
-                  Upload New CV
+                {/* Hidden file input for CV upload */}
+                <input
+                  accept=".txt,.docx,.pdf"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) handleCvUpload(file);
+                    event.target.value = "";
+                  }}
+                  ref={cvFileInputRef}
+                  type="file"
+                />
+                <button
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-primary to-primary-container px-4 py-3 text-sm font-medium text-white shadow-sm transition-all hover:saturate-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={cvUploadState.uploading}
+                  onClick={() => cvFileInputRef.current?.click()}
+                  type="button"
+                >
+                  <span className="material-symbols-outlined text-[20px]">
+                    {cvUploadState.uploading ? "hourglass_empty" : "upload_file"}
+                  </span>
+                  {cvUploadState.uploading ? "Uploading..." : "Upload New CV"}
                 </button>
-                <button className="flex w-full items-center justify-center gap-2 rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm font-medium text-on-surface transition-all hover:bg-surface-container-high active:scale-[0.98]">
+                <button
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm font-medium text-on-surface transition-all hover:bg-surface-container-high active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={cvUploadState.uploading}
+                  onClick={() => cvFileInputRef.current?.click()}
+                  type="button"
+                >
                   <span className="material-symbols-outlined text-[20px]">find_replace</span>
                   Replace Current CV
                 </button>
+                {cvUploadState.message ? (
+                  <p className="rounded-lg bg-primary/10 px-3 py-2 text-xs leading-5 text-primary">
+                    {cvUploadState.message}
+                  </p>
+                ) : null}
+                {cvUploadState.error ? (
+                  <p className="rounded-lg bg-error-container px-3 py-2 text-xs leading-5 text-on-error-container">
+                    {cvUploadState.error}
+                  </p>
+                ) : null}
               </div>
             </section>
           </div>

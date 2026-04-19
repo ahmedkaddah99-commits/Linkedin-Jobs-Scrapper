@@ -259,6 +259,60 @@ class ReviewRecord:
 
 
 @dataclass(slots=True)
+class ReferralContactRecord:
+    contact_id: str
+    name: str
+    company: str
+    linkedin_url: str = ""
+    relationship_note: str = ""
+    can_refer: bool = False
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        name: str,
+        company: str,
+        linkedin_url: str = "",
+        relationship_note: str = "",
+        can_refer: bool = False,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "ReferralContactRecord":
+        now = utc_now_iso()
+        return cls(
+            contact_id=f"contact_{uuid4().hex[:16]}",
+            name=str(name).strip(),
+            company=str(company).strip(),
+            linkedin_url=str(linkedin_url).strip(),
+            relationship_note=str(relationship_note).strip(),
+            can_refer=bool(can_refer),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ReferralContactRecord":
+        return cls(
+            contact_id=str(payload.get("contact_id") or ""),
+            name=str(payload.get("name") or ""),
+            company=str(payload.get("company") or ""),
+            linkedin_url=str(payload.get("linkedin_url") or ""),
+            relationship_note=str(payload.get("relationship_note") or ""),
+            can_refer=bool(payload.get("can_refer") or False),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
 class UserRecord:
     user_id: str
     email: str

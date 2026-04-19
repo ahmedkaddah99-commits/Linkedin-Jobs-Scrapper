@@ -119,6 +119,7 @@ class BackendApplicationTests(unittest.TestCase):
                     "experience_levels": [2, 3],
                     "low_applicant_threshold": 60,
                     "stage4_max_jobs": 15,
+                    "target_roles": ["Business Analyst", "Consultant"],
                 },
             }
         )
@@ -137,6 +138,7 @@ class BackendApplicationTests(unittest.TestCase):
         )
         self.assertEqual(run.run_plan.resolved_run_settings["keywords"], ["analyst", "consultant"])
         self.assertEqual(run.run_plan.resolved_run_settings["stage4_max_jobs"], 15)
+        self.assertEqual(run.run_plan.resolved_run_settings["target_roles"], ["Business Analyst", "Consultant"])
         self.assertTrue((temp_dir / "backend.sqlite3").exists())
 
     def test_builder_can_update_existing_workspace(self):
@@ -214,6 +216,58 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertIn("job_board_indeed", connector_ids)
         self.assertIn("tailored_application_documents", generation_ids)
         self.assertIn("application_document_export", renderer_ids)
+
+    def test_referral_contacts_and_outreach_drafts(self):
+        app, _ = self._create_app_with_test_workflow("referrals_and_outreach")
+        user = app.upsert_user(
+            {
+                "email": "networking@example.com",
+                "display_name": "Networking User",
+                "role": "admin",
+                "metadata": {
+                    "profile": {
+                        "name": "Networking User",
+                        "summary": "Product and operations specialist with experience improving internal tooling.",
+                    }
+                },
+            }
+        )
+
+        completed_run = app.start_run("custom_workspace", execute=True, requested_by="test")
+        self.assertEqual(completed_run.status, "failed")
+        completed_run = app.retry_run(completed_run.id)
+        completed_run = app.process_next_queued_run(auto_retry_failed=True)
+        self.assertEqual(completed_run.status, "completed")
+
+        contact = app.upsert_referral_contact(
+            user_id=user.user_id,
+            payload={
+                "name": "Jane Referrer",
+                "company": "ACME",
+                "linkedin_url": "https://linkedin.com/in/jane-referrer",
+                "relationship_note": "Worked together on automation rollout.",
+                "can_refer": True,
+            },
+        )
+        self.assertEqual(contact.company, "ACME")
+        self.assertEqual(len(app.list_referral_contacts(user.user_id)), 1)
+
+        referral_draft = app.generate_referral_outreach(
+            user_id=user.user_id,
+            run_id=completed_run.id,
+            job_id="job_1",
+            contact_id=contact.contact_id,
+        )
+        self.assertIn("Jane Referrer", referral_draft["message"])
+        self.assertIn("Analyst", referral_draft["message"])
+
+        hiring_manager_draft = app.generate_hiring_manager_outreach(
+            user_id=user.user_id,
+            run_id=completed_run.id,
+            job_id="job_1",
+        )
+        self.assertIn("Analyst", hiring_manager_draft["message"])
+        self.assertIn("hiring_manager", hiring_manager_draft)
 
     def test_queue_worker_retry_and_resource_crud(self):
         app, _ = self._create_app_with_test_workflow("queue_worker_flow")

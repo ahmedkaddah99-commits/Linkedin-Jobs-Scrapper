@@ -4,6 +4,12 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from backend.capabilities.networking import (
+    build_hiring_manager_outreach_draft,
+    build_referral_outreach_draft,
+    find_referral_contacts_for_company,
+    guess_hiring_manager_from_job,
+)
 from backend.domain.models import (
     ROLE_ADMIN,
     ROLE_EDITOR,
@@ -25,6 +31,7 @@ from backend.domain.models import (
     ArtifactRecord,
     ApiTokenRecord,
     JobRecord,
+    ReferralContactRecord,
     ReviewRecord,
     RunRecord,
     SecretRecord,
@@ -191,6 +198,112 @@ class BackendApplication:
     def delete_user(self, user_id: str) -> None:
         self.repositories.auth_repository.delete_user(user_id)
 
+    def list_referral_contacts(self, user_id: str) -> list[ReferralContactRecord]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        contacts = [
+            ReferralContactRecord.from_dict(item)
+            for item in (user.metadata or {}).get("referrals") or []
+            if isinstance(item, dict)
+        ]
+        contacts.sort(key=lambda item: (item.company.lower(), item.name.lower()))
+        return contacts
+
+    def get_referral_contact(self, user_id: str, contact_id: str) -> ReferralContactRecord:
+        for contact in self.list_referral_contacts(user_id):
+            if contact.contact_id == contact_id:
+                return contact
+        raise KeyError(f"Referral contact '{contact_id}' not found.")
+
+    def upsert_referral_contact(
+        self,
+        *,
+        user_id: str,
+        payload: Mapping[str, Any] | ReferralContactRecord,
+        contact_id: str = "",
+    ) -> ReferralContactRecord:
+        user = self.repositories.auth_repository.get_user(user_id)
+        contact = payload if isinstance(payload, ReferralContactRecord) else ReferralContactRecord.from_dict(payload)
+        if contact_id:
+            contact.contact_id = contact_id
+        if not contact.contact_id:
+            contact = ReferralContactRecord.create(
+                name=contact.name,
+                company=contact.company,
+                linkedin_url=contact.linkedin_url,
+                relationship_note=contact.relationship_note,
+                can_refer=contact.can_refer,
+                metadata=contact.metadata,
+            )
+        if not contact.name:
+            raise ValueError("contact name is required")
+        if not contact.company:
+            raise ValueError("contact company is required")
+        contact.updated_at = utc_now_iso()
+
+        contacts = self.list_referral_contacts(user_id)
+        replaced = False
+        normalized_contacts: list[ReferralContactRecord] = []
+        for existing in contacts:
+            if existing.contact_id == contact.contact_id:
+                normalized_contacts.append(contact)
+                replaced = True
+            else:
+                normalized_contacts.append(existing)
+        if not replaced:
+            normalized_contacts.append(contact)
+        self._persist_referral_contacts(user, normalized_contacts)
+        return self.get_referral_contact(user_id, contact.contact_id)
+
+    def delete_referral_contact(self, user_id: str, contact_id: str) -> None:
+        user = self.repositories.auth_repository.get_user(user_id)
+        contacts = self.list_referral_contacts(user_id)
+        kept_contacts = [contact for contact in contacts if contact.contact_id != contact_id]
+        if len(kept_contacts) == len(contacts):
+            raise KeyError(f"Referral contact '{contact_id}' not found.")
+        self._persist_referral_contacts(user, kept_contacts)
+
+    def generate_referral_outreach(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+        contact_id: str = "",
+    ) -> dict[str, Any]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        job = self._get_job_for_run(run_id=run_id, job_id=job_id)
+        contacts = self.list_referral_contacts(user_id)
+        matches = find_referral_contacts_for_company(contacts, job.company)
+        if contact_id:
+            contact = next((item for item in matches if item.contact_id == contact_id), None)
+            if contact is None:
+                contact = self.get_referral_contact(user_id, contact_id)
+        else:
+            contact = matches[0] if matches else None
+        if contact is None:
+            raise ValueError("No referral contact matches this job yet.")
+        profile = dict((user.metadata or {}).get("profile") or {})
+        payload = build_referral_outreach_draft(profile=profile, job=job, contact=contact)
+        payload["matched_contacts"] = [item.to_dict() for item in matches]
+        return payload
+
+    def generate_hiring_manager_outreach(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        job = self._get_job_for_run(run_id=run_id, job_id=job_id)
+        profile = dict((user.metadata or {}).get("profile") or {})
+        hiring_manager = guess_hiring_manager_from_job(job)
+        return build_hiring_manager_outreach_draft(
+            profile=profile,
+            job=job,
+            hiring_manager=hiring_manager,
+        )
+
     def list_api_tokens(
         self,
         *,
@@ -331,6 +444,21 @@ class BackendApplication:
 
     def resolve_runtime_value(self, payload: Any) -> Any:
         return resolve_secret_references(payload, secret_lookup=self.repositories.secret_store.get_secret)
+
+    def _persist_referral_contacts(self, user: UserRecord, contacts: list[ReferralContactRecord]) -> None:
+        metadata = dict(user.metadata or {})
+        metadata["referrals"] = [contact.to_dict() for contact in contacts]
+        user.metadata = metadata
+        user.updated_at = utc_now_iso()
+        self.repositories.auth_repository.upsert_user(user)
+
+    def _get_job_for_run(self, *, run_id: str, job_id: str) -> JobRecord:
+        self.repositories.run_repository.get(run_id)
+        for jobs in self.repositories.job_store.load_all_job_sets(run_id).values():
+            for job in jobs:
+                if job.job_id == job_id:
+                    return job
+        raise KeyError(f"Job '{job_id}' not found for run '{run_id}'.")
 
     def get_run(self, run_id: str) -> RunRecord:
         return self.repositories.run_repository.get(run_id)

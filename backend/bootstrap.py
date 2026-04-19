@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.adapters import register_legacy_stage_adapters
+from backend.adapters import register_stage_adapters
 from backend.application import BackendApplication
 from backend.connectors.job_boards import list_portal_strategy_ids
 from backend.orchestration import BackendRegistries, ComponentDescriptor, Registry, StageEngine
@@ -43,16 +43,6 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     connector_registry.register(
-        "linkedin_search",
-        ComponentDescriptor(
-            id="linkedin_search",
-            kind="connector",
-            name="LinkedIn Job Search (Legacy Alias)",
-            description="Compatibility alias for the LinkedIn search connector.",
-            metadata={"alias_for": "linkedin_jobs"},
-        ),
-    )
-    connector_registry.register(
         "curated_job_urls",
         ComponentDescriptor(
             id="curated_job_urls",
@@ -62,13 +52,12 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     connector_registry.register(
-        "manual_url",
+        "company_career_sites",
         ComponentDescriptor(
-            id="manual_url",
+            id="company_career_sites",
             kind="connector",
-            name="Curated Job URLs (Legacy Alias)",
-            description="Compatibility alias for curated job URL ingestion.",
-            metadata={"alias_for": "curated_job_urls"},
+            name="Company Career Sites",
+            description="Discover jobs directly from specific company career pages configured by the user.",
         ),
     )
     connector_registry.register(
@@ -82,16 +71,6 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     connector_registry.register(
-        "blue_collar_portals",
-        ComponentDescriptor(
-            id="blue_collar_portals",
-            kind="connector",
-            name="Job Board Collection (Legacy Alias)",
-            description="Compatibility alias for multi-portal job-board collection.",
-            metadata={"alias_for": "job_board_collection", "portal_strategy_ids": list_portal_strategy_ids()},
-        ),
-    )
-    connector_registry.register(
         "job_board_indeed",
         ComponentDescriptor(
             id="job_board_indeed",
@@ -99,16 +78,6 @@ def _build_registries() -> BackendRegistries:
             name="Indeed Board Source",
             description="Indeed source strategy within the generic job-board collection layer.",
             metadata={"portal": "indeed", "group": "job_boards"},
-        ),
-    )
-    connector_registry.register(
-        "blue_collar_indeed",
-        ComponentDescriptor(
-            id="blue_collar_indeed",
-            kind="connector",
-            name="Indeed Board Source (Legacy Alias)",
-            description="Compatibility alias for the Indeed source strategy.",
-            metadata={"alias_for": "job_board_indeed", "portal": "indeed", "group": "job_boards"},
         ),
     )
     connector_registry.register(
@@ -122,16 +91,6 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     connector_registry.register(
-        "blue_collar_arbeitsagentur",
-        ComponentDescriptor(
-            id="blue_collar_arbeitsagentur",
-            kind="connector",
-            name="Arbeitsagentur Board Source (Legacy Alias)",
-            description="Compatibility alias for the Arbeitsagentur source strategy.",
-            metadata={"alias_for": "job_board_arbeitsagentur", "portal": "arbeitsagentur", "group": "job_boards"},
-        ),
-    )
-    connector_registry.register(
         "job_board_stepstone",
         ComponentDescriptor(
             id="job_board_stepstone",
@@ -142,16 +101,6 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     connector_registry.register(
-        "blue_collar_stepstone",
-        ComponentDescriptor(
-            id="blue_collar_stepstone",
-            kind="connector",
-            name="StepStone Board Source (Legacy Alias)",
-            description="Compatibility alias for the StepStone source strategy.",
-            metadata={"alias_for": "job_board_stepstone", "portal": "stepstone", "group": "job_boards"},
-        ),
-    )
-    connector_registry.register(
         "job_board_linkedin",
         ComponentDescriptor(
             id="job_board_linkedin",
@@ -159,16 +108,6 @@ def _build_registries() -> BackendRegistries:
             name="LinkedIn Board Source",
             description="LinkedIn source strategy within the generic job-board collection layer.",
             metadata={"portal": "linkedin", "group": "job_boards"},
-        ),
-    )
-    connector_registry.register(
-        "blue_collar_linkedin",
-        ComponentDescriptor(
-            id="blue_collar_linkedin",
-            kind="connector",
-            name="LinkedIn Board Source (Legacy Alias)",
-            description="Compatibility alias for the LinkedIn board source strategy.",
-            metadata={"alias_for": "job_board_linkedin", "portal": "linkedin", "group": "job_boards"},
         ),
     )
 
@@ -182,32 +121,12 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     generation_registry.register(
-        "white_collar_cv_generation",
-        ComponentDescriptor(
-            id="white_collar_cv_generation",
-            kind="generation",
-            name="Tailored Application Documents (Legacy Alias)",
-            description="Compatibility alias for tailored application document generation.",
-            metadata={"alias_for": "tailored_application_documents"},
-        ),
-    )
-    generation_registry.register(
         "reusable_role_profiles",
         ComponentDescriptor(
             id="reusable_role_profiles",
             kind="generation",
             name="Reusable Role Profiles",
             description="Generate reusable role-based profile documents for grouped jobs.",
-        ),
-    )
-    generation_registry.register(
-        "blue_collar_role_cv_generation",
-        ComponentDescriptor(
-            id="blue_collar_role_cv_generation",
-            kind="generation",
-            name="Reusable Role Profiles (Legacy Alias)",
-            description="Compatibility alias for reusable role-based profile generation.",
-            metadata={"alias_for": "reusable_role_profiles"},
         ),
     )
 
@@ -221,16 +140,6 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     renderer_registry.register(
-        "docx_pdf_renderer",
-        ComponentDescriptor(
-            id="docx_pdf_renderer",
-            kind="renderer",
-            name="Application Document Export (Legacy Alias)",
-            description="Compatibility alias for the document export renderer.",
-            metadata={"alias_for": "application_document_export"},
-        ),
-    )
-    renderer_registry.register(
         "application_package_export",
         ComponentDescriptor(
             id="application_package_export",
@@ -239,18 +148,8 @@ def _build_registries() -> BackendRegistries:
             description="Export packaged application assets, reusable bundles, and email drafts.",
         ),
     )
-    renderer_registry.register(
-        "blue_collar_package_renderer",
-        ComponentDescriptor(
-            id="blue_collar_package_renderer",
-            kind="renderer",
-            name="Application Package Export (Legacy Alias)",
-            description="Compatibility alias for the application packaging renderer.",
-            metadata={"alias_for": "application_package_export"},
-        ),
-    )
 
-    register_legacy_stage_adapters(stage_registry)
+    register_stage_adapters(stage_registry)
     return BackendRegistries(
         stage_registry=stage_registry,
         connector_registry=connector_registry,

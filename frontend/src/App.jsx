@@ -6,9 +6,11 @@ import ConnectionPanel from "./components/ConnectionPanel";
 import { useSession } from "./context/SessionContext";
 import DashboardPage from "./pages/DashboardPage";
 import ReviewQueuePage from "./pages/ReviewQueuePage";
+import ReferralsPage from "./pages/ReferralsPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import RunsPage from "./pages/RunsPage";
 import SettingsPage from "./pages/SettingsPage";
+import TrackerPage from "./pages/TrackerPage";
 import WorkspacesPage from "./pages/WorkspacesPage";
 
 export default function App() {
@@ -23,7 +25,9 @@ export default function App() {
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:runId" element={<RunDetailPage />} />
           <Route path="/review-queue" element={<ReviewQueuePage />} />
+          <Route path="/tracker" element={<TrackerPage />} />
           <Route path="/artifacts" element={<ArtifactsPage />} />
+          <Route path="/referrals" element={<ReferralsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/admin" element={<AdminPage />} />
         </Routes>

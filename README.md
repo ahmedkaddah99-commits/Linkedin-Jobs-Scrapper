@@ -11,8 +11,6 @@ The product surface is:
 - review queue
 - React frontend + JSON API
 
-The old stage scripts still exist, but they are compatibility wrappers only.
-
 ## Main Entry Points
 
 Use these first:
@@ -20,15 +18,6 @@ Use these first:
 - `workspace_runner.py`
 - `backend/api/server.py`
 - `frontend/`
-
-Legacy compatibility entrypoints:
-
-- `main.py`
-- `orchestrator.py`
-- `stage1_scrape_enrich.py`
-- `stage2_filter_local.py`
-- `stage3_filter_ai.py`
-- `stage4_docs_export.py`
 
 ## Setup (Windows + venv)
 
@@ -47,7 +36,7 @@ npm install
 
 ## Secrets
 
-Create `user_config/.env` when running local legacy-compatible flows:
+Create `user_config/.env` for local external-service credentials:
 
 ```env
 SCRAPEOPS_API_KEY=your_scrapeops_key
@@ -116,16 +105,6 @@ Example:
 ```powershell
 .\run_daily.ps1 -WorkspaceId my_custom_workspace
 ```
-
-## Legacy Compatibility
-
-These still work, but they are no longer the product model:
-
-- `main.py`
-- `orchestrator.py`
-- `bc_automation/orchestrator_blue_collar.py`
-
-They exist only so older script-based usage does not break immediately.
 
 ## Architecture
 

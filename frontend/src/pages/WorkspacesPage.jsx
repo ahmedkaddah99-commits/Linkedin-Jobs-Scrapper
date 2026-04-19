@@ -23,6 +23,29 @@ const EMPTY_BUILDER_FORM = {
   settings: {},
 };
 
+function parseLineList(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function formatCompanySiteEntries(entries) {
+  if (!Array.isArray(entries)) return "Not set";
+  const lines = entries
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return String(entry || "").trim();
+      }
+      const companyName = String(entry.company_name || entry.company || "").trim();
+      const url = String(entry.url || "").trim();
+      if (companyName && url) return `${companyName} | ${url}`;
+      return url || companyName;
+    })
+    .filter(Boolean);
+  return lines.length ? lines.join("\n") : "Not set";
+}
+
 function TogglePill({ checked, label, onClick }) {
   return (
     <button
@@ -101,8 +124,12 @@ function normalizeWorkspaceSettingValue(value) {
 }
 
 function formatSettingValue(value) {
+  if (Array.isArray(value) && value.some((item) => item && typeof item === "object")) {
+    return formatCompanySiteEntries(value);
+  }
   if (Array.isArray(value)) {
-    return value.length ? value.join(", ") : "Not set";
+    const separator = value.some((item) => String(item || "").includes("http")) ? "\n" : ", ";
+    return value.length ? value.join(separator) : "Not set";
   }
   if (typeof value === "boolean") {
     return value ? "Yes" : "No";
@@ -119,6 +146,12 @@ function formatSettingValue(value) {
 function settingDisplayValue(field, value) {
   if (field.type === "tag_list") {
     return Array.isArray(value) ? value.join(", ") : "";
+  }
+  if (field.type === "url_list") {
+    return Array.isArray(value) ? value.join("\n") : "";
+  }
+  if (field.type === "company_site_list") {
+    return formatCompanySiteEntries(value === undefined ? [] : value);
   }
   if (field.type === "multi_select") {
     return Array.isArray(value) ? value : [];
@@ -198,6 +231,10 @@ function workspaceSettingEntries(workspace, catalog) {
   }));
 }
 
+function workspaceHasConnector(workspace, connectorId) {
+  return (workspace.sources || []).some((source) => source.connector_id === connectorId);
+}
+
 function FieldRenderer({ field, value, onChange }) {
   if (field.type === "multi_select") {
     const selectedValues = Array.isArray(value) ? value : [];
@@ -206,12 +243,17 @@ function FieldRenderer({ field, value, onChange }) {
         <div className="flex flex-wrap gap-3">
           {(field.options || []).map((option) => {
             const checked = selectedValues.some((item) => String(item) === String(option.value));
+            const selectionLimitReached =
+              field.id === "target_roles" && !checked && selectedValues.length >= 3;
             return (
               <TogglePill
                 checked={checked}
                 key={`${field.id}-${option.value}`}
                 label={option.label}
                 onClick={() => {
+                  if (selectionLimitReached) {
+                    return;
+                  }
                   const next = checked
                     ? selectedValues.filter((item) => String(item) !== String(option.value))
                     : [...selectedValues, option.value];
@@ -239,6 +281,18 @@ function FieldRenderer({ field, value, onChange }) {
           </option>
         ))}
       </select>
+    );
+  }
+
+  if (field.type === "url_list" || field.type === "company_site_list") {
+    return (
+      <textarea
+        className="min-h-32 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={field.placeholder || ""}
+        rows={field.type === "company_site_list" ? 5 : 4}
+        value={settingDisplayValue(field, value)}
+      />
     );
   }
 
@@ -271,6 +325,7 @@ export default function WorkspacesPage() {
     message: "",
   });
   const [form, setForm] = useState(EMPTY_BUILDER_FORM);
+  const [quickManualUrls, setQuickManualUrls] = useState({});
 
   const {
     data: workspacesData,
@@ -306,6 +361,14 @@ export default function WorkspacesPage() {
         fieldMatchesSelection(field, form, availableSources),
       ),
     [builderCatalog, form, availableSources],
+  );
+  const targetRoleFields = useMemo(
+    () => availableConfigurationFields.filter((field) => field.id === "target_roles"),
+    [availableConfigurationFields],
+  );
+  const searchConfigurationFields = useMemo(
+    () => availableConfigurationFields.filter((field) => field.id !== "target_roles"),
+    [availableConfigurationFields],
   );
 
   function resetBuilderState(overrides = {}) {
@@ -434,7 +497,7 @@ export default function WorkspacesPage() {
     }
   }
 
-  async function triggerRun(workspaceId, executionMode) {
+  async function triggerRun(workspaceId, executionMode, runInputOverrides = {}) {
     setActionState({ workspaceId, message: "", error: "" });
     try {
       const run = await request("/runs", {
@@ -443,6 +506,7 @@ export default function WorkspacesPage() {
           workspace_id: workspaceId,
           execution_mode: executionMode,
           max_attempts: 1,
+          run_input_overrides: runInputOverrides,
         },
       });
       setActionState({
@@ -464,6 +528,14 @@ export default function WorkspacesPage() {
         error: runError.message || "Unable to start run.",
       });
     }
+  }
+
+  function quickManualValue(workspace) {
+    if (Object.prototype.hasOwnProperty.call(quickManualUrls, workspace.id)) {
+      return quickManualUrls[workspace.id];
+    }
+    const savedUrls = workspace.settings?.manual_url_seed_list;
+    return Array.isArray(savedUrls) ? savedUrls.join("\n") : "";
   }
 
   async function deleteWorkspace(workspaceId) {
@@ -621,12 +693,39 @@ export default function WorkspacesPage() {
             </BuilderSection>
 
             <BuilderSection
+              description="Pick up to three role families to shape search keywords, screening context, and document emphasis for this workspace."
+              title="Target Role"
+            >
+              {targetRoleFields.length ? (
+                <div className="space-y-2">
+                  {targetRoleFields.map((field) => (
+                    <label className="space-y-2" key={field.id}>
+                      <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                      <FieldRenderer
+                        field={field}
+                        onChange={(nextValue) => updateSetting(field.id, nextValue)}
+                        value={form.settings[field.id]}
+                      />
+                      <span className="block text-xs leading-6 text-on-surface-variant">
+                        {field.description}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-on-surface-variant">
+                  This flow does not expose role targeting.
+                </p>
+              )}
+            </BuilderSection>
+
+            <BuilderSection
               description="Set the search and routing values that make this workspace behave like a real job-seeker setup rather than a fixed preset."
               title="Search And Routing Settings"
             >
-              {availableConfigurationFields.length ? (
+              {searchConfigurationFields.length ? (
                 <div className="grid gap-4 md:grid-cols-2">
-                  {availableConfigurationFields.map((field) => (
+                  {searchConfigurationFields.map((field) => (
                     <label className="space-y-2" key={field.id}>
                       <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
                       <FieldRenderer
@@ -807,9 +906,57 @@ export default function WorkspacesPage() {
                             {entry.label}
                             {entry.internal ? " · Internal" : ""}
                           </div>
-                          <div className="mt-1 text-sm text-on-surface">{entry.value}</div>
+                          <div className="mt-1 whitespace-pre-wrap text-sm text-on-surface">{entry.value}</div>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {workspaceHasConnector(workspace, "curated_job_urls") ? (
+                  <div className="mt-5 space-y-3 rounded-xl border border-outline-variant/10 bg-surface p-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-on-surface">Quick Paste Job URLs</h3>
+                      <p className="mt-1 text-xs leading-6 text-on-surface-variant">
+                        Paste one URL per line and run this workspace without editing any local files.
+                      </p>
+                    </div>
+                    <textarea
+                      className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm text-on-surface"
+                      onChange={(event) =>
+                        setQuickManualUrls((current) => ({
+                          ...current,
+                          [workspace.id]: event.target.value,
+                        }))
+                      }
+                      placeholder="https://company.example/jobs/123"
+                      value={quickManualValue(workspace)}
+                    />
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={!parseLineList(quickManualValue(workspace)).length}
+                        onClick={() =>
+                          triggerRun(workspace.id, "sync", {
+                            manual_urls_inline: parseLineList(quickManualValue(workspace)),
+                          })
+                        }
+                        type="button"
+                      >
+                        Run Pasted URLs
+                      </button>
+                      <button
+                        className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={!parseLineList(quickManualValue(workspace)).length}
+                        onClick={() =>
+                          triggerRun(workspace.id, "queued", {
+                            manual_urls_inline: parseLineList(quickManualValue(workspace)),
+                          })
+                        }
+                        type="button"
+                      >
+                        Queue Pasted URLs
+                      </button>
                     </div>
                   </div>
                 ) : null}

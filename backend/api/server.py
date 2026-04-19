@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import mimetypes
+import re
 from datetime import datetime, timezone
+from email.parser import BytesFeedParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from backend.capabilities.networking import find_referral_contacts_for_company
+from backend.capabilities.tailored_documents.rendering import get_document_design_options
 from backend.bootstrap import create_backend
 from backend.domain.models import (
     TOKEN_SCOPE_ARTIFACTS_READ,
@@ -30,6 +36,159 @@ from backend.domain.models import (
 
 def _json_bytes(payload) -> bytes:
     return json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# CV extraction helpers
+# ---------------------------------------------------------------------------
+
+def _extract_text_from_docx(data: bytes) -> str:
+    """Extract plain text from a DOCX file using python-docx or a basic ZIP/XML fallback."""
+    try:
+        import docx  # type: ignore
+        doc = docx.Document(io.BytesIO(data))
+        return "\n".join(para.text for para in doc.paragraphs)
+    except Exception:
+        pass
+    # Fallback: extract XML text nodes directly from the ZIP
+    try:
+        import zipfile
+        import xml.etree.ElementTree as ET
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            with zf.open("word/document.xml") as f:
+                tree = ET.parse(f)
+                ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                return " ".join(node.text for node in tree.iter(f"{{{ns}}}t") if node.text)
+    except Exception:
+        return ""
+
+
+def _extract_text_from_pdf(data: bytes) -> str:
+    """Extract plain text from a PDF using pypdf if available."""
+    try:
+        from pypdf import PdfReader  # type: ignore
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception:
+        return ""
+
+
+def _parse_cv_sections(cv_text: str) -> dict:
+    """Best-effort heuristic extraction of CV sections.
+
+    Returns a dict with optional keys: summary, competencies, experience_lines.
+    These are used to pre-populate the profile settings UI after upload.
+    """
+    lines = [line.rstrip() for line in cv_text.splitlines()]
+
+    # ---- detect section header positions ----
+    _SUMMARY_HEADERS = re.compile(
+        r"^(professional\s+summary|summary|profile|about\s+me|objective)",
+        re.IGNORECASE,
+    )
+    _SKILLS_HEADERS = re.compile(
+        r"^(skills|core\s+competencies|competencies|technical\s+skills|key\s+skills)",
+        re.IGNORECASE,
+    )
+    _EXP_HEADERS = re.compile(
+        r"^(experience|work\s+experience|professional\s+experience|employment)",
+        re.IGNORECASE,
+    )
+
+    sections: dict[str, list[str]] = {}
+    current_section = "_preamble"
+    sections[current_section] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _SUMMARY_HEADERS.match(stripped):
+            current_section = "summary"
+            sections.setdefault(current_section, [])
+        elif _SKILLS_HEADERS.match(stripped):
+            current_section = "skills"
+            sections.setdefault(current_section, [])
+        elif _EXP_HEADERS.match(stripped):
+            current_section = "experience"
+            sections.setdefault(current_section, [])
+        else:
+            sections.setdefault(current_section, []).append(stripped)
+
+    # ---- build result ----
+    result: dict = {}
+
+    summary_lines = sections.get("summary", [])
+    if summary_lines:
+        result["summary"] = " ".join(summary_lines[:6])  # cap at ~6 sentences
+
+    skills_lines = sections.get("skills", [])
+    if skills_lines:
+        # Try to treat comma-separated lines as individual competencies
+        competencies: list[str] = []
+        for skill_line in skills_lines:
+            for part in re.split(r"[,;|•·]", skill_line):
+                part = part.strip(" .-")
+                if part and len(part) < 60:
+                    competencies.append(part)
+        result["competencies"] = competencies[:20]  # cap at 20
+
+    exp_lines = sections.get("experience", [])
+    if exp_lines:
+        result["experience_lines"] = exp_lines[:40]  # cap at 40 raw lines
+
+    return result
+
+
+def _parse_multipart_file(content_type_header: str, body: bytes) -> tuple[str, bytes]:
+    """Parse a multipart/form-data body and return (filename, file_bytes).
+
+    Returns ('', b'') if parsing fails or no file part is found.
+    """
+    boundary_match = re.search(r'boundary=([^;\s]+)', content_type_header)
+    if not boundary_match:
+        return "", b""
+    boundary = boundary_match.group(1).strip('"')
+
+    # email.parser expects a header block — prepend a synthetic MIME header
+    synthetic = (
+        f"Content-Type: multipart/form-data; boundary={boundary}\r\n\r\n"
+    ).encode("latin-1")
+    parser = BytesFeedParser()
+    parser.feed(synthetic + body)
+    msg = parser.close()
+
+    for part in msg.get_payload():
+        content_disposition = part.get("Content-Disposition", "")
+        if 'filename="' not in content_disposition and "filename*=" not in content_disposition:
+            continue
+        filename_match = re.search(r'filename="([^"]+)"', content_disposition)
+        filename = filename_match.group(1) if filename_match else "upload"
+        return filename, part.get_payload(decode=True) or b""
+
+    return "", b""
+
+
+def _guess_image_extension(filename: str, file_bytes: bytes) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg"}:
+        return ".jpg" if suffix == ".jpeg" else suffix
+    if file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if file_bytes[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    return ""
+
+
+def _store_profile_photo(user, file_bytes: bytes, extension: str) -> tuple[str, str]:
+    profile_dir = Path("user_config") / "profile_photos"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    normalized_extension = ".jpg" if extension == ".jpeg" else extension
+    photo_path = profile_dir / f"{user.user_id}{normalized_extension}"
+    photo_path.write_bytes(file_bytes)
+    mime_type = "image/png" if normalized_extension == ".png" else "image/jpeg"
+    data_url = f"data:{mime_type};base64,{base64.b64encode(file_bytes).decode('ascii')}"
+    return str(photo_path.resolve()), data_url
 
 
 def _workspace_summary(workspace) -> dict:
@@ -98,6 +257,85 @@ def _workspace_option(workspace) -> dict:
     }
 
 
+def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user) -> dict:
+    merged = {
+        "name": str(profile_payload.get("name") or existing_profile.get("name") or user.display_name or user.email.split("@")[0]),
+        "role_title": str(profile_payload.get("role_title") or existing_profile.get("role_title") or ""),
+        "email": str(profile_payload.get("email") or existing_profile.get("email") or user.email),
+        "location": str(profile_payload.get("location") or existing_profile.get("location") or ""),
+        "website": str(profile_payload.get("website") or existing_profile.get("website") or ""),
+        "linkedin_url": str(profile_payload.get("linkedin_url") or existing_profile.get("linkedin_url") or ""),
+        "github_url": str(profile_payload.get("github_url") or existing_profile.get("github_url") or ""),
+        "avatar_url": str(profile_payload.get("avatar_url") or existing_profile.get("avatar_url") or ""),
+        "photo_data_url": str(profile_payload.get("photo_data_url") or existing_profile.get("photo_data_url") or ""),
+        "photo_path": str(profile_payload.get("photo_path") or existing_profile.get("photo_path") or ""),
+        "summary": str(profile_payload.get("summary") or existing_profile.get("summary") or ""),
+        "competencies": [
+            str(item)
+            for item in profile_payload.get("competencies", existing_profile.get("competencies") or [])
+            if str(item).strip()
+        ],
+        "languages": [
+            str(item)
+            for item in profile_payload.get("languages", existing_profile.get("languages") or [])
+            if str(item).strip()
+        ],
+        "recent_experience": [
+            {
+                "title": str(item.get("title") or ""),
+                "company": str(item.get("company") or ""),
+                "period": str(item.get("period") or ""),
+            }
+            for item in profile_payload.get("recent_experience", existing_profile.get("recent_experience") or [])
+            if isinstance(item, dict)
+        ],
+    }
+    if not merged["avatar_url"] and merged["photo_data_url"]:
+        merged["avatar_url"] = merged["photo_data_url"]
+    return merged
+
+
+def _merge_document_metadata(existing_documents: dict, documents_payload: dict) -> dict:
+    return {
+        "generate_docx": bool(documents_payload.get("generate_docx", existing_documents.get("generate_docx", True))),
+        "generate_pdf": bool(documents_payload.get("generate_pdf", existing_documents.get("generate_pdf", True))),
+        "export_tracker": bool(documents_payload.get("export_tracker", existing_documents.get("export_tracker", True))),
+        "export_package": bool(documents_payload.get("export_package", existing_documents.get("export_package", True))),
+        "file_naming": str(documents_payload.get("file_naming") or existing_documents.get("file_naming") or "workspace_job_title"),
+        "cv_template": str(documents_payload.get("cv_template") or existing_documents.get("cv_template") or "classic"),
+        "cv_color_scheme": str(documents_payload.get("cv_color_scheme") or existing_documents.get("cv_color_scheme") or "classic_navy"),
+        "cv_font": str(documents_payload.get("cv_font") or existing_documents.get("cv_font") or "Calibri"),
+        "include_photo": bool(documents_payload.get("include_photo", existing_documents.get("include_photo", True))),
+    }
+
+
+def _build_run_input_overrides(user, payload: dict) -> dict:
+    profile = dict((user.metadata or {}).get("profile") or {})
+    documents = dict((user.metadata or {}).get("documents") or {})
+    overrides = dict(payload.get("run_input_overrides") or {})
+
+    if profile.get("name"):
+        overrides.setdefault("candidate_name", str(profile.get("name")))
+    if profile.get("email"):
+        overrides.setdefault("candidate_email", str(profile.get("email")))
+    if profile.get("languages"):
+        overrides.setdefault("languages", [str(item) for item in profile.get("languages") or [] if str(item).strip()])
+
+    overrides.setdefault("cv_font", str(documents.get("cv_font") or "Calibri"))
+    overrides.setdefault("cv_template", str(documents.get("cv_template") or "classic"))
+    overrides.setdefault("cv_color_scheme", str(documents.get("cv_color_scheme") or "classic_navy"))
+    overrides.setdefault("include_photo", bool(documents.get("include_photo", True)))
+
+    if bool(documents.get("include_photo", True)):
+        photo_path = str(profile.get("photo_path") or "")
+        if photo_path:
+            overrides.setdefault("profile_image", photo_path)
+    else:
+        overrides["profile_image"] = ""
+
+    return overrides
+
+
 def _build_settings_payload(application, user) -> dict:
     workspaces = [workspace for workspace in application.list_workspaces() if application.user_can_access_workspace(user, workspace.id)]
     profile_options: dict[str, dict] = {}
@@ -114,8 +352,9 @@ def _build_settings_payload(application, user) -> dict:
     metadata = dict(user.metadata or {})
     profile = dict(metadata.get("profile") or {})
     defaults = dict(metadata.get("defaults") or {})
-    documents = dict(metadata.get("documents") or {})
+    documents = _merge_document_metadata(dict(metadata.get("documents") or {}), {})
     review_preferences = dict(metadata.get("review_preferences") or {})
+    referrals = [contact.to_dict() for contact in application.list_referral_contacts(user.user_id)]
 
     if not defaults.get("default_workspace_id") and workspaces:
         defaults["default_workspace_id"] = workspaces[0].id
@@ -128,17 +367,6 @@ def _build_settings_payload(application, user) -> dict:
     if "max_jobs_per_run" not in defaults:
         defaults["max_jobs_per_run"] = 25
 
-    if "generate_docx" not in documents:
-        documents["generate_docx"] = True
-    if "generate_pdf" not in documents:
-        documents["generate_pdf"] = True
-    if "export_tracker" not in documents:
-        documents["export_tracker"] = True
-    if "export_package" not in documents:
-        documents["export_package"] = True
-    if not documents.get("file_naming"):
-        documents["file_naming"] = "workspace_job_title"
-
     if "require_review_before_use" not in review_preferences:
         review_preferences["require_review_before_use"] = True
     if not review_preferences.get("default_decision_state"):
@@ -148,31 +376,15 @@ def _build_settings_payload(application, user) -> dict:
     if "auto_open_next_item" not in review_preferences:
         review_preferences["auto_open_next_item"] = True
 
-    profile_section = {
-        "name": str(profile.get("name") or user.display_name or user.email.split("@")[0]),
-        "role_title": str(profile.get("role_title") or ""),
-        "email": str(profile.get("email") or user.email),
-        "location": str(profile.get("location") or ""),
-        "website": str(profile.get("website") or ""),
-        "avatar_url": str(profile.get("avatar_url") or ""),
-        "summary": str(profile.get("summary") or ""),
-        "competencies": [str(item) for item in profile.get("competencies") or [] if str(item).strip()],
-        "recent_experience": [
-            {
-                "title": str(item.get("title") or ""),
-                "company": str(item.get("company") or ""),
-                "period": str(item.get("period") or ""),
-            }
-            for item in profile.get("recent_experience") or []
-            if isinstance(item, dict)
-        ],
-    }
+    profile_section = _merge_profile_metadata(profile, {}, user)
+    document_design_options = get_document_design_options()
 
     return {
         "profile": profile_section,
         "defaults": defaults,
         "documents": documents,
         "review_preferences": review_preferences,
+        "referrals": referrals,
         "account": {
             "display_name": user.display_name,
             "email": user.email,
@@ -199,6 +411,9 @@ def _build_settings_payload(application, user) -> dict:
                 {"id": "company_job_title", "label": "Company + Job Title"},
                 {"id": "run_artifact_id", "label": "Run + Artifact ID"},
             ],
+            "cv_templates": document_design_options["templates"],
+            "cv_color_schemes": document_design_options["color_schemes"],
+            "cv_fonts": document_design_options["fonts"],
         },
     }
 
@@ -219,6 +434,7 @@ def _collect_authorized_runs(application, user, *, workspace_id: str = "") -> tu
 
 def _collect_review_queue_entries(application, user, *, workspace_id: str = "", run_id: str = "") -> list[dict]:
     workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
+    referral_contacts = application.list_referral_contacts(user.user_id)
     entries: list[dict] = []
     for run in runs:
         if run_id and run.id != run_id:
@@ -235,6 +451,8 @@ def _collect_review_queue_entries(application, user, *, workspace_id: str = "", 
             for job in job_sets.get(set_key, []):
                 review = reviews_by_job.get(job.job_id)
                 status = str((review.status if review else "") or "waiting_review")
+                review_meta = dict(review.metadata or {}) if review else {}
+                matched_contacts = find_referral_contacts_for_company(referral_contacts, job.company)
                 entries.append(
                     {
                         "review_id": review.review_id if review else "",
@@ -258,8 +476,60 @@ def _collect_review_queue_entries(application, user, *, workspace_id: str = "", 
                         "filter_status": job.filter_status,
                         "manual_approved": bool(job.manual_approved),
                         "updated_at": review.updated_at if review else run.updated_at,
+                        # Tracker fields (REQ-09 / REQ-10)
+                        "tracker_status": str(review_meta.get("tracker_status") or ""),
+                        "email_confirmed": bool(review_meta.get("email_confirmed") or False),
+                        "referral_contacts": [contact.to_dict() for contact in matched_contacts],
+                        "has_referral_contact": bool(matched_contacts),
+                        "referable_contact_count": sum(1 for contact in matched_contacts if contact.can_refer),
                     }
                 )
+    entries.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return entries
+
+
+def _collect_tracker_entries(application, user) -> list[dict]:
+    """Return all reviews that have been approved or have a tracker_status set."""
+    workspaces, runs = _collect_authorized_runs(application, user)
+    workspaces_map = {ws.id: ws for ws in application.list_workspaces()}
+    entries: list[dict] = []
+    for run in runs:
+        job_sets = application.list_job_sets(run.id)
+        review_records = application.list_reviews(run_id=run.id, limit=1000, offset=0)
+        # build a fast job lookup
+        jobs_by_id: dict[str, object] = {}
+        for jobs in job_sets.values():
+            for job in jobs:
+                jobs_by_id[job.job_id] = job
+        workspace = workspaces_map.get(run.workspace_id)
+        for review in review_records:
+            review_meta = dict(review.metadata or {})
+            tracker_status = str(review_meta.get("tracker_status") or "")
+            # include if approved decision OR has any tracker status already set
+            if review.decision != "approved" and not tracker_status:
+                continue
+            if not tracker_status:
+                tracker_status = "applied"
+            job = jobs_by_id.get(review.job_id)
+            entries.append(
+                {
+                    "review_id": review.review_id,
+                    "run_id": review.run_id,
+                    "workspace_id": run.workspace_id,
+                    "workspace_name": workspace.name if workspace else run.workspace_id,
+                    "job_id": review.job_id,
+                    "title": job.title if job else "",
+                    "company": job.company if job else "",
+                    "apply_link": (job.apply_link or job.link or job.source_url) if job else "",
+                    "location": job.location_raw if job else "",
+                    "tracker_status": tracker_status,
+                    "email_confirmed": bool(review_meta.get("email_confirmed") or False),
+                    "rejection_note": str(review_meta.get("rejection_note") or ""),
+                    "rejected_at": str(review_meta.get("rejected_at") or ""),
+                    "updated_at": review.updated_at,
+                    "run_finished_at": run.finished_at or run.updated_at,
+                }
+            )
     entries.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
     return entries
 
@@ -488,6 +758,37 @@ def build_handler(application):
                     user, _ = self._require_identity()
                     self._send_json(_build_settings_payload(application, user))
                     return
+                if segments == ["referrals"]:
+                    user, _ = self._require_identity()
+                    limit = _parse_int_param(query, "limit", default=100, maximum=1000)
+                    offset = _parse_int_param(query, "offset", default=0, maximum=100000)
+                    contacts = application.list_referral_contacts(user.user_id)
+                    paged_contacts = contacts[offset : offset + limit]
+                    self._send_json(
+                        {
+                            "contacts": [contact.to_dict() for contact in paged_contacts],
+                            "meta": self._pagination_meta(limit=limit, offset=offset, returned=len(paged_contacts)),
+                        }
+                    )
+                    return
+                if segments[:1] == ["referrals"] and len(segments) == 2:
+                    user, _ = self._require_identity()
+                    self._send_json(application.get_referral_contact(user.user_id, segments[1]).to_dict())
+                    return
+                if segments == ["cv"]:
+                    user, _ = self._require_identity()
+                    metadata = dict(user.metadata or {})
+                    cv_text = str(metadata.get("cv_text") or "")
+                    # fall back to disk file if metadata not populated yet
+                    if not cv_text:
+                        cv_path = Path("user_config") / "cv_master.txt"
+                        if cv_path.exists():
+                            try:
+                                cv_text = cv_path.read_text(encoding="utf-8")
+                            except Exception:
+                                cv_text = ""
+                    self._send_json({"cv_text": cv_text, "char_count": len(cv_text)})
+                    return
                 if segments == ["users"]:
                     self._require_scope(TOKEN_SCOPE_USERS_READ)
                     limit = _parse_int_param(query, "limit", default=50, maximum=500)
@@ -659,6 +960,16 @@ def build_handler(application):
                         }
                     )
                     return
+                if segments == ["tracker"]:
+                    user, _ = self._require_identity()
+                    entries = _collect_tracker_entries(application, user)
+                    self._send_json(
+                        {
+                            "items": entries,
+                            "meta": self._pagination_meta(limit=len(entries), offset=0, returned=len(entries)),
+                        }
+                    )
+                    return
                 if segments == ["artifacts"]:
                     user, _ = self._require_scope(TOKEN_SCOPE_ARTIFACTS_READ)
                     limit = _parse_int_param(query, "limit", default=100, maximum=1000)
@@ -770,8 +1081,120 @@ def build_handler(application):
         def do_POST(self):  # noqa: N802
             try:
                 _, segments, _ = self._parse_request()
+
+                # ---- CV upload (multipart/form-data — must be handled before JSON body read) ----
+                if segments == ["cv-upload"]:
+                    user, _ = self._require_identity()
+                    content_type_header = str(self.headers.get("Content-Type") or "")
+                    if "multipart/form-data" not in content_type_header:
+                        raise ValueError("cv-upload requires multipart/form-data content type")
+                    content_length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+                    filename, file_bytes = _parse_multipart_file(content_type_header, raw_body)
+                    if not file_bytes:
+                        raise ValueError("No file found in multipart body. Ensure the form field has a filename.")
+                    ext = Path(filename).suffix.lower() if filename else ".txt"
+                    if ext == ".docx":
+                        cv_text = _extract_text_from_docx(file_bytes)
+                    elif ext == ".pdf":
+                        cv_text = _extract_text_from_pdf(file_bytes)
+                    else:
+                        # .txt or unknown — try UTF-8, fall back to latin-1
+                        try:
+                            cv_text = file_bytes.decode("utf-8")
+                        except UnicodeDecodeError:
+                            cv_text = file_bytes.decode("latin-1")
+                    if not cv_text.strip():
+                        raise ValueError(f"Could not extract any text from uploaded file '{filename}'.")
+                    # Save to disk (for legacy pipeline compatibility)
+                    cv_save_path = Path("user_config") / "cv_master.txt"
+                    cv_save_path.parent.mkdir(parents=True, exist_ok=True)
+                    cv_save_path.write_text(cv_text, encoding="utf-8")
+                    # Persist in user metadata
+                    metadata = dict(user.metadata or {})
+                    metadata["cv_text"] = cv_text
+                    user.metadata = metadata
+                    user.updated_at = datetime.now(timezone.utc).isoformat()
+                    application.repositories.auth_repository.upsert_user(user)
+                    # Parse heuristic sections for frontend pre-fill
+                    parsed = _parse_cv_sections(cv_text)
+                    self._send_json(
+                        {
+                            "cv_text": cv_text,
+                            "char_count": len(cv_text),
+                            "filename": filename,
+                            "parsed": parsed,
+                        },
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if segments == ["profile-photo-upload"]:
+                    user, _ = self._require_identity()
+                    content_type_header = str(self.headers.get("Content-Type") or "")
+                    if "multipart/form-data" not in content_type_header:
+                        raise ValueError("profile-photo-upload requires multipart/form-data content type")
+                    content_length = int(self.headers.get("Content-Length", "0"))
+                    raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+                    filename, file_bytes = _parse_multipart_file(content_type_header, raw_body)
+                    if not file_bytes:
+                        raise ValueError("No file found in multipart body. Ensure the form field has a filename.")
+                    if len(file_bytes) > 2 * 1024 * 1024:
+                        raise ValueError("Profile photo must be 2MB or smaller.")
+                    extension = _guess_image_extension(filename, file_bytes)
+                    if extension not in {".png", ".jpg"}:
+                        raise ValueError("Profile photo must be a PNG or JPG image.")
+                    photo_path, photo_data_url = _store_profile_photo(user, file_bytes, extension)
+                    metadata = dict(user.metadata or {})
+                    profile = _merge_profile_metadata(dict(metadata.get("profile") or {}), {}, user)
+                    profile["photo_path"] = photo_path
+                    profile["photo_data_url"] = photo_data_url
+                    if not profile.get("avatar_url"):
+                        profile["avatar_url"] = photo_data_url
+                    metadata["profile"] = profile
+                    user.metadata = metadata
+                    user.updated_at = datetime.now(timezone.utc).isoformat()
+                    application.repositories.auth_repository.upsert_user(user)
+                    self._send_json(
+                        {
+                            "photo_path": photo_path,
+                            "photo_data_url": photo_data_url,
+                        },
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+
                 payload = self._read_json_body()
 
+                if segments == ["referrals"]:
+                    user, _ = self._require_identity()
+                    self._send_json(
+                        application.upsert_referral_contact(user_id=user.user_id, payload=payload).to_dict(),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if segments == ["outreach", "referral-draft"]:
+                    user, _ = self._require_identity()
+                    self._send_json(
+                        application.generate_referral_outreach(
+                            user_id=user.user_id,
+                            run_id=str(payload.get("run_id") or ""),
+                            job_id=str(payload.get("job_id") or ""),
+                            contact_id=str(payload.get("contact_id") or ""),
+                        ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                if segments == ["outreach", "hiring-manager-draft"]:
+                    user, _ = self._require_identity()
+                    self._send_json(
+                        application.generate_hiring_manager_outreach(
+                            user_id=user.user_id,
+                            run_id=str(payload.get("run_id") or ""),
+                            job_id=str(payload.get("job_id") or ""),
+                        ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
                 if segments == ["users"]:
                     self._require_scope(TOKEN_SCOPE_USERS_WRITE)
                     self._send_json(application.upsert_user(payload).to_dict(), status=HTTPStatus.CREATED)
@@ -821,17 +1244,18 @@ def build_handler(application):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                     execution_mode = str(payload.get("execution_mode") or "queued").strip().lower()
                     max_attempts = max(1, int(payload.get("max_attempts") or 1))
+                    run_input_overrides = _build_run_input_overrides(user, payload)
                     if execution_mode == "queued":
                         run = application.enqueue_run(
                             workspace_id,
-                            run_input_overrides=dict(payload.get("run_input_overrides") or {}),
+                            run_input_overrides=run_input_overrides,
                             requested_by=f"api:{user.user_id}",
                             max_attempts=max_attempts,
                         )
                     elif execution_mode == "planned":
                         run = application.start_run(
                             workspace_id,
-                            run_input_overrides=dict(payload.get("run_input_overrides") or {}),
+                            run_input_overrides=run_input_overrides,
                             execute=False,
                             requested_by=f"api:{user.user_id}",
                             max_attempts=max_attempts,
@@ -839,7 +1263,7 @@ def build_handler(application):
                     elif execution_mode == "sync":
                         run = application.start_run(
                             workspace_id,
-                            run_input_overrides=dict(payload.get("run_input_overrides") or {}),
+                            run_input_overrides=run_input_overrides,
                             execute=True,
                             requested_by=f"api:{user.user_id}",
                             max_attempts=max_attempts,
@@ -909,30 +1333,12 @@ def build_handler(application):
                 if segments == ["settings"]:
                     user, _ = self._require_identity()
                     metadata = dict(user.metadata or {})
+                    existing_profile = dict(metadata.get("profile") or {})
+                    existing_documents = dict(metadata.get("documents") or {})
 
                     if "profile" in payload:
                         profile_payload = dict(payload.get("profile") or {})
-                        metadata["profile"] = {
-                            "name": str(profile_payload.get("name") or user.display_name or user.email.split("@")[0]),
-                            "role_title": str(profile_payload.get("role_title") or ""),
-                            "email": str(profile_payload.get("email") or user.email),
-                            "location": str(profile_payload.get("location") or ""),
-                            "website": str(profile_payload.get("website") or ""),
-                            "avatar_url": str(profile_payload.get("avatar_url") or ""),
-                            "summary": str(profile_payload.get("summary") or ""),
-                            "competencies": [
-                                str(item) for item in profile_payload.get("competencies") or [] if str(item).strip()
-                            ],
-                            "recent_experience": [
-                                {
-                                    "title": str(item.get("title") or ""),
-                                    "company": str(item.get("company") or ""),
-                                    "period": str(item.get("period") or ""),
-                                }
-                                for item in profile_payload.get("recent_experience") or []
-                                if isinstance(item, dict)
-                            ],
-                        }
+                        metadata["profile"] = _merge_profile_metadata(existing_profile, profile_payload, user)
 
                     if "defaults" in payload:
                         defaults_payload = dict(payload.get("defaults") or {})
@@ -949,13 +1355,7 @@ def build_handler(application):
 
                     if "documents" in payload:
                         documents_payload = dict(payload.get("documents") or {})
-                        metadata["documents"] = {
-                            "generate_docx": bool(documents_payload.get("generate_docx", True)),
-                            "generate_pdf": bool(documents_payload.get("generate_pdf", True)),
-                            "export_tracker": bool(documents_payload.get("export_tracker", True)),
-                            "export_package": bool(documents_payload.get("export_package", True)),
-                            "file_naming": str(documents_payload.get("file_naming") or "workspace_job_title"),
-                        }
+                        metadata["documents"] = _merge_document_metadata(existing_documents, documents_payload)
 
                     if "review_preferences" in payload:
                         review_payload = dict(payload.get("review_preferences") or {})
@@ -977,6 +1377,17 @@ def build_handler(application):
                     refreshed_user = application.get_user(user.user_id)
                     self._send_json(_build_settings_payload(application, refreshed_user), status=HTTPStatus.OK)
                     return
+                if segments[:1] == ["referrals"] and len(segments) == 2:
+                    user, _ = self._require_identity()
+                    self._send_json(
+                        application.upsert_referral_contact(
+                            user_id=user.user_id,
+                            payload=payload,
+                            contact_id=segments[1],
+                        ).to_dict(),
+                        status=HTTPStatus.OK,
+                    )
+                    return
                 if segments[:2] == ["workspace-builder", "workspaces"] and len(segments) == 3:
                     self._require_workspace_access(
                         workspace_id=segments[2],
@@ -991,6 +1402,40 @@ def build_handler(application):
                     self._require_scope(TOKEN_SCOPE_USERS_WRITE)
                     payload["user_id"] = segments[1]
                     self._send_json(application.upsert_user(payload).to_dict(), status=HTTPStatus.OK)
+                    return
+                if segments[:1] == ["tracker"] and len(segments) == 2:
+                    # PUT /tracker/:review_id — update tracker_status, email_confirmed, rejection_note
+                    user, _ = self._require_identity()
+                    review = application.get_review(segments[1])
+                    run = application.get_run(review.run_id)
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    review_meta = dict(review.metadata or {})
+                    allowed_tracker_statuses = {"applied", "email_confirmed", "interview_invited", "rejected"}
+                    if "tracker_status" in payload:
+                        new_status = str(payload["tracker_status"]).strip().lower()
+                        if new_status and new_status not in allowed_tracker_statuses:
+                            raise ValueError(f"tracker_status must be one of: {sorted(allowed_tracker_statuses)}")
+                        review_meta["tracker_status"] = new_status
+                    if "email_confirmed" in payload:
+                        review_meta["email_confirmed"] = bool(payload["email_confirmed"])
+                    if "rejection_note" in payload:
+                        review_meta["rejection_note"] = str(payload["rejection_note"])
+                    if payload.get("tracker_status") == "rejected" and not review_meta.get("rejected_at"):
+                        review_meta["rejected_at"] = datetime.now(timezone.utc).isoformat()
+                    review.metadata = review_meta
+                    application.repositories.review_store.upsert_review(review)
+                    self._send_json(
+                        {
+                            "review_id": review.review_id,
+                            "tracker_status": str(review_meta.get("tracker_status") or ""),
+                            "email_confirmed": bool(review_meta.get("email_confirmed") or False),
+                            "rejection_note": str(review_meta.get("rejection_note") or ""),
+                            "rejected_at": str(review_meta.get("rejected_at") or ""),
+                            "updated_at": review.updated_at,
+                        },
+                        status=HTTPStatus.OK,
+                    )
                     return
                 if segments[:1] == ["secrets"] and len(segments) == 2:
                     user, _ = self._require_scope(TOKEN_SCOPE_SECRETS_WRITE)
@@ -1051,6 +1496,11 @@ def build_handler(application):
                 if segments[:1] == ["users"] and len(segments) == 2:
                     self._require_scope(TOKEN_SCOPE_USERS_WRITE)
                     application.delete_user(segments[1])
+                    self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)
+                    return
+                if segments[:1] == ["referrals"] and len(segments) == 2:
+                    user, _ = self._require_identity()
+                    application.delete_referral_contact(user.user_id, segments[1])
                     self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)
                     return
                 if segments[:1] == ["users"] and len(segments) == 4 and segments[2] == "tokens":

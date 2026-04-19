@@ -2,7 +2,12 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from manual_url_ingestion import extract_linkedin_job_id, is_valid_job_url, load_manual_urls
+from backend.capabilities.tailored_documents.manual_urls import (
+    extract_linkedin_job_id,
+    is_valid_job_url,
+    load_manual_urls,
+    normalize_manual_urls,
+)
 
 
 class ManualUrlIngestionTests(unittest.TestCase):
@@ -50,6 +55,26 @@ class ManualUrlIngestionTests(unittest.TestCase):
         )
         self.assertEqual(len(invalid_entries), 1)
         self.assertEqual(invalid_entries[0]["error"], "invalid_url_format")
+
+    def test_normalize_manual_urls_supports_inline_multiline_input(self):
+        urls, invalid_entries = normalize_manual_urls(
+            """
+            https://example.com/jobs/alpha
+            # ignore me
+            invalid-url
+            https://example.com/jobs/alpha
+            https://example.com/jobs/beta
+            """
+        )
+        self.assertEqual(
+            urls,
+            [
+                "https://example.com/jobs/alpha",
+                "https://example.com/jobs/beta",
+            ],
+        )
+        self.assertEqual(len(invalid_entries), 1)
+        self.assertEqual(invalid_entries[0]["url"], "invalid-url")
 
 
 if __name__ == "__main__":
