@@ -40,6 +40,14 @@ class _FlakyStage(BaseStage):
         return StageOutcome(data={definition.output_key or "flaky_data": {"status": "ok"}}, metrics={"retried": True})
 
 
+class _CanRunExplodesStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        raise RuntimeError("can_run exploded")
+
+    def execute(self, context, definition) -> StageOutcome:
+        return StageOutcome()
+
+
 class BackendApplicationTests(unittest.TestCase):
     def _workspace_tempdir(self, name: str) -> Path:
         path = Path.cwd() / ".backend_test_tmp" / name
@@ -54,6 +62,7 @@ class BackendApplicationTests(unittest.TestCase):
         app = create_backend(temp_dir)
         app.registries.stage_registry.register("test.seed_jobs", _SeedJobsStage())
         app.registries.stage_registry.register("test.flaky", _FlakyStage())
+        app.registries.stage_registry.register("test.can_run_explodes", _CanRunExplodesStage())
         app.upsert_workflow_template(
             {
                 "id": "custom_template_v1",
@@ -120,6 +129,12 @@ class BackendApplicationTests(unittest.TestCase):
                     "low_applicant_threshold": 60,
                     "stage4_max_jobs": 15,
                     "target_roles": ["Business Analyst", "Consultant"],
+                    "linkedin_max_pages": 7,
+                    "reuse_scrape_snapshot": True,
+                    "page_fetch_sleep_seconds": 1.5,
+                    "include_photo": False,
+                    "cv_template": "modern",
+                    "french_special_char_threshold": 9999,
                 },
             }
         )
@@ -139,6 +154,12 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(run.run_plan.resolved_run_settings["keywords"], ["analyst", "consultant"])
         self.assertEqual(run.run_plan.resolved_run_settings["stage4_max_jobs"], 15)
         self.assertEqual(run.run_plan.resolved_run_settings["target_roles"], ["Business Analyst", "Consultant"])
+        self.assertEqual(run.run_plan.resolved_run_settings["linkedin_max_pages"], 7)
+        self.assertTrue(run.run_plan.resolved_run_settings["reuse_scrape_snapshot"])
+        self.assertEqual(run.run_plan.resolved_run_settings["page_fetch_sleep_seconds"], 1.5)
+        self.assertFalse(run.run_plan.resolved_run_settings["include_photo"])
+        self.assertEqual(run.run_plan.resolved_run_settings["cv_template"], "modern")
+        self.assertEqual(run.run_plan.resolved_run_settings["french_special_char_threshold"], 9999)
         self.assertTrue((temp_dir / "backend.sqlite3").exists())
 
     def test_builder_can_update_existing_workspace(self):
@@ -212,10 +233,84 @@ class BackendApplicationTests(unittest.TestCase):
         renderer_ids = {item.id for item in app.list_renderers()}
 
         self.assertIn("linkedin_jobs", connector_ids)
+        self.assertIn("linkedin_search", connector_ids)
         self.assertIn("job_board_collection", connector_ids)
+        self.assertIn("blue_collar_portals", connector_ids)
         self.assertIn("job_board_indeed", connector_ids)
         self.assertIn("tailored_application_documents", generation_ids)
+        self.assertIn("white_collar_cv_generation", generation_ids)
+        self.assertIn("blue_collar_role_cv_generation", generation_ids)
         self.assertIn("application_document_export", renderer_ids)
+        self.assertIn("docx_pdf_renderer", renderer_ids)
+        self.assertIn("blue_collar_package_renderer", renderer_ids)
+        self.assertTrue(app.registries.stage_registry.contains("legacy.blue_collar.stage1"))
+        self.assertTrue(app.registries.stage_registry.contains("legacy.white_collar.docs"))
+
+    def test_missing_or_invalid_stage_definitions_fail_run_instead_of_leaving_it_running(self):
+        app, _ = self._create_app_with_test_workflow("invalid_stage_failure")
+        app.upsert_workflow_template(
+            {
+                "id": "invalid_stage_template_v1",
+                "name": "Invalid Stage Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="missing_stage",
+                        stage_type="test.stage_does_not_exist",
+                        name="Missing Stage",
+                        output_key="missing_output",
+                    ).to_dict()
+                ],
+            }
+        )
+        app.upsert_workspace(
+            {
+                "id": "invalid_stage_workspace",
+                "name": "Invalid Stage Workspace",
+                "workflow_template_id": "invalid_stage_template_v1",
+                "workspace_type": "custom",
+                "sources": [],
+            }
+        )
+
+        run = app.start_run("invalid_stage_workspace", execute=True, requested_by="test")
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.current_stage_id, "missing_stage")
+        self.assertEqual(len(run.stage_results), 1)
+        self.assertEqual(run.stage_results[0].status, "failed")
+        self.assertIn("test.stage_does_not_exist", run.last_error)
+
+    def test_can_run_exceptions_fail_run_cleanly(self):
+        app, _ = self._create_app_with_test_workflow("can_run_failure")
+        app.upsert_workflow_template(
+            {
+                "id": "can_run_template_v1",
+                "name": "Can Run Failure Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="explode_in_can_run",
+                        stage_type="test.can_run_explodes",
+                        name="Explode In can_run",
+                        output_key="exploded_output",
+                    ).to_dict()
+                ],
+            }
+        )
+        app.upsert_workspace(
+            {
+                "id": "can_run_workspace",
+                "name": "Can Run Workspace",
+                "workflow_template_id": "can_run_template_v1",
+                "workspace_type": "custom",
+                "sources": [],
+            }
+        )
+
+        run = app.start_run("can_run_workspace", execute=True, requested_by="test")
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.current_stage_id, "explode_in_can_run")
+        self.assertEqual(len(run.stage_results), 1)
+        self.assertEqual(run.stage_results[0].status, "failed")
+        self.assertEqual(run.stage_results[0].error, "can_run exploded")
 
     def test_referral_contacts_and_outreach_drafts(self):
         app, _ = self._create_app_with_test_workflow("referrals_and_outreach")
@@ -268,6 +363,36 @@ class BackendApplicationTests(unittest.TestCase):
         )
         self.assertIn("Analyst", hiring_manager_draft["message"])
         self.assertIn("hiring_manager", hiring_manager_draft)
+
+    def test_referral_import_merges_companies_for_one_person(self):
+        app, _ = self._create_app_with_test_workflow("referral_import")
+        user = app.upsert_user(
+            {
+                "email": "imports@example.com",
+                "display_name": "Import User",
+                "role": "admin",
+            }
+        )
+
+        import_payload = app.import_referral_contacts(
+            user_id=user.user_id,
+            csv_text=(
+                "First Name,Last Name,URL,Company,Position\n"
+                "Jane,Referrer,https://linkedin.com/in/jane-referrer,ACME,Engineering Manager\n"
+                "Jane,Referrer,https://linkedin.com/in/jane-referrer,Beta,Director\n"
+            ),
+        )
+        self.assertEqual(import_payload["summary"]["created"], 1)
+        self.assertEqual(import_payload["summary"]["updated"], 1)
+
+        contacts = app.list_referral_contacts(user.user_id)
+        self.assertEqual(len(contacts), 1)
+        self.assertEqual(contacts[0].name, "Jane Referrer")
+        self.assertEqual(
+            [entry["company_name"] for entry in contacts[0].companies],
+            ["ACME", "Beta"],
+        )
+        self.assertEqual(contacts[0].source_kind, "linkedin_csv")
 
     def test_queue_worker_retry_and_resource_crud(self):
         app, _ = self._create_app_with_test_workflow("queue_worker_flow")

@@ -35,7 +35,7 @@ export default function ConnectionPanel() {
         <p className="mt-3 max-w-2xl text-sm leading-7 text-on-surface-variant">
           This frontend now reads from the real backend API and SQLite-backed storage. Add the
           API base URL and a bearer token, then the app will load live workspaces, runs, reviews,
-          artifacts, and saved settings.
+          documents, and saved settings.
         </p>
       </div>
 

@@ -1,14 +1,17 @@
 import base64
 import json
+import os
 import shutil
 import threading
 import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from backend import create_backend
 from backend.api.server import build_handler
+from backend.capabilities.tracker.email_integration import TrackerMailboxMessage
 from backend.domain.models import ArtifactRecord, JobRecord, StageDefinition
 from backend.orchestration import BaseStage, StageOutcome
 
@@ -35,9 +38,38 @@ class _ApiSeedStage(BaseStage):
         )
 
 
+class _ApiDocumentStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        return bool(definition.input_keys and context.get_job_set(definition.input_keys[0]))
+
+    def execute(self, context, definition) -> StageOutcome:
+        jobs = context.get_job_dicts(definition.input_keys[0])
+        output_root = Path(definition.config.get("output_root") or str(Path(".backend_test_tmp") / context.run.id))
+        output_root.mkdir(parents=True, exist_ok=True)
+        artifacts = []
+        records = []
+        for job in jobs:
+            file_path = output_root / f"{job['job_id']}_CV.docx"
+            file_path.write_bytes(b"requeued-docx-content")
+            artifacts.append(
+                ArtifactRecord(
+                    artifact_id=f"{job['job_id']}_generated_cv",
+                    artifact_type="cv_docx",
+                    path=str(file_path),
+                    metadata={"job_id": job["job_id"], "job_title": job.get("title"), "company": job.get("company")},
+                )
+            )
+            records.append(JobRecord.from_mapping(job))
+        return StageOutcome(
+            job_sets={definition.output_key or "generated_jobs": records},
+            artifacts=artifacts,
+            metrics={"generated_jobs": len(records)},
+        )
+
+
 class BackendApiTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = Path.cwd() / ".backend_test_tmp" / "api_tests"
+        self.temp_dir = Path.cwd() / ".backend_test_tmp" / f"api_tests_{self._testMethodName}"
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir, ignore_errors=True)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
@@ -45,6 +77,7 @@ class BackendApiTests(unittest.TestCase):
 
         self.app = create_backend(self.temp_dir)
         self.app.registries.stage_registry.register("test.api_seed", _ApiSeedStage())
+        self.app.registries.stage_registry.register("test.api_generate_documents", _ApiDocumentStage())
         self.app.upsert_workflow_template(
             {
                 "id": "api_template_v1",
@@ -121,6 +154,18 @@ class BackendApiTests(unittest.TestCase):
         raw = response.read().decode("utf-8")
         conn.close()
         return response.status, json.loads(raw) if raw else {}
+
+    def _binary_request(self, method: str, path: str, *, authenticated: bool = True):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        headers = {}
+        if authenticated:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        conn.request(method, path, headers=headers)
+        response = conn.getresponse()
+        raw = response.read()
+        response_headers = dict(response.getheaders())
+        conn.close()
+        return response.status, response_headers, raw
 
     def test_api_requires_bearer_auth_for_protected_routes(self):
         status, payload = self._request("GET", "/workspaces", authenticated=False)
@@ -218,6 +263,17 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(catalog_payload["sources"])
         self.assertTrue(catalog_payload["modules"])
         self.assertTrue(catalog_payload["configuration_fields"])
+        self.assertIn("builder_sections", catalog_payload)
+        user_facing_fields = {
+            field["id"]: field for field in catalog_payload["configuration_fields"] if field.get("user_facing")
+        }
+        self.assertIn("workspace_cv_asset_id", user_facing_fields)
+        self.assertIn("country_codes", user_facing_fields)
+        self.assertNotIn("geo_id", user_facing_fields)
+        self.assertNotIn("candidate_name", user_facing_fields)
+        self.assertTrue(
+            any(not flow.get("frontend_visible", True) for flow in catalog_payload["flows"] if flow["id"] == "reusable_packages")
+        )
 
         status, workspace_payload = self._request(
             "POST",
@@ -266,6 +322,30 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(updated_workspace_payload["settings"]["keywords"], ["designer"])
         self.assertEqual(updated_workspace_payload["metadata"]["source_ids"], ["linkedin_jobs", "curated_job_urls"])
 
+    def test_workspace_builder_source_validation_returns_runtime_hints(self):
+        status, payload = self._request(
+            "POST",
+            "/workspace-builder/source-validation",
+            {
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs", "job_board_collection", "curated_job_urls"],
+                "settings": {
+                    "keywords": ["analyst"],
+                    "country_codes": ["DE"],
+                    "manual_url_seed_list": ["https://company.example/jobs/123"],
+                    "portals": ["indeed", "stepstone"],
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["valid"])
+        self.assertEqual(payload["derived_runtime_defaults"]["geo_id"], "101282230")
+        self.assertIn("cities", payload["derived_runtime_defaults"])
+        source_status = {item["source_id"]: item["status"] for item in payload["source_results"]}
+        self.assertEqual(source_status["linkedin_jobs"], "valid")
+        self.assertEqual(source_status["job_board_collection"], "valid")
+        self.assertEqual(source_status["curated_job_urls"], "valid")
+
     def test_settings_payload_includes_document_design_options_and_persists_phase2_preferences(self):
         status, settings_payload = self._request("GET", "/settings")
         self.assertEqual(status, 200)
@@ -313,6 +393,147 @@ class BackendApiTests(unittest.TestCase):
         status, settings_payload = self._request("GET", "/settings")
         self.assertEqual(status, 200)
         self.assertTrue(settings_payload["profile"]["photo_data_url"].startswith("data:image/png;base64,"))
+
+    def test_documents_endpoint_bulk_export_and_candidate_assets(self):
+        status, cv_payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "resume.txt",
+            b"Summary\nExperienced analyst with operations background.",
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(cv_payload["asset"]["asset_kind"], "workspace_cv")
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        docs_dir = self.temp_dir / "generated_docs" / "2026-04-20" / "api_docs_bundle"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "api_job_1_CV.docx").write_bytes(b"docx-content")
+        (docs_dir / "api_job_1_cover_letter.txt").write_text("Cover letter", encoding="utf-8")
+
+        status, _ = self._request(
+            "PUT",
+            f"/runs/{run_id}/artifacts/api_docs_dir",
+            {
+                "artifact_type": "stage5_docs_dir",
+                "path": str(docs_dir),
+                "metadata": {"status": "ready"},
+            },
+        )
+        self.assertEqual(status, 200)
+
+        status, documents_payload = self._request("GET", f"/documents?run_id={run_id}")
+        self.assertEqual(status, 200)
+        document_ids = {item["document_id"]: item for item in documents_payload["documents"]}
+        generated_cv = next(
+            (item for item in documents_payload["documents"] if item["asset_kind"] == "generated_cv"),
+            None,
+        )
+        self.assertIsNotNone(generated_cv)
+
+        status, uploaded_payload = self._request("GET", "/documents?asset_kind=workspace_cv")
+        self.assertEqual(status, 200)
+        uploaded_cv = next(
+            (item for item in uploaded_payload["documents"] if item["asset_kind"] == "workspace_cv"),
+            None,
+        )
+        self.assertIsNotNone(uploaded_cv)
+
+        status, bundle_payload = self._request(
+            "POST",
+            "/documents/bulk-export",
+            {
+                "label": "test_export",
+                "document_ids": [uploaded_cv["document_id"], generated_cv["document_id"]],
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(bundle_payload["document_count"], 2)
+
+        status, headers, body = self._binary_request("GET", bundle_payload["download_url"])
+        self.assertEqual(status, 200)
+        self.assertIn(headers.get("Content-Type"), {"application/zip", "application/x-zip-compressed"})
+        self.assertTrue(body.startswith(b"PK"))
+
+    def test_rejected_jobs_endpoint_and_requeue_flow(self):
+        requeue_root = self.temp_dir / "requeue_docs"
+        self.app.upsert_workflow_template(
+            {
+                "id": "api_requeue_template",
+                "name": "API Requeue Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="generate_documents",
+                        stage_type="test.api_generate_documents",
+                        name="Generate Documents",
+                        input_keys=["accepted_jobs"],
+                        output_key="generated_jobs",
+                        config={"output_root": str(requeue_root)},
+                        metadata={"supports_requeue": True},
+                    ).to_dict()
+                ],
+            }
+        )
+        self.app.upsert_workspace(
+            {
+                "id": "api_requeue_workspace",
+                "name": "API Requeue Workspace",
+                "workflow_template_id": "api_requeue_template",
+                "workspace_type": "custom",
+                "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
+            }
+        )
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_requeue_workspace", "execution_mode": "planned", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        rejected_job = {
+            "job_id": "rejected_job_1",
+            "title": "Senior Engineer",
+            "company": "Rejected Co",
+            "apply_link": "https://company.example/jobs/1",
+            "stage3_filter_reason": "Rejected because the title looks too senior.",
+            "stage3_filter_reasons": ["seniority mismatch"],
+        }
+        self.app.repositories.job_store.save_blob(run_id, "prioritize_jobs_rejected", [rejected_job])
+
+        status, rejected_payload = self._request("GET", f"/rejected-jobs?run_id={run_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(rejected_payload["items"]), 1)
+        item = rejected_payload["items"][0]
+        self.assertEqual(item["job_id"], "rejected_job_1")
+        self.assertTrue(item["can_requeue"])
+
+        status, requeue_payload = self._request(
+            "POST",
+            "/rejected-jobs/requeue",
+            {
+                "run_id": run_id,
+                "job_id": "rejected_job_1",
+                "source_stage": item["source_stage"],
+                "reason_summary": item["reason_summary"],
+                "execution_mode": "sync",
+                "notes": "Override this rejection and regenerate documents.",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(requeue_payload["run"]["status"], "completed")
+
+        new_run_id = requeue_payload["run"]["id"]
+        status, documents_payload = self._request("GET", f"/documents?run_id={new_run_id}")
+        self.assertEqual(status, 200)
+        self.assertTrue(any(item["asset_kind"] == "generated_cv" for item in documents_payload["documents"]))
 
     def test_api_supports_user_and_secret_admin_endpoints(self):
         status, users_payload = self._request("GET", "/users")
@@ -412,6 +633,32 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(delete_payload["deleted"], contact_id)
 
+    def test_referrals_import_endpoint_merges_companies(self):
+        status, import_payload = self._request(
+            "POST",
+            "/referrals/import",
+            {
+                "csv_text": (
+                    "First Name,Last Name,URL,Company,Position\n"
+                    "Jane,Referrer,https://linkedin.com/in/jane-referrer,ACME API,Engineering Manager\n"
+                    "Jane,Referrer,https://linkedin.com/in/jane-referrer,Contoso,Director\n"
+                ),
+                "source_kind": "linkedin_csv",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(import_payload["summary"]["created"], 1)
+        self.assertEqual(import_payload["summary"]["updated"], 1)
+
+        status, referrals_payload = self._request("GET", "/referrals")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(referrals_payload["contacts"]), 1)
+        self.assertEqual(
+            [entry["company_name"] for entry in referrals_payload["contacts"][0]["companies"]],
+            ["ACME API", "Contoso"],
+        )
+        self.assertEqual(referrals_payload["contacts"][0]["source_kind"], "linkedin_csv")
+
     def test_api_supports_versioned_routes_pagination_and_worker_visibility(self):
         self._request(
             "POST",
@@ -448,6 +695,127 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(workers_payload["meta"]["offset"], 0)
         worker_ids = {worker["worker_id"] for worker in workers_payload["workers"]}
         self.assertIn("api_worker_test", worker_ids)
+
+    def test_phase0_contracts_endpoint_returns_shared_contract_catalog(self):
+        status, payload = self._request("GET", "/contracts/phase0")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["version"], "2026-04-20")
+        self.assertIn("workspace_configuration_v2", payload)
+        self.assertIn("candidate_asset_descriptor", payload)
+        self.assertIn("rejected_job_review", payload)
+        self.assertIn("mail_connection", payload)
+        self.assertIn("referral_relationship", payload)
+        self.assertEqual(
+            payload["workspace_configuration_v2"]["default"]["schema_version"],
+            "workspace_configuration_v2",
+        )
+        self.assertEqual(
+            payload["mail_connection"]["default"]["schema_version"],
+            "mail_connection_contract_v1",
+        )
+
+    def test_artifacts_endpoint_expands_directory_exports_into_individual_files(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        docs_dir = self.temp_dir / "generated_docs" / "2026-04-20" / "api_bundle"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "api_job_1_CV.docx").write_bytes(b"docx-content")
+        (docs_dir / "api_job_1_CV.txt").write_text("CV text content", encoding="utf-8")
+        (docs_dir / "api_job_1_email.txt").write_text("Email body", encoding="utf-8")
+        assets_dir = docs_dir / "_assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        (assets_dir / "profile.png").write_bytes(b"png")
+
+        status, artifact_payload = self._request(
+            "PUT",
+            f"/runs/{run_id}/artifacts/api_docs_dir",
+            {
+                "artifact_type": "stage5_docs_dir",
+                "path": str(docs_dir),
+                "metadata": {"status": "ready"},
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(artifact_payload["artifact_id"], "api_docs_dir")
+
+        status, artifacts_payload = self._request("GET", f"/artifacts?run_id={run_id}")
+        self.assertEqual(status, 200)
+        entries = artifacts_payload["artifacts"]
+        entries_by_name = {item["file_name"]: item for item in entries}
+        self.assertIn("api_job_1_CV.docx", entries_by_name)
+        self.assertIn("api_job_1_CV.txt", entries_by_name)
+        self.assertIn("api_job_1_email.txt", entries_by_name)
+        self.assertNotIn("profile.png", entries_by_name)
+        self.assertTrue(all(item["artifact_id"] != "api_docs_dir" for item in entries))
+
+        cv_entry = entries_by_name["api_job_1_CV.docx"]
+        self.assertEqual(cv_entry["artifact_type"], "cv_docx")
+        self.assertTrue(cv_entry["is_virtual"])
+        self.assertTrue(cv_entry["is_cv"])
+        self.assertEqual(cv_entry["source_artifact_id"], "api_docs_dir")
+        self.assertEqual(cv_entry["source_artifact_type"], "stage5_docs_dir")
+
+        status, headers, body = self._binary_request("GET", cv_entry["download_url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"docx-content")
+        self.assertIn("api_job_1_CV.docx", headers.get("Content-Disposition", ""))
+
+    def test_workspace_settings_take_precedence_over_profile_document_defaults_in_run_overrides(self):
+        self.user.metadata = {
+            "profile": {
+                "name": "Global Profile Name",
+                "email": "global@example.com",
+                "languages": ["English - C1"],
+                "photo_path": "user_config/_profile_from_cv.png",
+            },
+            "documents": {
+                "cv_font": "Calibri",
+                "cv_template": "classic",
+                "cv_color_scheme": "classic_navy",
+                "include_photo": True,
+            },
+        }
+        self.app.upsert_user(self.user)
+        self.app.upsert_workspace(
+            {
+                "id": "api_workspace",
+                "name": "API Workspace",
+                "workflow_template_id": "api_template_v1",
+                "workspace_type": "custom",
+                "settings": {
+                    "candidate_name": "Workspace Name",
+                    "candidate_email": "workspace@example.com",
+                    "languages": ["German - B1/B2"],
+                    "cv_font": "Georgia",
+                    "cv_template": "modern",
+                    "cv_color_scheme": "forest",
+                    "include_photo": False,
+                },
+                "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
+            }
+        )
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        overrides = run_payload["run_input_overrides"]
+        self.assertNotIn("candidate_name", overrides)
+        self.assertNotIn("candidate_email", overrides)
+        self.assertNotIn("languages", overrides)
+        self.assertNotIn("cv_font", overrides)
+        self.assertNotIn("cv_template", overrides)
+        self.assertNotIn("cv_color_scheme", overrides)
+        self.assertNotIn("include_photo", overrides)
+        self.assertEqual(overrides.get("profile_image"), "")
 
     def test_tracker_api(self):
         # --- 1. Create and process a run so jobs exist ---
@@ -516,6 +884,195 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertIn("tracker_status", bad_payload["error"]["message"])
+
+    def test_tracker_email_integration_api(self):
+        class _FakeMailboxClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def probe(self):
+                return {"status": "connected", "folder": self.kwargs.get("folder")}
+
+            def fetch_recent_messages(self, *, limit):
+                assert limit == 25
+                return [
+                    TrackerMailboxMessage(
+                        message_id="msg-confirm-1",
+                        subject="ACME API application received",
+                        from_address="jobs@acmeapi.com",
+                        sent_at="2026-04-18T09:00:00+00:00",
+                        text="We have received your application for Engineer at ACME API.",
+                    ),
+                    TrackerMailboxMessage(
+                        message_id="msg-interview-1",
+                        subject="Interview invitation from ACME API",
+                        from_address="recruiting@acmeapi.com",
+                        sent_at="2026-04-18T12:00:00+00:00",
+                        text="We would like to invite you to interview for the Engineer role at ACME API.",
+                    ),
+                ]
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+        self._request("POST", "/workers/process-next", {})
+
+        status, review_payload = self._request(
+            "POST",
+            f"/runs/{run_id}/reviews",
+            {"job_id": "api_job_1", "decision": "approved", "status": "approved", "reviewer": "tester"},
+        )
+        self.assertEqual(status, 201)
+        review_id = review_payload["review_id"]
+        email_address = f"candidate+{review_id}@gmail.com"
+
+        with patch("backend.capabilities.tracker.email_integration.ImapMailboxClient", _FakeMailboxClient):
+            status, integration_payload = self._request("GET", "/tracker/email-integration")
+            self.assertEqual(status, 200)
+            self.assertFalse(integration_payload["config"]["connected"])
+
+            status, connect_payload = self._request(
+                "PUT",
+                "/tracker/email-integration",
+                {
+                    "provider_id": "gmail",
+                    "email_address": email_address,
+                    "folder": "INBOX",
+                    "max_messages": 25,
+                    "password": "app-password-123",
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(connect_payload["config"]["connected"])
+            self.assertEqual(connect_payload["config"]["provider_id"], "gmail")
+
+            status, sync_payload = self._request("POST", "/tracker/email-integration/sync", {})
+            self.assertEqual(status, 200)
+            self.assertEqual(sync_payload["result"]["summary"]["updated_reviews"], 2)
+            self.assertEqual(sync_payload["result"]["summary"]["matched_messages"], 2)
+
+        status, tracker_payload = self._request("GET", "/tracker")
+        self.assertEqual(status, 200)
+        item = next((entry for entry in tracker_payload["items"] if entry["review_id"] == review_id), None)
+        self.assertIsNotNone(item)
+        self.assertEqual(item["tracker_status"], "interview_invited")
+        self.assertTrue(item["email_confirmed"])
+
+        status, delete_payload = self._request("DELETE", "/tracker/email-integration")
+        self.assertEqual(status, 200)
+        self.assertFalse(delete_payload["integration"]["config"]["connected"])
+
+    def test_tracker_google_email_integration_api(self):
+        class _FakeGmailMailboxClient:
+            def __init__(self, *, access_token):
+                self.access_token = access_token
+
+            def fetch_recent_messages(self, *, limit):
+                assert limit == 25
+                return (
+                    [
+                        TrackerMailboxMessage(
+                            message_id="gmail-confirm-1",
+                            subject="ACME API application received",
+                            from_address="jobs@acmeapi.com",
+                            sent_at="2026-04-18T09:00:00+00:00",
+                            text="We have received your application for Engineer at ACME API.",
+                        ),
+                        TrackerMailboxMessage(
+                            message_id="gmail-interview-1",
+                            subject="Interview invitation from ACME API",
+                            from_address="recruiting@acmeapi.com",
+                            sent_at="2026-04-18T12:00:00+00:00",
+                            text="We would like to invite you to interview for the Engineer role at ACME API.",
+                        ),
+                    ],
+                    "history-123",
+                )
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+        self._request("POST", "/workers/process-next", {})
+
+        status, review_payload = self._request(
+            "POST",
+            f"/runs/{run_id}/reviews",
+            {"job_id": "api_job_1", "decision": "approved", "status": "approved", "reviewer": "tester"},
+        )
+        self.assertEqual(status, 201)
+        review_id = review_payload["review_id"]
+        email_address = f"candidate+{review_id}@gmail.com"
+
+        with patch.dict(
+            os.environ,
+            {
+                "TRACKER_GOOGLE_OAUTH_CLIENT_ID": "client-id",
+                "TRACKER_GOOGLE_OAUTH_CLIENT_SECRET": "client-secret",
+            },
+            clear=False,
+        ):
+            with patch("backend.api.server.build_google_tracker_authorization_url", return_value="https://accounts.google.test/auth"), patch(
+                "backend.api.server.exchange_google_tracker_oauth_code",
+                return_value={
+                    "access_token": "google-access-token",
+                    "refresh_token": "google-refresh-token",
+                    "expires_in": 3600,
+                },
+            ), patch(
+                "backend.api.server.fetch_google_tracker_profile",
+                return_value={"emailAddress": email_address},
+            ), patch(
+                "backend.api.server.refresh_google_tracker_access_token",
+                return_value={"access_token": "refreshed-google-token", "expires_in": 3600},
+            ), patch(
+                "backend.capabilities.tracker.email_integration.GmailMailboxClient",
+                _FakeGmailMailboxClient,
+            ):
+                status, integration_payload = self._request("GET", "/tracker/email-integration")
+                self.assertEqual(status, 200)
+                self.assertTrue(integration_payload["config"]["oauth_available"])
+                self.assertFalse(integration_payload["config"]["connected"])
+
+                status, start_payload = self._request(
+                    "POST",
+                    "/tracker/email-integration/google/start",
+                    {"max_messages": 25, "folder": "INBOX"},
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(start_payload["authorization_url"], "https://accounts.google.test/auth")
+                self.assertEqual(
+                    start_payload["integration"]["config"]["authorization_state"],
+                    "authorization_url_created",
+                )
+
+                stored_config = self.app.get_user(self.user.user_id).metadata["tracker_email_integration"]
+                oauth_state = stored_config["oauth_state"]
+                callback_path = (
+                    f"/tracker/email-integration/google/callback?state={self.user.user_id}:{oauth_state}&code=test-code"
+                )
+                status, headers, body = self._binary_request("GET", callback_path, authenticated=False)
+                self.assertEqual(status, 200)
+                self.assertEqual(headers.get("Content-Type"), "text/html; charset=utf-8")
+                self.assertIn(b"Google Inbox Connected", body)
+
+                status, connected_payload = self._request("GET", "/tracker/email-integration")
+                self.assertEqual(status, 200)
+                self.assertTrue(connected_payload["config"]["connected"])
+                self.assertEqual(connected_payload["config"]["email_address"], email_address)
+
+                status, sync_payload = self._request("POST", "/tracker/email-integration/sync", {})
+                self.assertEqual(status, 200)
+                self.assertEqual(sync_payload["result"]["summary"]["updated_reviews"], 2)
+                self.assertEqual(sync_payload["result"]["summary"]["matched_messages"], 2)
+                self.assertEqual(sync_payload["integration"]["config"]["history_id"], "history-123")
 
 
 if __name__ == "__main__":

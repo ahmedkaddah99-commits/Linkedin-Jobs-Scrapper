@@ -119,6 +119,7 @@ CV_FONT_OPTIONS = [
 ]
 
 ALLOWED_PROFILE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
+_WORD_PDF_EXPORT_UNAVAILABLE = False
 
 
 def resolve_profile_image_path(raw_path: str):
@@ -234,6 +235,7 @@ def create_cv_document(
     profile_image_path,
     include_profile_image: bool,
     profile_links: List[Dict[str, str]],
+    output_path: str | Path | None = None,
 ) -> str:
     try:
         from docx import Document
@@ -250,10 +252,13 @@ def create_cv_document(
     header_location = format_header_location(record)
     safe_stem = sanitize_filename(f"{candidate_name}_{title}_{company}_{job_id}_CV", max_length=140)
 
-    target_dir = docs_dir / run_date
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    cv_path = target_dir / f"{safe_stem}.docx"
+    if output_path:
+        cv_path = Path(output_path)
+        cv_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        target_dir = docs_dir / run_date
+        target_dir.mkdir(parents=True, exist_ok=True)
+        cv_path = target_dir / f"{safe_stem}.docx"
     template = _resolve_template(cv_template_id)
     color_scheme = _resolve_color_scheme(cv_color_scheme)
     primary_rgb = RGBColor.from_string(color_scheme["primary"])
@@ -473,103 +478,81 @@ def create_cv_document(
         run.font.size = Pt(max(float(template["base_font_size"]) + 1.4, 11.0))
         return paragraph, run
 
-    _, run_summary = add_section_heading("Professional Summary")
-    doc.add_paragraph(str(record.get("cv_professional_summary") or "").strip())
-    add_section_separator()
+    rendered_sections = 0
 
-    _, run_exp = add_section_heading("Professional Experience")
+    def begin_section(title: str) -> None:
+        nonlocal rendered_sections
+        if rendered_sections > 0:
+            add_section_separator()
+        add_section_heading(title)
+        rendered_sections += 1
+
+    summary_text = str(record.get("cv_professional_summary") or "").strip()
+    if summary_text:
+        begin_section("Professional Summary")
+        doc.add_paragraph(summary_text)
 
     experiences = record.get("cv_professional_experience") or []
-    for item in experiences:
-        if not isinstance(item, dict):
-            continue
-        role_title = str(item.get("role_title") or "").strip()
-        exp_company = str(item.get("company") or "").strip()
-        period = str(item.get("period") or "").strip()
-        headline_parts = [part for part in [role_title, exp_company, period] if part]
-        if headline_parts:
-            exp_header = doc.add_paragraph(" | ".join(headline_parts))
-            exp_header.runs[0].bold = True
-        for bullet in item.get("bullets", []):
-            if str(bullet).strip():
-                doc.add_paragraph(str(bullet).strip(), style="List Bullet")
-    add_section_separator()
+    if experiences:
+        begin_section("Professional Experience")
+        for item in experiences:
+            if not isinstance(item, dict):
+                continue
+            role_title = str(item.get("role_title") or "").strip()
+            exp_company = str(item.get("company") or "").strip()
+            period = str(item.get("period") or "").strip()
+            headline_parts = [part for part in [role_title, exp_company, period] if part]
+            if headline_parts:
+                exp_header = doc.add_paragraph(" | ".join(headline_parts))
+                exp_header.runs[0].bold = True
+            for bullet in item.get("bullets", []):
+                if str(bullet).strip():
+                    doc.add_paragraph(str(bullet).strip(), style="List Bullet")
 
-    _, run_initiatives = add_section_heading("Projects")
     initiatives = record.get("cv_strategic_initiatives") or []
-    for item in initiatives:
-        if not isinstance(item, dict):
-            continue
-        initiative_title = str(item.get("title") or "").strip()
-        if initiative_title:
-            ini_header = doc.add_paragraph(initiative_title)
-            ini_header.runs[0].bold = True
-        for bullet in item.get("bullets", []):
-            if str(bullet).strip():
-                doc.add_paragraph(str(bullet).strip(), style="List Bullet")
-    add_section_separator()
+    if initiatives:
+        begin_section("Projects")
+        for item in initiatives:
+            if not isinstance(item, dict):
+                continue
+            initiative_title = str(item.get("title") or "").strip()
+            if initiative_title:
+                ini_header = doc.add_paragraph(initiative_title)
+                ini_header.runs[0].bold = True
+            for bullet in item.get("bullets", []):
+                if str(bullet).strip():
+                    doc.add_paragraph(str(bullet).strip(), style="List Bullet")
 
-    _, run_skills = add_section_heading("Skills")
-    skills = record.get("cv_skills") or []
+    skills = [str(skill).strip() for skill in (record.get("cv_skills") or []) if str(skill).strip()]
     if skills:
-        doc.add_paragraph(", ".join([str(skill).strip() for skill in skills if str(skill).strip()]))
-    add_section_separator()
+        begin_section("Skills")
+        doc.add_paragraph(", ".join(skills))
 
-    _, run_education = add_section_heading("Education")
     education_items = record.get("cv_education") or []
-    for item in education_items:
-        if not isinstance(item, dict):
-            continue
-        degree_title = str(item.get("degree_title") or "").strip()
-        thesis_title = str(item.get("thesis_title") or "").strip()
-        if degree_title:
-            degree_paragraph = doc.add_paragraph(degree_title)
-            degree_paragraph.runs[0].bold = True
-        if thesis_title:
-            doc.add_paragraph(thesis_title)
-        for bullet in item.get("thesis_bullets", []):
-            if str(bullet).strip():
-                doc.add_paragraph(str(bullet).strip(), style="List Bullet")
-    add_section_separator()
+    if education_items:
+        begin_section("Education")
+        for item in education_items:
+            if not isinstance(item, dict):
+                continue
+            degree_title = str(item.get("degree_title") or "").strip()
+            thesis_title = str(item.get("thesis_title") or "").strip()
+            if degree_title:
+                degree_paragraph = doc.add_paragraph(degree_title)
+                degree_paragraph.runs[0].bold = True
+            if thesis_title:
+                doc.add_paragraph(thesis_title)
+            for bullet in item.get("thesis_bullets", []):
+                if str(bullet).strip():
+                    doc.add_paragraph(str(bullet).strip(), style="List Bullet")
 
     doc.save(cv_path)
     return str(cv_path.resolve())
 
 
 def convert_docx_to_pdf(docx_path: str) -> str:
+    global _WORD_PDF_EXPORT_UNAVAILABLE
     source_path = Path(docx_path)
     target_path = source_path.with_suffix(".pdf")
-
-    try:
-        from docx2pdf import convert as docx2pdf_convert
-
-        docx2pdf_convert(str(source_path), str(target_path))
-        if target_path.exists():
-            return str(target_path.resolve())
-    except Exception:
-        pass
-
-    try:
-        src = str(source_path.resolve()).replace("'", "''")
-        dst = str(target_path.resolve()).replace("'", "''")
-        ps_script = (
-            "$word = New-Object -ComObject Word.Application; "
-            "$word.Visible = $false; "
-            f"$doc = $word.Documents.Open('{src}'); "
-            f"$doc.SaveAs('{dst}', 17); "
-            "$doc.Close(); "
-            "$word.Quit();"
-        )
-        subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_script],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        if target_path.exists():
-            return str(target_path.resolve())
-    except Exception:
-        pass
 
     office_cmd = shutil.which("soffice") or shutil.which("libreoffice")
     if office_cmd:
@@ -579,13 +562,45 @@ def convert_docx_to_pdf(docx_path: str) -> str:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=20,
             )
             if target_path.exists():
                 return str(target_path.resolve())
         except Exception:
             pass
 
+    if not _WORD_PDF_EXPORT_UNAVAILABLE:
+        try:
+            src = str(source_path.resolve()).replace("'", "''")
+            dst = str(target_path.resolve()).replace("'", "''")
+            ps_script = (
+                "$ErrorActionPreference = 'Stop'; "
+                "$word = $null; "
+                "$doc = $null; "
+                "try { "
+                "$word = New-Object -ComObject Word.Application; "
+                "$word.Visible = $false; "
+                "$word.DisplayAlerts = 0; "
+                f"$doc = $word.Documents.Open('{src}', $false, $true); "
+                f"$doc.ExportAsFixedFormat('{dst}', 17); "
+                "} finally { "
+                "if ($doc -ne $null) { $doc.Close($false) }; "
+                "if ($word -ne $null) { $word.Quit() } "
+                "}"
+            )
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if target_path.exists():
+                return str(target_path.resolve())
+        except Exception:
+            _WORD_PDF_EXPORT_UNAVAILABLE = True
+
     raise RuntimeError(
-        "Unable to convert DOCX to PDF. Install docx2pdf + Microsoft Word, "
-        "or install LibreOffice and add soffice to PATH."
+        "Unable to convert DOCX to PDF. Install LibreOffice and add soffice to PATH, "
+        "or ensure Microsoft Word automation can export PDFs without prompts."
     )

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 from urllib.parse import urlparse
 
+from backend.capabilities.tailored_documents.rendering import (
+    CV_COLOR_SCHEMES,
+    CV_FONT_OPTIONS,
+    CV_TEMPLATE_PRESETS,
+)
+from backend.domain.phase0_contracts import normalize_workspace_configuration_v2
 from backend.domain.models import JobSource, ProfileRef, PromptSetRef, StageDefinition, WorkflowTemplate, WorkspaceDefinition
 
 
@@ -24,6 +31,144 @@ MODULE_REUSABLE_PROFILES = "reusable_profile_builder"
 MODULE_TAILORED_DOCUMENTS = "tailored_document_generation"
 MODULE_APPLICATION_PACKAGING = "application_packaging"
 
+COUNTRY_OPTIONS = [
+    {"value": "DE", "label": "Germany"},
+    {"value": "NL", "label": "Netherlands"},
+    {"value": "AT", "label": "Austria"},
+    {"value": "CH", "label": "Switzerland"},
+    {"value": "BE", "label": "Belgium"},
+    {"value": "LU", "label": "Luxembourg"},
+    {"value": "FR", "label": "France"},
+    {"value": "ES", "label": "Spain"},
+    {"value": "PL", "label": "Poland"},
+    {"value": "SE", "label": "Sweden"},
+]
+
+COUNTRY_TO_LINKEDIN_GEO = {
+    "DE": "101282230",
+    "NL": "102890719",
+    "AT": "103883259",
+    "CH": "106693272",
+    "BE": "100565514",
+    "LU": "104042105",
+    "FR": "105015875",
+    "ES": "105646813",
+    "PL": "105072130",
+    "SE": "105117694",
+}
+
+COUNTRY_TO_SOURCE_CITIES = {
+    "DE": ["Berlin", "Munich", "Hamburg", "Frankfurt", "Cologne"],
+    "NL": ["Amsterdam", "Rotterdam", "Utrecht"],
+    "AT": ["Vienna", "Graz", "Linz"],
+    "CH": ["Zurich", "Basel", "Geneva"],
+    "BE": ["Brussels", "Antwerp", "Ghent"],
+    "LU": ["Luxembourg"],
+    "FR": ["Paris", "Lyon", "Marseille"],
+    "ES": ["Madrid", "Barcelona", "Valencia"],
+    "PL": ["Warsaw", "Krakow", "Wroclaw"],
+    "SE": ["Stockholm", "Gothenburg", "Malmo"],
+}
+
+USER_FACING_FIELD_IDS = {
+    "workspace_cv_asset_id",
+    "keywords",
+    "country_codes",
+    "time_posted_seconds",
+    "experience_levels",
+    "manual_url_seed_list",
+    "company_career_sites",
+    "portals",
+    "forbidden_title_keywords",
+    "max_german_level",
+    "languages",
+    "cv_template",
+    "cv_color_scheme",
+    "cv_font",
+    "include_photo",
+    "stage1_extra_prompt",
+    "stage1_prompt_override",
+    "stage4_extra_prompt",
+    "stage4_prompt_override",
+}
+
+FIELD_SECTION_BY_ID = {
+    "workspace_cv_asset_id": "cv_binding",
+    "keywords": "targeting",
+    "country_codes": "targeting",
+    "time_posted_seconds": "filters",
+    "experience_levels": "filters",
+    "manual_url_seed_list": "sources",
+    "company_career_sites": "sources",
+    "portals": "sources",
+    "forbidden_title_keywords": "filters",
+    "max_german_level": "filters",
+    "languages": "filters",
+    "cv_template": "documents",
+    "cv_color_scheme": "documents",
+    "cv_font": "documents",
+    "include_photo": "documents",
+    "stage1_extra_prompt": "prompt_preferences",
+    "stage1_prompt_override": "prompt_preferences",
+    "stage4_extra_prompt": "prompt_preferences",
+    "stage4_prompt_override": "prompt_preferences",
+}
+
+FIELD_SORT_ORDER = {
+    "workspace_cv_asset_id": 10,
+    "keywords": 20,
+    "country_codes": 30,
+    "time_posted_seconds": 40,
+    "experience_levels": 50,
+    "forbidden_title_keywords": 60,
+    "max_german_level": 70,
+    "languages": 80,
+    "manual_url_seed_list": 90,
+    "company_career_sites": 100,
+    "portals": 110,
+    "cv_template": 120,
+    "cv_color_scheme": 130,
+    "cv_font": 140,
+    "include_photo": 150,
+    "stage1_extra_prompt": 160,
+    "stage1_prompt_override": 170,
+    "stage4_extra_prompt": 180,
+    "stage4_prompt_override": 190,
+}
+
+BUILDER_SECTIONS = [
+    {
+        "id": "cv_binding",
+        "title": "CV Baseline",
+        "description": "Start with the CV that best matches this search so keywords, defaults, and generated documents stay aligned.",
+    },
+    {
+        "id": "targeting",
+        "title": "Targeting",
+        "description": "Use keyword-first targeting and country selection instead of role presets and raw source ids.",
+    },
+    {
+        "id": "sources",
+        "title": "Sources",
+        "description": "Choose the sources for this workspace and keep each source's settings beside it.",
+    },
+    {
+        "id": "filters",
+        "title": "Filters",
+        "description": "Apply clear user-facing filters for recency, seniority, titles, and language fit.",
+    },
+    {
+        "id": "documents",
+        "title": "Document Defaults",
+        "description": "Keep the CV design controls available without exposing pipeline internals.",
+    },
+    {
+        "id": "prompt_preferences",
+        "title": "Prompt Overrides",
+        "description": "Review stage-specific prompt behavior and only override it deliberately.",
+    },
+]
+
 
 @dataclass(frozen=True, slots=True)
 class BuilderCatalog:
@@ -33,6 +178,7 @@ class BuilderCatalog:
     configuration_fields: list[dict]
     starter_profiles: list[dict]
     starter_prompt_families: list[dict]
+    builder_sections: list[dict]
 
     def to_dict(self) -> dict:
         return {
@@ -42,11 +188,40 @@ class BuilderCatalog:
             "configuration_fields": list(self.configuration_fields),
             "starter_profiles": list(self.starter_profiles),
             "starter_prompt_families": list(self.starter_prompt_families),
+            "builder_sections": list(self.builder_sections),
         }
+
+
+def _boolean_options(true_label: str, false_label: str) -> list[dict[str, Any]]:
+    return [
+        {"value": True, "label": true_label},
+        {"value": False, "label": false_label},
+    ]
+
+
+def _document_template_options() -> list[dict[str, str]]:
+    return [{"value": item["id"], "label": item["label"]} for item in CV_TEMPLATE_PRESETS.values()]
+
+
+def _document_color_scheme_options() -> list[dict[str, str]]:
+    return [{"value": item["id"], "label": item["label"]} for item in CV_COLOR_SCHEMES.values()]
+
+
+def _document_font_options() -> list[dict[str, str]]:
+    return [{"value": item["id"], "label": item["label"]} for item in CV_FONT_OPTIONS]
 
 
 def _configuration_fields() -> list[dict]:
     return [
+        {
+            "id": "workspace_cv_asset_id",
+            "label": "Workspace CV",
+            "description": "Select the baseline CV for this workspace. Upload a new one if this search needs a different baseline.",
+            "type": "asset_select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "dynamic_source": "workspace_cv_assets",
+            "placeholder": "Choose an uploaded CV",
+        },
         {
             "id": "keywords",
             "label": "Target Keywords",
@@ -55,6 +230,15 @@ def _configuration_fields() -> list[dict]:
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
             "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_COMPANY_CAREER_SITES, SOURCE_MULTI_PORTAL],
             "placeholder": "analyst, consultant, product manager",
+        },
+        {
+            "id": "country_codes",
+            "label": "Target Countries",
+            "description": "Country-based targeting that stays consistent across search, career-site, and board sources.",
+            "type": "multi_select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_COMPANY_CAREER_SITES, SOURCE_MULTI_PORTAL],
+            "options": list(COUNTRY_OPTIONS),
         },
         {
             "id": "target_roles",
@@ -112,6 +296,62 @@ def _configuration_fields() -> list[dict]:
             ],
         },
         {
+            "id": "linkedin_max_pages",
+            "label": "LinkedIn Pages Per Keyword",
+            "description": "Maximum pages to fetch for each LinkedIn keyword search.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
+            "placeholder": "5",
+        },
+        {
+            "id": "max_enrich_jobs",
+            "label": "Max Jobs To Enrich",
+            "description": "Cap how many approved LinkedIn jobs get full detail enrichment.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
+            "placeholder": "50",
+        },
+        {
+            "id": "ai_batch_size",
+            "label": "Stage 1 AI Batch Size",
+            "description": "How many job titles to send in one Stage 1 AI filtering request.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
+            "placeholder": "30",
+        },
+        {
+            "id": "reuse_scrape_snapshot",
+            "label": "Reuse LinkedIn Snapshot",
+            "description": "Skip a fresh LinkedIn scrape and reuse the saved Stage 1 snapshot.",
+            "type": "boolean",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
+            "options": _boolean_options("Reuse saved snapshot", "Always scrape fresh"),
+            "default": False,
+        },
+        {
+            "id": "page_fetch_sleep_seconds",
+            "label": "LinkedIn Page Fetch Delay (seconds)",
+            "description": "Optional delay between paginated LinkedIn requests.",
+            "type": "float",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
+            "placeholder": "1.0",
+        },
+        {
+            "id": "use_proxy_fallback",
+            "label": "Use Proxy Fallback",
+            "description": "Allow proxy fallback when direct job detail enrichment fails.",
+            "type": "boolean",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "options": _boolean_options("Enable fallback", "Disable fallback"),
+            "default": False,
+        },
+        {
             "id": "manual_url_seed_list",
             "label": "Pasted Job URLs",
             "description": "Paste one job URL per line so this workspace can ingest curated postings without editing any files.",
@@ -119,6 +359,15 @@ def _configuration_fields() -> list[dict]:
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "source_ids": [SOURCE_CURATED_URLS],
             "placeholder": "https://company.example/jobs/123",
+        },
+        {
+            "id": "manual_request_timeout_seconds",
+            "label": "Manual URL Timeout (seconds)",
+            "description": "HTTP timeout when loading curated job URLs.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_CURATED_URLS],
+            "placeholder": "45",
         },
         {
             "id": "company_career_sites",
@@ -137,6 +386,15 @@ def _configuration_fields() -> list[dict]:
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "source_ids": [SOURCE_COMPANY_CAREER_SITES],
             "placeholder": "10",
+        },
+        {
+            "id": "company_site_request_timeout_seconds",
+            "label": "Company Site Timeout (seconds)",
+            "description": "HTTP timeout when crawling configured company career pages.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_COMPANY_CAREER_SITES],
+            "placeholder": "30",
         },
         {
             "id": "forbidden_title_keywords",
@@ -166,30 +424,30 @@ def _configuration_fields() -> list[dict]:
             "default": "B2",
         },
         {
-            "id": "reject_french",
+            "id": "french_special_char_threshold",
             "label": "Reject French-language Jobs",
-            "description": "Exclude jobs that appear to be written primarily in French.",
+            "description": "Enable or disable French-language rejection in local language filtering.",
             "type": "select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
             "options": [
-                {"value": "yes", "label": "Yes — exclude French jobs"},
-                {"value": "no", "label": "No — allow French jobs"},
+                {"value": 0, "label": "Yes - exclude French jobs"},
+                {"value": 9999, "label": "No - allow French jobs"},
             ],
-            "default": "yes",
+            "default": 0,
         },
         {
-            "id": "reject_spanish",
+            "id": "spanish_special_char_threshold",
             "label": "Reject Spanish-language Jobs",
-            "description": "Exclude jobs that appear to be written primarily in Spanish.",
+            "description": "Enable or disable Spanish-language rejection in local language filtering.",
             "type": "select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
             "options": [
-                {"value": "yes", "label": "Yes — exclude Spanish jobs"},
-                {"value": "no", "label": "No — allow Spanish jobs"},
+                {"value": 0, "label": "Yes - exclude Spanish jobs"},
+                {"value": 9999, "label": "No - allow Spanish jobs"},
             ],
-            "default": "yes",
+            "default": 0,
         },
         {
             "id": "low_applicant_threshold",
@@ -210,6 +468,183 @@ def _configuration_fields() -> list[dict]:
             "placeholder": "25",
         },
         {
+            "id": "dedupe_against_tracker",
+            "label": "Deduplicate Against Tracker",
+            "description": "Remove jobs that already exist in the tracker output before continuing.",
+            "type": "boolean",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": _boolean_options("Drop tracked duplicates", "Keep tracked duplicates"),
+            "default": True,
+        },
+        {
+            "id": "candidate_name",
+            "label": "Candidate Name Override",
+            "description": "Optional workspace-specific candidate name used in generated assets.",
+            "type": "text",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
+            "placeholder": "Ahmed Kaddah",
+        },
+        {
+            "id": "candidate_email",
+            "label": "Candidate Email Override",
+            "description": "Optional workspace-specific candidate email used in generated assets.",
+            "type": "text",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
+            "placeholder": "name@example.com",
+        },
+        {
+            "id": "languages",
+            "label": "Language Lines",
+            "description": "Language items used in tailored CVs and reusable role profiles.",
+            "type": "tag_list",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
+            "placeholder": "English - C1, German - B1/B2",
+        },
+        {
+            "id": "cv_template",
+            "label": "CV Template",
+            "description": "Document layout preset for tailored CV generation.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": _document_template_options(),
+        },
+        {
+            "id": "cv_color_scheme",
+            "label": "CV Color Scheme",
+            "description": "Color palette used for tailored CV generation.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": _document_color_scheme_options(),
+        },
+        {
+            "id": "cv_font",
+            "label": "CV Font",
+            "description": "Font family used for tailored CV generation.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": _document_font_options(),
+        },
+        {
+            "id": "include_photo",
+            "label": "Include Profile Photo",
+            "description": "Use the configured profile image in tailored CV exports.",
+            "type": "boolean",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": _boolean_options("Include photo", "No photo"),
+            "default": True,
+        },
+        {
+            "id": "stage1_model",
+            "label": "Stage 1 AI Model",
+            "description": "Model name for LinkedIn title filtering.",
+            "type": "text",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
+            "placeholder": "deepseek-chat",
+        },
+        {
+            "id": "stage1_extra_prompt",
+            "label": "Stage 1 Extra Prompt",
+            "description": "Extra instructions appended to the Stage 1 AI filtering prompt.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
+            "placeholder": "Favor hybrid roles and deprioritize internships.",
+        },
+        {
+            "id": "stage1_prompt_override",
+            "label": "Stage 1 Prompt Override",
+            "description": "Full prompt override for LinkedIn title filtering.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
+            "placeholder": "Custom full prompt with placeholders.",
+        },
+        {
+            "id": "stage4_model",
+            "label": "Stage 4 Primary Model",
+            "description": "Primary model used for tailored document generation.",
+            "type": "text",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "deepseek-chat",
+        },
+        {
+            "id": "stage4_fallback_model",
+            "label": "Stage 4 Fallback Model",
+            "description": "Fallback model used when the primary model fails.",
+            "type": "text",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "gemini-2.5-flash",
+        },
+        {
+            "id": "stage4_extra_prompt",
+            "label": "Stage 4 Extra Prompt",
+            "description": "Extra instructions appended to the tailored document generation prompt.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "Highlight cross-functional delivery and process design experience.",
+        },
+        {
+            "id": "stage4_prompt_override",
+            "label": "Stage 4 Prompt Override",
+            "description": "Full prompt override for tailored document generation.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "Custom full prompt with placeholders.",
+        },
+        {
+            "id": "stage4_sleep_seconds",
+            "label": "Stage 4 Delay (seconds)",
+            "description": "Delay between tailored document generations.",
+            "type": "float",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "4.0",
+        },
+        {
+            "id": "stage4_retries",
+            "label": "Stage 4 Retries",
+            "description": "Retry count for tailored document generation failures.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "3",
+        },
+        {
+            "id": "stage4_retry_sleep",
+            "label": "Stage 4 Retry Delay (seconds)",
+            "description": "Delay between Stage 4 retry attempts.",
+            "type": "float",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "3.0",
+        },
+        {
+            "id": "force_regenerate",
+            "label": "Force Regenerate Documents",
+            "description": "Ignore the Stage 4 checkpoint and rebuild all selected tailored documents.",
+            "type": "boolean",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": _boolean_options("Always regenerate", "Reuse checkpoint when possible"),
+            "default": False,
+        },
+        {
+            "id": "excel_mode",
+            "label": "Tracker Export Mode",
+            "description": "Create a new sheet per run or append rows into one sheet.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": [
+                {"value": "new-sheet", "label": "Create a new sheet per run"},
+                {"value": "append-rows", "label": "Append rows into one sheet"},
+            ],
+        },
+        {
+            "id": "sheet_name",
+            "label": "Tracker Sheet Name",
+            "description": "Optional custom sheet name for the tracker export.",
+            "type": "text",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "jobs",
+        },
+        {
             "id": "cities",
             "label": "Target Cities",
             "description": "Cities used to collect jobs from job boards and portal searches.",
@@ -223,7 +658,7 @@ def _configuration_fields() -> list[dict]:
             "label": "Job Boards",
             "description": "Job boards or portals that should be queried for this workspace.",
             "type": "multi_select",
-            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
             "source_ids": [SOURCE_MULTI_PORTAL],
             "options": [
                 {"value": "indeed", "label": "Indeed"},
@@ -268,7 +703,212 @@ def _configuration_fields() -> list[dict]:
             "source_ids": [SOURCE_MULTI_PORTAL],
             "placeholder": "1200",
         },
+        {
+            "id": "timeout_seconds",
+            "label": "Portal Request Timeout (seconds)",
+            "description": "HTTP timeout for reusable-package source collection.",
+            "type": "number",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "source_ids": [SOURCE_MULTI_PORTAL],
+            "placeholder": "25",
+        },
+        {
+            "id": "arbeitsagentur_detail_fetch_limit",
+            "label": "Arbeitsagentur Detail Fetch Limit",
+            "description": "Cap on detail pages fetched from Arbeitsagentur during one run.",
+            "type": "number",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "source_ids": [SOURCE_MULTI_PORTAL],
+            "placeholder": "20",
+        },
+        {
+            "id": "reuse_snapshot",
+            "label": "Reuse Portal Snapshot",
+            "description": "Skip fresh job-board scraping and reuse the saved snapshot.",
+            "type": "boolean",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "source_ids": [SOURCE_MULTI_PORTAL],
+            "options": _boolean_options("Reuse saved snapshot", "Always scrape fresh"),
+            "default": False,
+        },
+        {
+            "id": "exclude_driver_license_required",
+            "label": "Reject Driver's License Requirements",
+            "description": "Exclude jobs that clearly require a driver's license.",
+            "type": "boolean",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "options": _boolean_options("Reject those jobs", "Allow those jobs"),
+            "default": True,
+        },
+        {
+            "id": "exclude_special_training_required",
+            "label": "Reject Special Training Requirements",
+            "description": "Exclude jobs that require certifications or vocational training.",
+            "type": "boolean",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "options": _boolean_options("Reject those jobs", "Allow those jobs"),
+            "default": True,
+        },
+        {
+            "id": "model",
+            "label": "Role Classifier Model",
+            "description": "Model used to classify reusable-package role clusters.",
+            "type": "text",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "deepseek-chat",
+        },
+        {
+            "id": "batch_size",
+            "label": "Role Classifier Batch Size",
+            "description": "How many role clusters to classify in one AI request.",
+            "type": "number",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "50",
+        },
+        {
+            "id": "retries",
+            "label": "Role Classifier Retries",
+            "description": "Retry count for reusable role classification batches.",
+            "type": "number",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "3",
+        },
+        {
+            "id": "retry_sleep_seconds",
+            "label": "Role Classifier Retry Delay (seconds)",
+            "description": "Delay between reusable role classification retries.",
+            "type": "float",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "2.0",
+        },
+        {
+            "id": "extra_prompt",
+            "label": "Role Classifier Extra Prompt",
+            "description": "Extra instructions appended to the reusable role classification prompt.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "Prefer warehouse and logistics when titles are ambiguous.",
+        },
+        {
+            "id": "prompt_override",
+            "label": "Role Classifier Prompt Override",
+            "description": "Full prompt override for reusable role classification.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "Custom full prompt with placeholders.",
+        },
+        {
+            "id": "candidate_phone",
+            "label": "Candidate Phone",
+            "description": "Phone number inserted into reusable package email drafts.",
+            "type": "text",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "+49 ...",
+        },
+        {
+            "id": "candidate_location",
+            "label": "Candidate Location",
+            "description": "Location line used in reusable role CVs.",
+            "type": "text",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "91052 Erlangen / 90402 Nuremberg",
+        },
+        {
+            "id": "availability",
+            "label": "Availability",
+            "description": "Availability line used in reusable role CVs and package emails.",
+            "type": "text",
+            "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+            "placeholder": "Ab sofort | Vollzeit | Mini-job",
+        },
     ]
+
+
+def _normalize_country_codes(raw_value: Any) -> list[str]:
+    if isinstance(raw_value, str):
+        values = [item.strip().upper() for item in raw_value.split(",") if item.strip()]
+    elif isinstance(raw_value, (list, tuple, set)):
+        values = [str(item).strip().upper() for item in raw_value if str(item).strip()]
+    else:
+        return []
+    normalized: list[str] = []
+    seen = set()
+    allowed_codes = {item["value"] for item in COUNTRY_OPTIONS}
+    for value in values:
+        if value not in allowed_codes or value in seen:
+            continue
+        normalized.append(value)
+        seen.add(value)
+    return normalized
+
+
+def _derive_geo_id_from_countries(country_codes: list[str]) -> str:
+    for country_code in country_codes:
+        geo_id = COUNTRY_TO_LINKEDIN_GEO.get(country_code)
+        if geo_id:
+            return geo_id
+    return ""
+
+
+def _derive_source_cities(country_codes: list[str]) -> list[str]:
+    cities: list[str] = []
+    seen = set()
+    for country_code in country_codes:
+        for city in COUNTRY_TO_SOURCE_CITIES.get(country_code, []):
+            if city in seen:
+                continue
+            cities.append(city)
+            seen.add(city)
+    return cities[:8]
+
+
+def derive_runtime_defaults_from_settings(
+    settings: dict[str, Any],
+    *,
+    source_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    selected_source_ids = set(source_ids or [])
+    country_codes = _normalize_country_codes(settings.get("country_codes"))
+    derived: dict[str, Any] = {}
+    if country_codes and SOURCE_LINKEDIN_SEARCH in selected_source_ids and not settings.get("geo_id"):
+        geo_id = _derive_geo_id_from_countries(country_codes)
+        if geo_id:
+            derived["geo_id"] = geo_id
+    if SOURCE_MULTI_PORTAL in selected_source_ids:
+        if not settings.get("portals"):
+            derived["portals"] = list(DEFAULT_MULTI_PORTAL_IDS)
+        if not settings.get("cities") and country_codes:
+            cities = _derive_source_cities(country_codes)
+            if cities:
+                derived["cities"] = cities
+        if not settings.get("posted_within_days") and settings.get("time_posted_seconds"):
+            try:
+                posted_since_days = max(1, int(int(settings["time_posted_seconds"]) / 86400))
+            except (TypeError, ValueError):
+                posted_since_days = 0
+            if posted_since_days:
+                derived["posted_within_days"] = posted_since_days
+    return derived
+
+
+def _annotate_builder_field(field_definition: dict) -> dict:
+    field = deepcopy(field_definition)
+    field_id = str(field.get("id") or "")
+    field["section"] = FIELD_SECTION_BY_ID.get(field_id, "advanced")
+    field["user_facing"] = field_id in USER_FACING_FIELD_IDS
+    field["sort_order"] = FIELD_SORT_ORDER.get(field_id, 999)
+    if field_id == "geo_id":
+        field["description"] = "Derived internally from the selected country when possible."
+    if field_id == "target_roles":
+        field["description"] = "Legacy role-family helper retained only for migration compatibility."
+    if field_id == "workspace_cv_asset_id":
+        field["required"] = True
+    return field
+
+
+def _catalog_configuration_fields() -> list[dict]:
+    fields = [_annotate_builder_field(field) for field in _configuration_fields()]
+    return sorted(fields, key=lambda item: (int(item.get("sort_order", 999)), str(item.get("label") or "")))
 
 
 def workspace_builder_catalog() -> BuilderCatalog:
@@ -278,11 +918,13 @@ def workspace_builder_catalog() -> BuilderCatalog:
                 "id": FLOW_TAILORED_DOCUMENTS,
                 "name": "Tailored Application Documents",
                 "description": "Build a workflow that searches or ingests jobs, screens them, and generates tailored application documents.",
+                "frontend_visible": True,
             },
             {
                 "id": FLOW_REUSABLE_PACKAGES,
                 "name": "Reusable Application Packages",
                 "description": "Build a workflow that collects jobs, groups them into reusable role buckets, and exports packaged application assets.",
+                "frontend_visible": False,
             },
         ],
         sources=[
@@ -312,7 +954,7 @@ def workspace_builder_catalog() -> BuilderCatalog:
                 "connector_id": "job_board_collection",
                 "name": "Job Board Collection",
                 "description": "Collect jobs from multiple job boards and portals through the shared board connector layer.",
-                "compatible_flows": [FLOW_REUSABLE_PACKAGES],
+                "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
             },
         ],
         modules=[
@@ -359,7 +1001,7 @@ def workspace_builder_catalog() -> BuilderCatalog:
                 "default_enabled": True,
             },
         ],
-        configuration_fields=_configuration_fields(),
+        configuration_fields=_catalog_configuration_fields(),
         starter_profiles=[
             {"id": "job_seeker_primary", "label": "Primary Job Seeker Profile"},
             {"id": "operations_profile", "label": "Operations-Focused Profile"},
@@ -368,6 +1010,7 @@ def workspace_builder_catalog() -> BuilderCatalog:
             {"id": FLOW_TAILORED_DOCUMENTS, "label": "Tailored Documents"},
             {"id": FLOW_REUSABLE_PACKAGES, "label": "Reusable Packages"},
         ],
+        builder_sections=list(BUILDER_SECTIONS),
     )
 
 
@@ -505,6 +1148,8 @@ def _normalize_company_site_list(raw_value: "Any") -> list[dict[str, str]]:
 
 def _normalize_setting_value(field_definition: dict, raw_value: "Any") -> "Any":
     field_type = str(field_definition.get("type") or "").strip()
+    if field_definition.get("id") == "country_codes":
+        return _normalize_country_codes(raw_value)
     if field_type == "tag_list":
         return _normalize_tag_list(raw_value)
     if field_type == "multi_select":
@@ -521,6 +1166,22 @@ def _normalize_setting_value(field_definition: dict, raw_value: "Any") -> "Any":
         if not text:
             return None
         return int(float(text))
+    if field_type == "float":
+        text = str(raw_value or "").strip()
+        if not text:
+            return None
+        return float(text)
+    if field_type == "boolean":
+        if isinstance(raw_value, bool):
+            return raw_value
+        text = str(raw_value or "").strip().lower()
+        if not text:
+            return None
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return None
     if field_type == "select":
         text = str(raw_value or "").strip()
         if not text:
@@ -530,7 +1191,11 @@ def _normalize_setting_value(field_definition: dict, raw_value: "Any") -> "Any":
     return text or None
 
 
-def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_settings: dict[str, "Any"]) -> dict[str, "Any"]:
+def _normalize_workspace_settings_base(
+    flow_id: str,
+    source_ids: list[str],
+    payload_settings: dict[str, "Any"],
+) -> dict[str, Any]:
     field_map = {field["id"]: field for field in _configuration_fields()}
     selected_source_ids = set(source_ids)
     settings: dict[str, Any] = {}
@@ -549,6 +1214,109 @@ def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_setti
             continue
         settings[str(key)] = normalized
     return settings
+
+
+def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_settings: dict[str, "Any"]) -> dict[str, "Any"]:
+    selected_source_ids = set(source_ids)
+    settings = _normalize_workspace_settings_base(flow_id, source_ids, payload_settings)
+    settings.update(
+        {
+            key: value
+            for key, value in derive_runtime_defaults_from_settings(settings, source_ids=list(selected_source_ids)).items()
+            if value not in (None, "", [], {})
+        }
+    )
+    return settings
+
+
+def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str, Any]:
+    flow_id = str(payload.get("flow_id") or FLOW_TAILORED_DOCUMENTS).strip()
+    source_ids = [str(item).strip() for item in payload.get("source_ids") or [] if str(item).strip()]
+    settings = _normalize_workspace_settings_base(flow_id, source_ids, dict(payload.get("settings") or {}))
+    derived_runtime_defaults = derive_runtime_defaults_from_settings(settings, source_ids=source_ids)
+    effective_settings = {**settings, **derived_runtime_defaults}
+    results: list[dict[str, Any]] = []
+
+    def add_result(source_id: str, *, status: str, summary: str, details: list[str] | None = None) -> None:
+        results.append(
+            {
+                "source_id": source_id,
+                "status": status,
+                "summary": summary,
+                "details": list(details or []),
+            }
+        )
+
+    if SOURCE_LINKEDIN_SEARCH in source_ids:
+        linkedin_details: list[str] = []
+        status = "valid"
+        if not effective_settings.get("keywords"):
+            status = "invalid"
+            linkedin_details.append("Add at least one target keyword.")
+        derived_geo_id = str(effective_settings.get("geo_id") or "")
+        if derived_geo_id:
+            linkedin_details.append(f"LinkedIn geo id resolved to {derived_geo_id}.")
+        else:
+            status = "invalid"
+            linkedin_details.append("Select at least one target country so LinkedIn location can be derived.")
+        add_result(
+            SOURCE_LINKEDIN_SEARCH,
+            status=status,
+            summary="LinkedIn search is ready." if status == "valid" else "LinkedIn search is missing required setup.",
+            details=linkedin_details,
+        )
+
+    if SOURCE_CURATED_URLS in source_ids:
+        urls = effective_settings.get("manual_url_seed_list") or []
+        details = [f"{len(urls)} curated URL(s) supplied."] if urls else ["Paste one or more job URLs."]
+        add_result(
+            SOURCE_CURATED_URLS,
+            status="valid" if urls else "invalid",
+            summary="Curated URLs look usable." if urls else "Curated URLs are required for this source.",
+            details=details,
+        )
+
+    if SOURCE_COMPANY_CAREER_SITES in source_ids:
+        companies = effective_settings.get("company_career_sites") or []
+        details = [f"{len(companies)} career site(s) configured."] if companies else ["Add at least one company career page URL."]
+        add_result(
+            SOURCE_COMPANY_CAREER_SITES,
+            status="valid" if companies else "invalid",
+            summary="Company career sites look usable." if companies else "Company career sites are required for this source.",
+            details=details,
+        )
+
+    if SOURCE_MULTI_PORTAL in source_ids:
+        portals = effective_settings.get("portals") or []
+        cities = effective_settings.get("cities") or []
+        status = "valid"
+        details: list[str] = []
+        if not effective_settings.get("keywords"):
+            status = "invalid"
+            details.append("Add at least one target keyword before enabling job boards.")
+        if not portals:
+            status = "invalid"
+            details.append("Choose at least one job board.")
+        else:
+            details.append(f"Boards: {', '.join(str(item) for item in portals)}")
+        if not cities:
+            status = "invalid"
+            details.append("Select a target country so representative source cities can be derived.")
+        else:
+            details.append(f"Representative source cities: {', '.join(str(item) for item in cities[:4])}")
+        add_result(
+            SOURCE_MULTI_PORTAL,
+            status=status,
+            summary="Job board sourcing is ready." if status == "valid" else "Job board sourcing is missing required setup.",
+            details=details,
+        )
+
+    return {
+        "flow_id": flow_id,
+        "valid": all(item["status"] == "valid" for item in results) if results else True,
+        "source_results": results,
+        "derived_runtime_defaults": derived_runtime_defaults,
+    }
 
 
 def _default_prompt_family(flow_id: str) -> str:
@@ -771,9 +1539,20 @@ def build_workspace_from_scratch(payload: dict) -> tuple[WorkflowTemplate, Works
         source_ids,
         dict(payload.get("settings") or {}),
     )
+    normalized_workspace_contract = normalize_workspace_configuration_v2(
+        {
+            "flow_id": flow_id,
+            "source_ids": list(source_ids),
+            "profile_label": profile_label,
+            "settings": dict(workspace_settings),
+        }
+    )
 
     source_stages, source_output_keys, sources = _build_source_stages(source_ids)
     if len(source_output_keys) > 1:
+        merge_stage_config = {"dedupe_against_tracker": True}
+        if "dedupe_against_tracker" in workspace_settings:
+            merge_stage_config["dedupe_against_tracker"] = bool(workspace_settings["dedupe_against_tracker"])
         source_stages.append(
             StageDefinition(
                 stage_id="merge_source_jobs",
@@ -782,7 +1561,7 @@ def build_workspace_from_scratch(payload: dict) -> tuple[WorkflowTemplate, Works
                 description="Combine jobs from all enabled sources and remove duplicates.",
                 input_keys=source_output_keys,
                 output_key="merged_source_jobs",
-                config={"dedupe_against_tracker": True},
+                config=merge_stage_config,
             )
         )
         source_output_key = "merged_source_jobs"
@@ -851,6 +1630,7 @@ def build_workspace_from_scratch(payload: dict) -> tuple[WorkflowTemplate, Works
             "automation_flow": flow_id,
             "modules": list(module_ids),
             "source_ids": list(source_ids),
+            "workspace_configuration_v2": normalized_workspace_contract,
         },
     )
     return workflow_template, workspace

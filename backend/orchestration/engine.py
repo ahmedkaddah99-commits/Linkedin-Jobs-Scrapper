@@ -104,21 +104,20 @@ class StageEngine:
                 )
                 continue
 
-            stage = self.stage_registry.get(definition.stage_type)
             started_at = utc_now_iso()
 
-            if not stage.can_run(context, definition):
-                self._append_stage_result(
-                    context=context,
-                    definition=definition,
-                    status=STAGE_STATUS_SKIPPED,
-                    started_at=started_at,
-                    finished_at=utc_now_iso(),
-                    metrics={"reason": "can_run_returned_false"},
-                )
-                continue
-
             try:
+                stage = self.stage_registry.get(definition.stage_type)
+                if not stage.can_run(context, definition):
+                    self._append_stage_result(
+                        context=context,
+                        definition=definition,
+                        status=STAGE_STATUS_SKIPPED,
+                        started_at=started_at,
+                        finished_at=utc_now_iso(),
+                        metrics={"reason": "can_run_returned_false"},
+                    )
+                    continue
                 outcome = stage.execute(context, definition)
             except Exception as exc:
                 self._append_stage_result(

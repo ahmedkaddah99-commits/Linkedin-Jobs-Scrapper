@@ -249,7 +249,7 @@ export default function ReviewQueuePage() {
             Review Queue
           </h1>
           <p className="mt-1 text-sm text-on-surface-variant">
-            Verify and approve extracted job artifacts.
+            Verify and approve extracted job details before generating final documents.
           </p>
         </div>
         <button
@@ -402,7 +402,7 @@ export default function ReviewQueuePage() {
                       </div>
                       {row.manual_approved ? (
                         <div className="mt-2 text-xs font-medium text-primary">
-                          Manual URL • Filtering bypassed
+                          Manual URL | Filtering bypassed
                         </div>
                       ) : null}
                       {row.has_referral_contact ? (
@@ -437,7 +437,7 @@ export default function ReviewQueuePage() {
                       <StatusBadge tone={statusTone(row.status)}>{labelize(row.status)}</StatusBadge>
                       <div className="mt-1.5 flex items-center gap-1 text-xs text-on-surface-variant">
                         <span className="material-symbols-outlined text-[12px]">description</span>
-                        {row.artifact_status === "artifact_ready" ? "Artifact Ready" : "No Artifacts"}
+                        {row.artifact_status === "artifact_ready" ? "Documents Ready" : "No Documents"}
                       </div>
                       {actionState.jobId === row.job_id && (actionState.message || actionState.error) ? (
                         <div

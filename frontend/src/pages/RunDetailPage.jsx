@@ -86,19 +86,14 @@ export default function RunDetailPage() {
     () => request(`/runs/${runId}`),
     [request, runId],
   );
-  const { data: artifactsPayload } = useApiResource(
-    () => request(`/runs/${runId}/artifacts`),
+  const { data: documentsPayload } = useApiResource(
+    () => request(`/documents?run_id=${encodeURIComponent(runId)}&limit=500`),
     [request, runId],
   );
 
-  const artifacts = useMemo(
-    () =>
-      (artifactsPayload?.artifacts || []).map((artifact) => ({
-        ...artifact,
-        file_name: artifact.path?.split(/[\\/]/).pop() || artifact.artifact_id,
-        download_url: `/runs/${runId}/artifacts/${artifact.artifact_id}/download`,
-      })),
-    [artifactsPayload?.artifacts, runId],
+  const documents = useMemo(
+    () => documentsPayload?.documents || [],
+    [documentsPayload?.documents],
   );
   const stageResults = run?.stage_results || [];
 
@@ -131,16 +126,30 @@ export default function RunDetailPage() {
     }
   }
 
-  async function downloadArtifact(artifact) {
-    const blob = await request(artifact.download_url, { responseType: "blob" });
+  async function downloadDocument(item) {
+    const blob = await request(item.download_url, { responseType: "blob" });
     const objectUrl = window.URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
+    const anchor = window.document.createElement("a");
     anchor.href = objectUrl;
-    anchor.download = artifact.file_name;
-    document.body.appendChild(anchor);
+    anchor.download = item.display_name;
+    window.document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     window.URL.revokeObjectURL(objectUrl);
+  }
+
+  async function openDocument(document) {
+    const blob = await request(document.preview_url || document.download_url, {
+      responseType: "blob",
+    });
+    const objectUrl = window.URL.createObjectURL(blob);
+    const openedWindow = window.open(objectUrl, "_blank", "noopener,noreferrer");
+    if (!openedWindow) {
+      window.location.assign(objectUrl);
+    }
+    window.setTimeout(() => {
+      window.URL.revokeObjectURL(objectUrl);
+    }, 60000);
   }
 
   function exportRunLogs() {
@@ -259,16 +268,16 @@ export default function RunDetailPage() {
 
         <div className="space-y-6">
           <h3 className="px-1 font-headline text-xl font-bold tracking-tight text-on-surface">
-            Artifacts Output
+            Generated Documents
           </h3>
           <div className="overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest">
-            {artifacts.length ? (
-              artifacts.map((artifact, index) => (
+            {documents.length ? (
+              documents.map((documentEntry, index) => (
                 <div
-                  key={artifact.artifact_id}
+                  key={documentEntry.document_id}
                   className={[
-                    "group flex cursor-pointer items-center justify-between p-4 transition-colors hover:bg-surface-container-low",
-                    index < artifacts.length - 1 ? "border-b border-outline-variant/10" : "",
+                    "group flex items-center justify-between p-4 transition-colors hover:bg-surface-container-low",
+                    index < documents.length - 1 ? "border-b border-outline-variant/10" : "",
                   ].join(" ")}
                 >
                   <div className="flex items-center gap-3">
@@ -276,21 +285,44 @@ export default function RunDetailPage() {
                       <span className="material-symbols-outlined text-lg">description</span>
                     </div>
                     <div>
-                      <p className="text-sm font-semibold text-on-surface">{artifact.file_name}</p>
-                      <p className="text-xs text-on-surface-variant">{labelize(artifact.artifact_type)}</p>
+                      <p className="text-sm font-semibold text-on-surface">
+                        {documentEntry.display_name}
+                      </p>
+                      <p className="text-xs text-on-surface-variant">
+                        {documentEntry.group_label || labelize(documentEntry.asset_kind)}
+                      </p>
+                      {documentEntry.relative_path &&
+                      documentEntry.relative_path !== documentEntry.display_name ? (
+                        <p className="mt-1 break-all text-[11px] text-on-surface-variant/80">
+                          {documentEntry.relative_path}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
-                  <button
-                    className="p-1 text-on-surface-variant opacity-0 transition-all group-hover:opacity-100 hover:text-primary"
-                    onClick={() => downloadArtifact(artifact)}
-                    type="button"
-                  >
-                    <span className="material-symbols-outlined">download</span>
-                  </button>
+                  <div className="flex items-center gap-1 opacity-0 transition-all group-hover:opacity-100">
+                    <button
+                      className="p-1 text-on-surface-variant hover:text-primary"
+                      onClick={() => openDocument(documentEntry)}
+                      title="Open document"
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined">open_in_new</span>
+                    </button>
+                    <button
+                      className="p-1 text-on-surface-variant hover:text-primary"
+                      onClick={() => downloadDocument(documentEntry)}
+                      title="Download document"
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined">download</span>
+                    </button>
+                  </div>
                 </div>
               ))
             ) : (
-              <div className="p-6 text-on-surface-variant">No artifacts generated for this run yet.</div>
+              <div className="p-6 text-on-surface-variant">
+                No documents were generated for this run yet.
+              </div>
             )}
           </div>
 

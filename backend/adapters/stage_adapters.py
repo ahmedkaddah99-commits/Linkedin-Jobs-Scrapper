@@ -29,6 +29,7 @@ from backend.capabilities.tailored_documents.workflow import run_manual_pipeline
 from backend.connectors.company_career_sites import scrape_company_career_sites
 from backend.domain.models import ArtifactRecord, JobRecord, StageContext, StageDefinition
 from backend.orchestration.engine import BaseStage, StageOutcome
+from backend.orchestration.workspace_builder import derive_runtime_defaults_from_settings
 
 TARGET_ROLE_KEYWORD_MAP = {
     "Product Manager": ["product manager", "product owner", "go-to-market"],
@@ -116,13 +117,31 @@ def _augment_with_target_role_context(settings: dict[str, Any]) -> dict[str, Any
     return settings
 
 
+def _harmonize_tailored_runtime_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    settings.update(derive_runtime_defaults_from_settings(settings, source_ids=["linkedin_jobs", "job_board_collection"]))
+    if "linkedin_max_pages" in settings and "max_pages" not in settings:
+        settings["max_pages"] = settings["linkedin_max_pages"]
+    mirrored_pairs = (
+        ("max_german_level", "stage3_max_german_level"),
+        ("french_special_char_threshold", "stage3_french_special_char_threshold"),
+        ("spanish_special_char_threshold", "stage3_spanish_special_char_threshold"),
+        ("german_special_char_threshold", "stage3_german_special_char_threshold"),
+    )
+    for source_key, target_key in mirrored_pairs:
+        if source_key in settings and target_key not in settings:
+            settings[target_key] = settings[source_key]
+    return settings
+
+
 def _build_root_cli_args(context: StageContext, definition: StageDefinition):
     from backend.config.job_seeker import load_job_seeker_config, load_project_dotenv
 
     load_project_dotenv()
     config = load_job_seeker_config()
     defaults = build_main_defaults(config)
-    resolved_settings = _augment_with_target_role_context(_resolved_settings(context, definition))
+    resolved_settings = _resolved_settings(context, definition)
+    resolved_settings = _harmonize_tailored_runtime_settings(resolved_settings)
+    resolved_settings = _augment_with_target_role_context(resolved_settings)
     cli_args = _namespace_from_defaults(defaults, resolved_settings)
     return config, cli_args
 
@@ -266,7 +285,10 @@ class MergeJobSetsStage(BaseStage):
             merged_input.extend(context.get_job_dicts(key))
 
         merged_jobs, dropped_duplicates = dedupe_job_records(merged_input, logger=context.logger)
-        if bool(definition.config.get("dedupe_against_tracker", True)):
+        dedupe_against_tracker = definition.config.get("dedupe_against_tracker")
+        if dedupe_against_tracker is None:
+            dedupe_against_tracker = bool(getattr(cli_args, "dedupe_against_tracker", True))
+        if bool(dedupe_against_tracker):
             existing_keys = load_existing_tracker_identity_keys(str(cli_args.output_xlsx))
             merged_jobs, dropped_against_tracker = dedupe_job_records(
                 merged_jobs,
@@ -470,3 +492,16 @@ def register_stage_adapters(stage_registry) -> None:
     stage_registry.register("jobs.classify.roles", RoleClassificationStage())
     stage_registry.register("profiles.generate.reusable", ReusableProfileGenerationStage())
     stage_registry.register("applications.package.export", ApplicationPackageExportStage())
+
+    # Compatibility aliases for persisted legacy workflow templates.
+    stage_registry.register("legacy.linkedin.acquire", LinkedInAcquireStage())
+    stage_registry.register("legacy.manual_url.ingest", ManualUrlIngestionStage())
+    stage_registry.register("legacy.jobs.merge", MergeJobSetsStage())
+    stage_registry.register("legacy.white_collar.local_filter", TailoredScreeningStage())
+    stage_registry.register("legacy.white_collar.rank", TailoredPrioritizationStage())
+    stage_registry.register("legacy.white_collar.docs", TailoredDocumentExportStage())
+    stage_registry.register("legacy.blue_collar.stage1", JobBoardAcquisitionStage())
+    stage_registry.register("legacy.blue_collar.stage2", ReusablePackageFilteringStage())
+    stage_registry.register("legacy.blue_collar.stage3", RoleClassificationStage())
+    stage_registry.register("legacy.blue_collar.stage4", ReusableProfileGenerationStage())
+    stage_registry.register("legacy.blue_collar.stage5", ApplicationPackageExportStage())

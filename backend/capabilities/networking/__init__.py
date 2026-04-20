@@ -4,7 +4,10 @@ from .outreach import (
     build_referral_outreach_draft,
     find_referral_contacts_for_company,
     guess_hiring_manager_from_job,
+    merge_referral_contacts,
     normalize_company_name,
+    parse_referral_contacts_csv,
+    referral_company_names,
 )
 
 __all__ = [
@@ -13,5 +16,8 @@ __all__ = [
     "build_referral_outreach_draft",
     "find_referral_contacts_for_company",
     "guess_hiring_manager_from_job",
+    "merge_referral_contacts",
     "normalize_company_name",
+    "parse_referral_contacts_csv",
+    "referral_company_names",
 ]

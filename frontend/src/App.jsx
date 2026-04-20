@@ -1,10 +1,10 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import AdminPage from "./pages/AdminPage";
 import AppShell from "./components/AppShell";
-import ArtifactsPage from "./pages/ArtifactsPage";
 import ConnectionPanel from "./components/ConnectionPanel";
 import { useSession } from "./context/SessionContext";
 import DashboardPage from "./pages/DashboardPage";
+import DocumentsPage from "./pages/ArtifactsPage";
 import ReviewQueuePage from "./pages/ReviewQueuePage";
 import ReferralsPage from "./pages/ReferralsPage";
 import RunDetailPage from "./pages/RunDetailPage";
@@ -26,7 +26,8 @@ export default function App() {
           <Route path="/runs/:runId" element={<RunDetailPage />} />
           <Route path="/review-queue" element={<ReviewQueuePage />} />
           <Route path="/tracker" element={<TrackerPage />} />
-          <Route path="/artifacts" element={<ArtifactsPage />} />
+          <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/artifacts" element={<Navigate replace to="/documents" />} />
           <Route path="/referrals" element={<ReferralsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/admin" element={<AdminPage />} />

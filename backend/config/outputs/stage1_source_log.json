@@ -1,0 +1,42 @@
+{
+    "started_at_utc": "2026-04-19T16:11:37+00:00",
+    "by_portal": {
+        "indeed": {
+            "jobs_collected": 0,
+            "errors_count": 3,
+            "errors": [
+                "indeed page=1 status=403",
+                "indeed page=2 status=403",
+                "Indeed appears blocked (403/429). Remaining Indeed combinations skipped for this run."
+            ]
+        },
+        "arbeitsagentur": {
+            "jobs_collected": 414,
+            "errors_count": 0,
+            "errors": []
+        },
+        "linkedin": {
+            "jobs_collected": 438,
+            "errors_count": 2,
+            "errors": [
+                "linkedin page=1 status=429",
+                "linkedin page=2 status=429"
+            ]
+        },
+        "stepstone": {
+            "jobs_collected": 0,
+            "errors_count": 0,
+            "errors": []
+        }
+    },
+    "errors": [
+        "indeed page=1 status=403",
+        "indeed page=2 status=403",
+        "Indeed appears blocked (403/429). Remaining Indeed combinations skipped for this run.",
+        "linkedin page=1 status=429",
+        "linkedin page=2 status=429"
+    ],
+    "stopped_early": false,
+    "finished_at_utc": "2026-04-19T16:14:38+00:00",
+    "total_jobs_collected": 852
+}

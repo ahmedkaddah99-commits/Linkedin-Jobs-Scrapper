@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping
 
+from backend.capabilities.tailored_documents.rendering import convert_docx_to_pdf
 from .support import cfg_str, compact_whitespace, load_json_file, load_reusable_packages_config, resolve_path, save_json_file
 
 
@@ -99,6 +100,7 @@ def write_excel(records: List[Dict], output_xlsx: Path) -> None:
         "apply_link",
         "assigned_cv_txt",
         "assigned_cv_docx",
+        "assigned_cv_pdf",
         "email_subject",
         "email_draft_path",
         "package_dir",
@@ -143,6 +145,7 @@ def build_stage5_args(config: dict | None = None, overrides: Mapping[str, Any] |
         "candidate_name": cfg_str(config, ("candidate", "name"), "Ahmed Kaddah"),
         "candidate_email": cfg_str(config, ("candidate", "email"), ""),
         "candidate_phone": cfg_str(config, ("candidate", "phone"), ""),
+        "generate_pdf": True,
     }
     if overrides:
         payload.update({key: value for key, value in overrides.items() if value is not None})
@@ -199,18 +202,37 @@ def run_stage5_pipeline(
         safe_job_name = build_package_slug(job_id=job_id, company=company, title=title)
         package_dir = ensure_dir(docs_root / safe_job_name)
 
-        role_cv_txt = Path(str(role_cv.get("cv_txt_path") or ""))
-        role_cv_docx = Path(str(role_cv.get("cv_docx_path") or ""))
+        role_cv_txt_raw = str(role_cv.get("cv_txt_path") or "").strip()
+        role_cv_docx_raw = str(role_cv.get("cv_docx_path") or "").strip()
+        role_cv_pdf_raw = str(role_cv.get("cv_pdf_path") or "").strip()
+        role_cv_txt = Path(role_cv_txt_raw) if role_cv_txt_raw and role_cv_txt_raw != "." else None
+        role_cv_docx = Path(role_cv_docx_raw) if role_cv_docx_raw and role_cv_docx_raw != "." else None
+        role_cv_pdf = Path(role_cv_pdf_raw) if role_cv_pdf_raw and role_cv_pdf_raw != "." else None
         assigned_cv_txt = ""
         assigned_cv_docx = ""
-        if role_cv_txt.exists():
+        assigned_cv_pdf = ""
+        pdf_generation_error = ""
+        if role_cv_txt and role_cv_txt.exists():
             assigned_cv_txt_path = package_dir / f"{safe_job_name}_CV.txt"
             shutil.copyfile(role_cv_txt, assigned_cv_txt_path)
             assigned_cv_txt = str(assigned_cv_txt_path)
-        if role_cv_docx and str(role_cv_docx).strip() and role_cv_docx.exists():
+        if role_cv_docx and role_cv_docx.exists():
             assigned_cv_docx_path = package_dir / f"{safe_job_name}_CV.docx"
             shutil.copyfile(role_cv_docx, assigned_cv_docx_path)
             assigned_cv_docx = str(assigned_cv_docx_path)
+        if role_cv_pdf and role_cv_pdf.exists():
+            assigned_cv_pdf_path = package_dir / f"{safe_job_name}_CV.pdf"
+            shutil.copyfile(role_cv_pdf, assigned_cv_pdf_path)
+            assigned_cv_pdf = str(assigned_cv_pdf_path)
+        elif assigned_cv_docx and bool(getattr(args, "generate_pdf", True)):
+            assigned_cv_pdf_path = Path(assigned_cv_docx).with_suffix(".pdf")
+            try:
+                assigned_cv_pdf = convert_docx_to_pdf(assigned_cv_docx)
+                if Path(assigned_cv_pdf).exists() and Path(assigned_cv_pdf) != assigned_cv_pdf_path:
+                    Path(assigned_cv_pdf).replace(assigned_cv_pdf_path)
+                    assigned_cv_pdf = str(assigned_cv_pdf_path)
+            except Exception as exc:
+                pdf_generation_error = str(exc)
 
         email_subject = build_email_subject(job)
         email_body = build_email_body(job, args.candidate_name, args.candidate_email, args.candidate_phone, category_name)
@@ -225,6 +247,8 @@ def run_stage5_pipeline(
                 "role_category_name": category_name,
                 "assigned_cv_txt": assigned_cv_txt,
                 "assigned_cv_docx": assigned_cv_docx,
+                "assigned_cv_pdf": assigned_cv_pdf,
+                "pdf_generation_error": pdf_generation_error,
                 "email_subject": email_subject,
                 "email_draft_path": str(email_path),
                 "package_dir": str(package_dir),

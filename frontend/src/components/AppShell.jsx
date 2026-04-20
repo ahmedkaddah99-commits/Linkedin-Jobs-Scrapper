@@ -8,7 +8,7 @@ const navItems = [
   { label: "Runs", icon: "speed", to: "/runs" },
   { label: "Review Queue", icon: "fact_check", to: "/review-queue" },
   { label: "Tracker", icon: "table_rows", to: "/tracker" },
-  { label: "Artifacts", icon: "inventory_2", to: "/artifacts" },
+  { label: "Documents", icon: "inventory_2", to: "/documents" },
   { label: "Referrals", icon: "group_add", to: "/referrals" },
   { label: "Settings", icon: "settings", to: "/settings" },
   { label: "Admin", icon: "admin_panel_settings", to: "/admin" },

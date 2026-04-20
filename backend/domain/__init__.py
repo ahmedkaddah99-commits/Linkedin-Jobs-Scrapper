@@ -32,6 +32,19 @@ from .job_identity import (
     load_existing_tracker_identity_keys,
     title_company_signature,
 )
+from .phase0_contracts import (
+    build_candidate_asset_contract,
+    build_mail_connection_contract,
+    build_referral_relationship_contract,
+    build_rejected_job_review_contract,
+    build_workspace_configuration_v2_contract,
+    normalize_candidate_asset_descriptor,
+    normalize_mail_connection_contract,
+    normalize_referral_relationship,
+    normalize_rejected_job_review,
+    normalize_workspace_configuration_v2,
+    phase0_contract_catalog,
+)
 
 __all__ = [
     "ArtifactRecord",
@@ -59,7 +72,18 @@ __all__ = [
     "dedupe_job_records",
     "job_identity_keys",
     "load_existing_tracker_identity_keys",
+    "normalize_candidate_asset_descriptor",
+    "normalize_mail_connection_contract",
+    "normalize_referral_relationship",
+    "normalize_rejected_job_review",
+    "normalize_workspace_configuration_v2",
+    "phase0_contract_catalog",
     "normalize_job_record",
+    "build_candidate_asset_contract",
+    "build_mail_connection_contract",
+    "build_referral_relationship_contract",
+    "build_rejected_job_review_contract",
+    "build_workspace_configuration_v2_contract",
     "stable_manual_job_id",
     "title_company_signature",
 ]

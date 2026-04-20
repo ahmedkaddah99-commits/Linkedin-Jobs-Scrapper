@@ -43,12 +43,32 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     connector_registry.register(
+        "linkedin_search",
+        ComponentDescriptor(
+            id="linkedin_search",
+            kind="connector",
+            name="LinkedIn Job Search",
+            description="Legacy alias for LinkedIn search-driven job discovery.",
+            metadata={"alias_for": "linkedin_jobs"},
+        ),
+    )
+    connector_registry.register(
         "curated_job_urls",
         ComponentDescriptor(
             id="curated_job_urls",
             kind="connector",
             name="Curated Job URLs",
             description="Manual job URL ingestion and normalization for curated opportunities.",
+        ),
+    )
+    connector_registry.register(
+        "manual_url",
+        ComponentDescriptor(
+            id="manual_url",
+            kind="connector",
+            name="Curated Job URLs",
+            description="Legacy alias for curated manual job URL ingestion.",
+            metadata={"alias_for": "curated_job_urls"},
         ),
     )
     connector_registry.register(
@@ -68,6 +88,16 @@ def _build_registries() -> BackendRegistries:
             name="Job Board Collection",
             description="Collect jobs across multiple job boards and portals.",
             metadata={"portal_strategy_ids": list_portal_strategy_ids()},
+        ),
+    )
+    connector_registry.register(
+        "blue_collar_portals",
+        ComponentDescriptor(
+            id="blue_collar_portals",
+            kind="connector",
+            name="Blue-Collar Portal Collection",
+            description="Legacy alias for multi-board blue-collar portal collection.",
+            metadata={"alias_for": "job_board_collection", "portal_strategy_ids": list_portal_strategy_ids()},
         ),
     )
     connector_registry.register(
@@ -121,12 +151,32 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     generation_registry.register(
+        "white_collar_cv_generation",
+        ComponentDescriptor(
+            id="white_collar_cv_generation",
+            kind="generation",
+            name="Tailored Application Documents",
+            description="Legacy alias for tailored white-collar document generation.",
+            metadata={"alias_for": "tailored_application_documents"},
+        ),
+    )
+    generation_registry.register(
         "reusable_role_profiles",
         ComponentDescriptor(
             id="reusable_role_profiles",
             kind="generation",
             name="Reusable Role Profiles",
             description="Generate reusable role-based profile documents for grouped jobs.",
+        ),
+    )
+    generation_registry.register(
+        "blue_collar_role_cv_generation",
+        ComponentDescriptor(
+            id="blue_collar_role_cv_generation",
+            kind="generation",
+            name="Reusable Role Profiles",
+            description="Legacy alias for blue-collar reusable role profile generation.",
+            metadata={"alias_for": "reusable_role_profiles"},
         ),
     )
 
@@ -140,12 +190,32 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     renderer_registry.register(
+        "docx_pdf_renderer",
+        ComponentDescriptor(
+            id="docx_pdf_renderer",
+            kind="renderer",
+            name="Application Document Export",
+            description="Legacy alias for Word/PDF application document export.",
+            metadata={"alias_for": "application_document_export"},
+        ),
+    )
+    renderer_registry.register(
         "application_package_export",
         ComponentDescriptor(
             id="application_package_export",
             kind="renderer",
             name="Application Package Export",
             description="Export packaged application assets, reusable bundles, and email drafts.",
+        ),
+    )
+    renderer_registry.register(
+        "blue_collar_package_renderer",
+        ComponentDescriptor(
+            id="blue_collar_package_renderer",
+            kind="renderer",
+            name="Application Package Export",
+            description="Legacy alias for blue-collar application package export.",
+            metadata={"alias_for": "application_package_export"},
         ),
     )
 

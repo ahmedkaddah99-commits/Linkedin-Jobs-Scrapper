@@ -3,12 +3,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any, Mapping
+from uuid import uuid4
 
 from backend.capabilities.networking import (
     build_hiring_manager_outreach_draft,
     build_referral_outreach_draft,
     find_referral_contacts_for_company,
     guess_hiring_manager_from_job,
+    merge_referral_contacts,
+    parse_referral_contacts_csv,
 )
 from backend.domain.models import (
     ROLE_ADMIN,
@@ -35,6 +38,7 @@ from backend.domain.models import (
     ReviewRecord,
     RunRecord,
     SecretRecord,
+    StageDefinition,
     StageContext,
     UserRecord,
     WorkerRecord,
@@ -43,7 +47,11 @@ from backend.domain.models import (
     utc_plus_seconds,
     utc_now_iso,
 )
-from backend.orchestration import build_workspace_from_scratch, workspace_builder_catalog
+from backend.orchestration import (
+    build_workspace_from_scratch,
+    validate_workspace_source_configuration,
+    workspace_builder_catalog,
+)
 from backend.security import issue_api_token, resolve_secret_references, token_has_scope, token_is_expired, verify_token_value
 
 
@@ -138,6 +146,9 @@ class BackendApplication:
         ]
         return catalog
 
+    def validate_workspace_builder_sources(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return validate_workspace_source_configuration(dict(payload))
+
     def create_workspace_from_scratch(self, payload: Mapping[str, Any]) -> WorkspaceDefinition:
         workflow_template, workspace = build_workspace_from_scratch(dict(payload))
         self.upsert_workflow_template(workflow_template)
@@ -151,6 +162,102 @@ class BackendApplication:
         workflow_template, workspace = build_workspace_from_scratch(builder_payload)
         self.upsert_workflow_template(workflow_template)
         return self.upsert_workspace(workspace)
+
+    def _find_job_payload(self, run_id: str, job_id: str) -> dict[str, Any]:
+        for jobs in self.repositories.job_store.load_all_job_sets(run_id).values():
+            for job in jobs:
+                if job.job_id == job_id:
+                    return job.to_dict()
+        for key, value in self.repositories.job_store.load_all_blobs(run_id).items():
+            if not str(key).endswith("_rejected") or not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, dict) and str(item.get("job_id") or "") == job_id:
+                    return dict(item)
+        raise KeyError(f"Job '{job_id}' not found in run '{run_id}'.")
+
+    def _workflow_from_run_snapshot(self, run: RunRecord) -> WorkflowTemplate:
+        if run.run_plan and run.run_plan.workflow_snapshot:
+            return WorkflowTemplate.from_dict(run.run_plan.workflow_snapshot)
+        return self.repositories.workspace_repository.get_workflow_template(run.workflow_template_id)
+
+    def _workspace_from_run_snapshot(self, run: RunRecord) -> WorkspaceDefinition:
+        if run.run_plan and run.run_plan.workspace_snapshot:
+            return WorkspaceDefinition.from_dict(run.run_plan.workspace_snapshot)
+        return self.repositories.workspace_repository.get_workspace(run.workspace_id)
+
+    def _build_requeue_workflow(self, workflow: WorkflowTemplate) -> WorkflowTemplate:
+        requeue_stages = [
+            StageDefinition.from_dict(stage.to_dict())
+            for stage in workflow.stages
+            if stage.stage_type == "applications.generate.documents"
+            or bool((stage.metadata or {}).get("supports_requeue"))
+        ]
+        if not requeue_stages:
+            raise ValueError("This workspace does not expose a document-generation stage that can be requeued.")
+        requeue_stages[0].input_keys = ["requeued_jobs"]
+        return WorkflowTemplate(
+            id=f"{workflow.id}_requeue",
+            name=f"{workflow.name} Requeue",
+            description=f"Requeue workflow for {workflow.name}.",
+            stages=requeue_stages,
+            default_run_settings=dict(workflow.default_run_settings),
+        )
+
+    def requeue_job_for_generation(
+        self,
+        *,
+        run_id: str,
+        job_id: str,
+        requested_by: str = "api",
+        max_attempts: int = 1,
+        execute: bool = False,
+        notes: str = "",
+    ) -> RunRecord:
+        original_run = self.get_run(run_id)
+        workspace = self.get_workspace(original_run.workspace_id)
+        original_workflow = self.repositories.workspace_repository.get_workflow_template(workspace.workflow_template_id)
+        job_payload = self._find_job_payload(run_id, job_id)
+        requeue_workflow = self._build_requeue_workflow(original_workflow)
+        run_overrides = dict(original_run.run_input_overrides or {})
+        run_overrides["force_regenerate"] = True
+
+        requeue_run = RunRecord.create(
+            workspace_id=workspace.id,
+            workflow_template_id=requeue_workflow.id,
+            run_input_overrides=run_overrides,
+            requested_by=requested_by,
+            max_attempts=max_attempts,
+            metadata={
+                "workspace_type": workspace.workspace_type,
+                "requeue_origin": {
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "notes": str(notes or ""),
+                },
+            },
+        )
+        requeue_run.run_plan = self.stage_engine.build_run_plan(
+            workspace=workspace,
+            workflow=requeue_workflow,
+            run_input_overrides=run_overrides,
+        )
+        self.repositories.run_repository.save(requeue_run)
+        self.repositories.job_store.save_job_set(
+            requeue_run.id,
+            "requeued_jobs",
+            [JobRecord.from_mapping(job_payload)],
+        )
+        self._refresh_run_job_keys(requeue_run.id)
+
+        if execute:
+            return self._execute_run(
+                requeue_run,
+                workspace=workspace,
+                workflow=requeue_workflow,
+                auto_retry_failed=False,
+            )
+        return self._queue_run(requeue_run)
 
     def list_users(self) -> list[UserRecord]:
         return self.repositories.auth_repository.list_users()
@@ -205,7 +312,7 @@ class BackendApplication:
             for item in (user.metadata or {}).get("referrals") or []
             if isinstance(item, dict)
         ]
-        contacts.sort(key=lambda item: (item.company.lower(), item.name.lower()))
+        contacts.sort(key=lambda item: (item.primary_company().lower(), item.name.lower()))
         return contacts
 
     def get_referral_contact(self, user_id: str, contact_id: str) -> ReferralContactRecord:
@@ -229,15 +336,19 @@ class BackendApplication:
             contact = ReferralContactRecord.create(
                 name=contact.name,
                 company=contact.company,
+                companies=contact.companies,
                 linkedin_url=contact.linkedin_url,
                 relationship_note=contact.relationship_note,
                 can_refer=contact.can_refer,
+                source_kind=contact.source_kind,
+                import_batch_id=contact.import_batch_id,
+                import_ref=contact.import_ref,
                 metadata=contact.metadata,
             )
         if not contact.name:
             raise ValueError("contact name is required")
-        if not contact.company:
-            raise ValueError("contact company is required")
+        contact.company = contact.primary_company()
+        contact.can_refer = bool(contact.can_refer or any(bool(item.get("can_refer")) for item in contact.companies))
         contact.updated_at = utc_now_iso()
 
         contacts = self.list_referral_contacts(user_id)
@@ -253,6 +364,46 @@ class BackendApplication:
             normalized_contacts.append(contact)
         self._persist_referral_contacts(user, normalized_contacts)
         return self.get_referral_contact(user_id, contact.contact_id)
+
+    def import_referral_contacts(
+        self,
+        *,
+        user_id: str,
+        csv_text: str,
+        source_kind: str = "linkedin_csv",
+    ) -> dict[str, Any]:
+        if not str(csv_text or "").strip():
+            raise ValueError("csv_text is required")
+        user = self.repositories.auth_repository.get_user(user_id)
+        import_batch_id = f"import_{uuid4().hex[:12]}"
+        parsed_contacts = parse_referral_contacts_csv(
+            csv_text,
+            source_kind=source_kind,
+            import_batch_id=import_batch_id,
+        )
+        if not parsed_contacts:
+            raise ValueError("No contacts could be parsed from the CSV.")
+        existing_contacts = self.list_referral_contacts(user_id)
+        merged_contacts, summary = merge_referral_contacts(existing_contacts, parsed_contacts)
+        for contact in merged_contacts:
+            contact.updated_at = utc_now_iso()
+        self._persist_referral_contacts(user, merged_contacts)
+        refreshed_contacts = self.list_referral_contacts(user_id)
+        imported_contact_ids = {
+            contact.contact_id
+            for contact in refreshed_contacts
+            if contact.import_batch_id == import_batch_id
+        }
+        return {
+            "import_batch_id": import_batch_id,
+            "source_kind": source_kind,
+            "summary": {
+                **summary,
+                "parsed": len(parsed_contacts),
+                "total_contacts": len(refreshed_contacts),
+            },
+            "contacts": [contact.to_dict() for contact in refreshed_contacts if contact.contact_id in imported_contact_ids],
+        }
 
     def delete_referral_contact(self, user_id: str, contact_id: str) -> None:
         user = self.repositories.auth_repository.get_user(user_id)
@@ -764,8 +915,8 @@ class BackendApplication:
 
     def execute_claimed_run(self, run_id: str, *, auto_retry_failed: bool = True) -> RunRecord:
         run = self.repositories.run_repository.get(run_id)
-        workspace = self.repositories.workspace_repository.get_workspace(run.workspace_id)
-        workflow = self.repositories.workspace_repository.get_workflow_template(run.workflow_template_id)
+        workspace = self._workspace_from_run_snapshot(run)
+        workflow = self._workflow_from_run_snapshot(run)
         return self._execute_run(run, workspace=workspace, workflow=workflow, auto_retry_failed=auto_retry_failed)
 
     def release_worker(self, worker_id: str, *, status: str = WORKER_STATUS_IDLE) -> WorkerRecord | None:

@@ -1,7 +1,12 @@
 from .engine import BaseStage, StageEngine, StageOutcome
 from .registries import BackendRegistries, ComponentDescriptor, Registry
 from .seeded_workspaces import DEFAULT_WORKFLOW_TEMPLATES, DEFAULT_WORKSPACES
-from .workspace_builder import build_workspace_from_scratch, workspace_builder_catalog
+from .workspace_builder import (
+    build_workspace_from_scratch,
+    derive_runtime_defaults_from_settings,
+    validate_workspace_source_configuration,
+    workspace_builder_catalog,
+)
 
 __all__ = [
     "BaseStage",
@@ -13,5 +18,7 @@ __all__ = [
     "StageEngine",
     "StageOutcome",
     "build_workspace_from_scratch",
+    "derive_runtime_defaults_from_settings",
+    "validate_workspace_source_configuration",
     "workspace_builder_catalog",
 ]

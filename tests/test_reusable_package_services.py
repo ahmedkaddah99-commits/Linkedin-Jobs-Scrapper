@@ -1,6 +1,7 @@
 import shutil
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -73,17 +74,32 @@ class ReusablePackageServiceTests(unittest.TestCase):
             }
         ]
 
-        stage4_args = stage4_module.build_stage4_args(
-            config,
-            overrides={
-                "role_cv_output_dir": str(temp_dir / "role_cvs"),
-                "role_cv_index_json": str(temp_dir / "stage4_role_cvs.json"),
-            },
-        )
-        stage4_result = stage4_module.run_stage4_pipeline(stage4_args, config=config, jobs=jobs)
+        def fake_pdf_convert(docx_path: str) -> str:
+            pdf_path = Path(docx_path).with_suffix(".pdf")
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+            return str(pdf_path)
+
+        with patch(
+            "backend.capabilities.reusable_packages.reusable_profiles.convert_docx_to_pdf",
+            side_effect=fake_pdf_convert,
+        ):
+            stage4_args = stage4_module.build_stage4_args(
+                config,
+                overrides={
+                    "role_cv_output_dir": str(temp_dir / "role_cvs"),
+                    "role_cv_index_json": str(temp_dir / "stage4_role_cvs.json"),
+                },
+            )
+            stage4_result = stage4_module.run_stage4_pipeline(stage4_args, config=config, jobs=jobs)
 
         self.assertGreater(len(stage4_result["role_cv_records"]), 0)
         self.assertTrue((temp_dir / "stage4_role_cvs.json").exists())
+        warehouse_role_record = next(
+            item for item in stage4_result["role_cv_records"] if item["category_id"] == "warehouse_logistics"
+        )
+        self.assertTrue(Path(warehouse_role_record["cv_txt_path"]).exists())
+        self.assertTrue(Path(warehouse_role_record["cv_docx_path"]).exists())
+        self.assertTrue(Path(warehouse_role_record["cv_pdf_path"]).exists())
 
         stage5_args = stage5_module.build_stage5_args(
             config,
@@ -107,6 +123,8 @@ class ReusablePackageServiceTests(unittest.TestCase):
 
         record = stage5_result["records"][0]
         self.assertTrue(Path(record["assigned_cv_txt"]).exists())
+        self.assertTrue(Path(record["assigned_cv_docx"]).exists())
+        self.assertTrue(Path(record["assigned_cv_pdf"]).exists())
         self.assertTrue(Path(record["email_draft_path"]).exists())
 
 

@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import uuid4
 
+from backend.domain.phase0_contracts import normalize_referral_relationship
+
 
 RUN_STATUS_PLANNED = "planned"
 RUN_STATUS_QUEUED = "queued"
@@ -266,6 +268,10 @@ class ReferralContactRecord:
     linkedin_url: str = ""
     relationship_note: str = ""
     can_refer: bool = False
+    companies: list[dict[str, Any]] = field(default_factory=list)
+    source_kind: str = "manual"
+    import_batch_id: str = ""
+    import_ref: str = ""
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -275,37 +281,108 @@ class ReferralContactRecord:
         cls,
         *,
         name: str,
-        company: str,
+        company: str = "",
+        companies: list[Mapping[str, Any]] | None = None,
         linkedin_url: str = "",
         relationship_note: str = "",
         can_refer: bool = False,
+        source_kind: str = "manual",
+        import_batch_id: str = "",
+        import_ref: str = "",
         metadata: Mapping[str, Any] | None = None,
     ) -> "ReferralContactRecord":
         now = utc_now_iso()
+        normalized = normalize_referral_relationship(
+            {
+                "name": name,
+                "company": company,
+                "companies": companies or [],
+                "linkedin_url": linkedin_url,
+                "relationship_note": relationship_note,
+                "can_refer": can_refer,
+                "source_kind": source_kind,
+                "import_batch_id": import_batch_id,
+                "import_ref": import_ref,
+                "metadata": dict(metadata or {}),
+            }
+        )
+        normalized_companies = [dict(item) for item in normalized["companies"]]
+        primary_company = next(
+            (
+                str(item.get("company_name") or "").strip()
+                for item in normalized_companies
+                if str(item.get("company_name") or "").strip()
+            ),
+            str(company).strip(),
+        )
         return cls(
             contact_id=f"contact_{uuid4().hex[:16]}",
-            name=str(name).strip(),
-            company=str(company).strip(),
-            linkedin_url=str(linkedin_url).strip(),
-            relationship_note=str(relationship_note).strip(),
-            can_refer=bool(can_refer),
+            name=str(normalized["person"]["full_name"] or name).strip(),
+            company=primary_company,
+            linkedin_url=str(normalized["person"]["linkedin_url"] or "").strip(),
+            relationship_note=str(normalized["person"]["notes"] or "").strip(),
+            can_refer=bool(
+                can_refer
+                or any(bool(item.get("can_refer")) for item in normalized_companies)
+            ),
+            companies=normalized_companies,
+            source_kind=str(normalized["source"]["kind"] or source_kind).strip() or "manual",
+            import_batch_id=str(normalized["source"]["import_batch_id"] or import_batch_id).strip(),
+            import_ref=str(normalized["source"]["import_ref"] or import_ref).strip(),
             created_at=now,
             updated_at=now,
             metadata=dict(metadata or {}),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["company"] = self.primary_company()
+        payload["can_refer"] = self.can_refer or any(bool(item.get("can_refer")) for item in self.companies)
+        return payload
+
+    def primary_company(self) -> str:
+        for item in self.companies:
+            company_name = str(item.get("company_name") or "").strip()
+            if company_name:
+                return company_name
+        return str(self.company or "").strip()
+
+    def company_names(self) -> list[str]:
+        names: list[str] = []
+        for item in self.companies:
+            company_name = str(item.get("company_name") or "").strip()
+            if company_name:
+                names.append(company_name)
+        if not names and str(self.company or "").strip():
+            names.append(str(self.company).strip())
+        return names
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ReferralContactRecord":
+        normalized = normalize_referral_relationship(payload)
+        companies = [dict(item) for item in normalized["companies"]]
+        primary_company = next(
+            (
+                str(item.get("company_name") or "").strip()
+                for item in companies
+                if str(item.get("company_name") or "").strip()
+            ),
+            str(payload.get("company") or "").strip(),
+        )
         return cls(
             contact_id=str(payload.get("contact_id") or ""),
-            name=str(payload.get("name") or ""),
-            company=str(payload.get("company") or ""),
-            linkedin_url=str(payload.get("linkedin_url") or ""),
-            relationship_note=str(payload.get("relationship_note") or ""),
-            can_refer=bool(payload.get("can_refer") or False),
+            name=str(normalized["person"]["full_name"] or payload.get("name") or ""),
+            company=primary_company,
+            linkedin_url=str(normalized["person"]["linkedin_url"] or ""),
+            relationship_note=str(normalized["person"]["notes"] or ""),
+            can_refer=bool(
+                payload.get("can_refer")
+                or any(bool(item.get("can_refer")) for item in companies)
+            ),
+            companies=companies,
+            source_kind=str(normalized["source"]["kind"] or payload.get("source_kind") or "manual"),
+            import_batch_id=str(normalized["source"]["import_batch_id"] or payload.get("import_batch_id") or ""),
+            import_ref=str(normalized["source"]["import_ref"] or payload.get("import_ref") or ""),
             created_at=str(payload.get("created_at") or utc_now_iso()),
             updated_at=str(payload.get("updated_at") or utc_now_iso()),
             metadata=dict(payload.get("metadata") or {}),

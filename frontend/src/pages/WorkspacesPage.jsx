@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { labelize } from "../lib/formatters";
@@ -63,11 +63,26 @@ function TogglePill({ checked, label, onClick }) {
   );
 }
 
-function BuilderSection({ title, description, children }) {
+function BuilderSection({ id, title, description, children, emphasized = false }) {
   return (
-    <section className="space-y-3 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
+    <section
+      className={[
+        "space-y-3 rounded-xl bg-surface-container-lowest p-6 transition-all",
+        emphasized
+          ? "border border-primary/30 ring-2 ring-primary/10"
+          : "border border-outline-variant/20",
+      ].join(" ")}
+      id={id}
+    >
       <div>
-        <h3 className="font-headline text-lg font-bold text-on-surface">{title}</h3>
+        <div className="flex flex-wrap items-center gap-3">
+          <h3 className="font-headline text-lg font-bold text-on-surface">{title}</h3>
+          {emphasized ? (
+            <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+              Review Focus
+            </span>
+          ) : null}
+        </div>
         <p className="mt-1 text-sm leading-6 text-on-surface-variant">{description}</p>
       </div>
       {children}
@@ -144,6 +159,9 @@ function formatSettingValue(value) {
 }
 
 function settingDisplayValue(field, value) {
+  if (field.type === "asset_select") {
+    return value === undefined || value === null ? "" : String(value);
+  }
   if (field.type === "tag_list") {
     return Array.isArray(value) ? value.join(", ") : "";
   }
@@ -155,6 +173,12 @@ function settingDisplayValue(field, value) {
   }
   if (field.type === "multi_select") {
     return Array.isArray(value) ? value : [];
+  }
+  if (field.type === "boolean") {
+    if (value === undefined || value === null || value === "") {
+      return "";
+    }
+    return value ? "true" : "false";
   }
   if (value === undefined || value === null) {
     return "";
@@ -227,7 +251,7 @@ function workspaceSettingEntries(workspace, catalog) {
     key,
     label: fieldMap.get(key)?.label || labelize(key),
     value: formatSettingValue(value),
-    internal: SYSTEM_SETTING_KEYS.has(key),
+    internal: SYSTEM_SETTING_KEYS.has(key) || fieldMap.get(key)?.user_facing === false,
   }));
 }
 
@@ -235,7 +259,25 @@ function workspaceHasConnector(workspace, connectorId) {
   return (workspace.sources || []).some((source) => source.connector_id === connectorId);
 }
 
-function FieldRenderer({ field, value, onChange }) {
+function FieldRenderer({ field, value, onChange, dynamicOptions = {} }) {
+  if (field.type === "asset_select") {
+    const options = dynamicOptions[field.dynamic_source] || [];
+    return (
+      <select
+        className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+        onChange={(event) => onChange(event.target.value)}
+        value={settingDisplayValue(field, value)}
+      >
+        <option value="">{options.length ? "Select a CV" : "Upload a CV first"}</option>
+        {options.map((option) => (
+          <option key={`${field.id}-${option.value}`} value={String(option.value)}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
   if (field.type === "multi_select") {
     const selectedValues = Array.isArray(value) ? value : [];
     return (
@@ -284,13 +326,41 @@ function FieldRenderer({ field, value, onChange }) {
     );
   }
 
-  if (field.type === "url_list" || field.type === "company_site_list") {
+  if (field.type === "boolean") {
+    return (
+      <select
+        className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+        onChange={(event) => {
+          const nextValue = event.target.value;
+          if (!nextValue) {
+            onChange(undefined);
+            return;
+          }
+          onChange(nextValue === "true");
+        }}
+        value={settingDisplayValue(field, value)}
+      >
+        <option value="">Use workspace default</option>
+        {(field.options || []).map((option) => (
+          <option key={`${field.id}-${String(option.value)}`} value={String(option.value)}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  if (
+    field.type === "url_list" ||
+    field.type === "company_site_list" ||
+    field.type === "textarea"
+  ) {
     return (
       <textarea
         className="min-h-32 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
         onChange={(event) => onChange(event.target.value)}
         placeholder={field.placeholder || ""}
-        rows={field.type === "company_site_list" ? 5 : 4}
+        rows={field.type === "company_site_list" ? 5 : field.rows || 4}
         value={settingDisplayValue(field, value)}
       />
     );
@@ -301,7 +371,8 @@ function FieldRenderer({ field, value, onChange }) {
       className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
       onChange={(event) => onChange(event.target.value)}
       placeholder={field.placeholder || ""}
-      type={field.type === "number" ? "number" : "text"}
+      step={field.type === "float" ? "0.1" : undefined}
+      type={field.type === "number" || field.type === "float" ? "number" : "text"}
       value={settingDisplayValue(field, value)}
     />
   );
@@ -309,6 +380,8 @@ function FieldRenderer({ field, value, onChange }) {
 
 export default function WorkspacesPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusedSectionId = searchParams.get("focus") || "";
   const { request } = useSession();
   const [actionState, setActionState] = useState({
     workspaceId: "",
@@ -326,6 +399,17 @@ export default function WorkspacesPage() {
   });
   const [form, setForm] = useState(EMPTY_BUILDER_FORM);
   const [quickManualUrls, setQuickManualUrls] = useState({});
+  const [sourceValidation, setSourceValidation] = useState({
+    loading: false,
+    valid: true,
+    sourceResults: [],
+    error: "",
+  });
+  const [cvUploadState, setCvUploadState] = useState({
+    uploading: false,
+    message: "",
+    error: "",
+  });
 
   const {
     data: workspacesData,
@@ -338,9 +422,16 @@ export default function WorkspacesPage() {
     loading: builderLoading,
     error: builderError,
   } = useApiResource(() => request("/workspace-builder/catalog"), [request]);
+  const {
+    data: cvAssetsPayload,
+    refresh: refreshCvAssets,
+  } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request]);
 
   const workspaces = workspacesData?.workspaces || [];
-  const flows = builderCatalog?.flows || [];
+  const flows = useMemo(
+    () => (builderCatalog?.flows || []).filter((flow) => flow.frontend_visible !== false),
+    [builderCatalog?.flows],
+  );
   const availableSources = useMemo(
     () =>
       (builderCatalog?.sources || []).filter((item) =>
@@ -358,17 +449,43 @@ export default function WorkspacesPage() {
   const availableConfigurationFields = useMemo(
     () =>
       (builderCatalog?.configuration_fields || []).filter((field) =>
-        fieldMatchesSelection(field, form, availableSources),
+        field.user_facing !== false && fieldMatchesSelection(field, form, availableSources),
       ),
     [builderCatalog, form, availableSources],
   );
-  const targetRoleFields = useMemo(
-    () => availableConfigurationFields.filter((field) => field.id === "target_roles"),
+  const builderSections = useMemo(
+    () =>
+      (builderCatalog?.builder_sections || []).filter((section) =>
+        availableConfigurationFields.some((field) => field.section === section.id),
+      ),
+    [availableConfigurationFields, builderCatalog?.builder_sections],
+  );
+  const focusedSection = useMemo(
+    () => builderSections.find((section) => section.id === focusedSectionId) || null,
+    [builderSections, focusedSectionId],
+  );
+  const sectionFields = useMemo(
+    () =>
+      availableConfigurationFields.reduce((accumulator, field) => {
+        const sectionId = field.section || "advanced";
+        if (!accumulator[sectionId]) {
+          accumulator[sectionId] = [];
+        }
+        accumulator[sectionId].push(field);
+        return accumulator;
+      }, {}),
     [availableConfigurationFields],
   );
-  const searchConfigurationFields = useMemo(
-    () => availableConfigurationFields.filter((field) => field.id !== "target_roles"),
-    [availableConfigurationFields],
+  const dynamicFieldOptions = useMemo(
+    () => ({
+      workspace_cv_assets: (cvAssetsPayload?.documents || [])
+        .filter((item) => item.asset_kind === "workspace_cv")
+        .map((item) => ({
+          value: item.asset_id,
+          label: item.display_name,
+        })),
+    }),
+    [cvAssetsPayload?.documents],
   );
 
   function resetBuilderState(overrides = {}) {
@@ -397,11 +514,15 @@ export default function WorkspacesPage() {
           : "Primary Job Seeker Profile",
       settings: buildDefaultSettings(builderCatalog, defaultFlowId),
     });
+    setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
+    setCvUploadState({ uploading: false, message: "", error: "" });
     resetBuilderState({ open: true });
   }
 
   function openEditor(workspace) {
     setForm(hydrateFormFromWorkspace(workspace, builderCatalog));
+    setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
+    setCvUploadState({ uploading: false, message: "", error: "" });
     resetBuilderState({
       open: true,
       mode: "edit",
@@ -412,6 +533,14 @@ export default function WorkspacesPage() {
   function closeBuilder() {
     resetBuilderState();
     setForm(EMPTY_BUILDER_FORM);
+    setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
+    setCvUploadState({ uploading: false, message: "", error: "" });
+    if (searchParams.get("edit")) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("edit");
+      next.delete("focus");
+      setSearchParams(next);
+    }
   }
 
   function updateForm(patch) {
@@ -441,6 +570,7 @@ export default function WorkspacesPage() {
           : "Primary Job Seeker Profile",
       settings: buildDefaultSettings(builderCatalog, flowId),
     }));
+    setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
   }
 
   function toggleValue(key, value) {
@@ -496,6 +626,89 @@ export default function WorkspacesPage() {
       }));
     }
   }
+
+  async function validateSources() {
+    setSourceValidation({ loading: true, valid: true, sourceResults: [], error: "" });
+    try {
+      const payload = await request("/workspace-builder/source-validation", {
+        method: "POST",
+        body: {
+          flow_id: form.flowId,
+          source_ids: form.sourceIds,
+          settings: form.settings,
+        },
+      });
+      setSourceValidation({
+        loading: false,
+        valid: Boolean(payload.valid),
+        sourceResults: payload.source_results || [],
+        error: "",
+      });
+    } catch (validationError) {
+      setSourceValidation({
+        loading: false,
+        valid: false,
+        sourceResults: [],
+        error: validationError.message || "Unable to validate sources.",
+      });
+    }
+  }
+
+  async function uploadWorkspaceCv(file) {
+    if (!file) return;
+    setCvUploadState({ uploading: true, message: "", error: "" });
+    try {
+      const formData = new FormData();
+      formData.append("cv_file", file, file.name);
+      const response = await request("/cv-upload", {
+        method: "POST",
+        body: formData,
+      });
+      const uploadedAssetId = response?.asset?.asset_id || "";
+      if (uploadedAssetId) {
+        updateSetting("workspace_cv_asset_id", uploadedAssetId);
+      }
+      await refreshCvAssets().catch(() => undefined);
+      setCvUploadState({
+        uploading: false,
+        message: uploadedAssetId
+          ? `Uploaded ${file.name} and selected it for this workspace.`
+          : `Uploaded ${file.name}.`,
+        error: "",
+      });
+    } catch (uploadError) {
+      setCvUploadState({
+        uploading: false,
+        message: "",
+        error: uploadError.message || "Unable to upload CV.",
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!builderCatalog || builderState.open) {
+      return;
+    }
+    const editWorkspaceId = searchParams.get("edit");
+    if (!editWorkspaceId) {
+      return;
+    }
+    const workspace = workspaces.find((item) => item.id === editWorkspaceId);
+    if (workspace) {
+      openEditor(workspace);
+    }
+  }, [builderCatalog, builderState.open, searchParams, workspaces]);
+
+  useEffect(() => {
+    if (!builderState.open || !focusedSectionId) {
+      return;
+    }
+    const targetId = `workspace-builder-${focusedSectionId}`;
+    const timer = window.setTimeout(() => {
+      document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [builderState.open, focusedSectionId]);
 
   async function triggerRun(workspaceId, executionMode, runInputOverrides = {}) {
     setActionState({ workspaceId, message: "", error: "" });
@@ -596,22 +809,32 @@ export default function WorkspacesPage() {
       {builderState.open ? (
         <div className="grid gap-6 xl:grid-cols-12">
           <div className="space-y-6 xl:col-span-8">
+            {focusedSectionId ? (
+              <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
+                {focusedSection ? (
+                  <>
+                    Opened from rejected-job review. The workspace editor is focused on{" "}
+                    <span className="font-semibold text-primary">{focusedSection.title}</span>.
+                  </>
+                ) : (
+                  <>
+                    Opened from rejected-job review. This rejection does not map to a specific
+                    workspace section, so review the settings below and the review queue together.
+                  </>
+                )}
+              </div>
+            ) : null}
+
             <BuilderSection
               description="Give the workspace a clear name and describe what kind of search or application output it should handle."
               title="Workspace Identity"
             >
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4">
                 <input
                   className="rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
                   onChange={(event) => updateForm({ name: event.target.value })}
                   placeholder="Workspace name"
                   value={form.name}
-                />
-                <input
-                  className="rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => updateForm({ promptFamily: event.target.value })}
-                  placeholder="Prompt family"
-                  value={form.promptFamily}
                 />
               </div>
               <textarea
@@ -623,19 +846,25 @@ export default function WorkspacesPage() {
             </BuilderSection>
 
             <BuilderSection
-              description="Choose the outcome this workspace should produce. This decides the available sources and modules."
+              description="This remediation flow stays focused on sourcing jobs, screening them, and generating tailored application documents."
               title="Automation Flow"
             >
-              <div className="flex flex-wrap gap-3">
-                {flows.map((flow) => (
-                  <TogglePill
-                    checked={form.flowId === flow.id}
-                    key={flow.id}
-                    label={flow.name}
-                    onClick={() => setFlow(flow.id)}
-                  />
-                ))}
-              </div>
+              {flows.length > 1 ? (
+                <div className="flex flex-wrap gap-3">
+                  {flows.map((flow) => (
+                    <TogglePill
+                      checked={form.flowId === flow.id}
+                      key={flow.id}
+                      label={flow.name}
+                      onClick={() => setFlow(flow.id)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-outline-variant/10 bg-surface p-4 text-sm text-on-surface">
+                  {flows[0]?.name || "Tailored Application Documents"}
+                </div>
+              )}
               <p className="text-sm text-on-surface-variant">
                 {flows.find((flow) => flow.id === form.flowId)?.description || ""}
               </p>
@@ -662,112 +891,166 @@ export default function WorkspacesPage() {
             </BuilderSection>
 
             <BuilderSection
-              description="Choose the baseline automation modules that should run after jobs are sourced."
+              description="The core automation path is fixed for this remediation: source jobs, screen them, prioritize them, and generate documents."
               title="Automation Modules"
             >
               {availableModules.length ? (
-                <div className="space-y-3">
-                  {availableModules.map((module) => (
-                    <label
-                      className="flex items-start gap-3 rounded-lg border border-outline-variant/10 bg-surface p-4"
-                      key={module.id}
-                    >
-                      <input
-                        checked={form.moduleIds.includes(module.id)}
-                        className="mt-1"
-                        onChange={() => toggleValue("moduleIds", module.id)}
-                        type="checkbox"
-                      />
-                      <span>
-                        <span className="block text-sm font-semibold text-on-surface">{module.name}</span>
-                        <span className="mt-1 block text-xs leading-6 text-on-surface-variant">
-                          {module.description}
-                        </span>
-                      </span>
-                    </label>
-                  ))}
+                <div className="flex flex-wrap gap-3">
+                  {availableModules
+                    .filter((module) => form.moduleIds.includes(module.id))
+                    .map((module) => (
+                      <div
+                        className="rounded-full border border-primary/20 bg-primary/10 px-3 py-2 text-sm font-medium text-primary"
+                        key={module.id}
+                      >
+                        {module.name}
+                      </div>
+                    ))}
                 </div>
               ) : (
                 <p className="text-sm text-on-surface-variant">No modules are available for this flow.</p>
               )}
             </BuilderSection>
 
-            <BuilderSection
-              description="Pick up to three role families to shape search keywords, screening context, and document emphasis for this workspace."
-              title="Target Role"
-            >
-              {targetRoleFields.length ? (
-                <div className="space-y-2">
-                  {targetRoleFields.map((field) => (
-                    <label className="space-y-2" key={field.id}>
-                      <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
-                      <FieldRenderer
-                        field={field}
-                        onChange={(nextValue) => updateSetting(field.id, nextValue)}
-                        value={form.settings[field.id]}
-                      />
-                      <span className="block text-xs leading-6 text-on-surface-variant">
-                        {field.description}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-on-surface-variant">
-                  This flow does not expose role targeting.
-                </p>
-              )}
-            </BuilderSection>
-
-            <BuilderSection
-              description="Set the search and routing values that make this workspace behave like a real job-seeker setup rather than a fixed preset."
-              title="Search And Routing Settings"
-            >
-              {searchConfigurationFields.length ? (
-                <div className="grid gap-4 md:grid-cols-2">
-                  {searchConfigurationFields.map((field) => (
-                    <label className="space-y-2" key={field.id}>
-                      <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
-                      <FieldRenderer
-                        field={field}
-                        onChange={(nextValue) => updateSetting(field.id, nextValue)}
-                        value={form.settings[field.id]}
-                      />
-                      <span className="block text-xs leading-6 text-on-surface-variant">
-                        {field.description}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-on-surface-variant">
-                  Select a source to see the settings that apply to that workspace.
-                </p>
-              )}
-            </BuilderSection>
+            {builderSections.map((section) => {
+              const fields = sectionFields[section.id] || [];
+              if (!fields.length) {
+                return null;
+              }
+              return (
+                <BuilderSection
+                  description={section.description}
+                  emphasized={section.id === focusedSectionId}
+                  id={`workspace-builder-${section.id}`}
+                  key={section.id}
+                  title={section.title}
+                >
+                  {section.id === "cv_binding" ? (
+                    <div className="space-y-4">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        {fields.map((field) => (
+                          <label className="space-y-2" key={field.id}>
+                            <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                            <FieldRenderer
+                              dynamicOptions={dynamicFieldOptions}
+                              field={field}
+                              onChange={(nextValue) => updateSetting(field.id, nextValue)}
+                              value={form.settings[field.id]}
+                            />
+                            <span className="block text-xs leading-6 text-on-surface-variant">
+                              {field.description}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="rounded-lg border border-dashed border-outline-variant/20 bg-surface p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-on-surface">Upload a new workspace CV</p>
+                            <p className="text-xs leading-6 text-on-surface-variant">
+                              Uploading here also adds the CV to the shared documents library.
+                            </p>
+                          </div>
+                          <label className="inline-flex cursor-pointer items-center rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high">
+                            <input
+                              className="hidden"
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (file) {
+                                  uploadWorkspaceCv(file);
+                                  event.target.value = "";
+                                }
+                              }}
+                              type="file"
+                            />
+                            {cvUploadState.uploading ? "Uploading..." : "Upload CV"}
+                          </label>
+                        </div>
+                        {cvUploadState.message ? (
+                          <p className="mt-3 text-sm text-primary">{cvUploadState.message}</p>
+                        ) : null}
+                        {cvUploadState.error ? (
+                          <p className="mt-3 text-sm text-error">{cvUploadState.error}</p>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {fields.map((field) => (
+                        <label className="space-y-2" key={field.id}>
+                          <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                          <FieldRenderer
+                            dynamicOptions={dynamicFieldOptions}
+                            field={field}
+                            onChange={(nextValue) => updateSetting(field.id, nextValue)}
+                            value={form.settings[field.id]}
+                          />
+                          <span className="block text-xs leading-6 text-on-surface-variant">
+                            {field.description}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </BuilderSection>
+              );
+            })}
           </div>
 
           <div className="space-y-6 xl:col-span-4">
             <BuilderSection
-              description="Set the baseline job-seeker profile and how curated sources should be treated."
-              title="Profile Defaults"
+              description="Check the selected sources before you save or run so broken setup is visible early."
+              title="Source Validation"
             >
-              <input
-                className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                onChange={(event) => updateForm({ profileLabel: event.target.value })}
-                placeholder="Profile label"
-                value={form.profileLabel}
-              />
-              <label className="flex items-center gap-3 rounded-lg border border-outline-variant/10 bg-surface p-4 text-sm text-on-surface">
-                <input
-                  checked={form.manualSourcesArePreapproved}
-                  onChange={(event) =>
-                    updateForm({ manualSourcesArePreapproved: event.target.checked })
-                  }
-                  type="checkbox"
-                />
-                Treat curated job URLs as already reviewed by the user
-              </label>
+              <button
+                className="w-full rounded bg-surface-container-low px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={sourceValidation.loading || !form.sourceIds.length}
+                onClick={validateSources}
+                type="button"
+              >
+                {sourceValidation.loading ? "Validating..." : "Validate Selected Sources"}
+              </button>
+              {sourceValidation.error ? (
+                <p className="text-sm text-error">{sourceValidation.error}</p>
+              ) : null}
+              {sourceValidation.sourceResults.length ? (
+                <div className="space-y-3">
+                  {sourceValidation.sourceResults.map((result) => (
+                    <div
+                      className="rounded-lg border border-outline-variant/10 bg-surface p-4"
+                      key={result.source_id}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-semibold text-on-surface">
+                          {labelize(result.source_id)}
+                        </span>
+                        <span
+                          className={[
+                            "rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                            result.status === "valid"
+                              ? "bg-primary/10 text-primary"
+                              : "bg-error/10 text-error",
+                          ].join(" ")}
+                        >
+                          {result.status}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-on-surface-variant">{result.summary}</p>
+                      {result.details?.length ? (
+                        <div className="mt-2 space-y-1 text-xs leading-6 text-on-surface-variant">
+                          {result.details.map((detail) => (
+                            <div key={detail}>{detail}</div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-on-surface-variant">
+                  Validation will summarize country-to-source defaults, pasted URL readiness, and job-board setup.
+                </p>
+              )}
             </BuilderSection>
 
             <BuilderSection
@@ -785,11 +1068,13 @@ export default function WorkspacesPage() {
                 </div>
                 <div>
                   <span className="font-semibold text-on-surface">Modules:</span>{" "}
-                  {form.moduleIds.length ? form.moduleIds.map(labelize).join(", ") : "None selected"}
+                  {form.moduleIds.length ? form.moduleIds.map(labelize).join(", ") : "Default remediation path"}
                 </div>
                 <div>
-                  <span className="font-semibold text-on-surface">Profile:</span>{" "}
-                  {form.profileLabel || "Not set"}
+                  <span className="font-semibold text-on-surface">Workspace CV:</span>{" "}
+                  {dynamicFieldOptions.workspace_cv_assets.find(
+                    (item) => item.value === form.settings.workspace_cv_asset_id,
+                  )?.label || "Not selected"}
                 </div>
               </div>
 
@@ -811,7 +1096,8 @@ export default function WorkspacesPage() {
                     builderState.submitting ||
                     !form.name.trim() ||
                     !form.sourceIds.length ||
-                    !form.moduleIds.length
+                    !form.moduleIds.length ||
+                    !form.settings.workspace_cv_asset_id
                   }
                   onClick={submitWorkspace}
                   type="button"
@@ -904,7 +1190,7 @@ export default function WorkspacesPage() {
                         >
                           <div className="text-[11px] uppercase tracking-wider text-on-surface-variant">
                             {entry.label}
-                            {entry.internal ? " · Internal" : ""}
+                            {entry.internal ? " | Internal" : ""}
                           </div>
                           <div className="mt-1 whitespace-pre-wrap text-sm text-on-surface">{entry.value}</div>
                         </div>
