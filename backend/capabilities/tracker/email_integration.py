@@ -5,7 +5,7 @@ import html
 import imaplib
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from email.message import Message
 from email.policy import default
@@ -17,11 +17,17 @@ from backend.capabilities.tracker.google_oauth import (
     list_google_gmail_messages,
     tracker_google_oauth_metadata,
 )
+from backend.domain.phase0_contracts import (
+    normalize_application_status,
+    normalize_gmail_application_detection,
+    normalize_gmail_scan_window,
+)
 from backend.domain.models import utc_now_iso, utc_plus_seconds
 
 TRACKER_EMAIL_INTEGRATION_METADATA_KEY = "tracker_email_integration"
 
 _MAX_PROCESSED_MESSAGE_IDS = 250
+_MAX_PENDING_REVIEW_DETECTIONS = 50
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +112,6 @@ TRACKER_EMAIL_PROVIDER_PRESETS: dict[str, TrackerEmailProviderPreset] = {
 _REJECTION_PATTERNS = [
     "regret to inform you",
     "regret informing you",
-    "unfortunately",
     "not moving forward",
     "not move forward",
     "not be moving forward",
@@ -153,9 +158,103 @@ _CONFIRMATION_PATTERNS = [
     "danke fuer ihre bewerbung",
 ]
 
+_OFFER_PATTERNS = [
+    "job offer",
+    "offer letter",
+    "employment offer",
+    "we are pleased to offer",
+    "we would like to offer",
+    "angebot",
+]
+
+_APPLICATION_SIGNAL_PATTERNS = [
+    "application",
+    "applying",
+    "applied",
+    "candidate",
+    "job",
+    "position",
+    "role",
+    "career",
+    "recruiting",
+    "recruiter",
+    "bewerbung",
+    "kandidat",
+    "stelle",
+    "karriere",
+]
+
+_ATS_OR_RECRUITING_DOMAIN_HINTS = [
+    "greenhouse.io",
+    "lever.co",
+    "workday",
+    "smartrecruiters",
+    "ashbyhq",
+    "personio",
+    "teamtailor",
+    "recruitee",
+    "jobvite",
+    "icims",
+    "bamboohr",
+    "successfactors",
+    "talent",
+    "recruit",
+    "careers",
+    "jobs",
+]
+
+_GMAIL_APPLICATION_QUERY_TERMS = [
+    "application",
+    "interview",
+    "recruiter",
+    "recruiting",
+    "candidate",
+    "career",
+    "hiring",
+    "offer",
+    "rejection",
+    "bewerbung",
+    "angebot",
+    "absage",
+]
+
 
 def tracker_email_provider_options() -> list[dict[str, Any]]:
     return [preset.to_dict() for preset in TRACKER_EMAIL_PROVIDER_PRESETS.values()]
+
+
+def _gmail_detection_key(payload: Mapping[str, Any] | None) -> str:
+    detection = normalize_gmail_application_detection(payload)
+    detection_id = str(detection.get("detection_id") or "").strip()
+    if detection_id:
+        return detection_id
+    message_id = str(detection.get("source_email", {}).get("message_id") or "").strip()
+    if message_id:
+        return f"gmail::{message_id}"
+    return ""
+
+
+def _normalize_pending_review_detections(payload: Any) -> list[dict[str, Any]]:
+    detections: list[dict[str, Any]] = []
+    for item in payload or []:
+        if not isinstance(item, Mapping):
+            continue
+        detection = normalize_gmail_application_detection(item)
+        detection_id = _gmail_detection_key(detection)
+        if not detection_id or detection["status"]["approval_state"] != "pending_review":
+            continue
+        detection["detection_id"] = detection_id
+        detections.append(detection)
+    detections.sort(key=lambda item: str(item.get("source_email", {}).get("sent_at") or ""), reverse=True)
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for detection in detections:
+        detection_id = _gmail_detection_key(detection)
+        if not detection_id or detection_id in seen:
+            continue
+        seen.add(detection_id)
+        deduped.append(detection)
+    return deduped[:_MAX_PENDING_REVIEW_DETECTIONS]
 
 
 def normalize_tracker_email_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -196,6 +295,7 @@ def normalize_tracker_email_config(payload: Mapping[str, Any] | None) -> dict[st
         "imap_port": max(1, imap_port),
         "folder": str(raw.get("folder") or "INBOX").strip() or "INBOX",
         "max_messages": max_messages,
+        "scan_window": normalize_gmail_scan_window(raw.get("scan_window")),
         "password_secret_id": str(raw.get("password_secret_id") or "").strip(),
         "access_token_secret_id": str(raw.get("access_token_secret_id") or "").strip(),
         "refresh_token_secret_id": str(raw.get("refresh_token_secret_id") or "").strip(),
@@ -212,6 +312,7 @@ def normalize_tracker_email_config(payload: Mapping[str, Any] | None) -> dict[st
         "last_error": str(raw.get("last_error") or ""),
         "processed_message_ids": processed_message_ids,
         "last_sync_summary": dict(raw.get("last_sync_summary") or {}),
+        "pending_detections": _normalize_pending_review_detections(raw.get("pending_detections")),
     }
 
 
@@ -251,6 +352,7 @@ def build_public_tracker_email_config(
         "imap_port": config["imap_port"],
         "folder": config["folder"],
         "max_messages": config["max_messages"],
+        "scan_window": config["scan_window"],
         "connected": connected,
         "has_password": bool(has_password),
         "has_access_token": bool(has_access_token),
@@ -262,6 +364,8 @@ def build_public_tracker_email_config(
         "last_sync_at": config["last_sync_at"],
         "last_error": config["last_error"],
         "last_sync_summary": dict(config["last_sync_summary"] or {}),
+        "pending_detection_count": len(config["pending_detections"]),
+        "pending_detections": [dict(item) for item in config["pending_detections"]],
         "history_id": config["history_id"],
         "provider": preset.to_dict(),
     }
@@ -315,7 +419,10 @@ def sync_tracker_email(
         password=password,
         folder=normalized["folder"],
     )
-    messages = client.fetch_recent_messages(limit=int(normalized["max_messages"]))
+    messages = client.fetch_recent_messages(
+        limit=int(normalized["max_messages"]),
+        scan_window=str(normalized.get("scan_window") or "last_1_month"),
+    )
     return _process_tracker_messages(
         application=application,
         tracker_items=tracker_items,
@@ -339,7 +446,10 @@ def sync_tracker_gmail(
     if not access_token:
         raise ValueError("A Google access token is required before syncing Gmail.")
     client = GmailMailboxClient(access_token=access_token)
-    messages, history_id = client.fetch_recent_messages(limit=int(normalized["max_messages"]))
+    messages, history_id = client.fetch_recent_messages(
+        limit=int(normalized["max_messages"]),
+        scan_window=str(normalized.get("scan_window") or "last_1_month"),
+    )
     result = _process_tracker_messages(
         application=application,
         tracker_items=tracker_items,
@@ -467,14 +577,18 @@ class ImapMailboxClient:
             except Exception:
                 pass
 
-    def fetch_recent_messages(self, *, limit: int) -> list[TrackerMailboxMessage]:
+    def fetch_recent_messages(self, *, limit: int, scan_window: str = "last_1_month") -> list[TrackerMailboxMessage]:
         mailbox = imaplib.IMAP4_SSL(self.host, self.port)
         try:
             mailbox.login(self.email_address, self.password)
             status, _ = mailbox.select(self.folder, readonly=True)
             if status != "OK":
                 raise ValueError(f"Unable to open folder '{self.folder}'.")
-            search_status, payload = mailbox.search(None, "ALL")
+            since_date = _scan_window_since_date(scan_window)
+            if since_date:
+                search_status, payload = mailbox.search(None, "SINCE", since_date.strftime("%d-%b-%Y"))
+            else:
+                search_status, payload = mailbox.search(None, "ALL")
             if search_status != "OK":
                 raise ValueError("Unable to search the inbox.")
             message_ids = (payload[0] or b"").split()
@@ -511,8 +625,23 @@ class GmailMailboxClient:
     def __init__(self, *, access_token: str) -> None:
         self.access_token = str(access_token or "").strip()
 
-    def fetch_recent_messages(self, *, limit: int) -> tuple[list[TrackerMailboxMessage], str]:
-        listing = list_google_gmail_messages(access_token=self.access_token, limit=limit)
+    def fetch_recent_messages(self, *, limit: int, scan_window: str = "last_1_month") -> tuple[list[TrackerMailboxMessage], str]:
+        query_text = _gmail_query_for_scan_window(scan_window)
+        try:
+            listing = list_google_gmail_messages(
+                access_token=self.access_token,
+                limit=limit,
+                query_text=query_text,
+            )
+        except ValueError as exc:
+            error_text = str(exc)
+            if not query_text or ("400" not in error_text and "invalid query" not in error_text.lower()):
+                raise
+            listing = list_google_gmail_messages(
+                access_token=self.access_token,
+                limit=limit,
+                query_text="",
+            )
         message_refs = listing.get("messages") or []
         messages: list[TrackerMailboxMessage] = []
         latest_history_id = ""
@@ -550,18 +679,71 @@ def _process_tracker_messages(
     processed_ids = set(normalized.get("processed_message_ids") or [])
     matched_updates: list[dict[str, Any]] = []
     unmatched_messages: list[dict[str, Any]] = []
+    detections: list[dict[str, Any]] = []
     skipped_messages = 0
     seen_new_ids: list[str] = []
 
     for message in sorted(messages, key=lambda item: item.sent_at or ""):
+        if not _message_in_scan_window(message, str(normalized.get("scan_window") or "last_1_month")):
+            skipped_messages += 1
+            continue
         if message.message_id in processed_ids:
             skipped_messages += 1
             continue
         new_status = _classify_tracker_status(message)
         if not new_status:
             continue
-        seen_new_ids.append(message.message_id)
         matched_item = _match_tracker_item(message, tracker_items)
+        if not _looks_like_application_email(message, status=new_status, matched_item=matched_item):
+            continue
+        confidence, evidence = _classify_message_confidence(
+            message,
+            status=new_status,
+            matched_item=matched_item,
+        )
+        if confidence == "low":
+            continue
+        seen_new_ids.append(message.message_id)
+        detection_payload = {
+            "detection_id": f"gmail::{message.message_id}",
+            "scan_window": normalized.get("scan_window"),
+            "message_id": message.message_id,
+            "subject": message.subject,
+            "from_address": message.from_address,
+            "sent_at": message.sent_at,
+            "status": new_status,
+            "suggested_application_status": normalize_application_status(new_status),
+            "confidence": confidence,
+            "approval_state": "approved" if matched_item and confidence == "high" else "pending_review",
+            "company": str((matched_item or {}).get("company") or ""),
+            "title": str((matched_item or {}).get("title") or ""),
+            "application_date": message.sent_at,
+            "evidence": evidence,
+            "metadata": {
+                "provider_id": normalized["provider_id"],
+                "review_id": str((matched_item or {}).get("review_id") or ""),
+                "run_id": str((matched_item or {}).get("run_id") or ""),
+                "job_id": str((matched_item or {}).get("job_id") or ""),
+            },
+        }
+        detections.append(normalize_gmail_application_detection(detection_payload))
+        if matched_item and confidence != "high":
+            unmatched_messages.append(
+                {
+                    "message_id": message.message_id,
+                    "subject": message.subject,
+                    "from_address": message.from_address,
+                    "status": new_status,
+                    "application_status": normalize_application_status(new_status),
+                    "confidence": confidence,
+                    "evidence": evidence,
+                    "sent_at": message.sent_at,
+                    "review_id": str(matched_item.get("review_id") or ""),
+                    "company": str(matched_item.get("company") or ""),
+                    "title": str(matched_item.get("title") or ""),
+                }
+            )
+            continue
         if not matched_item:
             unmatched_messages.append(
                 {
@@ -569,6 +751,9 @@ def _process_tracker_messages(
                     "subject": message.subject,
                     "from_address": message.from_address,
                     "status": new_status,
+                    "application_status": normalize_application_status(new_status),
+                    "confidence": confidence,
+                    "evidence": evidence,
                     "sent_at": message.sent_at,
                 }
             )
@@ -584,20 +769,27 @@ def _process_tracker_messages(
                 changed = True
             if current_status in {"", "applied"}:
                 review_meta["tracker_status"] = "email_confirmed"
+                review_meta["application_status"] = normalize_application_status("email_confirmed")
                 changed = changed or current_status != "email_confirmed"
         elif new_status == "interview_invited":
             if current_status != "rejected":
                 review_meta["tracker_status"] = "interview_invited"
+                review_meta["application_status"] = normalize_application_status("interview_invited")
                 changed = changed or current_status != "interview_invited"
             if not review_meta.get("email_confirmed"):
                 review_meta["email_confirmed"] = True
                 changed = True
         elif new_status == "rejected":
             review_meta["tracker_status"] = "rejected"
+            review_meta["application_status"] = normalize_application_status("rejected")
             changed = changed or current_status != "rejected"
             if not review_meta.get("rejected_at"):
                 review_meta["rejected_at"] = message.sent_at or utc_now_iso()
                 changed = True
+        elif new_status == "offer":
+            review_meta["tracker_status"] = "offer"
+            review_meta["application_status"] = normalize_application_status("offer")
+            changed = changed or current_status != "offer"
 
         review_meta["tracker_email_sync"] = {
             "message_id": message.message_id,
@@ -617,6 +809,9 @@ def _process_tracker_messages(
                 "company": str(matched_item.get("company") or ""),
                 "from_status": current_status,
                 "to_status": str(review_meta.get("tracker_status") or current_status),
+                "application_status": str(review_meta.get("application_status") or ""),
+                "confidence": confidence,
+                "evidence": evidence,
                 "email_confirmed": bool(review_meta.get("email_confirmed") or False),
                 "changed": bool(changed),
                 "message_id": message.message_id,
@@ -635,11 +830,14 @@ def _process_tracker_messages(
         "matched_messages": len(matched_updates),
         "updated_reviews": sum(1 for item in matched_updates if item["changed"]),
         "unmatched_messages": len(unmatched_messages),
+        "detections": len(detections),
+        "pending_review": sum(1 for item in detections if item["status"]["approval_state"] == "pending_review"),
     }
     return {
         "summary": summary,
         "matched_updates": matched_updates,
         "unmatched_messages": unmatched_messages[:20],
+        "detections": detections[:50],
         "processed_message_ids": processed_message_ids,
         "synced_at": utc_now_iso(),
     }
@@ -680,6 +878,49 @@ def _parse_message_date(value: str) -> str:
         return parsed.astimezone(timezone.utc).isoformat()
     except Exception:
         return ""
+
+
+def _scan_window_since_date(scan_window: str) -> datetime | None:
+    normalized = normalize_gmail_scan_window(scan_window)
+    now = datetime.now(timezone.utc)
+    if normalized == "now":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if normalized == "last_1_month":
+        return now - timedelta(days=30)
+    if normalized == "last_2_months":
+        return now - timedelta(days=60)
+    if normalized == "last_3_months":
+        return now - timedelta(days=90)
+    return None
+
+
+def _gmail_query_for_scan_window(scan_window: str) -> str:
+    normalized = normalize_gmail_scan_window(scan_window)
+    keyword_group = "{" + " ".join(_GMAIL_APPLICATION_QUERY_TERMS) + "}"
+    if normalized == "now":
+        return f"newer_than:1d {keyword_group}"
+    if normalized == "last_1_month":
+        return f"newer_than:30d {keyword_group}"
+    if normalized == "last_2_months":
+        return f"newer_than:60d {keyword_group}"
+    if normalized == "last_3_months":
+        return f"newer_than:90d {keyword_group}"
+    if not _scan_window_since_date(scan_window):
+        return ""
+    return f"newer_than:30d {keyword_group}"
+
+
+def _message_in_scan_window(message: TrackerMailboxMessage, scan_window: str) -> bool:
+    since_date = _scan_window_since_date(scan_window)
+    if not since_date or not message.sent_at:
+        return True
+    try:
+        sent_at = datetime.fromisoformat(message.sent_at)
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=timezone.utc)
+        return sent_at.astimezone(timezone.utc) >= since_date
+    except Exception:
+        return True
 
 
 def _extract_text_body(message: Message) -> str:
@@ -731,6 +972,8 @@ def _normalized_text(value: str) -> str:
 
 def _classify_tracker_status(message: TrackerMailboxMessage) -> str:
     searchable = _normalized_text(f"{message.subject} {message.text}")
+    if any(pattern in searchable for pattern in (_normalized_text(item) for item in _OFFER_PATTERNS)):
+        return "offer"
     if any(pattern in searchable for pattern in (_normalized_text(item) for item in _REJECTION_PATTERNS)):
         return "rejected"
     if any(pattern in searchable for pattern in (_normalized_text(item) for item in _INTERVIEW_PATTERNS)):
@@ -738,6 +981,74 @@ def _classify_tracker_status(message: TrackerMailboxMessage) -> str:
     if any(pattern in searchable for pattern in (_normalized_text(item) for item in _CONFIRMATION_PATTERNS)):
         return "email_confirmed"
     return ""
+
+
+def _collect_message_evidence(
+    message: TrackerMailboxMessage,
+    *,
+    status: str,
+    matched_item: Mapping[str, Any] | None = None,
+) -> tuple[list[str], list[str], bool]:
+    searchable = _normalized_text(f"{message.subject} {message.text}")
+    sender_domain = message.from_address.split("@")[-1].casefold()
+    sender_address = message.from_address.casefold()
+    evidence: list[str] = []
+    signal_hits = [
+        pattern
+        for pattern in _APPLICATION_SIGNAL_PATTERNS
+        if _normalized_text(pattern) in searchable
+    ]
+    if signal_hits:
+        evidence.append("application wording")
+    has_recruiting_sender = any(hint in sender_domain or hint in sender_address for hint in _ATS_OR_RECRUITING_DOMAIN_HINTS)
+    if has_recruiting_sender:
+        evidence.append("recruiting sender")
+    if matched_item:
+        evidence.append("tracker match")
+    if status in {"email_confirmed", "interview_invited", "rejected", "offer"}:
+        evidence.append(f"{normalize_application_status(status)} status signal")
+    return list(dict.fromkeys(evidence)), signal_hits, has_recruiting_sender
+
+
+def _looks_like_application_email(
+    message: TrackerMailboxMessage,
+    *,
+    status: str,
+    matched_item: Mapping[str, Any] | None = None,
+) -> bool:
+    evidence, signal_hits, has_recruiting_sender = _collect_message_evidence(
+        message,
+        status=status,
+        matched_item=matched_item,
+    )
+    has_application_context = bool(has_recruiting_sender or signal_hits or matched_item)
+    if not has_application_context:
+        return False
+    if status == "offer" and not (has_recruiting_sender or matched_item):
+        return False
+    if status == "rejected" and not (has_recruiting_sender or signal_hits or matched_item):
+        return False
+    return any(item.endswith("status signal") for item in evidence)
+
+
+def _classify_message_confidence(
+    message: TrackerMailboxMessage,
+    *,
+    status: str,
+    matched_item: Mapping[str, Any] | None = None,
+) -> tuple[str, list[str]]:
+    evidence, signal_hits, has_recruiting_sender = _collect_message_evidence(
+        message,
+        status=status,
+        matched_item=matched_item,
+    )
+    has_status_signal = any(item.endswith("status signal") for item in evidence)
+    has_tracker_match = "tracker match" in evidence
+    if has_status_signal and (has_recruiting_sender or len(signal_hits) >= 2 or (has_tracker_match and signal_hits)):
+        return "high", evidence
+    if has_status_signal and (has_recruiting_sender or bool(signal_hits) or has_tracker_match):
+        return "medium", evidence
+    return "low", evidence
 
 
 def _token_overlap_score(target: str, searchable_tokens: set[str], *, min_length: int) -> int:

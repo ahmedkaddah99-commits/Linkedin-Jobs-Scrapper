@@ -2,15 +2,20 @@ import { useCallback, useState } from "react";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "./useApiResource";
 
-const COLUMN_ORDER = ["applied", "email_confirmed", "interview_invited", "rejected"];
+const COLUMN_ORDER = ["not_applied", "applied", "interview_invited", "rejected", "offer", "withdrawn", "unknown"];
 
 function groupByStatus(items) {
   const groups = Object.fromEntries(COLUMN_ORDER.map((key) => [key, []]));
   for (const item of items) {
-    const column = COLUMN_ORDER.includes(item.tracker_status) ? item.tracker_status : "applied";
+    const trackerStatus = item.tracker_status === "email_confirmed" ? "applied" : item.tracker_status;
+    const column = COLUMN_ORDER.includes(trackerStatus) ? trackerStatus : "unknown";
     groups[column].push(item);
   }
   return groups;
+}
+
+function detectionKey(detection) {
+  return detection?.detection_id || detection?.source_email?.message_id || "";
 }
 
 export function useTracker() {
@@ -32,6 +37,22 @@ export function useTracker() {
   const items = data?.tracker?.items || [];
   const columns = groupByStatus(items);
   const emailIntegration = data?.integration || { providers: [], config: null };
+
+  function removeDetectionsFromLastSyncResult(detections) {
+    const resolvedIds = new Set((detections || []).map(detectionKey).filter(Boolean));
+    if (!resolvedIds.size) {
+      return;
+    }
+    setLastSyncResult((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return {
+        ...prev,
+        detections: (prev.detections || []).filter((detection) => !resolvedIds.has(detectionKey(detection))),
+      };
+    });
+  }
 
   async function refreshEmailIntegration() {
     const integration = await request("/tracker/email-integration");
@@ -92,18 +113,55 @@ export function useTracker() {
     }
   }
 
-  async function syncEmailIntegration() {
+  async function syncEmailIntegration(fields = {}) {
     setIntegrationBusy("sync");
     try {
       const result = await request("/tracker/email-integration/sync", {
         method: "POST",
-        body: {},
+        body: fields,
       });
       const tracker = await request("/tracker");
       setLastSyncResult(result.result || null);
       setData((prev) => ({
         ...(prev || {}),
         tracker,
+        integration: result.integration,
+      }));
+      return result;
+    } finally {
+      setIntegrationBusy("");
+    }
+  }
+
+  async function approveEmailDetections(detections) {
+    setIntegrationBusy("approve-detections");
+    try {
+      const result = await request("/tracker/email-integration/detections/approve", {
+        method: "POST",
+        body: { detections },
+      });
+      removeDetectionsFromLastSyncResult(detections);
+      setData((prev) => ({
+        ...(prev || {}),
+        tracker: result.tracker,
+        integration: result.integration,
+      }));
+      return result;
+    } finally {
+      setIntegrationBusy("");
+    }
+  }
+
+  async function dismissEmailDetections(detections) {
+    setIntegrationBusy("dismiss-detections");
+    try {
+      const result = await request("/tracker/email-integration/detections/dismiss", {
+        method: "POST",
+        body: { detections },
+      });
+      removeDetectionsFromLastSyncResult(detections);
+      setData((prev) => ({
+        ...(prev || {}),
         integration: result.integration,
       }));
       return result;
@@ -145,6 +203,8 @@ export function useTracker() {
     startGoogleEmailIntegration,
     updateEmailIntegrationSettings,
     syncEmailIntegration,
+    approveEmailDetections,
+    dismissEmailDetections,
     deleteEmailIntegration,
   };
 }

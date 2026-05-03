@@ -377,9 +377,9 @@ class BackendApplicationTests(unittest.TestCase):
         import_payload = app.import_referral_contacts(
             user_id=user.user_id,
             csv_text=(
-                "First Name,Last Name,URL,Company,Position\n"
-                "Jane,Referrer,https://linkedin.com/in/jane-referrer,ACME,Engineering Manager\n"
-                "Jane,Referrer,https://linkedin.com/in/jane-referrer,Beta,Director\n"
+                "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                "Jane,Referrer,https://linkedin.com/in/jane-referrer,,ACME,Engineering Manager,01 Jan 2024\n"
+                "Jane,Referrer,https://linkedin.com/in/jane-referrer,,Beta,Director,01 Jan 2024\n"
             ),
         )
         self.assertEqual(import_payload["summary"]["created"], 1)

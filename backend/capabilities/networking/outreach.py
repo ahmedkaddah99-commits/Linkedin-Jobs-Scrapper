@@ -3,10 +3,11 @@ from __future__ import annotations
 import csv
 import io
 import re
+from itertools import zip_longest
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterable
 
-from backend.domain.models import JobRecord
+from backend.domain.models import JobRecord, utc_now_iso
 
 if TYPE_CHECKING:
     from backend.domain.models import ReferralContactRecord
@@ -14,6 +15,42 @@ if TYPE_CHECKING:
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 _WHITESPACE = re.compile(r"\s+")
+_LINKEDIN_HEADER_ALIASES = {
+    "first name": {"first name", "firstname", "first_name"},
+    "last name": {"last name", "lastname", "last_name"},
+    "url": {"url", "profile url", "linkedin url", "linkedin_url"},
+    "email address": {"email address", "email", "email_address"},
+    "company": {"company", "company name", "current company", "organization"},
+    "position": {"position", "title", "role", "headline"},
+    "connected on": {"connected on", "connected_on", "connected date"},
+}
+_REQUIRED_LINKEDIN_HEADER_KEYS = [
+    "first name",
+    "last name",
+    "url",
+    "email address",
+    "company",
+    "position",
+    "connected on",
+]
+_LINKEDIN_HEADER_DISPLAY = "First Name, Last Name, URL, Email Address, Company, Position, Connected On"
+_LEGAL_SUFFIXES = {
+    "ag",
+    "gmbh",
+    "inc",
+    "incorporated",
+    "llc",
+    "ltd",
+    "limited",
+    "plc",
+    "se",
+    "corp",
+    "corporation",
+    "company",
+    "co",
+    "kg",
+    "ug",
+}
 _MANAGER_PATTERNS = [
     re.compile(r"report(?:ing)?\s+to\s+(?P<name>[A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){0,2})", re.IGNORECASE),
     re.compile(
@@ -50,6 +87,35 @@ def normalize_company_name(value: str) -> str:
     return _WHITESPACE.sub(" ", normalized).strip()
 
 
+def normalize_company_match_key(value: str) -> str:
+    tokens = [
+        token
+        for token in normalize_company_name(value).split()
+        if token and token not in _LEGAL_SUFFIXES
+    ]
+    return " ".join(tokens).strip()
+
+
+def company_names_safely_match(left: str, right: str) -> bool:
+    left_normalized = normalize_company_name(left)
+    right_normalized = normalize_company_name(right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized == right_normalized:
+        return True
+    left_key = normalize_company_match_key(left)
+    right_key = normalize_company_match_key(right)
+    if not left_key or not right_key:
+        return False
+    if left_key == right_key:
+        return True
+    left_tokens = set(left_key.split())
+    right_tokens = set(right_key.split())
+    if len(left_tokens) < 2 and len(right_tokens) < 2:
+        return False
+    return left_tokens.issubset(right_tokens) or right_tokens.issubset(left_tokens)
+
+
 def find_referral_contacts_for_company(
     contacts: Iterable["ReferralContactRecord"],
     company_name: str,
@@ -59,11 +125,13 @@ def find_referral_contacts_for_company(
         return []
     matches: list["ReferralContactRecord"] = []
     for contact in contacts:
+        if not bool(getattr(contact, "is_active", True)):
+            continue
         company_candidates = [normalize_company_name(item) for item in referral_company_names(contact)]
         company_candidates = [item for item in company_candidates if item]
         if not company_candidates:
             continue
-        if any(candidate == target or candidate in target or target in candidate for candidate in company_candidates):
+        if any(company_names_safely_match(candidate, target) for candidate in company_candidates):
             matches.append(contact)
     matches.sort(key=lambda item: (not item.can_refer, item.name.lower(), item.primary_company().lower()))
     return matches
@@ -98,17 +166,20 @@ def parse_referral_contacts_csv(
     normalized_text = str(csv_text or "").lstrip("\ufeff").strip()
     if not normalized_text:
         return []
-    reader = csv.DictReader(io.StringIO(normalized_text))
+    header, rows = _linkedin_csv_header_and_rows(normalized_text)
     parsed_contacts: list[ReferralContactRecord] = []
-    for row in reader:
-        normalized_row = {str(key or "").strip().lower(): value for key, value in (row or {}).items()}
+    normalized_header = [str(cell or "").strip() for cell in header]
+    for source_order, row in enumerate(rows, start=1):
+        normalized_row = {
+            str(key or "").strip().lower(): str(value or "")
+            for key, value in zip_longest(normalized_header, row, fillvalue="")
+            if str(key or "").strip()
+        }
         first_name = str(_csv_value(normalized_row, "first name", "firstname", "first_name")).strip()
         last_name = str(_csv_value(normalized_row, "last name", "lastname", "last_name")).strip()
         full_name = " ".join(part for part in (first_name, last_name) if part).strip()
         if not full_name:
             full_name = str(_csv_value(normalized_row, "name", "full name", "full_name")).strip()
-        if not full_name:
-            continue
         company_name = str(
             _csv_value(
                 normalized_row,
@@ -118,6 +189,8 @@ def parse_referral_contacts_csv(
                 "organization",
             )
         ).strip()
+        if not full_name and not company_name:
+            continue
         role_title = str(_csv_value(normalized_row, "position", "title", "role", "headline")).strip()
         linkedin_url = str(
             _csv_value(
@@ -135,7 +208,10 @@ def parse_referral_contacts_csv(
                 "connected on",
             )
         ).strip()
+        if not full_name:
+            full_name = company_name
         metadata = {
+            "source_order": source_order,
             "import_source_row": {
                 key: str(value).strip()
                 for key, value in normalized_row.items()
@@ -175,11 +251,17 @@ def merge_referral_contacts(
     created_count = 0
     updated_count = 0
     skipped_count = 0
-    for incoming in incoming_contacts:
+    incoming_identities: set[str] = set()
+    incoming_order_by_identity: dict[str, int] = {}
+    incoming_batch_id = ""
+    for incoming_order, incoming in enumerate(incoming_contacts):
         identity = _referral_contact_identity(incoming)
         if not identity:
             skipped_count += 1
             continue
+        incoming_identities.add(identity)
+        incoming_order_by_identity.setdefault(identity, incoming_order)
+        incoming_batch_id = incoming.import_batch_id or incoming_batch_id
         existing_index = index_by_identity.get(identity)
         if existing_index is None:
             merged_contacts.append(incoming)
@@ -188,10 +270,51 @@ def merge_referral_contacts(
             continue
         merged_contacts[existing_index] = _merge_referral_contact_record(merged_contacts[existing_index], incoming)
         updated_count += 1
+    deactivated_count = 0
+    if incoming_batch_id:
+        for idx, contact in enumerate(merged_contacts):
+            if contact.source_kind not in {"linkedin_csv", "linkedin_csv_import"}:
+                continue
+            if _referral_contact_identity(contact) in incoming_identities:
+                continue
+            if not bool(getattr(contact, "is_active", True)):
+                continue
+            merged_contacts[idx] = contact.__class__(
+                contact_id=contact.contact_id,
+                name=contact.name,
+                company=contact.company,
+                linkedin_url=contact.linkedin_url,
+                relationship_note=contact.relationship_note,
+                can_refer=contact.can_refer,
+                is_active=False,
+                inactive_at=utc_now_iso(),
+                inactive_reason="missing_from_latest_linkedin_upload",
+                companies=contact.companies,
+                source_kind=contact.source_kind,
+                import_batch_id=contact.import_batch_id,
+                import_ref=contact.import_ref,
+                created_at=contact.created_at,
+                updated_at=utc_now_iso(),
+                metadata=contact.metadata,
+            )
+            deactivated_count += 1
+    if incoming_batch_id:
+        manual_contacts = [contact for contact in merged_contacts if not _is_linkedin_import_contact(contact)]
+        linkedin_contacts = [contact for contact in merged_contacts if _is_linkedin_import_contact(contact)]
+        linkedin_contacts.sort(
+            key=lambda contact: (
+                0 if _referral_contact_identity(contact) in incoming_order_by_identity else 1,
+                incoming_order_by_identity.get(_referral_contact_identity(contact), _source_order_for_contact(contact)),
+                _source_order_for_contact(contact),
+                str(contact.name or "").lower(),
+            )
+        )
+        merged_contacts = [*manual_contacts, *linkedin_contacts]
     return merged_contacts, {
         "created": created_count,
         "updated": updated_count,
         "skipped": skipped_count,
+        "deactivated": deactivated_count,
     }
 
 
@@ -336,6 +459,82 @@ def _csv_value(row: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _linkedin_csv_header_and_rows(csv_text: str) -> tuple[list[str], list[list[str]]]:
+    normalized_text = str(csv_text or "").lstrip("\ufeff").strip()
+    if not normalized_text:
+        return [], []
+    rows = list(csv.reader(io.StringIO(normalized_text)))
+    if not rows:
+        return [], []
+    header_row_index, header_row_span, header = _find_linkedin_header_row(rows)
+    if header_row_index < 0:
+        raise ValueError(
+            "LinkedIn connections CSV header was not found. Expected header row: "
+            f"{_LINKEDIN_HEADER_DISPLAY}."
+        )
+    data_rows = [
+        [str(cell or "") for cell in row]
+        for row in rows[header_row_index + header_row_span :]
+        if any(str(cell or "").strip() for cell in row)
+    ]
+    return header, data_rows
+
+
+def _find_linkedin_header_row(rows: list[list[str]]) -> tuple[int, int, list[str]]:
+    for idx, row in enumerate(rows):
+        normalized_row = [str(cell or "").strip() for cell in row]
+        if _is_linkedin_header_row(normalized_row):
+            return idx, 1, normalized_row
+        merged_header = _merge_split_linkedin_header_rows(rows, idx)
+        if merged_header:
+            return idx, 2, merged_header
+    return -1, 0, []
+
+
+def _merge_split_linkedin_header_rows(rows: list[list[str]], start_index: int) -> list[str]:
+    if start_index + 1 >= len(rows):
+        return []
+    tokens = [
+        _normalize_linkedin_header_cell(cell)
+        for cell in [*rows[start_index], *rows[start_index + 1]]
+        if _normalize_linkedin_header_cell(cell)
+    ]
+    if not tokens:
+        return []
+    merged: list[str] = []
+    pointer = 0
+    required_headers = list(_REQUIRED_LINKEDIN_HEADER_KEYS)
+    for required in required_headers:
+        aliases = _LINKEDIN_HEADER_ALIASES[required]
+        matched_end = -1
+        current = ""
+        for idx in range(pointer, len(tokens)):
+            current = f"{current} {tokens[idx]}".strip()
+            if current in aliases:
+                matched_end = idx
+        if matched_end < 0:
+            return []
+        merged.append(required)
+        pointer = matched_end + 1
+    if pointer != len(tokens):
+        return []
+    return merged
+
+
+def _is_linkedin_header_row(row: list[str]) -> bool:
+    normalized_cells = {_normalize_linkedin_header_cell(cell) for cell in row}
+    matched_required = [
+        required
+        for required in _REQUIRED_LINKEDIN_HEADER_KEYS
+        if normalized_cells.intersection(_LINKEDIN_HEADER_ALIASES[required])
+    ]
+    return len(matched_required) == len(_REQUIRED_LINKEDIN_HEADER_KEYS)
+
+
+def _normalize_linkedin_header_cell(value: str) -> str:
+    return _WHITESPACE.sub(" ", str(value or "").lstrip("\ufeff").strip().lower())
+
+
 def _referral_contact_identity(contact: "ReferralContactRecord") -> str:
     linkedin_url = str(contact.linkedin_url or "").strip().lower()
     if linkedin_url:
@@ -346,6 +545,17 @@ def _referral_contact_identity(contact: "ReferralContactRecord") -> str:
     return ""
 
 
+def _is_linkedin_import_contact(contact: "ReferralContactRecord") -> bool:
+    return str(getattr(contact, "source_kind", "") or "").strip() in {"linkedin_csv", "linkedin_csv_import"}
+
+
+def _source_order_for_contact(contact: "ReferralContactRecord") -> int:
+    try:
+        return int(float(str((getattr(contact, "metadata", None) or {}).get("source_order") or "999999999")))
+    except Exception:
+        return 999999999
+
+
 def _merge_referral_contact_record(
     existing: "ReferralContactRecord",
     incoming: "ReferralContactRecord",
@@ -353,6 +563,7 @@ def _merge_referral_contact_record(
     merged_companies = _merge_company_entries(existing.companies, incoming.companies)
     merged_metadata = dict(existing.metadata or {})
     merged_metadata.update(dict(incoming.metadata or {}))
+    incoming_is_active = bool(getattr(incoming, "is_active", True))
     return existing.__class__(
         contact_id=existing.contact_id,
         name=str(existing.name or incoming.name or "").strip(),
@@ -367,6 +578,15 @@ def _merge_referral_contact_record(
         linkedin_url=str(existing.linkedin_url or incoming.linkedin_url or "").strip(),
         relationship_note=_merge_note(existing.relationship_note, incoming.relationship_note),
         can_refer=bool(existing.can_refer or incoming.can_refer or any(item.get("can_refer") for item in merged_companies)),
+        is_active=incoming_is_active,
+        inactive_at="" if incoming_is_active else str(
+            getattr(incoming, "inactive_at", "") or getattr(existing, "inactive_at", "") or ""
+        ).strip(),
+        inactive_reason=str(
+            "" if incoming_is_active else (
+                getattr(incoming, "inactive_reason", "") or getattr(existing, "inactive_reason", "") or ""
+            )
+        ).strip(),
         companies=merged_companies,
         source_kind=str(existing.source_kind or incoming.source_kind or "manual").strip() or "manual",
         import_batch_id=str(incoming.import_batch_id or existing.import_batch_id or "").strip(),

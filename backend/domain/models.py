@@ -268,6 +268,9 @@ class ReferralContactRecord:
     linkedin_url: str = ""
     relationship_note: str = ""
     can_refer: bool = False
+    is_active: bool = True
+    inactive_at: str = ""
+    inactive_reason: str = ""
     companies: list[dict[str, Any]] = field(default_factory=list)
     source_kind: str = "manual"
     import_batch_id: str = ""
@@ -286,6 +289,9 @@ class ReferralContactRecord:
         linkedin_url: str = "",
         relationship_note: str = "",
         can_refer: bool = False,
+        is_active: bool = True,
+        inactive_at: str = "",
+        inactive_reason: str = "",
         source_kind: str = "manual",
         import_batch_id: str = "",
         import_ref: str = "",
@@ -300,6 +306,9 @@ class ReferralContactRecord:
                 "linkedin_url": linkedin_url,
                 "relationship_note": relationship_note,
                 "can_refer": can_refer,
+                "is_active": is_active,
+                "inactive_at": inactive_at,
+                "inactive_reason": inactive_reason,
                 "source_kind": source_kind,
                 "import_batch_id": import_batch_id,
                 "import_ref": import_ref,
@@ -325,6 +334,9 @@ class ReferralContactRecord:
                 can_refer
                 or any(bool(item.get("can_refer")) for item in normalized_companies)
             ),
+            is_active=bool(normalized["lifecycle"]["is_active"]),
+            inactive_at=str(normalized["lifecycle"]["inactive_at"] or "").strip(),
+            inactive_reason=str(normalized["lifecycle"]["inactive_reason"] or "").strip(),
             companies=normalized_companies,
             source_kind=str(normalized["source"]["kind"] or source_kind).strip() or "manual",
             import_batch_id=str(normalized["source"]["import_batch_id"] or import_batch_id).strip(),
@@ -338,6 +350,13 @@ class ReferralContactRecord:
         payload = asdict(self)
         payload["company"] = self.primary_company()
         payload["can_refer"] = self.can_refer or any(bool(item.get("can_refer")) for item in self.companies)
+        payload["is_active"] = bool(self.is_active)
+        payload["lifecycle"] = {
+            "status": "active" if self.is_active else "inactive",
+            "is_active": bool(self.is_active),
+            "inactive_at": self.inactive_at,
+            "inactive_reason": self.inactive_reason,
+        }
         return payload
 
     def primary_company(self) -> str:
@@ -379,6 +398,9 @@ class ReferralContactRecord:
                 payload.get("can_refer")
                 or any(bool(item.get("can_refer")) for item in companies)
             ),
+            is_active=bool(normalized["lifecycle"]["is_active"]),
+            inactive_at=str(normalized["lifecycle"]["inactive_at"] or ""),
+            inactive_reason=str(normalized["lifecycle"]["inactive_reason"] or ""),
             companies=companies,
             source_kind=str(normalized["source"]["kind"] or payload.get("source_kind") or "manual"),
             import_batch_id=str(normalized["source"]["import_batch_id"] or payload.get("import_batch_id") or ""),

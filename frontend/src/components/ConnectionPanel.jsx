@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useSession } from "../context/SessionContext";
+import { resolveApiUrl } from "../lib/api";
 
 export default function ConnectionPanel() {
   const { apiBaseUrl, accessToken, connect, status, error } = useSession();
@@ -8,6 +9,7 @@ export default function ConnectionPanel() {
     token: accessToken || "",
   });
   const [submitting, setSubmitting] = useState(false);
+  const [autoConnecting, setAutoConnecting] = useState(false);
   const [localError, setLocalError] = useState("");
 
   async function handleSubmit(event) {
@@ -26,6 +28,27 @@ export default function ConnectionPanel() {
     }
   }
 
+  async function connectToLocalBackend() {
+    setAutoConnecting(true);
+    setLocalError("");
+    try {
+      const baseUrl = formState.baseUrl || "/v1";
+      const response = await fetch(resolveApiUrl(baseUrl, "/dev/bootstrap-auth"));
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error?.message || "Unable to prepare local connection.");
+      }
+      await connect({
+        baseUrl: payload.api_base_url || baseUrl,
+        token: payload.access_token,
+      });
+    } catch (connectError) {
+      setLocalError(connectError.message || "Unable to connect to the local backend.");
+    } finally {
+      setAutoConnecting(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-3xl rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
       <div className="mb-8">
@@ -33,10 +56,28 @@ export default function ConnectionPanel() {
           Connect Frontend To Backend
         </h1>
         <p className="mt-3 max-w-2xl text-sm leading-7 text-on-surface-variant">
-          This frontend now reads from the real backend API and SQLite-backed storage. Add the
-          API base URL and a bearer token, then the app will load live workspaces, runs, reviews,
-          documents, and saved settings.
+          Connect to the local backend to load your saved workspaces, runs, reviews, documents, and
+          settings.
         </p>
+      </div>
+
+      <div className="mb-6 rounded-xl border border-primary/20 bg-primary/10 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-bold text-on-surface">Using this app on your computer?</p>
+            <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+              Use the local backend. No URL or token needs to be pasted.
+            </p>
+          </div>
+          <button
+            className="rounded-lg bg-primary px-5 py-3 text-sm font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={autoConnecting || submitting}
+            onClick={connectToLocalBackend}
+            type="button"
+          >
+            {autoConnecting ? "Connecting..." : "Use local backend"}
+          </button>
+        </div>
       </div>
 
       <form className="space-y-6" onSubmit={handleSubmit}>

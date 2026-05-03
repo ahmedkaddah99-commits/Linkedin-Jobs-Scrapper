@@ -258,16 +258,16 @@ def load_job_seeker_config(path_override: str = "") -> dict:
     return base
 
 
-def load_project_dotenv() -> None:
+def load_project_dotenv(*, override: bool = False) -> None:
     try:
         from dotenv import load_dotenv
     except Exception:
         return
 
     if DEFAULT_ENV_PATH.exists() and DEFAULT_ENV_PATH.is_file():
-        load_dotenv(dotenv_path=DEFAULT_ENV_PATH)
+        load_dotenv(dotenv_path=DEFAULT_ENV_PATH, override=override)
     if LEGACY_ENV_PATH.exists() and LEGACY_ENV_PATH.is_file():
-        load_dotenv(dotenv_path=LEGACY_ENV_PATH)
+        load_dotenv(dotenv_path=LEGACY_ENV_PATH, override=override)
 
 
 def cfg_get(config: dict, path: Iterable[str], default=None):

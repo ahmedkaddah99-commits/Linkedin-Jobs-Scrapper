@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 
@@ -65,6 +67,104 @@ function companyEntries(contact) {
   return [];
 }
 
+function importedConnectedDate(contact) {
+  const row = contact?.metadata?.import_source_row || {};
+  return row["connected on"] || row.connected_on || row["connected date"] || "";
+}
+
+async function loadAllReferralContacts(request) {
+  const limit = 1000;
+  let offset = 0;
+  const contacts = [];
+
+  while (true) {
+    const payload = await request(`/referrals?limit=${limit}&offset=${offset}`);
+    const page = Array.isArray(payload?.contacts) ? payload.contacts : [];
+    const returned = Number(payload?.meta?.returned ?? page.length);
+
+    contacts.push(...page);
+
+    if (!page.length || returned < limit) {
+      break;
+    }
+    offset += returned;
+  }
+
+  return {
+    contacts,
+    meta: {
+      total: contacts.length,
+      returned: contacts.length,
+    },
+  };
+}
+
+async function loadAllReferralOutreachItems(request) {
+  const limit = 1000;
+  let offset = 0;
+  const items = [];
+
+  while (true) {
+    const payload = await request(`/referrals/outreach-statuses?limit=${limit}&offset=${offset}`);
+    const page = Array.isArray(payload?.items) ? payload.items : [];
+    const returned = Number(payload?.meta?.returned ?? page.length);
+
+    items.push(...page);
+
+    if (!page.length || returned < limit) {
+      break;
+    }
+    offset += returned;
+  }
+
+  return {
+    items,
+    meta: {
+      total: items.length,
+      returned: items.length,
+    },
+  };
+}
+
+async function loadReferralWorkspace(request) {
+  const [contactsPayload, outreachPayload] = await Promise.all([
+    loadAllReferralContacts(request),
+    loadAllReferralOutreachItems(request),
+  ]);
+  return {
+    contacts: contactsPayload.contacts,
+    outreachItems: outreachPayload.items,
+    meta: {
+      contacts: contactsPayload.meta,
+      outreach: outreachPayload.meta,
+    },
+  };
+}
+
+function outreachStatusTone(status) {
+  switch (status) {
+    case "Contacted":
+      return "primary";
+    case "Replied":
+    case "Referral offered":
+      return "success";
+    case "No referral":
+      return "warning";
+    default:
+      return "neutral";
+  }
+}
+
+function formatUpdatedAt(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    return text;
+  }
+  return parsed.toLocaleString();
+}
+
 export default function ReferralsPage() {
   const { request } = useSession();
   const [form, setForm] = useState(EMPTY_FORM);
@@ -76,11 +176,13 @@ export default function ReferralsPage() {
     busy: false,
     message: "",
     error: "",
+    summary: null,
   });
 
-  const { data, loading, error, refresh } = useApiResource(() => request("/referrals"), [request]);
+  const { data, loading, error, refresh } = useApiResource(() => loadReferralWorkspace(request), [request]);
 
   const contacts = data?.contacts || [];
+  const outreachItems = data?.outreachItems || [];
   const stats = useMemo(() => {
     const uniqueCompanies = new Set(
       contacts
@@ -92,8 +194,20 @@ export default function ReferralsPage() {
       total: contacts.length,
       companies: uniqueCompanies.size,
       canRefer: contacts.filter((contact) => Boolean(contact.can_refer)).length,
+      outreachTracked: outreachItems.length,
     };
-  }, [contacts]);
+  }, [contacts, outreachItems]);
+  const outreachByContact = useMemo(() => {
+    const groups = new Map();
+    outreachItems.forEach((item) => {
+      const contactId = String(item.contact_id || "").trim();
+      if (!contactId) return;
+      const currentItems = groups.get(contactId) || [];
+      currentItems.push(item);
+      groups.set(contactId, currentItems);
+    });
+    return groups;
+  }, [outreachItems]);
 
   function updateForm(patch) {
     setForm((current) => ({ ...current, ...patch }));
@@ -181,7 +295,8 @@ export default function ReferralsPage() {
       setImportState((current) => ({
         ...current,
         busy: false,
-        message: `Import complete. ${summary.created || 0} new contact${summary.created === 1 ? "" : "s"} added and ${summary.updated || 0} existing contact${summary.updated === 1 ? "" : "s"} updated.`,
+        message: "LinkedIn connections imported successfully.",
+        summary,
         error: "",
       }));
       await refresh();
@@ -191,6 +306,7 @@ export default function ReferralsPage() {
         busy: false,
         message: "",
         error: importError.message || "Unable to import referral contacts.",
+        summary: null,
       }));
     }
   }
@@ -205,6 +321,7 @@ export default function ReferralsPage() {
       fileName: file.name,
       message: "",
       error: "",
+      summary: null,
     }));
   }
 
@@ -221,11 +338,12 @@ export default function ReferralsPage() {
         </p>
       </header>
 
-      <section className="grid gap-4 md:grid-cols-3">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           { label: "Contacts", value: stats.total },
           { label: "Target Companies", value: stats.companies },
           { label: "Can Refer", value: stats.canRefer },
+          { label: "Tracked Outreach", value: stats.outreachTracked },
         ].map((card) => (
           <div
             key={card.label}
@@ -326,7 +444,7 @@ export default function ReferralsPage() {
                     className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
                   >
                     {company.company_name}
-                    {company.role_title ? ` • ${company.role_title}` : ""}
+                    {company.role_title ? ` | ${company.role_title}` : ""}
                   </span>
                 ))}
               </div>
@@ -363,8 +481,15 @@ export default function ReferralsPage() {
                 Import LinkedIn Connections
               </h2>
               <p className="mt-1 text-sm text-on-surface-variant">
-                Upload a LinkedIn connections CSV or paste the exported CSV directly. Existing contacts are merged by LinkedIn URL or name.
+                Upload the LinkedIn connections CSV exactly as LinkedIn gives it to you. Notes before the table are ignored automatically, and the newest upload becomes the current source of truth.
               </p>
+              <Link
+                className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary-container"
+                to="/referrals/linkedin-csv-guide"
+              >
+                <span className="material-symbols-outlined text-[16px]">help</span>
+                How to export your LinkedIn connections
+              </Link>
             </div>
 
             <div className="space-y-4">
@@ -388,7 +513,7 @@ export default function ReferralsPage() {
 
               <ReferralFormField
                 label="CSV Content"
-                hint="Supported headers include LinkedIn export columns such as First Name, Last Name, URL, Company, and Position."
+                hint="Runr looks for this LinkedIn header row: First Name, Last Name, URL, Email Address, Company, Position, Connected On. Rows keep the same order as the uploaded file."
               >
                 <textarea
                   className="min-h-40 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
@@ -397,6 +522,7 @@ export default function ReferralsPage() {
                     csvText: event.target.value,
                     message: "",
                     error: "",
+                    summary: null,
                   }))}
                   placeholder="Paste your LinkedIn connections CSV here if you do not want to upload a file."
                   value={importState.csvText}
@@ -407,6 +533,19 @@ export default function ReferralsPage() {
             {(importState.message || importState.error) ? (
               <div className={["mt-4 text-sm", importState.error ? "text-error" : "text-primary"].join(" ")}>
                 {importState.error || importState.message}
+              </div>
+            ) : null}
+            {importState.summary && !importState.error ? (
+              <div className="mt-3 grid gap-2 text-xs text-on-surface-variant sm:grid-cols-3">
+                <div className="rounded-lg bg-surface-container-low px-3 py-2">
+                  Parsed rows: <span className="font-semibold text-on-surface">{importState.summary.parsed || 0}</span>
+                </div>
+                <div className="rounded-lg bg-surface-container-low px-3 py-2">
+                  Added: <span className="font-semibold text-on-surface">{importState.summary.created || 0}</span>
+                </div>
+                <div className="rounded-lg bg-surface-container-low px-3 py-2">
+                  Total saved: <span className="font-semibold text-on-surface">{importState.summary.total_contacts || 0}</span>
+                </div>
               </div>
             ) : null}
 
@@ -425,12 +564,23 @@ export default function ReferralsPage() {
 
         <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest">
           <div className="border-b border-outline-variant/10 px-6 py-5">
-            <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
-              Saved Contacts
-            </h2>
-            <p className="mt-1 text-sm text-on-surface-variant">
-              These contacts are matched against company names in the review queue.
-            </p>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
+                  Saved Contacts
+                </h2>
+                <p className="mt-1 text-sm text-on-surface-variant">
+                  These contacts are matched against company names in the review queue. Outreach status is edited there and summarized here per contact.
+                </p>
+              </div>
+              <Link
+                className="inline-flex items-center gap-1 rounded-lg bg-surface-container-low px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
+                to="/review-queue"
+              >
+                <span className="material-symbols-outlined text-[16px]">fact_check</span>
+                Open Review Queue
+              </Link>
+            </div>
           </div>
 
           <div className="divide-y divide-outline-variant/10">
@@ -439,78 +589,173 @@ export default function ReferralsPage() {
             ) : error ? (
               <div className="px-6 py-10 text-error">{error}</div>
             ) : contacts.length ? (
-              contacts.map((contact) => (
-                <article key={contact.contact_id} className="px-6 py-5">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div className="space-y-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-lg font-semibold text-on-surface">{contact.name}</h3>
-                        {contact.can_refer ? (
-                          <span className="rounded-full bg-teal-500/10 px-2.5 py-1 text-xs font-semibold text-teal-500">
-                            Can Refer
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-500">
-                            Warm Contact
-                          </span>
-                        )}
+              contacts.map((contact) => {
+                const contactOutreach = outreachByContact.get(contact.contact_id) || [];
+
+                return (
+                  <article key={contact.contact_id} className="px-6 py-5">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold text-on-surface">{contact.name}</h3>
+                          {contact.can_refer ? (
+                            <span className="rounded-full bg-teal-500/10 px-2.5 py-1 text-xs font-semibold text-teal-500">
+                              Can Refer
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-500">
+                              Warm Contact
+                            </span>
+                          )}
+                          {contact.is_active === false ? (
+                            <span className="rounded-full bg-error/10 px-2.5 py-1 text-xs font-semibold text-error">
+                              Removed from latest upload
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {companyEntries(contact).length ? (
+                            companyEntries(contact).map((entry) => (
+                              <span
+                                key={`${contact.contact_id}-${entry.company_name || entry.company}`}
+                                className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
+                              >
+                                {entry.company_name || entry.company}
+                                {entry.role_title ? ` | ${entry.role_title}` : ""}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface-variant">
+                              No company linked yet
+                            </span>
+                          )}
+                        </div>
+
+                        {contact.linkedin_url ? (
+                          <a
+                            className="inline-flex items-center gap-1 text-sm text-primary transition-colors hover:text-primary-container"
+                            href={contact.linkedin_url}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            <span className="material-symbols-outlined text-[15px]">open_in_new</span>
+                            LinkedIn profile
+                          </a>
+                        ) : null}
+
+                        {importedConnectedDate(contact) ? (
+                          <div className="text-xs text-on-surface-variant">
+                            Connected on LinkedIn: {importedConnectedDate(contact)}
+                          </div>
+                        ) : null}
+
+                        <p className="max-w-2xl whitespace-pre-wrap text-sm leading-6 text-on-surface-variant">
+                          {contact.relationship_note || "No relationship note saved yet."}
+                        </p>
+
+                        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <h4 className="text-sm font-semibold text-on-surface">Outreach Activity</h4>
+                              <p className="mt-1 text-xs text-on-surface-variant">
+                                Stored per run, job, and contact. Update these statuses from the Review Queue.
+                              </p>
+                            </div>
+                            <Link
+                              className="inline-flex items-center gap-1 text-sm font-medium text-primary transition-colors hover:text-primary-container"
+                              to="/review-queue"
+                            >
+                              <span className="material-symbols-outlined text-[15px]">fact_check</span>
+                              Manage statuses
+                            </Link>
+                          </div>
+                          {contactOutreach.length ? (
+                            <div className="mt-4 space-y-3">
+                              {contactOutreach.map((item) => (
+                                <div
+                                  key={`${item.run_id}-${item.job_id}-${item.contact_id}`}
+                                  className="rounded-xl border border-outline-variant/15 bg-surface-container-lowest p-4"
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="space-y-2">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <StatusBadge tone={outreachStatusTone(item.outreach_status)}>
+                                          {item.outreach_status}
+                                        </StatusBadge>
+                                        <span className="text-xs text-on-surface-variant">
+                                          {formatUpdatedAt(item.updated_at)}
+                                        </span>
+                                      </div>
+                                      <div className="text-sm font-semibold text-on-surface">
+                                        {item.job_title || "Untitled job"}
+                                        {item.company ? ` at ${item.company}` : ""}
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-2 text-xs text-on-surface-variant">
+                                        <span>{item.workspace_name || "Workspace not set"}</span>
+                                        {item.run_id ? (
+                                          <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-[11px] text-on-surface-variant">
+                                            {item.run_id}
+                                          </span>
+                                        ) : null}
+                                        {item.source_label ? <span>{item.source_label}</span> : null}
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                      {item.contact_linkedin_url ? (
+                                        <a
+                                          className="rounded bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+                                          href={item.contact_linkedin_url}
+                                          rel="noreferrer"
+                                          target="_blank"
+                                        >
+                                          Open LinkedIn
+                                        </a>
+                                      ) : null}
+                                      {item.apply_link ? (
+                                        <a
+                                          className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface"
+                                          href={item.apply_link}
+                                          rel="noreferrer"
+                                          target="_blank"
+                                        >
+                                          Open Job
+                                        </a>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="mt-4 text-sm text-on-surface-variant">
+                              No outreach tracked yet. Once you mark a status in Review Queue, it will appear here for this contact.
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex flex-wrap gap-2">
-                        {companyEntries(contact).length ? (
-                          companyEntries(contact).map((entry) => (
-                            <span
-                              key={`${contact.contact_id}-${entry.company_name || entry.company}`}
-                              className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
-                            >
-                              {entry.company_name || entry.company}
-                              {entry.role_title ? ` • ${entry.role_title}` : ""}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface-variant">
-                            No company linked yet
-                          </span>
-                        )}
-                      </div>
-
-                      {contact.linkedin_url ? (
-                        <a
-                          className="inline-flex items-center gap-1 text-sm text-primary transition-colors hover:text-primary-container"
-                          href={contact.linkedin_url}
-                          rel="noreferrer"
-                          target="_blank"
+                        <button
+                          className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                          onClick={() => startEditing(contact)}
+                          type="button"
                         >
-                          <span className="material-symbols-outlined text-[15px]">open_in_new</span>
-                          LinkedIn profile
-                        </a>
-                      ) : null}
-
-                      <p className="max-w-2xl whitespace-pre-wrap text-sm leading-6 text-on-surface-variant">
-                        {contact.relationship_note || "No relationship note saved yet."}
-                      </p>
+                          Edit
+                        </button>
+                        <button
+                          className="rounded bg-error/10 px-3 py-2 text-sm font-medium text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={actionState.busyId === contact.contact_id}
+                          onClick={() => deleteContact(contact.contact_id)}
+                          type="button"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                        onClick={() => startEditing(contact)}
-                        type="button"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="rounded bg-error/10 px-3 py-2 text-sm font-medium text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={actionState.busyId === contact.contact_id}
-                        onClick={() => deleteContact(contact.contact_id)}
-                        type="button"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              ))
+                  </article>
+                );
+              })
             ) : (
               <div className="px-6 py-10 text-on-surface-variant">
                 No referral contacts yet. Add a person manually or import your LinkedIn connections to start surfacing warm paths.

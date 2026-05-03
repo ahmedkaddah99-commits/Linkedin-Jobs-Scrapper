@@ -11,6 +11,10 @@ CANDIDATE_ASSET_DESCRIPTOR_SCHEMA = "candidate_asset_descriptor_v1"
 REJECTED_JOB_REVIEW_SCHEMA = "rejected_job_review_v1"
 MAIL_CONNECTION_CONTRACT_SCHEMA = "mail_connection_contract_v1"
 REFERRAL_RELATIONSHIP_SCHEMA = "referral_relationship_v1"
+TRACKER_APPLICATION_SCHEMA = "tracker_application_v1"
+GMAIL_APPLICATION_DETECTION_SCHEMA = "gmail_application_detection_v1"
+APPLICATION_DOCUMENT_SCHEMA = "application_document_v1"
+ATS_EXPORT_GATE_SCHEMA = "ats_export_gate_v1"
 
 WORKSPACE_TARGETING_METHOD = "keyword_profile_aligned"
 WORKSPACE_KEYWORD_LIMIT = 12
@@ -101,8 +105,92 @@ MAIL_SUPPORTED_SCOPES = [
 
 REFERRAL_SOURCE_KINDS = [
     "manual",
+    "linkedin_csv",
     "linkedin_csv_import",
     "enriched",
+]
+
+APPLICATION_STATUSES = [
+    "Not applied",
+    "Applied",
+    "Interviewing",
+    "Rejected",
+    "Offer",
+    "Withdrawn",
+    "Unknown",
+]
+
+APPLICATION_STATUS_DEFAULT = "Unknown"
+
+LEGACY_TRACKER_STATUS_TO_APPLICATION_STATUS = {
+    "": "Not applied",
+    "not_applied": "Not applied",
+    "not applied": "Not applied",
+    "false": "Not applied",
+    "no": "Not applied",
+    "applied": "Applied",
+    "true": "Applied",
+    "yes": "Applied",
+    "email_confirmed": "Applied",
+    "email confirmed": "Applied",
+    "interview_invited": "Interviewing",
+    "interview invited": "Interviewing",
+    "interviewing": "Interviewing",
+    "rejected": "Rejected",
+    "offer": "Offer",
+    "withdrawn": "Withdrawn",
+    "unknown": "Unknown",
+}
+
+REFERRAL_OUTREACH_STATUSES = [
+    "Not contacted",
+    "Contacted",
+    "Replied",
+    "Referral offered",
+    "No referral",
+]
+
+REFERRAL_CONTACT_LIFECYCLE_STATUSES = [
+    "active",
+    "inactive",
+]
+
+GMAIL_SCAN_WINDOWS = [
+    "now",
+    "last_1_month",
+    "last_2_months",
+    "last_3_months",
+]
+
+GMAIL_DETECTION_CONFIDENCE_LEVELS = [
+    "high",
+    "medium",
+    "low",
+]
+
+GMAIL_DETECTION_APPROVAL_STATES = [
+    "pending_review",
+    "approved",
+    "dismissed",
+]
+
+APPLICATION_DOCUMENT_TYPES = [
+    "Original CV",
+    "Tailored CV",
+    "Cover letter",
+    "Transcript",
+    "Certificate",
+    "Other",
+]
+
+ATS_GATE_STATES = [
+    "not_started",
+    "drafting",
+    "scoring",
+    "passed",
+    "blocked",
+    "warning_acknowledged",
+    "exported_anyway",
 ]
 
 DEFAULT_MULTI_PORTAL_IDS = [
@@ -113,6 +201,10 @@ DEFAULT_MULTI_PORTAL_IDS = [
 
 def _clean_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _casefold_key(value: Any) -> str:
+    return _clean_text(value).casefold().replace("-", "_")
 
 
 def _clean_bool(value: Any, *, default: bool = False) -> bool:
@@ -212,6 +304,58 @@ def _normalize_prompt_overrides(settings: Mapping[str, Any]) -> list[dict[str, s
             }
         )
     return overrides
+
+
+def normalize_application_status(value: Any, *, default: str = APPLICATION_STATUS_DEFAULT) -> str:
+    """Return the user-facing application status for legacy and new status values."""
+    text = _clean_text(value)
+    if not text:
+        if default == "":
+            return ""
+        return default if default in APPLICATION_STATUSES else APPLICATION_STATUS_DEFAULT
+    for status in APPLICATION_STATUSES:
+        if text.casefold() == status.casefold():
+            return status
+    legacy_match = LEGACY_TRACKER_STATUS_TO_APPLICATION_STATUS.get(_casefold_key(text))
+    if legacy_match:
+        return legacy_match
+    if default == "":
+        return ""
+    return default if default in APPLICATION_STATUSES else APPLICATION_STATUS_DEFAULT
+
+
+def legacy_tracker_status_for_application_status(value: Any) -> str:
+    status = normalize_application_status(value)
+    if status == "Not applied":
+        return "not_applied"
+    if status == "Applied":
+        return "applied"
+    if status == "Interviewing":
+        return "interview_invited"
+    if status == "Rejected":
+        return "rejected"
+    if status == "Offer":
+        return "offer"
+    if status == "Withdrawn":
+        return "withdrawn"
+    return "unknown"
+
+
+def normalize_referral_outreach_status(value: Any, *, default: str = "Not contacted") -> str:
+    text = _clean_text(value)
+    if not text:
+        return default
+    for status in REFERRAL_OUTREACH_STATUSES:
+        if text.casefold().replace("_", " ") == status.casefold():
+            return status
+    return default
+
+
+def normalize_gmail_scan_window(value: Any, *, default: str = "last_1_month") -> str:
+    text = _casefold_key(value)
+    if text in GMAIL_SCAN_WINDOWS:
+        return text
+    return default
 
 
 def _normalize_source_ids(payload: Mapping[str, Any], settings: Mapping[str, Any]) -> set[str]:
@@ -689,6 +833,300 @@ def build_mail_connection_contract() -> dict[str, Any]:
     }
 
 
+def default_tracker_application_contract() -> dict[str, Any]:
+    return {
+        "schema_version": TRACKER_APPLICATION_SCHEMA,
+        "application_id": "",
+        "review_id": "",
+        "run_id": "",
+        "workspace_id": "",
+        "job": {
+            "job_id": "",
+            "title": "",
+            "company": "",
+            "location": "",
+            "apply_link": "",
+            "linkedin_link": "",
+            "full_description": "",
+        },
+        "status": {
+            "application_status": "Unknown",
+            "legacy_tracker_status": "",
+            "email_confirmed": False,
+            "source": "manual",
+            "confidence": "",
+            "suggested_application_status": "",
+        },
+        "dates": {
+            "application_date": "",
+            "rejected_at": "",
+            "updated_at": "",
+        },
+        "notes": "",
+        "documents": [],
+        "metadata": {},
+    }
+
+
+def normalize_tracker_application(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(payload or {})
+    metadata = dict(raw.get("metadata") or {})
+    contract = deepcopy(default_tracker_application_contract())
+    review_id = _clean_text(raw.get("review_id"))
+    job_id = _clean_text(raw.get("job_id"))
+    legacy_status = _clean_text(
+        raw.get("tracker_status")
+        or raw.get("legacy_tracker_status")
+        or metadata.get("tracker_status")
+        or raw.get("applied?")
+    )
+    application_status = normalize_application_status(
+        raw.get("application_status")
+        or raw.get("status")
+        or legacy_status,
+        default="Not applied" if legacy_status in {"", "not_applied"} else "Unknown",
+    )
+    contract["application_id"] = _clean_text(raw.get("application_id") or review_id or job_id)
+    contract["review_id"] = review_id
+    contract["run_id"] = _clean_text(raw.get("run_id"))
+    contract["workspace_id"] = _clean_text(raw.get("workspace_id"))
+    contract["job"]["job_id"] = job_id
+    contract["job"]["title"] = _clean_text(raw.get("title"))
+    contract["job"]["company"] = _clean_text(raw.get("company"))
+    contract["job"]["location"] = _clean_text(raw.get("location") or raw.get("location_raw"))
+    contract["job"]["apply_link"] = _clean_text(raw.get("apply_link") or raw.get("link"))
+    contract["job"]["linkedin_link"] = _clean_text(raw.get("linkedin_link"))
+    contract["job"]["full_description"] = _clean_text(raw.get("full_description") or raw.get("description"))
+    contract["status"]["application_status"] = application_status
+    contract["status"]["legacy_tracker_status"] = legacy_status or legacy_tracker_status_for_application_status(application_status)
+    contract["status"]["email_confirmed"] = _clean_bool(
+        raw.get("email_confirmed") or metadata.get("email_confirmed"),
+        default=False,
+    )
+    contract["status"]["source"] = _clean_text(raw.get("status_source") or metadata.get("status_source") or "manual") or "manual"
+    contract["status"]["confidence"] = _clean_text(raw.get("confidence") or metadata.get("confidence"))
+    contract["status"]["suggested_application_status"] = normalize_application_status(
+        raw.get("suggested_application_status") or metadata.get("suggested_application_status"),
+        default="",
+    )
+    if contract["status"]["suggested_application_status"] not in APPLICATION_STATUSES:
+        contract["status"]["suggested_application_status"] = ""
+    contract["dates"]["application_date"] = _clean_text(raw.get("application_date") or raw.get("applied_at"))
+    contract["dates"]["rejected_at"] = _clean_text(raw.get("rejected_at") or metadata.get("rejected_at"))
+    contract["dates"]["updated_at"] = _clean_text(raw.get("updated_at"))
+    contract["notes"] = _clean_text(raw.get("notes") or raw.get("rejection_note") or metadata.get("rejection_note"))
+    contract["documents"] = [dict(item) for item in _clean_list(raw.get("documents")) if isinstance(item, Mapping)]
+    contract["metadata"] = metadata
+    return contract
+
+
+def build_tracker_application_contract() -> dict[str, Any]:
+    return {
+        "schema_id": TRACKER_APPLICATION_SCHEMA,
+        "version": PHASE0_CONTRACT_VERSION,
+        "default": default_tracker_application_contract(),
+        "application_statuses": list(APPLICATION_STATUSES),
+        "legacy_status_mapping": dict(LEGACY_TRACKER_STATUS_TO_APPLICATION_STATUS),
+    }
+
+
+def default_gmail_application_detection_contract() -> dict[str, Any]:
+    return {
+        "schema_version": GMAIL_APPLICATION_DETECTION_SCHEMA,
+        "detection_id": "",
+        "scan_window": "last_1_month",
+        "source_email": {
+            "message_id": "",
+            "subject": "",
+            "from_address": "",
+            "sent_at": "",
+        },
+        "detected_application": {
+            "company": "",
+            "title": "",
+            "application_date": "",
+            "source_url": "",
+        },
+        "status": {
+            "suggested_application_status": "Unknown",
+            "confidence": "low",
+            "approval_state": "pending_review",
+            "evidence": [],
+        },
+        "metadata": {},
+    }
+
+
+def normalize_gmail_application_detection(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(payload or {})
+    contract = deepcopy(default_gmail_application_detection_contract())
+    source_email = dict(raw.get("source_email") or {})
+    detected_application = dict(raw.get("detected_application") or {})
+    raw_status = raw.get("status")
+    status = dict(raw_status) if isinstance(raw_status, Mapping) else {}
+    contract["detection_id"] = _clean_text(raw.get("detection_id"))
+    contract["scan_window"] = normalize_gmail_scan_window(raw.get("scan_window"))
+    contract["source_email"]["message_id"] = _clean_text(raw.get("message_id") or source_email.get("message_id"))
+    contract["source_email"]["subject"] = _clean_text(raw.get("subject") or source_email.get("subject"))
+    contract["source_email"]["from_address"] = _clean_text(raw.get("from_address") or source_email.get("from_address"))
+    contract["source_email"]["sent_at"] = _clean_text(raw.get("sent_at") or source_email.get("sent_at"))
+    contract["detected_application"]["company"] = _clean_text(raw.get("company") or detected_application.get("company"))
+    contract["detected_application"]["title"] = _clean_text(raw.get("title") or detected_application.get("title"))
+    contract["detected_application"]["application_date"] = _clean_text(
+        raw.get("application_date") or detected_application.get("application_date")
+    )
+    contract["detected_application"]["source_url"] = _clean_text(
+        raw.get("source_url") or raw.get("apply_link") or detected_application.get("source_url")
+    )
+    contract["status"]["suggested_application_status"] = normalize_application_status(
+        raw.get("suggested_application_status")
+        or raw.get("tracker_status")
+        or status.get("suggested_application_status")
+        or status.get("application_status")
+        or raw.get("status"),
+    )
+    confidence = _casefold_key(raw.get("confidence") or status.get("confidence") or "low")
+    contract["status"]["confidence"] = confidence if confidence in GMAIL_DETECTION_CONFIDENCE_LEVELS else "low"
+    approval_state = _casefold_key(raw.get("approval_state") or status.get("approval_state") or "pending_review")
+    contract["status"]["approval_state"] = (
+        approval_state if approval_state in GMAIL_DETECTION_APPROVAL_STATES else "pending_review"
+    )
+    contract["status"]["evidence"] = _clean_tag_list(raw.get("evidence") or status.get("evidence"), limit=20)
+    contract["metadata"] = dict(raw.get("metadata") or {})
+    return contract
+
+
+def build_gmail_application_detection_contract() -> dict[str, Any]:
+    return {
+        "schema_id": GMAIL_APPLICATION_DETECTION_SCHEMA,
+        "version": PHASE0_CONTRACT_VERSION,
+        "default": default_gmail_application_detection_contract(),
+        "scan_windows": list(GMAIL_SCAN_WINDOWS),
+        "confidence_levels": list(GMAIL_DETECTION_CONFIDENCE_LEVELS),
+        "approval_states": list(GMAIL_DETECTION_APPROVAL_STATES),
+        "application_statuses": list(APPLICATION_STATUSES),
+    }
+
+
+def default_application_document_contract() -> dict[str, Any]:
+    return {
+        "schema_version": APPLICATION_DOCUMENT_SCHEMA,
+        "document_id": "",
+        "document_name": "",
+        "document_type": "Other",
+        "related_application": {
+            "application_id": "",
+            "job_id": "",
+            "company": "",
+            "title": "",
+        },
+        "file": {
+            "path": "",
+            "download_url": "",
+            "content_type": "",
+        },
+        "status": "ready",
+        "created_at": "",
+        "metadata": {},
+    }
+
+
+def normalize_application_document(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(payload or {})
+    metadata = dict(raw.get("metadata") or {})
+    contract = deepcopy(default_application_document_contract())
+    document_type = _clean_text(raw.get("document_type") or raw.get("type") or raw.get("asset_kind") or "Other")
+    matching_type = next(
+        (item for item in APPLICATION_DOCUMENT_TYPES if item.casefold() == document_type.casefold()),
+        "Other",
+    )
+    contract["document_id"] = _clean_text(raw.get("document_id") or raw.get("artifact_id") or raw.get("asset_id"))
+    contract["document_name"] = _clean_text(raw.get("document_name") or raw.get("file_name") or raw.get("display_name"))
+    contract["document_type"] = matching_type
+    contract["related_application"]["application_id"] = _clean_text(raw.get("application_id") or metadata.get("application_id"))
+    contract["related_application"]["job_id"] = _clean_text(raw.get("job_id") or metadata.get("job_id"))
+    contract["related_application"]["company"] = _clean_text(raw.get("company") or metadata.get("company"))
+    contract["related_application"]["title"] = _clean_text(raw.get("title") or raw.get("job_title") or metadata.get("job_title"))
+    contract["file"]["path"] = _clean_text(raw.get("path"))
+    contract["file"]["download_url"] = _clean_text(raw.get("download_url"))
+    contract["file"]["content_type"] = _clean_text(raw.get("content_type") or raw.get("mime_type"))
+    contract["status"] = _clean_text(raw.get("status") or metadata.get("status") or "ready") or "ready"
+    contract["created_at"] = _clean_text(raw.get("created_at") or metadata.get("created_at"))
+    contract["metadata"] = metadata
+    return contract
+
+
+def build_application_document_contract() -> dict[str, Any]:
+    return {
+        "schema_id": APPLICATION_DOCUMENT_SCHEMA,
+        "version": PHASE0_CONTRACT_VERSION,
+        "default": default_application_document_contract(),
+        "document_types": list(APPLICATION_DOCUMENT_TYPES),
+    }
+
+
+def default_ats_export_gate_contract() -> dict[str, Any]:
+    return {
+        "schema_version": ATS_EXPORT_GATE_SCHEMA,
+        "target_score": 90,
+        "best_score": 0,
+        "attempt_count": 0,
+        "max_attempts": 3,
+        "gate_state": "not_started",
+        "can_export_final": False,
+        "export_anyway_allowed": False,
+        "missing_requirements": [],
+        "last_warning": "",
+        "metadata": {},
+    }
+
+
+def normalize_ats_export_gate(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    raw = dict(payload or {})
+    contract = deepcopy(default_ats_export_gate_contract())
+    try:
+        contract["target_score"] = max(0, min(100, int(raw.get("target_score") or 90)))
+    except (TypeError, ValueError):
+        contract["target_score"] = 90
+    try:
+        contract["best_score"] = max(0, min(100, int(raw.get("best_score") or raw.get("score") or 0)))
+    except (TypeError, ValueError):
+        contract["best_score"] = 0
+    try:
+        contract["attempt_count"] = max(0, int(raw.get("attempt_count") or 0))
+    except (TypeError, ValueError):
+        contract["attempt_count"] = 0
+    try:
+        contract["max_attempts"] = max(1, int(raw.get("max_attempts") or 3))
+    except (TypeError, ValueError):
+        contract["max_attempts"] = 3
+    gate_state = _casefold_key(raw.get("gate_state") or raw.get("state") or "not_started")
+    contract["gate_state"] = gate_state if gate_state in ATS_GATE_STATES else "not_started"
+    contract["can_export_final"] = _clean_bool(
+        raw.get("can_export_final"),
+        default=contract["best_score"] >= contract["target_score"],
+    )
+    contract["export_anyway_allowed"] = _clean_bool(
+        raw.get("export_anyway_allowed"),
+        default=contract["attempt_count"] >= contract["max_attempts"],
+    )
+    contract["missing_requirements"] = _clean_tag_list(raw.get("missing_requirements"), limit=50)
+    contract["last_warning"] = _clean_text(raw.get("last_warning"))
+    contract["metadata"] = dict(raw.get("metadata") or {})
+    return contract
+
+
+def build_ats_export_gate_contract() -> dict[str, Any]:
+    return {
+        "schema_id": ATS_EXPORT_GATE_SCHEMA,
+        "version": PHASE0_CONTRACT_VERSION,
+        "default": default_ats_export_gate_contract(),
+        "gate_states": list(ATS_GATE_STATES),
+        "default_target_score": 90,
+        "default_max_attempts": 3,
+    }
+
+
 def default_referral_relationship_contract() -> dict[str, Any]:
     return {
         "schema_version": REFERRAL_RELATIONSHIP_SCHEMA,
@@ -706,8 +1144,17 @@ def default_referral_relationship_contract() -> dict[str, Any]:
             "created_at": "",
             "updated_at": "",
         },
+        "lifecycle": {
+            "status": "active",
+            "is_active": True,
+            "inactive_at": "",
+            "inactive_reason": "",
+        },
         "matching": {
             "company_aliases": [],
+        },
+        "outreach": {
+            "default_status": "Not contacted",
         },
         "metadata": {},
     }
@@ -757,11 +1204,31 @@ def normalize_referral_relationship(payload: Mapping[str, Any] | None) -> dict[s
     contract["source"]["import_ref"] = _clean_text(raw.get("import_ref"))
     contract["source"]["created_at"] = _clean_text(raw.get("created_at"))
     contract["source"]["updated_at"] = _clean_text(raw.get("updated_at"))
+    is_active = _clean_bool(raw.get("is_active", raw.get("active", True)), default=True)
+    lifecycle_payload = raw.get("lifecycle") if isinstance(raw.get("lifecycle"), Mapping) else {}
+    if lifecycle_payload:
+        is_active = _clean_bool(lifecycle_payload.get("is_active"), default=is_active)
+    lifecycle_status = _clean_text(
+        (lifecycle_payload or {}).get("status")
+        or raw.get("lifecycle_status")
+        or ("active" if is_active else "inactive")
+    ).casefold()
+    if lifecycle_status not in REFERRAL_CONTACT_LIFECYCLE_STATUSES:
+        lifecycle_status = "active" if is_active else "inactive"
+    contract["lifecycle"]["status"] = lifecycle_status
+    contract["lifecycle"]["is_active"] = lifecycle_status == "active" and is_active
+    contract["lifecycle"]["inactive_at"] = _clean_text(
+        (lifecycle_payload or {}).get("inactive_at") or raw.get("inactive_at")
+    )
+    contract["lifecycle"]["inactive_reason"] = _clean_text(
+        (lifecycle_payload or {}).get("inactive_reason") or raw.get("inactive_reason")
+    )
 
     aliases = _clean_tag_list(raw.get("company_aliases"), limit=50)
     if not aliases:
         aliases = [item["company_name"] for item in companies if _clean_text(item.get("company_name"))]
     contract["matching"]["company_aliases"] = aliases
+    contract["outreach"]["default_status"] = normalize_referral_outreach_status(raw.get("outreach_status"))
     contract["metadata"] = dict(raw.get("metadata") or {})
     return contract
 
@@ -772,6 +1239,8 @@ def build_referral_relationship_contract() -> dict[str, Any]:
         "version": PHASE0_CONTRACT_VERSION,
         "default": default_referral_relationship_contract(),
         "source_kinds": list(REFERRAL_SOURCE_KINDS),
+        "lifecycle_statuses": list(REFERRAL_CONTACT_LIFECYCLE_STATUSES),
+        "outreach_statuses": list(REFERRAL_OUTREACH_STATUSES),
     }
 
 
@@ -783,30 +1252,54 @@ def phase0_contract_catalog() -> dict[str, Any]:
         "rejected_job_review": build_rejected_job_review_contract(),
         "mail_connection": build_mail_connection_contract(),
         "referral_relationship": build_referral_relationship_contract(),
+        "tracker_application": build_tracker_application_contract(),
+        "gmail_application_detection": build_gmail_application_detection_contract(),
+        "application_document": build_application_document_contract(),
+        "ats_export_gate": build_ats_export_gate_contract(),
     }
 
 
 __all__ = [
     "CANDIDATE_ASSET_DESCRIPTOR_SCHEMA",
+    "APPLICATION_DOCUMENT_SCHEMA",
+    "APPLICATION_STATUSES",
+    "ATS_EXPORT_GATE_SCHEMA",
+    "GMAIL_APPLICATION_DETECTION_SCHEMA",
     "MAIL_CONNECTION_CONTRACT_SCHEMA",
     "PHASE0_CONTRACT_VERSION",
     "REFERRAL_RELATIONSHIP_SCHEMA",
     "REJECTED_JOB_REVIEW_SCHEMA",
+    "TRACKER_APPLICATION_SCHEMA",
     "WORKSPACE_CONFIGURATION_V2_SCHEMA",
+    "build_application_document_contract",
+    "build_ats_export_gate_contract",
     "build_candidate_asset_contract",
+    "build_gmail_application_detection_contract",
     "build_mail_connection_contract",
     "build_referral_relationship_contract",
     "build_rejected_job_review_contract",
+    "build_tracker_application_contract",
     "build_workspace_configuration_v2_contract",
+    "default_application_document_contract",
+    "default_ats_export_gate_contract",
     "default_candidate_asset_descriptor",
+    "default_gmail_application_detection_contract",
     "default_mail_connection_contract",
     "default_referral_relationship_contract",
     "default_rejected_job_review_contract",
+    "default_tracker_application_contract",
     "default_workspace_configuration_v2",
+    "legacy_tracker_status_for_application_status",
+    "normalize_application_document",
+    "normalize_application_status",
+    "normalize_ats_export_gate",
     "normalize_candidate_asset_descriptor",
+    "normalize_gmail_application_detection",
     "normalize_mail_connection_contract",
+    "normalize_referral_outreach_status",
     "normalize_referral_relationship",
     "normalize_rejected_job_review",
+    "normalize_tracker_application",
     "normalize_workspace_configuration_v2",
     "phase0_contract_catalog",
 ]

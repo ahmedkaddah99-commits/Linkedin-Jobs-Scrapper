@@ -77,7 +77,7 @@ def _build_registries() -> BackendRegistries:
             id="company_career_sites",
             kind="connector",
             name="Company Career Sites",
-            description="Discover jobs directly from specific company career pages configured by the user.",
+            description="Discover jobs directly from backend-prepared company career pages, with manual overrides when needed.",
         ),
     )
     connector_registry.register(

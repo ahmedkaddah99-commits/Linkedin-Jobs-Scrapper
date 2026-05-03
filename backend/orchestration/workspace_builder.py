@@ -12,7 +12,8 @@ from backend.capabilities.tailored_documents.rendering import (
     CV_FONT_OPTIONS,
     CV_TEMPLATE_PRESETS,
 )
-from backend.domain.phase0_contracts import normalize_workspace_configuration_v2
+from backend.connectors.company_career_sites import load_discovered_company_site_entries
+from backend.domain.phase0_contracts import DEFAULT_MULTI_PORTAL_IDS, normalize_workspace_configuration_v2
 from backend.domain.models import JobSource, ProfileRef, PromptSetRef, StageDefinition, WorkflowTemplate, WorkspaceDefinition
 
 
@@ -372,7 +373,7 @@ def _configuration_fields() -> list[dict]:
         {
             "id": "company_career_sites",
             "label": "Company Career Sites",
-            "description": "One company per line in the format Company Name | Career Site URL.",
+            "description": "Optional manual overrides. Leave blank to use the backend-discovered career-site list automatically.",
             "type": "company_site_list",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "source_ids": [SOURCE_COMPANY_CAREER_SITES],
@@ -946,7 +947,7 @@ def workspace_builder_catalog() -> BuilderCatalog:
                 "id": SOURCE_COMPANY_CAREER_SITES,
                 "connector_id": "company_career_sites",
                 "name": "Company Career Sites",
-                "description": "Discover open roles directly from specific company career pages and push them through the shared screening flow.",
+                "description": "Discover open roles directly from backend-prepared company career pages and push them through the shared screening flow.",
                 "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             },
             {
@@ -1278,11 +1279,25 @@ def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str
 
     if SOURCE_COMPANY_CAREER_SITES in source_ids:
         companies = effective_settings.get("company_career_sites") or []
-        details = [f"{len(companies)} career site(s) configured."] if companies else ["Add at least one company career page URL."]
+        discovered_companies = [] if companies else load_discovered_company_site_entries()
+        effective_companies = companies or discovered_companies
+        details = (
+            [f"{len(companies)} pasted career site(s) configured."]
+            if companies
+            else (
+                [f"{len(discovered_companies)} backend-discovered career site(s) available."]
+                if discovered_companies
+                else ["Load the backend career-site discovery list first, or add manual career page URLs."]
+            )
+        )
         add_result(
             SOURCE_COMPANY_CAREER_SITES,
-            status="valid" if companies else "invalid",
-            summary="Company career sites look usable." if companies else "Company career sites are required for this source.",
+            status="valid" if effective_companies else "invalid",
+            summary=(
+                "Company career sites look usable."
+                if effective_companies
+                else "Company career sites are required for this source."
+            ),
             details=details,
         )
 
@@ -1368,7 +1383,7 @@ def _build_source_stages(source_ids: list[str]) -> tuple[list[StageDefinition], 
                 stage_id="source_company_career_sites",
                 stage_type="jobs.acquire.company_sites",
                 name="Acquire Company Career Site Jobs",
-                description="Scrape configured company career pages for matching open roles.",
+                description="Scrape backend-prepared company career pages for matching open roles.",
                 output_key="source_company_career_jobs",
                 config={"connector_id": "company_career_sites"},
             )

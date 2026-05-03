@@ -26,7 +26,10 @@ from backend.capabilities.tailored_documents.runtime import (
 )
 from backend.capabilities.tailored_documents.screening import run_stage2_pipeline as run_tailored_stage2_pipeline
 from backend.capabilities.tailored_documents.workflow import run_manual_pipeline
-from backend.connectors.company_career_sites import scrape_company_career_sites
+from backend.connectors.company_career_sites import (
+    load_discovered_company_site_entries,
+    scrape_company_career_sites,
+)
 from backend.domain.models import ArtifactRecord, JobRecord, StageContext, StageDefinition
 from backend.orchestration.engine import BaseStage, StageOutcome
 from backend.orchestration.workspace_builder import derive_runtime_defaults_from_settings
@@ -52,6 +55,75 @@ def _json_artifact(run_id: str, stage_id: str, artifact_type: str, path: str) ->
         artifact_type=artifact_type,
         path=path,
     )
+
+
+def _tailored_document_artifact_metadata(record: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "job_id": str(record.get("job_id") or ""),
+        "job_title": str(record.get("title") or ""),
+        "company": str(record.get("company") or ""),
+        "status": "ready" if not record.get("doc_generation_error") else "error",
+    }
+    propagated_fields = (
+        "ats_score",
+        "ats_best_score",
+        "ats_target_score",
+        "ats_attempt_count",
+        "ats_max_attempts",
+        "ats_missing_requirements",
+        "missing_requirements",
+        "ats_gate_state",
+        "ats_can_export_final",
+        "ats_export_anyway_allowed",
+        "ats_last_warning",
+        "ats_stop_reason",
+        "ats_attempt_history",
+    )
+    for field_name in propagated_fields:
+        value = record.get(field_name)
+        if value not in (None, "", [], {}):
+            metadata[field_name] = value
+    if isinstance(record.get("ats_export_gate"), dict):
+        metadata["ats_export_gate"] = dict(record["ats_export_gate"])
+    return metadata
+
+
+def _tailored_document_artifacts(
+    run_id: str,
+    stage_id: str,
+    *,
+    output_json: str,
+    output_xlsx: str,
+    records: list[dict[str, Any]],
+) -> list[ArtifactRecord]:
+    artifacts = [
+        _json_artifact(run_id, stage_id, "documents_json", output_json),
+        _json_artifact(run_id, stage_id, "documents_xlsx", output_xlsx),
+    ]
+    for record in records:
+        job_id = str(record.get("job_id") or "")
+        metadata = _tailored_document_artifact_metadata(record)
+        cv_docx_path = str(record.get("cv_docx") or "")
+        if cv_docx_path:
+            artifacts.append(
+                ArtifactRecord(
+                    artifact_id=f"{run_id}_{stage_id}_{job_id}_cv_docx",
+                    artifact_type="cv_docx",
+                    path=cv_docx_path,
+                    metadata=metadata,
+                )
+            )
+        cv_pdf_path = str(record.get("cv_pdf") or "")
+        if cv_pdf_path:
+            artifacts.append(
+                ArtifactRecord(
+                    artifact_id=f"{run_id}_{stage_id}_{job_id}_cv_pdf",
+                    artifact_type="cv_pdf",
+                    path=cv_pdf_path,
+                    metadata=metadata,
+                )
+            )
+    return artifacts
 
 
 def _namespace_from_defaults(defaults: dict[str, Any], overrides: dict[str, Any]) -> SimpleNamespace:
@@ -130,6 +202,10 @@ def _harmonize_tailored_runtime_settings(settings: dict[str, Any]) -> dict[str, 
     for source_key, target_key in mirrored_pairs:
         if source_key in settings and target_key not in settings:
             settings[target_key] = settings[source_key]
+    if not settings.get("company_career_sites"):
+        discovered_company_sites = load_discovered_company_site_entries()
+        if discovered_company_sites:
+            settings["company_career_sites"] = discovered_company_sites
     return settings
 
 
@@ -325,15 +401,16 @@ class TailoredDocumentExportStage(BaseStage):
 
         Path(stage4_args.input).write_text(json.dumps(jobs, indent=2, ensure_ascii=False), encoding="utf-8")
         records = run_tailored_stage4_pipeline(stage4_args, config=config, jobs=jobs)
-        artifacts = [
-            _json_artifact(context.run.id, definition.stage_id, "documents_json", str(stage4_args.output_json)),
-            _json_artifact(context.run.id, definition.stage_id, "documents_xlsx", str(stage4_args.output_xlsx)),
-            _json_artifact(context.run.id, definition.stage_id, "docs_dir", str(stage4_args.docs_dir)),
-        ]
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(records)},
             metrics={"generated_jobs": len(records)},
-            artifacts=artifacts,
+            artifacts=_tailored_document_artifacts(
+                context.run.id,
+                definition.stage_id,
+                output_json=str(stage4_args.output_json),
+                output_xlsx=str(stage4_args.output_xlsx),
+                records=records,
+            ),
         )
 
 

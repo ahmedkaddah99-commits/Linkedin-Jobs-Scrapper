@@ -12,6 +12,7 @@ from email.parser import BytesFeedParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -35,14 +36,24 @@ from backend.capabilities.tracker.google_oauth import (
     exchange_google_tracker_oauth_code,
     fetch_google_tracker_profile,
     refresh_google_tracker_access_token,
+    tracker_google_oauth_metadata,
 )
 from backend.capabilities.tailored_documents.rendering import get_document_design_options
 from backend.bootstrap import create_backend
 from backend.domain.phase0_contracts import (
+    legacy_tracker_status_for_application_status,
+    normalize_application_document,
+    normalize_application_status,
     normalize_candidate_asset_descriptor,
+    normalize_gmail_application_detection,
+    normalize_gmail_scan_window,
+    normalize_referral_outreach_status,
     normalize_rejected_job_review,
+    normalize_tracker_application,
     phase0_contract_catalog,
 )
+from backend.domain.ats_export_gate import evaluate_ats_export_gate
+from backend.tools.discover_company_careers import run_discovery as run_career_url_discovery
 from backend.domain.models import (
     TOKEN_SCOPE_ARTIFACTS_READ,
     TOKEN_SCOPE_ARTIFACTS_WRITE,
@@ -69,6 +80,12 @@ def _json_bytes(payload) -> bytes:
 
 _EXPANDED_ARTIFACT_DELIMITER = "__item__"
 _EXPANDED_ARTIFACT_SUFFIXES = {".csv", ".docx", ".json", ".md", ".pdf", ".txt", ".xlsx"}
+
+
+class AtsExportBlockedError(ValueError):
+    def __init__(self, gate: dict):
+        self.gate = gate
+        super().__init__(gate.get("last_warning") or "Final CV export is blocked until the ATS score target is reached.")
 
 
 def _artifact_download_url(run_id: str, artifact_id: str) -> str:
@@ -173,6 +190,7 @@ def _build_artifact_entry(
         "workspace_name": workspace.name if workspace else run.workspace_id,
         "run_id": run.id,
         "created_at": created_at,
+        "job_id": str(metadata.get("job_id") or ""),
         "job_title": str(metadata.get("job_title") or ""),
         "company": str(metadata.get("company") or ""),
         "status": str(metadata.get("status") or ("ready" if path else "missing")),
@@ -691,6 +709,21 @@ def _collect_review_queue_entries(application, user, *, workspace_id: str = "", 
                 status = str((review.status if review else "") or "waiting_review")
                 review_meta = dict(review.metadata or {}) if review else {}
                 matched_contacts = find_referral_contacts_for_company(referral_contacts, job.company)
+                tracker_status = str(review_meta.get("tracker_status") or "")
+                application_status = normalize_application_status(
+                    review_meta.get("application_status") or tracker_status,
+                    default="" if not tracker_status else "Unknown",
+                )
+                matched_contact_payloads = []
+                for contact in matched_contacts:
+                    contact_payload = contact.to_dict()
+                    contact_payload["outreach_status"] = _get_referral_outreach_status(
+                        user,
+                        run_id=run.id,
+                        job_id=job.job_id,
+                        contact_id=contact.contact_id,
+                    )
+                    matched_contact_payloads.append(contact_payload)
                 entries.append(
                     {
                         "review_id": review.review_id if review else "",
@@ -715,9 +748,10 @@ def _collect_review_queue_entries(application, user, *, workspace_id: str = "", 
                         "manual_approved": bool(job.manual_approved),
                         "updated_at": review.updated_at if review else run.updated_at,
                         # Tracker fields (REQ-09 / REQ-10)
-                        "tracker_status": str(review_meta.get("tracker_status") or ""),
+                        "tracker_status": tracker_status,
+                        "application_status": application_status,
                         "email_confirmed": bool(review_meta.get("email_confirmed") or False),
-                        "referral_contacts": [contact.to_dict() for contact in matched_contacts],
+                        "referral_contacts": matched_contact_payloads,
                         "has_referral_contact": bool(matched_contacts),
                         "referable_contact_count": sum(1 for contact in matched_contacts if contact.can_refer),
                     }
@@ -726,10 +760,199 @@ def _collect_review_queue_entries(application, user, *, workspace_id: str = "", 
     return entries
 
 
+TRACKER_EXCEL_BASELINE_COLUMNS = [
+    "run_date",
+    "run_timestamp",
+    "job_id",
+    "title",
+    "company",
+    "location_raw",
+    "keyword",
+    "posted_time_text",
+    "posted_age_hours",
+    "applicant_count",
+    "priority_rank",
+    "priority_rule",
+    "easy_apply_status",
+    "apply_link",
+    "apply_link_source",
+    "linkedin_link",
+    "link",
+    "enrich_status_code",
+    "enrich_error",
+    "full_description",
+    "cv_professional_summary",
+    "cv_professional_experience",
+    "cv_strategic_initiatives",
+    "cv_skills",
+    "cv_education",
+    "tailored_cv",
+    "cv_docx",
+    "cv_pdf",
+    "tailored_cv_docx",
+    "pdf_generation_error",
+    "doc_generation_error",
+    "posted_datetime_estimated_utc",
+    "priority_bucket",
+    "priority_tier",
+    "Status",
+    "applied?",
+    "notes",
+]
+
+TRACKER_TABLE_COLUMNS = [
+    {"key": "Status", "label": "Status"},
+    {"key": "company", "label": "Company"},
+    {"key": "title", "label": "Role"},
+    {"key": "location_raw", "label": "Location"},
+    {"key": "application_date", "label": "Application date"},
+    {"key": "apply_link", "label": "Application link"},
+    {"key": "linkedin_link", "label": "LinkedIn link"},
+    {"key": "priority_rank", "label": "Priority"},
+    {"key": "applicant_count", "label": "Applicants"},
+    {"key": "documents", "label": "Documents"},
+    {"key": "notes", "label": "Notes"},
+]
+
+
+def _run_date(value: str) -> str:
+    text = str(value or "").strip()
+    return text[:10] if text else ""
+
+
+def _tracker_baseline_row(
+    *,
+    job,
+    run,
+    review=None,
+    application_status: str,
+    documents: list[dict] | None = None,
+    external: dict | None = None,
+) -> dict:
+    external = dict(external or {})
+    review_meta = dict(getattr(review, "metadata", None) or {})
+    job_payload = job.to_dict() if job else {}
+    row = {column: job_payload.get(column, "") for column in TRACKER_EXCEL_BASELINE_COLUMNS}
+    run_timestamp = str(
+        row.get("run_timestamp")
+        or getattr(run, "finished_at", "")
+        or getattr(run, "updated_at", "")
+        or getattr(run, "created_at", "")
+        or external.get("updated_at")
+        or external.get("created_at")
+        or ""
+    )
+    row.update(
+        {
+            "run_date": row.get("run_date") or _run_date(run_timestamp),
+            "run_timestamp": run_timestamp,
+            "job_id": row.get("job_id") or (job.job_id if job else external.get("application_id", "")),
+            "title": row.get("title") or (job.title if job else external.get("title", "")),
+            "company": row.get("company") or (job.company if job else external.get("company", "")),
+            "location_raw": row.get("location_raw") or (job.location_raw if job else external.get("location", "")),
+            "apply_link": row.get("apply_link") or (job.apply_link or job.link or job.source_url if job else external.get("apply_link", "")),
+            "linkedin_link": row.get("linkedin_link") or (job_payload.get("linkedin_link") or (job.link if job else "")),
+            "link": row.get("link") or (job.link if job else external.get("apply_link", "")),
+            "full_description": row.get("full_description") or (job.description_text if job else external.get("full_description", "")),
+            "priority_rank": row.get("priority_rank") or (job.priority_rank if job else external.get("priority_rank", "")),
+            "Status": application_status,
+            "applied?": application_status,
+            "notes": (
+                str(getattr(review, "notes", "") or review_meta.get("notes") or "")
+                if review
+                else str(external.get("notes") or "")
+            ),
+        }
+    )
+    row["application_date"] = str(
+        review_meta.get("application_date")
+        or review_meta.get("applied_at")
+        or external.get("application_date")
+        or ""
+    )
+    row["documents"] = documents or []
+    return row
+
+
+def _tracker_document_summary(document: dict, *, source_scope: str = "") -> dict:
+    metadata = dict(document.get("metadata") or {})
+    label = str(document.get("display_name") or document.get("document_name") or document.get("relative_path") or "").strip()
+    document_type = str(document.get("document_type") or _document_type_for_asset_kind(str(document.get("asset_kind") or ""))).strip()
+    if not label:
+        label = document_type or "Document"
+    return {
+        "document_id": str(document.get("document_id") or ""),
+        "field": str(document.get("asset_kind") or ""),
+        "label": label,
+        "document_type": document_type,
+        "asset_kind": str(document.get("asset_kind") or ""),
+        "download_url": str(document.get("download_url") or ""),
+        "path": str(document.get("relative_path") or document.get("path") or ""),
+        "workspace_id": str(document.get("workspace_id") or ""),
+        "run_id": str(document.get("run_id") or ""),
+        "job_id": str(metadata.get("job_id") or document.get("job_id") or ""),
+        "source_origin": str(document.get("source_origin") or ""),
+        "source_scope": source_scope,
+    }
+
+
+def _dedupe_tracker_documents(documents: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for document in documents:
+        key = (
+            str(document.get("document_id") or "")
+            or str(document.get("download_url") or "")
+            or str(document.get("path") or "")
+            or f"{document.get('field')}::{document.get('label')}"
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(document)
+    return deduped
+
+
+def _index_tracker_documents(document_entries: list[dict]) -> tuple[dict[tuple[str, str], list[dict]], list[dict]]:
+    by_run_and_job: dict[tuple[str, str], list[dict]] = {}
+    standard_documents: list[dict] = []
+    standard_asset_kinds = {
+        "workspace_cv",
+        "certification",
+        "recommendation_letter",
+        "uploaded_document",
+        "motivation_letter",
+        "cover_letter",
+    }
+    for document in document_entries:
+        metadata = dict(document.get("metadata") or {})
+        run_id = str(document.get("run_id") or "")
+        job_id = str(metadata.get("job_id") or document.get("job_id") or "")
+        if run_id and job_id:
+            by_run_and_job.setdefault((run_id, job_id), []).append(
+                _tracker_document_summary(document, source_scope="application")
+            )
+            continue
+        asset_kind = str(document.get("asset_kind") or "").lower()
+        if asset_kind in standard_asset_kinds or str(document.get("source_origin") or "") == "upload":
+            standard_documents.append(_tracker_document_summary(document, source_scope="standard"))
+    return by_run_and_job, standard_documents
+
+
+def _standard_documents_for_workspace(documents: list[dict], workspace_id: str) -> list[dict]:
+    workspace_id = str(workspace_id or "")
+    return [
+        document
+        for document in documents
+        if not str(document.get("workspace_id") or "") or str(document.get("workspace_id") or "") == workspace_id
+    ]
+
+
 def _collect_tracker_entries(application, user) -> list[dict]:
     """Return all reviews that have been approved or have a tracker_status set."""
     workspaces, runs = _collect_authorized_runs(application, user)
     workspaces_map = {ws.id: ws for ws in application.list_workspaces()}
+    application_documents, standard_documents = _index_tracker_documents(_collect_document_entries(application, user))
     entries: list[dict] = []
     for run in runs:
         job_sets = application.list_job_sets(run.id)
@@ -748,26 +971,132 @@ def _collect_tracker_entries(application, user) -> list[dict]:
                 continue
             if not tracker_status:
                 tracker_status = "applied"
-            job = jobs_by_id.get(review.job_id)
-            entries.append(
-                {
-                    "review_id": review.review_id,
-                    "run_id": review.run_id,
-                    "workspace_id": run.workspace_id,
-                    "workspace_name": workspace.name if workspace else run.workspace_id,
-                    "job_id": review.job_id,
-                    "title": job.title if job else "",
-                    "company": job.company if job else "",
-                    "apply_link": (job.apply_link or job.link or job.source_url) if job else "",
-                    "location": job.location_raw if job else "",
-                    "tracker_status": tracker_status,
-                    "email_confirmed": bool(review_meta.get("email_confirmed") or False),
-                    "rejection_note": str(review_meta.get("rejection_note") or ""),
-                    "rejected_at": str(review_meta.get("rejected_at") or ""),
-                    "updated_at": review.updated_at,
-                    "run_finished_at": run.finished_at or run.updated_at,
-                }
+            application_status = normalize_application_status(
+                review_meta.get("application_status") or tracker_status,
+                default="Applied",
             )
+            job = jobs_by_id.get(review.job_id)
+            job_extra = dict(job.extra_fields or {}) if job else {}
+            description_text = str(
+                (job.description_text if job else "")
+                or job_extra.get("full_description")
+                or job_extra.get("description")
+                or ""
+            )
+            document_fields = {
+                "cv_docx": str(job_extra.get("cv_docx") or job_extra.get("original_cv_docx") or ""),
+                "cv_pdf": str(job_extra.get("cv_pdf") or job_extra.get("original_cv_pdf") or ""),
+                "tailored_cv_docx": str(job_extra.get("tailored_cv_docx") or ""),
+                "tailored_cv": str(job_extra.get("tailored_cv") or job_extra.get("tailored_cv_pdf") or ""),
+            }
+            documents = [
+                {"field": key, "label": label, "path": value}
+                for key, label, value in [
+                    ("cv_docx", "Original CV DOCX", document_fields["cv_docx"]),
+                    ("cv_pdf", "Original CV PDF", document_fields["cv_pdf"]),
+                    ("tailored_cv_docx", "Tailored CV DOCX", document_fields["tailored_cv_docx"]),
+                    ("tailored_cv", "Tailored CV", document_fields["tailored_cv"]),
+                ]
+                if value
+            ]
+            documents = _dedupe_tracker_documents(
+                [
+                    *documents,
+                    *_standard_documents_for_workspace(standard_documents, run.workspace_id),
+                    *application_documents.get((run.id, review.job_id), []),
+                ]
+            )
+            entry = {
+                "review_id": review.review_id,
+                "run_id": review.run_id,
+                "workspace_id": run.workspace_id,
+                "workspace_name": workspace.name if workspace else run.workspace_id,
+                "job_id": review.job_id,
+                "title": job.title if job else "",
+                "company": job.company if job else "",
+                "apply_link": (job.apply_link or job.link or job.source_url) if job else "",
+                "linkedin_link": str(job_extra.get("linkedin_link") or (job.link if job else "") or ""),
+                "location": job.location_raw if job else "",
+                "full_description": description_text,
+                "tracker_status": tracker_status,
+                "application_status": application_status,
+                "email_confirmed": bool(review_meta.get("email_confirmed") or False),
+                "rejection_note": str(review_meta.get("rejection_note") or ""),
+                "rejected_at": str(review_meta.get("rejected_at") or ""),
+                "application_date": str(review_meta.get("application_date") or review_meta.get("applied_at") or ""),
+                "notes": str(review.notes or review_meta.get("notes") or ""),
+                "applicant_count": job_extra.get("applicant_count") or job_extra.get("num_applicants") or "",
+                "posted_time_text": str(job_extra.get("posted_time_text") or job_extra.get("listed_at_text") or ""),
+                "priority_rank": job.priority_rank if job else job_extra.get("priority_rank"),
+                "priority_bucket": str(job_extra.get("priority_bucket") or job_extra.get("priority_tier") or ""),
+                **document_fields,
+                "documents": documents,
+                "updated_at": review.updated_at,
+                "run_finished_at": run.finished_at or run.updated_at,
+            }
+            entry["tracker_table_row"] = _tracker_baseline_row(
+                job=job,
+                run=run,
+                review=review,
+                application_status=application_status,
+                documents=documents,
+            )
+            entry["tracker_application"] = normalize_tracker_application({**entry, "metadata": review_meta})
+            entries.append(entry)
+    for external in _load_external_tracker_applications(user):
+        application_status = normalize_application_status(
+            external.get("application_status") or external.get("tracker_status"),
+            default="Unknown",
+        )
+        tracker_status = str(
+            external.get("tracker_status")
+            or legacy_tracker_status_for_application_status(application_status)
+        )
+        entry = {
+            "review_id": str(external.get("review_id") or external.get("application_id") or ""),
+            "application_id": str(external.get("application_id") or ""),
+            "run_id": "",
+            "workspace_id": "",
+            "workspace_name": "External applications",
+            "job_id": str(external.get("application_id") or ""),
+            "title": str(external.get("title") or ""),
+            "company": str(external.get("company") or ""),
+            "apply_link": str(external.get("apply_link") or ""),
+            "linkedin_link": "",
+            "location": str(external.get("location") or ""),
+            "full_description": str(external.get("full_description") or ""),
+            "tracker_status": tracker_status,
+            "application_status": application_status,
+            "email_confirmed": bool(external.get("email_confirmed") or False),
+            "rejection_note": str(external.get("rejection_note") or ""),
+            "rejected_at": str(external.get("rejected_at") or ""),
+            "application_date": str(external.get("application_date") or ""),
+            "notes": str(external.get("notes") or ""),
+            "applicant_count": "",
+            "posted_time_text": "",
+            "priority_rank": external.get("priority_rank"),
+            "priority_bucket": "external",
+            "cv_docx": "",
+            "cv_pdf": "",
+            "tailored_cv_docx": "",
+            "tailored_cv": "",
+            "documents": list(standard_documents),
+            "updated_at": str(external.get("updated_at") or external.get("created_at") or ""),
+            "run_finished_at": "",
+            "source_label": "Gmail",
+            "external_application": True,
+            "gmail_detection": dict(external.get("gmail_detection") or {}),
+        }
+        entry["tracker_table_row"] = _tracker_baseline_row(
+            job=None,
+            run=None,
+            review=None,
+            application_status=application_status,
+            documents=list(standard_documents),
+            external=external,
+        )
+        entry["tracker_application"] = normalize_tracker_application({**entry, "metadata": dict(external)})
+        entries.append(entry)
     entries.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
     return entries
 
@@ -792,6 +1121,326 @@ def _persist_tracker_email_config(application, user, config: dict) -> object:
     user.updated_at = datetime.now(timezone.utc).isoformat()
     application.repositories.auth_repository.upsert_user(user)
     return application.get_user(user.user_id)
+
+
+def _gmail_detection_id(payload: dict | None) -> str:
+    detection = normalize_gmail_application_detection(payload or {})
+    detection_id = str(detection.get("detection_id") or "").strip()
+    if detection_id:
+        return detection_id
+    message_id = str(detection.get("source_email", {}).get("message_id") or "").strip()
+    if message_id:
+        return f"gmail::{message_id}"
+    return ""
+
+
+def _merge_pending_tracker_detections(
+    *,
+    existing: list[dict] | None,
+    additions: list[dict] | None = None,
+    remove_ids: set[str] | None = None,
+) -> list[dict]:
+    resolved_ids = {str(item).strip() for item in (remove_ids or set()) if str(item).strip()}
+    merged: list[dict] = []
+    for payload in [*(additions or []), *(existing or [])]:
+        if not isinstance(payload, dict):
+            continue
+        detection = normalize_gmail_application_detection(payload)
+        detection_id = _gmail_detection_id(detection)
+        if not detection_id or detection["status"]["approval_state"] != "pending_review" or detection_id in resolved_ids:
+            continue
+        detection["detection_id"] = detection_id
+        merged.append(detection)
+    merged.sort(key=lambda item: str(item.get("source_email", {}).get("sent_at") or ""), reverse=True)
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for detection in merged:
+        detection_id = _gmail_detection_id(detection)
+        if not detection_id or detection_id in seen:
+            continue
+        seen.add(detection_id)
+        deduped.append(detection)
+    return deduped[:50]
+
+
+_REFERRAL_OUTREACH_METADATA_KEY = "referral_outreach"
+_EXTERNAL_TRACKER_APPLICATIONS_METADATA_KEY = "external_tracker_applications"
+
+
+def _referral_outreach_key(*, run_id: str, job_id: str, contact_id: str) -> str:
+    return "::".join([str(run_id or "").strip(), str(job_id or "").strip(), str(contact_id or "").strip()])
+
+
+def _get_referral_outreach_status(user, *, run_id: str, job_id: str, contact_id: str) -> str:
+    metadata = dict(user.metadata or {})
+    outreach = dict(metadata.get(_REFERRAL_OUTREACH_METADATA_KEY) or {})
+    record = dict(outreach.get(_referral_outreach_key(run_id=run_id, job_id=job_id, contact_id=contact_id)) or {})
+    return normalize_referral_outreach_status(record.get("outreach_status"))
+
+
+def _persist_referral_outreach_status(
+    application,
+    user,
+    *,
+    run_id: str,
+    job_id: str,
+    contact_id: str,
+    outreach_status: str,
+    contact_snapshot: dict | None = None,
+) -> tuple[object, dict]:
+    status = normalize_referral_outreach_status(outreach_status)
+    metadata = dict(user.metadata or {})
+    outreach = dict(metadata.get(_REFERRAL_OUTREACH_METADATA_KEY) or {})
+    key = _referral_outreach_key(run_id=run_id, job_id=job_id, contact_id=contact_id)
+    snapshot = dict(contact_snapshot or {})
+    record = {
+        "run_id": str(run_id or "").strip(),
+        "job_id": str(job_id or "").strip(),
+        "contact_id": str(contact_id or "").strip(),
+        "outreach_status": status,
+        "contact_name": str(snapshot.get("name") or ""),
+        "contact_company": str(snapshot.get("company") or ""),
+        "contact_linkedin_url": str(snapshot.get("linkedin_url") or ""),
+        "contact_can_refer": bool(snapshot.get("can_refer") or False),
+        "relationship_note": str(snapshot.get("relationship_note") or ""),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    outreach[key] = record
+    metadata[_REFERRAL_OUTREACH_METADATA_KEY] = outreach
+    user.metadata = metadata
+    user.updated_at = datetime.now(timezone.utc).isoformat()
+    application.repositories.auth_repository.upsert_user(user)
+    return application.get_user(user.user_id), record
+
+
+def _load_referral_outreach_records(user) -> list[dict]:
+    metadata = dict(user.metadata or {})
+    outreach = dict(metadata.get(_REFERRAL_OUTREACH_METADATA_KEY) or {})
+    records: list[dict] = []
+    for key, raw_record in outreach.items():
+        record = dict(raw_record or {})
+        run_id = str(record.get("run_id") or "").strip()
+        job_id = str(record.get("job_id") or "").strip()
+        contact_id = str(record.get("contact_id") or "").strip()
+        if not (run_id and job_id and contact_id):
+            key_parts = [part.strip() for part in str(key or "").split("::")]
+            if len(key_parts) == 3:
+                run_id = run_id or key_parts[0]
+                job_id = job_id or key_parts[1]
+                contact_id = contact_id or key_parts[2]
+        if not (run_id and job_id and contact_id):
+            continue
+        records.append(
+            {
+                "run_id": run_id,
+                "job_id": job_id,
+                "contact_id": contact_id,
+                "outreach_status": normalize_referral_outreach_status(record.get("outreach_status")),
+                "contact_name": str(record.get("contact_name") or ""),
+                "contact_company": str(record.get("contact_company") or ""),
+                "contact_linkedin_url": str(record.get("contact_linkedin_url") or ""),
+                "contact_can_refer": bool(record.get("contact_can_refer") or False),
+                "relationship_note": str(record.get("relationship_note") or ""),
+                "updated_at": str(record.get("updated_at") or ""),
+            }
+        )
+    records.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return records
+
+
+def _collect_referral_outreach_entries(
+    application,
+    user,
+    *,
+    contact_id: str = "",
+    run_id: str = "",
+    job_id: str = "",
+) -> list[dict]:
+    requested_contact_id = str(contact_id or "").strip()
+    requested_run_id = str(run_id or "").strip()
+    requested_job_id = str(job_id or "").strip()
+    records = [
+        record
+        for record in _load_referral_outreach_records(user)
+        if (not requested_contact_id or record["contact_id"] == requested_contact_id)
+        and (not requested_run_id or record["run_id"] == requested_run_id)
+        and (not requested_job_id or record["job_id"] == requested_job_id)
+    ]
+    if not records:
+        return []
+
+    workspaces, runs = _collect_authorized_runs(application, user)
+    runs_by_id = {run.id: run for run in runs}
+    contacts_by_id = {
+        contact.contact_id: contact.to_dict() for contact in application.list_referral_contacts(user.user_id)
+    }
+    jobs_by_run: dict[str, dict[str, object]] = {}
+    entries: list[dict] = []
+
+    for record in records:
+        run = runs_by_id.get(record["run_id"])
+        if run is None:
+            continue
+        if run.id not in jobs_by_run:
+            run_jobs: dict[str, object] = {}
+            for job_set in application.list_job_sets(run.id).values():
+                for job in job_set:
+                    run_jobs[job.job_id] = job
+            jobs_by_run[run.id] = run_jobs
+        job = jobs_by_run[run.id].get(record["job_id"])
+        workspace = workspaces.get(run.workspace_id)
+        live_contact = dict(contacts_by_id.get(record["contact_id"]) or {})
+        contact_name = str(live_contact.get("name") or record.get("contact_name") or "").strip()
+        contact_company = str(live_contact.get("company") or record.get("contact_company") or "").strip()
+        contact_linkedin_url = str(
+            live_contact.get("linkedin_url") or record.get("contact_linkedin_url") or ""
+        ).strip()
+        relationship_note = str(
+            live_contact.get("relationship_note") or record.get("relationship_note") or ""
+        ).strip()
+        can_refer = bool(
+            live_contact.get("can_refer")
+            if "can_refer" in live_contact
+            else record.get("contact_can_refer") or False
+        )
+        apply_link = (
+            str(job.apply_link or job.link or job.source_url).strip()
+            if job is not None
+            else ""
+        )
+        source_label = (
+            str(job.portal or job.source_type or "").strip()
+            if job is not None
+            else ""
+        )
+        job_title = str(job.title if job is not None else "").strip()
+        company_name = str(job.company if job is not None else "").strip() or contact_company
+        entries.append(
+            {
+                **record,
+                "workspace_id": str(run.workspace_id or ""),
+                "workspace_name": workspace.name if workspace else run.workspace_id,
+                "job_title": job_title,
+                "company": company_name,
+                "apply_link": apply_link,
+                "source_label": source_label,
+                "contact_name": contact_name,
+                "contact_company": contact_company,
+                "contact_can_refer": can_refer,
+                "contact_linkedin_url": contact_linkedin_url,
+                "relationship_note": relationship_note,
+            }
+        )
+    entries.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return entries
+
+
+def _save_referral_outreach_status_from_payload(application, user, payload: dict) -> dict:
+    contact_id = str(payload.get("contact_id") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    job_id = str(payload.get("job_id") or "").strip()
+    if not contact_id or not run_id or not job_id:
+        raise ValueError("run_id, job_id, and contact_id are required")
+    run = application.get_run(run_id)
+    if not application.user_can_access_workspace(user, run.workspace_id):
+        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+    contact = application.get_referral_contact(user.user_id, contact_id)
+    _, record = _persist_referral_outreach_status(
+        application,
+        user,
+        run_id=run_id,
+        job_id=job_id,
+        contact_id=contact_id,
+        outreach_status=str(payload.get("outreach_status") or ""),
+        contact_snapshot=contact.to_dict(),
+    )
+    return record
+
+
+def _load_external_tracker_applications(user) -> list[dict]:
+    metadata = dict(user.metadata or {})
+    applications = metadata.get(_EXTERNAL_TRACKER_APPLICATIONS_METADATA_KEY) or []
+    return [dict(item) for item in applications if isinstance(item, dict)]
+
+
+def _persist_external_tracker_applications(application, user, applications: list[dict]) -> object:
+    metadata = dict(user.metadata or {})
+    metadata[_EXTERNAL_TRACKER_APPLICATIONS_METADATA_KEY] = [dict(item) for item in applications]
+    user.metadata = metadata
+    user.updated_at = datetime.now(timezone.utc).isoformat()
+    application.repositories.auth_repository.upsert_user(user)
+    return application.get_user(user.user_id)
+
+
+def _external_tracker_application_from_detection(detection: dict, *, existing: dict | None = None) -> dict:
+    normalized = (
+        dict(detection)
+        if str(detection.get("schema_version") or "") == "gmail_application_detection_v1"
+        else normalize_gmail_application_detection(detection)
+    )
+    detected = normalized["detected_application"]
+    source_email = normalized["source_email"]
+    status = normalized["status"]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    application_id = str((existing or {}).get("application_id") or f"external_{uuid4().hex[:16]}")
+    return {
+        "application_id": application_id,
+        "review_id": application_id,
+        "source": "gmail_detection",
+        "title": detected["title"],
+        "company": detected["company"],
+        "application_date": detected["application_date"] or source_email["sent_at"],
+        "apply_link": detected["source_url"],
+        "tracker_status": legacy_tracker_status_for_application_status(status["suggested_application_status"]),
+        "application_status": status["suggested_application_status"],
+        "email_confirmed": status["suggested_application_status"] == "Applied",
+        "rejection_note": "",
+        "notes": f"Imported from Gmail email: {source_email['subject']}",
+        "gmail_detection": normalized,
+        "created_at": str((existing or {}).get("created_at") or now_iso),
+        "updated_at": now_iso,
+    }
+
+
+def _upsert_external_tracker_application_from_detection(applications: list[dict], detection: dict) -> dict:
+    detection_id = _gmail_detection_id(detection)
+    for index, item in enumerate(applications):
+        existing_detection = item.get("gmail_detection")
+        if not isinstance(existing_detection, dict):
+            continue
+        if _gmail_detection_id(existing_detection) != detection_id:
+            continue
+        updated = _external_tracker_application_from_detection(detection, existing=item)
+        applications[index] = updated
+        return updated
+    external_application = _external_tracker_application_from_detection(detection)
+    applications.append(external_application)
+    return external_application
+
+
+def _update_external_tracker_application(application, user, application_id: str, payload: dict) -> tuple[object, dict]:
+    applications = _load_external_tracker_applications(user)
+    for index, item in enumerate(applications):
+        if str(item.get("application_id") or "") != application_id:
+            continue
+        updated = dict(item)
+        if "tracker_status" in payload:
+            updated["tracker_status"] = str(payload.get("tracker_status") or "").strip().lower()
+            updated["application_status"] = normalize_application_status(updated["tracker_status"])
+        if "application_status" in payload:
+            updated["application_status"] = normalize_application_status(payload.get("application_status"))
+            updated["tracker_status"] = legacy_tracker_status_for_application_status(updated["application_status"])
+        if "email_confirmed" in payload:
+            updated["email_confirmed"] = bool(payload.get("email_confirmed"))
+        if "rejection_note" in payload:
+            updated["rejection_note"] = str(payload.get("rejection_note") or "")
+        if "notes" in payload:
+            updated["notes"] = str(payload.get("notes") or "")
+        updated["updated_at"] = datetime.now(timezone.utc).isoformat()
+        applications[index] = updated
+        refreshed_user = _persist_external_tracker_applications(application, user, applications)
+        return refreshed_user, updated
+    raise KeyError(f"External tracker application '{application_id}' not found.")
 
 
 def _clear_tracker_email_config(application, user) -> object:
@@ -921,6 +1570,92 @@ def _parse_tracker_google_oauth_state(state: str) -> tuple[str, str]:
     return user_id.strip(), nonce.strip()
 
 
+def _normalized_document_lookup_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _run_jobs_for_document_lookup(application, run) -> list[object]:
+    job_sets = application.list_job_sets(run.id)
+    ordered_keys = list(run.final_job_set_keys or []) + [key for key in job_sets if key not in (run.final_job_set_keys or [])]
+    ordered_jobs: list[object] = []
+    seen_job_ids: set[str] = set()
+    for key in ordered_keys:
+        for job in job_sets.get(key, []):
+            job_id = str(getattr(job, "job_id", "") or "").strip()
+            if job_id and job_id in seen_job_ids:
+                continue
+            if job_id:
+                seen_job_ids.add(job_id)
+            ordered_jobs.append(job)
+    return ordered_jobs
+
+
+def _match_run_job_for_document_entry(entry: dict, run_jobs: list[object]) -> object | None:
+    explicit_job_id = str(entry.get("job_id") or "").strip()
+    if explicit_job_id:
+        for job in run_jobs:
+            if str(getattr(job, "job_id", "") or "").strip() == explicit_job_id:
+                return job
+
+    raw_text = " ".join(
+        str(entry.get(key) or "")
+        for key in ("file_name", "relative_path", "path", "artifact_id", "source_artifact_id")
+    ).lower()
+    compact_text = _normalized_document_lookup_token(raw_text)
+    best_match = None
+    best_score = 0
+
+    for job in run_jobs:
+        job_id = str(getattr(job, "job_id", "") or "").strip()
+        title = str(getattr(job, "title", "") or "").strip()
+        company = str(getattr(job, "company", "") or "").strip()
+        score = 0
+        compact_job_id = _normalized_document_lookup_token(job_id)
+        compact_title = _normalized_document_lookup_token(title)
+        compact_company = _normalized_document_lookup_token(company)
+
+        if job_id and job_id.lower() in raw_text:
+            score = max(score, 120)
+        if compact_job_id and compact_job_id in compact_text:
+            score = max(score, 110)
+        if compact_title and compact_title in compact_text:
+            score += 30
+        if compact_company and compact_company in compact_text:
+            score += 24
+        if compact_title and compact_company and compact_title in compact_text and compact_company in compact_text:
+            score += 30
+
+        if score > best_score:
+            best_match = job
+            best_score = score
+
+    return best_match if best_score >= 60 else None
+
+
+def _enrich_artifact_entry_with_job_context(entry: dict, run_jobs: list[object]) -> dict:
+    matched_job = _match_run_job_for_document_entry(entry, run_jobs)
+    if matched_job is None:
+        return entry
+
+    metadata = dict(entry.get("metadata") or {})
+    job_id = str(metadata.get("job_id") or entry.get("job_id") or getattr(matched_job, "job_id", "") or "").strip()
+    job_title = str(metadata.get("job_title") or entry.get("job_title") or getattr(matched_job, "title", "") or "").strip()
+    company = str(metadata.get("company") or entry.get("company") or getattr(matched_job, "company", "") or "").strip()
+    if job_id and not metadata.get("job_id"):
+        metadata["job_id"] = job_id
+    if job_title and not metadata.get("job_title"):
+        metadata["job_title"] = job_title
+    if company and not metadata.get("company"):
+        metadata["company"] = company
+    return {
+        **entry,
+        "job_id": job_id,
+        "job_title": job_title,
+        "company": company,
+        "metadata": metadata,
+    }
+
+
 def _collect_artifact_entries(application, user, *, workspace_id: str = "", run_id: str = "") -> list[dict]:
     workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
     entries: list[dict] = []
@@ -928,9 +1663,13 @@ def _collect_artifact_entries(application, user, *, workspace_id: str = "", run_
         if run_id and run.id != run_id:
             continue
         workspace = workspaces.get(run.workspace_id)
+        run_jobs = _run_jobs_for_document_lookup(application, run)
         artifacts = application.list_artifacts(run.id)
         for artifact in artifacts:
-            entries.extend(_expand_artifact_entries(run, workspace, artifact))
+            entries.extend(
+                _enrich_artifact_entry_with_job_context(entry, run_jobs)
+                for entry in _expand_artifact_entries(run, workspace, artifact)
+            )
     entries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
     return entries
 
@@ -1056,6 +1795,248 @@ def _document_group_for_asset_kind(asset_kind: str) -> tuple[str, str]:
     return "supporting_documents", "Supporting Documents"
 
 
+def _document_type_for_asset_kind(asset_kind: str) -> str:
+    normalized_kind = str(asset_kind or "").strip().lower()
+    if normalized_kind == "workspace_cv":
+        return "Original CV"
+    if normalized_kind == "generated_cv":
+        return "Tailored CV"
+    if normalized_kind in {"cover_letter", "motivation_letter"}:
+        return "Cover letter"
+    if "transcript" in normalized_kind:
+        return "Transcript"
+    if "certificate" in normalized_kind:
+        return "Certificate"
+    return "Other"
+
+
+def _clean_int(value, *, default: int = 0) -> int:
+    try:
+        return int(float(str(value).strip()))
+    except Exception:
+        return default
+
+
+def _evaluate_ats_export_gate_payload(payload: dict, *, export_anyway: bool = False) -> dict:
+    return evaluate_ats_export_gate(payload, export_anyway=export_anyway)
+
+
+def _evaluate_ats_export_gate_for_document(document: dict, *, export_anyway: bool = False) -> dict:
+    metadata = dict(document.get("metadata") or {})
+    nested_gate = metadata.get("ats_export_gate") if isinstance(metadata.get("ats_export_gate"), dict) else {}
+    gate_metadata = dict((nested_gate or {}).get("metadata") or {})
+    if metadata.get("ats_stop_reason") and "stop_reason" not in gate_metadata:
+        gate_metadata["stop_reason"] = metadata.get("ats_stop_reason")
+    if metadata.get("ats_attempt_history") and "attempt_history" not in gate_metadata:
+        gate_metadata["attempt_history"] = metadata.get("ats_attempt_history")
+    payload = {
+        **dict(nested_gate or {}),
+        "target_score": metadata.get("ats_target_score")
+        or metadata.get("target_score")
+        or (nested_gate or {}).get("target_score")
+        or 90,
+        "best_score": metadata.get("ats_best_score")
+        or metadata.get("best_score")
+        or metadata.get("ats_score")
+        or metadata.get("score")
+        or (nested_gate or {}).get("best_score")
+        or 0,
+        "attempt_count": metadata.get("ats_attempt_count")
+        or metadata.get("attempt_count")
+        or (nested_gate or {}).get("attempt_count")
+        or 0,
+        "max_attempts": metadata.get("ats_max_attempts")
+        or metadata.get("max_attempts")
+        or (nested_gate or {}).get("max_attempts")
+        or 3,
+        "gate_state": metadata.get("ats_gate_state")
+        or metadata.get("gate_state")
+        or (nested_gate or {}).get("gate_state")
+        or "not_started",
+        "can_export_final": metadata.get("ats_can_export_final")
+        if metadata.get("ats_can_export_final") is not None
+        else metadata.get("can_export_final")
+        if metadata.get("can_export_final") is not None
+        else (nested_gate or {}).get("can_export_final"),
+        "export_anyway_allowed": metadata.get("ats_export_anyway_allowed")
+        if metadata.get("ats_export_anyway_allowed") is not None
+        else metadata.get("export_anyway_allowed")
+        if metadata.get("export_anyway_allowed") is not None
+        else (nested_gate or {}).get("export_anyway_allowed"),
+        "missing_requirements": metadata.get("missing_requirements")
+        or metadata.get("ats_missing_requirements")
+        or (nested_gate or {}).get("missing_requirements")
+        or [],
+        "last_warning": metadata.get("ats_last_warning")
+        or metadata.get("last_warning")
+        or (nested_gate or {}).get("last_warning")
+        or "",
+        "metadata": gate_metadata,
+    }
+    return _evaluate_ats_export_gate_payload(payload, export_anyway=export_anyway)
+
+
+def _document_requires_ats_gate(document: dict) -> bool:
+    document_type = str(document.get("document_type") or "").casefold()
+    asset_kind = str(document.get("asset_kind") or "").casefold()
+    if document_type == "tailored cv" or asset_kind == "generated_cv":
+        return True
+    return False
+
+
+def _assert_document_export_allowed(document: dict, *, export_anyway: bool = False) -> None:
+    if not _document_requires_ats_gate(document):
+        return
+    gate = _evaluate_ats_export_gate_for_document(document, export_anyway=export_anyway)
+    if not gate["can_export_final"]:
+        raise AtsExportBlockedError(gate)
+
+
+def _document_display_status(item: dict) -> str:
+    if bool(item.get("final_export_blocked")):
+        return "export_blocked"
+    return str(
+        item.get("status")
+        or (item.get("application_document") or {}).get("status")
+        or "ready"
+    ).strip() or "ready"
+
+
+def _document_group_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")[:80]
+
+
+def _build_document_library_grouping(item: dict) -> dict:
+    related_application = dict(item.get("related_application") or {})
+    job_id = str(related_application.get("job_id") or item.get("job_id") or "").strip()
+    job_title = str(related_application.get("title") or item.get("job_title") or "").strip()
+    company = str(related_application.get("company") or item.get("company") or "").strip()
+    run_id = str(item.get("run_id") or "").strip()
+    workspace_id = str(item.get("workspace_id") or "").strip()
+    workspace_name = str(item.get("workspace_name") or workspace_id or "").strip()
+    display_status = _document_display_status(item)
+
+    if job_id or job_title or company:
+        if job_title and company:
+            group_label = f"{job_title} at {company}"
+        elif job_title:
+            group_label = job_title
+        elif company:
+            group_label = company
+        else:
+            group_label = job_id or "Application"
+        group_token = job_id or _document_group_token(f"{company} {job_title}") or str(item.get("document_id") or "application")
+        return {
+            "group_id": f"application::{run_id or 'manual'}::{group_token}",
+            "group_label": group_label,
+            "group_kind": "application",
+            "display_status": display_status,
+        }
+    if run_id:
+        return {
+            "group_id": f"run::{run_id}",
+            "group_label": f"Run {run_id} outputs",
+            "group_kind": "run",
+            "display_status": display_status,
+        }
+    if workspace_id:
+        return {
+            "group_id": f"workspace_library::{workspace_id}",
+            "group_label": f"Reusable assets for {workspace_name or workspace_id}",
+            "group_kind": "workspace_library",
+            "display_status": display_status,
+        }
+    return {
+        "group_id": "shared_library",
+        "group_label": "Reusable candidate assets",
+        "group_kind": "shared_library",
+        "display_status": display_status,
+    }
+
+
+def _document_group_payloads(entries: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for item in entries:
+        group_id = str(item.get("group_id") or item.get("document_id") or "").strip()
+        if not group_id:
+            continue
+        if group_id not in grouped:
+            grouped[group_id] = {
+                "group_id": group_id,
+                "group_label": str(item.get("group_label") or ""),
+                "group_kind": str(item.get("group_kind") or ""),
+                "workspace_id": str(item.get("workspace_id") or ""),
+                "workspace_name": str(item.get("workspace_name") or ""),
+                "run_id": str(item.get("run_id") or ""),
+                "job_id": str(item.get("job_id") or ""),
+                "job_title": str(item.get("job_title") or ""),
+                "company": str(item.get("company") or ""),
+                "count": 0,
+                "latest_created_at": str(item.get("created_at") or ""),
+                "status_counts": {},
+            }
+        group = grouped[group_id]
+        group["count"] += 1
+        created_at = str(item.get("created_at") or "")
+        if created_at and created_at > str(group.get("latest_created_at") or ""):
+            group["latest_created_at"] = created_at
+        status_key = str(item.get("display_status") or item.get("status") or "ready")
+        status_counts = dict(group.get("status_counts") or {})
+        status_counts[status_key] = int(status_counts.get(status_key) or 0) + 1
+        group["status_counts"] = status_counts
+    return list(grouped.values())
+
+
+def _attach_application_document_contract(item: dict) -> dict:
+    document_type = _document_type_for_asset_kind(str(item.get("asset_kind") or ""))
+    metadata = dict(item.get("metadata") or {})
+    metadata["source_origin"] = item.get("source_origin")
+    payload = {
+        **item,
+        "document_type": document_type,
+        "document_name": item.get("display_name"),
+        "title": item.get("job_title"),
+        "path": item.get("relative_path"),
+        "metadata": metadata,
+    }
+    normalized = normalize_application_document(payload)
+    gate = _evaluate_ats_export_gate_for_document({**item, "document_type": normalized["document_type"]})
+    document_item = {
+        **item,
+        "job_id": str(
+            normalized["related_application"].get("job_id")
+            or item.get("job_id")
+            or metadata.get("job_id")
+            or ""
+        ),
+        "job_title": str(
+            normalized["related_application"].get("title")
+            or item.get("job_title")
+            or metadata.get("job_title")
+            or ""
+        ),
+        "company": str(
+            normalized["related_application"].get("company")
+            or item.get("company")
+            or metadata.get("company")
+            or ""
+        ),
+        "status": normalized["status"],
+        "document_type": normalized["document_type"],
+        "related_application": dict(normalized["related_application"]),
+        "application_document": normalized,
+        "ats_export_gate": gate,
+        "final_export_blocked": _document_requires_ats_gate({**item, "document_type": normalized["document_type"]})
+        and not gate["can_export_final"],
+    }
+    return {
+        **document_item,
+        "kind_group_id": str(item.get("group_id") or ""),
+        "kind_group_label": str(item.get("group_label") or ""),
+        **_build_document_library_grouping(document_item),
+    }
+
+
 def _document_id_for_artifact(run_id: str, artifact_id: str) -> str:
     return f"artifact::{run_id}::{artifact_id}"
 
@@ -1081,7 +2062,7 @@ def _artifact_asset_kind(entry: dict) -> str:
 def _artifact_entry_to_document_item(entry: dict) -> dict:
     asset_kind = _artifact_asset_kind(entry)
     group_id, group_label = _document_group_for_asset_kind(asset_kind)
-    return {
+    return _attach_application_document_contract({
         "document_id": _document_id_for_artifact(entry["run_id"], entry["artifact_id"]),
         "asset_id": "",
         "asset_kind": asset_kind,
@@ -1091,8 +2072,10 @@ def _artifact_entry_to_document_item(entry: dict) -> dict:
         "workspace_id": str(entry.get("workspace_id") or ""),
         "workspace_name": str(entry.get("workspace_name") or ""),
         "run_id": str(entry.get("run_id") or ""),
+        "job_id": str(entry.get("job_id") or ""),
         "job_title": str(entry.get("job_title") or ""),
         "company": str(entry.get("company") or ""),
+        "status": str(entry.get("status") or "ready"),
         "created_at": str(entry.get("created_at") or ""),
         "source_origin": "generated_run",
         "download_url": str(entry.get("download_url") or ""),
@@ -1100,8 +2083,9 @@ def _artifact_entry_to_document_item(entry: dict) -> dict:
         "relative_path": str(entry.get("relative_path") or ""),
         "content_type": str(entry.get("content_type") or ""),
         "tags": [],
+        "metadata": dict(entry.get("metadata") or {}),
         "is_generated": True,
-    }
+    })
 
 
 def _candidate_asset_to_document_item(asset: dict, workspace_names: dict[str, str]) -> dict:
@@ -1109,7 +2093,7 @@ def _candidate_asset_to_document_item(asset: dict, workspace_names: dict[str, st
     group_id, group_label = _document_group_for_asset_kind(asset_kind)
     workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
     metadata = dict(asset.get("metadata") or {})
-    return {
+    return _attach_application_document_contract({
         "document_id": _document_id_for_candidate_asset(str(asset.get("asset_id") or "")),
         "asset_id": str(asset.get("asset_id") or ""),
         "asset_kind": asset_kind,
@@ -1119,8 +2103,10 @@ def _candidate_asset_to_document_item(asset: dict, workspace_names: dict[str, st
         "workspace_id": workspace_id,
         "workspace_name": workspace_names.get(workspace_id, workspace_id),
         "run_id": str(asset.get("source", {}).get("run_id") or ""),
+        "job_id": str(metadata.get("job_id") or asset.get("job_id") or ""),
         "job_title": "",
         "company": "",
+        "status": str(metadata.get("status") or "ready"),
         "created_at": str(metadata.get("created_at") or ""),
         "source_origin": str(asset.get("source", {}).get("origin") or "upload"),
         "download_url": str(asset.get("file", {}).get("download_url") or ""),
@@ -1128,8 +2114,9 @@ def _candidate_asset_to_document_item(asset: dict, workspace_names: dict[str, st
         "relative_path": str(asset.get("file", {}).get("path") or ""),
         "content_type": str(asset.get("file", {}).get("mime_type") or ""),
         "tags": list(metadata.get("tags") or []),
+        "metadata": metadata,
         "is_generated": str(asset.get("source", {}).get("origin") or "upload") != "upload",
-    }
+    })
 
 
 def _collect_document_entries(
@@ -1170,7 +2157,22 @@ def _resolve_candidate_asset_download(user, asset_id: str) -> tuple[str, str]:
     raise KeyError(f"Candidate asset '{asset_id}' not found.")
 
 
-def _resolve_document_selection(application, user, document_id: str) -> tuple[str, str]:
+def _find_document_entry(application, user, document_id: str) -> dict:
+    for item in _collect_document_entries(application, user):
+        if str(item.get("document_id") or "") == str(document_id or ""):
+            return item
+    raise KeyError(f"Document '{document_id}' not found.")
+
+
+def _resolve_document_selection(
+    application,
+    user,
+    document_id: str,
+    *,
+    export_anyway: bool = False,
+) -> tuple[str, str]:
+    document = _find_document_entry(application, user, document_id)
+    _assert_document_export_allowed(document, export_anyway=export_anyway)
     kind, _, remainder = str(document_id or "").partition("::")
     if kind == "artifact":
         run_id, _, artifact_id = remainder.partition("::")
@@ -1194,7 +2196,14 @@ def _safe_zip_entry_name(original_name: str, *, used_names: set[str]) -> str:
     return candidate
 
 
-def _create_bulk_export_bundle(application, user, document_ids: list[str], *, label: str = "") -> dict:
+def _create_bulk_export_bundle(
+    application,
+    user,
+    document_ids: list[str],
+    *,
+    label: str = "",
+    export_anyway: bool = False,
+) -> dict:
     if not document_ids:
         raise ValueError("At least one document is required for bulk export.")
     bundle_id = f"bundle_{uuid4().hex[:16]}"
@@ -1203,7 +2212,12 @@ def _create_bulk_export_bundle(application, user, document_ids: list[str], *, la
     used_names: set[str] = set()
     with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for document_id in document_ids:
-            file_path, file_name = _resolve_document_selection(application, user, document_id)
+            file_path, file_name = _resolve_document_selection(
+                application,
+                user,
+                document_id,
+                export_anyway=export_anyway,
+            )
             target = Path(file_path)
             if not target.exists() or not target.is_file():
                 continue
@@ -1498,6 +2512,15 @@ def _parse_int_param(query: dict[str, list[str]], name: str, *, default: int, mi
     return max(minimum, min(maximum, value))
 
 
+def _parse_bool_param(query: dict[str, list[str]], name: str, *, default: bool = False) -> bool:
+    raw_value = str((query.get(name) or [str(default)])[0]).strip().lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def build_handler(application):
     class BackendApiHandler(BaseHTTPRequestHandler):
         def _cors_headers(self) -> dict[str, str]:
@@ -1575,6 +2598,9 @@ def build_handler(application):
             return ""
 
         def _tracker_google_callback_uri(self) -> str:
+            configured_redirect_uri = str(tracker_google_oauth_metadata().get("redirect_uri") or "").strip()
+            if configured_redirect_uri:
+                return configured_redirect_uri
             return f"{self._request_origin()}{self._request_api_prefix()}/tracker/email-integration/google/callback"
 
         def _pagination_meta(self, *, limit: int, offset: int, returned: int) -> dict[str, int]:
@@ -1767,6 +2793,29 @@ def build_handler(application):
                     user, token = self._require_identity()
                     self._send_json({"user": user.to_dict(), "token": token.to_public_dict()})
                     return
+                if segments == ["dev", "bootstrap-auth"]:
+                    user = application.upsert_user(
+                        {
+                            "email": "admin@runr.local",
+                            "display_name": "Runr Admin",
+                            "role": "admin",
+                            "allowed_workspace_ids": [],
+                        }
+                    )
+                    token, raw_token = application.issue_api_token(
+                        user_id=user.user_id,
+                        name="frontend-dev",
+                        scopes=[],
+                    )
+                    self._send_json(
+                        {
+                            "api_base_url": self._request_api_prefix() or "/v1",
+                            "access_token": raw_token,
+                            "user": user.to_dict(),
+                            "token": token.to_public_dict(),
+                        }
+                    )
+                    return
                 if segments == ["dashboard"]:
                     user, _ = self._require_identity()
                     self._send_json(_dashboard_payload(application, user))
@@ -1785,6 +2834,25 @@ def build_handler(application):
                         {
                             "contacts": [contact.to_dict() for contact in paged_contacts],
                             "meta": self._pagination_meta(limit=limit, offset=offset, returned=len(paged_contacts)),
+                        }
+                    )
+                    return
+                if segments == ["referrals", "outreach-statuses"]:
+                    user, _ = self._require_identity()
+                    limit = _parse_int_param(query, "limit", default=100, maximum=1000)
+                    offset = _parse_int_param(query, "offset", default=0, maximum=100000)
+                    items = _collect_referral_outreach_entries(
+                        application,
+                        user,
+                        contact_id=str((query.get("contact_id") or [""])[0]).strip(),
+                        run_id=str((query.get("run_id") or [""])[0]).strip(),
+                        job_id=str((query.get("job_id") or [""])[0]).strip(),
+                    )
+                    paged_items = items[offset : offset + limit]
+                    self._send_json(
+                        {
+                            "items": paged_items,
+                            "meta": self._pagination_meta(limit=limit, offset=offset, returned=len(paged_items)),
                         }
                     )
                     return
@@ -1983,6 +3051,8 @@ def build_handler(application):
                     self._send_json(
                         {
                             "items": entries,
+                            "columns": TRACKER_TABLE_COLUMNS,
+                            "excel_baseline_columns": TRACKER_EXCEL_BASELINE_COLUMNS,
                             "meta": self._pagination_meta(limit=len(entries), offset=0, returned=len(entries)),
                         }
                     )
@@ -2018,23 +3088,19 @@ def build_handler(application):
                     self._send_json(
                         {
                             "documents": paged_entries,
-                            "groups": [
-                                {
-                                    "group_id": group_key,
-                                    "group_label": group_items[0]["group_label"],
-                                    "count": len(group_items),
-                                }
-                                for group_key, group_items in {
-                                    key: [item for item in entries if item["group_id"] == key]
-                                    for key in sorted({item["group_id"] for item in entries})
-                                }.items()
-                            ],
+                            "groups": _document_group_payloads(entries),
                             "meta": self._pagination_meta(limit=limit, offset=offset, returned=len(paged_entries)),
                         }
                     )
                     return
                 if segments[:2] == ["documents", "assets"] and len(segments) == 4 and segments[3] == "download":
                     user, _ = self._require_scope(TOKEN_SCOPE_ARTIFACTS_READ)
+                    document_id = _document_id_for_candidate_asset(segments[2])
+                    document = _find_document_entry(application, user, document_id)
+                    _assert_document_export_allowed(
+                        document,
+                        export_anyway=_parse_bool_param(query, "export_anyway"),
+                    )
                     file_path, download_name = _resolve_candidate_asset_download(user, segments[2])
                     self._send_file(file_path, download_name=download_name)
                     return
@@ -2111,6 +3177,12 @@ def build_handler(application):
                 if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "artifacts" and segments[4] == "download":
                     run = application.get_run(segments[1])
                     self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_ARTIFACTS_READ)
+                    document_id = _document_id_for_artifact(segments[1], segments[3])
+                    document = _find_document_entry(application, self._require_identity()[0], document_id)
+                    _assert_document_export_allowed(
+                        document,
+                        export_anyway=_parse_bool_param(query, "export_anyway"),
+                    )
                     file_path, download_name = _resolve_artifact_download(application, segments[1], segments[3])
                     self._send_file(file_path, download_name=download_name)
                     return
@@ -2163,6 +3235,8 @@ def build_handler(application):
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
+            except AtsExportBlockedError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:
@@ -2304,6 +3378,135 @@ def build_handler(application):
 
                 payload = self._read_json_body()
 
+                if segments == ["ats", "export-gate", "evaluate"]:
+                    self._require_identity()
+                    gate = _evaluate_ats_export_gate_payload(
+                        payload,
+                        export_anyway=bool(payload.get("export_anyway")),
+                    )
+                    self._send_json(gate, status=HTTPStatus.OK)
+                    return
+                if segments == ["tracker", "email-integration", "detections", "approve"]:
+                    user, _ = self._require_identity()
+                    current_config = _get_tracker_email_config(user)
+                    detections_payload = payload.get("detections")
+                    if not isinstance(detections_payload, list):
+                        detections_payload = [payload.get("detection") or payload]
+                    approved: list[dict] = []
+                    resolved_detection_ids: set[str] = set()
+                    applications = _load_external_tracker_applications(user)
+                    for detection_payload in detections_payload:
+                        if not isinstance(detection_payload, dict):
+                            continue
+                        detection = normalize_gmail_application_detection(
+                            {
+                                **detection_payload,
+                                "approval_state": "approved",
+                            }
+                        )
+                        detection_id = _gmail_detection_id(detection)
+                        if detection_id:
+                            detection["detection_id"] = detection_id
+                            resolved_detection_ids.add(detection_id)
+                        review_id = str(detection.get("metadata", {}).get("review_id") or "").strip()
+                        if review_id:
+                            review = application.get_review(review_id)
+                            run = application.get_run(review.run_id)
+                            if not application.user_can_access_workspace(user, run.workspace_id):
+                                raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                            review_meta = dict(review.metadata or {})
+                            application_status = normalize_application_status(
+                                detection["status"]["suggested_application_status"]
+                            )
+                            review_meta["application_status"] = application_status
+                            review_meta["tracker_status"] = legacy_tracker_status_for_application_status(application_status)
+                            if application_status == "Applied":
+                                review_meta["email_confirmed"] = True
+                            if application_status == "Rejected" and not review_meta.get("rejected_at"):
+                                review_meta["rejected_at"] = detection["source_email"]["sent_at"] or datetime.now(timezone.utc).isoformat()
+                            review_meta["tracker_email_sync"] = {
+                                "message_id": detection["source_email"]["message_id"],
+                                "subject": detection["source_email"]["subject"],
+                                "from_address": detection["source_email"]["from_address"],
+                                "status": review_meta["tracker_status"],
+                                "suggested_application_status": application_status,
+                                "confidence": detection["status"]["confidence"],
+                                "evidence": list(detection["status"]["evidence"] or []),
+                                "provider_id": str(detection.get("metadata", {}).get("provider_id") or current_config["provider_id"]),
+                                "synced_at": datetime.now(timezone.utc).isoformat(),
+                                "approval_state": "approved",
+                            }
+                            review.metadata = review_meta
+                            application.repositories.review_store.upsert_review(review)
+                            approved.append({"review_id": review_id, "application_status": application_status})
+                            continue
+                        external_application = _upsert_external_tracker_application_from_detection(applications, detection)
+                        approved.append(external_application)
+                    updated_config = dict(current_config)
+                    updated_config["pending_detections"] = _merge_pending_tracker_detections(
+                        existing=current_config.get("pending_detections") or [],
+                        remove_ids=resolved_detection_ids,
+                    )
+                    if updated_config.get("last_sync_summary"):
+                        updated_config["last_sync_summary"] = {
+                            **dict(updated_config.get("last_sync_summary") or {}),
+                            "pending_review": len(updated_config["pending_detections"]),
+                        }
+                    refreshed_user = _persist_external_tracker_applications(application, user, applications)
+                    refreshed_user = _persist_tracker_email_config(application, refreshed_user, updated_config)
+                    self._send_json(
+                        {
+                            "approved": approved,
+                            "tracker": {
+                                "items": _collect_tracker_entries(application, refreshed_user),
+                                "meta": self._pagination_meta(limit=len(approved), offset=0, returned=len(approved)),
+                            },
+                            "integration": _tracker_email_integration_payload(application, refreshed_user),
+                        },
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                if segments == ["tracker", "email-integration", "detections", "dismiss"]:
+                    user, _ = self._require_identity()
+                    current_config = _get_tracker_email_config(user)
+                    detections_payload = payload.get("detections")
+                    if not isinstance(detections_payload, list):
+                        detections_payload = [payload.get("detection") or payload]
+                    dismissed: list[dict] = []
+                    resolved_detection_ids: set[str] = set()
+                    for detection_payload in detections_payload:
+                        if not isinstance(detection_payload, dict):
+                            continue
+                        detection = normalize_gmail_application_detection(
+                            {
+                                **detection_payload,
+                                "approval_state": "dismissed",
+                            }
+                        )
+                        detection_id = _gmail_detection_id(detection)
+                        if detection_id:
+                            detection["detection_id"] = detection_id
+                            resolved_detection_ids.add(detection_id)
+                        dismissed.append(detection)
+                    updated_config = dict(current_config)
+                    updated_config["pending_detections"] = _merge_pending_tracker_detections(
+                        existing=current_config.get("pending_detections") or [],
+                        remove_ids=resolved_detection_ids,
+                    )
+                    if updated_config.get("last_sync_summary"):
+                        updated_config["last_sync_summary"] = {
+                            **dict(updated_config.get("last_sync_summary") or {}),
+                            "pending_review": len(updated_config["pending_detections"]),
+                        }
+                    refreshed_user = _persist_tracker_email_config(application, user, updated_config)
+                    self._send_json(
+                        {
+                            "dismissed": dismissed,
+                            "integration": _tracker_email_integration_payload(application, refreshed_user),
+                        },
+                        status=HTTPStatus.OK,
+                    )
+                    return
                 if segments == ["referrals"]:
                     user, _ = self._require_identity()
                     self._send_json(
@@ -2319,6 +3522,13 @@ def build_handler(application):
                             csv_text=str(payload.get("csv_text") or ""),
                             source_kind=str(payload.get("source_kind") or "linkedin_csv"),
                         ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                if segments == ["referrals", "outreach-status"]:
+                    user, _ = self._require_identity()
+                    self._send_json(
+                        _save_referral_outreach_status_from_payload(application, user, payload),
                         status=HTTPStatus.OK,
                     )
                     return
@@ -2367,6 +3577,69 @@ def build_handler(application):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                     self._send_json(application.upsert_secret(payload).to_public_dict(), status=HTTPStatus.CREATED)
                     return
+                if segments == ["career-url-discovery", "run"]:
+                    self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
+                    source = str(payload.get("source") or "regular").strip().lower()
+                    if source not in {"regular", "phd", "all"}:
+                        raise ValueError("Choose regular companies, universities/PhD, or all sources.")
+                    raw_limit = payload.get("limit")
+                    limit = 25 if raw_limit in {None, ""} else int(raw_limit)
+                    limit = max(0, min(5000, limit))
+                    offset = max(0, int(payload.get("offset") or 0))
+                    discovery_args = SimpleNamespace(
+                        source=source,
+                        input=str(payload.get("input") or ""),
+                        input_format="auto",
+                        company_name_column="",
+                        homepage_url_column="",
+                        homepage_url="",
+                        domain="",
+                        company_name="",
+                        limit=limit,
+                        offset=offset,
+                        timeout_seconds=max(5, min(60, int(payload.get("timeout_seconds") or 20))),
+                        shallow_crawl_pages=max(0, min(20, int(payload.get("shallow_crawl_pages") or 8))),
+                        use_rendered_fallback=bool(payload.get("use_rendered_fallback") or False),
+                        allow_domain_guessing=False,
+                        output_json=str(payload.get("output_json") or ""),
+                        output_company_sites=str(payload.get("output_company_sites") or ""),
+                        save_mysql=bool(payload.get("save_mysql") or False),
+                        mysql_host=str(payload.get("mysql_host") or ""),
+                        mysql_port=int(payload.get("mysql_port") or 0),
+                        mysql_user=str(payload.get("mysql_user") or ""),
+                        mysql_password=str(payload.get("mysql_password") or ""),
+                        mysql_database=str(payload.get("mysql_database") or ""),
+                        mysql_table=str(payload.get("mysql_table") or ""),
+                    )
+                    result = run_career_url_discovery(discovery_args)
+                    compact_results = []
+                    for item in result.get("results", []):
+                        compact_results.append(
+                            {
+                                "company_name": item.get("company_name", ""),
+                                "homepage_url": item.get("homepage_url", ""),
+                                "primary_career_url": item.get("primary_career_url", ""),
+                                "secondary_candidate_urls": item.get("secondary_candidate_urls", []),
+                                "ats_type": item.get("ats_type", ""),
+                                "confidence_score": item.get("confidence_score", 0),
+                                "crawl_status": item.get("crawl_status", ""),
+                                "validation_evidence": item.get("validation_evidence", []),
+                            }
+                        )
+                    self._send_json(
+                        {
+                            "processed": result.get("processed", 0),
+                            "found": result.get("found", 0),
+                            "not_found": result.get("not_found", 0),
+                            "saved_list_path": result.get("output_company_sites", ""),
+                            "details_path": result.get("output_json", ""),
+                            "company_site_entries": result.get("company_site_entries", 0),
+                            "mysql_rows_saved": result.get("mysql_rows_saved", 0),
+                            "results": compact_results,
+                        },
+                        status=HTTPStatus.OK,
+                    )
+                    return
                 if segments == ["workspaces"]:
                     user, _ = self._require_scope(TOKEN_SCOPE_WORKSPACES_WRITE)
                     workspace_id = str(payload.get("id") or "")
@@ -2396,6 +3669,7 @@ def build_handler(application):
                         user,
                         [str(item) for item in payload.get("document_ids") or [] if str(item).strip()],
                         label=str(payload.get("label") or ""),
+                        export_anyway=bool(payload.get("export_anyway")),
                     )
                     self._send_json(bundle, status=HTTPStatus.CREATED)
                     return
@@ -2524,6 +3798,8 @@ def build_handler(application):
                         merged_payload["folder"] = str(payload.get("folder") or "INBOX")
                     if "max_messages" in payload and payload.get("max_messages") is not None:
                         merged_payload["max_messages"] = payload.get("max_messages")
+                    if "scan_window" in payload and payload.get("scan_window") is not None:
+                        merged_payload["scan_window"] = normalize_gmail_scan_window(payload.get("scan_window"))
                     current_config = normalize_tracker_email_config(merged_payload)
                     redirect_uri = self._tracker_google_callback_uri()
                     state_nonce, oauth_state = _build_tracker_google_oauth_state(user)
@@ -2550,6 +3826,10 @@ def build_handler(application):
                 if segments == ["tracker", "email-integration", "sync"]:
                     user, _ = self._require_identity()
                     current_config = _get_tracker_email_config(user)
+                    if "scan_window" in payload and payload.get("scan_window") is not None:
+                        current_config["scan_window"] = normalize_gmail_scan_window(payload.get("scan_window"))
+                    if "max_messages" in payload and payload.get("max_messages") is not None:
+                        current_config["max_messages"] = payload.get("max_messages")
                     tracker_items = _collect_tracker_entries(application, user)
                     try:
                         updated_config = dict(current_config)
@@ -2588,7 +3868,11 @@ def build_handler(application):
                             )
                     except ValueError as exc:
                         failed_config = dict(current_config)
-                        failed_config["last_error"] = str(exc)
+                        error_text = str(exc)
+                        failed_config["last_error"] = error_text
+                        if "invalid_grant" in error_text.lower() or "expired or revoked" in error_text.lower():
+                            failed_config["connected"] = False
+                            failed_config["authorization_state"] = "reauthorization_required"
                         failed_config["updated_at"] = datetime.now(timezone.utc).isoformat()
                         _persist_tracker_email_config(application, user, failed_config)
                         raise
@@ -2597,6 +3881,15 @@ def build_handler(application):
                     updated_config["updated_at"] = result["synced_at"]
                     updated_config["last_error"] = ""
                     updated_config["last_sync_summary"] = dict(result["summary"] or {})
+                    updated_config["pending_detections"] = _merge_pending_tracker_detections(
+                        existing=current_config.get("pending_detections") or [],
+                        additions=[
+                            detection
+                            for detection in result.get("detections") or []
+                            if isinstance(detection, dict)
+                            and str(detection.get("status", {}).get("approval_state") or "") == "pending_review"
+                        ],
+                    )
                     updated_config["authorization_state"] = "authorized"
                     if result.get("history_id"):
                         updated_config["history_id"] = str(result.get("history_id") or "")
@@ -2618,6 +3911,8 @@ def build_handler(application):
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
+            except AtsExportBlockedError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:
@@ -2674,6 +3969,13 @@ def build_handler(application):
                     application.repositories.auth_repository.upsert_user(user)
                     refreshed_user = application.get_user(user.user_id)
                     self._send_json(_build_settings_payload(application, refreshed_user), status=HTTPStatus.OK)
+                    return
+                if segments == ["referrals", "outreach-status"]:
+                    user, _ = self._require_identity()
+                    self._send_json(
+                        _save_referral_outreach_status_from_payload(application, user, payload),
+                        status=HTTPStatus.OK,
+                    )
                     return
                 if segments[:1] == ["referrals"] and len(segments) == 2:
                     user, _ = self._require_identity()
@@ -2752,28 +4054,74 @@ def build_handler(application):
                         merged_config["processed_message_ids"] = []
                         merged_config["last_sync_at"] = ""
                         merged_config["last_sync_summary"] = {}
+                        merged_config["pending_detections"] = []
                     refreshed_user = _persist_tracker_email_config(application, user, merged_config)
                     self._send_json(_tracker_email_integration_payload(application, refreshed_user), status=HTTPStatus.OK)
                     return
                 if segments[:1] == ["tracker"] and len(segments) == 2:
                     # PUT /tracker/:review_id — update tracker_status, email_confirmed, rejection_note
                     user, _ = self._require_identity()
+                    if segments[1].startswith("external_"):
+                        _, updated_external = _update_external_tracker_application(
+                            application,
+                            user,
+                            segments[1],
+                            payload,
+                        )
+                        self._send_json(
+                            {
+                                "review_id": updated_external["review_id"],
+                                "application_id": updated_external["application_id"],
+                                "tracker_status": str(updated_external.get("tracker_status") or ""),
+                                "application_status": normalize_application_status(
+                                    updated_external.get("application_status") or updated_external.get("tracker_status"),
+                                ),
+                                "email_confirmed": bool(updated_external.get("email_confirmed") or False),
+                                "rejection_note": str(updated_external.get("rejection_note") or ""),
+                                "notes": str(updated_external.get("notes") or ""),
+                                "updated_at": str(updated_external.get("updated_at") or ""),
+                            },
+                            status=HTTPStatus.OK,
+                        )
+                        return
                     review = application.get_review(segments[1])
                     run = application.get_run(review.run_id)
                     if not application.user_can_access_workspace(user, run.workspace_id):
                         raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                     review_meta = dict(review.metadata or {})
-                    allowed_tracker_statuses = {"applied", "email_confirmed", "interview_invited", "rejected"}
+                    allowed_tracker_statuses = {
+                        "applied",
+                        "email_confirmed",
+                        "interview_invited",
+                        "rejected",
+                        "not_applied",
+                        "offer",
+                        "withdrawn",
+                        "unknown",
+                    }
                     if "tracker_status" in payload:
                         new_status = str(payload["tracker_status"]).strip().lower()
                         if new_status and new_status not in allowed_tracker_statuses:
                             raise ValueError(f"tracker_status must be one of: {sorted(allowed_tracker_statuses)}")
                         review_meta["tracker_status"] = new_status
+                        review_meta["application_status"] = normalize_application_status(new_status)
+                    if "application_status" in payload:
+                        application_status = normalize_application_status(payload.get("application_status"), default="")
+                        if not application_status:
+                            raise ValueError("application_status is required")
+                        review_meta["application_status"] = application_status
+                        review_meta["tracker_status"] = legacy_tracker_status_for_application_status(application_status)
                     if "email_confirmed" in payload:
                         review_meta["email_confirmed"] = bool(payload["email_confirmed"])
                     if "rejection_note" in payload:
                         review_meta["rejection_note"] = str(payload["rejection_note"])
-                    if payload.get("tracker_status") == "rejected" and not review_meta.get("rejected_at"):
+                    if "notes" in payload:
+                        review.notes = str(payload.get("notes") or "")
+                        review_meta["notes"] = review.notes
+                    if (
+                        review_meta.get("tracker_status") == "rejected"
+                        or review_meta.get("application_status") == "Rejected"
+                    ) and not review_meta.get("rejected_at"):
                         review_meta["rejected_at"] = datetime.now(timezone.utc).isoformat()
                     review.metadata = review_meta
                     application.repositories.review_store.upsert_review(review)
@@ -2781,8 +4129,12 @@ def build_handler(application):
                         {
                             "review_id": review.review_id,
                             "tracker_status": str(review_meta.get("tracker_status") or ""),
+                            "application_status": normalize_application_status(
+                                review_meta.get("application_status") or review_meta.get("tracker_status"),
+                            ),
                             "email_confirmed": bool(review_meta.get("email_confirmed") or False),
                             "rejection_note": str(review_meta.get("rejection_note") or ""),
+                            "notes": str(review.notes or review_meta.get("notes") or ""),
                             "rejected_at": str(review_meta.get("rejected_at") or ""),
                             "updated_at": review.updated_at,
                         },
@@ -2836,6 +4188,8 @@ def build_handler(application):
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
+            except AtsExportBlockedError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:
@@ -2931,6 +4285,8 @@ def build_handler(application):
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
+            except AtsExportBlockedError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:

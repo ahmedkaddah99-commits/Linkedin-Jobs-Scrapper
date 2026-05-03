@@ -27,7 +27,7 @@ export function statusTone(status) {
   if (["completed", "approved", "active", "running", "artifact_ready", "ready"].includes(normalized)) {
     return "success";
   }
-  if (["failed", "rejected", "error", "cancelled", "missing"].includes(normalized)) {
+  if (["failed", "rejected", "error", "cancelled", "missing", "blocked", "export_blocked"].includes(normalized)) {
     return "warning";
   }
   return "primary";

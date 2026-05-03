@@ -39,6 +39,16 @@ DEFAULT_CANDIDATE_EMAIL = "ahmed.kaddah@tutamail.com"
 DEFAULT_CV_FONT = "Calibri"
 
 
+def _record_has_ats_export_gate(record: Dict) -> bool:
+    nested_gate = record.get("ats_export_gate")
+    if isinstance(nested_gate, dict):
+        required_nested = ("target_score", "best_score", "attempt_count", "max_attempts")
+        if all(nested_gate.get(key) not in (None, "") for key in required_nested):
+            return True
+    required_flat = ("ats_score", "ats_target_score", "ats_attempt_count", "ats_max_attempts")
+    return all(record.get(key) not in (None, "") for key in required_flat)
+
+
 def main() -> int:
     load_project_dotenv()
     config = load_job_seeker_config()
@@ -346,87 +356,90 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
         job_id = str(job.get("job_id"))
         if job_id in generated_by_id and not args.force_regenerate:
             existing_record = generated_by_id[job_id]
-            for passthrough_key in [
-                "posted_time_text",
-                "posted_age_hours",
-                "posted_datetime_estimated_utc",
-                "applicant_count",
-                "priority_rank",
-                "priority_tier",
-                "priority_bucket",
-                "priority_rule",
-                "source_type",
-                "filter_status",
-                "source_url",
-                "manual_approved",
-            ]:
-                if passthrough_key in job and existing_record.get(passthrough_key) != job.get(passthrough_key):
-                    existing_record[passthrough_key] = job.get(passthrough_key)
+            if _record_has_ats_export_gate(existing_record):
+                for passthrough_key in [
+                    "posted_time_text",
+                    "posted_age_hours",
+                    "posted_datetime_estimated_utc",
+                    "applicant_count",
+                    "priority_rank",
+                    "priority_tier",
+                    "priority_bucket",
+                    "priority_rule",
+                    "source_type",
+                    "filter_status",
+                    "source_url",
+                    "manual_approved",
+                ]:
+                    if passthrough_key in job and existing_record.get(passthrough_key) != job.get(passthrough_key):
+                        existing_record[passthrough_key] = job.get(passthrough_key)
+                        checkpoint_changed = True
+                if not existing_record.get("run_date"):
+                    existing_record["run_date"] = run_date
                     checkpoint_changed = True
-            if not existing_record.get("run_date"):
-                existing_record["run_date"] = run_date
-                checkpoint_changed = True
-            if not existing_record.get("run_timestamp"):
-                existing_record["run_timestamp"] = run_timestamp
-                checkpoint_changed = True
-            if not existing_record.get("linkedin_link"):
-                existing_record["linkedin_link"] = existing_record.get("link", "")
-                checkpoint_changed = True
-            if not existing_record.get("apply_link"):
-                existing_record["apply_link"] = existing_record.get("linkedin_link", "")
-                checkpoint_changed = True
-            existing_record["cv_template"] = cv_template_id
-            existing_record["cv_color_scheme"] = cv_color_scheme
-            existing_record["cv_font"] = cv_font_name
-            existing_record["cv_include_photo"] = include_photo
+                if not existing_record.get("run_timestamp"):
+                    existing_record["run_timestamp"] = run_timestamp
+                    checkpoint_changed = True
+                if not existing_record.get("linkedin_link"):
+                    existing_record["linkedin_link"] = existing_record.get("link", "")
+                    checkpoint_changed = True
+                if not existing_record.get("apply_link"):
+                    existing_record["apply_link"] = existing_record.get("linkedin_link", "")
+                    checkpoint_changed = True
+                existing_record["cv_template"] = cv_template_id
+                existing_record["cv_color_scheme"] = cv_color_scheme
+                existing_record["cv_font"] = cv_font_name
+                existing_record["cv_include_photo"] = include_photo
 
-            ensure_structured_cv_fields(existing_record, candidate_name=candidate_name, cv_text=cv_text)
+                ensure_structured_cv_fields(existing_record, candidate_name=candidate_name, cv_text=cv_text)
 
-            missing_cv_doc = not existing_record.get("cv_docx")
-            has_text_content = bool(existing_record.get("cv_professional_summary")) and bool(
-                existing_record.get("cv_professional_experience")
-            )
-            if missing_cv_doc and has_text_content:
-                try:
-                    cv_doc_path = create_cv_document(
-                        existing_record,
-                        docs_dir=docs_dir,
-                        run_date=existing_record.get("run_date", run_date),
-                        candidate_name=candidate_name,
-                        candidate_email=candidate_email,
-                        cv_font_name=cv_font_name,
-                        cv_template_id=cv_template_id,
-                        cv_color_scheme=cv_color_scheme,
-                        languages=languages,
-                        profile_image_path=profile_image_path,
-                        include_profile_image=include_photo,
-                        profile_links=profile_links,
-                    )
-                    existing_record["cv_docx"] = cv_doc_path
-                    existing_record["tailored_cv_docx"] = cv_doc_path
-                    existing_record["doc_generation_error"] = None
-                    checkpoint_changed = True
-                except Exception as exc:
-                    existing_record["doc_generation_error"] = str(exc)
-                    checkpoint_changed = True
-            elif missing_cv_doc and existing_record.get("tailored_cv_docx"):
-                existing_record["cv_docx"] = existing_record.get("tailored_cv_docx")
-                checkpoint_changed = True
-
-            missing_pdf = not existing_record.get("cv_pdf")
-            if not missing_pdf and existing_record.get("cv_pdf") and not Path(existing_record["cv_pdf"]).exists():
-                missing_pdf = True
-            if existing_record.get("cv_docx") and missing_pdf:
-                try:
-                    existing_record["cv_pdf"] = convert_docx_to_pdf(existing_record["cv_docx"])
-                    existing_record["pdf_generation_error"] = None
-                    checkpoint_changed = True
-                except Exception as exc:
-                    existing_record["cv_pdf"] = ""
-                    existing_record["pdf_generation_error"] = str(exc)
+                missing_cv_doc = not existing_record.get("cv_docx")
+                has_text_content = bool(existing_record.get("cv_professional_summary")) and bool(
+                    existing_record.get("cv_professional_experience")
+                )
+                if missing_cv_doc and has_text_content:
+                    try:
+                        cv_doc_path = create_cv_document(
+                            existing_record,
+                            docs_dir=docs_dir,
+                            run_date=existing_record.get("run_date", run_date),
+                            candidate_name=candidate_name,
+                            candidate_email=candidate_email,
+                            cv_font_name=cv_font_name,
+                            cv_template_id=cv_template_id,
+                            cv_color_scheme=cv_color_scheme,
+                            languages=languages,
+                            profile_image_path=profile_image_path,
+                            include_profile_image=include_photo,
+                            profile_links=profile_links,
+                        )
+                        existing_record["cv_docx"] = cv_doc_path
+                        existing_record["tailored_cv_docx"] = cv_doc_path
+                        existing_record["doc_generation_error"] = None
+                        checkpoint_changed = True
+                    except Exception as exc:
+                        existing_record["doc_generation_error"] = str(exc)
+                        checkpoint_changed = True
+                elif missing_cv_doc and existing_record.get("tailored_cv_docx"):
+                    existing_record["cv_docx"] = existing_record.get("tailored_cv_docx")
                     checkpoint_changed = True
 
-            continue
+                missing_pdf = not existing_record.get("cv_pdf")
+                if not missing_pdf and existing_record.get("cv_pdf") and not Path(existing_record["cv_pdf"]).exists():
+                    missing_pdf = True
+                if existing_record.get("cv_docx") and missing_pdf:
+                    try:
+                        existing_record["cv_pdf"] = convert_docx_to_pdf(existing_record["cv_docx"])
+                        existing_record["pdf_generation_error"] = None
+                        checkpoint_changed = True
+                    except Exception as exc:
+                        existing_record["cv_pdf"] = ""
+                        existing_record["pdf_generation_error"] = str(exc)
+                        checkpoint_changed = True
+
+                continue
+
+            print(f"Regenerating docs for job {index}/{total_jobs}: {job_id} - {job.get('title', '')} (ATS backfill)")
 
         print(f"Generating docs for job {index}/{total_jobs}: {job_id} - {job.get('title', '')}")
 

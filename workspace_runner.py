@@ -5,6 +5,10 @@ from uuid import uuid4
 
 from backend import create_backend
 from backend.api import serve_api
+from backend.tools.discover_company_careers import (
+    add_discover_company_careers_arguments,
+    run_from_args as run_career_discovery_from_args,
+)
 from backend.worker import WorkerService
 
 
@@ -23,7 +27,7 @@ def parse_key_value(items: list[str]) -> dict[str, str]:
 
 
 def _print_json(payload) -> None:
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    print(json.dumps(payload, indent=2, ensure_ascii=True))
 
 
 def main() -> int:
@@ -39,6 +43,11 @@ def main() -> int:
     subparsers.add_parser("list-generations", help="List available generation strategies.")
     subparsers.add_parser("list-renderers", help="List available renderers.")
     subparsers.add_parser("list-users", help="List backend users.")
+    discover_career_urls_parser = subparsers.add_parser(
+        "discover-career-urls",
+        help="Discover company career URLs from a CSV/JSON list.",
+    )
+    add_discover_company_careers_arguments(discover_career_urls_parser)
     list_workers_parser = subparsers.add_parser("list-workers", help="List worker heartbeats and leases.")
     list_workers_parser.add_argument("--limit", type=int, default=50)
     list_workers_parser.add_argument("--offset", type=int, default=0)
@@ -162,6 +171,9 @@ def main() -> int:
             print(f"{descriptor.id}: {descriptor.name}")
         return 0
 
+    if args.command == "discover-career-urls":
+        return run_career_discovery_from_args(args)
+
     if args.command == "list-runs":
         for run in application.list_runs(limit=args.limit, status=args.status, workspace_id=args.workspace_id):
             print(f"{run.id} | {run.workspace_id} | {run.status} | attempts={run.attempt_count}/{run.max_attempts}")
@@ -221,7 +233,12 @@ def main() -> int:
         )
         _print_json(
             {
-                "user": user.to_dict(),
+                "user": {
+                    "user_id": user.user_id,
+                    "email": user.email,
+                    "display_name": user.display_name,
+                    "role": user.role,
+                },
                 "token": token.to_public_dict(),
                 "access_token": raw_token,
                 "api_base_url": "http://127.0.0.1:8000/v1",

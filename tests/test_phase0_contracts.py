@@ -2,10 +2,15 @@ import unittest
 
 from backend.domain.phase0_contracts import (
     PHASE0_CONTRACT_VERSION,
+    normalize_application_document,
+    normalize_application_status,
+    normalize_ats_export_gate,
     normalize_candidate_asset_descriptor,
+    normalize_gmail_application_detection,
     normalize_mail_connection_contract,
     normalize_referral_relationship,
     normalize_rejected_job_review,
+    normalize_tracker_application,
     normalize_workspace_configuration_v2,
     phase0_contract_catalog,
 )
@@ -144,6 +149,8 @@ class Phase0ContractsTests(unittest.TestCase):
                 "linkedin_url": "https://linkedin.com/in/jane-referrer",
                 "relationship_note": "Former teammate",
                 "can_refer": True,
+                "is_active": False,
+                "inactive_reason": "missing_from_latest_upload",
                 "created_at": "2026-04-20T08:00:00+00:00",
             }
         )
@@ -154,6 +161,132 @@ class Phase0ContractsTests(unittest.TestCase):
         self.assertEqual(normalized["companies"][0]["company_name"], "ACME API")
         self.assertTrue(normalized["companies"][0]["can_refer"])
         self.assertEqual(normalized["matching"]["company_aliases"], ["ACME API"])
+        self.assertFalse(normalized["lifecycle"]["is_active"])
+        self.assertEqual(normalized["lifecycle"]["status"], "inactive")
+        self.assertEqual(normalized["lifecycle"]["inactive_reason"], "missing_from_latest_upload")
+
+    def test_application_status_normalizes_legacy_tracker_values(self):
+        self.assertEqual(normalize_application_status("applied"), "Applied")
+        self.assertEqual(normalize_application_status("email_confirmed"), "Applied")
+        self.assertEqual(normalize_application_status("interview_invited"), "Interviewing")
+        self.assertEqual(normalize_application_status("Rejected"), "Rejected")
+        self.assertEqual(normalize_application_status("not applied"), "Not applied")
+        self.assertEqual(normalize_application_status("flying_high"), "Unknown")
+
+    def test_tracker_application_contract_maps_excel_and_legacy_status(self):
+        normalized = normalize_tracker_application(
+            {
+                "review_id": "review_1",
+                "job_id": "job_1",
+                "title": "Business Analyst",
+                "company": "ACME GmbH",
+                "location_raw": "Berlin",
+                "apply_link": "https://acme.example/jobs/1",
+                "full_description": "Analyze business processes.",
+                "applied?": "email_confirmed",
+                "email_confirmed": True,
+                "notes": "Sent tailored CV.",
+            }
+        )
+
+        self.assertEqual(normalized["application_id"], "review_1")
+        self.assertEqual(normalized["job"]["title"], "Business Analyst")
+        self.assertEqual(normalized["status"]["application_status"], "Applied")
+        self.assertEqual(normalized["status"]["legacy_tracker_status"], "email_confirmed")
+        self.assertTrue(normalized["status"]["email_confirmed"])
+        self.assertEqual(normalized["notes"], "Sent tailored CV.")
+
+    def test_gmail_application_detection_contract_defaults_to_reviewable_suggestion(self):
+        normalized = normalize_gmail_application_detection(
+            {
+                "scan_window": "last_3_months",
+                "message_id": "gmail-1",
+                "subject": "Thank you for applying",
+                "from_address": "jobs@example-ats.com",
+                "company": "ACME",
+                "title": "Analyst",
+                "status": "email_confirmed",
+                "confidence": "high",
+                "evidence": ["thank you for applying"],
+            }
+        )
+
+        self.assertEqual(normalized["scan_window"], "last_3_months")
+        self.assertEqual(normalized["status"]["suggested_application_status"], "Applied")
+        self.assertEqual(normalized["status"]["confidence"], "high")
+        self.assertEqual(normalized["status"]["approval_state"], "pending_review")
+
+    def test_gmail_application_detection_contract_accepts_nested_detection_shape(self):
+        normalized = normalize_gmail_application_detection(
+            {
+                "detection_id": "gmail::nested-1",
+                "scan_window": "last_1_month",
+                "source_email": {
+                    "message_id": "nested-1",
+                    "subject": "Interview invitation from ACME",
+                    "from_address": "recruiting@acme.example",
+                    "sent_at": "2026-04-18T12:00:00+00:00",
+                },
+                "detected_application": {
+                    "company": "ACME",
+                    "title": "Data Engineer",
+                    "application_date": "2026-04-18T12:00:00+00:00",
+                    "source_url": "https://jobs.example/acme/data-engineer",
+                },
+                "status": {
+                    "suggested_application_status": "Interviewing",
+                    "confidence": "medium",
+                    "approval_state": "pending_review",
+                    "evidence": ["recruiting sender", "Interviewing status signal"],
+                },
+                "metadata": {"review_id": "review_1"},
+            }
+        )
+
+        self.assertEqual(normalized["source_email"]["message_id"], "nested-1")
+        self.assertEqual(normalized["detected_application"]["company"], "ACME")
+        self.assertEqual(normalized["detected_application"]["source_url"], "https://jobs.example/acme/data-engineer")
+        self.assertEqual(normalized["status"]["suggested_application_status"], "Interviewing")
+        self.assertEqual(normalized["status"]["confidence"], "medium")
+        self.assertEqual(normalized["status"]["evidence"], ["recruiting sender", "Interviewing status signal"])
+        self.assertEqual(normalized["metadata"]["review_id"], "review_1")
+
+    def test_application_document_contract_normalizes_artifact_shape(self):
+        normalized = normalize_application_document(
+            {
+                "artifact_id": "artifact_1",
+                "file_name": "ACME_Analyst_CV.docx",
+                "document_type": "Tailored CV",
+                "job_id": "job_1",
+                "company": "ACME",
+                "job_title": "Analyst",
+                "path": "generated_docs/acme.docx",
+                "download_url": "/v1/runs/run_1/artifacts/artifact_1/download",
+            }
+        )
+
+        self.assertEqual(normalized["document_id"], "artifact_1")
+        self.assertEqual(normalized["document_type"], "Tailored CV")
+        self.assertEqual(normalized["related_application"]["job_id"], "job_1")
+        self.assertEqual(normalized["file"]["download_url"], "/v1/runs/run_1/artifacts/artifact_1/download")
+
+    def test_ats_export_gate_contract_blocks_until_target_or_warning(self):
+        normalized = normalize_ats_export_gate(
+            {
+                "target_score": 90,
+                "best_score": 84,
+                "attempt_count": 3,
+                "max_attempts": 3,
+                "gate_state": "blocked",
+                "missing_requirements": ["SQL", "stakeholder management"],
+            }
+        )
+
+        self.assertEqual(normalized["target_score"], 90)
+        self.assertEqual(normalized["best_score"], 84)
+        self.assertFalse(normalized["can_export_final"])
+        self.assertTrue(normalized["export_anyway_allowed"])
+        self.assertEqual(normalized["missing_requirements"], ["SQL", "stakeholder management"])
 
     def test_phase0_contract_catalog_exposes_all_contracts(self):
         catalog = phase0_contract_catalog()
@@ -164,6 +297,11 @@ class Phase0ContractsTests(unittest.TestCase):
         self.assertIn("rejected_job_review", catalog)
         self.assertIn("mail_connection", catalog)
         self.assertIn("referral_relationship", catalog)
+        self.assertIn("tracker_application", catalog)
+        self.assertIn("gmail_application_detection", catalog)
+        self.assertIn("application_document", catalog)
+        self.assertIn("ats_export_gate", catalog)
+        self.assertIn("Applied", catalog["tracker_application"]["application_statuses"])
 
 
 if __name__ == "__main__":

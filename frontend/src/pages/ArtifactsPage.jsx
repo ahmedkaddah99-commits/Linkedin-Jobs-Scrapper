@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
-import { formatDateTime, labelize } from "../lib/formatters";
+import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
 const VIEW_LIBRARY = "library";
 const VIEW_REJECTED = "rejected";
@@ -60,6 +61,47 @@ function FilterSelect({ children, onChange, value }) {
   );
 }
 
+function documentStatusValue(document) {
+  return (
+    String(
+      document?.display_status ||
+        (document?.final_export_blocked
+          ? "export_blocked"
+          : document?.status || document?.application_document?.status || "ready"),
+    ).trim() || "ready"
+  );
+}
+
+function documentStatusLabel(document) {
+  const value = documentStatusValue(document);
+  return value === "export_blocked" ? "Export Blocked" : labelize(value);
+}
+
+function buildDocumentGroupDescription(group) {
+  if (group.group_kind === "application") {
+    return [group.workspace_name, group.run_id].filter(Boolean).join(" | ");
+  }
+  if (group.group_kind === "run") {
+    return [group.workspace_name, group.run_id].filter(Boolean).join(" | ");
+  }
+  return group.workspace_name || "Reusable candidate assets available across applications.";
+}
+
+function buildReviewQueueTarget(documents) {
+  const params = new URLSearchParams();
+  params.set("status", "approved");
+  const runIds = Array.from(new Set(documents.map((document) => document.run_id).filter(Boolean)));
+  const workspaceIds = Array.from(
+    new Set(documents.map((document) => document.workspace_id).filter(Boolean)),
+  );
+  if (runIds.length === 1) {
+    params.set("run_id", runIds[0]);
+  } else if (workspaceIds.length === 1) {
+    params.set("workspace_id", workspaceIds[0]);
+  }
+  return `/review-queue?${params.toString()}`;
+}
+
 export default function DocumentsPage() {
   const { request } = useSession();
   const [activeView, setActiveView] = useState(VIEW_LIBRARY);
@@ -67,7 +109,7 @@ export default function DocumentsPage() {
     search: "",
     workspaceId: "",
     runId: "",
-    groupId: "",
+    status: "",
   });
   const [rejectedFilters, setRejectedFilters] = useState({
     search: "",
@@ -89,12 +131,14 @@ export default function DocumentsPage() {
     exporting: false,
     message: "",
     error: "",
+    gate: null,
   });
   const [requeueState, setRequeueState] = useState({
     loading: false,
     message: "",
     error: "",
   });
+  const [requirementsReviewOpen, setRequirementsReviewOpen] = useState(false);
 
   const {
     data: documentsPayload,
@@ -155,24 +199,37 @@ export default function DocumentsPage() {
         if (documentFilters.runId && item.run_id !== documentFilters.runId) {
           return false;
         }
-        if (documentFilters.groupId && item.group_id !== documentFilters.groupId) {
+        if (documentFilters.status && documentStatusValue(item) !== documentFilters.status) {
           return false;
         }
         return matchesQuery(
           [
             item.display_name,
             item.group_label,
+            item.kind_group_label,
+            item.document_type,
             item.job_title,
             item.company,
             item.workspace_name,
             item.run_id,
             item.relative_path,
             item.asset_kind,
+            documentStatusLabel(item),
           ],
           documentFilters.search,
         );
       }),
     [allDocuments, documentFilters],
+  );
+
+  const documentStatusOptions = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          allDocuments.map((item) => [documentStatusValue(item), documentStatusLabel(item)]),
+        ).entries(),
+      ).map(([value, label]) => ({ value, label })),
+    [allDocuments],
   );
 
   const filteredRejectedItems = useMemo(
@@ -213,6 +270,86 @@ export default function DocumentsPage() {
   );
   const selectedUnavailableRequeueCount =
     selectedRejectedItems.length - selectedRequeueableItems.length;
+  const selectedBlockedDocuments = useMemo(
+    () => selectedDocuments.filter((item) => item.final_export_blocked),
+    [selectedDocuments],
+  );
+  const remediationRequirements = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            ...(exportState.gate?.missing_requirements || []),
+            ...selectedBlockedDocuments.flatMap(
+              (document) => document.ats_export_gate?.missing_requirements || [],
+            ),
+          ].filter(Boolean),
+        ),
+      ),
+    [exportState.gate?.missing_requirements, selectedBlockedDocuments],
+  );
+  const reviewQueueTarget = useMemo(
+    () => buildReviewQueueTarget(selectedBlockedDocuments),
+    [selectedBlockedDocuments],
+  );
+  const visibleDocumentSections = useMemo(() => {
+    const groupMetaById = new Map(
+      documentGroups.map((group, index) => [group.group_id, { ...group, sortIndex: index }]),
+    );
+    const groupedDocuments = new Map();
+    filteredDocuments.forEach((item) => {
+      const groupId = item.group_id || item.document_id;
+      const groupMeta = groupMetaById.get(groupId) || {};
+      const existing = groupedDocuments.get(groupId);
+      if (existing) {
+        existing.documents.push(item);
+        if ((item.created_at || "") > (existing.latest_created_at || "")) {
+          existing.latest_created_at = item.created_at || "";
+        }
+        return;
+      }
+      groupedDocuments.set(groupId, {
+        group_id: groupId,
+        group_label: item.group_label || groupMeta.group_label || "Documents",
+        group_kind: item.group_kind || groupMeta.group_kind || "shared_library",
+        workspace_id: item.workspace_id || groupMeta.workspace_id || "",
+        workspace_name: item.workspace_name || groupMeta.workspace_name || "",
+        run_id: item.run_id || groupMeta.run_id || "",
+        job_id: item.job_id || groupMeta.job_id || "",
+        job_title: item.job_title || groupMeta.job_title || "",
+        company: item.company || groupMeta.company || "",
+        latest_created_at: item.created_at || groupMeta.latest_created_at || "",
+        documents: [item],
+        sortIndex: groupMeta.sortIndex ?? Number.MAX_SAFE_INTEGER,
+      });
+    });
+    const priority = {
+      application: 0,
+      run: 1,
+      workspace_library: 2,
+      shared_library: 3,
+    };
+    return Array.from(groupedDocuments.values()).sort((left, right) => {
+      const leftPriority = priority[left.group_kind] ?? 9;
+      const rightPriority = priority[right.group_kind] ?? 9;
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority;
+      }
+      if ((left.sortIndex ?? Number.MAX_SAFE_INTEGER) !== (right.sortIndex ?? Number.MAX_SAFE_INTEGER)) {
+        return (left.sortIndex ?? Number.MAX_SAFE_INTEGER) - (right.sortIndex ?? Number.MAX_SAFE_INTEGER);
+      }
+      if ((left.latest_created_at || "") !== (right.latest_created_at || "")) {
+        return String(right.latest_created_at || "").localeCompare(String(left.latest_created_at || ""));
+      }
+      return String(left.group_label || "").localeCompare(String(right.group_label || ""));
+    });
+  }, [documentGroups, filteredDocuments]);
+
+  useEffect(() => {
+    if (!exportState.gate) {
+      setRequirementsReviewOpen(false);
+    }
+  }, [exportState.gate]);
 
   function toggleSelection(setter, currentIds, id) {
     setter(
@@ -228,6 +365,42 @@ export default function DocumentsPage() {
   async function openFile(path) {
     const blob = await request(path, { responseType: "blob" });
     openBlob(blob);
+  }
+
+  async function downloadDocument(document) {
+    try {
+      await downloadFile(document.download_url, document.display_name || "document");
+    } catch (downloadError) {
+      if (downloadError.code === "ats_export_blocked") {
+        setSelectedDocumentIds([document.document_id]);
+        setExportState({
+          exporting: false,
+          message: "",
+          error: downloadError.message,
+          gate: downloadError.details?.gate || null,
+        });
+        return;
+      }
+      throw downloadError;
+    }
+  }
+
+  async function openDocument(document) {
+    try {
+      await openFile(document.preview_url || document.download_url);
+    } catch (openError) {
+      if (openError.code === "ats_export_blocked") {
+        setSelectedDocumentIds([document.document_id]);
+        setExportState({
+          exporting: false,
+          message: "",
+          error: openError.message,
+          gate: openError.details?.gate || null,
+        });
+        return;
+      }
+      throw openError;
+    }
   }
 
   async function uploadDocument(file) {
@@ -260,17 +433,18 @@ export default function DocumentsPage() {
     }
   }
 
-  async function exportSelectedDocuments() {
+  async function exportSelectedDocuments({ exportAnyway = false } = {}) {
     if (!selectedDocumentIds.length) {
       return;
     }
-    setExportState({ exporting: true, message: "", error: "" });
+    setExportState({ exporting: true, message: "", error: "", gate: null });
     try {
       const bundle = await request("/documents/bulk-export", {
         method: "POST",
         body: {
           label: "application_documents",
           document_ids: selectedDocumentIds,
+          export_anyway: exportAnyway,
         },
       });
       const blob = await request(bundle.download_url, { responseType: "blob" });
@@ -279,12 +453,14 @@ export default function DocumentsPage() {
         exporting: false,
         message: `Exported ${bundle.document_count} document${bundle.document_count === 1 ? "" : "s"}.`,
         error: "",
+        gate: null,
       });
     } catch (exportError) {
       setExportState({
         exporting: false,
         message: "",
         error: exportError.message || "Unable to export selected documents.",
+        gate: exportError.code === "ats_export_blocked" ? exportError.details?.gate || null : null,
       });
     }
   }
@@ -514,7 +690,7 @@ export default function DocumentsPage() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-4 md:grid-cols-4">
+              <div className="mt-5 grid gap-4 md:grid-cols-5">
                 <input
                   className="rounded-lg border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm text-on-surface"
                   onChange={(event) =>
@@ -550,6 +726,19 @@ export default function DocumentsPage() {
                     </option>
                   ))}
                 </FilterSelect>
+                <FilterSelect
+                  onChange={(event) =>
+                    setDocumentFilters((current) => ({ ...current, status: event.target.value }))
+                  }
+                  value={documentFilters.status}
+                >
+                  <option value="">All Statuses</option>
+                  {documentStatusOptions.map((statusOption) => (
+                    <option key={statusOption.value} value={statusOption.value}>
+                      {statusOption.label}
+                    </option>
+                  ))}
+                </FilterSelect>
                 <button
                   className="rounded-lg bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
                   onClick={() => refreshDocuments().catch(() => undefined)}
@@ -559,38 +748,14 @@ export default function DocumentsPage() {
                 </button>
               </div>
 
-              <div className="mt-5 flex flex-wrap gap-3">
-                <button
-                  className={[
-                    "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
-                    !documentFilters.groupId
-                      ? "bg-primary text-white"
-                      : "bg-surface-container-low text-on-surface hover:bg-surface-container-high",
-                  ].join(" ")}
-                  onClick={() =>
-                    setDocumentFilters((current) => ({ ...current, groupId: "" }))
-                  }
-                  type="button"
-                >
-                  All Groups
-                </button>
-                {documentGroups.map((group) => (
-                  <button
-                    className={[
-                      "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
-                      documentFilters.groupId === group.group_id
-                        ? "bg-primary text-white"
-                        : "bg-surface-container-low text-on-surface hover:bg-surface-container-high",
-                    ].join(" ")}
-                    key={group.group_id}
-                    onClick={() =>
-                      setDocumentFilters((current) => ({ ...current, groupId: group.group_id }))
-                    }
-                    type="button"
-                  >
-                    {group.group_label} ({group.count})
-                  </button>
-                ))}
+              <div className="mt-5 flex flex-wrap items-center gap-3 text-sm text-on-surface-variant">
+                <span>
+                  {visibleDocumentSections.length} visible application or library group
+                  {visibleDocumentSections.length === 1 ? "" : "s"}.
+                </span>
+                <span>
+                  {filteredDocuments.length} matching document{filteredDocuments.length === 1 ? "" : "s"}.
+                </span>
               </div>
 
               {exportState.message ? (
@@ -599,113 +764,306 @@ export default function DocumentsPage() {
               {exportState.error ? (
                 <p className="mt-4 text-sm text-error">{exportState.error}</p>
               ) : null}
+              {exportState.gate ? (
+                <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+                  <div className="text-sm font-semibold text-on-surface">
+                    ATS score gate blocked final CV export
+                  </div>
+                  <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+                    Best score reached: {exportState.gate.best_score}%. Target:{" "}
+                    {exportState.gate.target_score}%.
+                  </p>
+                  {exportState.gate.missing_requirements?.length ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {exportState.gate.missing_requirements.map((requirement) => (
+                        <span
+                          className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs text-on-surface"
+                          key={requirement}
+                        >
+                          {requirement}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button
+                      className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
+                      onClick={() => setRequirementsReviewOpen(true)}
+                      type="button"
+                    >
+                      Review missing requirements
+                    </button>
+                    <Link
+                      className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
+                      to="/settings"
+                    >
+                      Edit CV/profile inputs
+                    </Link>
+                    <button
+                      className="rounded bg-primary/10 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/20"
+                      onClick={() => exportSelectedDocuments({ exportAnyway: true })}
+                      type="button"
+                    >
+                      Export anyway
+                    </button>
+                    <button
+                      className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
+                      onClick={() => exportSelectedDocuments()}
+                      type="button"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {exportState.gate && requirementsReviewOpen ? (
+                <div className="mt-4 rounded-2xl border border-outline-variant/20 bg-surface p-5">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <h3 className="font-headline text-lg font-bold text-on-surface">
+                        Missing Requirements Review
+                      </h3>
+                      <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+                        Compare the blocked document set with the missing ATS requirements, then
+                        jump into the review queue or profile inputs before trying again.
+                      </p>
+                    </div>
+                    <button
+                      className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
+                      onClick={() => setRequirementsReviewOpen(false)}
+                      type="button"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  {remediationRequirements.length ? (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {remediationRequirements.map((requirement) => (
+                        <span
+                          className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
+                          key={requirement}
+                        >
+                          {requirement}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {selectedBlockedDocuments.length ? (
+                    <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                      {selectedBlockedDocuments.map((document) => (
+                        <div
+                          className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4"
+                          key={`blocked-${document.document_id}`}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="font-semibold text-on-surface">{document.display_name}</div>
+                            <StatusBadge tone={statusTone(documentStatusValue(document))}>
+                              {documentStatusLabel(document)}
+                            </StatusBadge>
+                          </div>
+                          <p className="mt-2 text-sm text-on-surface-variant">
+                            {document.group_label}
+                          </p>
+                          <p className="mt-2 text-sm text-on-surface-variant">
+                            Best score: {document.ats_export_gate?.best_score ?? exportState.gate.best_score}%.
+                            Target: {document.ats_export_gate?.target_score ?? exportState.gate.target_score}%.
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <Link
+                      className="rounded bg-primary/10 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/20"
+                      to={reviewQueueTarget}
+                    >
+                      Open Review Queue
+                    </Link>
+                    <Link
+                      className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
+                      to="/settings"
+                    >
+                      Edit CV/profile inputs
+                    </Link>
+                    {selectedBlockedDocuments.length === 1 && selectedBlockedDocuments[0].run_id ? (
+                      <Link
+                        className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
+                        to={`/runs/${selectedBlockedDocuments[0].run_id}`}
+                      >
+                        Open Related Run
+                      </Link>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </section>
 
-          <section className="grid gap-4 lg:grid-cols-2">
+          <section className="space-y-4">
             {documentsLoading ? (
-              <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-on-surface-variant shadow-soft lg:col-span-2">
+              <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-on-surface-variant shadow-soft">
                 Loading documents...
               </div>
             ) : documentsError ? (
-              <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-error shadow-soft lg:col-span-2">
+              <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-error shadow-soft">
                 {documentsError}
               </div>
-            ) : filteredDocuments.length ? (
-              filteredDocuments.map((document) => {
-                const isSelected = selectedDocumentIds.includes(document.document_id);
-                return (
-                  <article
-                    className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft"
-                    key={document.document_id}
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-headline text-xl font-bold text-on-surface">
-                            {document.display_name}
-                          </h3>
-                          <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                            {document.group_label}
-                          </span>
-                        </div>
-                        <p className="text-sm text-on-surface-variant">
-                          {[document.job_title, document.company].filter(Boolean).join(" at ") ||
-                            "Shared document"}
-                        </p>
+            ) : visibleDocumentSections.length ? (
+              visibleDocumentSections.map((group) => (
+                <section
+                  className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft"
+                  key={group.group_id}
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="font-headline text-2xl font-bold text-on-surface">
+                          {group.group_label}
+                        </h2>
+                        <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant">
+                          {labelize(group.group_kind)}
+                        </span>
                       </div>
-                      <label className="inline-flex items-center gap-2 text-sm text-on-surface">
-                        <input
-                          checked={isSelected}
-                          className="h-4 w-4 rounded border-outline-variant/40 text-primary focus:ring-primary"
-                          onChange={() =>
-                            toggleSelection(
-                              setSelectedDocumentIds,
-                              selectedDocumentIds,
-                              document.document_id,
-                            )
-                          }
-                          type="checkbox"
-                        />
-                        Select
-                      </label>
+                      <p className="mt-1 text-sm text-on-surface-variant">
+                        {buildDocumentGroupDescription(group) || "Documents linked to this workspace."}
+                      </p>
                     </div>
-
-                    <div className="mt-4 grid gap-3 text-sm text-on-surface-variant md:grid-cols-2">
-                      <div>
-                        <span className="font-semibold text-on-surface">Workspace:</span>{" "}
-                        {document.workspace_name || "Shared"}
-                      </div>
-                      <div>
-                        <span className="font-semibold text-on-surface">Run:</span>{" "}
-                        {document.run_id || "Manual upload"}
-                      </div>
-                      <div>
-                        <span className="font-semibold text-on-surface">Created:</span>{" "}
-                        {formatDateTime(document.created_at)}
-                      </div>
-                      <div>
-                        <span className="font-semibold text-on-surface">Origin:</span>{" "}
-                        {labelize(document.source_origin)}
-                      </div>
+                    <div className="text-sm text-on-surface-variant">
+                      {group.documents.length} document{group.documents.length === 1 ? "" : "s"}
                     </div>
+                  </div>
 
-                    {document.tags?.length ? (
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {document.tags.map((tag) => (
-                          <span
-                            className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface-variant"
-                            key={`${document.document_id}-${tag}`}
-                          >
-                            {labelize(tag)}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
+                  <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                    {group.documents.map((document) => {
+                      const isSelected = selectedDocumentIds.includes(document.document_id);
+                      return (
+                        <article
+                          className="rounded-xl border border-outline-variant/20 bg-surface p-5"
+                          key={document.document_id}
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="font-headline text-xl font-bold text-on-surface">
+                                  {document.display_name}
+                                </h3>
+                                <StatusBadge tone={statusTone(documentStatusValue(document))}>
+                                  {documentStatusLabel(document)}
+                                </StatusBadge>
+                                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                                  {document.document_type}
+                                </span>
+                              </div>
+                              <p className="text-sm text-on-surface-variant">
+                                {[document.job_title, document.company].filter(Boolean).join(" at ") ||
+                                  "Reusable supporting document"}
+                              </p>
+                            </div>
+                            <label className="inline-flex items-center gap-2 text-sm text-on-surface">
+                              <input
+                                checked={isSelected}
+                                className="h-4 w-4 rounded border-outline-variant/40 text-primary focus:ring-primary"
+                                onChange={() =>
+                                  toggleSelection(
+                                    setSelectedDocumentIds,
+                                    selectedDocumentIds,
+                                    document.document_id,
+                                  )
+                                }
+                                type="checkbox"
+                              />
+                              Select
+                            </label>
+                          </div>
 
-                    <div className="mt-5 flex flex-wrap gap-3">
-                      <button
-                        className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                        onClick={() => openFile(document.preview_url || document.download_url)}
-                        type="button"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                        onClick={() =>
-                          downloadFile(document.download_url, document.display_name || "document")
-                        }
-                        type="button"
-                      >
-                        Download
-                      </button>
-                    </div>
-                  </article>
-                );
-              })
+                          <div className="mt-4 grid gap-3 text-sm text-on-surface-variant md:grid-cols-2">
+                            <div>
+                              <span className="font-semibold text-on-surface">Status:</span>{" "}
+                              {documentStatusLabel(document)}
+                            </div>
+                            <div>
+                              <span className="font-semibold text-on-surface">Category:</span>{" "}
+                              {document.kind_group_label || labelize(document.asset_kind)}
+                            </div>
+                            <div>
+                              <span className="font-semibold text-on-surface">Workspace:</span>{" "}
+                              {document.workspace_name || "Shared"}
+                            </div>
+                            <div>
+                              <span className="font-semibold text-on-surface">Run:</span>{" "}
+                              {document.run_id || "Manual upload"}
+                            </div>
+                            <div>
+                              <span className="font-semibold text-on-surface">Created:</span>{" "}
+                              {formatDateTime(document.created_at)}
+                            </div>
+                            <div>
+                              <span className="font-semibold text-on-surface">Origin:</span>{" "}
+                              {labelize(document.source_origin)}
+                            </div>
+                          </div>
+
+                          {document.final_export_blocked ? (
+                            <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-on-surface-variant">
+                              <div className="font-semibold text-on-surface">
+                                Final export blocked at {document.ats_export_gate?.best_score ?? 0}% /{" "}
+                                {document.ats_export_gate?.target_score ?? 90}%
+                              </div>
+                              {document.ats_export_gate?.missing_requirements?.length ? (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {document.ats_export_gate.missing_requirements.map((requirement) => (
+                                    <span
+                                      className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs text-on-surface"
+                                      key={`${document.document_id}-${requirement}`}
+                                    >
+                                      {requirement}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          {document.tags?.length ? (
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {document.tags.map((tag) => (
+                                <span
+                                  className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface-variant"
+                                  key={`${document.document_id}-${tag}`}
+                                >
+                                  {labelize(tag)}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+
+                          <div className="mt-5 flex flex-wrap gap-3">
+                            <button
+                              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                              onClick={() => openDocument(document).catch(() => undefined)}
+                              type="button"
+                            >
+                              Preview
+                            </button>
+                            <button
+                              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                              onClick={() => downloadDocument(document).catch(() => undefined)}
+                              type="button"
+                            >
+                              Download
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))
             ) : (
-              <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft lg:col-span-2">
+              <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
                 <h2 className="font-headline text-xl font-bold text-on-surface">
                   No documents match these filters
                 </h2>

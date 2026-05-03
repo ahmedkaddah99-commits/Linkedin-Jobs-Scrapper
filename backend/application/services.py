@@ -312,7 +312,6 @@ class BackendApplication:
             for item in (user.metadata or {}).get("referrals") or []
             if isinstance(item, dict)
         ]
-        contacts.sort(key=lambda item: (item.primary_company().lower(), item.name.lower()))
         return contacts
 
     def get_referral_contact(self, user_id: str, contact_id: str) -> ReferralContactRecord:

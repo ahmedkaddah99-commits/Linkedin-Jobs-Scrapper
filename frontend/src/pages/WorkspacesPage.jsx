@@ -259,6 +259,17 @@ function workspaceHasConnector(workspace, connectorId) {
   return (workspace.sources || []).some((source) => source.connector_id === connectorId);
 }
 
+function compactListLabel(items, fallback = "N/A") {
+  const labels = (items || []).filter(Boolean);
+  if (!labels.length) {
+    return fallback;
+  }
+  if (labels.length <= 2) {
+    return labels.join(", ");
+  }
+  return `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
+}
+
 function FieldRenderer({ field, value, onChange, dynamicOptions = {} }) {
   if (field.type === "asset_select") {
     const options = dynamicOptions[field.dynamic_source] || [];
@@ -428,6 +439,11 @@ export default function WorkspacesPage() {
   } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request]);
 
   const workspaces = workspacesData?.workspaces || [];
+  const focusedWorkspaceId = searchParams.get("workspace_id") || "";
+  const focusedWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === focusedWorkspaceId) || null,
+    [focusedWorkspaceId, workspaces],
+  );
   const flows = useMemo(
     () => (builderCatalog?.flows || []).filter((flow) => flow.frontend_visible !== false),
     [builderCatalog?.flows],
@@ -499,6 +515,18 @@ export default function WorkspacesPage() {
       message: "",
       ...overrides,
     });
+  }
+
+  function focusWorkspace(workspaceId) {
+    const next = new URLSearchParams(searchParams);
+    next.set("workspace_id", workspaceId);
+    setSearchParams(next);
+  }
+
+  function showAllWorkspaces() {
+    const next = new URLSearchParams(searchParams);
+    next.delete("workspace_id");
+    setSearchParams(next);
   }
 
   function openBuilder() {
@@ -777,6 +805,301 @@ export default function WorkspacesPage() {
     }
   }
 
+  function workspacePresentation(workspace) {
+    const moduleNames = (workspace.metadata?.modules || []).map((moduleId) => labelize(moduleId));
+    const sourceNames = (workspace.sources || []).map((source) => labelize(source.connector_id));
+    return {
+      flowLabel: labelize(workspaceAutomationFlow(workspace)),
+      moduleNames,
+      sourceNames,
+      modulesLabel: compactListLabel(moduleNames, "Default modules"),
+      sourcesLabel: compactListLabel(sourceNames),
+      profileLabel: workspace.profiles?.[0]?.label || "N/A",
+      promptFamily: workspace.prompt_sets?.[0]?.family || "N/A",
+    };
+  }
+
+  function renderActionFeedback(workspace) {
+    if (actionState.workspaceId !== workspace.id || (!actionState.message && !actionState.error)) {
+      return null;
+    }
+    return (
+      <div
+        className={[
+          "rounded-lg px-4 py-3 text-sm",
+          actionState.error
+            ? "bg-error-container text-on-error-container"
+            : "bg-surface-container-low text-on-surface",
+        ].join(" ")}
+      >
+        {actionState.error || actionState.message}
+      </div>
+    );
+  }
+
+  function renderWorkspaceRows() {
+    return (
+      <div className="overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest shadow-soft">
+        <div className="hidden border-b border-outline-variant/10 bg-surface-container-low px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant md:grid md:grid-cols-12 md:items-center">
+          <div className="md:col-span-4">Workspace</div>
+          <div className="md:col-span-2">Sources</div>
+          <div className="md:col-span-2">Profile</div>
+          <div className="text-right md:col-span-4">Actions</div>
+        </div>
+
+        <div className="divide-y divide-outline-variant/10">
+          {workspaces.map((workspace) => {
+            const summary = workspacePresentation(workspace);
+            return (
+              <article
+                className="grid gap-4 px-4 py-4 transition-colors hover:bg-surface-container-low md:grid-cols-12 md:items-center"
+                key={workspace.id}
+              >
+                <div className="min-w-0 md:col-span-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="truncate font-headline text-lg font-bold text-on-surface">
+                      {workspace.name}
+                    </h2>
+                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                      {summary.flowLabel}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-sm text-on-surface-variant">
+                    {workspace.description || "No description provided."}
+                  </p>
+                  <p className="mt-1 text-xs text-on-surface-variant">
+                    {summary.modulesLabel}
+                  </p>
+                </div>
+
+                <div className="text-sm text-on-surface-variant md:col-span-2">
+                  <span className="font-semibold text-on-surface md:hidden">Sources: </span>
+                  {summary.sourcesLabel}
+                </div>
+
+                <div className="text-sm text-on-surface-variant md:col-span-2">
+                  <span className="font-semibold text-on-surface md:hidden">Profile: </span>
+                  {summary.profileLabel}
+                </div>
+
+                <div className="flex flex-wrap gap-2 md:col-span-4 md:justify-end">
+                  <button
+                    className="rounded bg-gradient-to-br from-primary to-primary-container px-3 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
+                    onClick={() => focusWorkspace(workspace.id)}
+                    type="button"
+                  >
+                    Open
+                  </button>
+                  <button
+                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    onClick={() => triggerRun(workspace.id, "sync")}
+                    type="button"
+                  >
+                    Run
+                  </button>
+                  <button
+                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    onClick={() => triggerRun(workspace.id, "queued")}
+                    type="button"
+                  >
+                    Queue
+                  </button>
+                  <button
+                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    onClick={() => openEditor(workspace)}
+                    type="button"
+                  >
+                    Edit
+                  </button>
+                </div>
+
+                <div className="md:col-span-12">{renderActionFeedback(workspace)}</div>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  function renderFocusedWorkspace(workspace) {
+    const summary = workspacePresentation(workspace);
+    const settingEntries = workspaceSettingEntries(workspace, builderCatalog);
+    const pastedUrlCount = parseLineList(quickManualValue(workspace)).length;
+
+    return (
+      <div className="space-y-5">
+        <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-on-surface">
+                Showing one workspace: {workspace.name}
+              </div>
+              <div className="text-xs text-on-surface-variant">
+                Other workspaces are hidden until you go back.
+              </div>
+            </div>
+            <button
+              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              onClick={showAllWorkspaces}
+              type="button"
+            >
+              Back to all workspaces
+            </button>
+          </div>
+        </div>
+
+        <article className="space-y-6 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-headline text-2xl font-bold text-on-surface">
+                  {workspace.name}
+                </h2>
+                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                  {summary.flowLabel}
+                </span>
+              </div>
+              <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
+                {workspace.description || "No description provided."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
+                onClick={() => triggerRun(workspace.id, "sync")}
+                type="button"
+              >
+                Run Now
+              </button>
+              <button
+                className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                onClick={() => triggerRun(workspace.id, "queued")}
+                type="button"
+              >
+                Queue Run
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-4">
+            {[
+              ["Sources", summary.sourcesLabel],
+              ["Modules", summary.modulesLabel],
+              ["Profile", summary.profileLabel],
+              ["Prompt Family", summary.promptFamily],
+            ].map(([label, value]) => (
+              <div className="rounded-lg border border-outline-variant/10 bg-surface p-4" key={label}>
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+                  {label}
+                </div>
+                <div className="mt-1 text-sm font-medium text-on-surface">{value}</div>
+              </div>
+            ))}
+          </div>
+
+          {workspaceHasConnector(workspace, "curated_job_urls") ? (
+            <div className="space-y-3 rounded-xl border border-outline-variant/10 bg-surface p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-on-surface">Quick Paste Job URLs</h3>
+                <p className="mt-1 text-xs leading-6 text-on-surface-variant">
+                  Paste one URL per line and run this workspace without editing any local files.
+                </p>
+              </div>
+              <textarea
+                className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm text-on-surface"
+                onChange={(event) =>
+                  setQuickManualUrls((current) => ({
+                    ...current,
+                    [workspace.id]: event.target.value,
+                  }))
+                }
+                placeholder="https://company.example/jobs/123"
+                value={quickManualValue(workspace)}
+              />
+              <div className="flex flex-wrap gap-3">
+                <button
+                  className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!pastedUrlCount}
+                  onClick={() =>
+                    triggerRun(workspace.id, "sync", {
+                      manual_urls_inline: parseLineList(quickManualValue(workspace)),
+                    })
+                  }
+                  type="button"
+                >
+                  Run Pasted URLs
+                </button>
+                <button
+                  className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!pastedUrlCount}
+                  onClick={() =>
+                    triggerRun(workspace.id, "queued", {
+                      manual_urls_inline: parseLineList(quickManualValue(workspace)),
+                    })
+                  }
+                  type="button"
+                >
+                  Queue Pasted URLs
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {renderActionFeedback(workspace)}
+
+          {settingEntries.length ? (
+            <details className="rounded-xl border border-outline-variant/10 bg-surface p-4">
+              <summary className="cursor-pointer text-sm font-semibold text-on-surface">
+                Saved configuration
+              </summary>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {settingEntries.map((entry) => (
+                  <div
+                    className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-3"
+                    key={`${workspace.id}-${entry.key}`}
+                  >
+                    <div className="text-[11px] uppercase tracking-wider text-on-surface-variant">
+                      {entry.label}
+                      {entry.internal ? " | Internal" : ""}
+                    </div>
+                    <div className="mt-1 whitespace-pre-wrap text-sm text-on-surface">
+                      {entry.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : null}
+
+          <div className="flex flex-wrap gap-3 border-t border-outline-variant/10 pt-5">
+            <button
+              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              onClick={() => openEditor(workspace)}
+              type="button"
+            >
+              Edit Workspace
+            </button>
+            <Link
+              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              to={`/runs?workspace_id=${workspace.id}`}
+            >
+              View Runs
+            </Link>
+            <button
+              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-error-container hover:text-on-error-container disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={builderState.deleting === workspace.id}
+              onClick={() => deleteWorkspace(workspace.id)}
+              type="button"
+            >
+              {builderState.deleting === workspace.id ? "Deleting..." : "Delete Workspace"}
+            </button>
+          </div>
+        </article>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
       <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -785,7 +1108,7 @@ export default function WorkspacesPage() {
             Workspaces
           </h1>
           <p className="text-sm text-on-surface-variant">
-            Build each job-seeker workspace from scratch, inspect all saved settings, edit them later, and run directly from the app.
+            Browse workspaces as simple rows. Open one workspace to review its settings, edit it, or run it without other workspaces getting in the way.
           </p>
           <p className="text-xs uppercase tracking-wider text-on-surface-variant/80">
             Run Now executes inside the app. Queue Run only waits for a worker.
@@ -1116,13 +1439,13 @@ export default function WorkspacesPage() {
         </div>
       ) : null}
 
-      <section className="grid gap-6 xl:grid-cols-2">
+      <section className="space-y-4">
         {loading ? (
-          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-on-surface-variant shadow-soft xl:col-span-2">
+          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-on-surface-variant shadow-soft">
             Loading workspaces...
           </div>
         ) : error ? (
-          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft xl:col-span-2">
+          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
             <p className="text-error">{error}</p>
             <button
               className="mt-4 rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
@@ -1132,177 +1455,28 @@ export default function WorkspacesPage() {
               Retry
             </button>
           </div>
+        ) : focusedWorkspace ? (
+          renderFocusedWorkspace(focusedWorkspace)
+        ) : focusedWorkspaceId ? (
+          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+            <h2 className="font-headline text-xl font-bold text-on-surface">
+              Workspace not found
+            </h2>
+            <p className="mt-2 text-sm text-on-surface-variant">
+              The selected workspace is no longer available. Return to the workspace list.
+            </p>
+            <button
+              className="mt-4 rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              onClick={showAllWorkspaces}
+              type="button"
+            >
+              Back to all workspaces
+            </button>
+          </div>
         ) : workspaces.length ? (
-          workspaces.map((workspace) => {
-            const moduleLabels = (workspace.metadata?.modules || [])
-              .map((moduleId) => labelize(moduleId))
-              .join(", ");
-            const sourceLabels = (workspace.sources || [])
-              .map((source) => labelize(source.connector_id))
-              .join(", ");
-            const settingEntries = workspaceSettingEntries(workspace, builderCatalog);
-
-            return (
-              <article
-                key={workspace.id}
-                className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="font-headline text-xl font-bold text-on-surface">{workspace.name}</h2>
-                    <p className="mt-1 text-xs uppercase tracking-wider text-primary">
-                      {labelize(workspaceAutomationFlow(workspace))}
-                    </p>
-                  </div>
-                </div>
-
-                <p className="mt-4 text-sm leading-7 text-on-surface-variant">
-                  {workspace.description || "No description provided."}
-                </p>
-
-                <div className="mt-5 space-y-3 text-sm text-on-surface-variant">
-                  <div>
-                    <span className="font-semibold text-on-surface">Sources:</span>{" "}
-                    {sourceLabels || "N/A"}
-                  </div>
-                  <div>
-                    <span className="font-semibold text-on-surface">Modules:</span>{" "}
-                    {moduleLabels || "N/A"}
-                  </div>
-                  <div>
-                    <span className="font-semibold text-on-surface">Profile:</span>{" "}
-                    {workspace.profiles?.[0]?.label || "N/A"}
-                  </div>
-                  <div>
-                    <span className="font-semibold text-on-surface">Prompt Family:</span>{" "}
-                    {workspace.prompt_sets?.[0]?.family || "N/A"}
-                  </div>
-                </div>
-
-                {settingEntries.length ? (
-                  <div className="mt-5 space-y-3">
-                    <h3 className="text-sm font-semibold text-on-surface">Saved Configuration</h3>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {settingEntries.map((entry) => (
-                        <div
-                          className="rounded-lg border border-outline-variant/10 bg-surface p-3"
-                          key={`${workspace.id}-${entry.key}`}
-                        >
-                          <div className="text-[11px] uppercase tracking-wider text-on-surface-variant">
-                            {entry.label}
-                            {entry.internal ? " | Internal" : ""}
-                          </div>
-                          <div className="mt-1 whitespace-pre-wrap text-sm text-on-surface">{entry.value}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {workspaceHasConnector(workspace, "curated_job_urls") ? (
-                  <div className="mt-5 space-y-3 rounded-xl border border-outline-variant/10 bg-surface p-4">
-                    <div>
-                      <h3 className="text-sm font-semibold text-on-surface">Quick Paste Job URLs</h3>
-                      <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                        Paste one URL per line and run this workspace without editing any local files.
-                      </p>
-                    </div>
-                    <textarea
-                      className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm text-on-surface"
-                      onChange={(event) =>
-                        setQuickManualUrls((current) => ({
-                          ...current,
-                          [workspace.id]: event.target.value,
-                        }))
-                      }
-                      placeholder="https://company.example/jobs/123"
-                      value={quickManualValue(workspace)}
-                    />
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={!parseLineList(quickManualValue(workspace)).length}
-                        onClick={() =>
-                          triggerRun(workspace.id, "sync", {
-                            manual_urls_inline: parseLineList(quickManualValue(workspace)),
-                          })
-                        }
-                        type="button"
-                      >
-                        Run Pasted URLs
-                      </button>
-                      <button
-                        className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={!parseLineList(quickManualValue(workspace)).length}
-                        onClick={() =>
-                          triggerRun(workspace.id, "queued", {
-                            manual_urls_inline: parseLineList(quickManualValue(workspace)),
-                          })
-                        }
-                        type="button"
-                      >
-                        Queue Pasted URLs
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                {actionState.workspaceId === workspace.id &&
-                (actionState.message || actionState.error) ? (
-                  <div
-                    className={[
-                      "mt-4 rounded-lg px-4 py-3 text-sm",
-                      actionState.error
-                        ? "bg-error-container text-on-error-container"
-                        : "bg-surface-container-low text-on-surface",
-                    ].join(" ")}
-                  >
-                    {actionState.error || actionState.message}
-                  </div>
-                ) : null}
-
-                <div className="mt-6 flex flex-wrap gap-3">
-                  <button
-                    className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
-                    onClick={() => triggerRun(workspace.id, "sync")}
-                    type="button"
-                  >
-                    Run Now
-                  </button>
-                  <button
-                    className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                    onClick={() => triggerRun(workspace.id, "queued")}
-                    type="button"
-                  >
-                    Queue Run
-                  </button>
-                  <button
-                    className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                    onClick={() => openEditor(workspace)}
-                    type="button"
-                  >
-                    Edit Workspace
-                  </button>
-                  <Link
-                    className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                    to={`/runs?workspace_id=${workspace.id}`}
-                  >
-                    View Runs
-                  </Link>
-                  <button
-                    className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-error-container hover:text-on-error-container disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={builderState.deleting === workspace.id}
-                    onClick={() => deleteWorkspace(workspace.id)}
-                    type="button"
-                  >
-                    {builderState.deleting === workspace.id ? "Deleting..." : "Delete"}
-                  </button>
-                </div>
-              </article>
-            );
-          })
+          renderWorkspaceRows()
         ) : (
-          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft xl:col-span-2">
+          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
             <h2 className="font-headline text-xl font-bold text-on-surface">No workspaces yet</h2>
             <p className="mt-2 max-w-2xl text-sm leading-7 text-on-surface-variant">
               Start by creating a workspace from scratch. You choose the job sources, the screening and generation modules, and the search settings that define that job-seeker workflow.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -42,6 +43,12 @@ IGNORED_LINK_HINTS = (
     "/login",
     "/signin",
     "/sign-in",
+)
+
+DISCOVERED_COMPANY_SITE_FILES = (
+    Path("user_config") / "discovered_regular_company_career_sites.txt",
+    Path("user_config") / "discovered_phd_university_career_sites.txt",
+    Path("user_config") / "discovered_company_career_sites.txt",
 )
 
 
@@ -94,8 +101,24 @@ def parse_company_site_entries(raw_value: Any) -> list[dict[str, str]]:
         company_name = ""
         url = ""
         if isinstance(entry, dict):
-            company_name = compact_whitespace(str(entry.get("company_name") or entry.get("company") or ""))
-            url = compact_whitespace(str(entry.get("url") or entry.get("career_site_url") or ""))
+            company_name = compact_whitespace(
+                str(
+                    entry.get("company_name")
+                    or entry.get("company")
+                    or entry.get("name")
+                    or entry.get("Company name")
+                    or ""
+                )
+            )
+            url = compact_whitespace(
+                str(
+                    entry.get("url")
+                    or entry.get("career_site_url")
+                    or entry.get("primary_career_url")
+                    or entry.get("career_url")
+                    or ""
+                )
+            )
         else:
             text = compact_whitespace(str(entry))
             if not text:
@@ -123,6 +146,26 @@ def parse_company_site_entries(raw_value: Any) -> list[dict[str, str]]:
             }
         )
     return parsed_entries
+
+
+def load_discovered_company_site_entries(paths: Any = None) -> list[dict[str, str]]:
+    source_paths = paths or DISCOVERED_COMPANY_SITE_FILES
+    entries: list[dict[str, str]] = []
+    seen_urls = set()
+
+    for path_value in source_paths:
+        path = Path(path_value)
+        if not path.exists() or not path.is_file():
+            continue
+        parsed_entries = parse_company_site_entries(path.read_text(encoding="utf-8"))
+        for entry in parsed_entries:
+            url = entry.get("url") or ""
+            if not url or url in seen_urls:
+                continue
+            entries.append(entry)
+            seen_urls.add(url)
+
+    return entries
 
 
 def extract_company_job_links_from_html(
@@ -280,6 +323,7 @@ def scrape_company_career_sites(
 
 __all__ = [
     "extract_company_job_links_from_html",
+    "load_discovered_company_site_entries",
     "parse_company_site_entries",
     "scrape_company_career_sites",
 ]

@@ -7,6 +7,7 @@ import DashboardPage from "./pages/DashboardPage";
 import DocumentsPage from "./pages/ArtifactsPage";
 import ReviewQueuePage from "./pages/ReviewQueuePage";
 import ReferralsPage from "./pages/ReferralsPage";
+import LinkedInConnectionsGuidePage from "./pages/LinkedInConnectionsGuidePage";
 import RunDetailPage from "./pages/RunDetailPage";
 import RunsPage from "./pages/RunsPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/artifacts" element={<Navigate replace to="/documents" />} />
           <Route path="/referrals" element={<ReferralsPage />} />
+          <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/admin" element={<AdminPage />} />
         </Routes>

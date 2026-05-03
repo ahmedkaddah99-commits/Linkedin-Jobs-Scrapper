@@ -63,20 +63,30 @@ export async function apiRequest(baseUrl, accessToken, path, options = {}) {
   if (responseType === "blob") {
     if (!response.ok) {
       let message = `${response.status} ${response.statusText}`;
+      let details = null;
+      let code = "";
       try {
         const payload = await response.json();
         message = payload?.error?.message || message;
+        code = payload?.error?.code || "";
+        details = payload?.error?.details || null;
       } catch {
         // ignore blob/json parsing errors on download failures
       }
-      throw new Error(message);
+      const error = new Error(message);
+      error.code = code;
+      error.details = details;
+      throw error;
     }
     return response.blob();
   }
   const text = await response.text();
   const payload = text ? JSON.parse(text) : {};
   if (!response.ok) {
-    throw new Error(payload?.error?.message || `${response.status} ${response.statusText}`);
+    const error = new Error(payload?.error?.message || `${response.status} ${response.statusText}`);
+    error.code = payload?.error?.code || "";
+    error.details = payload?.error?.details || null;
+    throw error;
   }
   return payload;
 }

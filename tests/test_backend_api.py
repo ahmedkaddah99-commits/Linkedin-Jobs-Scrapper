@@ -344,7 +344,24 @@ class BackendApiTests(unittest.TestCase):
         source_status = {item["source_id"]: item["status"] for item in payload["source_results"]}
         self.assertEqual(source_status["linkedin_jobs"], "valid")
         self.assertEqual(source_status["job_board_collection"], "valid")
-        self.assertEqual(source_status["curated_job_urls"], "valid")
+
+    def test_workspace_builder_source_validation_supplies_default_multi_portals(self):
+        status, payload = self._request(
+            "POST",
+            "/workspace-builder/source-validation",
+            {
+                "flow_id": "tailored_documents",
+                "source_ids": ["job_board_collection"],
+                "settings": {
+                    "keywords": ["analyst"],
+                    "country_codes": ["DE"],
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["valid"])
+        self.assertTrue(payload["derived_runtime_defaults"]["portals"])
+        self.assertIn("cities", payload["derived_runtime_defaults"])
 
     def test_settings_payload_includes_document_design_options_and_persists_phase2_preferences(self):
         status, settings_payload = self._request("GET", "/settings")
@@ -423,7 +440,7 @@ class BackendApiTests(unittest.TestCase):
             {
                 "artifact_type": "stage5_docs_dir",
                 "path": str(docs_dir),
-                "metadata": {"status": "ready"},
+                "metadata": {"status": "ready", "ats_score": 92, "ats_attempt_count": 1},
             },
         )
         self.assertEqual(status, 200)
@@ -436,6 +453,18 @@ class BackendApiTests(unittest.TestCase):
             None,
         )
         self.assertIsNotNone(generated_cv)
+        self.assertEqual(generated_cv["job_id"], "api_job_1")
+        self.assertEqual(generated_cv["related_application"]["job_id"], "api_job_1")
+        self.assertEqual(generated_cv["related_application"]["title"], "Engineer")
+        self.assertEqual(generated_cv["status"], "ready")
+        self.assertEqual(generated_cv["display_status"], "ready")
+        application_group = next(
+            (group for group in documents_payload["groups"] if group["group_kind"] == "application"),
+            None,
+        )
+        self.assertIsNotNone(application_group)
+        self.assertEqual(application_group["job_id"], "api_job_1")
+        self.assertGreaterEqual(application_group["count"], 1)
 
         status, uploaded_payload = self._request("GET", "/documents?asset_kind=workspace_cv")
         self.assertEqual(status, 200)
@@ -460,6 +489,86 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(headers.get("Content-Type"), {"application/zip", "application/x-zip-compressed"})
         self.assertTrue(body.startswith(b"PK"))
+
+    def test_ats_gate_blocks_final_cv_export_until_override_after_warning(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        docs_dir = self.temp_dir / "generated_docs" / "2026-04-20" / "blocked_ats_bundle"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "api_job_1_CV.docx").write_bytes(b"blocked-docx-content")
+
+        status, _ = self._request(
+            "PUT",
+            f"/runs/{run_id}/artifacts/api_blocked_docs_dir",
+            {
+                "artifact_type": "stage5_docs_dir",
+                "path": str(docs_dir),
+                "metadata": {
+                    "status": "ready",
+                    "ats_score": 84,
+                    "ats_target_score": 90,
+                    "ats_attempt_count": 3,
+                    "ats_max_attempts": 3,
+                    "missing_requirements": ["SQL", "stakeholder management"],
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+
+        status, documents_payload = self._request("GET", f"/documents?run_id={run_id}")
+        self.assertEqual(status, 200)
+        generated_cv = next(
+            (item for item in documents_payload["documents"] if item["asset_kind"] == "generated_cv"),
+            None,
+        )
+        self.assertIsNotNone(generated_cv)
+        self.assertTrue(generated_cv["final_export_blocked"])
+        self.assertEqual(generated_cv["ats_export_gate"]["best_score"], 84)
+        self.assertEqual(generated_cv["display_status"], "export_blocked")
+        blocked_group = next(
+            (group for group in documents_payload["groups"] if group["group_kind"] == "application"),
+            None,
+        )
+        self.assertIsNotNone(blocked_group)
+        self.assertEqual(blocked_group["status_counts"]["export_blocked"], 1)
+
+        status, blocked_payload = self._request(
+            "POST",
+            "/documents/bulk-export",
+            {
+                "label": "blocked_export",
+                "document_ids": [generated_cv["document_id"]],
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(blocked_payload["error"]["code"], "ats_export_blocked")
+        self.assertEqual(blocked_payload["error"]["details"]["gate"]["best_score"], 84)
+
+        status, headers, body = self._binary_request("GET", generated_cv["download_url"])
+        self.assertEqual(status, 400)
+        self.assertIn(b"ats_export_blocked", body)
+
+        status, bundle_payload = self._request(
+            "POST",
+            "/documents/bulk-export",
+            {
+                "label": "blocked_export",
+                "document_ids": [generated_cv["document_id"]],
+                "export_anyway": True,
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(bundle_payload["document_count"], 1)
+
+        status, headers, body = self._binary_request("GET", f"{generated_cv['download_url']}?export_anyway=true")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"blocked-docx-content")
 
     def test_rejected_jobs_endpoint_and_requeue_flow(self):
         requeue_root = self.temp_dir / "requeue_docs"
@@ -604,6 +713,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertTrue(row["has_referral_contact"])
         self.assertEqual(row["referral_contacts"][0]["contact_id"], contact_id)
+        self.assertEqual(row["referral_contacts"][0]["outreach_status"], "Not contacted")
 
         status, draft_payload = self._request(
             "POST",
@@ -612,6 +722,33 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertIn("Jane Referrer", draft_payload["message"])
+
+        status, outreach_payload = self._request(
+            "POST",
+            "/referrals/outreach-status",
+            {
+                "run_id": run_id,
+                "job_id": "api_job_1",
+                "contact_id": contact_id,
+                "outreach_status": "Contacted",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(outreach_payload["outreach_status"], "Contacted")
+        self.assertEqual(outreach_payload["contact_name"], "Jane Referrer")
+
+        status, review_queue_payload = self._request("GET", "/review-queue")
+        self.assertEqual(status, 200)
+        row = next((item for item in review_queue_payload["items"] if item["job_id"] == "api_job_1"), None)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["referral_contacts"][0]["outreach_status"], "Contacted")
+
+        status, outreach_items_payload = self._request("GET", f"/referrals/outreach-statuses?contact_id={contact_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(outreach_items_payload["items"]), 1)
+        self.assertEqual(outreach_items_payload["items"][0]["job_id"], "api_job_1")
+        self.assertEqual(outreach_items_payload["items"][0]["outreach_status"], "Contacted")
+        self.assertEqual(outreach_items_payload["items"][0]["contact_linkedin_url"], "https://linkedin.com/in/jane-referrer")
 
         status, manager_payload = self._request(
             "POST",
@@ -639,9 +776,9 @@ class BackendApiTests(unittest.TestCase):
             "/referrals/import",
             {
                 "csv_text": (
-                    "First Name,Last Name,URL,Company,Position\n"
-                    "Jane,Referrer,https://linkedin.com/in/jane-referrer,ACME API,Engineering Manager\n"
-                    "Jane,Referrer,https://linkedin.com/in/jane-referrer,Contoso,Director\n"
+                    "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                    "Jane,Referrer,https://linkedin.com/in/jane-referrer,,ACME API,Engineering Manager,01 Jan 2024\n"
+                    "Jane,Referrer,https://linkedin.com/in/jane-referrer,,Contoso,Director,01 Jan 2024\n"
                 ),
                 "source_kind": "linkedin_csv",
             },
@@ -738,7 +875,7 @@ class BackendApiTests(unittest.TestCase):
             {
                 "artifact_type": "stage5_docs_dir",
                 "path": str(docs_dir),
-                "metadata": {"status": "ready"},
+                "metadata": {"status": "ready", "ats_score": 92, "ats_attempt_count": 1},
             },
         )
         self.assertEqual(status, 200)
@@ -836,6 +973,20 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         review_id = review_payload["review_id"]
+        user = self.app.get_user(self.user.user_id)
+        user.metadata = {
+            **dict(user.metadata or {}),
+            "candidate_assets": [
+                {
+                    "asset_id": "asset_cert_api",
+                    "asset_kind": "certification",
+                    "display_name": "Standard certificate",
+                    "download_url": "/documents/assets/asset_cert_api/download",
+                    "path": "user_config/candidate_assets/asset_cert_api.pdf",
+                }
+            ],
+        }
+        self.app.upsert_user(user)
 
         # --- 3. GET /tracker returns the approved job (defaulting tracker_status to 'applied') ---
         status, tracker_payload = self._request("GET", "/tracker")
@@ -846,16 +997,25 @@ class BackendApiTests(unittest.TestCase):
         self.assertIsNotNone(item, "Approved review should appear in tracker")
         self.assertEqual(item["tracker_status"], "applied")
         self.assertFalse(item["email_confirmed"])
+        self.assertIn("excel_baseline_columns", tracker_payload)
+        self.assertIn("applied?", tracker_payload["excel_baseline_columns"])
+        self.assertEqual(item["tracker_table_row"]["Status"], "Applied")
+        self.assertEqual(item["tracker_table_row"]["applied?"], "Applied")
+        self.assertEqual(item["tracker_table_row"]["company"], item["company"])
+        document_labels = [document["label"] for document in item["documents"]]
+        self.assertIn("Standard certificate", document_labels)
+        self.assertTrue(any(document["source_scope"] == "application" for document in item["documents"]))
 
         # --- 4. PUT /tracker/:review_id to update status and email_confirmed ---
         status, update_payload = self._request(
             "PUT",
             f"/tracker/{review_id}",
-            {"tracker_status": "email_confirmed", "email_confirmed": True},
+            {"tracker_status": "email_confirmed", "email_confirmed": True, "notes": "Follow up next week."},
         )
         self.assertEqual(status, 200)
         self.assertEqual(update_payload["tracker_status"], "email_confirmed")
         self.assertTrue(update_payload["email_confirmed"])
+        self.assertEqual(update_payload["notes"], "Follow up next week.")
 
         # --- 5. GET /tracker reflects updated fields ---
         status, tracker_payload2 = self._request("GET", "/tracker")
@@ -864,6 +1024,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertIsNotNone(item2)
         self.assertEqual(item2["tracker_status"], "email_confirmed")
         self.assertTrue(item2["email_confirmed"])
+        self.assertEqual(item2["notes"], "Follow up next week.")
 
         # --- 6. Move to rejected with a note; rejected_at should be auto-set ---
         status, reject_payload = self._request(
@@ -893,8 +1054,9 @@ class BackendApiTests(unittest.TestCase):
             def probe(self):
                 return {"status": "connected", "folder": self.kwargs.get("folder")}
 
-            def fetch_recent_messages(self, *, limit):
+            def fetch_recent_messages(self, *, limit, scan_window="last_1_month"):
                 assert limit == 25
+                assert scan_window == "last_1_month"
                 return [
                     TrackerMailboxMessage(
                         message_id="msg-confirm-1",
@@ -954,6 +1116,8 @@ class BackendApiTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(sync_payload["result"]["summary"]["updated_reviews"], 2)
             self.assertEqual(sync_payload["result"]["summary"]["matched_messages"], 2)
+            self.assertEqual(sync_payload["result"]["summary"]["detections"], 2)
+            self.assertEqual(sync_payload["result"]["detections"][0]["status"]["confidence"], "high")
 
         status, tracker_payload = self._request("GET", "/tracker")
         self.assertEqual(status, 200)
@@ -971,8 +1135,9 @@ class BackendApiTests(unittest.TestCase):
             def __init__(self, *, access_token):
                 self.access_token = access_token
 
-            def fetch_recent_messages(self, *, limit):
+            def fetch_recent_messages(self, *, limit, scan_window="last_1_month"):
                 assert limit == 25
+                assert scan_window == "last_1_month"
                 return (
                     [
                         TrackerMailboxMessage(
@@ -988,6 +1153,13 @@ class BackendApiTests(unittest.TestCase):
                             from_address="recruiting@acmeapi.com",
                             sent_at="2026-04-18T12:00:00+00:00",
                             text="We would like to invite you to interview for the Engineer role at ACME API.",
+                        ),
+                        TrackerMailboxMessage(
+                            message_id="gmail-false-positive-1",
+                            subject="Interview with the Vampire fan club update",
+                            from_address="newsletter@movieclub.example",
+                            sent_at="2026-04-18T13:00:00+00:00",
+                            text="Join our interview series and get a snack-bar offer tonight.",
                         ),
                     ],
                     "history-123",
@@ -1072,7 +1244,226 @@ class BackendApiTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(sync_payload["result"]["summary"]["updated_reviews"], 2)
                 self.assertEqual(sync_payload["result"]["summary"]["matched_messages"], 2)
+                self.assertEqual(sync_payload["result"]["summary"]["detections"], 2)
                 self.assertEqual(sync_payload["integration"]["config"]["history_id"], "history-123")
+
+    def test_tracker_google_email_review_queue_persists_and_supports_dismiss(self):
+        class _FakeGmailMailboxClient:
+            def __init__(self, *, access_token):
+                self.access_token = access_token
+
+            def fetch_recent_messages(self, *, limit, scan_window="last_1_month"):
+                assert limit == 25
+                assert scan_window == "last_1_month"
+                return (
+                    [
+                        TrackerMailboxMessage(
+                            message_id="gmail-review-1",
+                            subject="Interview invitation from ACME API",
+                            from_address="updates@acmeapi.com",
+                            sent_at="2026-04-18T12:00:00+00:00",
+                            text="We would like to speak with you about Engineer at ACME API on Thursday.",
+                        ),
+                    ],
+                    "history-review-123",
+                )
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+        self._request("POST", "/workers/process-next", {})
+
+        status, review_payload = self._request(
+            "POST",
+            f"/runs/{run_id}/reviews",
+            {"job_id": "api_job_1", "decision": "approved", "status": "approved", "reviewer": "tester"},
+        )
+        self.assertEqual(status, 201)
+        review_id = review_payload["review_id"]
+        email_address = f"candidate+{review_id}@gmail.com"
+
+        with patch.dict(
+            os.environ,
+            {
+                "TRACKER_GOOGLE_OAUTH_CLIENT_ID": "client-id",
+                "TRACKER_GOOGLE_OAUTH_CLIENT_SECRET": "client-secret",
+            },
+            clear=False,
+        ):
+            with patch("backend.api.server.build_google_tracker_authorization_url", return_value="https://accounts.google.test/auth"), patch(
+                "backend.api.server.exchange_google_tracker_oauth_code",
+                return_value={
+                    "access_token": "google-access-token",
+                    "refresh_token": "google-refresh-token",
+                    "expires_in": 3600,
+                },
+            ), patch(
+                "backend.api.server.fetch_google_tracker_profile",
+                return_value={"emailAddress": email_address},
+            ), patch(
+                "backend.api.server.refresh_google_tracker_access_token",
+                return_value={"access_token": "refreshed-google-token", "expires_in": 3600},
+            ), patch(
+                "backend.capabilities.tracker.email_integration.GmailMailboxClient",
+                _FakeGmailMailboxClient,
+            ):
+                self._request(
+                    "POST",
+                    "/tracker/email-integration/google/start",
+                    {"max_messages": 25, "folder": "INBOX"},
+                )
+
+                stored_config = self.app.get_user(self.user.user_id).metadata["tracker_email_integration"]
+                oauth_state = stored_config["oauth_state"]
+                callback_path = (
+                    f"/tracker/email-integration/google/callback?state={self.user.user_id}:{oauth_state}&code=test-code"
+                )
+                status, _, _ = self._binary_request("GET", callback_path, authenticated=False)
+                self.assertEqual(status, 200)
+
+                status, sync_payload = self._request("POST", "/tracker/email-integration/sync", {})
+                self.assertEqual(status, 200)
+                self.assertEqual(sync_payload["result"]["summary"]["updated_reviews"], 0)
+                self.assertEqual(sync_payload["result"]["summary"]["detections"], 1)
+                self.assertEqual(sync_payload["integration"]["config"]["pending_detection_count"], 1)
+                detection = sync_payload["integration"]["config"]["pending_detections"][0]
+                self.assertEqual(detection["status"]["approval_state"], "pending_review")
+                self.assertEqual(detection["detected_application"]["company"], "ACME API")
+                self.assertEqual(detection["detected_application"]["title"], "Engineer")
+
+                status, tracker_payload = self._request("GET", "/tracker")
+                self.assertEqual(status, 200)
+                tracker_item = next((item for item in tracker_payload["items"] if item["review_id"] == review_id), None)
+                self.assertIsNotNone(tracker_item)
+                self.assertEqual(tracker_item["tracker_status"], "applied")
+
+                status, integration_payload = self._request("GET", "/tracker/email-integration")
+                self.assertEqual(status, 200)
+                self.assertEqual(integration_payload["config"]["pending_detection_count"], 1)
+
+                status, dismiss_payload = self._request(
+                    "POST",
+                    "/tracker/email-integration/detections/dismiss",
+                    {"detection": detection},
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(len(dismiss_payload["dismissed"]), 1)
+                self.assertEqual(dismiss_payload["dismissed"][0]["status"]["approval_state"], "dismissed")
+                self.assertEqual(dismiss_payload["integration"]["config"]["pending_detection_count"], 0)
+
+                status, integration_payload = self._request("GET", "/tracker/email-integration")
+                self.assertEqual(status, 200)
+                self.assertEqual(integration_payload["config"]["pending_detection_count"], 0)
+
+    def test_ats_export_gate_evaluate_endpoint_blocks_then_allows_export_anyway(self):
+        status, blocked_payload = self._request(
+            "POST",
+            "/ats/export-gate/evaluate",
+            {
+                "target_score": 90,
+                "best_score": 84,
+                "attempt_count": 3,
+                "max_attempts": 3,
+                "missing_requirements": ["SQL"],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(blocked_payload["gate_state"], "blocked")
+        self.assertFalse(blocked_payload["can_export_final"])
+        self.assertTrue(blocked_payload["export_anyway_allowed"])
+        self.assertIn("Best score reached: 84%", blocked_payload["last_warning"])
+
+        status, export_payload = self._request(
+            "POST",
+            "/ats/export-gate/evaluate",
+            {
+                "target_score": 90,
+                "best_score": 84,
+                "attempt_count": 3,
+                "max_attempts": 3,
+                "export_anyway": True,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(export_payload["gate_state"], "exported_anyway")
+        self.assertTrue(export_payload["can_export_final"])
+
+    def test_ats_export_gate_evaluate_endpoint_blocks_when_score_stalls_before_max_attempts(self):
+        status, stalled_payload = self._request(
+            "POST",
+            "/ats/export-gate/evaluate",
+            {
+                "target_score": 90,
+                "best_score": 84,
+                "attempt_count": 2,
+                "max_attempts": 3,
+                "missing_requirements": ["SQL"],
+                "metadata": {"stop_reason": "score_stalled"},
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(stalled_payload["gate_state"], "blocked")
+        self.assertFalse(stalled_payload["can_export_final"])
+        self.assertTrue(stalled_payload["export_anyway_allowed"])
+        self.assertIn("Best score reached: 84%", stalled_payload["last_warning"])
+
+    def test_gmail_detection_approval_imports_external_application(self):
+        status, approve_payload = self._request(
+            "POST",
+            "/tracker/email-integration/detections/approve",
+            {
+                "detection": {
+                    "detection_id": "gmail::external-1",
+                    "scan_window": "last_1_month",
+                    "source_email": {
+                        "message_id": "external-1",
+                        "subject": "Thank you for applying to Example GmbH",
+                        "from_address": "jobs@example.com",
+                        "sent_at": "2026-04-18T09:00:00+00:00",
+                    },
+                    "detected_application": {
+                        "company": "Example GmbH",
+                        "title": "Data Analyst",
+                        "application_date": "2026-04-18T09:00:00+00:00",
+                        "source_url": "https://jobs.example.com/data-analyst",
+                    },
+                    "status": {
+                        "suggested_application_status": "Applied",
+                        "confidence": "medium",
+                        "approval_state": "pending_review",
+                        "evidence": ["application wording"],
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(approve_payload["approved"]), 1)
+        imported = approve_payload["approved"][0]
+        self.assertTrue(imported["application_id"].startswith("external_"))
+        self.assertEqual(imported["application_status"], "Applied")
+
+        status, tracker_payload = self._request("GET", "/tracker")
+        self.assertEqual(status, 200)
+        external = next(
+            (item for item in tracker_payload["items"] if item.get("application_id") == imported["application_id"]),
+            None,
+        )
+        self.assertIsNotNone(external)
+        self.assertTrue(external["external_application"])
+        self.assertEqual(external["company"], "Example GmbH")
+
+        status, updated_payload = self._request(
+            "PUT",
+            f"/tracker/{imported['application_id']}",
+            {"application_status": "Interviewing"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated_payload["application_status"], "Interviewing")
 
 
 if __name__ == "__main__":

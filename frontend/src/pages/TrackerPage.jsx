@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
+import { useSession } from "../context/SessionContext";
 import { useTracker } from "../hooks/useTracker";
 
 const COLUMNS = [
+  {
+    key: "not_applied",
+    label: "Not Applied",
+    icon: "radio_button_unchecked",
+    accent: "text-on-surface-variant",
+    badge: "bg-surface-container text-on-surface-variant",
+    border: "border-outline-variant/30",
+    glow: "shadow-black/0",
+  },
   {
     key: "applied",
     label: "Applied",
@@ -12,17 +22,8 @@ const COLUMNS = [
     glow: "shadow-primary/10",
   },
   {
-    key: "email_confirmed",
-    label: "Email Confirmed",
-    icon: "mark_email_read",
-    accent: "text-teal-500",
-    badge: "bg-teal-500/10 text-teal-500",
-    border: "border-teal-500/30",
-    glow: "shadow-teal-500/10",
-  },
-  {
     key: "interview_invited",
-    label: "Interview Invited",
+    label: "Interviewing",
     icon: "calendar_month",
     accent: "text-amber-500",
     badge: "bg-amber-500/10 text-amber-500",
@@ -38,6 +39,33 @@ const COLUMNS = [
     border: "border-error/30",
     glow: "shadow-error/10",
   },
+  {
+    key: "offer",
+    label: "Offer",
+    icon: "workspace_premium",
+    accent: "text-green-500",
+    badge: "bg-green-500/10 text-green-500",
+    border: "border-green-500/30",
+    glow: "shadow-green-500/10",
+  },
+  {
+    key: "withdrawn",
+    label: "Withdrawn",
+    icon: "remove_circle",
+    accent: "text-on-surface-variant",
+    badge: "bg-surface-container text-on-surface-variant",
+    border: "border-outline-variant/30",
+    glow: "shadow-black/0",
+  },
+  {
+    key: "unknown",
+    label: "Unknown",
+    icon: "help",
+    accent: "text-on-surface-variant",
+    badge: "bg-surface-container text-on-surface-variant",
+    border: "border-outline-variant/30",
+    glow: "shadow-black/0",
+  },
 ];
 
 function formatDate(iso) {
@@ -51,6 +79,32 @@ function formatDate(iso) {
   } catch {
     return iso.slice(0, 10);
   }
+}
+
+function formatDateTime(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function triggerDownload(blob, fileName) {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName || "document";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(objectUrl);
 }
 
 function StatusDropdown({ current, onSelect, disabled }) {
@@ -108,7 +162,8 @@ function TrackerCard({ item, onUpdate, updating }) {
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState(item.rejection_note || "");
   const isBusy = updating === item.review_id;
-  const isRejected = item.tracker_status === "rejected";
+  const currentStatus = item.tracker_status === "email_confirmed" ? "applied" : item.tracker_status || "unknown";
+  const isRejected = currentStatus === "rejected";
 
   async function handleStatusChange(newStatus) {
     await onUpdate(item.review_id, { tracker_status: newStatus });
@@ -124,7 +179,7 @@ function TrackerCard({ item, onUpdate, updating }) {
     setNoteOpen(false);
   }
 
-  const col = COLUMNS.find((c) => c.key === item.tracker_status) || COLUMNS[0];
+  const col = COLUMNS.find((c) => c.key === currentStatus) || COLUMNS[COLUMNS.length - 1];
 
   return (
     <div
@@ -154,7 +209,7 @@ function TrackerCard({ item, onUpdate, updating }) {
           </div>
         </div>
         <StatusDropdown
-          current={item.tracker_status || "applied"}
+          current={currentStatus}
           disabled={isBusy}
           onSelect={handleStatusChange}
         />
@@ -264,6 +319,254 @@ function TrackerCard({ item, onUpdate, updating }) {
   );
 }
 
+function statusKeyFromItem(item) {
+  const trackerStatus = item.tracker_status === "email_confirmed" ? "applied" : item.tracker_status;
+  return COLUMNS.some((column) => column.key === trackerStatus) ? trackerStatus : "unknown";
+}
+
+function TrackerLink({ href, children }) {
+  if (!href) {
+    return <span className="text-on-surface-variant/60">Not set</span>;
+  }
+  return (
+    <a
+      className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20"
+      href={href}
+      rel="noreferrer"
+      target="_blank"
+    >
+      {children}
+      <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+    </a>
+  );
+}
+
+function TrackerNotesCell({ item, onUpdate, updating }) {
+  const [note, setNote] = useState(item.notes || "");
+  const [editing, setEditing] = useState(false);
+  const isDirty = note !== (item.notes || "");
+  const isBusy = updating === item.review_id;
+
+  useEffect(() => {
+    setNote(item.notes || "");
+  }, [item.notes]);
+
+  async function saveNote() {
+    if (!isDirty) return;
+    await onUpdate(item.review_id, { notes: note });
+    setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <div className="min-w-44 max-w-64">
+        <p className="line-clamp-2 text-xs leading-5 text-on-surface-variant">
+          {item.notes || "No notes yet."}
+        </p>
+        <button
+          className="mt-2 rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/10"
+          disabled={isBusy}
+          onClick={() => setEditing(true)}
+          type="button"
+        >
+          {item.notes ? "Edit note" : "Add note"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-w-56 space-y-2">
+      <textarea
+        className="min-h-20 w-full rounded-xl border border-outline-variant/20 bg-surface px-3 py-2 text-xs text-on-surface"
+        disabled={isBusy}
+        onChange={(event) => setNote(event.target.value)}
+        placeholder="Add notes"
+        value={note}
+      />
+      <div className="flex flex-wrap gap-2">
+        <button
+          className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!isDirty || isBusy}
+          onClick={saveNote}
+          type="button"
+        >
+          {isBusy ? "Saving..." : "Save"}
+        </button>
+        <button
+          className="rounded-full bg-surface-container-low px-3 py-1.5 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container"
+          onClick={() => {
+            setNote(item.notes || "");
+            setEditing(false);
+          }}
+          type="button"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TrackerDocumentsCell({ documents, request }) {
+  const [busyId, setBusyId] = useState("");
+  const [error, setError] = useState("");
+  const visibleDocuments = Array.isArray(documents) ? documents : [];
+
+  async function downloadDocument(document) {
+    const downloadUrl = String(document.download_url || "").trim();
+    if (!downloadUrl) return;
+    setBusyId(document.document_id || document.label || downloadUrl);
+    setError("");
+    try {
+      const blob = await request(downloadUrl, { responseType: "blob" });
+      triggerDownload(blob, document.label || document.document_type || "document");
+    } catch (downloadError) {
+      setError(downloadError.message || "Unable to download document.");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  if (!visibleDocuments.length) {
+    return (
+      <div className="min-w-44">
+        <span className="text-xs text-on-surface-variant/60">No linked documents</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-w-48 max-w-64 space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {visibleDocuments.slice(0, 4).map((document) => {
+          const key = document.document_id || document.download_url || document.path || document.label;
+          const canDownload = Boolean(document.download_url);
+          return (
+            <button
+              className={[
+                "inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
+                canDownload
+                  ? "bg-primary/10 text-primary hover:bg-primary/20"
+                  : "bg-surface-container-low text-on-surface-variant",
+              ].join(" ")}
+              disabled={!canDownload || busyId === key}
+              key={key}
+              onClick={() => downloadDocument(document)}
+              title={document.label || document.document_type || "Document"}
+              type="button"
+            >
+              <span className="material-symbols-outlined text-[13px]">
+                {document.source_scope === "standard" ? "verified" : "description"}
+              </span>
+              <span className="truncate">{document.label || document.document_type || "Document"}</span>
+            </button>
+          );
+        })}
+        {visibleDocuments.length > 4 ? (
+          <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-semibold text-on-surface-variant">
+            +{visibleDocuments.length - 4} more
+          </span>
+        ) : null}
+      </div>
+      {error ? <div className="text-xs text-error">{error}</div> : null}
+    </div>
+  );
+}
+
+function TrackerTable({ items, onUpdate, updating, request }) {
+  if (!items.length) {
+    return (
+      <div className="rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-8 text-center">
+        <span className="material-symbols-outlined text-3xl text-on-surface-variant">table</span>
+        <p className="mt-3 text-sm font-semibold text-on-surface">No tracker rows yet.</p>
+        <p className="mt-1 text-xs text-on-surface-variant">
+          Approved jobs and imported Gmail applications will appear here.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-outline-variant/20 bg-surface-container-lowest shadow-sm">
+      <div className="border-b border-outline-variant/10 bg-surface-container-low px-5 py-4">
+        <h2 className="text-lg font-bold text-on-surface">Tracker table</h2>
+        <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+          This follows the old Excel tracker shape, but uses clear app fields like Status instead of the old applied? wording.
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-[1180px] w-full table-fixed border-collapse text-left text-sm">
+          <thead className="bg-surface-container-low text-[11px] uppercase tracking-[0.14em] text-on-surface-variant">
+            <tr>
+              <th className="w-36 px-4 py-3">Status</th>
+              <th className="w-48 px-4 py-3">Company</th>
+              <th className="w-64 px-4 py-3">Role</th>
+              <th className="w-44 px-4 py-3">Location</th>
+              <th className="w-36 px-4 py-3">Applied</th>
+              <th className="w-40 px-4 py-3">Links</th>
+              <th className="w-28 px-4 py-3">Priority</th>
+              <th className="w-28 px-4 py-3">Applicants</th>
+              <th className="w-64 px-4 py-3">Documents</th>
+              <th className="w-64 px-4 py-3">Notes</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-outline-variant/10">
+            {items.map((item) => {
+              const row = item.tracker_table_row || {};
+              return (
+                <tr className="align-top transition-colors hover:bg-surface-container-low/70" key={item.review_id}>
+                  <td className="px-4 py-4">
+                    <StatusDropdown
+                      current={statusKeyFromItem(item)}
+                      disabled={updating === item.review_id}
+                      onSelect={(nextStatus) => onUpdate(item.review_id, { tracker_status: nextStatus })}
+                    />
+                  </td>
+                  <td className="max-w-56 px-4 py-4">
+                    <div className="font-semibold text-on-surface">{item.company || row.company || "Unknown company"}</div>
+                    <div className="mt-1 text-xs text-on-surface-variant">{item.workspace_name || "Tracker"}</div>
+                  </td>
+                  <td className="max-w-72 px-4 py-4">
+                    <div className="font-medium text-on-surface">{item.title || row.title || "Untitled role"}</div>
+                    {row.keyword ? (
+                      <div className="mt-1 text-xs text-on-surface-variant">Keyword: {row.keyword}</div>
+                    ) : null}
+                  </td>
+                  <td className="max-w-52 px-4 py-4 text-on-surface-variant">
+                    {item.location || row.location_raw || "Not set"}
+                  </td>
+                  <td className="px-4 py-4 text-on-surface-variant">
+                    {formatDate(item.application_date || row.application_date || item.run_finished_at) || "Not set"}
+                  </td>
+                  <td className="px-4 py-4">
+                    <div className="flex min-w-40 flex-col gap-2">
+                      <TrackerLink href={item.apply_link || row.apply_link}>Apply</TrackerLink>
+                      <TrackerLink href={item.linkedin_link || row.linkedin_link}>LinkedIn</TrackerLink>
+                    </div>
+                  </td>
+                  <td className="px-4 py-4 text-on-surface-variant">
+                    {item.priority_rank || row.priority_rank || row.priority_tier || "Not set"}
+                  </td>
+                  <td className="px-4 py-4 text-on-surface-variant">
+                    {item.applicant_count || row.applicant_count || "Not set"}
+                  </td>
+                  <td className="px-4 py-4 text-on-surface-variant">
+                    <TrackerDocumentsCell documents={item.documents} request={request} />
+                  </td>
+                  <td className="px-4 py-4">
+                    <TrackerNotesCell item={item} onUpdate={onUpdate} updating={updating} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function KanbanColumn({ colDef, cards, onUpdate, updating }) {
   return (
     <div className="flex min-w-[280px] flex-1 flex-col">
@@ -325,6 +628,7 @@ function buildEmailFormState(integration) {
   return {
     folder: config.folder || "INBOX",
     max_messages: String(config.max_messages || 40),
+    scan_window: config.scan_window || "last_1_month",
   };
 }
 
@@ -335,6 +639,8 @@ function EmailIntegrationPanel({
   onRefreshIntegration,
   onSaveSettings,
   onSync,
+  onApproveDetections,
+  onDismissDetections,
   onDelete,
   lastSyncResult,
 }) {
@@ -347,6 +653,9 @@ function EmailIntegrationPanel({
   }, [integration]);
 
   const syncSummary = lastSyncResult?.summary || config.last_sync_summary || null;
+  const reviewDetections = config.pending_detections || [];
+  const pendingDetectionCount = Number(config.pending_detection_count || reviewDetections.length || 0);
+  const detectionActionBusy = busy === "approve-detections" || busy === "dismiss-detections";
 
   function updateField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -361,6 +670,7 @@ function EmailIntegrationPanel({
         auth_strategy: "google_oauth",
         folder: form.folder,
         max_messages: Number(form.max_messages || 40),
+        scan_window: form.scan_window,
       });
       setFeedback({ message: "Sync settings updated.", error: "" });
     } catch (saveError) {
@@ -374,6 +684,7 @@ function EmailIntegrationPanel({
       const startPayload = await onStartGoogle({
         folder: form.folder,
         max_messages: Number(form.max_messages || 40),
+        scan_window: form.scan_window,
       });
       const authorizationUrl = startPayload?.authorization_url || "";
       if (!authorizationUrl) {
@@ -431,7 +742,10 @@ function EmailIntegrationPanel({
   async function handleSync() {
     setFeedback({ message: "", error: "" });
     try {
-      const result = await onSync();
+      const result = await onSync({
+        max_messages: Number(form.max_messages || 40),
+        scan_window: form.scan_window,
+      });
       const summary = result?.result?.summary || {};
       setFeedback({
         message: `Sync complete. ${summary.updated_reviews || 0} tracker card${summary.updated_reviews === 1 ? "" : "s"} updated.`,
@@ -446,10 +760,30 @@ function EmailIntegrationPanel({
     setFeedback({ message: "", error: "" });
     try {
       await onDelete();
-      setForm(buildEmailFormState({ providers }));
+      setForm(buildEmailFormState({}));
       setFeedback({ message: "Inbox connection removed.", error: "" });
     } catch (deleteError) {
       setFeedback({ message: "", error: deleteError.message || "Unable to disconnect inbox." });
+    }
+  }
+
+  async function approveDetection(detection) {
+    setFeedback({ message: "", error: "" });
+    try {
+      await onApproveDetections([detection]);
+      setFeedback({ message: "Gmail detection imported into the tracker.", error: "" });
+    } catch (approveError) {
+      setFeedback({ message: "", error: approveError.message || "Unable to approve this detection." });
+    }
+  }
+
+  async function dismissDetection(detection) {
+    setFeedback({ message: "", error: "" });
+    try {
+      await onDismissDetections([detection]);
+      setFeedback({ message: "Detection dismissed and removed from review.", error: "" });
+    } catch (dismissError) {
+      setFeedback({ message: "", error: dismissError.message || "Unable to dismiss this detection." });
     }
   }
 
@@ -541,6 +875,24 @@ function EmailIntegrationPanel({
           />
         </label>
 
+        <label className="block lg:col-span-2">
+          <span className="mb-2 block text-sm font-semibold text-on-surface">Read emails from</span>
+          <select
+            className="w-full rounded-xl border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+            onChange={(event) => updateField("scan_window", event.target.value)}
+            value={form.scan_window}
+          >
+            <option value="now">Now onward</option>
+            <option value="last_1_month">Last 1 month</option>
+            <option value="last_2_months">Last 2 months</option>
+            <option value="last_3_months">Last 3 months</option>
+          </select>
+          <span className="mt-2 block text-xs leading-6 text-on-surface-variant">
+            Runr only looks for likely application-status emails such as confirmations,
+            interviews, rejections, and offers.
+          </span>
+        </label>
+
         <div className="lg:col-span-2">
           {feedback.error ? (
             <div className="rounded-2xl border border-error/20 bg-error/5 px-4 py-3 text-sm text-error">
@@ -589,12 +941,13 @@ function EmailIntegrationPanel({
       </form>
 
       {syncSummary ? (
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           {[
             { label: "Checked", value: syncSummary.checked_messages || 0 },
             { label: "Processed", value: syncSummary.processed_messages || 0 },
             { label: "Updated", value: syncSummary.updated_reviews || 0 },
             { label: "Unmatched", value: syncSummary.unmatched_messages || 0 },
+            { label: "Needs review", value: pendingDetectionCount },
           ].map((item) => (
             <div
               className="rounded-2xl border border-outline-variant/20 bg-surface-container p-4"
@@ -611,7 +964,10 @@ function EmailIntegrationPanel({
 
       {lastSyncResult?.matched_updates?.length ? (
         <div className="mt-6 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
-          <h3 className="text-sm font-semibold text-on-surface">Latest Matches</h3>
+          <h3 className="text-sm font-semibold text-on-surface">Automatic Tracker Updates</h3>
+          <p className="mt-1 text-xs leading-6 text-on-surface-variant">
+            High-confidence Gmail matches update the tracker immediately when the sender and message content look job-related.
+          </p>
           <div className="mt-3 space-y-2">
             {lastSyncResult.matched_updates.slice(0, 5).map((match) => (
               <div
@@ -631,13 +987,102 @@ function EmailIntegrationPanel({
           </div>
         </div>
       ) : null}
+
+      {reviewDetections.length ? (
+        <div className="mt-6 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-on-surface">Needs Review</h3>
+              <p className="mt-1 text-xs leading-6 text-on-surface-variant">
+                Approve messages that should update the tracker or import an external application. Dismiss anything that is too weak or irrelevant.
+              </p>
+            </div>
+            <span className="rounded-full bg-surface px-3 py-1 text-xs font-semibold text-on-surface-variant">
+              {pendingDetectionCount} pending
+            </span>
+          </div>
+          <div className="mt-4 space-y-3">
+            {reviewDetections.slice(0, 12).map((detection) => {
+              const detectedCompany = detection.detected_application.company || "Company not matched";
+              const detectedTitle = detection.detected_application.title || "Title not detected";
+              const isMatchedTrackerCard = Boolean(detection.metadata?.review_id);
+              return (
+                <article
+                  className="rounded-2xl border border-outline-variant/20 bg-surface px-4 py-3"
+                  key={detection.detection_id}
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-on-surface">
+                          {detectedCompany}
+                          {detectedTitle ? ` - ${detectedTitle}` : ""}
+                        </span>
+                        <span className="rounded-full bg-surface-container px-2 py-1 text-xs text-on-surface-variant">
+                          {detection.status.suggested_application_status} · {detection.status.confidence}
+                        </span>
+                        <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
+                          {isMatchedTrackerCard ? "Matched tracker card" : "New external application"}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs leading-6 text-on-surface-variant">
+                        {detection.source_email.subject || "No subject"} · {detection.source_email.from_address || "Unknown sender"}
+                      </div>
+                      <div className="text-xs leading-6 text-on-surface-variant">
+                        {formatDateTime(detection.source_email.sent_at)}
+                      </div>
+                      {detection.status.evidence?.length ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {detection.status.evidence.map((evidence) => (
+                            <span
+                              className="rounded-full bg-surface-container-high px-2.5 py-1 text-[11px] font-medium text-on-surface-variant"
+                              key={`${detection.detection_id}-${evidence}`}
+                            >
+                              {evidence}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <button
+                        className="rounded-lg bg-primary/10 px-3 py-2 text-xs font-semibold text-primary transition hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={detectionActionBusy}
+                        onClick={() => approveDetection(detection)}
+                        type="button"
+                      >
+                        Import / approve
+                      </button>
+                      <button
+                        className="rounded-lg bg-surface-container-high px-3 py-2 text-xs font-semibold text-on-surface transition hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={detectionActionBusy}
+                        onClick={() => dismissDetection(detection)}
+                        type="button"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      ) : syncSummary ? (
+        <div className="mt-6 rounded-2xl border border-outline-variant/20 bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
+          No Gmail detections are waiting for review.
+        </div>
+      ) : null}
     </section>
   );
 }
 
 export default function TrackerPage() {
+  const { request } = useSession();
   const {
     columns,
+    items,
     loading,
     error,
     refresh,
@@ -650,9 +1095,11 @@ export default function TrackerPage() {
     startGoogleEmailIntegration,
     updateEmailIntegrationSettings,
     syncEmailIntegration,
+    approveEmailDetections,
+    dismissEmailDetections,
     deleteEmailIntegration,
   } = useTracker();
-  const totalCards = COLUMNS.reduce((acc, c) => acc + (columns[c.key]?.length || 0), 0);
+  const totalCards = items.length;
 
   return (
     <div className="space-y-8">
@@ -698,27 +1145,36 @@ export default function TrackerPage() {
           integration={emailIntegration}
           lastSyncResult={lastSyncResult}
           onDelete={deleteEmailIntegration}
+          onDismissDetections={dismissEmailDetections}
           onRefreshIntegration={refreshEmailIntegration}
           onSaveSettings={updateEmailIntegrationSettings}
+          onApproveDetections={approveEmailDetections}
           onStartGoogle={startGoogleEmailIntegration}
           onSync={syncEmailIntegration}
         />
       ) : null}
 
-      {/* Kanban board */}
       {!loading && !error && (
-        <div className="flex gap-5 overflow-x-auto pb-4">
-          {COLUMNS.map((colDef) => (
-            <KanbanColumn
-              cards={columns[colDef.key] || []}
-              colDef={colDef}
-              key={colDef.key}
-              onUpdate={updateCard}
-              updating={updating}
-            />
+        <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">
+          {COLUMNS.map((column) => (
+            <div
+              className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-3"
+              key={column.key}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-on-surface-variant">{column.label}</span>
+                <span className={["rounded-full px-2 py-0.5 text-xs font-bold", column.badge].join(" ")}>
+                  {columns[column.key]?.length || 0}
+                </span>
+              </div>
+            </div>
           ))}
         </div>
       )}
+
+      {!loading && !error ? (
+        <TrackerTable items={items} onUpdate={updateCard} request={request} updating={updating} />
+      ) : null}
     </div>
   );
 }
