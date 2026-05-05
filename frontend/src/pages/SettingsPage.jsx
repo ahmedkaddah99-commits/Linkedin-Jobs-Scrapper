@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
+import {
+  CV_STUDIO_ROUTE,
+  WEB_CV_COLOR_FIELDS,
+  WEB_CV_COLOR_PRESETS,
+  WEB_CV_TEMPLATES,
+  buildCvStudioHtml,
+  buildCvStudioState,
+  matchPresetByPalette,
+  stashCvStudioSeed,
+} from "../lib/cvStudio";
 
 const settingsTabs = [
   "Profile",
@@ -48,6 +58,13 @@ async function cropImageToSquare(file) {
   }
   const outputFileName = file.name.replace(/\.[^.]+$/, "") || "profile-photo";
   return new File([blob], `${outputFileName}.png`, { type: "image/png" });
+}
+
+function sanitizeHexInput(value) {
+  return String(value || "")
+    .replace(/[^0-9a-fA-F]/g, "")
+    .slice(0, 6)
+    .toUpperCase();
 }
 
 function SectionField({ label, children, hint = "" }) {
@@ -440,6 +457,66 @@ function ColorSchemeButton({ scheme, selected, onSelect }) {
   );
 }
 
+function WebTemplateCard({ template, selected, onSelect }) {
+  return (
+    <button
+      className={[
+        "rounded-xl border p-4 text-left transition-all",
+        selected
+          ? "border-primary bg-primary/10 shadow-soft"
+          : "border-outline-variant/20 bg-surface hover:border-primary/30 hover:bg-surface-container-low",
+      ].join(" ")}
+      onClick={onSelect}
+      type="button"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-outline-variant/10 bg-surface-container-low p-3">
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-primary/80">
+            {template.shortLabel}
+          </div>
+          <div className="mt-2 text-sm font-semibold text-on-surface">{template.label}</div>
+        </div>
+        <div className="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary">
+          HTML
+        </div>
+      </div>
+      <div className="text-xs leading-6 text-on-surface-variant">{template.description}</div>
+      <div className="mt-2 text-[11px] uppercase tracking-[0.16em] text-on-surface-variant/80">
+        {template.mood}
+      </div>
+    </button>
+  );
+}
+
+function WebColorPresetButton({ preset, selected, onSelect }) {
+  return (
+    <button
+      className={[
+        "flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all",
+        selected
+          ? "border-primary bg-primary/10 shadow-soft"
+          : "border-outline-variant/20 bg-surface hover:border-primary/30 hover:bg-surface-container-low",
+      ].join(" ")}
+      onClick={onSelect}
+      type="button"
+    >
+      <div className="flex items-center gap-1.5">
+        {WEB_CV_COLOR_FIELDS.map((field) => (
+          <span
+            key={field.id}
+            className="h-5 w-5 rounded-full border border-black/10"
+            style={{ backgroundColor: `#${preset.palette[field.id]}` }}
+          />
+        ))}
+      </div>
+      <div>
+        <div className="text-sm font-semibold text-on-surface">{preset.label}</div>
+        <div className="text-xs text-on-surface-variant">Editable hex palette</div>
+      </div>
+    </button>
+  );
+}
+
 function CvPreviewCard({ documents, profile, options }) {
   const template =
     (options.cv_templates || []).find((item) => item.id === documents.cv_template) ||
@@ -493,105 +570,266 @@ function CvPreviewCard({ documents, profile, options }) {
 function DocumentsTab({ draft, updateSection }) {
   const documents = draft.documents;
   const options = draft.options;
+  const browserStudioState = useMemo(
+    () => buildCvStudioState(draft.profile, documents),
+    [documents, draft.profile],
+  );
+  const browserPreviewHtml = useMemo(
+    () => buildCvStudioHtml(browserStudioState, { forIframe: true }),
+    [browserStudioState],
+  );
+  const selectedBrowserPreset = useMemo(
+    () => matchPresetByPalette(documents.web_cv_palette || {}),
+    [documents.web_cv_palette],
+  );
+
+  function updateBrowserPalette(fieldId, value) {
+    updateSection("documents", {
+      web_cv_palette: {
+        ...(documents.web_cv_palette || {}),
+        [fieldId]: sanitizeHexInput(value),
+      },
+    });
+  }
+
+  function applyBrowserPreset(preset) {
+    updateSection("documents", {
+      web_cv_palette: { ...preset.palette },
+    });
+  }
+
+  function openBrowserStudio() {
+    stashCvStudioSeed({
+      profile: draft.profile,
+      documents,
+    });
+    window.open(CV_STUDIO_ROUTE, "_blank", "noopener,noreferrer");
+  }
+
   return (
     <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8">
-      <div className="space-y-8">
-        <div className="grid gap-4 lg:grid-cols-2">
-          {(options.cv_templates || []).map((template) => (
-            <TemplateCard
-              key={template.id}
-              onSelect={() => updateSection("documents", { cv_template: template.id })}
-              selected={documents.cv_template === template.id}
-              template={template}
-            />
-          ))}
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          {(options.cv_color_schemes || []).map((scheme) => (
-            <ColorSchemeButton
-              key={scheme.id}
-              onSelect={() => updateSection("documents", { cv_color_scheme: scheme.id })}
-              scheme={scheme}
-              selected={documents.cv_color_scheme === scheme.id}
-            />
-          ))}
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,360px)]">
-          <div className="space-y-4">
-            <div className="max-w-md">
-              <SectionField label="CV Font">
-                <select
-                  className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => updateSection("documents", { cv_font: event.target.value })}
-                  value={documents.cv_font || ""}
+      <div className="space-y-10">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
+          <div className="space-y-6 rounded-2xl border border-outline-variant/15 bg-surface p-6">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-primary/80">
+                  Browser CV Studio
+                </div>
+                <h3 className="mt-2 text-lg font-bold text-on-surface">
+                  Edit the HTML CV directly in the browser
+                </h3>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-on-surface-variant">
+                  These templates are meant for on-the-spot editing. Open the studio, tailor the role,
+                  company, bullets, and colors, then print or save PDF directly from the browser.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  className="rounded-lg border border-outline-variant/20 px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low"
+                  onClick={openBrowserStudio}
+                  type="button"
                 >
-                  {(options.cv_fonts || []).map((font) => (
-                    <option key={font.id} value={font.id}>
-                      {font.label}
-                    </option>
-                  ))}
-                </select>
-              </SectionField>
+                  Open HTML CV Studio
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-4">
-        <ToggleRow
-          checked={Boolean(documents.generate_docx)}
-          description="Generate Microsoft Word application files for each produced artifact."
-          label="Generate DOCX"
-          onChange={(value) => updateSection("documents", { generate_docx: value })}
-        />
-        <ToggleRow
-          checked={Boolean(documents.generate_pdf)}
-          description="Generate PDF output alongside DOCX when the renderer supports it."
-          label="Generate PDF"
-          onChange={(value) => updateSection("documents", { generate_pdf: value })}
-        />
-        <ToggleRow
-          checked={Boolean(documents.export_tracker)}
-          description="Write tracker exports such as Excel reports and summary files."
-          label="Export Tracker"
-          onChange={(value) => updateSection("documents", { export_tracker: value })}
-        />
-        <ToggleRow
-          checked={Boolean(documents.export_package)}
-          description="Keep packaging artifacts such as JSON bundles and email drafts."
-          label="Export Package"
-          onChange={(value) => updateSection("documents", { export_package: value })}
-        />
-        <ToggleRow
-          checked={Boolean(documents.include_photo)}
-          description="Embed your uploaded square profile photo in the top-right of generated CVs."
-          label="Include Photo In CV"
-          onChange={(value) => updateSection("documents", { include_photo: value })}
-        />
+            <div className="grid gap-4 lg:grid-cols-2">
+              {WEB_CV_TEMPLATES.map((template) => (
+                <WebTemplateCard
+                  key={template.id}
+                  onSelect={() => updateSection("documents", { web_cv_template: template.id })}
+                  selected={browserStudioState.templateId === template.id}
+                  template={template}
+                />
+              ))}
             </div>
 
-            <div className="max-w-md">
-              <SectionField label="File Naming Strategy">
-                <select
-                  className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => updateSection("documents", { file_naming: event.target.value })}
-                  value={documents.file_naming || ""}
-                >
-                  {(options.document_naming_modes || []).map((mode) => (
-                    <option key={mode.id} value={mode.id}>
-                      {mode.label}
-                    </option>
-                  ))}
-                </select>
-              </SectionField>
+            <div className="grid gap-4 lg:grid-cols-2">
+              {WEB_CV_COLOR_PRESETS.map((preset) => (
+                <WebColorPresetButton
+                  key={preset.id}
+                  onSelect={() => applyBrowserPreset(preset)}
+                  preset={preset}
+                  selected={selectedBrowserPreset?.id === preset.id}
+                />
+              ))}
             </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              {WEB_CV_COLOR_FIELDS.map((field) => (
+                <SectionField key={field.id} hint={field.description} label={field.label}>
+                  <div className="flex items-center gap-3">
+                    <span
+                      className="h-11 w-11 rounded-xl border border-black/10"
+                      style={{ backgroundColor: `#${browserStudioState.palette?.[field.id] || "FFFFFF"}` }}
+                    />
+                    <div className="relative flex-1">
+                      <span className="pointer-events-none absolute left-4 top-3 text-sm text-on-surface-variant">
+                        #
+                      </span>
+                      <TextInput
+                        className="pl-7"
+                        maxLength={6}
+                        onChange={(event) => updateBrowserPalette(field.id, event.target.value)}
+                        value={documents.web_cv_palette?.[field.id] || browserStudioState.palette?.[field.id] || ""}
+                      />
+                    </div>
+                  </div>
+                </SectionField>
+              ))}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <SectionField label="Studio Font">
+                <TextInput
+                  onChange={(event) => updateSection("documents", { web_cv_font: event.target.value })}
+                  placeholder="Aptos"
+                  value={documents.web_cv_font || documents.cv_font || ""}
+                />
+              </SectionField>
+              <ToggleRow
+                checked={Boolean(documents.web_cv_show_photo ?? documents.include_photo)}
+                description="Keeps an optional image slot in the browser templates."
+                label="Show Photo In HTML CV"
+                onChange={(value) => updateSection("documents", { web_cv_show_photo: value })}
+              />
+            </div>
+
+            <p className="rounded-xl bg-surface-container-low px-4 py-3 text-xs leading-6 text-on-surface-variant">
+              The studio launch uses your current unsaved profile and browser-CV settings from this page.
+              Color codes stay editable as raw hex values.
+            </p>
           </div>
 
-          <div>
-            <div className="mb-3 text-sm font-semibold text-on-surface">Live Preview</div>
-            <CvPreviewCard documents={documents} options={options} profile={draft.profile} />
+          <div className="rounded-2xl border border-outline-variant/15 bg-surface p-5">
+            <div className="mb-3 text-sm font-semibold text-on-surface">Live HTML Preview</div>
+            <div className="rounded-2xl border border-outline-variant/10 bg-surface-container-low p-3">
+              <iframe
+                className="h-[840px] w-full rounded-xl bg-white"
+                srcDoc={browserPreviewHtml}
+                title="Browser CV HTML preview"
+              />
+            </div>
             <p className="mt-3 text-xs leading-6 text-on-surface-variant">
-              This preview is approximate. The generated DOCX uses the selected template, palette, font, and photo toggle.
+              This is the actual browser template output. The full studio adds job-specific text editing and
+              print controls.
             </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-outline-variant/15 bg-surface p-6">
+          <div className="mb-6">
+            <div className="text-xs font-bold uppercase tracking-[0.18em] text-primary/80">
+              Export Renderer
+            </div>
+            <h3 className="mt-2 text-lg font-bold text-on-surface">DOCX / PDF generation defaults</h3>
+            <p className="mt-2 text-sm leading-6 text-on-surface-variant">
+              These controls remain the defaults for the repo's generated application artifacts.
+            </p>
+          </div>
+
+          <div className="space-y-8">
+            <div className="grid gap-4 lg:grid-cols-2">
+              {(options.cv_templates || []).map((template) => (
+                <TemplateCard
+                  key={template.id}
+                  onSelect={() => updateSection("documents", { cv_template: template.id })}
+                  selected={documents.cv_template === template.id}
+                  template={template}
+                />
+              ))}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              {(options.cv_color_schemes || []).map((scheme) => (
+                <ColorSchemeButton
+                  key={scheme.id}
+                  onSelect={() => updateSection("documents", { cv_color_scheme: scheme.id })}
+                  scheme={scheme}
+                  selected={documents.cv_color_scheme === scheme.id}
+                />
+              ))}
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,360px)]">
+              <div className="space-y-4">
+                <div className="max-w-md">
+                  <SectionField label="CV Font">
+                    <select
+                      className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                      onChange={(event) => updateSection("documents", { cv_font: event.target.value })}
+                      value={documents.cv_font || ""}
+                    >
+                      {(options.cv_fonts || []).map((font) => (
+                        <option key={font.id} value={font.id}>
+                          {font.label}
+                        </option>
+                      ))}
+                    </select>
+                  </SectionField>
+                </div>
+
+                <div className="space-y-4">
+                  <ToggleRow
+                    checked={Boolean(documents.generate_docx)}
+                    description="Generate Microsoft Word application files for each produced artifact."
+                    label="Generate DOCX"
+                    onChange={(value) => updateSection("documents", { generate_docx: value })}
+                  />
+                  <ToggleRow
+                    checked={Boolean(documents.generate_pdf)}
+                    description="Generate PDF output alongside DOCX when the renderer supports it."
+                    label="Generate PDF"
+                    onChange={(value) => updateSection("documents", { generate_pdf: value })}
+                  />
+                  <ToggleRow
+                    checked={Boolean(documents.export_tracker)}
+                    description="Write tracker exports such as Excel reports and summary files."
+                    label="Export Tracker"
+                    onChange={(value) => updateSection("documents", { export_tracker: value })}
+                  />
+                  <ToggleRow
+                    checked={Boolean(documents.export_package)}
+                    description="Keep packaging artifacts such as JSON bundles and email drafts."
+                    label="Export Package"
+                    onChange={(value) => updateSection("documents", { export_package: value })}
+                  />
+                  <ToggleRow
+                    checked={Boolean(documents.include_photo)}
+                    description="Embed your uploaded square profile photo in the top-right of generated CVs."
+                    label="Include Photo In CV"
+                    onChange={(value) => updateSection("documents", { include_photo: value })}
+                  />
+                </div>
+
+                <div className="max-w-md">
+                  <SectionField label="File Naming Strategy">
+                    <select
+                      className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                      onChange={(event) => updateSection("documents", { file_naming: event.target.value })}
+                      value={documents.file_naming || ""}
+                    >
+                      {(options.document_naming_modes || []).map((mode) => (
+                        <option key={mode.id} value={mode.id}>
+                          {mode.label}
+                        </option>
+                      ))}
+                    </select>
+                  </SectionField>
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-3 text-sm font-semibold text-on-surface">Export Preview</div>
+                <CvPreviewCard documents={documents} options={options} profile={draft.profile} />
+                <p className="mt-3 text-xs leading-6 text-on-surface-variant">
+                  This preview is approximate. The generated DOCX uses the selected template, palette,
+                  font, and photo toggle.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>

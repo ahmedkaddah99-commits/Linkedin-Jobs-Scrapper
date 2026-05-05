@@ -104,7 +104,7 @@ function buildReviewQueueTarget(documents) {
 
 export default function DocumentsPage() {
   const { request } = useSession();
-  const [activeView, setActiveView] = useState(VIEW_LIBRARY);
+  const activeView = VIEW_LIBRARY;
   const [documentFilters, setDocumentFilters] = useState({
     search: "",
     workspaceId: "",
@@ -146,17 +146,14 @@ export default function DocumentsPage() {
     error: documentsError,
     refresh: refreshDocuments,
   } = useApiResource(() => request("/documents?limit=500"), [request]);
-  const {
-    data: rejectedPayload,
-    loading: rejectedLoading,
-    error: rejectedError,
-    refresh: refreshRejected,
-  } = useApiResource(() => request("/rejected-jobs?limit=300"), [request]);
   const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100"), [request]);
+  const rejectedLoading = false;
+  const rejectedError = "";
+  const refreshRejected = async () => undefined;
 
   const allDocuments = documentsPayload?.documents || [];
   const documentGroups = documentsPayload?.groups || [];
-  const allRejectedItems = rejectedPayload?.items || [];
+  const allRejectedItems = [];
   const workspaces = workspacesPayload?.workspaces || [];
 
   const workspaceOptions = useMemo(
@@ -508,35 +505,9 @@ export default function DocumentsPage() {
             Documents
           </h1>
           <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
-            Browse generated CVs and letters, keep supporting application assets in one library,
-            and send rejected jobs back into the pipeline when filters were too aggressive.
+            Browse application-ready CVs and letters, and keep certifications plus reusable
+            supporting assets in one place.
           </p>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <button
-            className={[
-              "rounded-full px-4 py-2 text-sm font-medium transition-colors",
-              activeView === VIEW_LIBRARY
-                ? "bg-primary text-white"
-                : "bg-surface-container-low text-on-surface hover:bg-surface-container-high",
-            ].join(" ")}
-            onClick={() => setActiveView(VIEW_LIBRARY)}
-            type="button"
-          >
-            Library
-          </button>
-          <button
-            className={[
-              "rounded-full px-4 py-2 text-sm font-medium transition-colors",
-              activeView === VIEW_REJECTED
-                ? "bg-primary text-white"
-                : "bg-surface-container-low text-on-surface hover:bg-surface-container-high",
-            ].join(" ")}
-            onClick={() => setActiveView(VIEW_REJECTED)}
-            type="button"
-          >
-            Rejected Jobs
-          </button>
         </div>
       </header>
 
@@ -554,13 +525,13 @@ export default function DocumentsPage() {
         </div>
         <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
           <div className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
-            Rejected Jobs
+            Visible Groups
           </div>
           <div className="mt-2 font-headline text-3xl font-bold text-on-surface">
-            {allRejectedItems.length}
+            {visibleDocumentSections.length}
           </div>
           <div className="mt-1 text-sm text-on-surface-variant">
-            Review why jobs were filtered out and override them when needed.
+            Application packages and shared document collections currently in view.
           </div>
         </div>
         <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
@@ -568,12 +539,10 @@ export default function DocumentsPage() {
             Current Selection
           </div>
           <div className="mt-2 font-headline text-3xl font-bold text-on-surface">
-            {activeView === VIEW_LIBRARY ? selectedDocumentIds.length : selectedRejectedIds.length}
+            {selectedDocumentIds.length}
           </div>
           <div className="mt-1 text-sm text-on-surface-variant">
-            {activeView === VIEW_LIBRARY
-              ? "Selected for bulk export."
-              : "Selected to send back into the generation flow."}
+            Selected for bulk export.
           </div>
         </div>
       </section>

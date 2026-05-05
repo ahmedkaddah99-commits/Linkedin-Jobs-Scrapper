@@ -5,6 +5,7 @@ import csv
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable
 
@@ -43,6 +44,25 @@ HOMEPAGE_URL_COLUMNS = (
     "company_domain",
     "BAS.WEBSITE",
 )
+
+
+def _configure_stdio() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except Exception:
+                pass
+
+
+def _safe_print(message: str) -> None:
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        encoded = str(message).encode("utf-8", errors="backslashreplace").decode("utf-8", errors="ignore")
+        print(encoded)
 
 
 def _compact(value) -> str:
@@ -286,7 +306,7 @@ def discover_targets(args, *, source_override: str = "") -> list[CareerDiscovery
     for index, target in enumerate(targets, start=1):
         company_name = target.get("company_name", "")
         homepage_url = target.get("homepage_url", "")
-        print(f"[CareerDiscovery] {index}/{total} {company_name or homepage_url}")
+        _safe_print(f"[CareerDiscovery] {index}/{total} {company_name or homepage_url}")
         result = discover_career_url(
             homepage_url=homepage_url,
             company_name=company_name,
@@ -296,7 +316,7 @@ def discover_targets(args, *, source_override: str = "") -> list[CareerDiscovery
             allow_domain_guessing=args.allow_domain_guessing,
         )
         results.append(result)
-        print(
+        _safe_print(
             "[CareerDiscovery] "
             f"status={result.crawl_status} "
             f"score={result.confidence_score:.2f} "
@@ -349,6 +369,19 @@ def _targets_for_source(args, source: str) -> list[dict[str, str]]:
         homepage_url_column=args.homepage_url_column,
     )
     return _slice_targets(targets, offset=args.offset, limit=args.limit)
+
+
+def _discover_single_target(target: dict[str, str], args) -> CareerDiscoveryResult:
+    company_name = target.get("company_name", "")
+    homepage_url = target.get("homepage_url", "")
+    return discover_career_url(
+        homepage_url=homepage_url,
+        company_name=company_name,
+        request_timeout_seconds=args.timeout_seconds,
+        shallow_crawl_pages=args.shallow_crawl_pages,
+        use_rendered_fallback=args.use_rendered_fallback,
+        allow_domain_guessing=args.allow_domain_guessing,
+    )
 
 
 def _result_from_dict(payload: dict) -> CareerDiscoveryResult:
@@ -491,6 +524,8 @@ def _run_child_discovery(command: list[str], *, timeout_seconds: int) -> tuple[i
             cwd=Path.cwd(),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=max(1, int(timeout_seconds)),
         )
     except subprocess.TimeoutExpired as exc:
@@ -636,17 +671,27 @@ def _run_robust_discovery_for_source(args, *, source: str) -> tuple[dict, list[C
     total = len(targets)
     batch_size = max(1, int(getattr(args, "robust_batch_size", 1) or 1))
     start_offset = max(0, int(getattr(args, "offset", 0) or 0))
-    aggregate_results: list[CareerDiscoveryResult] = []
     output_json_value = str(getattr(args, "output_json", "") or "")
     output_company_sites_value = str(getattr(args, "output_company_sites", "") or "")
     output_failures_value = str(getattr(args, "output_failures_csv", "") or "")
+    resume_existing_output = bool(getattr(args, "resume_existing_output", False))
+    aggregate_results: list[CareerDiscoveryResult] = []
+    relative_start = 0
+
+    if resume_existing_output and output_json_value:
+        existing_results = _load_results_from_path(Path(output_json_value))
+        if existing_results:
+            aggregate_results = existing_results[:total]
+            relative_start = min(len(aggregate_results), total)
 
     print(
         "[CareerDiscovery:robust] "
-        f"source={source} total_targets={total} batch_size={batch_size} start_offset={start_offset}"
+        f"source={source} total_targets={total} batch_size={batch_size} start_offset={start_offset} "
+        f"resume_at={relative_start}"
     )
 
-    for chunk_index, relative_offset in enumerate(range(0, total, batch_size), start=1):
+    chunk_seed = (relative_start // batch_size) + 1
+    for chunk_index, relative_offset in enumerate(range(relative_start, total, batch_size), start=chunk_seed):
         chunk_targets = targets[relative_offset : relative_offset + batch_size]
         actual_offset = start_offset + relative_offset
         print(
@@ -668,6 +713,80 @@ def _run_robust_discovery_for_source(args, *, source: str) -> tuple[dict, list[C
             output_company_sites_value=output_company_sites_value,
             failure_report_value=output_failures_value,
         )
+
+    return _persist_discovery_results(
+        source=source,
+        results=aggregate_results,
+        output_json_value=output_json_value,
+        output_company_sites_value=output_company_sites_value,
+        failure_report_value=output_failures_value,
+        save_mysql=bool(getattr(args, "save_mysql", False)),
+        mysql_config=_mysql_config_from_args(args) if getattr(args, "save_mysql", False) else None,
+    ), aggregate_results
+
+
+def _run_parallel_discovery_for_source(args, *, source: str) -> tuple[dict, list[CareerDiscoveryResult]]:
+    targets = _targets_for_source(args, source)
+    total = len(targets)
+    output_json_value = str(getattr(args, "output_json", "") or "")
+    output_company_sites_value = str(getattr(args, "output_company_sites", "") or "")
+    output_failures_value = str(getattr(args, "output_failures_csv", "") or "")
+    resume_existing_output = bool(getattr(args, "resume_existing_output", False))
+    workers = max(1, int(getattr(args, "workers", 1) or 1))
+    checkpoint_every = max(1, int(getattr(args, "checkpoint_every", 10) or 10))
+    aggregate_results: list[CareerDiscoveryResult] = []
+    relative_start = 0
+
+    if resume_existing_output and output_json_value:
+        existing_results = _load_results_from_path(Path(output_json_value))
+        if existing_results:
+            aggregate_results = existing_results[:total]
+            relative_start = min(len(aggregate_results), total)
+
+    _safe_print(
+        "[CareerDiscovery:parallel] "
+        f"source={source} total_targets={total} workers={workers} resume_at={relative_start}"
+    )
+
+    if output_json_value or output_company_sites_value or output_failures_value:
+        _persist_discovery_results(
+            source=source,
+            results=aggregate_results,
+            output_json_value=output_json_value,
+            output_company_sites_value=output_company_sites_value,
+            failure_report_value=output_failures_value,
+        )
+
+    pending_targets = targets[relative_start:]
+    if pending_targets:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_target = {
+                executor.submit(_discover_single_target, target, args): target
+                for target in pending_targets
+            }
+            for completed_index, future in enumerate(as_completed(future_to_target), start=relative_start + 1):
+                target = future_to_target[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = _synthetic_failure_result(
+                        target,
+                        status="worker_exception",
+                        evidence=[f"{type(exc).__name__}: {exc}"],
+                    )
+                aggregate_results.append(result)
+                if completed_index % checkpoint_every == 0 or completed_index == total:
+                    _safe_print(
+                        "[CareerDiscovery:parallel] "
+                        f"source={source} processed={completed_index}/{total}"
+                    )
+                    _persist_discovery_results(
+                        source=source,
+                        results=aggregate_results,
+                        output_json_value=output_json_value,
+                        output_company_sites_value=output_company_sites_value,
+                        failure_report_value=output_failures_value,
+                    )
 
     return _persist_discovery_results(
         source=source,
@@ -707,6 +826,8 @@ def add_discover_company_careers_arguments(parser: argparse.ArgumentParser) -> a
     parser.add_argument("--output-json", default="")
     parser.add_argument("--output-company-sites", default="")
     parser.add_argument("--output-failures-csv", default="")
+    parser.add_argument("--workers", type=int, default=1, help="Number of in-process worker threads for direct discovery.")
+    parser.add_argument("--checkpoint-every", type=int, default=25, help="Persist outputs every N completed targets in threaded mode.")
     parser.add_argument(
         "--robust-batch-size",
         type=int,
@@ -718,6 +839,11 @@ def add_discover_company_careers_arguments(parser: argparse.ArgumentParser) -> a
         type=int,
         default=0,
         help="Hard timeout for each subprocess batch when using --robust-batch-size.",
+    )
+    parser.add_argument(
+        "--resume-existing-output",
+        action="store_true",
+        help="When using robust mode, resume from an existing output JSON file instead of starting that slice from zero.",
     )
     parser.add_argument("--save-mysql", action="store_true")
     parser.add_argument("--mysql-host", default="")
@@ -791,6 +917,7 @@ def _persist_discovery_results(
 def run_discovery(args) -> dict:
     load_project_dotenv()
     normalized_source = str(getattr(args, "source", "custom") or "custom").strip().lower()
+    workers = max(1, int(getattr(args, "workers", 1) or 1))
 
     if int(getattr(args, "robust_batch_size", 0) or 0) > 0:
         if normalized_source == "all":
@@ -823,6 +950,38 @@ def run_discovery(args) -> dict:
             return combined_summary
         robust_summary, _ = _run_robust_discovery_for_source(args, source=normalized_source)
         return robust_summary
+
+    if workers > 1:
+        if normalized_source == "all":
+            if any(
+                str(value or "").strip()
+                for value in (
+                    getattr(args, "input", ""),
+                    getattr(args, "homepage_url", ""),
+                    getattr(args, "domain", ""),
+                    getattr(args, "company_name", ""),
+                )
+            ):
+                raise ValueError("The 'all' preset can only be used with the built-in regular and phd source files.")
+            combined_results: list[CareerDiscoveryResult] = []
+            source_summaries: list[dict] = []
+            for source in DISCOVERY_SOURCE_PRESETS:
+                source_summary, source_results = _run_parallel_discovery_for_source(args, source=source)
+                combined_results.extend(source_results)
+                source_summaries.append({key: value for key, value in source_summary.items() if key != "results"})
+            combined_summary = _persist_discovery_results(
+                source="all",
+                results=combined_results,
+                output_json_value=str(getattr(args, "output_json", "") or ""),
+                output_company_sites_value=str(getattr(args, "output_company_sites", "") or ""),
+                failure_report_value=str(getattr(args, "output_failures_csv", "") or ""),
+                save_mysql=bool(getattr(args, "save_mysql", False)),
+                mysql_config=_mysql_config_from_args(args) if getattr(args, "save_mysql", False) else None,
+            )
+            combined_summary["source_summaries"] = source_summaries
+            return combined_summary
+        parallel_summary, _ = _run_parallel_discovery_for_source(args, source=normalized_source)
+        return parallel_summary
 
     if normalized_source == "all":
         if any(
@@ -880,18 +1039,19 @@ def run_discovery(args) -> dict:
 
 
 def run_from_args(args) -> int:
+    _configure_stdio()
     payload = run_discovery(args)
-    print(f"[CareerDiscovery] wrote results: {payload['output_json']}")
-    print(
+    _safe_print(f"[CareerDiscovery] wrote results: {payload['output_json']}")
+    _safe_print(
         "[CareerDiscovery] wrote company-site entries: "
         f"{payload['output_company_sites']} ({payload['company_site_entries']})"
     )
-    print(
+    _safe_print(
         "[CareerDiscovery] wrote failure report: "
         f"{payload['failure_report_path']} ({payload['failure_count']})"
     )
     for source_summary in payload.get("source_summaries", []):
-        print(
+        _safe_print(
             "[CareerDiscovery] "
             f"{source_summary['source']}: processed={source_summary['processed']} "
             f"found={source_summary['found']} "
@@ -899,12 +1059,13 @@ def run_from_args(args) -> int:
             f"output={source_summary['output_company_sites']}"
         )
     if getattr(args, "save_mysql", False):
-        print(f"[CareerDiscovery] saved MySQL rows: {payload['mysql_rows_saved']}")
-    print(f"[CareerDiscovery] done. processed={payload['processed']} found={payload['found']}")
+        _safe_print(f"[CareerDiscovery] saved MySQL rows: {payload['mysql_rows_saved']}")
+    _safe_print(f"[CareerDiscovery] done. processed={payload['processed']} found={payload['found']}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     return run_from_args(parse_args(argv))
 
 

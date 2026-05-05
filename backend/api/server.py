@@ -538,7 +538,38 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
     return merged
 
 
+DEFAULT_WEB_CV_PALETTE = {
+    "primary": "17324D",
+    "accent": "D97706",
+    "surface": "F8FAFC",
+    "text": "0F172A",
+    "muted": "475569",
+    "border": "CBD5E1",
+}
+
+
+def _normalize_hex_color(value: str, fallback: str) -> str:
+    candidate = str(value or "").strip().lstrip("#").upper()
+    if re.fullmatch(r"[0-9A-F]{6}", candidate):
+        return candidate
+    return fallback
+
+
+def _merge_web_cv_palette(existing_palette: dict, payload_palette: dict) -> dict:
+    merged: dict[str, str] = {}
+    for key, fallback in DEFAULT_WEB_CV_PALETTE.items():
+        value = payload_palette.get(key) if key in payload_palette else existing_palette.get(key)
+        merged[key] = _normalize_hex_color(str(value or ""), fallback)
+    return merged
+
+
 def _merge_document_metadata(existing_documents: dict, documents_payload: dict) -> dict:
+    existing_web_cv_palette = dict(existing_documents.get("web_cv_palette") or {})
+    payload_web_cv_palette = dict(documents_payload.get("web_cv_palette") or {})
+    default_web_cv_show_photo = existing_documents.get("web_cv_show_photo")
+    if default_web_cv_show_photo is None:
+        default_web_cv_show_photo = existing_documents.get("include_photo", True)
+
     return {
         "generate_docx": bool(documents_payload.get("generate_docx", existing_documents.get("generate_docx", True))),
         "generate_pdf": bool(documents_payload.get("generate_pdf", existing_documents.get("generate_pdf", True))),
@@ -549,6 +580,16 @@ def _merge_document_metadata(existing_documents: dict, documents_payload: dict) 
         "cv_color_scheme": str(documents_payload.get("cv_color_scheme") or existing_documents.get("cv_color_scheme") or "classic_navy"),
         "cv_font": str(documents_payload.get("cv_font") or existing_documents.get("cv_font") or "Calibri"),
         "include_photo": bool(documents_payload.get("include_photo", existing_documents.get("include_photo", True))),
+        "web_cv_template": str(documents_payload.get("web_cv_template") or existing_documents.get("web_cv_template") or "ats_single_column"),
+        "web_cv_font": str(
+            documents_payload.get("web_cv_font")
+            or existing_documents.get("web_cv_font")
+            or documents_payload.get("cv_font")
+            or existing_documents.get("cv_font")
+            or "Aptos"
+        ),
+        "web_cv_show_photo": bool(documents_payload.get("web_cv_show_photo", default_web_cv_show_photo)),
+        "web_cv_palette": _merge_web_cv_palette(existing_web_cv_palette, payload_web_cv_palette),
     }
 
 
@@ -1805,7 +1846,7 @@ def _document_type_for_asset_kind(asset_kind: str) -> str:
         return "Cover letter"
     if "transcript" in normalized_kind:
         return "Transcript"
-    if "certificate" in normalized_kind:
+    if "certificate" in normalized_kind or "certification" in normalized_kind:
         return "Certificate"
     return "Other"
 
@@ -2059,6 +2100,38 @@ def _artifact_asset_kind(entry: dict) -> str:
     return "uploaded_document"
 
 
+def _artifact_entry_is_user_facing_document(entry: dict) -> bool:
+    artifact_type = str(entry.get("artifact_type") or "").strip().lower()
+    source_artifact_type = str(entry.get("source_artifact_type") or "").strip().lower()
+    if artifact_type in {"documents_json", "documents_xlsx"} or source_artifact_type in {
+        "documents_json",
+        "documents_xlsx",
+    }:
+        return False
+    hints = " ".join(
+        str(entry.get(key) or "").lower()
+        for key in ("artifact_type", "file_name", "relative_path", "source_artifact_type")
+    )
+    if "email" in hints:
+        return False
+    if bool(entry.get("is_cv")):
+        return True
+    return any(
+        keyword in hints
+        for keyword in (
+            "cover",
+            "motivation",
+            "anschreiben",
+            "certificate",
+            "certification",
+            "recommendation",
+            "reference",
+            "transcript",
+            "zeugnis",
+        )
+    )
+
+
 def _artifact_entry_to_document_item(entry: dict) -> dict:
     asset_kind = _artifact_asset_kind(entry)
     group_id, group_label = _document_group_for_asset_kind(asset_kind)
@@ -2135,6 +2208,7 @@ def _collect_document_entries(
     entries = [
         _artifact_entry_to_document_item(entry)
         for entry in _collect_artifact_entries(application, user, workspace_id=workspace_id, run_id=run_id)
+        if _artifact_entry_is_user_facing_document(entry)
     ]
     for asset in _load_candidate_assets(user):
         asset_workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")

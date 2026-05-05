@@ -16,17 +16,21 @@ class TrackerGmailIntegrationTests(unittest.TestCase):
         self.assertEqual(_gmail_query_for_scan_window("last_3_months"), f"newer_than:90d {query_suffix}")
 
     def test_google_error_message_includes_oauth_error_description(self):
+        payload_stream = io.BytesIO(b'{"error":"invalid_grant","error_description":"Token has been expired or revoked."}')
         error = HTTPError(
             "https://oauth2.googleapis.com/token",
             400,
             "Bad Request",
             hdrs={},
-            fp=io.BytesIO(b'{"error":"invalid_grant","error_description":"Token has been expired or revoked."}'),
+            fp=payload_stream,
         )
 
-        with patch("backend.capabilities.tracker.google_oauth.urlopen", side_effect=error):
-            with self.assertRaisesRegex(ValueError, "Token has been expired or revoked"):
-                _google_json_request("https://oauth2.googleapis.com/token", method="POST", body=b"")
+        try:
+            with patch("backend.capabilities.tracker.google_oauth.urlopen", side_effect=error):
+                with self.assertRaisesRegex(ValueError, "Token has been expired or revoked"):
+                    _google_json_request("https://oauth2.googleapis.com/token", method="POST", body=b"")
+        finally:
+            payload_stream.close()
 
     def test_gmail_message_list_retries_without_query_when_google_rejects_query(self):
         with patch(

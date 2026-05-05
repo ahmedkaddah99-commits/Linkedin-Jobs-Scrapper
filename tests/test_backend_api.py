@@ -433,6 +433,9 @@ class BackendApiTests(unittest.TestCase):
         docs_dir.mkdir(parents=True, exist_ok=True)
         (docs_dir / "api_job_1_CV.docx").write_bytes(b"docx-content")
         (docs_dir / "api_job_1_cover_letter.txt").write_text("Cover letter", encoding="utf-8")
+        (docs_dir / "api_job_1_email.txt").write_text("Email body", encoding="utf-8")
+        documents_manifest = self.temp_dir / "stage4_documents.json"
+        documents_manifest.write_text("{}", encoding="utf-8")
 
         status, _ = self._request(
             "PUT",
@@ -441,6 +444,16 @@ class BackendApiTests(unittest.TestCase):
                 "artifact_type": "stage5_docs_dir",
                 "path": str(docs_dir),
                 "metadata": {"status": "ready", "ats_score": 92, "ats_attempt_count": 1},
+            },
+        )
+        self.assertEqual(status, 200)
+        status, _ = self._request(
+            "PUT",
+            f"/runs/{run_id}/artifacts/api_documents_manifest",
+            {
+                "artifact_type": "documents_json",
+                "path": str(documents_manifest),
+                "metadata": {"status": "ready"},
             },
         )
         self.assertEqual(status, 200)
@@ -458,6 +471,9 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(generated_cv["related_application"]["title"], "Engineer")
         self.assertEqual(generated_cv["status"], "ready")
         self.assertEqual(generated_cv["display_status"], "ready")
+        self.assertIn("api_job_1_cover_letter.txt", {item["display_name"] for item in documents_payload["documents"]})
+        self.assertNotIn("api_job_1_email.txt", {item["display_name"] for item in documents_payload["documents"]})
+        self.assertNotIn("stage4_documents.json", {item["display_name"] for item in documents_payload["documents"]})
         application_group = next(
             (group for group in documents_payload["groups"] if group["group_kind"] == "application"),
             None,
@@ -973,6 +989,33 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         review_id = review_payload["review_id"]
+        docs_dir = self.temp_dir / "tracker_docs" / run_id
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "api_job_1_CV.docx").write_bytes(b"tracker-docx-content")
+        (docs_dir / "api_job_1_cover_letter.txt").write_text("Cover letter", encoding="utf-8")
+        (docs_dir / "api_job_1_email.txt").write_text("Email body", encoding="utf-8")
+        documents_manifest = self.temp_dir / f"{run_id}_documents.json"
+        documents_manifest.write_text("{}", encoding="utf-8")
+        status, _ = self._request(
+            "PUT",
+            f"/runs/{run_id}/artifacts/api_tracker_docs_dir",
+            {
+                "artifact_type": "stage5_docs_dir",
+                "path": str(docs_dir),
+                "metadata": {"status": "ready"},
+            },
+        )
+        self.assertEqual(status, 200)
+        status, _ = self._request(
+            "PUT",
+            f"/runs/{run_id}/artifacts/api_tracker_documents_manifest",
+            {
+                "artifact_type": "documents_json",
+                "path": str(documents_manifest),
+                "metadata": {"status": "ready"},
+            },
+        )
+        self.assertEqual(status, 200)
         user = self.app.get_user(self.user.user_id)
         user.metadata = {
             **dict(user.metadata or {}),
@@ -1003,7 +1046,11 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(item["tracker_table_row"]["applied?"], "Applied")
         self.assertEqual(item["tracker_table_row"]["company"], item["company"])
         document_labels = [document["label"] for document in item["documents"]]
+        self.assertIn("api_job_1_CV.docx", document_labels)
+        self.assertIn("api_job_1_cover_letter.txt", document_labels)
         self.assertIn("Standard certificate", document_labels)
+        self.assertNotIn("api_job_1_email.txt", document_labels)
+        self.assertNotIn(f"{run_id}_documents.json", document_labels)
         self.assertTrue(any(document["source_scope"] == "application" for document in item["documents"]))
 
         # --- 4. PUT /tracker/:review_id to update status and email_confirmed ---

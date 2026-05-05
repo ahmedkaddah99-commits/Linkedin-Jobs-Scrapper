@@ -1,6 +1,7 @@
 import shutil
 import sqlite3
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from backend.domain.models import (
@@ -147,7 +148,7 @@ class SqliteRepositoryTests(unittest.TestCase):
         self.assertEqual(len(loaded_workers), 1)
         self.assertEqual(loaded_workers[0].worker_id, "worker_a")
 
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             tables = {
                 row[0]
                 for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()

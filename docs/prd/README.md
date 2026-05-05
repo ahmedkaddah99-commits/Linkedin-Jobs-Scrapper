@@ -5,6 +5,7 @@ This folder stores in-repo copies of the product requirements documents used to 
 Current file:
 - `product_requirements_document.md`
 - `referral_tracker_workspace_prd.md`
+- `referral_tracker_confidence_pass_prd.md`
 
 Source of the current copy:
 - `C:\Users\ahmed\Downloads\product_requirements_document.md`

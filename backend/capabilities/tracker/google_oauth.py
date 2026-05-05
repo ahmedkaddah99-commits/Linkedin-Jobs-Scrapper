@@ -160,16 +160,19 @@ def _google_json_request(
                 raise ValueError("Google API returned an unexpected payload.")
             return payload
     except HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="ignore")
         try:
-            payload = json.loads(error_body) if error_body else {}
-        except json.JSONDecodeError:
-            payload = {}
-        error_payload = payload.get("error")
-        if isinstance(error_payload, dict):
-            error_message = str(error_payload.get("message") or "").strip()
-        else:
-            error_message = str(payload.get("error_description") or error_payload or "").strip()
+            error_body = exc.read().decode("utf-8", errors="ignore")
+            try:
+                payload = json.loads(error_body) if error_body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            error_payload = payload.get("error")
+            if isinstance(error_payload, dict):
+                error_message = str(error_payload.get("message") or "").strip()
+            else:
+                error_message = str(payload.get("error_description") or error_payload or "").strip()
+        finally:
+            exc.close()
         raise ValueError(error_message or f"Google API request failed with HTTP {exc.code}.") from exc
     except URLError as exc:
         raise ValueError(f"Unable to reach Google APIs: {exc.reason}") from exc

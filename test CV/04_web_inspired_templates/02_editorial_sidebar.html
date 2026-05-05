@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Editorial Sidebar CV (With Photo)</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background:
+        radial-gradient(circle at top left, rgba(194, 214, 255, 0.25), transparent 32%),
+        linear-gradient(180deg, #f6f4ef 0%, #ece9e2 100%);
+      color: #111827;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+    }
+    a {
+      color: inherit;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.15em;
+    }
+    .screen-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.9rem 1.2rem;
+      backdrop-filter: blur(10px);
+      background: rgba(255, 255, 255, 0.82);
+      border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+    }
+    .screen-toolbar .meta {
+      font-size: 0.92rem;
+      color: #475569;
+    }
+    .toolbar-actions {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .toolbar-button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.72rem 1rem;
+      background: #111827;
+      color: white;
+      font: inherit;
+      cursor: pointer;
+    }
+    .toolbar-link {
+      font-size: 0.92rem;
+      color: #334155;
+    }
+    .page-wrap {
+      padding: 1.5rem;
+    }
+    .sheet {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      background: white;
+      box-shadow: 0 28px 70px rgba(15, 23, 42, 0.15);
+      overflow: hidden;
+    }
+    .muted {
+      color: #64748b;
+    }
+    .caps {
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+    }
+    .tag {
+      display: inline-block;
+      padding: 0.22rem 0.58rem;
+      border-radius: 999px;
+      background: #e2e8f0;
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .photo-shell {
+      width: 34mm;
+      height: 44mm;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      background: linear-gradient(180deg, #eef2f7 0%, #dfe8f1 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .profile-photo {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .photo-shell-placeholder {
+      border-style: dashed;
+      background:
+        repeating-linear-gradient(
+          135deg,
+          rgba(148, 163, 184, 0.12),
+          rgba(148, 163, 184, 0.12) 8px,
+          rgba(255, 255, 255, 0.8) 8px,
+          rgba(255, 255, 255, 0.8) 16px
+        );
+    }
+    .photo-placeholder-copy {
+      padding: 0.6rem;
+      text-align: center;
+      font-size: 0.72rem;
+      line-height: 1.35;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    @media print {
+      html, body {
+        background: white;
+      }
+      .screen-toolbar {
+        display: none;
+      }
+      .page-wrap {
+        padding: 0;
+      }
+      .sheet {
+        width: auto;
+        min-height: auto;
+        margin: 0;
+        box-shadow: none;
+      }
+      @page {
+        size: A4;
+        margin: 10mm;
+      }
+    }
+    
+      .sidebar-sheet {
+        display: grid;
+        grid-template-columns: 70mm 1fr;
+        min-height: 297mm;
+        font-family: Georgia, "Palatino Linotype", serif;
+      }
+      .sidebar {
+        background:
+          linear-gradient(180deg, #13304a 0%, #1f4b64 100%);
+        color: #f8fafc;
+      }
+      .sidebar-inner {
+        padding: 18mm 12mm 16mm;
+      }
+      .sidebar h1 {
+        margin: 16px 0 0;
+        font-size: 1.9rem;
+        line-height: 1.05;
+      }
+      .sidebar-photo-wrap {
+        margin-top: 16px;
+      }
+      .sidebar-photo-shell {
+        width: 100%;
+        height: 58mm;
+        border-radius: 22px;
+        border-color: rgba(248, 250, 252, 0.18);
+      }
+      .sidebar-headline {
+        margin: 10px 0 0;
+        line-height: 1.4;
+        color: rgba(248, 250, 252, 0.88);
+      }
+      .sidebar-block {
+        margin-top: 22px;
+      }
+      .sidebar-block h2 {
+        margin: 0 0 10px;
+        font: 700 0.76rem/1 "Segoe UI", sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        color: rgba(248, 250, 252, 0.72);
+      }
+      .sidebar-block p {
+        margin: 8px 0 0;
+        line-height: 1.45;
+      }
+      .sidebar-skills {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .sidebar-skills li + li {
+        margin-top: 6px;
+      }
+      .content {
+        padding: 17mm 16mm 16mm;
+        background:
+          radial-gradient(circle at top right, rgba(171, 198, 255, 0.18), transparent 28%),
+          linear-gradient(180deg, #fffefb 0%, #ffffff 100%);
+      }
+      .content-kicker {
+        margin: 0 0 10px;
+        color: #7c8ba1;
+        font-size: 0.72rem;
+        font-weight: 700;
+      }
+      .content-intro p:last-child {
+        margin: 0;
+        font-size: 1rem;
+        line-height: 1.65;
+        color: #243649;
+      }
+      .content-section {
+        margin-top: 22px;
+      }
+      .content-section h2 {
+        margin: 0 0 12px;
+        font: 700 0.82rem/1 "Segoe UI", sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        color: #183b58;
+      }
+      .editorial-card + .editorial-card {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(24, 59, 88, 0.1);
+      }
+      .role-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .role-line h3 {
+        margin: 0;
+        font-size: 1.04rem;
+        color: #10293f;
+      }
+      .company {
+        margin: 5px 0 0 !important;
+        color: #5c6f82;
+      }
+      .period {
+        white-space: nowrap;
+        font: 600 0.8rem/1.3 "Segoe UI", sans-serif;
+        color: #6b7d90;
+      }
+      .editorial-bullets {
+        margin: 10px 0 0 18px;
+        padding: 0;
+      }
+      .editorial-bullets li {
+        margin-top: 5px;
+        line-height: 1.48;
+        color: #1f3144;
+      }
+      .education-row span {
+        display: block;
+        margin-top: 4px;
+        color: #64748b;
+      }
+      .education-row p {
+        margin: 8px 0 0;
+        line-height: 1.55;
+      }
+    
+  </style>
+</head>
+<body>
+  <div class="screen-toolbar">
+    <div class="meta">Editorial Sidebar CV (With Photo) · print-ready HTML prototype</div>
+    <div class="toolbar-actions">
+      <a class="toolbar-link" href="index.html">Back to gallery</a>
+      <button class="toolbar-button" onclick="window.print()">Print / Save PDF</button>
+    </div>
+  </div>
+  <div class="page-wrap">
+    
+    <main class="sheet sidebar-sheet">
+      <aside class="sidebar">
+        <div class="sidebar-inner">
+          <span class="tag">Sidebar</span>
+          <div class="sidebar-photo-wrap"><div class="photo-shell sidebar-photo-shell"><img class="profile-photo" src="_assets/profile_photo.png" alt="Candidate profile photo"></div></div>
+          <h1>Ahmed Kaddah</h1>
+          <p class="sidebar-headline">Operations and Logistics Support</p>
+          <div class="sidebar-block">
+            <h2>Contact</h2>
+            <p>Erlangen / Nuremberg, Germany</p>
+            <p><a href="mailto:ahmed.kaddah@tutamail.com">ahmed.kaddah@tutamail.com</a></p>
+            <p><a href="https://www.linkedin.com/in/ahmed-kaddah-3a1a88183/">LinkedIn</a></p>
+            <p><a href="https://github.com/ahmedkaddah99-commits?tab=repositories">GitHub</a></p>
+          </div>
+          <div class="sidebar-block">
+            <h2>Core Skills</h2>
+            <ul class="sidebar-skills"><li>Fleet coordination</li><li>Warehouse and field operations</li><li>Transport van logistics</li><li>Daily inspections and readiness checks</li><li>Inventory counting and documentation</li><li>Customer-facing service</li><li>Team onboarding</li><li>Shift reliability</li><li>Arabic (Native)</li><li>English (C1)</li><li>German (B1/B2)</li></ul>
+          </div>
+          <div class="sidebar-block">
+            <h2>Availability</h2>
+            <p>Available immediately for full-time or mini-job roles.</p>
+          </div>
+        </div>
+      </aside>
+      <section class="content">
+        <div class="content-intro">
+          <p class="caps content-kicker">Soft visual hierarchy / low layout complexity</p>
+          <p>Operations and logistics support professional with hands-on experience managing more than 1,600 e-scooters across 7 cities, coordinating 7 transport vans, completing daily readiness checks, and supporting customer-facing field operations. Recognized for fast response times, reliable execution, onboarding new team members, and disciplined daily documentation. Available immediately for warehouse, logistics, operational support, and service roles.</p>
+        </div>
+        <section class="content-section">
+          <h2>Experience</h2>
+          
+            <section class="editorial-card">
+              <div class="role-line">
+                <div>
+                  <h3>Logistics and Fleet Operations Associate</h3>
+                  <p class="company">Zeus Scooters GmbH</p>
+                </div>
+                <div class="period">Dec 2023 - Jul 2024</div>
+              </div>
+              <ul class="editorial-bullets"><li>Managed day-to-day support for a fleet of more than 1,600 e-scooters across 7 cities.</li><li>Coordinated logistics using 7 transport vans to keep assets available and operational.</li><li>Completed daily maintenance checks and readiness inspections to support reliable service.</li><li>Trained new team members on operational routines and day-to-day execution.</li></ul>
+            </section>
+            
+
+            <section class="editorial-card">
+              <div class="role-line">
+                <div>
+                  <h3>Service and Operations Associate</h3>
+                  <p class="company">Roxy Mobility GmbH</p>
+                </div>
+                <div class="period">Dec 2020 - Oct 2024</div>
+              </div>
+              <ul class="editorial-bullets"><li>Handled daily field service and customer support in a fast-moving operating environment.</li><li>Coordinated with partners including Deutsche Bahn on site and logistics-related tasks.</li><li>Earned top recognition for the fastest response time in the city.</li><li>Maintained daily records and inventory tracking for operational equipment.</li></ul>
+            </section>
+            
+
+            <section class="editorial-card">
+              <div class="role-line">
+                <div>
+                  <h3>Project and Team Assistant</h3>
+                  <p class="company">General Administration and Logistics</p>
+                </div>
+                <div class="period">Nov 2024 - Present</div>
+              </div>
+              <ul class="editorial-bullets"><li>Supported daily data capture and task tracking for ongoing team activities.</li><li>Prepared materials for workshops and team sessions.</li><li>Provided general administrative support to improve workflow consistency.</li></ul>
+            </section>
+            
+        </section>
+        <section class="content-section">
+          <h2>Education</h2>
+          <div class="education-row">
+            <strong>M.Sc. Information Systems</strong>
+            <span>University Example</span>
+            <p>Focus on analytics, business systems, and digital operations.</p>
+          </div>
+        </section>
+      </section>
+    </main>
+    
+  </div>
+</body>
+</html>

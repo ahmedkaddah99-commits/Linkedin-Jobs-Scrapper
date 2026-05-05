@@ -1,2 +1,90 @@
-Summary
-Experienced analyst with operations background.
+Ahmed Kaddah Düsseldorf, Germany ahmed.kaddah@tutamail.com
+
+PROFESSIONAL SUMMARY
+Market Intelligence & Business Transformation Specialist with experience translating complex data into executive-ready strategic insights across industrial and technology contexts. Proven ability to identify high-impact opportunities, design data-driven decision frameworks, and enable organizations to anticipate market shifts, competitive dynamics, and operational risks.
+Strong background in AI-enabled analytics, automation, stakeholder alignment, and cross-functional strategy support. Experienced in integrating external intelligence with internal performance data to guide planning, portfolio decisions, and transformation initiatives.
+
+PROFESSIONAL EXPERIENCE
+Technology Transformation & Strategy Consulting (Internship)
+Allianz Technology | Germany | May 2025 – Sep 2025
+Contributed to enterprise AI transformation programs impacting the Software Development Lifecycle (SDLC)
+Designed AI-enabled workflows integrating multiple data sources to improve productivity and decision transparency
+Developed architecture operating models improving visibility into technology assets and dependencies
+Supported governance frameworks including monitoring logic, guardrails, and usage tracking
+Collaborated with cross-functional stakeholders across IT, operations, and transformation units
+Produced structured analyses and presentations for senior stakeholders
+
+Business Transformation & AI Associate (Internship)
+Allianz SE | Germany | Nov 2024 – Apr 2025
+Identified and prioritized AI use cases across business units through structured stakeholder engagement
+Designed and prototyped AI-driven workflow automations and agent-based MVPs for process optimization
+Built tools linking business requirements to implementation artifacts, improving traceability and alignment
+Developed KPI-based impact models to quantify productivity gains and implementation value
+Facilitated workshops and enablement sessions for non-technical teams
+Established feedback loops to improve solution adoption and performance
+
+
+Contractor — Operations & Process Optimization
+Zeus Scooters GmbH | Germany | Dec 2023 – Jul 2024
+Managed multi-city operations across 7 locations with over 1,600 assets
+Led a 15-person team, introducing standardized procedures and performance monitoring systems
+Implemented operational dashboards to support data-driven decision-making
+Negotiated financing arrangements through structured stakeholder coordination
+Improved operational efficiency through workflow redesign and KPI management
+
+Operations Lead & Co-Founder
+Roxy Mobility GmbH | Freiburg | Dec 2020 – Oct 2024
+Built and scaled city-wide operations from inception
+Increased revenue by 25% while reducing costs by 50% through process optimization
+Developed governance structures, documentation standards, and performance systems
+Negotiated partnerships with Deutsche Bahn and local transport authorities
+Implemented KPI monitoring frameworks resulting in a fourfold improvement in asset utilization
+Coordinated cross-functional teams across operations, customer service, and regulatory bodies
+
+EDUCATION
+M.A. Entrepreneurship & Innovation
+Katholische Universität Eichstätt-Ingolstadt
+Expected April 2026
+B.Sc. Business Administration & Management
+University of Debrecen
+
+SKILLS
+Market & Strategic Analysis:
+Market monitoring, competitive analysis, scenario modeling, KPI design, performance analytics
+Data & Tools:
+Excel, PowerPoint, Power BI, dashboards, workflow automation, AI-assisted analysis, Python (Data Extract, Cleaning, Automation, & Insight Generation), Web Scrapping/Crawling
+Business & Transformation:
+Process optimization, stakeholder management, governance design, operating models
+Technology & AI:
+GenAI tools, API integration, low-code automation (n8n, etc.), analytics workflows
+LANGUAGES
+Arabic — Native | English — C1 | German — B1/B2
+
+
+
+MOTIVATION LETTER 
+Ahmed Kaddah
+Düsseldorf, Germany
+ahmed.kaddah@tutamail.com
+Henkel AG & Co. KGaA
+Adhesive Technologies Division
+Düsseldorf, Germany
+
+Application for Manager Market Intelligence — Adhesive Technologies
+Dear Hiring Team,
+I am applying for the position of Manager Market Intelligence within Adhesive Technologies with strong enthusiasm. Henkel’s strategic focus on industrial solutions, sustainability-driven innovation, and data-supported decision-making aligns closely with my professional experience in transformation, analytics, and cross-functional strategy support.
+Through my work in technology transformation and AI-enabled business initiatives at Allianz, I have developed the ability to convert complex information into actionable insights for senior stakeholders. My responsibilities included identifying high-impact opportunities, evaluating initiatives based on measurable value, and supporting governance structures that ensure reliable decision-making — competencies directly relevant to Market Intelligence functions.
+In addition, I led operational and strategic initiatives in entrepreneurial and industrial contexts, where success depended on anticipating demand shifts, managing uncertainty, and optimizing performance across multiple stakeholders. These experiences strengthened my ability to analyze market dynamics, evaluate risks, and support evidence-based planning.
+Henkel’s Adhesive Technologies division operates at the center of global industrial transformation, serving sectors such as automotive, electronics, construction, and infrastructure. As highlighted in the strategic overview of this business, performance is increasingly influenced by macroeconomic trends, technological disruption, and competitive developments across these end markets. 
+I am particularly motivated by the opportunity to contribute to a function that acts as an early-warning system for strategic decisions — monitoring markets continuously, synthesizing signals, and providing leadership with clear, data-driven guidance.
+My background combines analytical rigor with practical implementation experience:
+Designing data-driven frameworks to evaluate initiatives
+Integrating information from diverse sources into coherent insights
+Communicating complex analyses in an accessible manner
+Collaborating across functions and seniority levels
+Leveraging AI tools to accelerate analysis and insight generation
+I am confident that this combination allows me to contribute effectively to Henkel’s goal of anticipating market shifts, identifying opportunities, and supporting strategic planning across business units.
+Henkel’s reputation for long-term thinking, technological leadership, and responsible growth makes this role especially attractive to me. I would welcome the opportunity to contribute to strengthening the Market Intelligence capability that supports these ambitions.
+Thank you for your time and consideration. I look forward to the possibility of discussing how my background and motivation can contribute to Henkel’s continued success.
+Yours sincerely,
+Ahmed Kaddah

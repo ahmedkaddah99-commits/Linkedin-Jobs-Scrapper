@@ -4,6 +4,7 @@ import AppShell from "./components/AppShell";
 import ConnectionPanel from "./components/ConnectionPanel";
 import { useSession } from "./context/SessionContext";
 import DashboardPage from "./pages/DashboardPage";
+import CvStudioPage from "./pages/CvStudioPage";
 import DocumentsPage from "./pages/ArtifactsPage";
 import ReviewQueuePage from "./pages/ReviewQueuePage";
 import ReferralsPage from "./pages/ReferralsPage";
@@ -28,6 +29,7 @@ export default function App() {
           <Route path="/review-queue" element={<ReviewQueuePage />} />
           <Route path="/tracker" element={<TrackerPage />} />
           <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/cv-studio" element={<CvStudioPage />} />
           <Route path="/artifacts" element={<Navigate replace to="/documents" />} />
           <Route path="/referrals" element={<ReferralsPage />} />
           <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
