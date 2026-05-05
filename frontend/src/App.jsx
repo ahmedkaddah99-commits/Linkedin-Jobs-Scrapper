@@ -23,6 +23,7 @@ export default function App() {
       {isConnected ? (
         <Routes>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<Navigate replace to="/" />} />
           <Route path="/workspaces" element={<WorkspacesPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:runId" element={<RunDetailPage />} />
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/admin" element={<AdminPage />} />
+          <Route path="*" element={<Navigate replace to="/" />} />
         </Routes>
       ) : (
         <ConnectionPanel />

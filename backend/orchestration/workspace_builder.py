@@ -75,6 +75,7 @@ USER_FACING_FIELD_IDS = {
     "workspace_cv_asset_id",
     "keywords",
     "country_codes",
+    "target_roles",
     "time_posted_seconds",
     "experience_levels",
     "manual_url_seed_list",
@@ -82,13 +83,20 @@ USER_FACING_FIELD_IDS = {
     "portals",
     "forbidden_title_keywords",
     "max_german_level",
+    "french_special_char_threshold",
+    "spanish_special_char_threshold",
+    "low_applicant_threshold",
     "languages",
     "cv_template",
     "cv_color_scheme",
     "cv_font",
     "include_photo",
+    "stage1_model",
     "stage1_extra_prompt",
     "stage1_prompt_override",
+    "stage4_model",
+    "stage4_fallback_model",
+    "stage4_max_jobs",
     "stage4_extra_prompt",
     "stage4_prompt_override",
 }
@@ -97,6 +105,7 @@ FIELD_SECTION_BY_ID = {
     "workspace_cv_asset_id": "cv_binding",
     "keywords": "targeting",
     "country_codes": "targeting",
+    "target_roles": "targeting",
     "time_posted_seconds": "filters",
     "experience_levels": "filters",
     "manual_url_seed_list": "sources",
@@ -104,13 +113,20 @@ FIELD_SECTION_BY_ID = {
     "portals": "sources",
     "forbidden_title_keywords": "filters",
     "max_german_level": "filters",
+    "french_special_char_threshold": "filters",
+    "spanish_special_char_threshold": "filters",
+    "low_applicant_threshold": "filters",
     "languages": "filters",
     "cv_template": "documents",
     "cv_color_scheme": "documents",
     "cv_font": "documents",
     "include_photo": "documents",
+    "stage1_model": "prompt_preferences",
     "stage1_extra_prompt": "prompt_preferences",
     "stage1_prompt_override": "prompt_preferences",
+    "stage4_model": "prompt_preferences",
+    "stage4_fallback_model": "prompt_preferences",
+    "stage4_max_jobs": "prompt_preferences",
     "stage4_extra_prompt": "prompt_preferences",
     "stage4_prompt_override": "prompt_preferences",
 }
@@ -118,23 +134,31 @@ FIELD_SECTION_BY_ID = {
 FIELD_SORT_ORDER = {
     "workspace_cv_asset_id": 10,
     "keywords": 20,
+    "target_roles": 25,
     "country_codes": 30,
     "time_posted_seconds": 40,
     "experience_levels": 50,
     "forbidden_title_keywords": 60,
     "max_german_level": 70,
-    "languages": 80,
-    "manual_url_seed_list": 90,
-    "company_career_sites": 100,
-    "portals": 110,
-    "cv_template": 120,
-    "cv_color_scheme": 130,
-    "cv_font": 140,
-    "include_photo": 150,
-    "stage1_extra_prompt": 160,
-    "stage1_prompt_override": 170,
-    "stage4_extra_prompt": 180,
-    "stage4_prompt_override": 190,
+    "french_special_char_threshold": 80,
+    "spanish_special_char_threshold": 90,
+    "low_applicant_threshold": 100,
+    "languages": 110,
+    "manual_url_seed_list": 120,
+    "company_career_sites": 130,
+    "portals": 140,
+    "cv_template": 150,
+    "cv_color_scheme": 160,
+    "cv_font": 170,
+    "include_photo": 180,
+    "stage1_model": 190,
+    "stage1_extra_prompt": 200,
+    "stage1_prompt_override": 210,
+    "stage4_model": 220,
+    "stage4_fallback_model": 230,
+    "stage4_max_jobs": 240,
+    "stage4_extra_prompt": 250,
+    "stage4_prompt_override": 260,
 }
 
 BUILDER_SECTIONS = [
@@ -901,7 +925,10 @@ def _annotate_builder_field(field_definition: dict) -> dict:
     if field_id == "geo_id":
         field["description"] = "Derived internally from the selected country when possible."
     if field_id == "target_roles":
-        field["description"] = "Legacy role-family helper retained only for migration compatibility."
+        field["description"] = (
+            "Pick one primary role or blend up to three role families so search keywords "
+            "and document emphasis stay aligned."
+        )
     if field_id == "workspace_cv_asset_id":
         field["required"] = True
     return field

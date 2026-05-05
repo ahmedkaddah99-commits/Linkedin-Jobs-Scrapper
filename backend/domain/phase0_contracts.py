@@ -20,19 +20,33 @@ WORKSPACE_TARGETING_METHOD = "keyword_profile_aligned"
 WORKSPACE_KEYWORD_LIMIT = 12
 
 WORKSPACE_USER_FACING_FIELD_IDS = [
+    "workspace_cv_asset_id",
     "keywords",
     "country_codes",
+    "target_roles",
     "time_posted_seconds",
     "experience_levels",
     "manual_url_seed_list",
     "company_career_sites",
+    "portals",
     "forbidden_title_keywords",
     "max_german_level",
+    "french_special_char_threshold",
+    "spanish_special_char_threshold",
+    "low_applicant_threshold",
     "languages",
     "cv_template",
     "cv_color_scheme",
     "cv_font",
     "include_photo",
+    "stage1_model",
+    "stage1_extra_prompt",
+    "stage1_prompt_override",
+    "stage4_model",
+    "stage4_fallback_model",
+    "stage4_max_jobs",
+    "stage4_extra_prompt",
+    "stage4_prompt_override",
 ]
 
 WORKSPACE_HIDDEN_FIELD_IDS = [
@@ -45,13 +59,7 @@ WORKSPACE_HIDDEN_FIELD_IDS = [
     "manual_request_timeout_seconds",
     "company_site_max_jobs_per_site",
     "company_site_request_timeout_seconds",
-    "stage4_max_jobs",
     "dedupe_against_tracker",
-    "stage1_model",
-    "stage1_prompt_override",
-    "stage4_model",
-    "stage4_fallback_model",
-    "stage4_prompt_override",
     "stage4_sleep_seconds",
     "stage4_retries",
     "stage4_retry_sleep",
@@ -62,7 +70,6 @@ WORKSPACE_HIDDEN_FIELD_IDS = [
 ]
 
 WORKSPACE_DEPRECATED_FIELD_IDS = [
-    "target_roles",
     "geo_id",
     "linkedin_geo_id",
     "candidate_name",

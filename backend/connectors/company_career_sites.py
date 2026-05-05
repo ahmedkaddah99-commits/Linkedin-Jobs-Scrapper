@@ -52,6 +52,22 @@ DISCOVERED_COMPANY_SITE_FILES = (
 )
 
 
+def _discovery_path_variants(path_value: Any) -> list[Path]:
+    path = Path(path_value)
+    variants = [path]
+    if path.suffix.lower() == ".txt":
+        variants.append(path.with_suffix(".live.txt"))
+    deduped: list[Path] = []
+    seen = set()
+    for variant in variants:
+        normalized = str(variant)
+        if normalized in seen:
+            continue
+        deduped.append(variant)
+        seen.add(normalized)
+    return deduped
+
+
 def _same_host_family(candidate_url: str, base_url: str) -> bool:
     candidate_host = (urlparse(candidate_url).netloc or "").lower().split(":")[0]
     base_host = (urlparse(base_url).netloc or "").lower().split(":")[0]
@@ -154,16 +170,16 @@ def load_discovered_company_site_entries(paths: Any = None) -> list[dict[str, st
     seen_urls = set()
 
     for path_value in source_paths:
-        path = Path(path_value)
-        if not path.exists() or not path.is_file():
-            continue
-        parsed_entries = parse_company_site_entries(path.read_text(encoding="utf-8"))
-        for entry in parsed_entries:
-            url = entry.get("url") or ""
-            if not url or url in seen_urls:
+        for path in _discovery_path_variants(path_value):
+            if not path.exists() or not path.is_file():
                 continue
-            entries.append(entry)
-            seen_urls.add(url)
+            parsed_entries = parse_company_site_entries(path.read_text(encoding="utf-8"))
+            for entry in parsed_entries:
+                url = entry.get("url") or ""
+                if not url or url in seen_urls:
+                    continue
+                entries.append(entry)
+                seen_urls.add(url)
 
     return entries
 

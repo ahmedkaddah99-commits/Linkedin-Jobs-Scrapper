@@ -104,7 +104,7 @@ function buildReviewQueueTarget(documents) {
 
 export default function DocumentsPage() {
   const { request } = useSession();
-  const activeView = VIEW_LIBRARY;
+  const [activeView, setActiveView] = useState(VIEW_LIBRARY);
   const [documentFilters, setDocumentFilters] = useState({
     search: "",
     workspaceId: "",
@@ -146,14 +146,17 @@ export default function DocumentsPage() {
     error: documentsError,
     refresh: refreshDocuments,
   } = useApiResource(() => request("/documents?limit=500"), [request]);
+  const {
+    data: rejectedPayload,
+    loading: rejectedLoading,
+    error: rejectedError,
+    refresh: refreshRejected,
+  } = useApiResource(() => request("/rejected-jobs?limit=500"), [request]);
   const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100"), [request]);
-  const rejectedLoading = false;
-  const rejectedError = "";
-  const refreshRejected = async () => undefined;
 
   const allDocuments = documentsPayload?.documents || [];
   const documentGroups = documentsPayload?.groups || [];
-  const allRejectedItems = [];
+  const allRejectedItems = rejectedPayload?.items || [];
   const workspaces = workspacesPayload?.workspaces || [];
 
   const workspaceOptions = useMemo(
@@ -267,6 +270,10 @@ export default function DocumentsPage() {
   );
   const selectedUnavailableRequeueCount =
     selectedRejectedItems.length - selectedRequeueableItems.length;
+  const requeueableRejectedCount = useMemo(
+    () => allRejectedItems.filter((item) => item.can_requeue).length,
+    [allRejectedItems],
+  );
   const selectedBlockedDocuments = useMemo(
     () => selectedDocuments.filter((item) => item.final_export_blocked),
     [selectedDocuments],
@@ -347,6 +354,43 @@ export default function DocumentsPage() {
       setRequirementsReviewOpen(false);
     }
   }, [exportState.gate]);
+
+  const summaryCards =
+    activeView === VIEW_LIBRARY
+      ? [
+          {
+            label: "Documents In Library",
+            value: allDocuments.length,
+            description: "Generated files and uploaded assets in one place.",
+          },
+          {
+            label: "Visible Groups",
+            value: visibleDocumentSections.length,
+            description: "Application packages and shared document collections currently in view.",
+          },
+          {
+            label: "Current Selection",
+            value: selectedDocumentIds.length,
+            description: "Selected for bulk export.",
+          },
+        ]
+      : [
+          {
+            label: "Rejected Jobs",
+            value: allRejectedItems.length,
+            description: "Saved screening rejects available for review and requeue.",
+          },
+          {
+            label: "Can Requeue",
+            value: requeueableRejectedCount,
+            description: "Rejected jobs that can be sent back through the pipeline.",
+          },
+          {
+            label: "Current Selection",
+            value: selectedRejectedIds.length,
+            description: "Selected for bulk requeue.",
+          },
+        ];
 
   function toggleSelection(setter, currentIds, id) {
     setter(
@@ -511,40 +555,42 @@ export default function DocumentsPage() {
         </div>
       </header>
 
+      <section className="flex flex-wrap gap-2 rounded-xl bg-surface-container-low p-2">
+        {[
+          { id: VIEW_LIBRARY, label: "Documents Library" },
+          { id: VIEW_REJECTED, label: "Rejected Jobs Review" },
+        ].map((view) => (
+          <button
+            key={view.id}
+            className={[
+              "rounded-lg px-4 py-2.5 text-sm font-medium transition-colors",
+              activeView === view.id
+                ? "bg-surface-container-lowest text-on-surface shadow-soft"
+                : "text-on-surface-variant hover:bg-surface-container-high",
+            ].join(" ")}
+            onClick={() => setActiveView(view.id)}
+            type="button"
+          >
+            {view.label}
+          </button>
+        ))}
+      </section>
+
       <section className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
-          <div className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
-            Documents In Library
+        {summaryCards.map((card) => (
+          <div
+            key={card.label}
+            className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft"
+          >
+            <div className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
+              {card.label}
+            </div>
+            <div className="mt-2 font-headline text-3xl font-bold text-on-surface">
+              {card.value}
+            </div>
+            <div className="mt-1 text-sm text-on-surface-variant">{card.description}</div>
           </div>
-          <div className="mt-2 font-headline text-3xl font-bold text-on-surface">
-            {allDocuments.length}
-          </div>
-          <div className="mt-1 text-sm text-on-surface-variant">
-            Generated files and uploaded assets in one place.
-          </div>
-        </div>
-        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
-          <div className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
-            Visible Groups
-          </div>
-          <div className="mt-2 font-headline text-3xl font-bold text-on-surface">
-            {visibleDocumentSections.length}
-          </div>
-          <div className="mt-1 text-sm text-on-surface-variant">
-            Application packages and shared document collections currently in view.
-          </div>
-        </div>
-        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
-          <div className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
-            Current Selection
-          </div>
-          <div className="mt-2 font-headline text-3xl font-bold text-on-surface">
-            {selectedDocumentIds.length}
-          </div>
-          <div className="mt-1 text-sm text-on-surface-variant">
-            Selected for bulk export.
-          </div>
-        </div>
+        ))}
       </section>
 
       {activeView === VIEW_LIBRARY ? (

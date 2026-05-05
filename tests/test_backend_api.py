@@ -269,6 +269,13 @@ class BackendApiTests(unittest.TestCase):
         }
         self.assertIn("workspace_cv_asset_id", user_facing_fields)
         self.assertIn("country_codes", user_facing_fields)
+        self.assertIn("target_roles", user_facing_fields)
+        self.assertIn("french_special_char_threshold", user_facing_fields)
+        self.assertIn("spanish_special_char_threshold", user_facing_fields)
+        self.assertIn("low_applicant_threshold", user_facing_fields)
+        self.assertIn("stage1_model", user_facing_fields)
+        self.assertIn("stage4_model", user_facing_fields)
+        self.assertIn("stage4_fallback_model", user_facing_fields)
         self.assertNotIn("geo_id", user_facing_fields)
         self.assertNotIn("candidate_name", user_facing_fields)
         self.assertTrue(
@@ -289,6 +296,12 @@ class BackendApiTests(unittest.TestCase):
                     "time_posted_seconds": 86400,
                     "experience_levels": [2, 3],
                     "target_roles": ["Business Analyst", "Consultant"],
+                    "french_special_char_threshold": 9999,
+                    "spanish_special_char_threshold": 0,
+                    "low_applicant_threshold": 55,
+                    "stage1_model": "deepseek-chat",
+                    "stage4_model": "deepseek-chat",
+                    "stage4_fallback_model": "gemini-2.5-flash",
                 },
             },
         )
@@ -298,6 +311,11 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(workspace_payload["settings"]["keywords"], ["analyst"])
         self.assertEqual(workspace_payload["settings"]["experience_levels"], [2, 3])
         self.assertEqual(workspace_payload["settings"]["target_roles"], ["Business Analyst", "Consultant"])
+        self.assertEqual(workspace_payload["settings"]["french_special_char_threshold"], 9999)
+        self.assertEqual(workspace_payload["settings"]["low_applicant_threshold"], 55)
+        self.assertEqual(workspace_payload["settings"]["stage1_model"], "deepseek-chat")
+        self.assertEqual(workspace_payload["settings"]["stage4_model"], "deepseek-chat")
+        self.assertEqual(workspace_payload["settings"]["stage4_fallback_model"], "gemini-2.5-flash")
 
         status, updated_workspace_payload = self._request(
             "PUT",
@@ -639,6 +657,8 @@ class BackendApiTests(unittest.TestCase):
         item = rejected_payload["items"][0]
         self.assertEqual(item["job_id"], "rejected_job_1")
         self.assertTrue(item["can_requeue"])
+        self.assertIn("workspace_id=api_requeue_workspace", item["workspace_editor_url"])
+        self.assertIn("edit=api_requeue_workspace", item["workspace_editor_url"])
 
         status, requeue_payload = self._request(
             "POST",

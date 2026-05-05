@@ -164,6 +164,33 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
             ],
         )
 
+    def test_discovered_company_site_loader_reads_live_file_variant(self):
+        temp_dir = Path("tests") / "_tmp_company_career_discovery"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        canonical_path = temp_dir / "discovered_regular_company_career_sites.txt"
+        live_path = temp_dir / "discovered_regular_company_career_sites.live.txt"
+        try:
+            live_path.write_text(
+                "Acme | https://careers.acme.example/jobs\n",
+                encoding="utf-8",
+            )
+
+            entries = load_discovered_company_site_entries([canonical_path])
+        finally:
+            if canonical_path.exists():
+                canonical_path.unlink()
+            if live_path.exists():
+                live_path.unlink()
+            if temp_dir.exists():
+                temp_dir.rmdir()
+
+        self.assertEqual(
+            entries,
+            [
+                {"company_name": "Acme", "url": "https://careers.acme.example/jobs"},
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

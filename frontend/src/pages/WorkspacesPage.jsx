@@ -23,6 +23,23 @@ const EMPTY_BUILDER_FORM = {
   settings: {},
 };
 
+function defaultProfileLabelForFlow(flowId) {
+  return flowId === "reusable_packages"
+    ? "Operations Profile"
+    : "Primary Job Seeker Profile";
+}
+
+function buildBuilderForm(catalog, flowId = DEFAULT_FLOW_ID) {
+  return {
+    ...EMPTY_BUILDER_FORM,
+    flowId,
+    moduleIds: defaultModuleIdsForFlow(catalog, flowId),
+    promptFamily: flowId,
+    profileLabel: defaultProfileLabelForFlow(flowId),
+    settings: buildDefaultSettings(catalog, flowId),
+  };
+}
+
 function parseLineList(text) {
   return String(text || "")
     .split(/\r?\n/)
@@ -432,6 +449,7 @@ export default function WorkspacesPage() {
     data: builderCatalog,
     loading: builderLoading,
     error: builderError,
+    refresh: refreshBuilderCatalog,
   } = useApiResource(() => request("/workspace-builder/catalog"), [request]);
   const {
     data: cvAssetsPayload,
@@ -439,6 +457,7 @@ export default function WorkspacesPage() {
   } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request]);
 
   const workspaces = workspacesData?.workspaces || [];
+  const builderCatalogReady = Boolean(builderCatalog && !builderLoading);
   const focusedWorkspaceId = searchParams.get("workspace_id") || "";
   const focusedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === focusedWorkspaceId) || null,
@@ -503,6 +522,13 @@ export default function WorkspacesPage() {
     }),
     [cvAssetsPayload?.documents],
   );
+  const resolvedModuleIds = useMemo(
+    () =>
+      form.moduleIds.length
+        ? form.moduleIds
+        : defaultModuleIdsForFlow(builderCatalog, form.flowId),
+    [builderCatalog, form.flowId, form.moduleIds],
+  );
 
   function resetBuilderState(overrides = {}) {
     setBuilderState({
@@ -529,25 +555,37 @@ export default function WorkspacesPage() {
     setSearchParams(next);
   }
 
+  function clearBuilderSearchParams() {
+    if (!searchParams.get("create") && !searchParams.get("edit") && !searchParams.get("focus")) {
+      return;
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("create");
+    next.delete("edit");
+    next.delete("focus");
+    setSearchParams(next);
+  }
+
   function openBuilder() {
+    if (!builderCatalogReady) {
+      return;
+    }
     const defaultFlowId = flows[0]?.id || DEFAULT_FLOW_ID;
-    setForm({
-      ...EMPTY_BUILDER_FORM,
-      flowId: defaultFlowId,
-      moduleIds: defaultModuleIdsForFlow(builderCatalog, defaultFlowId),
-      promptFamily: defaultFlowId,
-      profileLabel:
-        defaultFlowId === "reusable_packages"
-          ? "Operations Profile"
-          : "Primary Job Seeker Profile",
-      settings: buildDefaultSettings(builderCatalog, defaultFlowId),
-    });
+    setForm(buildBuilderForm(builderCatalog, defaultFlowId));
     setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
     setCvUploadState({ uploading: false, message: "", error: "" });
     resetBuilderState({ open: true });
+    if (searchParams.get("create")) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("create");
+      setSearchParams(next);
+    }
   }
 
   function openEditor(workspace) {
+    if (!builderCatalogReady) {
+      return;
+    }
     setForm(hydrateFormFromWorkspace(workspace, builderCatalog));
     setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
     setCvUploadState({ uploading: false, message: "", error: "" });
@@ -563,12 +601,7 @@ export default function WorkspacesPage() {
     setForm(EMPTY_BUILDER_FORM);
     setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
     setCvUploadState({ uploading: false, message: "", error: "" });
-    if (searchParams.get("edit")) {
-      const next = new URLSearchParams(searchParams);
-      next.delete("edit");
-      next.delete("focus");
-      setSearchParams(next);
-    }
+    clearBuilderSearchParams();
   }
 
   function updateForm(patch) {
@@ -592,10 +625,7 @@ export default function WorkspacesPage() {
       sourceIds: [],
       moduleIds: defaultModuleIdsForFlow(builderCatalog, flowId),
       promptFamily: flowId,
-      profileLabel:
-        flowId === "reusable_packages"
-          ? "Operations Profile"
-          : "Primary Job Seeker Profile",
+      profileLabel: defaultProfileLabelForFlow(flowId),
       settings: buildDefaultSettings(builderCatalog, flowId),
     }));
     setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
@@ -634,7 +664,7 @@ export default function WorkspacesPage() {
           description: form.description,
           flow_id: form.flowId,
           source_ids: form.sourceIds,
-          module_ids: form.moduleIds,
+          module_ids: resolvedModuleIds,
           profile_label: form.profileLabel,
           prompt_family: form.promptFamily,
           manual_sources_are_preapproved: form.manualSourcesArePreapproved,
@@ -645,6 +675,7 @@ export default function WorkspacesPage() {
         message: `${isEditing ? "Updated" : "Created"} ${workspace.name}`,
       });
       setForm(EMPTY_BUILDER_FORM);
+      clearBuilderSearchParams();
       await refresh();
     } catch (submitError) {
       setBuilderState((current) => ({
@@ -726,6 +757,22 @@ export default function WorkspacesPage() {
       openEditor(workspace);
     }
   }, [builderCatalog, builderState.open, searchParams, workspaces]);
+
+  useEffect(() => {
+    if (!builderCatalogReady || builderState.open || searchParams.get("edit")) {
+      return;
+    }
+    if (searchParams.get("create")) {
+      const defaultFlowId = flows[0]?.id || DEFAULT_FLOW_ID;
+      setForm(buildBuilderForm(builderCatalog, defaultFlowId));
+      setSourceValidation({ loading: false, valid: true, sourceResults: [], error: "" });
+      setCvUploadState({ uploading: false, message: "", error: "" });
+      resetBuilderState({ open: true });
+      const next = new URLSearchParams(searchParams);
+      next.delete("create");
+      setSearchParams(next);
+    }
+  }, [builderCatalog, builderCatalogReady, builderState.open, flows, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (!builderState.open || !focusedSectionId) {
@@ -905,7 +952,8 @@ export default function WorkspacesPage() {
                     Queue
                   </button>
                   <button
-                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!builderCatalogReady}
                     onClick={() => openEditor(workspace)}
                     type="button"
                   >
@@ -1074,7 +1122,8 @@ export default function WorkspacesPage() {
 
           <div className="flex flex-wrap gap-3 border-t border-outline-variant/10 pt-5">
             <button
-              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!builderCatalogReady}
               onClick={() => openEditor(workspace)}
               type="button"
             >
@@ -1115,13 +1164,27 @@ export default function WorkspacesPage() {
           </p>
         </div>
         <button
-          className="rounded bg-gradient-to-br from-primary to-primary-container px-5 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
+          className="rounded bg-gradient-to-br from-primary to-primary-container px-5 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={!builderCatalogReady}
           onClick={openBuilder}
           type="button"
         >
-          Create Workspace From Scratch
+          {builderLoading ? "Loading Workspace Builder..." : "Create Workspace From Scratch"}
         </button>
       </header>
+
+      {builderError && !builderState.open ? (
+        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm shadow-soft">
+          <p className="text-error">{builderError}</p>
+          <button
+            className="mt-3 rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
+            onClick={() => refreshBuilderCatalog().catch(() => undefined)}
+            type="button"
+          >
+            Retry Workspace Builder
+          </button>
+        </div>
+      ) : null}
 
       {builderState.message ? (
         <div className="rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface">
@@ -1220,7 +1283,7 @@ export default function WorkspacesPage() {
               {availableModules.length ? (
                 <div className="flex flex-wrap gap-3">
                   {availableModules
-                    .filter((module) => form.moduleIds.includes(module.id))
+                    .filter((module) => resolvedModuleIds.includes(module.id))
                     .map((module) => (
                       <div
                         className="rounded-full border border-primary/20 bg-primary/10 px-3 py-2 text-sm font-medium text-primary"
@@ -1391,7 +1454,9 @@ export default function WorkspacesPage() {
                 </div>
                 <div>
                   <span className="font-semibold text-on-surface">Modules:</span>{" "}
-                  {form.moduleIds.length ? form.moduleIds.map(labelize).join(", ") : "Default remediation path"}
+                  {resolvedModuleIds.length
+                    ? resolvedModuleIds.map(labelize).join(", ")
+                    : "Default remediation path"}
                 </div>
                 <div>
                   <span className="font-semibold text-on-surface">Workspace CV:</span>{" "}
@@ -1419,7 +1484,7 @@ export default function WorkspacesPage() {
                     builderState.submitting ||
                     !form.name.trim() ||
                     !form.sourceIds.length ||
-                    !form.moduleIds.length ||
+                    !resolvedModuleIds.length ||
                     !form.settings.workspace_cv_asset_id
                   }
                   onClick={submitWorkspace}
@@ -1482,11 +1547,12 @@ export default function WorkspacesPage() {
               Start by creating a workspace from scratch. You choose the job sources, the screening and generation modules, and the search settings that define that job-seeker workflow.
             </p>
             <button
-              className="mt-5 rounded bg-gradient-to-br from-primary to-primary-container px-5 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
+              className="mt-5 rounded bg-gradient-to-br from-primary to-primary-container px-5 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!builderCatalogReady}
               onClick={openBuilder}
               type="button"
             >
-              Create Your First Workspace
+              {builderLoading ? "Loading Workspace Builder..." : "Create Your First Workspace"}
             </button>
           </div>
         )}

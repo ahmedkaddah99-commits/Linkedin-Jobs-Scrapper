@@ -2432,7 +2432,7 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                         "source_stage": source_stage,
                         "updated_at": review.updated_at if review else run.updated_at,
                         "apply_link": payload.get("apply_link") or payload.get("link") or payload.get("source_url"),
-                        "workspace_editor": f"/workspaces?edit={run.workspace_id}&focus="
+                        "workspace_editor": f"/workspaces?workspace_id={run.workspace_id}&edit={run.workspace_id}&focus="
                         f"{_rejected_focus_for_reason(review_meta.get('reason_code') or '')}",
                         "override_state": review_meta.get("rejection_override_state"),
                         "override_requested_at": review_meta.get("rejection_override_requested_at"),
@@ -2464,7 +2464,10 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                         "override_requested_by": normalized["override"]["requested_by"],
                         "override_notes": normalized["override"]["notes"],
                         "requeue_run_id": str(review_meta.get("requeue_run_id") or ""),
-                        "workspace_editor_url": f"/workspaces?edit={run.workspace_id}&focus={_rejected_focus_for_reason(reason_code)}",
+                        "workspace_editor_url": (
+                            f"/workspaces?workspace_id={run.workspace_id}&edit={run.workspace_id}"
+                            f"&focus={_rejected_focus_for_reason(reason_code)}"
+                        ),
                         "can_requeue": _workflow_supports_requeue(application, run),
                     }
                 )
@@ -2485,7 +2488,9 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                     "source_stage": review_meta.get("rejected_source_stage") or "manual_review",
                     "updated_at": review.updated_at,
                     "apply_link": job_payload.get("apply_link") or job_payload.get("link") or job_payload.get("source_url"),
-                    "workspace_editor": f"/workspaces?edit={run.workspace_id}&focus=review",
+                    "workspace_editor": (
+                        f"/workspaces?workspace_id={run.workspace_id}&edit={run.workspace_id}&focus=review"
+                    ),
                     "override_state": review_meta.get("rejection_override_state"),
                     "override_requested_at": review_meta.get("rejection_override_requested_at"),
                     "override_requested_by": review_meta.get("rejection_override_requested_by"),
@@ -2516,7 +2521,9 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                     "override_requested_by": normalized["override"]["requested_by"],
                     "override_notes": normalized["override"]["notes"],
                     "requeue_run_id": str(review_meta.get("requeue_run_id") or ""),
-                    "workspace_editor_url": f"/workspaces?edit={run.workspace_id}&focus=review",
+                    "workspace_editor_url": (
+                        f"/workspaces?workspace_id={run.workspace_id}&edit={run.workspace_id}&focus=review"
+                    ),
                     "can_requeue": _workflow_supports_requeue(application, run),
                 }
             )
