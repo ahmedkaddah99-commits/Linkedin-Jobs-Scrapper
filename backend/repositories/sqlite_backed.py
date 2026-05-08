@@ -25,6 +25,7 @@ from backend.domain.models import (
     utc_now_iso,
 )
 from backend.orchestration.seeded_workspaces import DEFAULT_WORKFLOW_TEMPLATES, DEFAULT_WORKSPACES
+from backend.security.auth import API_TOKEN_PREFIX_LENGTH
 
 
 def _serialize(payload: Any) -> str:
@@ -247,6 +248,7 @@ class _SqliteStore:
                 CREATE INDEX IF NOT EXISTS idx_reviews_run_updated_at ON reviews(run_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                 CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix_active ON api_tokens(token_prefix, is_active, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_secrets_workspace_id ON secrets(workspace_id, updated_at DESC);
                 """
             )
@@ -947,6 +949,27 @@ class SqliteAuthRepository(_SqliteStore):
         params.extend([max(1, int(limit)), max(0, int(offset))])
         with self._connect() as connection:
             rows = connection.execute(query, tuple(params)).fetchall()
+        return [ApiTokenRecord.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
+
+    def list_api_tokens_for_value(self, raw_token: str, *, active_only: bool = False) -> list[ApiTokenRecord]:
+        normalized_token = str(raw_token or "").strip()
+        if not normalized_token:
+            return []
+        candidate_prefix = normalized_token[:API_TOKEN_PREFIX_LENGTH]
+        query = "SELECT payload_json FROM api_tokens WHERE token_prefix = ?"
+        params: list[Any] = [candidate_prefix]
+        if active_only:
+            query += " AND is_active = 1"
+        query += " ORDER BY updated_at DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+            if not rows:
+                legacy_query = "SELECT payload_json FROM api_tokens WHERE ? LIKE token_prefix || '%'"
+                legacy_params: list[Any] = [normalized_token]
+                if active_only:
+                    legacy_query += " AND is_active = 1"
+                legacy_query += " ORDER BY updated_at DESC"
+                rows = connection.execute(legacy_query, tuple(legacy_params)).fetchall()
         return [ApiTokenRecord.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
 
     def get_api_token(self, token_id: str) -> ApiTokenRecord:

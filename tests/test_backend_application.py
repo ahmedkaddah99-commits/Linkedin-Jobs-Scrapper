@@ -1,9 +1,13 @@
 import shutil
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend import create_backend
+from backend.application.services import BackendValidationError
+from backend.domain.phase0_contracts import normalize_candidate_asset_descriptor
 from backend.domain.models import ArtifactRecord, JobRecord, StageDefinition
+from backend.profiles.cv_text import load_cv_text
 from backend.orchestration import BaseStage, StageOutcome
 
 
@@ -98,6 +102,62 @@ class BackendApplicationTests(unittest.TestCase):
         )
         return app, temp_dir
 
+    def _workspace_cv_asset_descriptor(self, *, asset_id: str, cv_path: Path) -> dict:
+        return normalize_candidate_asset_descriptor(
+            {
+                "asset_id": asset_id,
+                "asset_kind": "workspace_cv",
+                "display_name": cv_path.name,
+                "role": "workspace_cv",
+                "path": str(cv_path.resolve()),
+                "mime_type": "text/plain",
+                "extension": cv_path.suffix.lower().lstrip("."),
+                "tags": ["workspace_cv"],
+            }
+        )
+
+    def _create_builder_workspace_with_cv_snapshot(
+        self,
+        app,
+        *,
+        cv_path: Path,
+        cv_text: str,
+        workspace_name: str = "Builder Workspace",
+    ):
+        workspace = app.create_workspace_from_scratch(
+            {
+                "name": workspace_name,
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs"],
+                "module_ids": [
+                    "screening_filter",
+                    "priority_ranking",
+                    "tailored_document_generation",
+                ],
+                "workspace_cv_asset": self._workspace_cv_asset_descriptor(
+                    asset_id="asset_workspace_cv_primary",
+                    cv_path=cv_path,
+                ),
+                "settings": {
+                    "workspace_cv_asset_id": "asset_workspace_cv_primary",
+                    "keywords": ["analyst"],
+                    "geo_id": "101282230",
+                    "experience_levels": [2, 3],
+                    "stage4_max_jobs": 1,
+                },
+            }
+        )
+        workspace_payload = workspace.to_dict()
+        workspace_payload["settings"] = {
+            **dict(workspace_payload.get("settings") or {}),
+            "workspace_cv_text": cv_text,
+            "workspace_cv_asset_path": str(cv_path.resolve()),
+            "workspace_cv_asset_display_name": cv_path.name,
+            "workspace_cv_asset_extension": cv_path.suffix.lower().lstrip("."),
+            "workspace_cv_asset_mime_type": "text/plain",
+        }
+        return app.upsert_workspace(workspace_payload)
+
     def test_default_backend_starts_with_starter_templates_and_no_workspaces(self):
         temp_dir = self._workspace_tempdir("starter_templates")
         app = create_backend(temp_dir)
@@ -110,6 +170,8 @@ class BackendApplicationTests(unittest.TestCase):
     def test_builder_can_create_workspace_and_dry_run_plan(self):
         temp_dir = self._workspace_tempdir("builder_dry_run")
         app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Primary workspace CV snapshot", encoding="utf-8")
         workspace = app.create_workspace_from_scratch(
             {
                 "name": "My Search Workspace",
@@ -122,9 +184,15 @@ class BackendApplicationTests(unittest.TestCase):
                 ],
                 "prompt_family": "tailored_documents",
                 "profile_label": "Primary Job Seeker Profile",
+                "workspace_cv_asset": self._workspace_cv_asset_descriptor(
+                    asset_id="asset_workspace_cv_primary",
+                    cv_path=cv_path,
+                ),
                 "settings": {
+                    "workspace_cv_asset_id": "asset_workspace_cv_primary",
                     "keywords": ["analyst", "consultant"],
                     "geo_id": "101282230",
+                    "manual_url_seed_list": ["https://company.example/jobs/1"],
                     "experience_levels": [2, 3],
                     "low_applicant_threshold": 60,
                     "stage4_max_jobs": 15,
@@ -138,6 +206,16 @@ class BackendApplicationTests(unittest.TestCase):
                 },
             }
         )
+        workspace_payload = workspace.to_dict()
+        workspace_payload["settings"] = {
+            **dict(workspace_payload.get("settings") or {}),
+            "workspace_cv_text": "Primary workspace CV snapshot",
+            "workspace_cv_asset_path": str(cv_path.resolve()),
+            "workspace_cv_asset_display_name": cv_path.name,
+            "workspace_cv_asset_extension": "txt",
+            "workspace_cv_asset_mime_type": "text/plain",
+        }
+        workspace = app.upsert_workspace(workspace_payload)
         run = app.start_run(
             workspace.id,
             run_input_overrides={"manual_urls_file": "user_config/manual_job_urls.txt"},
@@ -160,6 +238,8 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertFalse(run.run_plan.resolved_run_settings["include_photo"])
         self.assertEqual(run.run_plan.resolved_run_settings["cv_template"], "modern")
         self.assertEqual(run.run_plan.resolved_run_settings["french_special_char_threshold"], 9999)
+        self.assertEqual(run.run_plan.resolved_run_settings["workspace_cv_asset_id"], "asset_workspace_cv_primary")
+        self.assertEqual(run.run_plan.resolved_run_settings["workspace_cv_text"], "Primary workspace CV snapshot")
         self.assertTrue((temp_dir / "backend.sqlite3").exists())
 
     def test_builder_can_update_existing_workspace(self):
@@ -177,6 +257,7 @@ class BackendApplicationTests(unittest.TestCase):
                 ],
                 "settings": {
                     "keywords": ["analyst"],
+                    "geo_id": "101282230",
                     "stage4_max_jobs": 10,
                 },
             }
@@ -196,6 +277,8 @@ class BackendApplicationTests(unittest.TestCase):
                 ],
                 "settings": {
                     "keywords": ["analyst", "consultant"],
+                    "geo_id": "101282230",
+                    "manual_url_seed_list": ["https://company.example/jobs/2"],
                     "stage4_max_jobs": 20,
                     "low_applicant_threshold": 50,
                 },
@@ -208,6 +291,125 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(updated_workspace.settings["keywords"], ["analyst", "consultant"])
         self.assertEqual(updated_workspace.settings["stage4_max_jobs"], 20)
         self.assertEqual(updated_workspace.metadata["source_ids"], ["linkedin_jobs", "curated_job_urls"])
+
+    def test_builder_can_create_academic_jobs_workspace(self):
+        temp_dir = self._workspace_tempdir("builder_academic_workspace")
+        app = create_backend(temp_dir)
+        workspace = app.create_workspace_from_scratch(
+            {
+                "name": "Academic Search Workspace",
+                "flow_id": "tailored_documents",
+                "source_ids": ["academic_career_sites"],
+                "module_ids": [
+                    "screening_filter",
+                    "priority_ranking",
+                    "tailored_document_generation",
+                ],
+                "settings": {
+                    "academic_career_sites": ["Example University | https://university.example/jobs"],
+                    "target_roles": ["PhD Researcher", "Postdoctoral Researcher"],
+                    "stage4_max_jobs": 12,
+                },
+            }
+        )
+
+        self.assertEqual(workspace.metadata["source_ids"], ["academic_career_sites"])
+        self.assertEqual(workspace.sources[0].connector_id, "academic_career_sites")
+        self.assertEqual(
+            workspace.settings["academic_career_sites"],
+            [{"company_name": "Example University", "url": "https://university.example/jobs"}],
+        )
+        self.assertNotIn("company_career_sites", workspace.settings)
+
+        workflow_template = app.get_workflow_template(workspace.workflow_template_id)
+        self.assertTrue(
+            any(
+                stage.stage_id == "source_academic_career_sites"
+                and stage.config.get("connector_id") == "academic_career_sites"
+                for stage in workflow_template.stages
+            )
+        )
+
+    def test_builder_queued_run_uses_snapshotted_workspace_cv_even_if_file_is_deleted(self):
+        temp_dir = self._workspace_tempdir("builder_cv_snapshot_runtime")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Workspace CV Snapshot Text", encoding="utf-8")
+        workspace = self._create_builder_workspace_with_cv_snapshot(
+            app,
+            cv_path=cv_path,
+            cv_text="Workspace CV Snapshot Text",
+        )
+
+        captured_cv_texts: list[str] = []
+
+        def stage1_stub(stage_args):
+            captured_cv_texts.append(load_cv_text())
+            return [
+                {
+                    "job_id": "builder_job_1",
+                    "title": "Analyst",
+                    "company": "ACME",
+                    "link": "https://example.com/jobs/1",
+                    "apply_link": "https://example.com/jobs/1",
+                }
+            ]
+
+        def stage4_stub(stage4_args, *, config=None, jobs=None):
+            captured_cv_texts.append(load_cv_text())
+            return [
+                {
+                    **dict(job),
+                    "cv_docx": str(temp_dir / "generated_docs" / "builder_job_1_CV.docx"),
+                    "cv_pdf": str(temp_dir / "generated_docs" / "builder_job_1_CV.pdf"),
+                }
+                for job in (jobs or [])
+            ]
+
+        with patch("backend.adapters.stage_adapters.run_tailored_stage1_pipeline", side_effect=stage1_stub), patch(
+            "backend.adapters.stage_adapters.run_tailored_stage2_pipeline",
+            side_effect=lambda jobs, cli_args: (list(jobs), []),
+        ), patch(
+            "backend.adapters.stage_adapters.run_tailored_stage3_pipeline",
+            side_effect=lambda jobs, cli_args: (list(jobs), []),
+        ), patch(
+            "backend.adapters.stage_adapters.run_tailored_stage4_pipeline",
+            side_effect=stage4_stub,
+        ):
+            planned_run = app.start_run(workspace.id, execute=False, requested_by="test")
+            self.assertEqual(planned_run.run_plan.resolved_run_settings["workspace_cv_text"], "Workspace CV Snapshot Text")
+
+            cv_path.unlink()
+
+            queued_run = app.resume_run(planned_run.id)
+            self.assertEqual(queued_run.status, "queued")
+            completed_run = app.process_next_queued_run(auto_retry_failed=False)
+
+        self.assertEqual(completed_run.status, "completed")
+        self.assertEqual(captured_cv_texts, ["Workspace CV Snapshot Text", "Workspace CV Snapshot Text"])
+
+    def test_builder_run_start_rejects_deleted_workspace_cv_asset(self):
+        temp_dir = self._workspace_tempdir("builder_missing_cv_snapshot")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Workspace CV Snapshot Text", encoding="utf-8")
+        workspace = self._create_builder_workspace_with_cv_snapshot(
+            app,
+            cv_path=cv_path,
+            cv_text="Workspace CV Snapshot Text",
+        )
+        cv_path.unlink()
+
+        with patch("backend.adapters.stage_adapters.run_tailored_stage1_pipeline") as stage1_pipeline:
+            with self.assertRaises(BackendValidationError) as error_context:
+                app.start_run(workspace.id, execute=True, requested_by="test")
+
+        self.assertEqual(error_context.exception.error_code, "run_preflight_failed")
+        self.assertEqual(
+            error_context.exception.details["field_errors"][0]["code"],
+            "workspace_cv_asset_missing_file",
+        )
+        stage1_pipeline.assert_not_called()
 
     def test_file_storage_backend_can_still_be_requested(self):
         temp_dir = self._workspace_tempdir("file_storage_backend")
@@ -232,6 +434,7 @@ class BackendApplicationTests(unittest.TestCase):
         generation_ids = {item.id for item in app.list_generations()}
         renderer_ids = {item.id for item in app.list_renderers()}
 
+        self.assertIn("academic_career_sites", connector_ids)
         self.assertIn("linkedin_jobs", connector_ids)
         self.assertIn("linkedin_search", connector_ids)
         self.assertIn("job_board_collection", connector_ids)
@@ -509,6 +712,34 @@ class BackendApplicationTests(unittest.TestCase):
         )
         resolved = app.resolve_runtime_value({"api_key": f"${{secret:{secret.secret_id}}}"})
         self.assertEqual(resolved["api_key"], "super-secret-value")
+
+    def test_authenticate_access_token_uses_prefix_candidates(self):
+        app, _ = self._create_app_with_test_workflow("auth_prefix_candidates")
+
+        user = app.upsert_user(
+            {
+                "email": "prefix@example.com",
+                "display_name": "Prefix User",
+                "role": "editor",
+                "allowed_workspace_ids": ["custom_workspace"],
+            }
+        )
+        token, raw_token = app.issue_api_token(user_id=user.user_id, name="prefix-token")
+
+        original_list_api_tokens = app.repositories.auth_repository.list_api_tokens
+
+        def fail_if_full_scan(*args, **kwargs):
+            if kwargs.get("active_only"):
+                raise AssertionError("authenticate_access_token fell back to a full active-token scan")
+            return original_list_api_tokens(*args, **kwargs)
+
+        app.repositories.auth_repository.list_api_tokens = fail_if_full_scan
+        self.addCleanup(setattr, app.repositories.auth_repository, "list_api_tokens", original_list_api_tokens)
+
+        authenticated_user, authenticated_token = app.authenticate_access_token(raw_token)
+
+        self.assertEqual(authenticated_user.user_id, user.user_id)
+        self.assertEqual(authenticated_token.token_id, token.token_id)
 
 
 if __name__ == "__main__":

@@ -148,6 +148,477 @@ html.dark .backdrop-blur-\[20px\] {
   background-color: rgba(16, 35, 61, 0.86) !important;
 }
 
+.app-shell {
+  --shell-sidebar-width: 14.5rem;
+  --shell-sidebar-bg: #ffffff;
+  --shell-sidebar-text: #0b1c30;
+  --shell-sidebar-muted: #7f8aac;
+  --shell-sidebar-border: rgba(178, 191, 217, 0.34);
+  --shell-sidebar-hover: #f6f8fc;
+  --shell-sidebar-active-bg: #f1f5fb;
+  --shell-sidebar-indicator: #14b8a6;
+  --shell-sidebar-logo-bg: #eaf1ff;
+  --shell-sidebar-logo-fg: #245ee8;
+  --shell-sidebar-cta-bg: #14b8a6;
+  --shell-sidebar-cta-hover: #0fa392;
+  --shell-sidebar-cta-text: #ffffff;
+  --shell-sidebar-tooltip-bg: #0b1c30;
+  --shell-sidebar-tooltip-text: #ffffff;
+  --shell-sidebar-shadow: 0 18px 40px rgba(11, 28, 48, 0.08);
+}
+
+.app-shell[data-sidebar-collapsed="true"] {
+  --shell-sidebar-width: 4.5rem;
+}
+
+.app-shell__desktop-sidebar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  top: 0;
+  width: var(--shell-sidebar-width);
+  transition: width 220ms ease;
+}
+
+.app-shell__main {
+  min-height: 100vh;
+  transition: padding-left 220ms ease;
+}
+
+.shell-sidebar {
+  overflow: hidden;
+  background: var(--shell-sidebar-bg);
+  border-right: 1px solid var(--shell-sidebar-border);
+  color: var(--shell-sidebar-text);
+}
+
+.shell-sidebar--mobile {
+  bottom: 0;
+  left: 0;
+  top: 0;
+  width: min(var(--shell-sidebar-width), calc(100vw - 2.5rem));
+  border-right: 1px solid var(--shell-sidebar-border);
+  border-radius: 0 1.25rem 1.25rem 0;
+  box-shadow: var(--shell-sidebar-shadow);
+}
+
+.shell-sidebar__header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.35rem 0.95rem 0.8rem;
+}
+
+.shell-sidebar__header.is-collapsed {
+  align-items: center;
+  padding-inline: 0.55rem;
+}
+
+.shell-sidebar__brand-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.shell-sidebar__brand-row.is-collapsed {
+  width: 100%;
+  justify-content: center;
+}
+
+.shell-sidebar__brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.shell-sidebar__brand.is-collapsed {
+  justify-content: center;
+}
+
+.shell-brand-mark {
+  display: flex;
+  height: 3rem;
+  width: 3rem;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.28rem;
+  border-radius: 0.7rem;
+  background: var(--shell-sidebar-logo-bg);
+  padding: 0.62rem 0.56rem;
+}
+
+.shell-brand-mark span {
+  display: block;
+  height: 0.38rem;
+  border-radius: 999px;
+  background: var(--shell-sidebar-logo-fg);
+}
+
+.shell-brand-mark span:nth-child(2) {
+  margin-left: auto;
+  width: 78%;
+}
+
+.shell-brand-mark span:nth-child(3) {
+  width: 60%;
+}
+
+.shell-sidebar__brand-copy {
+  min-width: 0;
+}
+
+.shell-sidebar__title {
+  margin: 0;
+  color: var(--shell-sidebar-text);
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: -0.07em;
+  line-height: 1;
+}
+
+.shell-sidebar__subtitle {
+  margin: 0.2rem 0 0;
+  color: var(--shell-sidebar-muted);
+  font-size: 0.74rem;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.shell-primary-action {
+  position: relative;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  min-height: 3rem;
+  border: 0;
+  border-radius: 0.85rem;
+  background: var(--shell-sidebar-cta-bg);
+  color: var(--shell-sidebar-cta-text);
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  padding: 0.8rem 0.9rem;
+  transition:
+    background-color 180ms ease,
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.shell-primary-action:hover {
+  background: var(--shell-sidebar-cta-hover);
+  box-shadow: 0 14px 30px rgba(20, 184, 166, 0.2);
+  transform: translateY(-1px);
+}
+
+.shell-primary-action.is-collapsed {
+  height: 3rem;
+  max-width: 3rem;
+  padding: 0;
+}
+
+.shell-primary-action__icon {
+  font-size: 1.05rem;
+}
+
+.shell-sidebar__nav {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem 0.55rem 0.35rem;
+}
+
+.shell-nav-link {
+  position: relative;
+  display: flex;
+  min-height: 2.9rem;
+  align-items: center;
+  gap: 0.7rem;
+  border-radius: 0.85rem;
+  color: var(--shell-sidebar-muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  padding: 0.72rem 0.85rem;
+  text-decoration: none;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.shell-nav-link::after {
+  content: "";
+  position: absolute;
+  right: -0.75rem;
+  top: 0.55rem;
+  bottom: 0.55rem;
+  width: 0.24rem;
+  border-radius: 999px;
+  background: transparent;
+  transition: background-color 180ms ease;
+}
+
+.shell-nav-link:hover {
+  background: var(--shell-sidebar-hover);
+  color: var(--shell-sidebar-text);
+}
+
+.shell-nav-link.is-active {
+  background: var(--shell-sidebar-active-bg);
+  color: var(--shell-sidebar-text);
+}
+
+.shell-nav-link.is-active::after {
+  background: var(--shell-sidebar-indicator);
+}
+
+.shell-nav-link.is-collapsed {
+  justify-content: center;
+  padding: 0;
+}
+
+.shell-nav-link__icon {
+  font-size: 1.2rem;
+}
+
+.shell-nav-link__label {
+  min-width: 0;
+}
+
+.shell-sidebar__footer {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 0.15rem;
+  padding: 0.55rem 0.55rem 0.85rem;
+}
+
+.shell-utility-link {
+  position: relative;
+  display: flex;
+  min-height: 2.8rem;
+  align-items: center;
+  gap: 0.7rem;
+  border: 0;
+  border-radius: 0.85rem;
+  background: transparent;
+  color: var(--shell-sidebar-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  padding: 0.68rem 0.85rem;
+  text-align: left;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.shell-utility-link:hover {
+  background: var(--shell-sidebar-hover);
+  color: var(--shell-sidebar-text);
+}
+
+.shell-utility-link.is-collapsed {
+  justify-content: center;
+  padding: 0;
+}
+
+.shell-utility-link.is-toggle {
+  margin-top: 0.45rem;
+}
+
+.shell-utility-link__icon {
+  font-size: 1.15rem;
+}
+
+.shell-profile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: 0.55rem;
+  border-top: 1px solid var(--shell-sidebar-border);
+  padding: 0.8rem 0.85rem 0;
+}
+
+.shell-profile.is-collapsed {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.shell-profile__avatar {
+  border: 1px solid rgba(187, 202, 198, 0.45);
+  border-radius: 999px;
+  height: 2.25rem;
+  object-fit: cover;
+  width: 2.25rem;
+}
+
+.shell-profile__meta {
+  min-width: 0;
+}
+
+.shell-profile__name {
+  color: var(--shell-sidebar-text);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin: 0;
+}
+
+.shell-profile__subtitle {
+  color: var(--shell-sidebar-muted);
+  font-size: 0.72rem;
+  margin: 0.18rem 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-sidebar__tooltip {
+  position: absolute;
+  left: calc(100% + 0.85rem);
+  top: 50%;
+  transform: translateY(-50%) translateX(-6px);
+  border-radius: 0.85rem;
+  background: var(--shell-sidebar-tooltip-bg);
+  box-shadow: 0 18px 34px rgba(11, 28, 48, 0.18);
+  color: var(--shell-sidebar-tooltip-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  opacity: 0;
+  padding: 0.72rem 0.9rem;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+  white-space: nowrap;
+  z-index: 20;
+}
+
+.shell-sidebar__tooltip::before {
+  content: "";
+  position: absolute;
+  left: -0.28rem;
+  top: 50%;
+  height: 0.72rem;
+  width: 0.72rem;
+  transform: translateY(-50%) rotate(45deg);
+  background: inherit;
+}
+
+.shell-nav-link.is-collapsed:hover .shell-sidebar__tooltip,
+.shell-utility-link.is-collapsed:hover .shell-sidebar__tooltip,
+.shell-primary-action.is-collapsed:hover .shell-sidebar__tooltip,
+.shell-profile.is-collapsed:hover .shell-sidebar__tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+html.dark .app-shell {
+  --shell-sidebar-bg: #0c1b30;
+  --shell-sidebar-text: #e6eefc;
+  --shell-sidebar-muted: #8ca3c4;
+  --shell-sidebar-border: rgba(118, 146, 182, 0.26);
+  --shell-sidebar-hover: #132742;
+  --shell-sidebar-active-bg: #18304f;
+  --shell-sidebar-indicator: #14b8a6;
+  --shell-sidebar-logo-bg: #16304f;
+  --shell-sidebar-logo-fg: #7ba9ff;
+  --shell-sidebar-cta-bg: #14b8a6;
+  --shell-sidebar-cta-hover: #11a694;
+  --shell-sidebar-tooltip-bg: #e6eefc;
+  --shell-sidebar-tooltip-text: #0c1b30;
+  --shell-sidebar-shadow: 0 20px 48px rgba(0, 0, 0, 0.34);
+}
+
+@media (min-width: 768px) {
+  .app-shell__main {
+    padding-left: calc(var(--shell-sidebar-width) + 0.5rem);
+  }
+
+  .app-shell__desktop-sidebar {
+    height: 100vh;
+  }
+
+  .app-shell__desktop-sidebar .shell-sidebar__header {
+    gap: 0.7rem;
+    padding: 1rem 0.78rem 0.55rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-sidebar__brand-row {
+    gap: 0.55rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-brand-mark {
+    height: 2.7rem;
+    width: 2.7rem;
+    border-radius: 0.65rem;
+    padding: 0.56rem 0.5rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-sidebar__title {
+    font-size: 1.5rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-sidebar__subtitle {
+    font-size: 0.68rem;
+    margin-top: 0.14rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-primary-action {
+    min-height: 2.8rem;
+    border-radius: 0.8rem;
+    font-size: 0.82rem;
+    padding: 0.7rem 0.8rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-sidebar__nav {
+    gap: 0.08rem;
+    overflow-y: hidden;
+    padding: 0.2rem 0.45rem 0.3rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-nav-link {
+    min-height: 2.48rem;
+    border-radius: 0.8rem;
+    font-size: 0.8rem;
+    gap: 0.65rem;
+    padding: 0.58rem 0.8rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-nav-link::after {
+    top: 0.42rem;
+    bottom: 0.42rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-sidebar__footer {
+    padding: 0.25rem 0.45rem 0.55rem;
+  }
+
+  .app-shell__desktop-sidebar .shell-utility-link {
+    min-height: 2.45rem;
+    border-radius: 0.8rem;
+    font-size: 0.78rem;
+    padding: 0.55rem 0.8rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .shell-sidebar__tooltip {
+    display: none;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

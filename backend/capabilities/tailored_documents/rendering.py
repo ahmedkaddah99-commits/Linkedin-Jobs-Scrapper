@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from backend.config.job_seeker import cfg_str, load_job_seeker_config, normalize_windows_env_path
+from backend.profiles.cv_text import resolve_runtime_cv_docx_path
 
 from .common import sanitize_filename
 from .generation import format_header_location
@@ -185,6 +186,10 @@ def _resolve_color_scheme(color_scheme_id: str) -> dict:
 
 
 def find_cv_docx_source_path():
+    runtime_docx_path = resolve_runtime_cv_docx_path()
+    if runtime_docx_path is not None:
+        return runtime_docx_path
+
     candidates = []
     config = load_job_seeker_config()
     config_cv_path = normalize_windows_env_path(cfg_str(config, ("candidate", "cv_path"), ""))

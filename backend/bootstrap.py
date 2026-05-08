@@ -81,6 +81,15 @@ def _build_registries() -> BackendRegistries:
         ),
     )
     connector_registry.register(
+        "academic_career_sites",
+        ComponentDescriptor(
+            id="academic_career_sites",
+            kind="connector",
+            name="Academic Career Sites",
+            description="Discover academic jobs directly from backend-prepared university, department, chair, and institute pages.",
+        ),
+    )
+    connector_registry.register(
         "job_board_collection",
         ComponentDescriptor(
             id="job_board_collection",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from backend.capabilities.networking import (
     merge_referral_contacts,
     parse_referral_contacts_csv,
 )
+from backend.capabilities.tailored_documents.manual_urls import normalize_manual_urls
 from backend.domain.models import (
     ROLE_ADMIN,
     ROLE_EDITOR,
@@ -48,6 +50,7 @@ from backend.domain.models import (
     utc_now_iso,
 )
 from backend.orchestration import (
+    build_quick_apply_workflow_template,
     build_workspace_from_scratch,
     validate_workspace_source_configuration,
     workspace_builder_catalog,
@@ -56,6 +59,325 @@ from backend.security import issue_api_token, resolve_secret_references, token_h
 
 
 ALLOWED_USER_ROLES = {ROLE_ADMIN, ROLE_EDITOR, ROLE_REVIEWER, ROLE_VIEWER}
+BUILDER_WORKSPACE_FLOW_IDS = {"tailored_documents", "reusable_packages"}
+BUILDER_CONNECTOR_SOURCE_IDS = {
+    "linkedin_jobs": "linkedin_jobs",
+    "curated_job_urls": "curated_job_urls",
+    "company_career_sites": "company_career_sites",
+    "academic_career_sites": "academic_career_sites",
+    "job_board_collection": "job_board_collection",
+}
+
+
+class BackendValidationError(ValueError):
+    def __init__(self, error_code: str, message: str, *, details: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.error_code = str(error_code or "validation_failed")
+        self.details = dict(details or {})
+
+
+def _field_error(
+    field: str,
+    code: str,
+    message: str,
+    *,
+    source_id: str = "",
+) -> dict[str, str]:
+    error = {
+        "field": str(field or "").strip(),
+        "code": str(code or "").strip(),
+        "message": str(message or "").strip(),
+    }
+    if source_id:
+        error["source_id"] = str(source_id).strip()
+    return error
+
+
+def _dedupe_field_errors(errors: list[dict[str, Any]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw_error in errors:
+        if not isinstance(raw_error, dict):
+            continue
+        field = str(raw_error.get("field") or "").strip()
+        code = str(raw_error.get("code") or "").strip()
+        message = str(raw_error.get("message") or "").strip()
+        source_id = str(raw_error.get("source_id") or "").strip()
+        if not field or not code or not message:
+            continue
+        dedupe_key = (field, code, source_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append(_field_error(field, code, message, source_id=source_id))
+    return deduped
+
+
+def _is_builder_created_workspace(workspace: WorkspaceDefinition) -> bool:
+    metadata = dict(workspace.metadata or {})
+    return str(metadata.get("builder_mode") or "").strip() == "scratch" or bool(metadata.get("workspace_configuration_v2"))
+
+
+def _builder_workspace_flow_id(workspace: WorkspaceDefinition) -> str:
+    metadata = dict(workspace.metadata or {})
+    return str(metadata.get("automation_flow") or workspace.settings.get("automation_flow") or "").strip()
+
+
+def _builder_workspace_source_ids(workspace: WorkspaceDefinition) -> list[str]:
+    metadata = dict(workspace.metadata or {})
+    source_ids = [str(item).strip() for item in metadata.get("source_ids") or [] if str(item).strip()]
+    if source_ids:
+        return source_ids
+    derived_source_ids: list[str] = []
+    for source in workspace.sources:
+        source_id = BUILDER_CONNECTOR_SOURCE_IDS.get(str(source.connector_id or "").strip())
+        if source_id and source_id not in derived_source_ids:
+            derived_source_ids.append(source_id)
+    return derived_source_ids
+
+
+def _workspace_cv_asset_id(workspace: WorkspaceDefinition) -> str:
+    metadata = dict(workspace.metadata or {})
+    workspace_configuration_v2 = metadata.get("workspace_configuration_v2") or {}
+    cv_binding = dict(workspace_configuration_v2.get("cv_binding") or {})
+    return str(workspace.settings.get("workspace_cv_asset_id") or cv_binding.get("asset_id") or "").strip()
+
+
+def _builder_workspace_cv_asset_field_errors(workspace: WorkspaceDefinition) -> list[dict[str, str]]:
+    asset_id = _workspace_cv_asset_id(workspace)
+    if not asset_id:
+        return []
+
+    metadata = dict(workspace.metadata or {})
+    asset = dict(metadata.get("workspace_cv_asset") or {})
+    if not asset:
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_unresolved",
+                "Select an accessible workspace CV before saving or running this workspace.",
+            )
+        ]
+
+    snapshot_asset_id = str(asset.get("asset_id") or "").strip()
+    if snapshot_asset_id != asset_id:
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_mismatch",
+                "The saved workspace CV no longer matches the selected workspace_cv_asset_id.",
+            )
+        ]
+
+    asset_kind = str(asset.get("asset_kind") or "").strip()
+    if asset_kind != "workspace_cv":
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_invalid_kind",
+                "workspace_cv_asset_id must reference an uploaded workspace CV.",
+            )
+        ]
+
+    bound_workspace_id = str(
+        asset.get("workspace_binding", {}).get("workspace_id")
+        or asset.get("workspace_id")
+        or ""
+    ).strip()
+    if bound_workspace_id and bound_workspace_id != workspace.id:
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_inaccessible",
+                "The selected workspace CV is bound to a different workspace.",
+            )
+        ]
+
+    file_path = str(asset.get("file", {}).get("path") or asset.get("path") or "").strip()
+    if not file_path or not Path(file_path).is_file():
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_missing_file",
+                "The selected workspace CV is no longer available on disk.",
+            )
+        ]
+    return []
+
+
+def _builder_workspace_run_preflight_field_errors(
+    workspace: WorkspaceDefinition,
+    *,
+    run_plan_settings: Mapping[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    asset_id = str(
+        (run_plan_settings or {}).get("workspace_cv_asset_id")
+        or _workspace_cv_asset_id(workspace)
+        or ""
+    ).strip()
+    if not asset_id:
+        return _builder_workspace_cv_asset_field_errors(workspace)
+
+    workspace_cv_text = str((run_plan_settings or {}).get("workspace_cv_text") or "").strip()
+    if workspace_cv_text:
+        return []
+
+    return [
+        _field_error(
+            "workspace_cv_asset_id",
+            "workspace_cv_snapshot_missing",
+            "Builder-created tailored-document runs require a resolved workspace CV snapshot. Re-save the workspace and start a new run.",
+        )
+    ]
+
+
+def _builder_workspace_validation_report(
+    *,
+    flow_id: str,
+    source_ids: list[str],
+    settings: Mapping[str, Any],
+) -> dict[str, Any]:
+    catalog_sources = {
+        str(item["id"]): set(item.get("compatible_flows") or [])
+        for item in workspace_builder_catalog().to_dict()["sources"]
+    }
+    field_errors: list[dict[str, str]] = []
+    valid_source_ids: list[str] = []
+
+    if flow_id not in BUILDER_WORKSPACE_FLOW_IDS:
+        field_errors.append(
+            _field_error(
+                "flow_id",
+                "unsupported",
+                "flow_id must be one of: tailored_documents, reusable_packages.",
+            )
+        )
+
+    if not source_ids:
+        field_errors.append(
+            _field_error(
+                "source_ids",
+                "required",
+                "Choose at least one source for this workspace.",
+            )
+        )
+    else:
+        for source_id in source_ids:
+            compatible_flows = catalog_sources.get(source_id)
+            if compatible_flows is None:
+                field_errors.append(
+                    _field_error(
+                        "source_ids",
+                        "unknown_source",
+                        f"Unknown source_id '{source_id}'.",
+                        source_id=source_id,
+                    )
+                )
+                continue
+            if flow_id in compatible_flows:
+                valid_source_ids.append(source_id)
+                continue
+            field_errors.append(
+                _field_error(
+                    "source_ids",
+                    "incompatible_source",
+                    f"Source '{source_id}' is not compatible with flow '{flow_id}'.",
+                    source_id=source_id,
+                )
+            )
+
+    validation_payload = {
+        "flow_id": flow_id,
+        "source_ids": valid_source_ids,
+        "settings": dict(settings or {}),
+    }
+    source_report = validate_workspace_source_configuration(validation_payload)
+    merged_field_errors = _dedupe_field_errors([*field_errors, *(source_report.get("field_errors") or [])])
+    return {
+        "flow_id": flow_id,
+        "source_ids": list(source_ids),
+        "field_errors": merged_field_errors,
+        "source_results": list(source_report.get("source_results") or []),
+        "derived_runtime_defaults": dict(source_report.get("derived_runtime_defaults") or {}),
+        "valid": not merged_field_errors,
+    }
+
+
+def _raise_builder_validation_error(
+    *,
+    error_code: str,
+    message: str,
+    phase: str,
+    workspace_id: str,
+    report: Mapping[str, Any],
+) -> None:
+    raise BackendValidationError(
+        error_code,
+        message,
+        details={
+            "phase": phase,
+            "workspace_id": workspace_id,
+            "flow_id": str(report.get("flow_id") or ""),
+            "source_ids": [str(item) for item in report.get("source_ids") or [] if str(item).strip()],
+            "field_errors": list(report.get("field_errors") or []),
+            "source_results": list(report.get("source_results") or []),
+        },
+    )
+
+
+def _validate_builder_workspace_payload(payload: Mapping[str, Any], *, workspace_id: str = "") -> None:
+    flow_id = str(payload.get("flow_id") or "tailored_documents").strip()
+    source_ids = [str(item).strip() for item in payload.get("source_ids") or [] if str(item).strip()]
+    report = _builder_workspace_validation_report(
+        flow_id=flow_id,
+        source_ids=source_ids,
+        settings=dict(payload.get("settings") or {}),
+    )
+    if report["valid"]:
+        return
+    _raise_builder_validation_error(
+        error_code="workspace_validation_failed",
+        message="Workspace validation failed.",
+        phase="save",
+        workspace_id=workspace_id,
+        report=report,
+    )
+
+
+def _validate_builder_workspace_definition(
+    workspace: WorkspaceDefinition,
+    *,
+    phase: str,
+    error_code: str,
+    run_plan_settings: Mapping[str, Any] | None = None,
+) -> None:
+    if not _is_builder_created_workspace(workspace):
+        return
+
+    report = _builder_workspace_validation_report(
+        flow_id=_builder_workspace_flow_id(workspace),
+        source_ids=_builder_workspace_source_ids(workspace),
+        settings=dict(workspace.settings or {}),
+    )
+    if phase == "run_preflight" and run_plan_settings is not None:
+        cv_field_errors = _builder_workspace_run_preflight_field_errors(
+            workspace,
+            run_plan_settings=run_plan_settings,
+        )
+    else:
+        cv_field_errors = _builder_workspace_cv_asset_field_errors(workspace)
+    merged_field_errors = _dedupe_field_errors([*(report.get("field_errors") or []), *cv_field_errors])
+    report["field_errors"] = merged_field_errors
+    report["valid"] = not merged_field_errors
+    if report["valid"]:
+        return
+    _raise_builder_validation_error(
+        error_code=error_code,
+        message="Workspace validation failed." if phase == "save" else "Run preflight failed.",
+        phase=phase,
+        workspace_id=workspace.id,
+        report=report,
+    )
 
 
 @dataclass(slots=True)
@@ -79,6 +401,11 @@ class BackendApplication:
         if not workspace.workflow_template_id:
             raise ValueError("workspace workflow_template_id is required")
         self.repositories.workspace_repository.get_workflow_template(workspace.workflow_template_id)
+        _validate_builder_workspace_definition(
+            workspace,
+            phase="save",
+            error_code="workspace_validation_failed",
+        )
         self.repositories.workspace_repository.upsert_workspace(workspace)
         return self.repositories.workspace_repository.get_workspace(workspace.id)
 
@@ -149,8 +476,76 @@ class BackendApplication:
     def validate_workspace_builder_sources(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return validate_workspace_source_configuration(dict(payload))
 
+    def start_quick_apply_run(
+        self,
+        workspace_id: str,
+        *,
+        manual_urls: list[str] | tuple[str, ...] | set[str] | str,
+        execute: bool = True,
+        enqueue: bool = False,
+        requested_by: str = "api",
+        max_attempts: int = 1,
+    ) -> tuple[RunRecord, list[dict[str, Any]]]:
+        if execute and enqueue:
+            raise ValueError("run cannot be both queued and synchronously executed")
+
+        workspace = self.repositories.workspace_repository.get_workspace(workspace_id)
+        _validate_builder_workspace_definition(
+            workspace,
+            phase="run_preflight",
+            error_code="run_preflight_failed",
+        )
+        automation_flow = str(
+            workspace.metadata.get("automation_flow")
+            or workspace.settings.get("automation_flow")
+            or ""
+        ).strip()
+        if automation_flow and automation_flow != "tailored_documents":
+            raise ValueError("Quick apply requires a tailored-documents workspace.")
+
+        valid_urls, invalid_entries = normalize_manual_urls(manual_urls)
+        if not valid_urls:
+            raise ValueError("Add at least one valid exact job URL.")
+
+        workflow = build_quick_apply_workflow_template()
+        run_input_overrides = {
+            "manual_urls_inline": list(valid_urls),
+            "manual_url_seed_list": list(valid_urls),
+            "stage4_max_jobs": len(valid_urls),
+        }
+        run = RunRecord.create(
+            workspace_id=workspace.id,
+            workflow_template_id=workflow.id,
+            run_input_overrides=run_input_overrides,
+            requested_by=requested_by,
+            max_attempts=max_attempts,
+            metadata={
+                "workspace_type": workspace.workspace_type,
+                "run_kind": "quick_apply",
+                "accepted_url_count": len(valid_urls),
+                "invalid_url_count": len(invalid_entries),
+            },
+        )
+        run.run_plan = self.stage_engine.build_run_plan(
+            workspace=workspace,
+            workflow=workflow,
+            run_input_overrides=run_input_overrides,
+        )
+        self.repositories.run_repository.save(run)
+
+        if enqueue:
+            return self._queue_run(run), invalid_entries
+        if not execute:
+            return self.repositories.run_repository.get(run.id), invalid_entries
+        return self._execute_run(run, workspace=workspace, workflow=workflow, auto_retry_failed=False), invalid_entries
+
     def create_workspace_from_scratch(self, payload: Mapping[str, Any]) -> WorkspaceDefinition:
-        workflow_template, workspace = build_workspace_from_scratch(dict(payload))
+        builder_payload = dict(payload)
+        _validate_builder_workspace_payload(
+            builder_payload,
+            workspace_id=str(builder_payload.get("workspace_id") or "").strip(),
+        )
+        workflow_template, workspace = build_workspace_from_scratch(builder_payload)
         self.upsert_workflow_template(workflow_template)
         return self.upsert_workspace(workspace)
 
@@ -159,6 +554,7 @@ class BackendApplication:
         builder_payload = dict(payload)
         builder_payload["workspace_id"] = existing_workspace.id
         builder_payload.setdefault("workflow_template_id", existing_workspace.workflow_template_id)
+        _validate_builder_workspace_payload(builder_payload, workspace_id=existing_workspace.id)
         workflow_template, workspace = build_workspace_from_scratch(builder_payload)
         self.upsert_workflow_template(workflow_template)
         return self.upsert_workspace(workspace)
@@ -510,7 +906,12 @@ class BackendApplication:
         token_text = str(raw_token or "").strip()
         if not token_text:
             raise PermissionError("Missing access token.")
-        for token in self.repositories.auth_repository.list_api_tokens(active_only=True):
+        candidate_lookup = getattr(self.repositories.auth_repository, "list_api_tokens_for_value", None)
+        candidate_tokens: list[ApiTokenRecord] = []
+        if callable(candidate_lookup):
+            candidate_tokens = list(candidate_lookup(token_text, active_only=True))
+        tokens_to_check = candidate_tokens or self.repositories.auth_repository.list_api_tokens(active_only=True)
+        for token in tokens_to_check:
             if not token.is_active or token_is_expired(token.expires_at):
                 continue
             if not verify_token_value(token_text, token.token_hash):
@@ -826,6 +1227,23 @@ class BackendApplication:
             recovered.append(worker)
         return recovered
 
+    def _fail_run_preflight(self, run: RunRecord, exc: BackendValidationError) -> RunRecord:
+        now = utc_now_iso()
+        metadata = dict(run.metadata or {})
+        metadata["preflight_error"] = {
+            "code": exc.error_code,
+            "message": str(exc),
+            "details": dict(exc.details),
+        }
+        run.metadata = metadata
+        run.status = RUN_STATUS_FAILED
+        run.current_stage_id = ""
+        run.last_error = str(exc)
+        run.finished_at = now
+        run.updated_at = now
+        self.repositories.run_repository.save(run)
+        return self.repositories.run_repository.get(run.id)
+
     def start_run(
         self,
         workspace_id: str,
@@ -839,6 +1257,11 @@ class BackendApplication:
         if execute and enqueue:
             raise ValueError("run cannot be both queued and synchronously executed")
         workspace = self.repositories.workspace_repository.get_workspace(workspace_id)
+        _validate_builder_workspace_definition(
+            workspace,
+            phase="run_preflight",
+            error_code="run_preflight_failed",
+        )
         workflow = self.repositories.workspace_repository.get_workflow_template(workspace.workflow_template_id)
 
         run = RunRecord.create(
@@ -916,6 +1339,15 @@ class BackendApplication:
         run = self.repositories.run_repository.get(run_id)
         workspace = self._workspace_from_run_snapshot(run)
         workflow = self._workflow_from_run_snapshot(run)
+        try:
+            _validate_builder_workspace_definition(
+                workspace,
+                phase="run_preflight",
+                error_code="run_preflight_failed",
+                run_plan_settings=run.run_plan.resolved_run_settings if run.run_plan else {},
+            )
+        except BackendValidationError as exc:
+            return self._fail_run_preflight(run, exc)
         return self._execute_run(run, workspace=workspace, workflow=workflow, auto_retry_failed=auto_retry_failed)
 
     def release_worker(self, worker_id: str, *, status: str = WORKER_STATUS_IDLE) -> WorkerRecord | None:
@@ -974,6 +1406,12 @@ class BackendApplication:
         run = self.repositories.run_repository.get(run_id)
         if run.status not in {RUN_STATUS_FAILED, RUN_STATUS_CANCELLED}:
             raise ValueError("only failed or cancelled runs can be retried")
+        _validate_builder_workspace_definition(
+            self._workspace_from_run_snapshot(run),
+            phase="run_preflight",
+            error_code="run_preflight_failed",
+            run_plan_settings=run.run_plan.resolved_run_settings if run.run_plan else {},
+        )
         self.repositories.job_store.clear_run(run.id)
         self.repositories.artifact_store.clear_run(run.id)
         run.stage_results = []
@@ -988,6 +1426,12 @@ class BackendApplication:
         run = self.repositories.run_repository.get(run_id)
         if run.status not in {RUN_STATUS_PLANNED, RUN_STATUS_FAILED, RUN_STATUS_CANCELLED}:
             raise ValueError("only planned, failed, or cancelled runs can be resumed")
+        _validate_builder_workspace_definition(
+            self._workspace_from_run_snapshot(run),
+            phase="run_preflight",
+            error_code="run_preflight_failed",
+            run_plan_settings=run.run_plan.resolved_run_settings if run.run_plan else {},
+        )
         self._trim_to_resumable_prefix(run)
         run.final_job_set_keys = sorted(self.repositories.job_store.list_job_set_keys(run.id))
         run.current_stage_id = ""

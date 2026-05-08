@@ -3,6 +3,8 @@ import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
 
+const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
+
 const navItems = [
   {
     label: "Dashboard",
@@ -18,6 +20,12 @@ const navItems = [
     icon: "workspaces",
     to: "/workspaces",
     matchers: [{ path: "/workspaces", end: false }],
+  },
+  {
+    label: "Quick Apply",
+    icon: "bolt",
+    to: "/quick-apply",
+    matchers: [{ path: "/quick-apply", end: false }],
   },
   {
     label: "Runs",
@@ -64,6 +72,11 @@ const navItems = [
       { path: "/cv-studio", end: false },
     ],
   },
+];
+
+const topRibbonItems = [
+  { label: "Support", icon: "contact_support" },
+  { label: "Documentation", icon: "menu_book" },
   {
     label: "Admin",
     icon: "admin_panel_settings",
@@ -72,73 +85,128 @@ const navItems = [
   },
 ];
 
-const footerLinks = [
-  { label: "Support", icon: "contact_support" },
-  { label: "Documentation", icon: "menu_book" },
-];
-
 function isNavItemActive(pathname, item) {
   return (item.matchers || []).some((matcher) => Boolean(matchPath(matcher, pathname)));
 }
 
-function SidebarLink({ item, onNavigate }) {
+function BrandMark() {
+  return (
+    <div aria-hidden="true" className="shell-brand-mark">
+      <span />
+      <span />
+      <span />
+    </div>
+  );
+}
+
+function HoverLabel({ label }) {
+  return <span className="shell-sidebar__tooltip">{label}</span>;
+}
+
+function SidebarLink({ collapsed = false, item, onNavigate }) {
   const location = useLocation();
   const isActive = isNavItemActive(location.pathname, item);
 
   return (
     <NavLink
       aria-current={isActive ? "page" : undefined}
-      className={() =>
-        [
-          "ml-4 flex items-center gap-3 py-3 pl-6 text-sm font-bold tracking-tight transition-all duration-300",
-          isActive
-            ? "translate-x-1 rounded-l-full bg-white text-primary shadow-sm"
-            : "text-on-surface-variant hover:text-primary active:translate-x-1",
-        ].join(" ")
-      }
+      aria-label={collapsed ? item.label : undefined}
+      className={["shell-nav-link", isActive ? "is-active" : "", collapsed ? "is-collapsed" : ""].join(" ")}
       onClick={onNavigate}
+      title={collapsed ? item.label : undefined}
       to={item.to}
     >
-      {() => (
-        <>
-          <span
-            className="material-symbols-outlined text-lg"
-            style={isActive ? { fontVariationSettings: "'FILL' 1" } : undefined}
-          >
-            {item.icon}
-          </span>
-          <span>{item.label}</span>
-        </>
-      )}
+      <span
+        className="material-symbols-outlined shell-nav-link__icon"
+        style={isActive ? { fontVariationSettings: "'FILL' 1" } : undefined}
+      >
+        {item.icon}
+      </span>
+      {!collapsed ? <span className="shell-nav-link__label">{item.label}</span> : null}
+      {collapsed ? <HoverLabel label={item.label} /> : null}
     </NavLink>
   );
 }
 
-function SidebarContents({ onClose, onDisconnect, onStartRun, shellUser, showSignOut = false }) {
+function SidebarActionButton({ collapsed = false, icon, label, onClick, type = "button" }) {
+  return (
+    <button
+      aria-label={collapsed ? label : undefined}
+      className={["shell-utility-link", collapsed ? "is-collapsed" : ""].join(" ")}
+      onClick={onClick}
+      title={collapsed ? label : undefined}
+      type={type}
+    >
+      <span className="material-symbols-outlined shell-utility-link__icon">{icon}</span>
+      {!collapsed ? <span>{label}</span> : null}
+      {collapsed ? <HoverLabel label={label} /> : null}
+    </button>
+  );
+}
+
+function TopRibbonAction({ item }) {
+  const location = useLocation();
+  const isActive = item.to ? isNavItemActive(location.pathname, item) : false;
+  const className = [
+    "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
+    isActive
+      ? "border-primary/30 bg-primary/10 text-primary"
+      : "border-outline-variant/20 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface",
+  ].join(" ");
+
+  const content = (
+    <>
+      <span
+        className="material-symbols-outlined text-[20px]"
+        style={isActive ? { fontVariationSettings: "'FILL' 1" } : undefined}
+      >
+        {item.icon}
+      </span>
+      <span className="hidden lg:inline">{item.label}</span>
+    </>
+  );
+
+  if (item.to) {
+    return (
+      <NavLink aria-label={item.label} className={className} title={item.label} to={item.to}>
+        {content}
+      </NavLink>
+    );
+  }
+
+  return (
+    <button aria-label={item.label} className={className} title={item.label} type="button">
+      {content}
+    </button>
+  );
+}
+
+function SidebarContents({
+  collapsed = false,
+  isDesktop = false,
+  onClose,
+  onStartRun,
+  onToggleCollapse,
+}) {
+  const isCollapsedRail = isDesktop && collapsed;
+
   function handleStartRun() {
     onStartRun();
     onClose?.();
   }
 
-  function handleDisconnect() {
-    onDisconnect();
-    onClose?.();
-  }
-
   return (
     <>
-      <div className="px-6">
-        <div className="mb-6 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded bg-teal-600 text-white">
-              <span className="material-symbols-outlined text-[20px]">work</span>
-            </div>
-            <div>
-              <h1 className="font-headline text-3xl font-extrabold tracking-tighter text-on-surface">
-                runr.
-              </h1>
-              <p className="text-xs font-medium text-on-surface-variant">High Performance Ops</p>
-            </div>
+      <div className={["shell-sidebar__header", isCollapsedRail ? "is-collapsed" : ""].join(" ")}>
+        <div className={["shell-sidebar__brand-row", isCollapsedRail ? "is-collapsed" : ""].join(" ")}>
+          <div className={["shell-sidebar__brand", isCollapsedRail ? "is-collapsed" : ""].join(" ")}>
+            <BrandMark />
+            {!isCollapsedRail ? (
+              <div className="shell-sidebar__brand-copy">
+                <h1 className="shell-sidebar__title">runr.</h1>
+                <p className="shell-sidebar__subtitle">High Performance Ops</p>
+              </div>
+            ) : null}
           </div>
           {onClose ? (
             <button
@@ -151,55 +219,36 @@ function SidebarContents({ onClose, onDisconnect, onStartRun, shellUser, showSig
             </button>
           ) : null}
         </div>
+
         <button
-          className="mb-8 flex w-full items-center justify-center gap-2 rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 active:scale-[0.98]"
+          aria-label={isCollapsedRail ? "Start New Run" : undefined}
+          className={["shell-primary-action", isCollapsedRail ? "is-collapsed" : ""].join(" ")}
           onClick={handleStartRun}
+          title={isCollapsedRail ? "Start New Run" : undefined}
           type="button"
         >
-          <span className="material-symbols-outlined text-[18px]">add</span>
-          Start New Run
+          <span className="material-symbols-outlined shell-primary-action__icon">add</span>
+          {!isCollapsedRail ? <span>Start New Run</span> : null}
+          {isCollapsedRail ? <HoverLabel label="Start New Run" /> : null}
         </button>
       </div>
 
-      <nav className="flex-1 space-y-1 overflow-y-auto">
+      <nav className="shell-sidebar__nav">
         {navItems.map((item) => (
-          <SidebarLink key={item.label} item={item} onNavigate={onClose} />
+          <SidebarLink collapsed={isCollapsedRail} item={item} key={item.label} onNavigate={onClose} />
         ))}
       </nav>
 
-      <div className="mt-auto px-6">
-        {footerLinks.map((item) => (
-          <button
-            key={item.label}
-            className="flex items-center gap-3 py-2 text-sm font-bold tracking-tight text-on-surface-variant transition-all hover:text-primary"
-            type="button"
-          >
-            <span className="material-symbols-outlined text-lg">{item.icon}</span>
-            {item.label}
-          </button>
-        ))}
-        {showSignOut ? (
-          <button
-            className="mt-3 flex items-center gap-3 py-2 text-sm font-bold tracking-tight text-on-surface-variant transition-all hover:text-primary"
-            onClick={handleDisconnect}
-            type="button"
-          >
-            <span className="material-symbols-outlined text-lg">logout</span>
-            Sign Out
-          </button>
-        ) : null}
-        <div className="mt-4 flex items-center gap-3 py-2">
-          <img
-            alt={shellUser.name}
-            className="h-8 w-8 rounded-full border border-outline-variant/30 object-cover"
-            src={shellUser.avatar}
+      {isDesktop ? (
+        <div className="shell-sidebar__footer">
+          <SidebarActionButton
+            collapsed={isCollapsedRail}
+            icon={isCollapsedRail ? "keyboard_double_arrow_right" : "keyboard_double_arrow_left"}
+            label={isCollapsedRail ? "Expand Menu" : "Collapse Menu"}
+            onClick={onToggleCollapse}
           />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-on-surface">{shellUser.name}</p>
-            <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
-          </div>
         </div>
-      </div>
+      ) : null}
     </>
   );
 }
@@ -212,10 +261,23 @@ export default function AppShell({ children }) {
   const { disconnect, status, user } = useSession();
   const { isDark, toggleTheme } = useTheme();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(DESKTOP_SIDEBAR_STORAGE_KEY) === "true";
+  });
 
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      DESKTOP_SIDEBAR_STORAGE_KEY,
+      desktopSidebarCollapsed ? "true" : "false",
+    );
+  }, [desktopSidebarCollapsed]);
 
   const shellUser = {
     name: user?.display_name || user?.email || "Disconnected",
@@ -225,7 +287,10 @@ export default function AppShell({ children }) {
   };
 
   return (
-    <div className="min-h-screen bg-background text-on-surface">
+    <div
+      className="app-shell min-h-screen bg-background text-on-surface"
+      data-sidebar-collapsed={desktopSidebarCollapsed ? "true" : "false"}
+    >
       <div
         aria-hidden={!mobileNavOpen}
         className={[
@@ -237,28 +302,26 @@ export default function AppShell({ children }) {
 
       <aside
         className={[
-          "fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-surface-container-low py-6 shadow-soft transition-transform duration-300 md:hidden",
+          "shell-sidebar shell-sidebar--mobile fixed inset-y-0 left-0 z-50 flex flex-col shadow-soft transition-transform duration-300 md:hidden",
           mobileNavOpen ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
       >
         <SidebarContents
           onClose={() => setMobileNavOpen(false)}
-          onDisconnect={disconnect}
           onStartRun={() => navigate("/workspaces")}
-          shellUser={shellUser}
-          showSignOut
         />
       </aside>
 
-      <aside className="fixed left-0 top-0 hidden h-screen w-64 flex-col bg-surface-container-low py-8 md:flex">
+      <aside className="app-shell__desktop-sidebar shell-sidebar hidden flex-col md:flex">
         <SidebarContents
-          onDisconnect={disconnect}
+          collapsed={desktopSidebarCollapsed}
+          isDesktop
           onStartRun={() => navigate("/workspaces")}
-          shellUser={shellUser}
+          onToggleCollapse={() => setDesktopSidebarCollapsed((currentValue) => !currentValue)}
         />
       </aside>
 
-      <div className="min-h-screen md:ml-64">
+      <div className="app-shell__main">
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] md:px-8">
           <div className="flex min-w-0 items-center gap-3">
             <button
@@ -280,7 +343,7 @@ export default function AppShell({ children }) {
                 </button>
                 <div className="h-4 w-px bg-outline-variant/30" />
                 <div className="min-w-0 text-base">
-                  <div className="flex items-baseline gap-3 truncate">
+          <div className="flex items-baseline gap-3 truncate">
                     <span className="text-on-surface-variant">Run Detail</span>
                     <span className="text-on-surface-variant/40">/</span>
                     <span className="truncate font-bold tracking-tight text-primary">
@@ -298,7 +361,10 @@ export default function AppShell({ children }) {
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
+            {topRibbonItems.map((item) => (
+              <TopRibbonAction item={item} key={item.label} />
+            ))}
             {isRunDetail ? (
               <>
                 <button
@@ -314,48 +380,43 @@ export default function AppShell({ children }) {
                   <span className="material-symbols-outlined text-xl">more_vert</span>
                 </button>
               </>
-            ) : (
-              <>
-                <button
-                  className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-                  onClick={toggleTheme}
-                  title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-                  type="button"
-                >
-                  <span className="material-symbols-outlined">
-                    {isDark ? "light_mode" : "dark_mode"}
-                  </span>
-                </button>
-                <button
-                  className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-                  type="button"
-                >
-                  <span className="material-symbols-outlined">notifications</span>
-                </button>
-                <button
-                  className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-                  type="button"
-                >
-                  <span className="material-symbols-outlined">help</span>
-                </button>
-                <button
-                  className="hidden text-sm text-on-surface-variant transition-colors hover:text-primary sm:block"
-                  onClick={disconnect}
-                  type="button"
-                >
-                  Sign Out
-                </button>
-                <img
-                  alt={shellUser.name}
-                  className="h-8 w-8 rounded-full border border-outline-variant/30 object-cover"
-                  src={shellUser.avatar}
-                />
-              </>
-            )}
+            ) : null}
+            <button
+              className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+              onClick={toggleTheme}
+              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              type="button"
+            >
+              <span className="material-symbols-outlined">
+                {isDark ? "light_mode" : "dark_mode"}
+              </span>
+            </button>
+            <button
+              className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+              type="button"
+            >
+              <span className="material-symbols-outlined">notifications</span>
+            </button>
+            <button
+              className="hidden text-sm text-on-surface-variant transition-colors hover:text-primary sm:block"
+              onClick={disconnect}
+              type="button"
+            >
+              Sign Out
+            </button>
+            <div className="hidden min-w-0 text-right xl:block">
+              <p className="truncate text-sm font-semibold text-on-surface">{shellUser.name}</p>
+              <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
+            </div>
+            <img
+              alt={shellUser.name}
+              className="h-8 w-8 rounded-full border border-outline-variant/30 object-cover"
+              src={shellUser.avatar}
+            />
           </div>
         </header>
 
-        <main className="mx-auto max-w-7xl px-4 pb-12 pt-6 md:px-8">{children}</main>
+        <main className="w-full px-4 pb-12 pt-6 md:px-8">{children}</main>
       </div>
     </div>
   );

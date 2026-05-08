@@ -19,7 +19,13 @@ from backend.domain.phase0_contracts import (
 class Phase0ContractsTests(unittest.TestCase):
     def test_workspace_configuration_v2_normalizes_legacy_builder_settings(self):
         payload = {
-            "source_ids": ["linkedin_search", "curated_urls", "company_career_sites"],
+            "source_ids": [
+                "linkedin_jobs",
+                "curated_job_urls",
+                "academic_career_sites",
+                "company_career_sites",
+                "job_board_collection",
+            ],
             "profile_label": "Primary Job Seeker Profile",
             "settings": {
                 "target_roles": ["Business Analyst", "Consultant"],
@@ -27,6 +33,7 @@ class Phase0ContractsTests(unittest.TestCase):
                 "time_posted_seconds": 172800,
                 "experience_levels": [2, 3],
                 "manual_url_seed_list": "https://company.example/jobs/1\nhttps://company.example/jobs/1\nhttps://company.example/jobs/2",
+                "academic_career_sites": "University of Example | https://university.example/jobs",
                 "company_career_sites": "Acme | https://careers.acme.com/jobs\nContoso | https://jobs.contoso.com",
                 "forbidden_title_keywords": ["Senior", "Senior", "Director"],
                 "languages": ["English - C1", "German - B1/B2"],
@@ -52,12 +59,15 @@ class Phase0ContractsTests(unittest.TestCase):
             "101282230",
         )
         self.assertTrue(normalized["source_configuration"]["linkedin_search"]["enabled"])
+        self.assertTrue(normalized["source_configuration"]["multi_portal"]["enabled"])
         self.assertTrue(normalized["source_configuration"]["curated_urls"]["enabled"])
+        self.assertTrue(normalized["source_configuration"]["academic_career_sites"]["enabled"])
         self.assertTrue(normalized["source_configuration"]["company_career_sites"]["enabled"])
         self.assertEqual(
             normalized["source_configuration"]["curated_urls"]["urls"],
             ["https://company.example/jobs/1", "https://company.example/jobs/2"],
         )
+        self.assertEqual(len(normalized["source_configuration"]["academic_career_sites"]["institutions"]), 1)
         self.assertEqual(len(normalized["source_configuration"]["company_career_sites"]["companies"]), 2)
         self.assertEqual(
             normalized["filter_preferences"]["forbidden_title_keywords"],

@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import mimetypes
+import os
 import re
 import zipfile
 from copy import deepcopy
@@ -16,6 +17,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+from backend.application.services import BackendValidationError
 from backend.capabilities.networking import find_referral_contacts_for_company
 from backend.capabilities.tracker import (
     TRACKER_EMAIL_INTEGRATION_METADATA_KEY,
@@ -72,6 +74,8 @@ from backend.domain.models import (
     TOKEN_SCOPE_WORKSPACES_WRITE,
     utc_plus_seconds,
 )
+from backend.orchestration.workspace_builder import _slugify
+from backend.profiles.cv_text import extract_cv_text_from_path
 
 
 def _json_bytes(payload) -> bytes:
@@ -80,6 +84,7 @@ def _json_bytes(payload) -> bytes:
 
 _EXPANDED_ARTIFACT_DELIMITER = "__item__"
 _EXPANDED_ARTIFACT_SUFFIXES = {".csv", ".docx", ".json", ".md", ".pdf", ".txt", ".xlsx"}
+_LOOPBACK_ORIGIN_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 class AtsExportBlockedError(ValueError):
@@ -1716,6 +1721,13 @@ def _collect_artifact_entries(application, user, *, workspace_id: str = "", run_
 
 
 _CANDIDATE_ASSET_METADATA_KEY = "candidate_assets"
+_WORKSPACE_CV_RUNTIME_SETTING_KEYS = (
+    "workspace_cv_text",
+    "workspace_cv_asset_path",
+    "workspace_cv_asset_display_name",
+    "workspace_cv_asset_extension",
+    "workspace_cv_asset_mime_type",
+)
 
 
 def _candidate_asset_download_url(asset_id: str) -> str:
@@ -1755,6 +1767,94 @@ def _load_candidate_assets(user) -> list[dict]:
         else:
             normalized.append(normalize_candidate_asset_descriptor(asset))
     return normalized
+
+
+def _get_candidate_asset_by_id(user, asset_id: str) -> dict:
+    target_asset_id = str(asset_id or "").strip()
+    for asset in _load_candidate_assets(user):
+        if str(asset.get("asset_id") or "").strip() == target_asset_id:
+            return asset
+    raise ValueError(f"Workspace CV asset '{target_asset_id}' was not found.")
+
+
+def _candidate_asset_file_path(asset: dict) -> Path | None:
+    file_payload = dict(asset.get("file") or {})
+    raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
+    return Path(raw_path) if raw_path else None
+
+
+def _resolve_workspace_cv_binding(user, asset_id: str) -> tuple[dict[str, str], dict]:
+    asset = _get_candidate_asset_by_id(user, asset_id)
+    asset_kind = str(asset.get("asset_kind") or "").strip().lower()
+    if asset_kind != "workspace_cv":
+        raise ValueError(f"Asset '{asset_id}' is not a workspace CV.")
+
+    asset_path = _candidate_asset_file_path(asset)
+    if asset_path is None or not asset_path.exists() or not asset_path.is_file():
+        raise ValueError(f"Workspace CV asset '{asset_id}' is missing its source file.")
+
+    cv_text = extract_cv_text_from_path(asset_path)
+    if not cv_text:
+        raise ValueError(f"Workspace CV asset '{asset_id}' does not contain readable text.")
+
+    file_payload = dict(asset.get("file") or {})
+    return (
+        {
+            "workspace_cv_text": cv_text,
+            "workspace_cv_asset_path": str(asset_path.resolve()),
+            "workspace_cv_asset_display_name": str(asset.get("display_name") or asset_path.name or asset_id),
+            "workspace_cv_asset_extension": str(
+                file_payload.get("extension") or asset_path.suffix.lower().lstrip(".")
+            ),
+            "workspace_cv_asset_mime_type": str(
+                file_payload.get("mime_type") or mimetypes.guess_type(asset_path.name)[0] or ""
+            ),
+        },
+        deepcopy(asset),
+    )
+
+
+def _prepare_workspace_builder_payload_with_cv(payload: dict, user, *, existing_workspace=None) -> tuple[dict, dict[str, str]]:
+    builder_payload = deepcopy(dict(payload or {}))
+    flow_id = str(
+        builder_payload.get("flow_id")
+        or getattr(existing_workspace, "metadata", {}).get("automation_flow")
+        or getattr(existing_workspace, "settings", {}).get("automation_flow")
+        or ""
+    ).strip()
+    if flow_id and flow_id != "tailored_documents":
+        return builder_payload, {}
+
+    settings = dict(builder_payload.get("settings") or {})
+    asset_id = str(settings.get("workspace_cv_asset_id") or builder_payload.get("workspace_cv_asset_id") or "").strip()
+    if not asset_id and existing_workspace is not None:
+        asset_id = str(getattr(existing_workspace, "settings", {}).get("workspace_cv_asset_id") or "").strip()
+        if asset_id:
+            settings["workspace_cv_asset_id"] = asset_id
+
+    if (flow_id or "tailored_documents") == "tailored_documents":
+        if not asset_id:
+            raise ValueError("workspace_cv_asset_id is required for tailored-documents workspaces.")
+        runtime_settings, workspace_cv_asset = _resolve_workspace_cv_binding(user, asset_id)
+        settings.update(runtime_settings)
+        builder_payload["workspace_cv_asset"] = workspace_cv_asset
+
+    builder_payload["settings"] = settings
+    return builder_payload, {
+        key: str(settings.get(key) or "")
+        for key in _WORKSPACE_CV_RUNTIME_SETTING_KEYS
+        if str(settings.get(key) or "")
+    }
+
+
+def _persist_workspace_runtime_settings(application, workspace, runtime_settings: dict[str, str]):
+    if not runtime_settings:
+        return workspace
+    workspace_payload = workspace.to_dict()
+    merged_settings = dict(workspace_payload.get("settings") or {})
+    merged_settings.update(runtime_settings)
+    workspace_payload["settings"] = merged_settings
+    return application.upsert_workspace(workspace_payload)
 
 
 def _persist_candidate_assets(application, user, assets: list[dict]) -> object:
@@ -2602,17 +2702,61 @@ def _parse_bool_param(query: dict[str, list[str]], name: str, *, default: bool =
     return default
 
 
-def build_handler(application):
+def _normalize_origin_value(value: str) -> str:
+    origin = str(value or "").strip()
+    if not origin:
+        return ""
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _origin_is_loopback(origin: str) -> bool:
+    normalized = _normalize_origin_value(origin)
+    if not normalized:
+        return False
+    parsed = urlparse(normalized)
+    return str(parsed.hostname or "").strip().lower() in _LOOPBACK_ORIGIN_HOSTS
+
+
+def _parse_allowed_origins(raw_value: str) -> tuple[set[str], bool]:
+    values = {str(item).strip() for item in str(raw_value or "").split(",") if str(item).strip()}
+    allow_all = "*" in values
+    normalized = {_normalize_origin_value(item) for item in values if item != "*"}
+    normalized.discard("")
+    return normalized, allow_all
+
+
+def build_handler(application, *, allowed_origins: set[str] | None = None, allow_all_origins: bool = False):
+    normalized_allowed_origins = {_normalize_origin_value(item) for item in (allowed_origins or set())}
+    normalized_allowed_origins.discard("")
+
     class BackendApiHandler(BaseHTTPRequestHandler):
+        def _cors_origin(self) -> str:
+            origin = _normalize_origin_value(str(self.headers.get("Origin") or ""))
+            if not origin:
+                return ""
+            if allow_all_origins or origin in normalized_allowed_origins or _origin_is_loopback(origin):
+                return origin
+            return ""
+
         def _cors_headers(self) -> dict[str, str]:
-            origin = str(self.headers.get("Origin") or "").strip()
-            return {
-                "Access-Control-Allow-Origin": origin or "*",
+            headers = {
                 "Access-Control-Allow-Headers": "Authorization, Content-Type",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
                 "Access-Control-Max-Age": "600",
                 "Vary": "Origin",
             }
+            allowed_origin = self._cors_origin()
+            if allowed_origin:
+                headers["Access-Control-Allow-Origin"] = allowed_origin
+            return headers
+
+        def _enforce_origin_policy(self) -> None:
+            request_origin = _normalize_origin_value(str(self.headers.get("Origin") or ""))
+            if request_origin and not self._cors_origin():
+                raise PermissionError(f"Origin '{request_origin}' is not allowed.")
 
         def _send_json(self, payload, status: int = 200, *, headers: dict[str, str] | None = None) -> None:
             body = _json_bytes(payload)
@@ -2739,13 +2883,18 @@ def build_handler(application):
             )
 
         def do_OPTIONS(self):  # noqa: N802
-            self.send_response(HTTPStatus.NO_CONTENT)
-            for key, value in self._cors_headers().items():
-                self.send_header(key, value)
-            self.end_headers()
+            try:
+                self._enforce_origin_policy()
+                self.send_response(HTTPStatus.NO_CONTENT)
+                for key, value in self._cors_headers().items():
+                    self.send_header(key, value)
+                self.end_headers()
+            except PermissionError as exc:
+                self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
 
         def do_GET(self):  # noqa: N802
             try:
+                self._enforce_origin_policy()
                 _, segments, query = self._parse_request()
 
                 if not segments:
@@ -3316,6 +3465,8 @@ def build_handler(application):
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
+            except BackendValidationError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, exc.error_code, str(exc), details=dict(exc.details))
             except AtsExportBlockedError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
             except ValueError as exc:
@@ -3325,6 +3476,7 @@ def build_handler(application):
 
         def do_POST(self):  # noqa: N802
             try:
+                self._enforce_origin_policy()
                 _, segments, query = self._parse_request()
 
                 # ---- CV upload (multipart/form-data — must be handled before JSON body read) ----
@@ -3383,15 +3535,6 @@ def build_handler(application):
                     cv_save_path = Path("user_config") / "cv_master.txt"
                     cv_save_path.parent.mkdir(parents=True, exist_ok=True)
                     cv_save_path.write_text(cv_text, encoding="utf-8")
-                    existing_assets = [
-                        asset
-                        for asset in _load_candidate_assets(user)
-                        if not (
-                            str(asset.get("asset_kind") or "") == "workspace_cv"
-                            and not str(asset.get("workspace_binding", {}).get("workspace_id") or "").strip()
-                        )
-                    ]
-                    user = _persist_candidate_assets(application, user, existing_assets)
                     uploaded_asset = _store_candidate_asset_upload(
                         application,
                         user,
@@ -3728,12 +3871,60 @@ def build_handler(application):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                     self._send_json(application.upsert_workspace(payload).to_dict(), status=HTTPStatus.CREATED)
                     return
-                if segments == ["workspace-builder", "workspaces"]:
-                    self._require_scope(TOKEN_SCOPE_WORKSPACES_WRITE)
+                if segments == ["quick-apply", "runs"]:
+                    user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
+                    workspace_id = str(payload.get("workspace_id") or "").strip()
+                    if not workspace_id:
+                        raise ValueError("workspace_id is required")
+                    if not application.user_can_access_workspace(user, workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
+                    execution_mode = str(payload.get("execution_mode") or "sync").strip().lower()
+                    max_attempts = max(1, int(payload.get("max_attempts") or 1))
+                    manual_urls = payload.get("manual_urls") or payload.get("urls") or []
+                    if execution_mode == "queued":
+                        run, invalid_entries = application.start_quick_apply_run(
+                            workspace_id,
+                            manual_urls=manual_urls,
+                            execute=False,
+                            enqueue=True,
+                            requested_by=f"api:{user.user_id}",
+                            max_attempts=max_attempts,
+                        )
+                    elif execution_mode == "planned":
+                        run, invalid_entries = application.start_quick_apply_run(
+                            workspace_id,
+                            manual_urls=manual_urls,
+                            execute=False,
+                            enqueue=False,
+                            requested_by=f"api:{user.user_id}",
+                            max_attempts=max_attempts,
+                        )
+                    elif execution_mode == "sync":
+                        run, invalid_entries = application.start_quick_apply_run(
+                            workspace_id,
+                            manual_urls=manual_urls,
+                            execute=True,
+                            enqueue=False,
+                            requested_by=f"api:{user.user_id}",
+                            max_attempts=max_attempts,
+                        )
+                    else:
+                        raise ValueError("execution_mode must be one of: queued, planned, sync")
                     self._send_json(
-                        application.create_workspace_from_scratch(payload).to_dict(),
+                        {
+                            "run": run.to_dict(),
+                            "accepted_url_count": int(run.metadata.get("accepted_url_count") or 0),
+                            "invalid_entries": invalid_entries,
+                        },
                         status=HTTPStatus.CREATED,
                     )
+                    return
+                if segments == ["workspace-builder", "workspaces"]:
+                    user, _ = self._require_scope(TOKEN_SCOPE_WORKSPACES_WRITE)
+                    prepared_payload, runtime_settings = _prepare_workspace_builder_payload_with_cv(payload, user)
+                    workspace = application.create_workspace_from_scratch(prepared_payload)
+                    workspace = _persist_workspace_runtime_settings(application, workspace, runtime_settings)
+                    self._send_json(workspace.to_dict(), status=HTTPStatus.CREATED)
                     return
                 if segments == ["workspace-builder", "source-validation"]:
                     self._require_scope(TOKEN_SCOPE_WORKSPACES_READ)
@@ -3992,6 +4183,8 @@ def build_handler(application):
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
+            except BackendValidationError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, exc.error_code, str(exc), details=dict(exc.details))
             except AtsExportBlockedError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
             except ValueError as exc:
@@ -4001,6 +4194,7 @@ def build_handler(application):
 
         def do_PUT(self):  # noqa: N802
             try:
+                self._enforce_origin_policy()
                 _, segments, _ = self._parse_request()
                 payload = self._read_json_body()
 
@@ -4070,14 +4264,19 @@ def build_handler(application):
                     )
                     return
                 if segments[:2] == ["workspace-builder", "workspaces"] and len(segments) == 3:
-                    self._require_workspace_access(
+                    user, _ = self._require_workspace_access(
                         workspace_id=segments[2],
                         required_scope=TOKEN_SCOPE_WORKSPACES_WRITE,
                     )
-                    self._send_json(
-                        application.update_workspace_from_scratch(segments[2], payload).to_dict(),
-                        status=HTTPStatus.OK,
+                    existing_workspace = application.get_workspace(segments[2])
+                    prepared_payload, runtime_settings = _prepare_workspace_builder_payload_with_cv(
+                        payload,
+                        user,
+                        existing_workspace=existing_workspace,
                     )
+                    workspace = application.update_workspace_from_scratch(segments[2], prepared_payload)
+                    workspace = _persist_workspace_runtime_settings(application, workspace, runtime_settings)
+                    self._send_json(workspace.to_dict(), status=HTTPStatus.OK)
                     return
                 if segments[:1] == ["users"] and len(segments) == 2:
                     self._require_scope(TOKEN_SCOPE_USERS_WRITE)
@@ -4269,6 +4468,8 @@ def build_handler(application):
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
+            except BackendValidationError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, exc.error_code, str(exc), details=dict(exc.details))
             except AtsExportBlockedError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
             except ValueError as exc:
@@ -4278,6 +4479,7 @@ def build_handler(application):
 
         def do_DELETE(self):  # noqa: N802
             try:
+                self._enforce_origin_policy()
                 _, segments, _ = self._parse_request()
 
                 if segments[:1] == ["users"] and len(segments) == 2:
@@ -4366,6 +4568,8 @@ def build_handler(application):
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
+            except BackendValidationError as exc:
+                self._send_error(HTTPStatus.BAD_REQUEST, exc.error_code, str(exc), details=dict(exc.details))
             except AtsExportBlockedError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
             except ValueError as exc:
@@ -4387,6 +4591,10 @@ def serve_api(
     storage_backend: str = "sqlite",
 ) -> None:
     application = create_backend(data_dir, storage_backend=storage_backend)
-    server = ThreadingHTTPServer((host, int(port)), build_handler(application))
+    allowed_origins, allow_all_origins = _parse_allowed_origins(os.getenv("BACKEND_ALLOWED_ORIGINS", ""))
+    server = ThreadingHTTPServer(
+        (host, int(port)),
+        build_handler(application, allowed_origins=allowed_origins, allow_all_origins=allow_all_origins),
+    )
     print(f"Unified backend API listening on http://{host}:{port}")
     server.serve_forever()

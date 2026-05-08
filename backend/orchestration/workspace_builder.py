@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 from urllib.parse import urlparse
@@ -12,7 +13,11 @@ from backend.capabilities.tailored_documents.rendering import (
     CV_FONT_OPTIONS,
     CV_TEMPLATE_PRESETS,
 )
-from backend.connectors.company_career_sites import load_discovered_company_site_entries
+from backend.connectors.company_career_sites import (
+    ACADEMIC_CAREER_SITE_FILES,
+    REGULAR_COMPANY_SITE_FILES,
+    load_discovered_company_site_entries,
+)
 from backend.domain.phase0_contracts import DEFAULT_MULTI_PORTAL_IDS, normalize_workspace_configuration_v2
 from backend.domain.models import JobSource, ProfileRef, PromptSetRef, StageDefinition, WorkflowTemplate, WorkspaceDefinition
 
@@ -22,6 +27,7 @@ FLOW_REUSABLE_PACKAGES = "reusable_packages"
 
 SOURCE_LINKEDIN_SEARCH = "linkedin_jobs"
 SOURCE_CURATED_URLS = "curated_job_urls"
+SOURCE_ACADEMIC_CAREER_SITES = "academic_career_sites"
 SOURCE_COMPANY_CAREER_SITES = "company_career_sites"
 SOURCE_MULTI_PORTAL = "job_board_collection"
 
@@ -34,6 +40,7 @@ MODULE_APPLICATION_PACKAGING = "application_packaging"
 
 COUNTRY_OPTIONS = [
     {"value": "DE", "label": "Germany"},
+    {"value": "GB", "label": "United Kingdom"},
     {"value": "NL", "label": "Netherlands"},
     {"value": "AT", "label": "Austria"},
     {"value": "CH", "label": "Switzerland"},
@@ -41,8 +48,10 @@ COUNTRY_OPTIONS = [
     {"value": "LU", "label": "Luxembourg"},
     {"value": "FR", "label": "France"},
     {"value": "ES", "label": "Spain"},
+    {"value": "HK", "label": "Hong Kong"},
     {"value": "PL", "label": "Poland"},
     {"value": "SE", "label": "Sweden"},
+    {"value": "TH", "label": "Thailand"},
 ]
 
 COUNTRY_TO_LINKEDIN_GEO = {
@@ -60,6 +69,7 @@ COUNTRY_TO_LINKEDIN_GEO = {
 
 COUNTRY_TO_SOURCE_CITIES = {
     "DE": ["Berlin", "Munich", "Hamburg", "Frankfurt", "Cologne"],
+    "GB": ["London", "Manchester", "Birmingham", "Leeds"],
     "NL": ["Amsterdam", "Rotterdam", "Utrecht"],
     "AT": ["Vienna", "Graz", "Linz"],
     "CH": ["Zurich", "Basel", "Geneva"],
@@ -67,8 +77,101 @@ COUNTRY_TO_SOURCE_CITIES = {
     "LU": ["Luxembourg"],
     "FR": ["Paris", "Lyon", "Marseille"],
     "ES": ["Madrid", "Barcelona", "Valencia"],
+    "HK": ["Hong Kong"],
     "PL": ["Warsaw", "Krakow", "Wroclaw"],
     "SE": ["Stockholm", "Gothenburg", "Malmo"],
+    "TH": ["Bangkok", "Chiang Mai", "Phuket"],
+}
+
+COUNTRY_LABEL_BY_CODE = {item["value"]: item["label"] for item in COUNTRY_OPTIONS}
+
+PORTAL_OPTION_DEFINITIONS = [
+    {
+        "value": "indeed",
+        "label": "Indeed",
+        "category": "generalist",
+        "summary": "Largest global aggregator with easy-apply coverage across broad salaried roles.",
+    },
+    {
+        "value": "linkedin",
+        "label": "LinkedIn Jobs",
+        "category": "generalist",
+        "summary": "Networking-led search for white-collar roles from mid-level through senior hiring.",
+    },
+    {
+        "value": "glassdoor",
+        "label": "Glassdoor",
+        "category": "generalist",
+        "summary": "Job listings paired with company reviews and salary context.",
+    },
+    {
+        "value": "ziprecruiter",
+        "label": "ZipRecruiter",
+        "category": "generalist",
+        "summary": "Broad salaried-role distribution across a large partner-board network.",
+    },
+    {
+        "value": "monster",
+        "label": "Monster",
+        "category": "generalist",
+        "summary": "Long-running generalist board for corporate, technical, and mid-level hiring.",
+    },
+    {
+        "value": "careerbuilder",
+        "label": "CareerBuilder",
+        "category": "generalist",
+        "summary": "Large professional hiring board for full-time salaried roles.",
+    },
+    {
+        "value": "careerjet",
+        "label": "Careerjet",
+        "category": "regional",
+        "summary": "Global aggregator that widens coverage with web-sourced salaried openings.",
+    },
+    {
+        "value": "stepstone",
+        "label": "StepStone",
+        "category": "regional",
+        "country_codes": ["DE", "GB"],
+        "summary": "Premium skilled-role coverage for Germany and the United Kingdom.",
+    },
+    {
+        "value": "reed",
+        "label": "Reed.co.uk",
+        "category": "regional",
+        "country_codes": ["GB"],
+        "summary": "High-volume UK hiring across dozens of salaried sectors.",
+    },
+    {
+        "value": "totaljobs",
+        "label": "Totaljobs",
+        "category": "regional",
+        "country_codes": ["GB"],
+        "summary": "Broad UK professional-network job coverage.",
+    },
+    {
+        "value": "jobsdb",
+        "label": "JobsDB",
+        "category": "regional",
+        "country_codes": ["HK", "TH"],
+        "summary": "Regional full-time board for Hong Kong and Thailand.",
+    },
+    {
+        "value": "arbeitsagentur",
+        "label": "Arbeitsagentur",
+        "category": "regional",
+        "country_codes": ["DE"],
+        "summary": "Official German employment-service listings.",
+    },
+]
+
+PORTAL_OPTION_BY_ID = {str(item["value"]): item for item in PORTAL_OPTION_DEFINITIONS}
+BASE_MULTI_PORTAL_DEFAULT_IDS = ["indeed", "linkedin", "careerjet"]
+COUNTRY_TO_RECOMMENDED_PORTALS = {
+    "DE": ["stepstone", "arbeitsagentur"],
+    "GB": ["stepstone", "reed", "totaljobs"],
+    "HK": ["jobsdb"],
+    "TH": ["jobsdb"],
 }
 
 USER_FACING_FIELD_IDS = {
@@ -79,6 +182,7 @@ USER_FACING_FIELD_IDS = {
     "time_posted_seconds",
     "experience_levels",
     "manual_url_seed_list",
+    "academic_career_sites",
     "company_career_sites",
     "portals",
     "forbidden_title_keywords",
@@ -109,6 +213,7 @@ FIELD_SECTION_BY_ID = {
     "time_posted_seconds": "filters",
     "experience_levels": "filters",
     "manual_url_seed_list": "sources",
+    "academic_career_sites": "sources",
     "company_career_sites": "sources",
     "portals": "sources",
     "forbidden_title_keywords": "filters",
@@ -145,52 +250,54 @@ FIELD_SORT_ORDER = {
     "low_applicant_threshold": 100,
     "languages": 110,
     "manual_url_seed_list": 120,
-    "company_career_sites": 130,
-    "portals": 140,
-    "cv_template": 150,
-    "cv_color_scheme": 160,
-    "cv_font": 170,
-    "include_photo": 180,
-    "stage1_model": 190,
-    "stage1_extra_prompt": 200,
-    "stage1_prompt_override": 210,
-    "stage4_model": 220,
-    "stage4_fallback_model": 230,
-    "stage4_max_jobs": 240,
-    "stage4_extra_prompt": 250,
-    "stage4_prompt_override": 260,
+    "academic_career_sites": 130,
+    "company_career_sites": 140,
+    "portals": 150,
+    "cv_template": 160,
+    "cv_color_scheme": 170,
+    "cv_font": 180,
+    "include_photo": 190,
+    "stage1_model": 200,
+    "stage1_extra_prompt": 210,
+    "stage1_prompt_override": 220,
+    "stage4_model": 230,
+    "stage4_fallback_model": 240,
+    "stage4_max_jobs": 250,
+    "stage4_extra_prompt": 260,
+    "stage4_prompt_override": 270,
 }
 
 BUILDER_SECTIONS = [
     {
         "id": "cv_binding",
-        "title": "CV Baseline",
-        "description": "Start with the CV that best matches this search so keywords, defaults, and generated documents stay aligned.",
+        "title": "Baseline CV",
+        "description": "Choose the CV this workspace should use as its baseline before any job-specific tailoring happens.",
     },
     {
         "id": "targeting",
         "title": "Targeting",
-        "description": "Use keyword-first targeting and country selection instead of role presets and raw source ids.",
+        "description": "Set the target roles, keywords, and countries that define what this workspace should pursue.",
     },
     {
         "id": "sources",
-        "title": "Sources",
-        "description": "Choose the sources for this workspace and keep each source's settings beside it.",
+        "title": "Source Setup",
+        "description": "Choose one recurring source type for this workspace and configure it inline.",
     },
     {
         "id": "filters",
         "title": "Filters",
-        "description": "Apply clear user-facing filters for recency, seniority, titles, and language fit.",
+        "description": "Control recency, seniority, language, and filtering behavior for this workspace.",
     },
     {
         "id": "documents",
-        "title": "Document Defaults",
-        "description": "Keep the CV design controls available without exposing pipeline internals.",
+        "title": "Document Style",
+        "description": "Set the default CV design choices used when this workspace generates application documents.",
     },
     {
         "id": "prompt_preferences",
         "title": "Prompt Overrides",
         "description": "Review stage-specific prompt behavior and only override it deliberately.",
+        "frontend_visible": False,
     },
 ]
 
@@ -253,25 +360,41 @@ def _configuration_fields() -> list[dict]:
             "description": "Keywords the system should search for when discovering jobs.",
             "type": "tag_list",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_COMPANY_CAREER_SITES, SOURCE_MULTI_PORTAL],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+                SOURCE_MULTI_PORTAL,
+            ],
             "placeholder": "analyst, consultant, product manager",
         },
         {
             "id": "country_codes",
             "label": "Target Countries",
-            "description": "Country-based targeting that stays consistent across search, career-site, and board sources.",
+            "description": "Choose the countries this workspace should target.",
             "type": "multi_select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_COMPANY_CAREER_SITES, SOURCE_MULTI_PORTAL],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+                SOURCE_MULTI_PORTAL,
+            ],
             "options": list(COUNTRY_OPTIONS),
         },
         {
             "id": "target_roles",
             "label": "Target Roles",
-            "description": "Pick one primary role or blend up to three role families that should shape search keywords and document emphasis.",
+            "description": "Add the roles this workspace should target. They shape search keywords and document emphasis.",
             "type": "multi_select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES, SOURCE_MULTI_PORTAL],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_CURATED_URLS,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+                SOURCE_MULTI_PORTAL,
+            ],
             "options": [
                 {"value": "Product Manager", "label": "Product Manager"},
                 {"value": "Business Analyst", "label": "Business Analyst"},
@@ -372,7 +495,12 @@ def _configuration_fields() -> list[dict]:
             "description": "Allow proxy fallback when direct job detail enrichment fails.",
             "type": "boolean",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_CURATED_URLS,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+            ],
             "options": _boolean_options("Enable fallback", "Disable fallback"),
             "default": False,
         },
@@ -395,13 +523,40 @@ def _configuration_fields() -> list[dict]:
             "placeholder": "45",
         },
         {
+            "id": "academic_career_sites",
+            "label": "Academic Websites",
+            "description": "Use the saved university and department website list for academic roles, and add up to 50 university, chair, department, institute, or research portal URLs of your own.",
+            "type": "company_site_list",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_ACADEMIC_CAREER_SITES],
+            "placeholder": "https://university.example/careers",
+        },
+        {
+            "id": "academic_site_max_jobs_per_site",
+            "label": "Academic Jobs Per Site",
+            "description": "Maximum job links to follow from each academic site during one run.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_ACADEMIC_CAREER_SITES],
+            "placeholder": "10",
+        },
+        {
+            "id": "academic_site_request_timeout_seconds",
+            "label": "Academic Site Timeout (seconds)",
+            "description": "How long the workspace waits for each academic website to respond.",
+            "type": "number",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "source_ids": [SOURCE_ACADEMIC_CAREER_SITES],
+            "placeholder": "30",
+        },
+        {
             "id": "company_career_sites",
-            "label": "Company Career Sites",
-            "description": "Optional manual overrides. Leave blank to use the backend-discovered career-site list automatically.",
+            "label": "Company Websites",
+            "description": "Search major company career sites worldwide, and add up to 50 company or careers URLs of your own. Separate each URL with Enter or a comma.",
             "type": "company_site_list",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "source_ids": [SOURCE_COMPANY_CAREER_SITES],
-            "placeholder": "Acme | https://careers.acme.com/jobs",
+            "placeholder": "https://careers.acme.com/jobs",
         },
         {
             "id": "company_site_max_jobs_per_site",
@@ -415,7 +570,7 @@ def _configuration_fields() -> list[dict]:
         {
             "id": "company_site_request_timeout_seconds",
             "label": "Company Site Timeout (seconds)",
-            "description": "HTTP timeout when crawling configured company career pages.",
+            "description": "How long the workspace waits for each company website to respond.",
             "type": "number",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "source_ids": [SOURCE_COMPANY_CAREER_SITES],
@@ -427,7 +582,12 @@ def _configuration_fields() -> list[dict]:
             "description": "Jobs whose title contains any of these words will be excluded before AI screening.",
             "type": "tag_list",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_CURATED_URLS,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+            ],
             "placeholder": "senior, director, intern, werkstudent",
         },
         {
@@ -436,7 +596,12 @@ def _configuration_fields() -> list[dict]:
             "description": "Reject jobs that require German above this level (e.g. B2 rejects C1/C2 jobs).",
             "type": "select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_CURATED_URLS,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+            ],
             "options": [
                 {"value": "A1", "label": "A1 — Beginner"},
                 {"value": "A2", "label": "A2 — Elementary"},
@@ -454,7 +619,12 @@ def _configuration_fields() -> list[dict]:
             "description": "Enable or disable French-language rejection in local language filtering.",
             "type": "select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_CURATED_URLS,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+            ],
             "options": [
                 {"value": 0, "label": "Yes - exclude French jobs"},
                 {"value": 9999, "label": "No - allow French jobs"},
@@ -467,7 +637,12 @@ def _configuration_fields() -> list[dict]:
             "description": "Enable or disable Spanish-language rejection in local language filtering.",
             "type": "select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_CURATED_URLS,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+            ],
             "options": [
                 {"value": 0, "label": "Yes - exclude Spanish jobs"},
                 {"value": 9999, "label": "No - allow Spanish jobs"},
@@ -480,7 +655,7 @@ def _configuration_fields() -> list[dict]:
             "description": "Listings below this applicant count get boosted during prioritization.",
             "type": "number",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "source_ids": [SOURCE_LINKEDIN_SEARCH],
             "placeholder": "80",
         },
         {
@@ -489,7 +664,12 @@ def _configuration_fields() -> list[dict]:
             "description": "Optional cap on how many jobs should reach document generation in one run.",
             "type": "number",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
-            "source_ids": [SOURCE_LINKEDIN_SEARCH, SOURCE_CURATED_URLS, SOURCE_COMPANY_CAREER_SITES],
+            "source_ids": [
+                SOURCE_LINKEDIN_SEARCH,
+                SOURCE_CURATED_URLS,
+                SOURCE_ACADEMIC_CAREER_SITES,
+                SOURCE_COMPANY_CAREER_SITES,
+            ],
             "placeholder": "25",
         },
         {
@@ -524,6 +704,7 @@ def _configuration_fields() -> list[dict]:
             "type": "tag_list",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
             "placeholder": "English - C1, German - B1/B2",
+            "frontend_visible": False,
         },
         {
             "id": "cv_template",
@@ -681,16 +862,11 @@ def _configuration_fields() -> list[dict]:
         {
             "id": "portals",
             "label": "Job Boards",
-            "description": "Job boards or portals that should be queried for this workspace.",
+            "description": "Choose the job boards to search. Global boards are always available. Regional boards appear after you select matching target countries.",
             "type": "multi_select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
             "source_ids": [SOURCE_MULTI_PORTAL],
-            "options": [
-                {"value": "indeed", "label": "Indeed"},
-                {"value": "stepstone", "label": "StepStone"},
-                {"value": "arbeitsagentur", "label": "Arbeitsagentur"},
-                {"value": "linkedin", "label": "LinkedIn"},
-            ],
+            "options": list(PORTAL_OPTION_DEFINITIONS),
         },
         {
             "id": "max_pages",
@@ -851,16 +1027,15 @@ def _configuration_fields() -> list[dict]:
 
 def _normalize_country_codes(raw_value: Any) -> list[str]:
     if isinstance(raw_value, str):
-        values = [item.strip().upper() for item in raw_value.split(",") if item.strip()]
+        values = [item.strip().upper() for item in raw_value.replace("\n", ",").split(",") if item.strip()]
     elif isinstance(raw_value, (list, tuple, set)):
         values = [str(item).strip().upper() for item in raw_value if str(item).strip()]
     else:
         return []
     normalized: list[str] = []
     seen = set()
-    allowed_codes = {item["value"] for item in COUNTRY_OPTIONS}
     for value in values:
-        if value not in allowed_codes or value in seen:
+        if len(value) != 2 or not value.isalpha() or value in seen:
             continue
         normalized.append(value)
         seen.add(value)
@@ -887,6 +1062,63 @@ def _derive_source_cities(country_codes: list[str]) -> list[str]:
     return cities[:8]
 
 
+def _portal_label(portal_id: str) -> str:
+    portal_definition = PORTAL_OPTION_BY_ID.get(str(portal_id or "").strip())
+    if portal_definition:
+        return str(portal_definition.get("label") or portal_id)
+    return str(portal_id or "").strip()
+
+
+def _portal_region_labels(portal_id: str) -> list[str]:
+    portal_definition = PORTAL_OPTION_BY_ID.get(str(portal_id or "").strip()) or {}
+    return [
+        COUNTRY_LABEL_BY_CODE.get(country_code, country_code)
+        for country_code in portal_definition.get("country_codes") or []
+    ]
+
+
+def _recommended_multi_portal_ids(country_codes: list[str]) -> list[str]:
+    recommended: list[str] = []
+    seen = set()
+    for portal_id in BASE_MULTI_PORTAL_DEFAULT_IDS:
+        if portal_id in PORTAL_OPTION_BY_ID and portal_id not in seen:
+            recommended.append(portal_id)
+            seen.add(portal_id)
+    for country_code in country_codes:
+        for portal_id in COUNTRY_TO_RECOMMENDED_PORTALS.get(country_code, []):
+            if portal_id in PORTAL_OPTION_BY_ID and portal_id not in seen:
+                recommended.append(portal_id)
+                seen.add(portal_id)
+    return recommended or list(DEFAULT_MULTI_PORTAL_IDS)
+
+
+def _portal_country_mismatch_errors(portals: list[str], country_codes: list[str]) -> list[dict[str, str]]:
+    selected_countries = set(country_codes)
+    if not selected_countries:
+        return []
+    errors: list[dict[str, str]] = []
+    for portal_id in portals:
+        required_countries = set((PORTAL_OPTION_BY_ID.get(str(portal_id or "").strip()) or {}).get("country_codes") or [])
+        if required_countries and not required_countries.intersection(selected_countries):
+            region_labels = _portal_region_labels(portal_id)
+            errors.append(
+                _field_error(
+                    "portals",
+                    "country_mismatch",
+                    (
+                        f"{_portal_label(portal_id)} only appears for "
+                        f"{', '.join(region_labels) or 'the supported target countries'}."
+                    ),
+                    source_id=SOURCE_MULTI_PORTAL,
+                )
+            )
+    return errors
+
+
+def _load_discovered_source_sites(paths: tuple[Path, ...]) -> list[dict[str, str]]:
+    return load_discovered_company_site_entries(paths)
+
+
 def derive_runtime_defaults_from_settings(
     settings: dict[str, Any],
     *,
@@ -901,7 +1133,7 @@ def derive_runtime_defaults_from_settings(
             derived["geo_id"] = geo_id
     if SOURCE_MULTI_PORTAL in selected_source_ids:
         if not settings.get("portals"):
-            derived["portals"] = list(DEFAULT_MULTI_PORTAL_IDS)
+            derived["portals"] = _recommended_multi_portal_ids(country_codes)
         if not settings.get("cities") and country_codes:
             cities = _derive_source_cities(country_codes)
             if cities:
@@ -922,12 +1154,13 @@ def _annotate_builder_field(field_definition: dict) -> dict:
     field["section"] = FIELD_SECTION_BY_ID.get(field_id, "advanced")
     field["user_facing"] = field_id in USER_FACING_FIELD_IDS
     field["sort_order"] = FIELD_SORT_ORDER.get(field_id, 999)
+    if field_id in {"languages", "stage1_prompt_override", "stage4_prompt_override"}:
+        field["frontend_visible"] = False
     if field_id == "geo_id":
         field["description"] = "Derived internally from the selected country when possible."
     if field_id == "target_roles":
         field["description"] = (
-            "Pick one primary role or blend up to three role families so search keywords "
-            "and document emphasis stay aligned."
+            "Add the roles this workspace should target so search keywords and document emphasis stay aligned."
         )
     if field_id == "workspace_cv_asset_id":
         field["required"] = True
@@ -959,29 +1192,39 @@ def workspace_builder_catalog() -> BuilderCatalog:
             {
                 "id": SOURCE_LINKEDIN_SEARCH,
                 "connector_id": "linkedin_jobs",
-                "name": "LinkedIn Job Search",
-                "description": "Discover jobs from LinkedIn listings and enrich them for downstream processing.",
+                "name": "LinkedIn Jobs",
+                "description": "Legacy LinkedIn search source kept only for older workspaces that already use it.",
                 "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+                "frontend_visible": False,
+                "legacy": True,
             },
             {
                 "id": SOURCE_CURATED_URLS,
                 "connector_id": "curated_job_urls",
-                "name": "Curated Job URLs",
-                "description": "Ingest job URLs supplied manually by the user and normalize them into the shared job schema.",
+                "name": "Exact Job Links",
+                "description": "Legacy source for pasting exact job posting links into a workspace.",
+                "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+                "frontend_visible": False,
+            },
+            {
+                "id": SOURCE_ACADEMIC_CAREER_SITES,
+                "connector_id": "academic_career_sites",
+                "name": "Academic Jobs",
+                "description": "Search university, department, chair, institute, and research-site openings from the saved academic list, with up to 50 academic URLs of your own.",
                 "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             },
             {
                 "id": SOURCE_COMPANY_CAREER_SITES,
                 "connector_id": "company_career_sites",
-                "name": "Company Career Sites",
-                "description": "Discover open roles directly from backend-prepared company career pages and push them through the shared screening flow.",
+                "name": "Company Websites",
+                "description": "Search roles from major company career sites worldwide and add up to 50 company URLs of your own.",
                 "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             },
             {
                 "id": SOURCE_MULTI_PORTAL,
                 "connector_id": "job_board_collection",
-                "name": "Job Board Collection",
-                "description": "Collect jobs from multiple job boards and portals through the shared board connector layer.",
+                "name": "Other Job Boards",
+                "description": "Search major global job boards, and unlock regional leaders automatically when the selected countries match them.",
                 "compatible_flows": [FLOW_TAILORED_DOCUMENTS, FLOW_REUSABLE_PACKAGES],
             },
         ],
@@ -1116,9 +1359,14 @@ def _normalize_multi_select(raw_value: "Any") -> list["Any"]:
 
 def _normalize_url_list(raw_value: "Any") -> list[str]:
     if isinstance(raw_value, str):
-        values = [line.strip() for line in raw_value.splitlines() if line.strip()]
+        values = [line.strip() for line in raw_value.replace(",", "\n").splitlines() if line.strip()]
     elif isinstance(raw_value, (list, tuple, set)):
-        values = [str(item).strip() for item in raw_value if str(item).strip()]
+        values = []
+        for item in raw_value:
+            text = str(item).strip()
+            if not text:
+                continue
+            values.extend([line.strip() for line in text.replace(",", "\n").splitlines() if line.strip()])
     else:
         return []
     deduped: list[str] = []
@@ -1131,14 +1379,21 @@ def _normalize_url_list(raw_value: "Any") -> list[str]:
             continue
         deduped.append(value)
         seen.add(value)
+        if len(deduped) >= 50:
+            break
     return deduped
 
 
 def _normalize_company_site_list(raw_value: "Any") -> list[dict[str, str]]:
     if isinstance(raw_value, str):
-        values = [line.strip() for line in raw_value.splitlines() if line.strip()]
+        values = [line.strip() for line in raw_value.replace(",", "\n").splitlines() if line.strip()]
     elif isinstance(raw_value, (list, tuple, set)):
-        values = list(raw_value)
+        values = []
+        for item in raw_value:
+            if isinstance(item, str):
+                values.extend([line.strip() for line in item.replace(",", "\n").splitlines() if line.strip()])
+            else:
+                values.append(item)
     else:
         return []
 
@@ -1171,6 +1426,8 @@ def _normalize_company_site_list(raw_value: "Any") -> list[dict[str, str]]:
             continue
         seen_urls.add(url)
         normalized.append({"company_name": company_name, "url": url})
+        if len(normalized) >= 50:
+            break
     return normalized
 
 
@@ -1182,8 +1439,6 @@ def _normalize_setting_value(field_definition: dict, raw_value: "Any") -> "Any":
         return _normalize_tag_list(raw_value)
     if field_type == "multi_select":
         normalized = _normalize_multi_select(raw_value)
-        if str(field_definition.get("id") or "") == "target_roles":
-            return normalized[:3]
         return normalized
     if field_type == "url_list":
         return _normalize_url_list(raw_value)
@@ -1217,6 +1472,43 @@ def _normalize_setting_value(field_definition: dict, raw_value: "Any") -> "Any":
         return int(text) if text.isdigit() else text
     text = str(raw_value or "").strip()
     return text or None
+
+
+def _field_error(
+    field: str,
+    code: str,
+    message: str,
+    *,
+    source_id: str = "",
+) -> dict[str, str]:
+    error = {
+        "field": str(field or "").strip(),
+        "code": str(code or "").strip(),
+        "message": str(message or "").strip(),
+    }
+    if source_id:
+        error["source_id"] = str(source_id).strip()
+    return error
+
+
+def _dedupe_field_errors(errors: list[dict[str, Any]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw_error in errors:
+        if not isinstance(raw_error, dict):
+            continue
+        field = str(raw_error.get("field") or "").strip()
+        code = str(raw_error.get("code") or "").strip()
+        message = str(raw_error.get("message") or "").strip()
+        source_id = str(raw_error.get("source_id") or "").strip()
+        if not field or not code or not message:
+            continue
+        dedupe_key = (field, code, source_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append(_field_error(field, code, message, source_id=source_id))
+    return deduped
 
 
 def _normalize_workspace_settings_base(
@@ -1264,34 +1556,63 @@ def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str
     derived_runtime_defaults = derive_runtime_defaults_from_settings(settings, source_ids=source_ids)
     effective_settings = {**settings, **derived_runtime_defaults}
     results: list[dict[str, Any]] = []
+    field_errors: list[dict[str, str]] = []
 
-    def add_result(source_id: str, *, status: str, summary: str, details: list[str] | None = None) -> None:
+    def add_result(
+        source_id: str,
+        *,
+        status: str,
+        summary: str,
+        details: list[str] | None = None,
+        source_field_errors: list[dict[str, str]] | None = None,
+    ) -> None:
+        normalized_field_errors = _dedupe_field_errors(list(source_field_errors or []))
         results.append(
             {
                 "source_id": source_id,
                 "status": status,
                 "summary": summary,
                 "details": list(details or []),
+                "field_errors": normalized_field_errors,
             }
         )
+        field_errors.extend(normalized_field_errors)
 
     if SOURCE_LINKEDIN_SEARCH in source_ids:
         linkedin_details: list[str] = []
+        linkedin_field_errors: list[dict[str, str]] = []
         status = "valid"
         if not effective_settings.get("keywords"):
             status = "invalid"
             linkedin_details.append("Add at least one target keyword.")
+            linkedin_field_errors.append(
+                _field_error(
+                    "keywords",
+                    "required",
+                    "Add at least one target keyword before enabling LinkedIn search.",
+                    source_id=SOURCE_LINKEDIN_SEARCH,
+                )
+            )
         derived_geo_id = str(effective_settings.get("geo_id") or "")
         if derived_geo_id:
             linkedin_details.append(f"LinkedIn geo id resolved to {derived_geo_id}.")
         else:
             status = "invalid"
             linkedin_details.append("Select at least one target country so LinkedIn location can be derived.")
+            linkedin_field_errors.append(
+                _field_error(
+                    "country_codes",
+                    "required",
+                    "Select at least one target country so LinkedIn location can be derived.",
+                    source_id=SOURCE_LINKEDIN_SEARCH,
+                )
+            )
         add_result(
             SOURCE_LINKEDIN_SEARCH,
             status=status,
             summary="LinkedIn search is ready." if status == "valid" else "LinkedIn search is missing required setup.",
             details=linkedin_details,
+            source_field_errors=linkedin_field_errors,
         )
 
     if SOURCE_CURATED_URLS in source_ids:
@@ -1302,19 +1623,31 @@ def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str
             status="valid" if urls else "invalid",
             summary="Curated URLs look usable." if urls else "Curated URLs are required for this source.",
             details=details,
+            source_field_errors=(
+                []
+                if urls
+                else [
+                    _field_error(
+                        "manual_url_seed_list",
+                        "required",
+                        "Paste one or more job URLs before enabling exact job links.",
+                        source_id=SOURCE_CURATED_URLS,
+                    )
+                ]
+            ),
         )
 
     if SOURCE_COMPANY_CAREER_SITES in source_ids:
         companies = effective_settings.get("company_career_sites") or []
-        discovered_companies = [] if companies else load_discovered_company_site_entries()
+        discovered_companies = [] if companies else _load_discovered_source_sites(REGULAR_COMPANY_SITE_FILES)
         effective_companies = companies or discovered_companies
         details = (
             [f"{len(companies)} pasted career site(s) configured."]
             if companies
             else (
-                [f"{len(discovered_companies)} backend-discovered career site(s) available."]
+                [f"{len(discovered_companies)} saved career site(s) are ready to use."]
                 if discovered_companies
-                else ["Load the backend career-site discovery list first, or add manual career page URLs."]
+                else ["Add one or more company URLs, or use the saved company-site list."]
             )
         )
         add_result(
@@ -1326,24 +1659,103 @@ def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str
                 else "Company career sites are required for this source."
             ),
             details=details,
+            source_field_errors=(
+                []
+                if effective_companies
+                else [
+                    _field_error(
+                        "company_career_sites",
+                        "required",
+                        "Add at least one company website or use the saved company-site list first.",
+                        source_id=SOURCE_COMPANY_CAREER_SITES,
+                    )
+                ]
+            ),
+        )
+
+    if SOURCE_ACADEMIC_CAREER_SITES in source_ids:
+        academic_sites = effective_settings.get("academic_career_sites") or []
+        discovered_academic_sites = [] if academic_sites else _load_discovered_source_sites(ACADEMIC_CAREER_SITE_FILES)
+        effective_academic_sites = academic_sites or discovered_academic_sites
+        details = (
+            [f"{len(academic_sites)} pasted academic site(s) configured."]
+            if academic_sites
+            else (
+                [f"{len(discovered_academic_sites)} saved academic site(s) are ready to use."]
+                if discovered_academic_sites
+                else ["Add one or more academic URLs, or use the saved academic-site list."]
+            )
+        )
+        add_result(
+            SOURCE_ACADEMIC_CAREER_SITES,
+            status="valid" if effective_academic_sites else "invalid",
+            summary=(
+                "Academic sites look usable."
+                if effective_academic_sites
+                else "Academic sites are required for this source."
+            ),
+            details=details,
+            source_field_errors=(
+                []
+                if effective_academic_sites
+                else [
+                    _field_error(
+                        "academic_career_sites",
+                        "required",
+                        "Add at least one academic website or use the saved academic-site list first.",
+                        source_id=SOURCE_ACADEMIC_CAREER_SITES,
+                    )
+                ]
+            ),
         )
 
     if SOURCE_MULTI_PORTAL in source_ids:
-        portals = effective_settings.get("portals") or []
+        portals = [str(item).strip() for item in (effective_settings.get("portals") or []) if str(item).strip()]
+        country_codes = _normalize_country_codes(effective_settings.get("country_codes"))
         cities = effective_settings.get("cities") or []
         status = "valid"
         details: list[str] = []
+        multi_portal_field_errors: list[dict[str, str]] = []
         if not effective_settings.get("keywords"):
             status = "invalid"
             details.append("Add at least one target keyword before enabling job boards.")
+            multi_portal_field_errors.append(
+                _field_error(
+                    "keywords",
+                    "required",
+                    "Add at least one target keyword before enabling job boards.",
+                    source_id=SOURCE_MULTI_PORTAL,
+                )
+            )
         if not portals:
             status = "invalid"
             details.append("Choose at least one job board.")
+            multi_portal_field_errors.append(
+                _field_error(
+                    "portals",
+                    "required",
+                    "Choose at least one job board before enabling other job boards.",
+                    source_id=SOURCE_MULTI_PORTAL,
+                )
+            )
         else:
-            details.append(f"Boards: {', '.join(str(item) for item in portals)}")
+            details.append(f"Boards: {', '.join(_portal_label(item) for item in portals)}")
+            country_mismatch_errors = _portal_country_mismatch_errors(portals, country_codes)
+            if country_mismatch_errors:
+                status = "invalid"
+                multi_portal_field_errors.extend(country_mismatch_errors)
+                details.extend(item["message"] for item in country_mismatch_errors)
         if not cities:
             status = "invalid"
             details.append("Select a target country so representative source cities can be derived.")
+            multi_portal_field_errors.append(
+                _field_error(
+                    "country_codes",
+                    "required",
+                    "Select at least one target country so job-board source cities can be derived.",
+                    source_id=SOURCE_MULTI_PORTAL,
+                )
+            )
         else:
             details.append(f"Representative source cities: {', '.join(str(item) for item in cities[:4])}")
         add_result(
@@ -1351,11 +1763,14 @@ def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str
             status=status,
             summary="Job board sourcing is ready." if status == "valid" else "Job board sourcing is missing required setup.",
             details=details,
+            source_field_errors=multi_portal_field_errors,
         )
 
     return {
         "flow_id": flow_id,
+        "source_ids": list(source_ids),
         "valid": all(item["status"] == "valid" for item in results) if results else True,
+        "field_errors": _dedupe_field_errors(field_errors),
         "source_results": results,
         "derived_runtime_defaults": derived_runtime_defaults,
     }
@@ -1412,11 +1827,37 @@ def _build_source_stages(source_ids: list[str]) -> tuple[list[StageDefinition], 
                 name="Acquire Company Career Site Jobs",
                 description="Scrape backend-prepared company career pages for matching open roles.",
                 output_key="source_company_career_jobs",
-                config={"connector_id": "company_career_sites"},
+                config={
+                    "connector_id": "company_career_sites",
+                    "site_settings_key": "company_career_sites",
+                    "request_timeout_setting_key": "company_site_request_timeout_seconds",
+                    "max_jobs_setting_key": "company_site_max_jobs_per_site",
+                    "discovered_site_paths": [str(path) for path in REGULAR_COMPANY_SITE_FILES],
+                },
             )
         )
         output_keys.append("source_company_career_jobs")
         sources.append(JobSource(id="source_company_career_sites", connector_id="company_career_sites"))
+
+    if SOURCE_ACADEMIC_CAREER_SITES in source_ids:
+        stages.append(
+            StageDefinition(
+                stage_id="source_academic_career_sites",
+                stage_type="jobs.acquire.company_sites",
+                name="Acquire Academic Site Jobs",
+                description="Collect matching jobs from saved university, department, chair, and institute pages.",
+                output_key="source_academic_career_jobs",
+                config={
+                    "connector_id": "academic_career_sites",
+                    "site_settings_key": "academic_career_sites",
+                    "request_timeout_setting_key": "academic_site_request_timeout_seconds",
+                    "max_jobs_setting_key": "academic_site_max_jobs_per_site",
+                    "discovered_site_paths": [str(path) for path in ACADEMIC_CAREER_SITE_FILES],
+                },
+            )
+        )
+        output_keys.append("source_academic_career_jobs")
+        sources.append(JobSource(id="source_academic_career_sites", connector_id="academic_career_sites"))
 
     if SOURCE_MULTI_PORTAL in source_ids:
         stages.append(
@@ -1483,6 +1924,49 @@ def _build_tailored_stages(source_output_key: str, module_ids: list[str]) -> lis
         )
 
     return stages
+
+
+def build_quick_apply_workflow_template() -> WorkflowTemplate:
+    return WorkflowTemplate(
+        id="quick_apply_tailored_documents",
+        name="Quick Apply Workflow",
+        description="Ingest exact job links and generate application documents without creating a dedicated workspace.",
+        stages=[
+            StageDefinition(
+                stage_id="source_exact_job_links",
+                stage_type="jobs.ingest.curated_urls",
+                name="Ingest Exact Job Links",
+                description="Load exact job posting URLs into the shared job schema.",
+                output_key="source_exact_job_links",
+                config={"connector_id": "curated_job_urls"},
+            ),
+            StageDefinition(
+                stage_id="merge_exact_job_links",
+                stage_type="jobs.merge.dedupe",
+                name="Merge Exact Job Links",
+                description="Remove duplicate job links before document generation.",
+                input_keys=["source_exact_job_links"],
+                output_key="quick_apply_jobs",
+                config={"dedupe_against_tracker": True},
+            ),
+            StageDefinition(
+                stage_id="generate_quick_apply_documents",
+                stage_type="applications.generate.documents",
+                name="Generate Application Documents",
+                description="Create application documents for the pasted job links.",
+                input_keys=["quick_apply_jobs"],
+                output_key="generated_jobs",
+                config={
+                    "generation_id": "tailored_application_documents",
+                    "renderer_id": "application_document_export",
+                },
+            ),
+        ],
+        default_run_settings={
+            "builder_mode": "quick_apply",
+            "automation_flow": FLOW_TAILORED_DOCUMENTS,
+        },
+    )
 
 
 def _build_reusable_package_stages(source_output_key: str, module_ids: list[str]) -> list[StageDefinition]:
@@ -1581,6 +2065,7 @@ def build_workspace_from_scratch(payload: dict) -> tuple[WorkflowTemplate, Works
         source_ids,
         dict(payload.get("settings") or {}),
     )
+    workspace_cv_asset = deepcopy(payload.get("workspace_cv_asset") or {})
     normalized_workspace_contract = normalize_workspace_configuration_v2(
         {
             "flow_id": flow_id,
@@ -1672,6 +2157,7 @@ def build_workspace_from_scratch(payload: dict) -> tuple[WorkflowTemplate, Works
             "automation_flow": flow_id,
             "modules": list(module_ids),
             "source_ids": list(source_ids),
+            "workspace_cv_asset": workspace_cv_asset,
             "workspace_configuration_v2": normalized_workspace_contract,
         },
     )

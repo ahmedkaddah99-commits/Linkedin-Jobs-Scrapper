@@ -27,12 +27,25 @@ PORTAL_STRATEGIES: dict[str, PortalStrategy] = {
     "linkedin": PortalStrategy("linkedin", "LinkedIn Guest Jobs", strategies.scrape_linkedin_jobs),
 }
 
+ADDITIONAL_PORTAL_STRATEGIES: dict[str, PortalStrategy] = {
+    "glassdoor": PortalStrategy("glassdoor", "Glassdoor", strategies.scrape_glassdoor_jobs),
+    "ziprecruiter": PortalStrategy("ziprecruiter", "ZipRecruiter", strategies.scrape_ziprecruiter_jobs),
+    "monster": PortalStrategy("monster", "Monster", strategies.scrape_monster_jobs),
+    "careerbuilder": PortalStrategy("careerbuilder", "CareerBuilder", strategies.scrape_careerbuilder_jobs),
+    "careerjet": PortalStrategy("careerjet", "Careerjet", strategies.scrape_careerjet_jobs),
+    "reed": PortalStrategy("reed", "Reed.co.uk", strategies.scrape_reed_jobs),
+    "totaljobs": PortalStrategy("totaljobs", "Totaljobs", strategies.scrape_totaljobs_jobs),
+    "jobsdb": PortalStrategy("jobsdb", "JobsDB", strategies.scrape_jobsdb_jobs),
+}
+
 
 def get_portal_strategy(portal_id: str) -> PortalStrategy:
     normalized = str(portal_id or "").strip().lower()
-    if normalized not in PORTAL_STRATEGIES:
-        raise KeyError(f"Unsupported portal strategy: {portal_id}")
-    return PORTAL_STRATEGIES[normalized]
+    if normalized in PORTAL_STRATEGIES:
+        return PORTAL_STRATEGIES[normalized]
+    if normalized in ADDITIONAL_PORTAL_STRATEGIES:
+        return ADDITIONAL_PORTAL_STRATEGIES[normalized]
+    raise KeyError(f"Unsupported portal strategy: {portal_id}")
 
 
 def list_portal_strategy_ids() -> list[str]:
@@ -123,6 +136,23 @@ def collect_jobs_from_portals(
                             timeout_seconds=timeout_seconds,
                         )
                     elif portal == "linkedin":
+                        jobs, errors = strategy.fetcher(
+                            keyword=keyword_clean,
+                            city=city_clean,
+                            max_pages=max_pages,
+                            posted_within_days=posted_within_days,
+                            timeout_seconds=timeout_seconds,
+                        )
+                    elif portal in {
+                        "glassdoor",
+                        "ziprecruiter",
+                        "monster",
+                        "careerbuilder",
+                        "careerjet",
+                        "reed",
+                        "totaljobs",
+                        "jobsdb",
+                    }:
                         jobs, errors = strategy.fetcher(
                             keyword=keyword_clean,
                             city=city_clean,

@@ -45,9 +45,15 @@ IGNORED_LINK_HINTS = (
     "/sign-in",
 )
 
-DISCOVERED_COMPANY_SITE_FILES = (
+REGULAR_COMPANY_SITE_FILES = (
     Path("user_config") / "discovered_regular_company_career_sites.txt",
+)
+ACADEMIC_CAREER_SITE_FILES = (
     Path("user_config") / "discovered_phd_university_career_sites.txt",
+)
+DISCOVERED_COMPANY_SITE_FILES = (
+    *REGULAR_COMPANY_SITE_FILES,
+    *ACADEMIC_CAREER_SITE_FILES,
     Path("user_config") / "discovered_company_career_sites.txt",
 )
 
@@ -105,9 +111,20 @@ def _job_like_link_score(text: str, href: str) -> int:
 
 def parse_company_site_entries(raw_value: Any) -> list[dict[str, str]]:
     if isinstance(raw_value, str):
-        raw_entries = [line.strip() for line in raw_value.splitlines() if line.strip()]
+        raw_entries = [
+            line.strip()
+            for line in raw_value.replace(",", "\n").splitlines()
+            if line.strip()
+        ]
     elif isinstance(raw_value, (list, tuple, set)):
-        raw_entries = list(raw_value)
+        raw_entries = []
+        for item in raw_value:
+            if isinstance(item, str):
+                raw_entries.extend(
+                    [line.strip() for line in item.replace(",", "\n").splitlines() if line.strip()]
+                )
+            else:
+                raw_entries.append(item)
     else:
         return []
 
@@ -161,6 +178,8 @@ def parse_company_site_entries(raw_value: Any) -> list[dict[str, str]]:
                 "url": normalized_url,
             }
         )
+        if len(parsed_entries) >= 50:
+            break
     return parsed_entries
 
 
@@ -338,8 +357,10 @@ def scrape_company_career_sites(
 
 
 __all__ = [
+    "ACADEMIC_CAREER_SITE_FILES",
     "extract_company_job_links_from_html",
     "load_discovered_company_site_entries",
     "parse_company_site_entries",
+    "REGULAR_COMPANY_SITE_FILES",
     "scrape_company_career_sites",
 ]

@@ -31,6 +31,7 @@ from backend.domain.models import (
 
 
 PBKDF2_ITERATIONS = 120_000
+API_TOKEN_PREFIX_LENGTH = 14
 
 ROLE_DEFAULT_SCOPES = {
     ROLE_ADMIN: {
@@ -121,7 +122,7 @@ def issue_api_token(
     metadata: dict | None = None,
 ) -> tuple[ApiTokenRecord, str]:
     raw_token = f"bkat_{token_urlsafe(32)}"
-    token_prefix = raw_token[:14]
+    token_prefix = raw_token[:API_TOKEN_PREFIX_LENGTH]
     record = ApiTokenRecord.create(
         user_id=user_id,
         name=token_name,

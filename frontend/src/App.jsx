@@ -9,6 +9,7 @@ import DocumentsPage from "./pages/ArtifactsPage";
 import ReviewQueuePage from "./pages/ReviewQueuePage";
 import ReferralsPage from "./pages/ReferralsPage";
 import LinkedInConnectionsGuidePage from "./pages/LinkedInConnectionsGuidePage";
+import QuickApplyPage from "./pages/QuickApplyPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import RunsPage from "./pages/RunsPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/dashboard" element={<Navigate replace to="/" />} />
           <Route path="/workspaces" element={<WorkspacesPage />} />
+          <Route path="/quick-apply" element={<QuickApplyPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:runId" element={<RunDetailPage />} />
           <Route path="/review-queue" element={<ReviewQueuePage />} />

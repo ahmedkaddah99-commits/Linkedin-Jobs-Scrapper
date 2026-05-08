@@ -1013,8 +1013,6 @@ export default function SettingsPage() {
         message: `CV uploaded (${json.char_count?.toLocaleString()} chars). Profile fields pre-filled — review and save.`,
         error: "",
       });
-      // Switch to Profile tab so user can review pre-filled fields
-      setActiveTab("Profile");
     } catch (uploadError) {
       setCvUploadState({
         uploading: false,

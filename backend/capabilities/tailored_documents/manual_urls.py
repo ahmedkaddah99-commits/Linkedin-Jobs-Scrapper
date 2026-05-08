@@ -73,9 +73,14 @@ def load_manual_urls(file_path: str | Path) -> tuple[list[str], list[dict[str, A
 
 def normalize_manual_urls(raw_entries: Any) -> tuple[list[str], list[dict[str, Any]]]:
     if isinstance(raw_entries, str):
-        iterable = raw_entries.splitlines()
+        iterable = raw_entries.replace(",", "\n").splitlines()
     elif isinstance(raw_entries, (list, tuple, set)):
-        iterable = list(raw_entries)
+        iterable = []
+        for item in raw_entries:
+            if isinstance(item, str):
+                iterable.extend(item.replace(",", "\n").splitlines())
+            else:
+                iterable.append(item)
     else:
         iterable = []
 

@@ -67,6 +67,28 @@ class _ApiDocumentStage(BaseStage):
         )
 
 
+class _ApiCuratedSourceStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        settings = dict(context.data.get("resolved_run_settings") or {})
+        return bool(settings.get("manual_urls_inline") or settings.get("manual_url_seed_list"))
+
+    def execute(self, context, definition) -> StageOutcome:
+        settings = dict(context.data.get("resolved_run_settings") or {})
+        urls = list(settings.get("manual_urls_inline") or settings.get("manual_url_seed_list") or [])
+        jobs = []
+        for index, url in enumerate(urls, start=1):
+            jobs.append(
+                JobRecord(
+                    job_id=f"quick_job_{index}",
+                    title=f"Quick Role {index}",
+                    company="Quick Apply Co",
+                    apply_link=str(url),
+                    source_url=str(url),
+                )
+            )
+        return StageOutcome(job_sets={definition.output_key or "source_exact_job_links": jobs})
+
+
 class BackendApiTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = Path.cwd() / ".backend_test_tmp" / f"api_tests_{self._testMethodName}"
@@ -78,6 +100,8 @@ class BackendApiTests(unittest.TestCase):
         self.app = create_backend(self.temp_dir)
         self.app.registries.stage_registry.register("test.api_seed", _ApiSeedStage())
         self.app.registries.stage_registry.register("test.api_generate_documents", _ApiDocumentStage())
+        self.app.registries.stage_registry.register("jobs.ingest.curated_urls", _ApiCuratedSourceStage())
+        self.app.registries.stage_registry.register("applications.generate.documents", _ApiDocumentStage())
         self.app.upsert_workflow_template(
             {
                 "id": "api_template_v1",
@@ -167,11 +191,58 @@ class BackendApiTests(unittest.TestCase):
         conn.close()
         return response.status, response_headers, raw
 
+    def _request_with_headers(self, method: str, path: str, *, headers: dict[str, str] | None = None, payload=None):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        body = None
+        request_headers = dict(headers or {})
+        if payload is not None:
+            body = json.dumps(payload)
+            request_headers.setdefault("Content-Type", "application/json")
+        conn.request(method, path, body=body, headers=request_headers)
+        response = conn.getresponse()
+        raw = response.read().decode("utf-8")
+        response_headers = dict(response.getheaders())
+        conn.close()
+        return response.status, response_headers, json.loads(raw) if raw else {}
+
+    def _upload_workspace_cv(
+        self,
+        *,
+        filename: str = "builder-resume.txt",
+        file_bytes: bytes = b"Builder CV Snapshot\nAnalyst with workflow-specific experience.",
+    ) -> dict:
+        status, payload = self._multipart_request("/cv-upload", "cv_file", filename, file_bytes)
+        self.assertEqual(status, 201)
+        return payload["asset"]
+
     def test_api_requires_bearer_auth_for_protected_routes(self):
         status, payload = self._request("GET", "/workspaces", authenticated=False)
         self.assertEqual(status, 401)
         self.assertIn("error", payload)
         self.assertEqual(payload["error"]["code"], "unauthorized")
+
+    def test_api_allows_loopback_cors_origin(self):
+        status, headers, payload = self._request_with_headers(
+            "GET",
+            "/health",
+            headers={"Origin": "http://127.0.0.1:4173"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:4173")
+
+    def test_api_rejects_disallowed_cors_origin(self):
+        status, headers, payload = self._request_with_headers(
+            "OPTIONS",
+            "/workspaces",
+            headers={
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
 
     def test_api_supports_run_queue_and_resource_endpoints(self):
         status, run_payload = self._request(
@@ -257,6 +328,8 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
 
     def test_api_supports_workspace_builder_catalog_and_create(self):
+        workspace_cv_asset_id = self._upload_workspace_cv()["asset_id"]
+
         status, catalog_payload = self._request("GET", "/workspace-builder/catalog")
         self.assertEqual(status, 200)
         self.assertTrue(catalog_payload["flows"])
@@ -264,12 +337,18 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(catalog_payload["modules"])
         self.assertTrue(catalog_payload["configuration_fields"])
         self.assertIn("builder_sections", catalog_payload)
+        source_by_id = {source["id"]: source for source in catalog_payload["sources"]}
         user_facing_fields = {
             field["id"]: field for field in catalog_payload["configuration_fields"] if field.get("user_facing")
         }
+        self.assertIn("academic_career_sites", source_by_id)
+        self.assertTrue(source_by_id["academic_career_sites"].get("frontend_visible", True))
+        self.assertFalse(source_by_id["linkedin_jobs"].get("frontend_visible", True))
+        self.assertTrue(source_by_id["linkedin_jobs"].get("legacy"))
         self.assertIn("workspace_cv_asset_id", user_facing_fields)
         self.assertIn("country_codes", user_facing_fields)
         self.assertIn("target_roles", user_facing_fields)
+        self.assertIn("academic_career_sites", user_facing_fields)
         self.assertIn("french_special_char_threshold", user_facing_fields)
         self.assertIn("spanish_special_char_threshold", user_facing_fields)
         self.assertIn("low_applicant_threshold", user_facing_fields)
@@ -291,6 +370,7 @@ class BackendApiTests(unittest.TestCase):
                 "source_ids": ["linkedin_jobs"],
                 "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
                 "settings": {
+                    "workspace_cv_asset_id": workspace_cv_asset_id,
                     "keywords": ["analyst"],
                     "geo_id": "101282230",
                     "time_posted_seconds": 86400,
@@ -308,6 +388,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(workspace_payload["workspace_type"], "custom")
         self.assertEqual(workspace_payload["metadata"]["automation_flow"], "tailored_documents")
+        self.assertEqual(workspace_payload["settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
         self.assertEqual(workspace_payload["settings"]["keywords"], ["analyst"])
         self.assertEqual(workspace_payload["settings"]["experience_levels"], [2, 3])
         self.assertEqual(workspace_payload["settings"]["target_roles"], ["Business Analyst", "Consultant"])
@@ -316,6 +397,22 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(workspace_payload["settings"]["stage1_model"], "deepseek-chat")
         self.assertEqual(workspace_payload["settings"]["stage4_model"], "deepseek-chat")
         self.assertEqual(workspace_payload["settings"]["stage4_fallback_model"], "gemini-2.5-flash")
+        self.assertEqual(
+            workspace_payload["settings"]["workspace_cv_text"],
+            "Builder CV Snapshot\nAnalyst with workflow-specific experience.",
+        )
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": workspace_payload["id"], "execution_mode": "planned", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
+        self.assertEqual(
+            run_payload["run_plan"]["resolved_run_settings"]["workspace_cv_text"],
+            "Builder CV Snapshot\nAnalyst with workflow-specific experience.",
+        )
 
         status, updated_workspace_payload = self._request(
             "PUT",
@@ -328,6 +425,8 @@ class BackendApiTests(unittest.TestCase):
                 "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
                 "settings": {
                     "keywords": ["designer"],
+                    "geo_id": "101282230",
+                    "manual_url_seed_list": ["https://company.example/jobs/updated"],
                     "stage4_max_jobs": 8,
                     "low_applicant_threshold": 55,
                 },
@@ -339,6 +438,99 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(updated_workspace_payload["description"], "Updated through API")
         self.assertEqual(updated_workspace_payload["settings"]["keywords"], ["designer"])
         self.assertEqual(updated_workspace_payload["metadata"]["source_ids"], ["linkedin_jobs", "curated_job_urls"])
+
+    def test_workspace_builder_invalid_save_returns_structured_validation_error(self):
+        workspace_cv_asset_id = self._upload_workspace_cv(filename="invalid-save-resume.txt")["asset_id"]
+
+        status, payload = self._request(
+            "POST",
+            "/workspace-builder/workspaces",
+            {
+                "name": "Invalid Builder Workspace",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs"],
+                "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+                "settings": {
+                    "workspace_cv_asset_id": workspace_cv_asset_id,
+                },
+            },
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "workspace_validation_failed")
+        self.assertEqual(payload["error"]["details"]["phase"], "save")
+        field_error_codes = {
+            item["code"]
+            for item in payload["error"]["details"]["field_errors"]
+        }
+        self.assertIn("required", field_error_codes)
+        self.assertTrue(
+            any(item["field"] == "keywords" for item in payload["error"]["details"]["field_errors"])
+        )
+        self.assertTrue(
+            any(item["field"] == "country_codes" for item in payload["error"]["details"]["field_errors"])
+        )
+
+    def test_run_start_with_deleted_workspace_cv_returns_structured_validation_error(self):
+        workspace_cv_asset_id = self._upload_workspace_cv(filename="deleted-run-resume.txt")["asset_id"]
+        status, workspace_payload = self._request(
+            "POST",
+            "/workspace-builder/workspaces",
+            {
+                "name": "Deleted CV Run Workspace",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs"],
+                "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+                "settings": {
+                    "workspace_cv_asset_id": workspace_cv_asset_id,
+                    "keywords": ["analyst"],
+                    "geo_id": "101282230",
+                },
+            },
+        )
+        self.assertEqual(status, 201)
+        Path(workspace_payload["settings"]["workspace_cv_asset_path"]).unlink()
+
+        status, payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": workspace_payload["id"], "execution_mode": "planned", "max_attempts": 1},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "run_preflight_failed")
+        self.assertEqual(payload["error"]["details"]["phase"], "run_preflight")
+        self.assertTrue(
+            any(
+                item["code"] == "workspace_cv_asset_missing_file"
+                for item in payload["error"]["details"]["field_errors"]
+            )
+        )
+
+    def test_api_supports_quick_apply_runs_without_creating_a_workspace(self):
+        status, payload = self._request(
+            "POST",
+            "/quick-apply/runs",
+            {
+                "workspace_id": "api_workspace",
+                "execution_mode": "sync",
+                "manual_urls": [
+                    "https://company.example/jobs/1",
+                    "https://company.example/jobs/1",
+                    "https://company.example/jobs/2",
+                ],
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["accepted_url_count"], 2)
+        self.assertEqual(payload["invalid_entries"], [])
+        self.assertEqual(payload["run"]["workspace_id"], "api_workspace")
+        self.assertEqual(payload["run"]["metadata"]["run_kind"], "quick_apply")
+        self.assertEqual(payload["run"]["status"], "completed")
+
+        status, jobs_payload = self._request("GET", f"/runs/{payload['run']['id']}/jobs")
+        self.assertEqual(status, 200)
+        self.assertIn("generated_jobs", jobs_payload["job_sets"])
 
     def test_workspace_builder_source_validation_returns_runtime_hints(self):
         status, payload = self._request(
@@ -380,6 +572,30 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(payload["valid"])
         self.assertTrue(payload["derived_runtime_defaults"]["portals"])
         self.assertIn("cities", payload["derived_runtime_defaults"])
+
+    def test_workspace_builder_source_validation_flags_regional_portal_country_mismatch(self):
+        status, payload = self._request(
+            "POST",
+            "/workspace-builder/source-validation",
+            {
+                "flow_id": "tailored_documents",
+                "source_ids": ["job_board_collection"],
+                "settings": {
+                    "keywords": ["analyst"],
+                    "country_codes": ["DE"],
+                    "portals": ["jobsdb"],
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["valid"])
+        portal_result = next(
+            item for item in payload["source_results"] if item["source_id"] == "job_board_collection"
+        )
+        self.assertEqual(portal_result["status"], "invalid")
+        self.assertTrue(
+            any(item["code"] == "country_mismatch" for item in portal_result["field_errors"])
+        )
 
     def test_settings_payload_includes_document_design_options_and_persists_phase2_preferences(self):
         status, settings_payload = self._request("GET", "/settings")

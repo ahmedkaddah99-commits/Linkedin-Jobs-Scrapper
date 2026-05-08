@@ -21,6 +21,7 @@ from backend.domain.models import (
     utc_now_iso,
 )
 from backend.orchestration.seeded_workspaces import DEFAULT_WORKFLOW_TEMPLATES, DEFAULT_WORKSPACES
+from backend.security.auth import API_TOKEN_PREFIX_LENGTH
 
 
 def _read_json(path: Path, default: Any):
@@ -344,6 +345,17 @@ class FileAuthRepository:
         if active_only:
             tokens = [token for token in tokens if token.is_active]
         return tokens
+
+    def list_api_tokens_for_value(self, raw_token: str, *, active_only: bool = False) -> list[ApiTokenRecord]:
+        normalized_token = str(raw_token or "").strip()
+        if not normalized_token:
+            return []
+        candidate_prefix = normalized_token[:API_TOKEN_PREFIX_LENGTH]
+        return [
+            token
+            for token in self.list_api_tokens(active_only=active_only)
+            if token.token_prefix == candidate_prefix or normalized_token.startswith(token.token_prefix)
+        ]
 
     def get_api_token(self, token_id: str) -> ApiTokenRecord:
         for token in self.list_api_tokens():

@@ -27,6 +27,7 @@ WORKSPACE_USER_FACING_FIELD_IDS = [
     "time_posted_seconds",
     "experience_levels",
     "manual_url_seed_list",
+    "academic_career_sites",
     "company_career_sites",
     "portals",
     "forbidden_title_keywords",
@@ -75,6 +76,12 @@ WORKSPACE_DEPRECATED_FIELD_IDS = [
     "candidate_name",
     "candidate_email",
 ]
+
+SOURCE_ID_ALIASES = {
+    "linkedin_jobs": "linkedin_search",
+    "curated_job_urls": "curated_urls",
+    "job_board_collection": "multi_portal",
+}
 
 REJECTED_JOB_REASON_DEFINITIONS = [
     {"code": "keyword_mismatch", "label": "Keyword mismatch"},
@@ -202,7 +209,7 @@ ATS_GATE_STATES = [
 
 DEFAULT_MULTI_PORTAL_IDS = [
     "indeed",
-    "glassdoor",
+    "stepstone",
 ]
 
 
@@ -367,7 +374,7 @@ def normalize_gmail_scan_window(value: Any, *, default: str = "last_1_month") ->
 
 def _normalize_source_ids(payload: Mapping[str, Any], settings: Mapping[str, Any]) -> set[str]:
     source_ids = {
-        _clean_text(item)
+        SOURCE_ID_ALIASES.get(_clean_text(item), _clean_text(item))
         for item in payload.get("source_ids")
         or payload.get("selected_source_ids")
         or settings.get("source_ids")
@@ -376,6 +383,8 @@ def _normalize_source_ids(payload: Mapping[str, Any], settings: Mapping[str, Any
     }
     if settings.get("manual_url_seed_list"):
         source_ids.add("curated_urls")
+    if settings.get("academic_career_sites"):
+        source_ids.add("academic_career_sites")
     if settings.get("company_career_sites"):
         source_ids.add("company_career_sites")
     if settings.get("geo_id") or settings.get("time_posted_seconds") or settings.get("experience_levels"):
@@ -440,6 +449,11 @@ def default_workspace_configuration_v2() -> dict[str, Any]:
             "curated_urls": {
                 "enabled": False,
                 "urls": [],
+                "validate_before_run": True,
+            },
+            "academic_career_sites": {
+                "enabled": False,
+                "institutions": [],
                 "validate_before_run": True,
             },
             "company_career_sites": {
@@ -511,7 +525,11 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
     ]
 
     contract["source_configuration"]["multi_portal"]["enabled"] = "multi_portal" in source_ids
-    configured_portals = _clean_tag_list(settings.get("portal_ids"), limit=10, lower=True)
+    configured_portals = _clean_tag_list(
+        settings.get("portals") or settings.get("portal_ids"),
+        limit=10,
+        lower=True,
+    )
     if configured_portals:
         contract["source_configuration"]["multi_portal"]["portals"] = configured_portals
 
@@ -519,6 +537,11 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
     contract["source_configuration"]["curated_urls"]["urls"] = _clean_tag_list(
         settings.get("manual_url_seed_list"),
         limit=250,
+    )
+
+    contract["source_configuration"]["academic_career_sites"]["enabled"] = "academic_career_sites" in source_ids
+    contract["source_configuration"]["academic_career_sites"]["institutions"] = _normalize_company_site_entries(
+        settings.get("academic_career_sites")
     )
 
     contract["source_configuration"]["company_career_sites"]["enabled"] = "company_career_sites" in source_ids

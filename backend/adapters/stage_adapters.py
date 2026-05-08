@@ -27,12 +27,15 @@ from backend.capabilities.tailored_documents.runtime import (
 from backend.capabilities.tailored_documents.screening import run_stage2_pipeline as run_tailored_stage2_pipeline
 from backend.capabilities.tailored_documents.workflow import run_manual_pipeline
 from backend.connectors.company_career_sites import (
+    ACADEMIC_CAREER_SITE_FILES,
+    REGULAR_COMPANY_SITE_FILES,
     load_discovered_company_site_entries,
     scrape_company_career_sites,
 )
 from backend.domain.models import ArtifactRecord, JobRecord, StageContext, StageDefinition
 from backend.orchestration.engine import BaseStage, StageOutcome
 from backend.orchestration.workspace_builder import derive_runtime_defaults_from_settings
+from backend.profiles.cv_text import runtime_cv_override
 
 TARGET_ROLE_KEYWORD_MAP = {
     "Product Manager": ["product manager", "product owner", "go-to-market"],
@@ -141,6 +144,32 @@ def _resolved_settings(context: StageContext, definition: StageDefinition) -> di
     return settings
 
 
+def _workspace_cv_snapshot_from_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "asset_id": str(settings.get("workspace_cv_asset_id") or "").strip(),
+        "display_name": str(settings.get("workspace_cv_asset_display_name") or "").strip(),
+        "path": str(settings.get("workspace_cv_asset_path") or "").strip(),
+        "text": str(settings.get("workspace_cv_text") or "").strip(),
+        "required": bool(
+            str(settings.get("builder_mode") or "").strip() == "scratch"
+            and str(settings.get("automation_flow") or "").strip() == "tailored_documents"
+        ),
+    }
+
+
+def _assert_workspace_cv_binding(settings: dict[str, Any]) -> None:
+    snapshot = _workspace_cv_snapshot_from_settings(settings)
+    if not snapshot["required"]:
+        return
+    if not snapshot["asset_id"]:
+        raise RuntimeError("Builder-created tailored-document runs require a selected workspace CV asset.")
+    if not snapshot["text"]:
+        raise RuntimeError(
+            "Builder-created tailored-document runs require a resolved workspace CV snapshot. "
+            "Re-save the workspace after selecting a workspace CV."
+        )
+
+
 def _normalize_target_roles(raw_value: Any) -> list[str]:
     if isinstance(raw_value, str):
         values = [item.strip() for item in raw_value.split(",") if item.strip()]
@@ -202,21 +231,58 @@ def _harmonize_tailored_runtime_settings(settings: dict[str, Any]) -> dict[str, 
     for source_key, target_key in mirrored_pairs:
         if source_key in settings and target_key not in settings:
             settings[target_key] = settings[source_key]
-    if not settings.get("company_career_sites"):
-        discovered_company_sites = load_discovered_company_site_entries()
-        if discovered_company_sites:
-            settings["company_career_sites"] = discovered_company_sites
     return settings
 
 
-def _build_root_cli_args(context: StageContext, definition: StageDefinition):
+def _prepare_company_site_source_settings(settings: dict[str, Any], definition: StageDefinition) -> dict[str, Any]:
+    normalized = dict(settings)
+    config = dict(definition.config or {})
+    site_settings_key = str(config.get("site_settings_key") or "company_career_sites").strip() or "company_career_sites"
+    timeout_setting_key = (
+        str(config.get("request_timeout_setting_key") or "company_site_request_timeout_seconds").strip()
+        or "company_site_request_timeout_seconds"
+    )
+    max_jobs_setting_key = (
+        str(config.get("max_jobs_setting_key") or "company_site_max_jobs_per_site").strip()
+        or "company_site_max_jobs_per_site"
+    )
+    discovered_site_paths = config.get("discovered_site_paths")
+    if not discovered_site_paths:
+        if site_settings_key == "academic_career_sites":
+            discovered_site_paths = [str(path) for path in ACADEMIC_CAREER_SITE_FILES]
+        else:
+            discovered_site_paths = [str(path) for path in REGULAR_COMPANY_SITE_FILES]
+
+    configured_sites = normalized.get(site_settings_key)
+    if configured_sites and not normalized.get("company_career_sites"):
+        normalized["company_career_sites"] = configured_sites
+    if not normalized.get("company_career_sites"):
+        discovered_company_sites = load_discovered_company_site_entries(discovered_site_paths)
+        if discovered_company_sites:
+            normalized["company_career_sites"] = discovered_company_sites
+    if timeout_setting_key in normalized and "company_site_request_timeout_seconds" not in normalized:
+        normalized["company_site_request_timeout_seconds"] = normalized[timeout_setting_key]
+    if max_jobs_setting_key in normalized and "company_site_max_jobs_per_site" not in normalized:
+        normalized["company_site_max_jobs_per_site"] = normalized[max_jobs_setting_key]
+    return normalized
+
+
+def _build_root_cli_args(
+    context: StageContext,
+    definition: StageDefinition,
+    *,
+    settings_transform: Any = None,
+):
     from backend.config.job_seeker import load_job_seeker_config, load_project_dotenv
 
     load_project_dotenv()
     config = load_job_seeker_config()
     defaults = build_main_defaults(config)
     resolved_settings = _resolved_settings(context, definition)
+    _assert_workspace_cv_binding(resolved_settings)
     resolved_settings = _harmonize_tailored_runtime_settings(resolved_settings)
+    if callable(settings_transform):
+        resolved_settings = settings_transform(resolved_settings, definition)
     resolved_settings = _augment_with_target_role_context(resolved_settings)
     cli_args = _namespace_from_defaults(defaults, resolved_settings)
     return config, cli_args
@@ -233,7 +299,8 @@ class LinkedInAcquireStage(BaseStage):
 
         config, cli_args = _build_root_cli_args(context, definition)
         stage_args = build_tailored_stage1_args(config, cli_args)
-        jobs = run_tailored_stage1_pipeline(stage_args)
+        with runtime_cv_override(_workspace_cv_snapshot_from_settings(vars(cli_args))):
+            jobs = run_tailored_stage1_pipeline(stage_args)
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(jobs)},
             metrics={"jobs_found": len(jobs)},
@@ -273,11 +340,19 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
         connector_id = str(definition.config.get("connector_id") or "")
         if connector_id:
             context.registries.connector_registry.get(connector_id)
-        _, cli_args = _build_root_cli_args(context, definition)
+        _, cli_args = _build_root_cli_args(
+            context,
+            definition,
+            settings_transform=_prepare_company_site_source_settings,
+        )
         return bool(getattr(cli_args, "company_career_sites", None))
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
-        _, cli_args = _build_root_cli_args(context, definition)
+        _, cli_args = _build_root_cli_args(
+            context,
+            definition,
+            settings_transform=_prepare_company_site_source_settings,
+        )
         jobs, failures = scrape_company_career_sites(
             company_sites=getattr(cli_args, "company_career_sites", []),
             keywords=getattr(cli_args, "keywords", []),
@@ -400,7 +475,8 @@ class TailoredDocumentExportStage(BaseStage):
             return StageOutcome(job_sets={definition.output_key: []}, metrics={"generated_jobs": 0})
 
         Path(stage4_args.input).write_text(json.dumps(jobs, indent=2, ensure_ascii=False), encoding="utf-8")
-        records = run_tailored_stage4_pipeline(stage4_args, config=config, jobs=jobs)
+        with runtime_cv_override(_workspace_cv_snapshot_from_settings(vars(cli_args))):
+            records = run_tailored_stage4_pipeline(stage4_args, config=config, jobs=jobs)
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(records)},
             metrics={"generated_jobs": len(records)},

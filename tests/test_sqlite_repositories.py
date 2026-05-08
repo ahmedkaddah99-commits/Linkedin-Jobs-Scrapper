@@ -129,6 +129,7 @@ class SqliteRepositoryTests(unittest.TestCase):
         loaded_reviews = review_store.list_reviews(run_id=run.id)
         loaded_user = auth_repository.get_user(user.user_id)
         loaded_tokens = auth_repository.list_api_tokens(user_id=user.user_id)
+        matched_tokens = auth_repository.list_api_tokens_for_value("bkat_test_token_value", active_only=True)
         loaded_secret = secret_store.get_secret(secret.secret_id)
         loaded_workers = worker_store.list_workers()
 
@@ -144,6 +145,8 @@ class SqliteRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded_reviews[0].decision, "approved")
         self.assertEqual(loaded_user.email, "admin@example.com")
         self.assertEqual(len(loaded_tokens), 1)
+        self.assertEqual(len(matched_tokens), 1)
+        self.assertEqual(matched_tokens[0].token_id, token.token_id)
         self.assertEqual(loaded_secret.name, "api_key")
         self.assertEqual(len(loaded_workers), 1)
         self.assertEqual(loaded_workers[0].worker_id, "worker_a")

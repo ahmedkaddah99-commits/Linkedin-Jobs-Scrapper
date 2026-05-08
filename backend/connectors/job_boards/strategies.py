@@ -668,6 +668,560 @@ def scrape_linkedin_jobs(
     return jobs, errors
 
 
+def _slugify_board_search_segment(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", compact_whitespace(value).lower())
+    normalized = re.sub(r"-+", "-", normalized).strip("-")
+    return normalized or "jobs"
+
+
+def _select_first_text(node: BeautifulSoup | None, selectors: List[str]) -> str:
+    if node is None:
+        return ""
+    for selector in selectors:
+        try:
+            match = node.select_one(selector)
+        except Exception:
+            match = None
+        if match:
+            text = compact_whitespace(match.get_text(" ", strip=True))
+            if text:
+                return text
+    return ""
+
+
+def _collect_json_ld_job_postings(node, collector: List[Dict]) -> None:
+    if isinstance(node, dict):
+        raw_type = node.get("@type")
+        type_values = raw_type if isinstance(raw_type, list) else [raw_type]
+        if any(str(item or "").strip().lower() == "jobposting" for item in type_values):
+            collector.append(node)
+        for value in node.values():
+            _collect_json_ld_job_postings(value, collector)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_json_ld_job_postings(item, collector)
+
+
+def _json_ld_company_name(value) -> str:
+    if isinstance(value, dict):
+        return compact_whitespace(str(value.get("name") or ""))
+    if isinstance(value, list):
+        for item in value:
+            company = _json_ld_company_name(item)
+            if company:
+                return company
+    return compact_whitespace(str(value or ""))
+
+
+def _json_ld_location_name(value) -> str:
+    if isinstance(value, dict):
+        address = value.get("address")
+        if isinstance(address, dict):
+            parts = [
+                compact_whitespace(str(address.get("addressLocality") or "")),
+                compact_whitespace(str(address.get("addressRegion") or "")),
+                compact_whitespace(str(address.get("addressCountry") or "")),
+            ]
+            filtered = [item for item in parts if item]
+            if filtered:
+                return ", ".join(filtered)
+        parts = [
+            compact_whitespace(str(value.get("name") or "")),
+            compact_whitespace(str(value.get("addressLocality") or "")),
+            compact_whitespace(str(value.get("addressRegion") or "")),
+            compact_whitespace(str(value.get("addressCountry") or "")),
+        ]
+        filtered = [item for item in parts if item]
+        if filtered:
+            return ", ".join(filtered)
+    if isinstance(value, list):
+        for item in value:
+            location = _json_ld_location_name(item)
+            if location:
+                return location
+    return compact_whitespace(str(value or ""))
+
+
+def _json_ld_url(value, base_url: str) -> str:
+    if isinstance(value, dict):
+        for key in ("url", "@id"):
+            if str(value.get(key) or "").strip():
+                return urljoin(base_url, str(value.get(key) or "").strip())
+        return ""
+    return urljoin(base_url, str(value or "").strip()) if str(value or "").strip() else ""
+
+
+def _extract_json_ld_jobs_from_soup(
+    *,
+    soup: BeautifulSoup,
+    portal: str,
+    keyword: str,
+    city: str,
+    base_url: str,
+) -> List[Dict]:
+    collected: List[Dict] = []
+    seen = set()
+    for script in soup.select("script[type='application/ld+json']"):
+        raw_text = (script.string or script.get_text() or "").strip()
+        if not raw_text:
+            continue
+        try:
+            payload = json.loads(raw_text)
+        except Exception:
+            continue
+        postings: List[Dict] = []
+        _collect_json_ld_job_postings(payload, postings)
+        for posting in postings:
+            title = compact_whitespace(str(posting.get("title") or posting.get("name") or ""))
+            link = (
+                _json_ld_url(posting.get("url"), base_url)
+                or _json_ld_url(posting.get("mainEntityOfPage"), base_url)
+                or _json_ld_url(posting.get("sameAs"), base_url)
+            )
+            if not title or not link:
+                continue
+            dedupe_key = link.casefold()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            identifier = posting.get("identifier")
+            job_id = ""
+            if isinstance(identifier, dict):
+                job_id = compact_whitespace(str(identifier.get("value") or identifier.get("name") or ""))
+            elif isinstance(identifier, str):
+                job_id = compact_whitespace(identifier)
+            if not job_id:
+                job_id = extract_query_job_id(link, "id", fallback_portal=portal)
+            collected.append(
+                _normalize_job_record(
+                    portal=portal,
+                    raw={
+                        "job_id": job_id or build_fallback_job_id(portal, link),
+                        "title": title,
+                        "company": _json_ld_company_name(posting.get("hiringOrganization")),
+                        "location_raw": _json_ld_location_name(posting.get("jobLocation") or posting.get("jobLocationType")) or city,
+                        "posted_text": compact_whitespace(str(posting.get("datePosted") or "")),
+                        "description": compact_whitespace(str(posting.get("description") or "")),
+                        "snippet": compact_whitespace(str(posting.get("description") or ""))[:500],
+                        "link": link,
+                        "apply_link": link,
+                        "source_keyword": keyword,
+                        "source_city": city,
+                    },
+                )
+            )
+    return collected
+
+
+def _extract_anchor_jobs_from_soup(
+    *,
+    soup: BeautifulSoup,
+    portal: str,
+    keyword: str,
+    city: str,
+    base_url: str,
+    link_hints: List[str],
+    title_selectors: List[str] | None = None,
+    company_selectors: List[str] | None = None,
+    location_selectors: List[str] | None = None,
+    snippet_selectors: List[str] | None = None,
+) -> List[Dict]:
+    jobs: List[Dict] = []
+    seen = set()
+    title_selectors = title_selectors or []
+    company_selectors = company_selectors or []
+    location_selectors = location_selectors or []
+    snippet_selectors = snippet_selectors or []
+
+    for anchor in soup.select("a[href]"):
+        raw_href = compact_whitespace(str(anchor.get("href") or ""))
+        if not raw_href or raw_href.startswith("mailto:") or raw_href.startswith("javascript:"):
+            continue
+        href = urljoin(base_url, raw_href)
+        haystack = f"{href} {anchor.get_text(' ', strip=True)}".lower()
+        if link_hints and not any(hint in haystack for hint in link_hints):
+            continue
+        dedupe_key = href.casefold()
+        if dedupe_key in seen:
+            continue
+        container = anchor.find_parent(["article", "li", "div"])
+        title = (
+            _select_first_text(container, title_selectors)
+            or compact_whitespace(anchor.get_text(" ", strip=True))
+        )
+        if not title or len(title) < 3:
+            continue
+        company = _select_first_text(container, company_selectors)
+        location_raw = _select_first_text(container, location_selectors) or city
+        snippet = _select_first_text(container, snippet_selectors)
+        job_id = (
+            extract_query_job_id(href, "id")
+            or extract_query_job_id(href, "jk")
+            or build_fallback_job_id(portal, href)
+        )
+        jobs.append(
+            _normalize_job_record(
+                portal=portal,
+                raw={
+                    "job_id": job_id,
+                    "title": title,
+                    "company": company,
+                    "location_raw": location_raw,
+                    "posted_text": "",
+                    "description": snippet,
+                    "snippet": snippet,
+                    "link": href,
+                    "apply_link": href,
+                    "source_keyword": keyword,
+                    "source_city": city,
+                },
+            )
+        )
+        seen.add(dedupe_key)
+    return jobs
+
+
+def _generic_job_board_fetch(
+    *,
+    portal: str,
+    keyword: str,
+    city: str,
+    max_pages: int,
+    timeout_seconds: int,
+    request_builder,
+    link_hints: List[str],
+    posted_within_days: int = 0,
+    title_selectors: List[str] | None = None,
+    company_selectors: List[str] | None = None,
+    location_selectors: List[str] | None = None,
+    snippet_selectors: List[str] | None = None,
+) -> Tuple[List[Dict], List[str]]:
+    errors: List[str] = []
+    jobs: List[Dict] = []
+    seen_links = set()
+    session = _new_session(timeout_seconds=timeout_seconds)
+
+    for page in range(1, max_pages + 1):
+        url, params = request_builder(keyword, city, page, posted_within_days)
+        try:
+            response = session.get(url, params=params, timeout=session.request_timeout)
+        except Exception as exc:
+            errors.append(f"{portal} page={page} error={exc}")
+            continue
+
+        if response.status_code in (403, 429):
+            proxy_response = _proxy_get(url=url, params=params, timeout_seconds=session.request_timeout)
+            if proxy_response is not None:
+                response = proxy_response
+
+        if response.status_code != 200:
+            errors.append(f"{portal} page={page} status={response.status_code}")
+            continue
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        page_jobs = _extract_json_ld_jobs_from_soup(
+            soup=soup,
+            portal=portal,
+            keyword=keyword,
+            city=city,
+            base_url=response.url or url,
+        )
+        if not page_jobs:
+            page_jobs = _extract_anchor_jobs_from_soup(
+                soup=soup,
+                portal=portal,
+                keyword=keyword,
+                city=city,
+                base_url=response.url or url,
+                link_hints=link_hints,
+                title_selectors=title_selectors,
+                company_selectors=company_selectors,
+                location_selectors=location_selectors,
+                snippet_selectors=snippet_selectors,
+            )
+
+        page_count = 0
+        for job in page_jobs:
+            link = str(job.get("link") or "").casefold()
+            if link and link in seen_links:
+                continue
+            if link:
+                seen_links.add(link)
+            jobs.append(job)
+            page_count += 1
+
+        if page_count == 0 and page > 1:
+            break
+
+    return jobs, errors
+
+
+def _glassdoor_request(keyword: str, city: str, page: int, posted_within_days: int) -> Tuple[str, Dict]:
+    params = {
+        "sc.keyword": keyword,
+        "locT": "C",
+        "locKeyword": city,
+    }
+    if page > 1:
+        params["p"] = page
+    if posted_within_days > 0:
+        params["fromAge"] = posted_within_days
+    return "https://www.glassdoor.com/Job/jobs.htm", params
+
+
+def _ziprecruiter_request(keyword: str, city: str, page: int, posted_within_days: int) -> Tuple[str, Dict]:
+    params = {
+        "search": keyword,
+        "location": city,
+        "page": page,
+    }
+    if posted_within_days > 0:
+        params["days"] = posted_within_days
+    return "https://www.ziprecruiter.com/jobs-search", params
+
+
+def _monster_request(keyword: str, city: str, page: int, posted_within_days: int) -> Tuple[str, Dict]:
+    params = {
+        "q": keyword,
+        "where": city,
+        "page": page,
+    }
+    if posted_within_days > 0:
+        params["tm"] = posted_within_days
+    return "https://www.monster.com/jobs/search/", params
+
+
+def _careerbuilder_request(keyword: str, city: str, page: int, posted_within_days: int) -> Tuple[str, Dict]:
+    params = {
+        "keywords": keyword,
+        "location": city,
+        "page_number": page,
+    }
+    if posted_within_days > 0:
+        params["posted"] = posted_within_days
+    return "https://www.careerbuilder.com/jobs", params
+
+
+def _careerjet_request(keyword: str, city: str, page: int, posted_within_days: int) -> Tuple[str, Dict]:
+    params = {
+        "s": keyword,
+        "l": city,
+        "p": max(0, page - 1),
+    }
+    if posted_within_days > 0:
+        params["nw"] = posted_within_days
+    return "https://www.careerjet.com/search/jobs", params
+
+
+def _reed_request(keyword: str, city: str, page: int, posted_within_days: int) -> Tuple[str, Dict]:
+    params = {
+        "keywords": keyword,
+        "locationName": city,
+        "pageno": page,
+    }
+    if posted_within_days > 0:
+        params["datecreatedoffered"] = posted_within_days
+    return "https://www.reed.co.uk/jobs", params
+
+
+def _totaljobs_request(keyword: str, city: str, page: int, posted_within_days: int) -> Tuple[str, Dict]:
+    params = {
+        "keywords": keyword,
+        "location": city,
+        "page": page,
+    }
+    if posted_within_days > 0:
+        params["sort"] = "date"
+    return "https://www.totaljobs.com/jobs", params
+
+
+def _jobsdb_request(keyword: str, city: str, page: int, posted_within_days: int) -> Tuple[str, Dict]:
+    params = {
+        "key": keyword,
+        "location": city,
+        "page": page,
+    }
+    if posted_within_days > 0:
+        params["daterange"] = posted_within_days
+    return "https://hk.jobsdb.com/hk/search-jobs", params
+
+
+def scrape_glassdoor_jobs(
+    keyword: str,
+    city: str,
+    max_pages: int,
+    posted_within_days: int,
+    timeout_seconds: int,
+) -> Tuple[List[Dict], List[str]]:
+    return _generic_job_board_fetch(
+        portal="glassdoor",
+        keyword=keyword,
+        city=city,
+        max_pages=max_pages,
+        timeout_seconds=timeout_seconds,
+        posted_within_days=posted_within_days,
+        request_builder=_glassdoor_request,
+        link_hints=["/job-listing/", "joblisting"],
+        company_selectors=["[data-test='employer-name']", "[data-test='employerName']", ".EmployerProfile_employerName__"],
+        location_selectors=["[data-test='emp-location']", ".JobCard_location__"],
+        snippet_selectors=["[data-test='job-description-teaser']", ".JobCard_jobDescriptionSnippet__"],
+    )
+
+
+def scrape_ziprecruiter_jobs(
+    keyword: str,
+    city: str,
+    max_pages: int,
+    posted_within_days: int,
+    timeout_seconds: int,
+) -> Tuple[List[Dict], List[str]]:
+    return _generic_job_board_fetch(
+        portal="ziprecruiter",
+        keyword=keyword,
+        city=city,
+        max_pages=max_pages,
+        timeout_seconds=timeout_seconds,
+        posted_within_days=posted_within_days,
+        request_builder=_ziprecruiter_request,
+        link_hints=["/jobs/", "ziprecruiter.com/jobs/"],
+        company_selectors=["[data-testid='job-card-company']", ".hiring_company_text", ".job_content .hiring_company_name"],
+        location_selectors=["[data-testid='job-card-location']", ".location", ".job_content .location"],
+        snippet_selectors=["[data-testid='job-card-snippet']", ".job_snippet"],
+    )
+
+
+def scrape_monster_jobs(
+    keyword: str,
+    city: str,
+    max_pages: int,
+    posted_within_days: int,
+    timeout_seconds: int,
+) -> Tuple[List[Dict], List[str]]:
+    return _generic_job_board_fetch(
+        portal="monster",
+        keyword=keyword,
+        city=city,
+        max_pages=max_pages,
+        timeout_seconds=timeout_seconds,
+        posted_within_days=posted_within_days,
+        request_builder=_monster_request,
+        link_hints=["/job-openings/", "/job/"],
+        company_selectors=["[data-testid='company-name']", ".company", ".companyName"],
+        location_selectors=["[data-testid='jobDetailLocation']", ".location", ".details__at"],
+        snippet_selectors=["[data-testid='jobCardDescription']", ".summary", ".mux-job-card__summary"],
+    )
+
+
+def scrape_careerbuilder_jobs(
+    keyword: str,
+    city: str,
+    max_pages: int,
+    posted_within_days: int,
+    timeout_seconds: int,
+) -> Tuple[List[Dict], List[str]]:
+    return _generic_job_board_fetch(
+        portal="careerbuilder",
+        keyword=keyword,
+        city=city,
+        max_pages=max_pages,
+        timeout_seconds=timeout_seconds,
+        posted_within_days=posted_within_days,
+        request_builder=_careerbuilder_request,
+        link_hints=["/job/", "/jobs/detail/"],
+        company_selectors=["[data-testid='company-name']", ".data-results-company", ".company-name"],
+        location_selectors=["[data-testid='job-location']", ".data-results-location", ".job-location"],
+        snippet_selectors=["[data-testid='job-description']", ".data-results-content", ".job-snippet"],
+    )
+
+
+def scrape_careerjet_jobs(
+    keyword: str,
+    city: str,
+    max_pages: int,
+    posted_within_days: int,
+    timeout_seconds: int,
+) -> Tuple[List[Dict], List[str]]:
+    return _generic_job_board_fetch(
+        portal="careerjet",
+        keyword=keyword,
+        city=city,
+        max_pages=max_pages,
+        timeout_seconds=timeout_seconds,
+        posted_within_days=posted_within_days,
+        request_builder=_careerjet_request,
+        link_hints=["/jobad/", "/job/"],
+        company_selectors=[".company", "[data-company]"],
+        location_selectors=[".locations", ".location"],
+        snippet_selectors=[".desc", ".snippet"],
+    )
+
+
+def scrape_reed_jobs(
+    keyword: str,
+    city: str,
+    max_pages: int,
+    posted_within_days: int,
+    timeout_seconds: int,
+) -> Tuple[List[Dict], List[str]]:
+    return _generic_job_board_fetch(
+        portal="reed",
+        keyword=keyword,
+        city=city,
+        max_pages=max_pages,
+        timeout_seconds=timeout_seconds,
+        posted_within_days=posted_within_days,
+        request_builder=_reed_request,
+        link_hints=["/jobs/"],
+        company_selectors=["[data-qa='company-name']", ".gtmJobListingPostedBy", ".job-result-company"],
+        location_selectors=["[data-qa='job-metadata-location']", ".job-result-location"],
+        snippet_selectors=["[data-qa='job-description']", ".job-result-description"],
+    )
+
+
+def scrape_totaljobs_jobs(
+    keyword: str,
+    city: str,
+    max_pages: int,
+    posted_within_days: int,
+    timeout_seconds: int,
+) -> Tuple[List[Dict], List[str]]:
+    return _generic_job_board_fetch(
+        portal="totaljobs",
+        keyword=keyword,
+        city=city,
+        max_pages=max_pages,
+        timeout_seconds=timeout_seconds,
+        posted_within_days=posted_within_days,
+        request_builder=_totaljobs_request,
+        link_hints=["/job/"],
+        company_selectors=["[data-at='job-item-company-name']", ".job-item-company-name", ".company"],
+        location_selectors=["[data-at='job-item-location']", ".job-item-location", ".location"],
+        snippet_selectors=["[data-at='job-item-teaser']", ".job-item-teaser", ".description"],
+    )
+
+
+def scrape_jobsdb_jobs(
+    keyword: str,
+    city: str,
+    max_pages: int,
+    posted_within_days: int,
+    timeout_seconds: int,
+) -> Tuple[List[Dict], List[str]]:
+    return _generic_job_board_fetch(
+        portal="jobsdb",
+        keyword=keyword,
+        city=city,
+        max_pages=max_pages,
+        timeout_seconds=timeout_seconds,
+        posted_within_days=posted_within_days,
+        request_builder=_jobsdb_request,
+        link_hints=["/job/"],
+        company_selectors=["[data-automation='job-company-name']", ".job-card-company-name", ".company"],
+        location_selectors=["[data-automation='job-detail-location']", ".job-card-location", ".location"],
+        snippet_selectors=["[data-automation='jobShortDescription']", ".job-card-teaser", ".description"],
+    )
+
+
 __all__ = [
     "build_fallback_job_id",
     "compact_whitespace",
@@ -675,8 +1229,16 @@ __all__ = [
     "normalize_city_from_location",
     "now_utc_iso",
     "repair_mojibake",
+    "scrape_careerbuilder_jobs",
+    "scrape_careerjet_jobs",
     "scrape_arbeitsagentur_jobs",
+    "scrape_glassdoor_jobs",
     "scrape_indeed_jobs",
+    "scrape_jobsdb_jobs",
     "scrape_linkedin_jobs",
+    "scrape_monster_jobs",
+    "scrape_reed_jobs",
     "scrape_stepstone_jobs",
+    "scrape_totaljobs_jobs",
+    "scrape_ziprecruiter_jobs",
 ]
