@@ -13,12 +13,25 @@ from backend.capabilities.tailored_documents.rendering import (
     CV_FONT_OPTIONS,
     CV_TEMPLATE_PRESETS,
 )
+from backend.capabilities.tailored_documents.modes import (
+    AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    DEFAULT_CV_GENERATION_MODE,
+    LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+)
 from backend.connectors.company_career_sites import (
     ACADEMIC_CAREER_SITE_FILES,
     REGULAR_COMPANY_SITE_FILES,
     load_discovered_company_site_entries,
 )
-from backend.domain.phase0_contracts import DEFAULT_MULTI_PORTAL_IDS, normalize_workspace_configuration_v2
+from backend.domain.phase0_contracts import (
+    DEFAULT_MULTI_PORTAL_IDS,
+    JOB_FILTERING_MODE_BROADER,
+    JOB_FILTERING_MODE_STRICT,
+    normalize_job_filtering_mode,
+    normalize_workspace_configuration_v2,
+)
 from backend.domain.models import JobSource, ProfileRef, PromptSetRef, StageDefinition, WorkflowTemplate, WorkspaceDefinition
 
 
@@ -176,9 +189,11 @@ COUNTRY_TO_RECOMMENDED_PORTALS = {
 
 USER_FACING_FIELD_IDS = {
     "workspace_cv_asset_id",
+    "cv_generation_mode",
     "keywords",
     "country_codes",
     "target_roles",
+    "job_filtering_mode",
     "time_posted_seconds",
     "experience_levels",
     "manual_url_seed_list",
@@ -200,6 +215,10 @@ USER_FACING_FIELD_IDS = {
     "stage1_prompt_override",
     "stage4_model",
     "stage4_fallback_model",
+    LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
     "stage4_max_jobs",
     "stage4_extra_prompt",
     "stage4_prompt_override",
@@ -207,9 +226,11 @@ USER_FACING_FIELD_IDS = {
 
 FIELD_SECTION_BY_ID = {
     "workspace_cv_asset_id": "cv_binding",
+    "cv_generation_mode": "advanced",
     "keywords": "targeting",
     "country_codes": "targeting",
     "target_roles": "targeting",
+    "job_filtering_mode": "filters",
     "time_posted_seconds": "filters",
     "experience_levels": "filters",
     "manual_url_seed_list": "sources",
@@ -231,6 +252,10 @@ FIELD_SECTION_BY_ID = {
     "stage1_prompt_override": "prompt_preferences",
     "stage4_model": "prompt_preferences",
     "stage4_fallback_model": "prompt_preferences",
+    LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD: "prompt_preferences",
+    LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD: "prompt_preferences",
+    AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD: "prompt_preferences",
+    AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD: "prompt_preferences",
     "stage4_max_jobs": "prompt_preferences",
     "stage4_extra_prompt": "prompt_preferences",
     "stage4_prompt_override": "prompt_preferences",
@@ -238,9 +263,11 @@ FIELD_SECTION_BY_ID = {
 
 FIELD_SORT_ORDER = {
     "workspace_cv_asset_id": 10,
+    "cv_generation_mode": 15,
     "keywords": 20,
     "target_roles": 25,
     "country_codes": 30,
+    "job_filtering_mode": 35,
     "time_posted_seconds": 40,
     "experience_levels": 50,
     "forbidden_title_keywords": 60,
@@ -262,6 +289,10 @@ FIELD_SORT_ORDER = {
     "stage1_prompt_override": 220,
     "stage4_model": 230,
     "stage4_fallback_model": 240,
+    LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD: 245,
+    LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD: 246,
+    AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD: 247,
+    AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD: 248,
     "stage4_max_jobs": 250,
     "stage4_extra_prompt": 260,
     "stage4_prompt_override": 270,
@@ -291,7 +322,7 @@ BUILDER_SECTIONS = [
     {
         "id": "documents",
         "title": "Document Style",
-        "description": "Set the default CV design choices used when this workspace generates application documents.",
+        "description": "Set the workspace-specific CV design choices used when this workspace generates tailored application documents.",
     },
     {
         "id": "prompt_preferences",
@@ -355,6 +386,20 @@ def _configuration_fields() -> list[dict]:
             "placeholder": "Choose an uploaded CV",
         },
         {
+            "id": "cv_generation_mode",
+            "label": "CV Generation Mode",
+            "description": "Choose whether this workspace should reuse the baseline workspace CV or generate a tailored variant per accepted job.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": [
+                {"value": "standard_cv", "label": "Standard CV"},
+                {"value": "light_customization", "label": "Light Customization"},
+                {"value": "aggressive_customization", "label": "Aggressive Customization"},
+            ],
+            "default": DEFAULT_CV_GENERATION_MODE,
+            "frontend_visible": False,
+        },
+        {
             "id": "keywords",
             "label": "Target Keywords",
             "description": "Keywords the system should search for when discovering jobs.",
@@ -404,6 +449,19 @@ def _configuration_fields() -> list[dict]:
                 {"value": "Frontend Engineer", "label": "Frontend Engineer"},
                 {"value": "Data Analyst", "label": "Data Analyst"},
             ],
+        },
+        {
+            "id": "job_filtering_mode",
+            "label": "Job Filtering",
+            "description": "Choose whether Stage 1 should stay strict to the saved targets or admit broader adjacent role matches.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": [
+                {"value": JOB_FILTERING_MODE_STRICT, "label": JOB_FILTERING_MODE_STRICT},
+                {"value": JOB_FILTERING_MODE_BROADER, "label": JOB_FILTERING_MODE_BROADER},
+            ],
+            "default": JOB_FILTERING_MODE_BROADER,
+            "frontend_visible": False,
         },
         {
             "id": "geo_id",
@@ -709,7 +767,7 @@ def _configuration_fields() -> list[dict]:
         {
             "id": "cv_template",
             "label": "CV Template",
-            "description": "Document layout preset for tailored CV generation.",
+            "description": "Document layout preset for this workspace's tailored CV generation.",
             "type": "select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "options": _document_template_options(),
@@ -717,7 +775,7 @@ def _configuration_fields() -> list[dict]:
         {
             "id": "cv_color_scheme",
             "label": "CV Color Scheme",
-            "description": "Color palette used for tailored CV generation.",
+            "description": "Color palette used for this workspace's tailored CV generation.",
             "type": "select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "options": _document_color_scheme_options(),
@@ -725,7 +783,7 @@ def _configuration_fields() -> list[dict]:
         {
             "id": "cv_font",
             "label": "CV Font",
-            "description": "Font family used for tailored CV generation.",
+            "description": "Font family used for this workspace's tailored CV generation.",
             "type": "select",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "options": _document_font_options(),
@@ -733,7 +791,7 @@ def _configuration_fields() -> list[dict]:
         {
             "id": "include_photo",
             "label": "Include Profile Photo",
-            "description": "Use the configured profile image in tailored CV exports.",
+            "description": "Use the configured profile image in this workspace's tailored CV exports.",
             "type": "boolean",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "options": _boolean_options("Include photo", "No photo"),
@@ -781,6 +839,42 @@ def _configuration_fields() -> list[dict]:
             "type": "text",
             "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
             "placeholder": "gemini-2.5-flash",
+        },
+        {
+            "id": LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+            "label": "Light Mode Extra Instructions",
+            "description": "Extra instructions appended only when Light Customization is selected.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "Emphasize the strongest domain-fit keywords in the summary and skills only.",
+            "frontend_visible": False,
+        },
+        {
+            "id": LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+            "label": "Light Mode Prompt Override",
+            "description": "Full prompt override used only when Light Customization is selected.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "Custom light-mode prompt with placeholders.",
+            "frontend_visible": False,
+        },
+        {
+            "id": AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+            "label": "Aggressive Mode Extra Instructions",
+            "description": "Extra instructions appended only when Aggressive Customization is selected.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "Push harder on role-specific bullet wording and ATS phrasing.",
+            "frontend_visible": False,
+        },
+        {
+            "id": AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+            "label": "Aggressive Mode Prompt Override",
+            "description": "Full prompt override used only when Aggressive Customization is selected.",
+            "type": "textarea",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "Custom aggressive-mode prompt with placeholders.",
+            "frontend_visible": False,
         },
         {
             "id": "stage4_extra_prompt",
@@ -1154,7 +1248,16 @@ def _annotate_builder_field(field_definition: dict) -> dict:
     field["section"] = FIELD_SECTION_BY_ID.get(field_id, "advanced")
     field["user_facing"] = field_id in USER_FACING_FIELD_IDS
     field["sort_order"] = FIELD_SORT_ORDER.get(field_id, 999)
-    if field_id in {"languages", "stage1_prompt_override", "stage4_prompt_override"}:
+    if field_id in {
+        "languages",
+        "stage1_prompt_override",
+        "stage4_extra_prompt",
+        "stage4_prompt_override",
+        LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+        LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+        AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+        AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    }:
         field["frontend_visible"] = False
     if field_id == "geo_id":
         field["description"] = "Derived internally from the selected country when possible."
@@ -1546,6 +1649,8 @@ def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_setti
             if value not in (None, "", [], {})
         }
     )
+    if flow_id == FLOW_TAILORED_DOCUMENTS:
+        settings["job_filtering_mode"] = normalize_job_filtering_mode(settings.get("job_filtering_mode"))
     return settings
 
 

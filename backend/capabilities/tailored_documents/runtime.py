@@ -5,6 +5,15 @@ from typing import Any
 
 from backend.config.job_seeker import cfg_bool, cfg_float, cfg_int, cfg_list, cfg_str
 
+from .modes import (
+    AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    DEFAULT_CV_GENERATION_MODE,
+    LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+)
+from backend.domain.phase0_contracts import JOB_FILTERING_MODE_BROADER, normalize_job_filtering_mode
+
 
 def build_stage1_args(config: dict, cli_args) -> SimpleNamespace:
     return SimpleNamespace(
@@ -24,6 +33,10 @@ def build_stage1_args(config: dict, cli_args) -> SimpleNamespace:
         reuse_scrape_snapshot=bool(cli_args.reuse_scrape_snapshot),
         stage1_extra_prompt=cli_args.stage1_extra_prompt,
         stage1_prompt_override=cli_args.stage1_prompt_override,
+        job_filtering_mode=normalize_job_filtering_mode(
+            getattr(cli_args, "job_filtering_mode", JOB_FILTERING_MODE_BROADER)
+        ),
+        job_filtering_target_phrases=list(getattr(cli_args, "job_filtering_target_phrases", []) or []),
         low_applicant_threshold=int(cli_args.low_applicant_threshold),
         debug_enrich_blocks=bool(cli_args.debug_enrich_blocks),
         page_fetch_sleep_seconds=float(cli_args.page_fetch_sleep_seconds),
@@ -38,6 +51,10 @@ def build_stage4_args(cli_args) -> SimpleNamespace:
         output_xlsx=cli_args.output_xlsx,
         checkpoint=cli_args.stage4_checkpoint,
         docs_dir=cli_args.docs_dir,
+        cv_generation_mode=getattr(cli_args, "cv_generation_mode", DEFAULT_CV_GENERATION_MODE),
+        workspace_cv_asset_id=getattr(cli_args, "workspace_cv_asset_id", ""),
+        workspace_cv_asset_path=getattr(cli_args, "workspace_cv_asset_path", ""),
+        workspace_cv_asset_display_name=getattr(cli_args, "workspace_cv_asset_display_name", ""),
         model=cli_args.stage4_model,
         fallback_model=cli_args.stage4_fallback_model,
         candidate_name=cli_args.candidate_name,
@@ -48,6 +65,18 @@ def build_stage4_args(cli_args) -> SimpleNamespace:
         cv_color_scheme=cli_args.cv_color_scheme,
         include_photo=bool(cli_args.include_photo),
         languages=list(cli_args.languages),
+        light_customization_extra_prompt=getattr(cli_args, LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD, ""),
+        light_customization_prompt_override=getattr(cli_args, LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD, ""),
+        aggressive_customization_extra_prompt=getattr(
+            cli_args,
+            AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+            "",
+        ),
+        aggressive_customization_prompt_override=getattr(
+            cli_args,
+            AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+            "",
+        ),
         stage4_extra_prompt=cli_args.stage4_extra_prompt,
         stage4_prompt_override=cli_args.stage4_prompt_override,
         sleep_seconds=float(cli_args.stage4_sleep_seconds),
@@ -168,6 +197,18 @@ def build_main_defaults(config: dict) -> dict[str, Any]:
         "stage4_checkpoint": cfg_str(config, ("runtime", "stage4", "checkpoint_json"), "stage4_checkpoint.json"),
         "stage4_model": cfg_str(config, ("ai", "models", "stage4_docs_deepseek"), "deepseek-chat"),
         "stage4_fallback_model": cfg_str(config, ("ai", "models", "stage4_docs_fallback_gemini"), "gemini-2.5-flash"),
+        LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD: "",
+        LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD: "",
+        AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD: cfg_str(
+            config,
+            ("ai", "prompts", "stage4_extra_instructions"),
+            "",
+        ),
+        AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD: cfg_str(
+            config,
+            ("ai", "prompts", "stage4_prompt_override"),
+            "",
+        ),
         "stage4_extra_prompt": cfg_str(config, ("ai", "prompts", "stage4_extra_instructions"), ""),
         "stage4_prompt_override": cfg_str(config, ("ai", "prompts", "stage4_prompt_override"), ""),
         "stage4_sleep_seconds": cfg_float(config, ("runtime", "stage4", "sleep_seconds"), 4.0),
@@ -177,6 +218,7 @@ def build_main_defaults(config: dict) -> dict[str, Any]:
         "output_json": cfg_str(config, ("outputs", "stage4_json"), "stage4_documents.json"),
         "output_xlsx": cfg_str(config, ("outputs", "stage4_xlsx"), "final_jobs_with_docs.xlsx"),
         "docs_dir": cfg_str(config, ("outputs", "docs_dir"), "generated_docs"),
+        "cv_generation_mode": DEFAULT_CV_GENERATION_MODE,
         "excel_mode": cfg_str(config, ("runtime", "stage4", "excel_mode"), "new-sheet"),
         "sheet_name": cfg_str(config, ("runtime", "stage4", "sheet_name"), ""),
         "run_date": cfg_str(config, ("runtime", "stage4", "run_date"), ""),

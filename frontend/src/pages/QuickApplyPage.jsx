@@ -160,11 +160,6 @@ export default function QuickApplyPage() {
       ),
     [workspacesPayload?.workspaces],
   );
-  const selectedWorkspace = useMemo(
-    () => eligibleWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId) || null,
-    [eligibleWorkspaces, selectedWorkspaceId],
-  );
-
   useEffect(() => {
     if (selectedWorkspaceId || !eligibleWorkspaces.length) {
       return;
@@ -281,7 +276,7 @@ export default function QuickApplyPage() {
       <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
         <h1 className="font-headline text-2xl font-bold text-on-surface">Quick Apply</h1>
         <p className="mt-3 max-w-2xl text-sm leading-7 text-on-surface-variant">
-          Quick Apply needs one tailored-documents workspace first so the app knows which CV baseline and document defaults to use.
+          Create a workspace first, then come back here to use it with direct job links.
         </p>
         <Link
           className="mt-5 inline-flex rounded bg-gradient-to-br from-primary to-primary-container px-5 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
@@ -300,17 +295,14 @@ export default function QuickApplyPage() {
           Quick Apply
         </h1>
         <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
-          Use this when you already found an exact job posting link yourself. Pick the workspace that should provide the baseline CV and document defaults, then paste the job URL and generate the application package.
-        </p>
-        <p className="text-xs uppercase tracking-wider text-on-surface-variant/80">
-          Exact job links only. This page does not crawl company sites and does not generate motivation letters.
+          Already found a job link? Choose a workspace, paste the link, and start.
         </p>
       </header>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+      <section>
         <div className="space-y-6 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
           <label className="space-y-2">
-            <span className="block text-sm font-semibold text-on-surface">Baseline Workspace</span>
+            <span className="block text-sm font-semibold text-on-surface">Workspace</span>
             <select
               className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
               onChange={(event) => {
@@ -325,13 +317,11 @@ export default function QuickApplyPage() {
                 </option>
               ))}
             </select>
-            <span className="block text-xs leading-6 text-on-surface-variant">
-              This workspace supplies the CV baseline, targeting defaults, and document styling.
-            </span>
+            <span className="block text-xs leading-6 text-on-surface-variant">This is the CV setup we'll use.</span>
           </label>
 
           <label className="space-y-2">
-            <span className="block text-sm font-semibold text-on-surface">Exact Job URLs</span>
+            <span className="block text-sm font-semibold text-on-surface">Job links</span>
             <TokenListInput
               onChange={(nextManualUrls) => {
                 resetSubmitFeedback();
@@ -340,17 +330,15 @@ export default function QuickApplyPage() {
               placeholder="https://company.example/jobs/123"
               value={manualUrls}
             />
-            <span className="block text-xs leading-6 text-on-surface-variant">
-              Paste one or more exact job posting links. Up to 50 URLs.
-            </span>
+            <span className="block text-xs leading-6 text-on-surface-variant">Paste up to 50 direct job links.</span>
           </label>
 
           <div className="space-y-2">
-            <span className="block text-sm font-semibold text-on-surface">Execution Mode</span>
+            <span className="block text-sm font-semibold text-on-surface">When should this run?</span>
             <div className="flex flex-wrap gap-3">
               <TogglePill
                 checked={executionMode === "sync"}
-                label="Run Now"
+                label="Start now"
                 onClick={() => {
                   resetSubmitFeedback();
                   setExecutionMode("sync");
@@ -358,7 +346,7 @@ export default function QuickApplyPage() {
               />
               <TogglePill
                 checked={executionMode === "queued"}
-                label="Queue Run"
+                label="Run later"
                 onClick={() => {
                   resetSubmitFeedback();
                   setExecutionMode("queued");
@@ -414,11 +402,11 @@ export default function QuickApplyPage() {
             >
               {submitState.submitting
                 ? executionMode === "sync"
-                  ? "Running..."
+                  ? "Starting..."
                   : "Queueing..."
                 : executionMode === "sync"
-                  ? "Create Quick Application"
-                  : "Queue Quick Application"}
+                  ? "Start"
+                  : "Queue"}
             </button>
             <Link
               className="rounded bg-surface-container-low px-5 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
@@ -428,32 +416,6 @@ export default function QuickApplyPage() {
             </Link>
           </div>
         </div>
-
-        <aside className="space-y-4 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
-          <div>
-            <div className="text-sm font-semibold text-on-surface">Selected workspace</div>
-            <div className="mt-1 text-lg font-bold text-on-surface">
-              {selectedWorkspace?.name || "Choose a workspace"}
-            </div>
-            <p className="mt-2 text-sm leading-6 text-on-surface-variant">
-              {selectedWorkspace?.description || "The selected workspace description will appear here."}
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-outline-variant/10 bg-surface p-4">
-            <div className="text-sm font-semibold text-on-surface">What this does</div>
-            <p className="mt-2 text-sm leading-6 text-on-surface-variant">
-              The app ingests the exact job links you pasted, removes duplicates, and generates application documents using the baseline workspace you selected.
-            </p>
-          </div>
-
-          <div className="rounded-lg border border-outline-variant/10 bg-surface p-4">
-            <div className="text-sm font-semibold text-on-surface">What this does not do</div>
-            <p className="mt-2 text-sm leading-6 text-on-surface-variant">
-              It does not crawl company sites, it does not search job boards, and it does not create a motivation letter.
-            </p>
-          </div>
-        </aside>
       </section>
     </div>
   );

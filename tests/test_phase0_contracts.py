@@ -29,6 +29,7 @@ class Phase0ContractsTests(unittest.TestCase):
             "profile_label": "Primary Job Seeker Profile",
             "settings": {
                 "target_roles": ["Business Analyst", "Consultant"],
+                "job_filtering_mode": "strict_match",
                 "geo_id": "101282230",
                 "time_posted_seconds": 172800,
                 "experience_levels": [2, 3],
@@ -39,13 +40,17 @@ class Phase0ContractsTests(unittest.TestCase):
                 "languages": ["English - C1", "German - B1/B2"],
                 "french_special_char_threshold": 0,
                 "spanish_special_char_threshold": 9999,
+                "cv_generation_mode": "standard_cv",
                 "cv_template": "modern",
                 "include_photo": False,
                 "linkedin_max_pages": 7,
                 "candidate_name": "Ahmed",
                 "candidate_email": "ahmed@example.com",
                 "stage1_extra_prompt": "Favor hybrid roles.",
-                "stage4_prompt_override": "Use my custom document prompt.",
+                "light_customization_extra_prompt": "Only sharpen the summary and skills.",
+                "light_customization_prompt_override": "Use my custom light prompt.",
+                "aggressive_customization_extra_prompt": "Lean harder into ATS language.",
+                "aggressive_customization_prompt_override": "Use my custom aggressive prompt.",
             },
         }
 
@@ -73,13 +78,50 @@ class Phase0ContractsTests(unittest.TestCase):
             normalized["filter_preferences"]["forbidden_title_keywords"],
             ["senior", "director"],
         )
+        self.assertEqual(normalized["filter_preferences"]["job_filtering"]["mode"], "Strict Match")
+        self.assertEqual(
+            normalized["filter_preferences"]["job_filtering"]["target_phrases"],
+            ["Business Analyst", "Consultant"],
+        )
         self.assertFalse(normalized["filter_preferences"]["language_preferences"]["allow_french"])
         self.assertTrue(normalized["filter_preferences"]["language_preferences"]["allow_spanish"])
+        self.assertEqual(normalized["document_preferences"]["cv_generation_mode"], "standard_cv")
         self.assertFalse(normalized["document_preferences"]["include_photo"])
         self.assertEqual(normalized["technical_runtime"]["linkedin_max_pages"], 7)
         self.assertEqual(normalized["legacy_passthrough"]["candidate_name"], "Ahmed")
         self.assertEqual(normalized["legacy_passthrough"]["candidate_email"], "ahmed@example.com")
-        self.assertEqual(len(normalized["prompt_preferences"]["stage_overrides"]), 2)
+        self.assertEqual(len(normalized["prompt_preferences"]["stage_overrides"]), 5)
+        self.assertIn(
+            {
+                "stage_id": "stage4_light",
+                "override_type": "append",
+                "value": "Only sharpen the summary and skills.",
+            },
+            normalized["prompt_preferences"]["stage_overrides"],
+        )
+        self.assertIn(
+            {
+                "stage_id": "stage4_aggressive",
+                "override_type": "replace",
+                "value": "Use my custom aggressive prompt.",
+            },
+            normalized["prompt_preferences"]["stage_overrides"],
+        )
+
+    def test_workspace_configuration_v2_defaults_job_filtering_mode_to_broader_match(self):
+        normalized = normalize_workspace_configuration_v2(
+            {
+                "settings": {
+                    "target_roles": ["Project Manager"],
+                }
+            }
+        )
+
+        self.assertEqual(normalized["filter_preferences"]["job_filtering"]["mode"], "Broader Match")
+        self.assertEqual(
+            normalized["filter_preferences"]["job_filtering"]["target_phrases"],
+            ["Project Manager"],
+        )
 
     def test_candidate_asset_descriptor_normalizes_artifact_payload(self):
         normalized = normalize_candidate_asset_descriptor(
@@ -279,6 +321,22 @@ class Phase0ContractsTests(unittest.TestCase):
         self.assertEqual(normalized["document_type"], "Tailored CV")
         self.assertEqual(normalized["related_application"]["job_id"], "job_1")
         self.assertEqual(normalized["file"]["download_url"], "/v1/runs/run_1/artifacts/artifact_1/download")
+
+    def test_application_document_contract_accepts_applied_cv_type(self):
+        normalized = normalize_application_document(
+            {
+                "artifact_id": "artifact_2",
+                "file_name": "workspace_cv.pdf",
+                "document_type": "Applied CV",
+                "job_id": "job_2",
+                "company": "ACME",
+                "job_title": "Analyst",
+                "path": "generated_docs/workspace_cv.pdf",
+            }
+        )
+
+        self.assertEqual(normalized["document_type"], "Applied CV")
+        self.assertEqual(normalized["related_application"]["job_id"], "job_2")
 
     def test_ats_export_gate_contract_blocks_until_target_or_warning(self):
         normalized = normalize_ats_export_gate(

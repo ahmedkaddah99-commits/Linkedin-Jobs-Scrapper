@@ -128,6 +128,64 @@ export const WEB_CV_TEMPLATES = [
   },
 ];
 
+const DOCX_TO_WEB_TEMPLATE_MAP = {
+  classic: "ats_single_column",
+  modern: "signal_header",
+  compact: "mono_nav",
+  europass: "europass_lite",
+};
+
+const DOCX_COLOR_SCHEME_TO_WEB_PALETTE = {
+  classic_navy: {
+    primary: "1F3A5F",
+    accent: "2EC4B6",
+    surface: "EAF3FF",
+    text: "0F172A",
+    muted: "475569",
+    border: "CBD5E1",
+  },
+  ocean_teal: {
+    primary: "006B5F",
+    accent: "14B8A6",
+    surface: "E5FFFB",
+    text: "10231E",
+    muted: "42756E",
+    border: "B8E9E2",
+  },
+  forest: {
+    primary: "2F5D50",
+    accent: "8AA06F",
+    surface: "F0F7F3",
+    text: "13201A",
+    muted: "4C675B",
+    border: "CFE0D4",
+  },
+  slate: {
+    primary: "334155",
+    accent: "60A5FA",
+    surface: "EEF2FF",
+    text: "0F172A",
+    muted: "5B6472",
+    border: "D4DBF3",
+  },
+  burgundy: {
+    primary: "7C2D12",
+    accent: "EA580C",
+    surface: "FFF1EB",
+    text: "2B1711",
+    muted: "7B5B51",
+    border: "F2D3C6",
+  },
+  charcoal: {
+    primary: "111827",
+    accent: "6B7280",
+    surface: "F3F4F6",
+    text: "111827",
+    muted: "4B5563",
+    border: "D1D5DB",
+  },
+};
+
 function emptyExperienceItem() {
   return {
     title: "",
@@ -269,7 +327,10 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
             title: item.title || "",
             company: item.company || "",
             period: item.period || "",
-            bulletsText: "",
+            bulletsText:
+              Array.isArray(item.bullets) && item.bullets.length
+                ? item.bullets.join("\n")
+                : item.bulletsText || "",
           }))
         : [],
     ),
@@ -299,6 +360,74 @@ export function buildStudioDocumentPatch(state) {
     web_cv_show_photo: Boolean(state.showPhoto),
     web_cv_palette: normalizePalette(state.palette || {}),
   };
+}
+
+function workspaceDocxTemplateToWebTemplate(templateId, fallbackTemplateId = "") {
+  const mappedTemplateId =
+    DOCX_TO_WEB_TEMPLATE_MAP[String(templateId || "").trim().toLowerCase()] ||
+    String(fallbackTemplateId || "").trim() ||
+    WEB_CV_TEMPLATES[0].id;
+  return findCvTemplate(mappedTemplateId).id;
+}
+
+function workspaceDocxColorSchemeToPalette(colorSchemeId) {
+  const normalizedId = String(colorSchemeId || "").trim();
+  const mappedPalette = DOCX_COLOR_SCHEME_TO_WEB_PALETTE[normalizedId];
+  if (mappedPalette) {
+    return normalizePalette(mappedPalette);
+  }
+  const customHex = normalizedId.replace(/^#/, "").toUpperCase();
+  if (/^[0-9A-F]{6}$/.test(customHex)) {
+    return normalizePalette({
+      primary: customHex,
+      accent: customHex,
+      surface: "F4F7FB",
+      text: "0F172A",
+      muted: "475569",
+      border: "CBD5E1",
+    });
+  }
+  return normalizePalette(DOCX_COLOR_SCHEME_TO_WEB_PALETTE.classic_navy);
+}
+
+export function buildWorkspacePreviewDocuments(sharedDocuments = {}, workspaceSettings = {}) {
+  const baseDocuments = sharedDocuments && typeof sharedDocuments === "object" ? sharedDocuments : {};
+  const normalizedSettings =
+    workspaceSettings && typeof workspaceSettings === "object" ? workspaceSettings : {};
+  const cvTemplate = String(
+    normalizedSettings.cv_template || baseDocuments.cv_template || "classic",
+  );
+  const cvColorScheme = String(
+    normalizedSettings.cv_color_scheme || baseDocuments.cv_color_scheme || "classic_navy",
+  );
+  const cvFont = String(normalizedSettings.cv_font || baseDocuments.cv_font || "Calibri");
+  const includePhoto = normalizedSettings.include_photo ?? baseDocuments.include_photo ?? true;
+
+  return {
+    ...baseDocuments,
+    cv_template: cvTemplate,
+    cv_color_scheme: cvColorScheme,
+    cv_font: cvFont,
+    include_photo: Boolean(includePhoto),
+    web_cv_template: workspaceDocxTemplateToWebTemplate(
+      cvTemplate,
+      baseDocuments.web_cv_template,
+    ),
+    web_cv_font: cvFont,
+    web_cv_show_photo: Boolean(includePhoto),
+    web_cv_palette: workspaceDocxColorSchemeToPalette(cvColorScheme),
+  };
+}
+
+export function buildWorkspacePreviewState(
+  profile = {},
+  sharedDocuments = {},
+  workspaceSettings = {},
+) {
+  return buildCvStudioState(
+    profile,
+    buildWorkspacePreviewDocuments(sharedDocuments, workspaceSettings),
+  );
 }
 
 function escapeHtml(value) {

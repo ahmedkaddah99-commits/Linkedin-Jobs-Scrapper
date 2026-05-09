@@ -8,7 +8,8 @@ from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
+
+from backend.config.job_seeker import load_project_dotenv
 
 
 DEFAULT_HEADERS = {
@@ -20,7 +21,9 @@ DEFAULT_HEADERS = {
     "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-load_dotenv()
+# Job-board strategies cache env-backed settings at import time, so load the
+# project-level dotenv paths first instead of relying on a repo-root .env only.
+load_project_dotenv()
 SCRAPEOPS_API_KEY = (os.getenv("SCRAPEOPS_API_KEY") or "").strip()
 
 

@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 from .common import compact_whitespace
 from .generation import split_bullets
+from .modes import CV_GENERATION_MODE_AGGRESSIVE, normalize_cv_generation_mode
 
 
 def split_paragraphs(text: str) -> List[str]:
@@ -24,6 +25,23 @@ def parse_cv_role_header(role_line: str, fallback_company: str = "") -> Dict:
 
     role_title = ""
     company = fallback_company
+
+    if len(parts) >= 3:
+        role_title = parts[0]
+        company = parts[1]
+        return {
+            "role_title": role_title,
+            "company": company,
+            "period": period,
+        }
+    if len(parts) == 2:
+        role_title = parts[0]
+        company = parts[1]
+        return {
+            "role_title": role_title,
+            "company": company,
+            "period": "",
+        }
 
     at_match = re.match(r"^(.*?)\s+at\s+(.+)$", role_company_part, flags=re.IGNORECASE)
     if at_match:
@@ -404,7 +422,30 @@ def extract_role_from_cv_text(cv_text: str, company_keyword: str):
     return None
 
 
-def ensure_structured_cv_fields(record: Dict, candidate_name: str, cv_text: str) -> None:
+def _clamp_rewritten_bullets(generated_bullets: List[str], baseline_bullets: List[str]) -> List[str]:
+    normalized_generated = [str(item).strip() for item in (generated_bullets or []) if str(item).strip()]
+    normalized_baseline = [str(item).strip() for item in (baseline_bullets or []) if str(item).strip()]
+    if not normalized_baseline:
+        return normalized_generated
+    if not normalized_generated:
+        return normalized_baseline
+    clamped: List[str] = []
+    for index, baseline_bullet in enumerate(normalized_baseline):
+        if index < len(normalized_generated):
+            clamped.append(normalized_generated[index])
+        else:
+            clamped.append(baseline_bullet)
+    return clamped
+
+
+def ensure_structured_cv_fields(
+    record: Dict,
+    candidate_name: str,
+    cv_text: str,
+    *,
+    cv_generation_mode: str = CV_GENERATION_MODE_AGGRESSIVE,
+) -> None:
+    normalized_mode = normalize_cv_generation_mode(cv_generation_mode)
     title = str(record.get("title") or "").strip()
     company = str(record.get("company") or "").strip()
 
@@ -454,7 +495,10 @@ def ensure_structured_cv_fields(record: Dict, candidate_name: str, cv_text: str)
                 normalize_compare_token(str(base_item.get("period", ""))),
             )
             base_bullets = [str(b).strip() for b in base_item.get("bullets", []) if str(b).strip()]
-            selected_bullets = experience_bullets_by_key.get(key) or base_bullets
+            if normalized_mode == CV_GENERATION_MODE_AGGRESSIVE:
+                selected_bullets = _clamp_rewritten_bullets(experience_bullets_by_key.get(key) or [], base_bullets)
+            else:
+                selected_bullets = base_bullets
             normalized_experiences.append(
                 {
                     "role_title": str(base_item.get("role_title", "")).strip(),
@@ -508,26 +552,11 @@ def ensure_structured_cv_fields(record: Dict, candidate_name: str, cv_text: str)
             base_degree = compact_whitespace(str(base_item.get("degree_title", "")).strip())
             base_thesis_title = compact_whitespace(str(base_item.get("thesis_title", "")).strip())
             base_thesis_bullets = [str(b).strip() for b in base_item.get("thesis_bullets", []) if str(b).strip()]
-            base_key = normalize_compare_token(base_degree)
-
-            matched_generated = None
-            for gen_item in normalized_generated_education:
-                gen_key = normalize_compare_token(str(gen_item.get("degree_title", "")))
-                if not gen_key:
-                    continue
-                if gen_key == base_key or gen_key in base_key or base_key in gen_key:
-                    matched_generated = gen_item
-                    break
-
-            thesis_bullets = base_thesis_bullets
-            if matched_generated and matched_generated.get("thesis_bullets"):
-                thesis_bullets = merge_unique_bullets([], matched_generated.get("thesis_bullets", []))
-
             final_education.append(
                 {
                     "degree_title": base_degree,
                     "thesis_title": base_thesis_title,
-                    "thesis_bullets": thesis_bullets,
+                    "thesis_bullets": base_thesis_bullets,
                 }
             )
         record["cv_education"] = final_education
@@ -554,28 +583,11 @@ def ensure_structured_cv_fields(record: Dict, candidate_name: str, cv_text: str)
                     normalized_generated_initiatives.append({"title": item_title, "bullets": []})
 
     if baseline_initiatives:
-        initiatives_by_baseline_title: Dict[str, List[str]] = {}
-        for gen_item in normalized_generated_initiatives:
-            gen_title_key = normalize_compare_token(str(gen_item.get("title", "")))
-            if not gen_title_key:
-                continue
-            for base_item in baseline_initiatives:
-                base_title = compact_whitespace(str(base_item.get("title", "")))
-                base_key = normalize_compare_token(base_title)
-                if not base_key:
-                    continue
-                if gen_title_key == base_key or gen_title_key in base_key or base_key in gen_title_key:
-                    existing = initiatives_by_baseline_title.get(base_key, [])
-                    initiatives_by_baseline_title[base_key] = merge_unique_bullets(existing, gen_item.get("bullets", []))
-                    break
-
         final_initiatives = []
         for base_item in baseline_initiatives:
             base_title = compact_whitespace(str(base_item.get("title", "")))
-            base_key = normalize_compare_token(base_title)
             base_bullets = [str(b).strip() for b in base_item.get("bullets", []) if str(b).strip()]
-            selected_bullets = initiatives_by_baseline_title.get(base_key) or base_bullets
-            final_initiatives.append({"title": base_title, "bullets": selected_bullets})
+            final_initiatives.append({"title": base_title, "bullets": base_bullets})
         record["cv_strategic_initiatives"] = final_initiatives
     else:
         deduped_initiatives = []

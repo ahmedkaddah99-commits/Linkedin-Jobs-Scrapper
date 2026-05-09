@@ -17,7 +17,15 @@ from backend.capabilities.reusable_packages.reusable_profiles import build_stage
 from backend.capabilities.reusable_packages.reusable_profiles import run_stage4_pipeline as run_reusable_stage4_pipeline
 from backend.capabilities.reusable_packages.support import load_reusable_packages_config
 from backend.capabilities.tailored_documents.acquisition import run_stage1_pipeline as run_tailored_stage1_pipeline
-from backend.capabilities.tailored_documents.documents import run_stage4_pipeline as run_tailored_stage4_pipeline
+from backend.capabilities.tailored_documents.documents import (
+    run_standard_cv_pipeline,
+    run_stage4_pipeline as run_tailored_stage4_pipeline,
+)
+from backend.capabilities.tailored_documents.modes import (
+    APPLIED_CV_ASSET_KIND,
+    CV_GENERATION_MODE_STANDARD,
+    normalize_cv_generation_mode,
+)
 from backend.capabilities.tailored_documents.prioritization import run_stage3_pipeline as run_tailored_stage3_pipeline
 from backend.capabilities.tailored_documents.runtime import (
     build_main_defaults,
@@ -32,6 +40,7 @@ from backend.connectors.company_career_sites import (
     load_discovered_company_site_entries,
     scrape_company_career_sites,
 )
+from backend.domain.phase0_contracts import derive_job_filtering_target_phrases, normalize_job_filtering_mode
 from backend.domain.models import ArtifactRecord, JobRecord, StageContext, StageDefinition
 from backend.orchestration.engine import BaseStage, StageOutcome
 from backend.orchestration.workspace_builder import derive_runtime_defaults_from_settings
@@ -67,6 +76,16 @@ def _tailored_document_artifact_metadata(record: dict[str, Any]) -> dict[str, An
         "company": str(record.get("company") or ""),
         "status": "ready" if not record.get("doc_generation_error") else "error",
     }
+    for field_name in (
+        "cv_generation_mode",
+        "document_asset_kind",
+        "document_display_name",
+        "applied_cv_asset_id",
+        "applied_cv_display_name",
+    ):
+        value = record.get(field_name)
+        if value not in (None, "", [], {}):
+            metadata[field_name] = value
     propagated_fields = (
         "ats_score",
         "ats_best_score",
@@ -106,6 +125,16 @@ def _tailored_document_artifacts(
     for record in records:
         job_id = str(record.get("job_id") or "")
         metadata = _tailored_document_artifact_metadata(record)
+        applied_cv_path = str(record.get("applied_cv") or "")
+        if applied_cv_path:
+            artifacts.append(
+                ArtifactRecord(
+                    artifact_id=f"{run_id}_{stage_id}_{job_id}_applied_cv",
+                    artifact_type=APPLIED_CV_ASSET_KIND,
+                    path=applied_cv_path,
+                    metadata=metadata,
+                )
+            )
         cv_docx_path = str(record.get("cv_docx") or "")
         if cv_docx_path:
             artifacts.append(
@@ -281,6 +310,10 @@ def _build_root_cli_args(
     resolved_settings = _resolved_settings(context, definition)
     _assert_workspace_cv_binding(resolved_settings)
     resolved_settings = _harmonize_tailored_runtime_settings(resolved_settings)
+    resolved_settings["job_filtering_mode"] = normalize_job_filtering_mode(
+        resolved_settings.get("job_filtering_mode")
+    )
+    resolved_settings["job_filtering_target_phrases"] = derive_job_filtering_target_phrases(resolved_settings)
     if callable(settings_transform):
         resolved_settings = settings_transform(resolved_settings, definition)
     resolved_settings = _augment_with_target_role_context(resolved_settings)
@@ -476,7 +509,10 @@ class TailoredDocumentExportStage(BaseStage):
 
         Path(stage4_args.input).write_text(json.dumps(jobs, indent=2, ensure_ascii=False), encoding="utf-8")
         with runtime_cv_override(_workspace_cv_snapshot_from_settings(vars(cli_args))):
-            records = run_tailored_stage4_pipeline(stage4_args, config=config, jobs=jobs)
+            if normalize_cv_generation_mode(getattr(stage4_args, "cv_generation_mode", "")) == CV_GENERATION_MODE_STANDARD:
+                records = run_standard_cv_pipeline(stage4_args, config=config, jobs=jobs)
+            else:
+                records = run_tailored_stage4_pipeline(stage4_args, config=config, jobs=jobs)
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(records)},
             metrics={"generated_jobs": len(records)},

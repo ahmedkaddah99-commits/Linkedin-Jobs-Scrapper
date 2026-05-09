@@ -3,9 +3,26 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { getApiErrorDetails, getApiErrorMessage } from "../lib/api";
+import {
+  buildCvStudioHtml,
+  buildWorkspacePreviewDocuments,
+  buildWorkspacePreviewState,
+} from "../lib/cvStudio";
 import { labelize } from "../lib/formatters";
 
 const DEFAULT_FLOW_ID = "tailored_documents";
+const DEFAULT_CV_GENERATION_MODE = "aggressive_customization";
+const CV_GENERATION_MODE_OPTIONS = [
+  { value: "standard_cv", label: "Standard" },
+  { value: "light_customization", label: "Light" },
+  { value: "aggressive_customization", label: "Aggressive" },
+];
+const LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD = "light_customization_extra_prompt";
+const LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD = "light_customization_prompt_override";
+const AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD = "aggressive_customization_extra_prompt";
+const AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD = "aggressive_customization_prompt_override";
+const LEGACY_STAGE4_EXTRA_PROMPT_FIELD = "stage4_extra_prompt";
+const LEGACY_STAGE4_PROMPT_OVERRIDE_FIELD = "stage4_prompt_override";
 const SYSTEM_SETTING_KEYS = new Set([
   "automation_flow",
   "config_loader",
@@ -13,21 +30,15 @@ const SYSTEM_SETTING_KEYS = new Set([
 ]);
 const FIXED_TAILORED_MODULE_IDS = ["screening_filter", "tailored_document_generation"];
 const OPTIONAL_PRIORITY_MODULE_ID = "priority_ranking";
+const JOB_FILTERING_STRICT = "Strict Match";
+const JOB_FILTERING_BROADER = "Broader Match";
 const QUICK_APPLY_ROUTE = "/quick-apply";
-const SOURCE_VALIDATION_DEBOUNCE_MS = 350;
 const EMPTY_ACTION_STATE = {
   workspaceId: "",
   loading: false,
   message: "",
   error: "",
   details: [],
-};
-const EMPTY_SOURCE_VALIDATION = {
-  loading: false,
-  valid: true,
-  sourceResults: [],
-  error: "",
-  validationKey: "",
 };
 
 const EMPTY_BUILDER_FORM = {
@@ -80,29 +91,12 @@ function parseLineList(text) {
   return parseDelimitedList(text);
 }
 
-function stableSerialize(value) {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableSerialize(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 function buildSourceValidationPayload({ flowId, sourceIds, settings }) {
   return {
     flow_id: flowId,
     source_ids: [...(sourceIds || [])],
     settings: { ...(settings || {}) },
   };
-}
-
-function sourceValidationKey(payload) {
-  return stableSerialize(payload);
 }
 
 function buildCountryOptions() {
@@ -280,7 +274,11 @@ function InfoHint({ content }) {
         aria-expanded={open}
         className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-outline-variant/30 text-[11px] font-bold text-on-surface-variant transition-colors hover:border-primary/40 hover:text-primary"
         onBlur={() => setOpen(false)}
-        onClick={() => setOpen((current) => !current)}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen((current) => !current);
+        }}
         onFocus={() => setOpen(true)}
         type="button"
       >
@@ -299,11 +297,13 @@ function InfoHint({ content }) {
   );
 }
 
-function ChoiceCard({ checked, title, description, info, onClick }) {
+function ChoiceCard({ checked, compact = false, title, description, info, onClick }) {
   return (
     <button
       className={[
-        "rounded-xl border p-4 text-left transition-all",
+        compact
+          ? "rounded-xl border px-4 py-3 text-left transition-colors duration-150"
+          : "rounded-xl border p-4 text-left transition-all",
         checked
           ? "border-primary/40 bg-primary/5 ring-2 ring-primary/10"
           : "border-outline-variant/20 bg-surface hover:border-primary/20 hover:bg-surface-container-low",
@@ -311,10 +311,12 @@ function ChoiceCard({ checked, title, description, info, onClick }) {
       onClick={onClick}
       type="button"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className={`flex justify-between gap-3 ${compact ? "items-center" : "items-start"}`}>
         <div>
           <div className="text-sm font-semibold text-on-surface">{title}</div>
-          <p className="mt-1 text-xs leading-6 text-on-surface-variant">{description}</p>
+          {description ? (
+            <p className="mt-1 text-xs leading-6 text-on-surface-variant">{description}</p>
+          ) : null}
         </div>
         {info ? <InfoHint content={info} /> : null}
       </div>
@@ -478,6 +480,14 @@ function normalizeWorkspaceSettingValue(value) {
 }
 
 function formatSettingValue(value, field = null) {
+  if (field?.type === "select") {
+    const selectedOption = (field.options || []).find(
+      (option) => String(option.value) === String(value),
+    );
+    if (selectedOption) {
+      return selectedOption.label;
+    }
+  }
   if (field?.id === "portals" && Array.isArray(value)) {
     const labelByValue = new Map(
       (field.options || []).map((option) => [String(option.value), option.label]),
@@ -531,6 +541,56 @@ function settingDisplayValue(field, value) {
     return "";
   }
   return String(value);
+}
+
+function normalizeJobFilteringMode(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ");
+  return normalized === "strict match" ? JOB_FILTERING_STRICT : JOB_FILTERING_BROADER;
+}
+
+function cvGenerationModeDescription(mode) {
+  if (mode === "standard_cv") {
+    return "Reuses your saved workspace CV with no tailoring.";
+  }
+  if (mode === "light_customization") {
+    return "Updates your summary and skills, while keeping most of your CV unchanged.";
+  }
+  return "Also rewrites experience bullets for a closer match, while keeping your core details unchanged.";
+}
+
+function cvGenerationModePromptFieldIds(mode) {
+  if (mode === "light_customization") {
+    return [
+      LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+      LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    ];
+  }
+  if (mode === "aggressive_customization") {
+    return [
+      AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+      AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    ];
+  }
+  return [];
+}
+
+function promptFieldFallbackValue(settings, mode, fieldId) {
+  const directValue = settings?.[fieldId];
+  if (directValue !== undefined && directValue !== null && String(directValue) !== "") {
+    return directValue;
+  }
+  if (mode === "aggressive_customization") {
+    if (fieldId === AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD) {
+      return settings?.[LEGACY_STAGE4_EXTRA_PROMPT_FIELD] || "";
+    }
+    if (fieldId === AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD) {
+      return settings?.[LEGACY_STAGE4_PROMPT_OVERRIDE_FIELD] || "";
+    }
+  }
+  return "";
 }
 
 function workspaceAutomationFlow(workspace) {
@@ -614,32 +674,6 @@ function compactListLabel(items, fallback = "N/A") {
     return labels.join(", ");
   }
   return `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
-}
-
-function sourceValidationStatusLabel(validation, isCurrent) {
-  if (validation.loading) {
-    return "Checking";
-  }
-  if (!isCurrent) {
-    return "Pending";
-  }
-  if (validation.error) {
-    return "Retry needed";
-  }
-  if (!validation.valid) {
-    return "Needs attention";
-  }
-  return "Ready";
-}
-
-function sourceValidationStatusClasses(validation, isCurrent) {
-  if (validation.loading || !isCurrent) {
-    return "bg-surface-container-low text-on-surface";
-  }
-  if (validation.error || !validation.valid) {
-    return "bg-error/10 text-error";
-  }
-  return "bg-primary/10 text-primary";
 }
 
 function FieldRenderer({ field, value, onChange, dynamicOptions = {}, formState = null }) {
@@ -851,13 +885,11 @@ export default function WorkspacesPage() {
     message: "",
   });
   const [form, setForm] = useState(EMPTY_BUILDER_FORM);
-  const [sourceValidation, setSourceValidation] = useState(EMPTY_SOURCE_VALIDATION);
   const [cvUploadState, setCvUploadState] = useState({
     uploading: false,
     message: "",
     error: "",
   });
-  const sourceValidationRequestIdRef = useRef(0);
 
   const {
     data: workspacesData,
@@ -871,6 +903,7 @@ export default function WorkspacesPage() {
     error: builderError,
     refresh: refreshBuilderCatalog,
   } = useApiResource(() => request("/workspace-builder/catalog"), [request]);
+  const { data: settingsPayload } = useApiResource(() => request("/settings"), [request]);
   const {
     data: cvAssetsPayload,
     refresh: refreshCvAssets,
@@ -931,6 +964,20 @@ export default function WorkspacesPage() {
       ),
     [availableConfigurationFields, builderCatalog?.builder_sections],
   );
+  const cvGenerationModeField = useMemo(
+    () =>
+      (builderCatalog?.configuration_fields || []).find(
+        (field) => field.id === "cv_generation_mode",
+      ) || null,
+    [builderCatalog?.configuration_fields],
+  );
+  const configurationFieldById = useMemo(
+    () => new Map((builderCatalog?.configuration_fields || []).map((field) => [field.id, field])),
+    [builderCatalog?.configuration_fields],
+  );
+  const cvGenerationModeOptions = cvGenerationModeField?.options?.length
+    ? cvGenerationModeField.options
+    : CV_GENERATION_MODE_OPTIONS;
   const focusedSection = useMemo(
     () => builderSections.find((section) => section.id === focusedSectionId) || null,
     [builderSections, focusedSectionId],
@@ -959,6 +1006,7 @@ export default function WorkspacesPage() {
           downloadUrl: item.download_url,
           sourceOrigin: item.source_origin,
           status: item.display_status || item.status || "ready",
+          previewProfile: item.preview_profile || null,
         })),
     [cvAssetsPayload?.documents],
   );
@@ -987,19 +1035,19 @@ export default function WorkspacesPage() {
   const selectedSource =
     availableSources.find((source) => form.sourceIds.includes(source.id)) || selectedLegacySource || null;
   const priorityRankingEnabled = resolvedModuleIds.includes(OPTIONAL_PRIORITY_MODULE_ID);
-  const activeSourceValidationPayload = useMemo(
+  const resolvedCvGenerationMode = String(
+    form.settings.cv_generation_mode ||
+      cvGenerationModeField?.default ||
+      DEFAULT_CV_GENERATION_MODE,
+  );
+  const activeCvPromptFields = useMemo(
     () =>
-      buildSourceValidationPayload({
-        flowId: form.flowId,
-        sourceIds: form.sourceIds,
-        settings: form.settings,
-      }),
-    [form.flowId, form.settings, form.sourceIds],
+      cvGenerationModePromptFieldIds(resolvedCvGenerationMode)
+        .map((fieldId) => configurationFieldById.get(fieldId))
+        .filter(Boolean),
+    [configurationFieldById, resolvedCvGenerationMode],
   );
-  const activeSourceValidationKey = useMemo(
-    () => sourceValidationKey(activeSourceValidationPayload),
-    [activeSourceValidationPayload],
-  );
+  const jobFilteringMode = normalizeJobFilteringMode(form.settings.job_filtering_mode);
   const sourceDefinitionById = useMemo(
     () => new Map((builderCatalog?.sources || []).map((source) => [source.id, source])),
     [builderCatalog?.sources],
@@ -1012,25 +1060,6 @@ export default function WorkspacesPage() {
     const baseName = source.name || labelize(source.id);
     return source.legacy && includeLegacyBadge ? `${baseName} (Legacy)` : baseName;
   };
-  const selectedSourceValidationResult = useMemo(
-    () =>
-      sourceValidation.sourceResults.find((result) => form.sourceIds.includes(result.source_id)) || null,
-    [form.sourceIds, sourceValidation.sourceResults],
-  );
-  const sourceValidationIsCurrent = !form.sourceIds.length || sourceValidation.validationKey === activeSourceValidationKey;
-  const sourceValidationIssues = useMemo(
-    () =>
-      sourceValidation.sourceResults
-        .filter((result) => result.status !== "valid")
-        .flatMap((result) => {
-          const prefix = resolveSourceName(result.source_id);
-          if (result.details?.length) {
-            return result.details.map((detail) => `${prefix}: ${detail}`);
-          }
-          return [`${prefix}: ${result.summary}`];
-        }),
-    [resolveSourceName, sourceValidation.sourceResults],
-  );
   const selectedWorkspaceCvLabel = useMemo(() => {
     const selectedAssetId = String(form.settings.workspace_cv_asset_id || "").trim();
     if (!selectedAssetId) {
@@ -1048,6 +1077,49 @@ export default function WorkspacesPage() {
     }
     return workspaceCvAssets.find((item) => item.value === selectedAssetId) || null;
   }, [form.settings.workspace_cv_asset_id, workspaceCvAssets]);
+  const sharedDocumentDefaults = settingsPayload?.documents || {};
+  const mergedPreviewProfile = useMemo(() => {
+    if (!selectedWorkspaceCvAsset) {
+      return null;
+    }
+    const sharedProfile = settingsPayload?.profile || {};
+    const previewProfile = selectedWorkspaceCvAsset.previewProfile || {};
+    return {
+      ...sharedProfile,
+      ...previewProfile,
+      photo_data_url:
+        previewProfile.photo_data_url ||
+        sharedProfile.photo_data_url ||
+        sharedProfile.avatar_url ||
+        "",
+      avatar_url:
+        previewProfile.avatar_url ||
+        sharedProfile.avatar_url ||
+        sharedProfile.photo_data_url ||
+        "",
+    };
+  }, [selectedWorkspaceCvAsset, settingsPayload?.profile]);
+  const effectiveDocumentPreviewDocuments = useMemo(
+    () => buildWorkspacePreviewDocuments(sharedDocumentDefaults, form.settings),
+    [form.settings, sharedDocumentDefaults],
+  );
+  const workspaceDocumentPreviewState = useMemo(() => {
+    if (!selectedWorkspaceCvAsset || !mergedPreviewProfile) {
+      return null;
+    }
+    return buildWorkspacePreviewState(
+      mergedPreviewProfile,
+      sharedDocumentDefaults,
+      form.settings,
+    );
+  }, [form.settings, mergedPreviewProfile, selectedWorkspaceCvAsset, sharedDocumentDefaults]);
+  const workspaceDocumentPreviewHtml = useMemo(
+    () =>
+      workspaceDocumentPreviewState
+        ? buildCvStudioHtml(workspaceDocumentPreviewState, { forIframe: true })
+        : "",
+    [workspaceDocumentPreviewState],
+  );
   const selectedWorkspaceCvMissing = Boolean(
     workspaceCvAssetsLoaded &&
       form.settings.workspace_cv_asset_id &&
@@ -1088,18 +1160,6 @@ export default function WorkspacesPage() {
     if (selectedWorkspaceCvMissing) {
       return "The selected baseline CV is no longer available. Upload or choose another one.";
     }
-    if (sourceValidation.loading) {
-      return "Checking the selected source with the backend...";
-    }
-    if (!sourceValidationIsCurrent) {
-      return "Source setup changed. Waiting for backend validation.";
-    }
-    if (sourceValidation.error) {
-      return sourceValidation.error;
-    }
-    if (!sourceValidation.valid) {
-      return "Resolve the source setup issues below before saving.";
-    }
     return "";
   }, [
     form.name,
@@ -1107,10 +1167,6 @@ export default function WorkspacesPage() {
     form.sourceIds.length,
     resolvedModuleIds.length,
     selectedWorkspaceCvMissing,
-    sourceValidation.error,
-    sourceValidation.loading,
-    sourceValidation.valid,
-    sourceValidationIsCurrent,
   ]);
   const saveDisabled = Boolean(builderLoading || builderState.submitting || saveBlockedReason);
 
@@ -1157,7 +1213,6 @@ export default function WorkspacesPage() {
     }
     const defaultFlowId = flows[0]?.id || DEFAULT_FLOW_ID;
     setForm(buildBuilderForm(builderCatalog, defaultFlowId));
-    setSourceValidation(EMPTY_SOURCE_VALIDATION);
     setCvUploadState({ uploading: false, message: "", error: "" });
     resetBuilderState({ open: true });
     if (searchParams.get("create")) {
@@ -1172,7 +1227,6 @@ export default function WorkspacesPage() {
       return;
     }
     setForm(hydrateFormFromWorkspace(workspace, builderCatalog));
-    setSourceValidation(EMPTY_SOURCE_VALIDATION);
     setCvUploadState({ uploading: false, message: "", error: "" });
     resetBuilderState({
       open: true,
@@ -1184,7 +1238,6 @@ export default function WorkspacesPage() {
   function closeBuilder() {
     resetBuilderState();
     setForm(EMPTY_BUILDER_FORM);
-    setSourceValidation(EMPTY_SOURCE_VALIDATION);
     setCvUploadState({ uploading: false, message: "", error: "" });
     clearBuilderSearchParams();
   }
@@ -1209,7 +1262,6 @@ export default function WorkspacesPage() {
         current.sourceIds.length === 1 && current.sourceIds[0] === sourceId ? [] : [sourceId];
       return { ...current, sourceIds: nextSourceIds };
     });
-    setSourceValidation(EMPTY_SOURCE_VALIDATION);
   }
 
   function setPriorityRankingEnabled(enabled) {
@@ -1231,67 +1283,6 @@ export default function WorkspacesPage() {
       });
   }
 
-  async function loadSourceValidationState(payload, requestId) {
-    try {
-      const response = await request("/workspace-builder/source-validation", {
-        method: "POST",
-        body: payload,
-      });
-      const nextState = {
-        loading: false,
-        valid: Boolean(response.valid),
-        sourceResults: response.source_results || [],
-        error: "",
-        validationKey: sourceValidationKey(payload),
-      };
-      if (sourceValidationRequestIdRef.current === requestId) {
-        setSourceValidation(nextState);
-      }
-      return nextState;
-    } catch (validationError) {
-      const nextState = {
-        loading: false,
-        valid: false,
-        sourceResults: [],
-        error: getApiErrorMessage(validationError, "Unable to validate sources."),
-        validationKey: sourceValidationKey(payload),
-      };
-      if (sourceValidationRequestIdRef.current === requestId) {
-        setSourceValidation(nextState);
-      }
-      return nextState;
-    }
-  }
-
-  async function validateSourcesNow(payload = activeSourceValidationPayload) {
-    const requestId = sourceValidationRequestIdRef.current + 1;
-    sourceValidationRequestIdRef.current = requestId;
-    setSourceValidation((current) => ({
-      ...current,
-      loading: true,
-      error: "",
-    }));
-    return loadSourceValidationState(payload, requestId);
-  }
-
-  async function ensureCurrentSourceValidation() {
-    if (!form.sourceIds.length) {
-      return {
-        ...EMPTY_SOURCE_VALIDATION,
-        validationKey: activeSourceValidationKey,
-      };
-    }
-    if (
-      sourceValidationIsCurrent &&
-      !sourceValidation.loading &&
-      !sourceValidation.error &&
-      sourceValidation.sourceResults.length
-    ) {
-      return sourceValidation;
-    }
-    return validateSourcesNow(activeSourceValidationPayload);
-  }
-
   async function submitWorkspace() {
     const isEditing = builderState.mode === "edit";
     const path = isEditing
@@ -1307,34 +1298,6 @@ export default function WorkspacesPage() {
     }));
 
     try {
-      const validationResult = await ensureCurrentSourceValidation();
-      if (validationResult.error) {
-        setBuilderState((current) => ({
-          ...current,
-          submitting: false,
-          error: validationResult.error,
-          details: [],
-        }));
-        return;
-      }
-      if (!validationResult.valid) {
-        const validationDetails = (validationResult.sourceResults || [])
-          .filter((result) => result.status !== "valid")
-          .flatMap((result) => {
-            const prefix = resolveSourceName(result.source_id);
-            if (result.details?.length) {
-              return result.details.map((detail) => `${prefix}: ${detail}`);
-            }
-            return [`${prefix}: ${result.summary}`];
-          });
-        setBuilderState((current) => ({
-          ...current,
-          submitting: false,
-          error: "Resolve the source setup issues before saving this workspace.",
-          details: validationDetails,
-        }));
-        return;
-      }
       const workspace = await request(path, {
         method: isEditing ? "PUT" : "POST",
         body: {
@@ -1397,27 +1360,6 @@ export default function WorkspacesPage() {
   }
 
   useEffect(() => {
-    if (!builderState.open || !form.sourceIds.length) {
-      return undefined;
-    }
-    const payload = activeSourceValidationPayload;
-    const requestId = sourceValidationRequestIdRef.current + 1;
-    sourceValidationRequestIdRef.current = requestId;
-    const timer = window.setTimeout(() => {
-      if (sourceValidationRequestIdRef.current !== requestId) {
-        return;
-      }
-      setSourceValidation((current) => ({
-        ...current,
-        loading: true,
-        error: "",
-      }));
-      loadSourceValidationState(payload, requestId).catch(() => undefined);
-    }, SOURCE_VALIDATION_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [activeSourceValidationKey, activeSourceValidationPayload, builderState.open, form.sourceIds.length, request]);
-
-  useEffect(() => {
     if (!builderCatalog || builderState.open) {
       return;
     }
@@ -1438,7 +1380,6 @@ export default function WorkspacesPage() {
     if (searchParams.get("create")) {
       const defaultFlowId = flows[0]?.id || DEFAULT_FLOW_ID;
       setForm(buildBuilderForm(builderCatalog, defaultFlowId));
-      setSourceValidation(EMPTY_SOURCE_VALIDATION);
       setCvUploadState({ uploading: false, message: "", error: "" });
       resetBuilderState({ open: true });
       const next = new URLSearchParams(searchParams);
@@ -1969,7 +1910,7 @@ export default function WorkspacesPage() {
             onClick={openBuilder}
             type="button"
           >
-            {builderLoading ? "Loading Workspace Builder..." : "Create Workspace From Scratch"}
+            {builderLoading ? "Loading Workspace Builder..." : "Create Workspace"}
           </button>
         </div>
       </header>
@@ -2126,66 +2067,6 @@ export default function WorkspacesPage() {
                 </div>
               ) : null}
 
-              {form.sourceIds.length ? (
-                <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-on-surface">Backend source validation</div>
-                      <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                        Save stays disabled until this source check is current and valid.
-                      </p>
-                    </div>
-                    <span
-                      className={[
-                        "rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
-                        sourceValidationStatusClasses(sourceValidation, sourceValidationIsCurrent),
-                      ].join(" ")}
-                    >
-                      {sourceValidationStatusLabel(sourceValidation, sourceValidationIsCurrent)}
-                    </span>
-                  </div>
-
-                  {!sourceValidationIsCurrent && !sourceValidation.loading ? (
-                    <p className="mt-3 text-sm text-on-surface-variant">
-                      Source setup changed. Rechecking it with the backend now.
-                    </p>
-                  ) : null}
-
-                  {sourceValidation.error ? (
-                    <p className="mt-3 text-sm text-error">{sourceValidation.error}</p>
-                  ) : null}
-
-                  {sourceValidationIsCurrent && selectedSourceValidationResult ? (
-                    <div className="mt-3 rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-semibold text-on-surface">
-                          {resolveSourceName(selectedSourceValidationResult.source_id)}
-                        </span>
-                        <span
-                          className={[
-                            "rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
-                            selectedSourceValidationResult.status === "valid"
-                              ? "bg-primary/10 text-primary"
-                              : "bg-error/10 text-error",
-                          ].join(" ")}
-                        >
-                          {selectedSourceValidationResult.status}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm text-on-surface-variant">
-                        {selectedSourceValidationResult.summary}
-                      </p>
-                      {selectedSourceValidationResult.details?.length ? (
-                        <div className="mt-2 space-y-1 text-xs leading-6 text-on-surface-variant">
-                          {selectedSourceValidationResult.details.map((detail) => (
-                            <div key={`${selectedSourceValidationResult.source_id}-${detail}`}>{detail}</div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
             </BuilderSection>
 
             <BuilderSection
@@ -2194,10 +2075,25 @@ export default function WorkspacesPage() {
             >
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
-                  <div className="text-sm font-semibold text-on-surface">Job Filtering</div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-semibold text-on-surface">Job Filtering</div>
+                    <InfoHint content="Strict Match: close title matches only. Broader Match: includes related titles too." />
+                  </div>
                   <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                    Always on. It removes obvious mismatches before documents are generated.
+                    Choose how strict the initial job match should be.
                   </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <TogglePill
+                      checked={jobFilteringMode === JOB_FILTERING_STRICT}
+                      label={JOB_FILTERING_STRICT}
+                      onClick={() => updateSetting("job_filtering_mode", JOB_FILTERING_STRICT)}
+                    />
+                    <TogglePill
+                      checked={jobFilteringMode === JOB_FILTERING_BROADER}
+                      label={JOB_FILTERING_BROADER}
+                      onClick={() => updateSetting("job_filtering_mode", JOB_FILTERING_BROADER)}
+                    />
+                  </div>
                 </div>
                 <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
                   <div className="flex items-center gap-2">
@@ -2221,12 +2117,67 @@ export default function WorkspacesPage() {
                   </div>
                 </div>
                 <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
-                  <div className="text-sm font-semibold text-on-surface">Tailored CV Generation</div>
-                  <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                    Generates role-specific application documents from your baseline CV. Motivation letters are not generated here.
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-semibold text-on-surface">CV Generation Mode</div>
+                    <InfoHint
+                      content={
+                        <div className="space-y-1">
+                          <div>Standard: Apply with uploaded CV.</div>
+                          <div>Light: Apply with tailored professional summary and skills.</div>
+                          <div>
+                            Aggressive: Apply with the second option plus all bullet points under
+                            work experience and project sections.
+                          </div>
+                        </div>
+                      }
+                    />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {cvGenerationModeOptions.map((option) => {
+                      const modeValue = String(option.value);
+                      return (
+                        <TogglePill
+                          checked={resolvedCvGenerationMode === modeValue}
+                          key={modeValue}
+                          onClick={() => updateSetting("cv_generation_mode", modeValue)}
+                          label={option.label}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
+              <details className="mt-4 rounded-xl border border-outline-variant/10 bg-surface p-4">
+                <summary className="cursor-pointer text-sm font-semibold text-on-surface">
+                  Advanced Prompt Controls - Optional
+                </summary>
+                <p className="mt-2 text-xs leading-6 text-on-surface-variant">
+                  Optional mode-specific prompt tuning. Most users can leave this closed.
+                </p>
+                {activeCvPromptFields.length ? (
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    {activeCvPromptFields.map((field) => (
+                      <label className="space-y-2" key={field.id}>
+                        <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                        <FieldRenderer
+                          dynamicOptions={dynamicFieldOptions}
+                          field={field}
+                          formState={form}
+                          onChange={(nextValue) => updateSetting(field.id, nextValue)}
+                          value={promptFieldFallbackValue(form.settings, resolvedCvGenerationMode, field.id)}
+                        />
+                        <span className="block text-xs leading-6 text-on-surface-variant">
+                          {field.description}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-4 text-sm text-on-surface-variant">
+                    Standard mode has no extra prompt controls.
+                  </div>
+                )}
+              </details>
             </BuilderSection>
 
             {visibleBuilderSections.map((section) => {
@@ -2248,16 +2199,91 @@ export default function WorkspacesPage() {
                     </div>
                   ) : null}
                   {section.id === "documents" ? (
-                    <div className="rounded-lg border border-outline-variant/10 bg-surface p-4">
-                      <p className="text-sm font-semibold text-on-surface">Document style stays shared</p>
-                      <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                        This workspace uses your saved template, font, color, and photo defaults. The
-                        baseline CV selected below stays visible here so you can review it without
-                        leaving the workspace page.
-                      </p>
+                    <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(320px,1.1fr)]">
+                      <div className="space-y-4">
+                        <div className="rounded-lg border border-outline-variant/10 bg-surface p-4">
+                          <p className="text-sm font-semibold text-on-surface">Workspace-specific style</p>
+                          <p className="mt-1 text-xs leading-6 text-on-surface-variant">
+                            Blank values inherit your shared document defaults. The live preview uses
+                            the selected baseline CV inside this workspace, so you can validate style
+                            changes without leaving the Workspaces page.
+                          </p>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          {fields.map((field) => (
+                            <label className="space-y-2" key={field.id}>
+                              <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                              <FieldRenderer
+                                dynamicOptions={dynamicFieldOptions}
+                                field={field}
+                                formState={form}
+                                onChange={(nextValue) => updateSetting(field.id, nextValue)}
+                                value={form.settings[field.id]}
+                              />
+                              <span className="block text-xs leading-6 text-on-surface-variant">
+                                {field.description}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+
+                        <div className="rounded-lg border border-outline-variant/10 bg-surface px-4 py-3 text-xs leading-6 text-on-surface-variant">
+                          Active export mapping: {labelize(effectiveDocumentPreviewDocuments.cv_template)},
+                          {" "}
+                          {labelize(effectiveDocumentPreviewDocuments.cv_color_scheme)},{" "}
+                          {effectiveDocumentPreviewDocuments.cv_font || "Calibri"},{" "}
+                          with {effectiveDocumentPreviewDocuments.include_photo ? "photo enabled" : "no photo"}.
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-on-surface">Live CV Preview</div>
+                            <p className="text-xs leading-6 text-on-surface-variant">
+                              Uses the selected workspace baseline CV as the preview content source.
+                            </p>
+                          </div>
+                          {selectedWorkspaceCvAsset ? (
+                            <span className="rounded-full bg-surface-container-low px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant">
+                              {selectedWorkspaceCvAsset.label}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {!form.settings.workspace_cv_asset_id ? (
+                          <div className="rounded-xl border border-dashed border-outline-variant/20 bg-surface p-6 text-sm text-on-surface-variant">
+                            Choose a baseline CV in the Baseline CV section to load the workspace preview.
+                          </div>
+                        ) : selectedWorkspaceCvMissing ? (
+                          <div className="rounded-xl border border-error/30 bg-error/5 p-6 text-sm text-error">
+                            The selected baseline CV is no longer available. Choose another workspace
+                            CV to restore the preview.
+                          </div>
+                        ) : workspaceDocumentPreviewState ? (
+                          <div className="overflow-hidden rounded-2xl border border-outline-variant/15 bg-surface p-3">
+                            <iframe
+                              className="h-[820px] w-full rounded-xl bg-white"
+                              srcDoc={workspaceDocumentPreviewHtml}
+                              title="Workspace CV preview"
+                            />
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-outline-variant/10 bg-surface p-6 text-sm text-on-surface-variant">
+                            Loading preview...
+                          </div>
+                        )}
+
+                        <p className="text-xs leading-6 text-on-surface-variant">
+                          This embedded preview reuses the browser CV rendering pipeline and maps your
+                          workspace export settings into a live HTML approximation. Generated DOCX/PDF
+                          artifacts still use the same workspace template, color scheme, font, and
+                          photo selection.
+                        </p>
+                      </div>
                     </div>
-                  ) : null}
-                  {section.id === "cv_binding" ? (
+                  ) : section.id === "cv_binding" ? (
                     <div className="space-y-4">
                       <div className="grid gap-4 md:grid-cols-2">
                         {fields.map((field) => (
@@ -2396,17 +2422,6 @@ export default function WorkspacesPage() {
               {saveBlockedReason ? (
                 <div className="rounded-lg border border-outline-variant/10 bg-surface px-4 py-3 text-sm text-on-surface-variant">
                   {saveBlockedReason}
-                </div>
-              ) : null}
-
-              {sourceValidationIsCurrent && sourceValidationIssues.length ? (
-                <div className="rounded-lg bg-error-container px-4 py-3 text-sm text-on-error-container">
-                  <div className="font-semibold">Source issues to fix</div>
-                  <div className="mt-2 space-y-1 text-xs leading-6">
-                    {sourceValidationIssues.map((issue) => (
-                      <div key={issue}>{issue}</div>
-                    ))}
-                  </div>
                 </div>
               ) : null}
 

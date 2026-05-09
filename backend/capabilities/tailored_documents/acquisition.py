@@ -10,6 +10,7 @@ from backend.config.job_seeker import (
     cfg_str,
     load_job_seeker_config,
 )
+from backend.domain.phase0_contracts import JOB_FILTERING_MODE_BROADER, JOB_FILTERING_MODE_STRICT
 from backend.profiles.cv_text import load_cv_text
 
 from .linkedin_connector import (
@@ -183,6 +184,18 @@ def main() -> int:
         help="Optional full prompt override. Supports {{CV_SUMMARY}} and {{JOB_LIST}} placeholders.",
     )
     parser.add_argument(
+        "--job-filtering-mode",
+        default=JOB_FILTERING_MODE_BROADER,
+        choices=[JOB_FILTERING_MODE_STRICT, JOB_FILTERING_MODE_BROADER],
+        help="Saved workspace Stage 1 title filtering mode.",
+    )
+    parser.add_argument(
+        "--job-filtering-target-phrases",
+        nargs="*",
+        default=[],
+        help="Explicit target roles and keywords used by strict title filtering.",
+    )
+    parser.add_argument(
         "--low-applicant-threshold",
         type=int,
         default=default_low_applicant_threshold,
@@ -287,6 +300,9 @@ def run_stage1_pipeline(args):
         extra_instructions=args.stage1_extra_prompt,
         prompt_override=args.stage1_prompt_override,
         ai_batch_size=args.ai_batch_size,
+        job_filtering_mode=getattr(args, "job_filtering_mode", JOB_FILTERING_MODE_BROADER),
+        job_filtering_target_phrases=getattr(args, "job_filtering_target_phrases", []) or [],
+        broader_keywords=getattr(args, "keywords", []) or [],
     )
     if not ai_approved_jobs:
         print("[Stage1] no jobs passed AI title filter, exiting.")

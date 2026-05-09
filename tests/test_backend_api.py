@@ -346,8 +346,10 @@ class BackendApiTests(unittest.TestCase):
         self.assertFalse(source_by_id["linkedin_jobs"].get("frontend_visible", True))
         self.assertTrue(source_by_id["linkedin_jobs"].get("legacy"))
         self.assertIn("workspace_cv_asset_id", user_facing_fields)
+        self.assertIn("cv_generation_mode", user_facing_fields)
         self.assertIn("country_codes", user_facing_fields)
         self.assertIn("target_roles", user_facing_fields)
+        self.assertIn("job_filtering_mode", user_facing_fields)
         self.assertIn("academic_career_sites", user_facing_fields)
         self.assertIn("french_special_char_threshold", user_facing_fields)
         self.assertIn("spanish_special_char_threshold", user_facing_fields)
@@ -355,6 +357,10 @@ class BackendApiTests(unittest.TestCase):
         self.assertIn("stage1_model", user_facing_fields)
         self.assertIn("stage4_model", user_facing_fields)
         self.assertIn("stage4_fallback_model", user_facing_fields)
+        self.assertIn("light_customization_extra_prompt", user_facing_fields)
+        self.assertIn("light_customization_prompt_override", user_facing_fields)
+        self.assertIn("aggressive_customization_extra_prompt", user_facing_fields)
+        self.assertIn("aggressive_customization_prompt_override", user_facing_fields)
         self.assertNotIn("geo_id", user_facing_fields)
         self.assertNotIn("candidate_name", user_facing_fields)
         self.assertTrue(
@@ -371,14 +377,24 @@ class BackendApiTests(unittest.TestCase):
                 "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
                 "settings": {
                     "workspace_cv_asset_id": workspace_cv_asset_id,
+                    "cv_generation_mode": "standard_cv",
                     "keywords": ["analyst"],
                     "geo_id": "101282230",
                     "time_posted_seconds": 86400,
                     "experience_levels": [2, 3],
                     "target_roles": ["Business Analyst", "Consultant"],
+                    "job_filtering_mode": "Strict Match",
+                    "cv_template": "compact",
+                    "cv_color_scheme": "burgundy",
+                    "cv_font": "Aptos",
+                    "include_photo": False,
                     "french_special_char_threshold": 9999,
                     "spanish_special_char_threshold": 0,
                     "low_applicant_threshold": 55,
+                    "light_customization_extra_prompt": "Only tune summary and skills.",
+                    "light_customization_prompt_override": "Use the light override.",
+                    "aggressive_customization_extra_prompt": "Tune bullet wording harder.",
+                    "aggressive_customization_prompt_override": "Use the aggressive override.",
                     "stage1_model": "deepseek-chat",
                     "stage4_model": "deepseek-chat",
                     "stage4_fallback_model": "gemini-2.5-flash",
@@ -389,11 +405,33 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(workspace_payload["workspace_type"], "custom")
         self.assertEqual(workspace_payload["metadata"]["automation_flow"], "tailored_documents")
         self.assertEqual(workspace_payload["settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
+        self.assertEqual(workspace_payload["settings"]["cv_generation_mode"], "standard_cv")
         self.assertEqual(workspace_payload["settings"]["keywords"], ["analyst"])
         self.assertEqual(workspace_payload["settings"]["experience_levels"], [2, 3])
         self.assertEqual(workspace_payload["settings"]["target_roles"], ["Business Analyst", "Consultant"])
+        self.assertEqual(workspace_payload["settings"]["job_filtering_mode"], "Strict Match")
+        self.assertEqual(workspace_payload["settings"]["cv_template"], "compact")
+        self.assertEqual(workspace_payload["settings"]["cv_color_scheme"], "burgundy")
+        self.assertEqual(workspace_payload["settings"]["cv_font"], "Aptos")
+        self.assertFalse(workspace_payload["settings"]["include_photo"])
         self.assertEqual(workspace_payload["settings"]["french_special_char_threshold"], 9999)
         self.assertEqual(workspace_payload["settings"]["low_applicant_threshold"], 55)
+        self.assertEqual(
+            workspace_payload["settings"]["light_customization_extra_prompt"],
+            "Only tune summary and skills.",
+        )
+        self.assertEqual(
+            workspace_payload["settings"]["light_customization_prompt_override"],
+            "Use the light override.",
+        )
+        self.assertEqual(
+            workspace_payload["settings"]["aggressive_customization_extra_prompt"],
+            "Tune bullet wording harder.",
+        )
+        self.assertEqual(
+            workspace_payload["settings"]["aggressive_customization_prompt_override"],
+            "Use the aggressive override.",
+        )
         self.assertEqual(workspace_payload["settings"]["stage1_model"], "deepseek-chat")
         self.assertEqual(workspace_payload["settings"]["stage4_model"], "deepseek-chat")
         self.assertEqual(workspace_payload["settings"]["stage4_fallback_model"], "gemini-2.5-flash")
@@ -409,6 +447,20 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_generation_mode"], "standard_cv")
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["job_filtering_mode"], "Strict Match")
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_template"], "compact")
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_color_scheme"], "burgundy")
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_font"], "Aptos")
+        self.assertFalse(run_payload["run_plan"]["resolved_run_settings"]["include_photo"])
+        self.assertEqual(
+            run_payload["run_plan"]["resolved_run_settings"]["light_customization_extra_prompt"],
+            "Only tune summary and skills.",
+        )
+        self.assertEqual(
+            run_payload["run_plan"]["resolved_run_settings"]["aggressive_customization_prompt_override"],
+            "Use the aggressive override.",
+        )
         self.assertEqual(
             run_payload["run_plan"]["resolved_run_settings"]["workspace_cv_text"],
             "Builder CV Snapshot\nAnalyst with workflow-specific experience.",
@@ -438,6 +490,59 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(updated_workspace_payload["description"], "Updated through API")
         self.assertEqual(updated_workspace_payload["settings"]["keywords"], ["designer"])
         self.assertEqual(updated_workspace_payload["metadata"]["source_ids"], ["linkedin_jobs", "curated_job_urls"])
+
+    def test_builder_run_falls_back_to_shared_document_style_defaults(self):
+        status, settings_payload = self._request(
+            "PUT",
+            "/settings",
+            {
+                "documents": {
+                    "cv_template": "modern",
+                    "cv_color_scheme": "forest",
+                    "cv_font": "Georgia",
+                    "include_photo": False,
+                }
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(settings_payload["documents"]["cv_template"], "modern")
+        self.assertEqual(settings_payload["documents"]["cv_color_scheme"], "forest")
+        self.assertEqual(settings_payload["documents"]["cv_font"], "Georgia")
+        self.assertFalse(settings_payload["documents"]["include_photo"])
+
+        workspace_cv_asset_id = self._upload_workspace_cv(filename="shared-style-resume.txt")["asset_id"]
+        status, workspace_payload = self._request(
+            "POST",
+            "/workspace-builder/workspaces",
+            {
+                "name": "Shared Style Fallback Workspace",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs"],
+                "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+                "settings": {
+                    "workspace_cv_asset_id": workspace_cv_asset_id,
+                    "keywords": ["analyst"],
+                    "geo_id": "101282230",
+                    "job_filtering_mode": "Strict Match",
+                },
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertNotIn("cv_template", workspace_payload["settings"])
+        self.assertNotIn("cv_color_scheme", workspace_payload["settings"])
+        self.assertNotIn("cv_font", workspace_payload["settings"])
+        self.assertNotIn("include_photo", workspace_payload["settings"])
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": workspace_payload["id"], "execution_mode": "planned", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_template"], "modern")
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_color_scheme"], "forest")
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_font"], "Georgia")
+        self.assertFalse(run_payload["run_plan"]["resolved_run_settings"]["include_photo"])
 
     def test_workspace_builder_invalid_save_returns_structured_validation_error(self):
         workspace_cv_asset_id = self._upload_workspace_cv(filename="invalid-save-resume.txt")["asset_id"]
@@ -650,7 +755,12 @@ class BackendApiTests(unittest.TestCase):
             "/cv-upload",
             "cv_file",
             "resume.txt",
-            b"Summary\nExperienced analyst with operations background.",
+            (
+                b"Summary\nExperienced analyst with operations background.\n"
+                b"Skills\nProcess improvement, Excel, SQL\n"
+                b"Experience\nBusiness Analyst | Example GmbH\n2022 - Present\n"
+                b"- Built dashboard reporting\n- Improved fulfillment workflow\n"
+            ),
         )
         self.assertEqual(status, 201)
         self.assertEqual(cv_payload["asset"]["asset_kind"], "workspace_cv")
@@ -723,6 +833,15 @@ class BackendApiTests(unittest.TestCase):
             None,
         )
         self.assertIsNotNone(uploaded_cv)
+        self.assertEqual(
+            uploaded_cv["preview_profile"]["summary"],
+            "Experienced analyst with operations background.",
+        )
+        self.assertIn("Process improvement", uploaded_cv["preview_profile"]["competencies"])
+        self.assertEqual(
+            uploaded_cv["preview_profile"]["recent_experience"][0]["title"],
+            "Business Analyst",
+        )
 
         status, bundle_payload = self._request(
             "POST",
@@ -739,6 +858,47 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(headers.get("Content-Type"), {"application/zip", "application/x-zip-compressed"})
         self.assertTrue(body.startswith(b"PK"))
+
+    def test_documents_endpoint_labels_applied_cv_artifacts_truthfully(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        applied_cv_path = self.temp_dir / "workspace_cv.pdf"
+        applied_cv_path.write_bytes(b"%PDF-1.4 applied workspace cv")
+
+        status, _ = self._request(
+            "PUT",
+            f"/runs/{run_id}/artifacts/api_applied_cv",
+            {
+                "artifact_type": "applied_cv",
+                "path": str(applied_cv_path),
+                "metadata": {
+                    "job_id": "api_job_1",
+                    "job_title": "Engineer",
+                    "company": "ACME API",
+                    "document_asset_kind": "applied_cv",
+                    "document_display_name": "Applied Workspace CV",
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+
+        status, documents_payload = self._request("GET", f"/documents?run_id={run_id}")
+        self.assertEqual(status, 200)
+        applied_cv = next(
+            (item for item in documents_payload["documents"] if item["asset_kind"] == "applied_cv"),
+            None,
+        )
+        self.assertIsNotNone(applied_cv)
+        self.assertEqual(applied_cv["document_type"], "Applied CV")
+        self.assertEqual(applied_cv["display_name"], "Applied Workspace CV")
+        self.assertEqual(applied_cv["job_id"], "api_job_1")
+        self.assertFalse(applied_cv["final_export_blocked"])
 
     def test_ats_gate_blocks_final_cv_export_until_override_after_warning(self):
         status, run_payload = self._request(

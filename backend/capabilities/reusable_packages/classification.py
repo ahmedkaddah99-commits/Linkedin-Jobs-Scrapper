@@ -8,7 +8,8 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Tuple
 
 import requests
-from dotenv import load_dotenv
+
+from backend.config.job_seeker import load_project_dotenv
 
 from .support import (
     cfg_int,
@@ -243,7 +244,7 @@ def classify_clusters_with_minimal_ai(
     extra_instructions: str = "",
     prompt_override: str = "",
 ) -> Dict[str, Dict]:
-    load_dotenv()
+    load_project_dotenv()
     api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
     valid_category_ids = {str(item.get("id") or "") for item in categories}
     assigned: Dict[str, Dict] = {}

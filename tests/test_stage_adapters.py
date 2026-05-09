@@ -52,6 +52,31 @@ class StageAdapterTests(unittest.TestCase):
         self.assertEqual(docx_artifact.metadata["ats_stop_reason"], "score_stalled")
         self.assertEqual(pdf_artifact.metadata["ats_export_gate"]["metadata"]["stop_reason"], "score_stalled")
 
+    def test_tailored_document_artifacts_preserve_applied_cv_references(self):
+        artifacts = _tailored_document_artifacts(
+            "run_2",
+            "stage_4",
+            output_json="stage4_documents.json",
+            output_xlsx="final_jobs_with_docs.xlsx",
+            records=[
+                {
+                    "job_id": "job_standard_1",
+                    "title": "Analyst",
+                    "company": "ACME",
+                    "cv_generation_mode": "standard_cv",
+                    "applied_cv": "candidate_assets/workspace_cv.pdf",
+                    "applied_cv_asset_id": "asset_workspace_cv",
+                    "document_asset_kind": "applied_cv",
+                    "document_display_name": "Applied Workspace CV",
+                }
+            ],
+        )
+
+        applied_cv_artifact = next(artifact for artifact in artifacts if artifact.artifact_type == "applied_cv")
+        self.assertEqual(applied_cv_artifact.path, "candidate_assets/workspace_cv.pdf")
+        self.assertEqual(applied_cv_artifact.metadata["cv_generation_mode"], "standard_cv")
+        self.assertEqual(applied_cv_artifact.metadata["document_asset_kind"], "applied_cv")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,16 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Mapping
 
+from backend.capabilities.tailored_documents.modes import (
+    AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    APPLIED_CV_DOCUMENT_TYPE,
+    DEFAULT_CV_GENERATION_MODE,
+    LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    normalize_cv_generation_mode,
+)
+
 
 PHASE0_CONTRACT_VERSION = "2026-04-20"
 
@@ -18,12 +28,20 @@ ATS_EXPORT_GATE_SCHEMA = "ats_export_gate_v1"
 
 WORKSPACE_TARGETING_METHOD = "keyword_profile_aligned"
 WORKSPACE_KEYWORD_LIMIT = 12
+JOB_FILTERING_MODE_STRICT = "Strict Match"
+JOB_FILTERING_MODE_BROADER = "Broader Match"
+JOB_FILTERING_MODES = [
+    JOB_FILTERING_MODE_STRICT,
+    JOB_FILTERING_MODE_BROADER,
+]
 
 WORKSPACE_USER_FACING_FIELD_IDS = [
     "workspace_cv_asset_id",
+    "cv_generation_mode",
     "keywords",
     "country_codes",
     "target_roles",
+    "job_filtering_mode",
     "time_posted_seconds",
     "experience_levels",
     "manual_url_seed_list",
@@ -45,12 +63,17 @@ WORKSPACE_USER_FACING_FIELD_IDS = [
     "stage1_prompt_override",
     "stage4_model",
     "stage4_fallback_model",
+    LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
+    AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
+    AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
     "stage4_max_jobs",
     "stage4_extra_prompt",
     "stage4_prompt_override",
 ]
 
 WORKSPACE_HIDDEN_FIELD_IDS = [
+    "job_filtering_target_phrases",
     "linkedin_max_pages",
     "max_enrich_jobs",
     "ai_batch_size",
@@ -190,6 +213,7 @@ GMAIL_DETECTION_APPROVAL_STATES = [
 
 APPLICATION_DOCUMENT_TYPES = [
     "Original CV",
+    APPLIED_CV_DOCUMENT_TYPE,
     "Tailored CV",
     "Cover letter",
     "Transcript",
@@ -301,11 +325,19 @@ def _normalize_company_site_entries(value: Any) -> list[dict[str, str]]:
 
 def _normalize_prompt_overrides(settings: Mapping[str, Any]) -> list[dict[str, str]]:
     overrides: list[dict[str, str]] = []
+    aggressive_extra_prompt = _clean_text(
+        settings.get(AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD) or settings.get("stage4_extra_prompt")
+    )
+    aggressive_prompt_override = _clean_text(
+        settings.get(AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD) or settings.get("stage4_prompt_override")
+    )
     prompt_pairs = [
         ("stage1", "append", _clean_text(settings.get("stage1_extra_prompt"))),
         ("stage1", "replace", _clean_text(settings.get("stage1_prompt_override"))),
-        ("stage4", "append", _clean_text(settings.get("stage4_extra_prompt"))),
-        ("stage4", "replace", _clean_text(settings.get("stage4_prompt_override"))),
+        ("stage4_light", "append", _clean_text(settings.get(LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD))),
+        ("stage4_light", "replace", _clean_text(settings.get(LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD))),
+        ("stage4_aggressive", "append", aggressive_extra_prompt),
+        ("stage4_aggressive", "replace", aggressive_prompt_override),
     ]
     for stage_id, override_type, value in prompt_pairs:
         if not value:
@@ -413,6 +445,34 @@ def _derive_keywords_from_target_roles(settings: Mapping[str, Any]) -> list[str]
     return [role.casefold() for role in target_roles]
 
 
+def normalize_job_filtering_mode(value: Any, *, default: str = JOB_FILTERING_MODE_BROADER) -> str:
+    text = _clean_text(value)
+    if not text:
+        return default
+    normalized = " ".join(text.casefold().replace("_", " ").replace("-", " ").split())
+    if normalized == "strict match":
+        return JOB_FILTERING_MODE_STRICT
+    if normalized == "broader match":
+        return JOB_FILTERING_MODE_BROADER
+    return default
+
+
+def derive_job_filtering_target_phrases(settings: Mapping[str, Any]) -> list[str]:
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for value in [
+        *_clean_tag_list(settings.get("target_roles"), limit=25),
+        *_clean_tag_list(settings.get("keywords"), limit=WORKSPACE_KEYWORD_LIMIT),
+    ]:
+        phrase = _clean_text(value)
+        dedupe_key = phrase.casefold()
+        if not phrase or dedupe_key in seen:
+            continue
+        phrases.append(phrase)
+        seen.add(dedupe_key)
+    return phrases
+
+
 def default_workspace_configuration_v2() -> dict[str, Any]:
     return {
         "schema_version": WORKSPACE_CONFIGURATION_V2_SCHEMA,
@@ -463,6 +523,10 @@ def default_workspace_configuration_v2() -> dict[str, Any]:
             },
         },
         "filter_preferences": {
+            "job_filtering": {
+                "mode": JOB_FILTERING_MODE_BROADER,
+                "target_phrases": [],
+            },
             "forbidden_title_keywords": [],
             "language_preferences": {
                 "profile_languages": [],
@@ -472,6 +536,7 @@ def default_workspace_configuration_v2() -> dict[str, Any]:
             },
         },
         "document_preferences": {
+            "cv_generation_mode": DEFAULT_CV_GENERATION_MODE,
             "cv_template": "",
             "cv_color_scheme": "",
             "cv_font": "",
@@ -554,6 +619,10 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
         limit=50,
         lower=True,
     )
+    contract["filter_preferences"]["job_filtering"]["mode"] = normalize_job_filtering_mode(
+        settings.get("job_filtering_mode")
+    )
+    contract["filter_preferences"]["job_filtering"]["target_phrases"] = derive_job_filtering_target_phrases(settings)
     contract["filter_preferences"]["language_preferences"]["profile_languages"] = _clean_tag_list(
         settings.get("languages"),
         limit=20,
@@ -568,6 +637,9 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
         settings.get("spanish_special_char_threshold") or 0
     ) != 0
 
+    contract["document_preferences"]["cv_generation_mode"] = normalize_cv_generation_mode(
+        settings.get("cv_generation_mode")
+    )
     contract["document_preferences"]["cv_template"] = _clean_text(settings.get("cv_template"))
     contract["document_preferences"]["cv_color_scheme"] = _clean_text(settings.get("cv_color_scheme"))
     contract["document_preferences"]["cv_font"] = _clean_text(settings.get("cv_font"))
@@ -1295,6 +1367,9 @@ __all__ = [
     "APPLICATION_STATUSES",
     "ATS_EXPORT_GATE_SCHEMA",
     "GMAIL_APPLICATION_DETECTION_SCHEMA",
+    "JOB_FILTERING_MODE_BROADER",
+    "JOB_FILTERING_MODES",
+    "JOB_FILTERING_MODE_STRICT",
     "MAIL_CONNECTION_CONTRACT_SCHEMA",
     "PHASE0_CONTRACT_VERSION",
     "REFERRAL_RELATIONSHIP_SCHEMA",
@@ -1319,12 +1394,14 @@ __all__ = [
     "default_rejected_job_review_contract",
     "default_tracker_application_contract",
     "default_workspace_configuration_v2",
+    "derive_job_filtering_target_phrases",
     "legacy_tracker_status_for_application_status",
     "normalize_application_document",
     "normalize_application_status",
     "normalize_ats_export_gate",
     "normalize_candidate_asset_descriptor",
     "normalize_gmail_application_detection",
+    "normalize_job_filtering_mode",
     "normalize_mail_connection_contract",
     "normalize_referral_outreach_status",
     "normalize_referral_relationship",

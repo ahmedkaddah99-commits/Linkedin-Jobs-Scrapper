@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from google import genai
 import requests
@@ -9,6 +9,7 @@ import requests
 from backend.domain.ats_export_gate import evaluate_ats_export_gate
 
 from .common import compact_whitespace, strip_json_fences
+from .modes import CV_GENERATION_MODE_LIGHT, normalize_cv_generation_mode
 
 
 DEFAULT_SYSTEM_PROMPT = "You are an expert career writing assistant."
@@ -60,10 +61,33 @@ def format_header_location(job: Dict) -> str:
     return f"{city_clean}, Germany"
 
 
+def _structured_cv_json_schema() -> str:
+    return """{
+  "professional_summary": "text",
+  "professional_experience": [
+    {
+      "role_title": "text",
+      "company": "text",
+      "period": "text",
+      "bullets": ["text", "text"]
+    }
+  ],
+  "education": [
+    {
+      "degree_title": "text",
+      "thesis_title": "text",
+      "thesis_bullets": ["text", "text"]
+    }
+  ],
+  "skills": ["text", "text"]
+}"""
+
+
 def build_docs_prompt(
     cv_text: str,
     job: Dict,
     candidate_name: str,
+    cv_generation_mode: str,
     extra_instructions: str = "",
     prompt_override: str = "",
 ) -> str:
@@ -72,6 +96,7 @@ def build_docs_prompt(
     title = str(job.get("title", ""))
     company = str(job.get("company", ""))
     job_city = extract_city_from_job(job)
+    normalized_mode = normalize_cv_generation_mode(cv_generation_mode)
 
     if prompt_override.strip():
         prompt = (
@@ -85,7 +110,7 @@ def build_docs_prompt(
             .replace("{{CANDIDATE_NAME}}", candidate_name)
         )
     else:
-        prompt = f"""
+        base_prompt = f"""
 You are an expert career writing assistant.
 
 Candidate full CV:
@@ -103,27 +128,30 @@ Write tailored CV content in English.
 Output requirements:
 - Return only raw JSON (no markdown)
 - Keep schema exactly:
-{{
-  "professional_summary": "text",
-  "professional_experience": [
-    {{
-      "role_title": "text",
-      "company": "text",
-      "period": "text",
-      "bullets": ["text", "text"]
-    }}
-  ],
-  "education": [
-    {{
-      "degree_title": "text",
-      "thesis_title": "text",
-      "thesis_bullets": ["text", "text"]
-    }}
-  ],
-  "skills": ["text", "text"]
-}}
+{_structured_cv_json_schema()}
+""".strip()
+        if normalized_mode == CV_GENERATION_MODE_LIGHT:
+            prompt = f"""{base_prompt}
 
-Content rules:
+Light Customization rules:
+- Only professional_summary and skills may change.
+- professional_summary:
+  - write a targeted, credible summary in about 70-120 words
+  - explain the fit for this exact role and company without inventing facts
+- skills:
+  - return 14 to 22 ATS-friendly skills grounded in the source CV and target role
+- professional_experience:
+  - copy only roles that already exist in the candidate CV
+  - keep role titles, companies, periods, bullet wording, bullet ordering, and role ordering unchanged
+- education:
+  - keep degree titles, thesis titles, thesis bullets, and item ordering unchanged
+- do not invent companies, dates, projects, certifications, or achievements
+- do not produce a motivation letter, cover letter, greeting, or signature
+""".strip()
+        else:
+            prompt = f"""{base_prompt}
+
+Aggressive Customization rules:
 - professional_summary:
   - detailed and substantial (about 70-140 words)
   - role-specific and company-specific
@@ -131,28 +159,18 @@ Content rules:
   - clearly explain why the candidate is a strong fit
 - professional_experience:
   - use only roles that exist in the candidate CV
-  - keep role titles exactly as written in the candidate CV
-  - preserve the same role order as in the candidate CV
-  - 3 to 6 roles total
-  - each role has 3 to 5 concise achievement-oriented bullets
-  - tailor bullets to the target role and ATS keywords
-  - do not fabricate companies or dates
+  - keep role titles, companies, periods, and role order exactly as written in the candidate CV
+  - you may rewrite bullet wording only
+  - keep the evidence truthful to the source CV and do not invent tools, scope, or outcomes
   - if Allianz Technology appears in the CV, include it explicitly
   - never include projects/initiatives in this section
 - skills:
   - 16 to 25 ATS-friendly skills relevant to the job description
   - include realistic adjacent skills when useful
-- if referencing EDUCATION content from the candidate CV:
-  - keep degree/thesis titles exactly as written in the CV
-  - do not rename or paraphrase degree/thesis titles
-  - preserve the same education item order as in the candidate CV
-  - you may only reword thesis bullet wording to fit the target role
-  - if referencing PROJECTS from the candidate CV:
-  - keep project titles exactly as written in the CV
-  - preserve the same project order as in the candidate CV
-  - only reword supporting bullet wording to better match the target job
-  - never include professional job roles in this section
-Do not produce a motivation letter, cover letter, greeting, or signature.
+- education:
+  - keep degree titles, thesis titles, thesis bullets, and item ordering unchanged
+- do not fabricate companies, dates, certifications, projects, or achievements
+- do not produce a motivation letter, cover letter, greeting, or signature
 """.strip()
     if extra_instructions:
         prompt = f"{prompt}\n\nAdditional user preferences:\n{extra_instructions.strip()}"
@@ -200,9 +218,11 @@ def build_ats_improvement_prompt(
     job: Dict,
     structured_cv: Dict[str, Any],
     score_payload: Dict[str, Any],
+    cv_generation_mode: str,
 ) -> str:
     description_excerpt = str(job.get("full_description") or "")[:6000]
-    return f"""
+    normalized_mode = normalize_cv_generation_mode(cv_generation_mode)
+    base_prompt = f"""
 You are improving a tailored CV for ATS matching while staying strictly truthful to the source CV.
 
 Candidate source CV:
@@ -223,35 +243,31 @@ Current ATS assessment:
 Rewrite the tailored CV to address the missing requirements where the source CV supports them.
 
 Return only raw JSON (no markdown) using exactly this schema:
-{{
-  "professional_summary": "text",
-  "professional_experience": [
-    {{
-      "role_title": "text",
-      "company": "text",
-      "period": "text",
-      "bullets": ["text", "text"]
-    }}
-  ],
-  "education": [
-    {{
-      "degree_title": "text",
-      "thesis_title": "text",
-      "thesis_bullets": ["text", "text"]
-    }}
-  ],
-  "skills": ["text", "text"]
-}}
+{_structured_cv_json_schema()}
+""".strip()
 
+    if normalized_mode == CV_GENERATION_MODE_LIGHT:
+        rules = """
+Rules:
+- stay truthful to the source CV
+- only improve professional_summary and skills
+- keep professional_experience, education, titles, companies, dates, bullet wording, and ordering unchanged
+- if a missing requirement is not supported by the source CV, do not fabricate it
+- keep the result concise, ATS-friendly, and role-specific
+""".strip()
+    else:
+        rules = """
 Rules:
 - stay truthful to the source CV
 - never invent experience, tools, certifications, companies, dates, titles, or achievements
-- keep role titles and education titles exactly as written in the source CV
-- preserve role order and education order
+- keep role titles, companies, periods, education titles, and ordering exactly as written in the source CV
+- you may improve professional_summary, skills, and professional_experience bullet wording only
+- keep education bullet wording unchanged
 - improve keyword coverage, evidence wording, and prioritization when the source CV supports it
 - if a missing requirement is not supported by the source CV, do not fabricate it
-- keep 3 to 6 roles, 3 to 5 bullets per role, and 16 to 25 skills
+- keep 16 to 25 skills
 """.strip()
+    return f"{base_prompt}\n\n{rules}"
 
 
 def _load_json_object(text: str) -> Dict[str, Any]:
@@ -423,7 +439,7 @@ def _parse_structured_cv_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
     experiences = _normalize_experiences(parsed.get("professional_experience", []))
     education_entries = _normalize_education(parsed.get("education", []))
 
-    if not professional_summary or not skills or not experiences:
+    if not professional_summary or not skills:
         raise ValueError("AI response missing required structured CV fields.")
 
     payload = {
@@ -469,6 +485,7 @@ def _generate_structured_cv_once(
     cv_text: str,
     job: Dict,
     candidate_name: str,
+    cv_generation_mode: str,
     extra_instructions: str,
     prompt_override: str,
 ) -> Dict[str, Any]:
@@ -476,6 +493,7 @@ def _generate_structured_cv_once(
         cv_text=cv_text,
         job=job,
         candidate_name=candidate_name,
+        cv_generation_mode=cv_generation_mode,
         extra_instructions=extra_instructions,
         prompt_override=prompt_override,
     )
@@ -519,12 +537,14 @@ def _improve_structured_cv_once(
     job: Dict,
     structured_cv: Dict[str, Any],
     score_payload: Dict[str, Any],
+    cv_generation_mode: str,
 ) -> Dict[str, Any]:
     prompt = build_ats_improvement_prompt(
         cv_text=cv_text,
         job=job,
         structured_cv=_structured_cv_for_prompt(structured_cv),
         score_payload=score_payload,
+        cv_generation_mode=cv_generation_mode,
     )
     parsed = call_ai_json(
         deepseek_api_key,
@@ -597,8 +617,10 @@ def _generate_docs_for_job_once(
     cv_text: str,
     job: Dict,
     candidate_name: str,
+    cv_generation_mode: str,
     extra_instructions: str,
     prompt_override: str,
+    payload_postprocessor: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     current_payload = _generate_structured_cv_once(
         deepseek_api_key,
@@ -608,9 +630,12 @@ def _generate_docs_for_job_once(
         cv_text,
         job,
         candidate_name,
+        cv_generation_mode,
         extra_instructions,
         prompt_override,
     )
+    if callable(payload_postprocessor):
+        current_payload = payload_postprocessor(current_payload)
     best_payload = current_payload
     best_score = -1
     best_missing_requirements: list[str] = []
@@ -658,7 +683,10 @@ def _generate_docs_for_job_once(
             job,
             current_payload,
             score_payload,
+            cv_generation_mode,
         )
+        if callable(payload_postprocessor):
+            current_payload = payload_postprocessor(current_payload)
 
     return _attach_ats_metadata(
         best_payload,
@@ -679,10 +707,12 @@ def generate_docs_for_job(
     cv_text: str,
     job: Dict,
     candidate_name: str,
+    cv_generation_mode: str,
     extra_instructions: str,
     prompt_override: str,
     retries: int,
     retry_sleep: float,
+    payload_postprocessor: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     last_error = None
 
@@ -696,8 +726,10 @@ def generate_docs_for_job(
                 cv_text=cv_text,
                 job=job,
                 candidate_name=candidate_name,
+                cv_generation_mode=cv_generation_mode,
                 extra_instructions=extra_instructions,
                 prompt_override=prompt_override,
+                payload_postprocessor=payload_postprocessor,
             )
         except Exception as exc:
             last_error = exc

@@ -40,6 +40,12 @@ from backend.capabilities.tracker.google_oauth import (
     refresh_google_tracker_access_token,
     tracker_google_oauth_metadata,
 )
+from backend.capabilities.tailored_documents.modes import (
+    APPLIED_CV_ASSET_KIND,
+    APPLIED_CV_DOCUMENT_TYPE,
+    CV_GENERATION_MODE_STANDARD,
+    normalize_cv_generation_mode,
+)
 from backend.capabilities.tailored_documents.rendering import get_document_design_options
 from backend.bootstrap import create_backend
 from backend.domain.phase0_contracts import (
@@ -386,6 +392,240 @@ def _parse_cv_sections(cv_text: str) -> dict:
         result["experience_lines"] = exp_lines[:40]  # cap at 40 raw lines
 
     return result
+
+
+_CV_SECTION_HEADER_PATTERN = re.compile(
+    r"^(professional\s+summary|summary|profile|about\s+me|objective|skills|core\s+competencies|"
+    r"competencies|technical\s+skills|key\s+skills|experience|work\s+experience|"
+    r"professional\s+experience|employment|education|certifications?)$",
+    re.IGNORECASE,
+)
+_CV_SUMMARY_HEADER_PATTERN = re.compile(
+    r"^(professional\s+summary|summary|profile|about\s+me|objective)$",
+    re.IGNORECASE,
+)
+_CV_CONTACT_LINE_PATTERN = re.compile(
+    r"(@|https?://|www\.|linkedin|github|\+?\d[\d\s()./-]{7,})",
+    re.IGNORECASE,
+)
+_CV_DATE_TOKEN_PATTERN = re.compile(
+    r"\b("
+    r"(?:19|20)\d{2}|present|current|"
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _cv_nonempty_lines(cv_text: str) -> list[str]:
+    return [line.strip() for line in str(cv_text or "").splitlines() if line.strip()]
+
+
+def _looks_like_cv_section_header(line: str) -> bool:
+    return bool(_CV_SECTION_HEADER_PATTERN.match(str(line or "").strip()))
+
+
+def _looks_like_cv_contact_line(line: str) -> bool:
+    return bool(_CV_CONTACT_LINE_PATTERN.search(str(line or "").strip()))
+
+
+def _looks_like_cv_date_line(line: str) -> bool:
+    return bool(_CV_DATE_TOKEN_PATTERN.search(str(line or "").strip()))
+
+
+def _cv_preamble_lines(cv_text: str) -> list[str]:
+    preamble: list[str] = []
+    for line in _cv_nonempty_lines(cv_text):
+        if _looks_like_cv_section_header(line):
+            break
+        preamble.append(line)
+        if len(preamble) >= 8:
+            break
+    return preamble
+
+
+def _cv_summary_lines(cv_text: str) -> list[str]:
+    lines = _cv_nonempty_lines(cv_text)
+    summary_lines: list[str] = []
+    capture_summary = False
+    for line in lines:
+        if _CV_SUMMARY_HEADER_PATTERN.match(line):
+            capture_summary = True
+            continue
+        if capture_summary and _looks_like_cv_section_header(line):
+            break
+        if capture_summary:
+            summary_lines.append(line)
+            if len(summary_lines) >= 4:
+                break
+    return summary_lines
+
+
+def _split_preview_experience_heading(line: str) -> tuple[str, str, str]:
+    text = re.sub(r"\s+", " ", str(line or "").strip(" -*•\t"))
+    if not text:
+        return "", "", ""
+
+    pipe_parts = [part.strip() for part in text.split("|") if part.strip()]
+    if len(pipe_parts) >= 3 and _looks_like_cv_date_line(pipe_parts[-1]):
+        return pipe_parts[0], pipe_parts[1], pipe_parts[-1]
+    if len(pipe_parts) >= 2:
+        return pipe_parts[0], pipe_parts[1], ""
+
+    dash_parts = [part.strip() for part in re.split(r"\s[-–—]\s", text) if part.strip()]
+    if len(dash_parts) >= 3 and _looks_like_cv_date_line(dash_parts[-1]):
+        return dash_parts[0], " - ".join(dash_parts[1:-1]), dash_parts[-1]
+    if len(dash_parts) >= 2 and _looks_like_cv_date_line(dash_parts[-1]):
+        return dash_parts[0], "", dash_parts[-1]
+
+    lower_text = text.lower()
+    marker = " at "
+    if marker in lower_text:
+        marker_index = lower_text.find(marker)
+        return text[:marker_index].strip(), text[marker_index + len(marker) :].strip(), ""
+
+    return text, "", ""
+
+
+def _looks_like_preview_experience_heading(line: str) -> bool:
+    text = str(line or "").strip()
+    if not text or text.startswith(("-", "*", "•")):
+        return False
+    if _looks_like_cv_section_header(text) or len(text) > 100:
+        return False
+    if "|" in text or " at " in text.lower():
+        return True
+    return False
+
+
+def _build_preview_experience_items(lines: list[str]) -> list[dict[str, str]]:
+    entries: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+
+    def flush_current() -> None:
+        nonlocal current
+        if current is None:
+            return
+        title = str(current.get("title") or "").strip()
+        company = str(current.get("company") or "").strip()
+        period = str(current.get("period") or "").strip()
+        bullets = [str(item).strip() for item in current.get("bullets") or [] if str(item).strip()]
+        if title or company or period or bullets:
+            entries.append(
+                {
+                    "title": title or "Experience Highlight",
+                    "company": company,
+                    "period": period,
+                    "bulletsText": "\n".join(bullets[:4]),
+                }
+            )
+        current = None
+
+    for raw_line in lines[:40]:
+        line = str(raw_line or "").strip()
+        if not line or _looks_like_cv_section_header(line):
+            continue
+        normalized_bullet = re.sub(r"^\s*[-*•]\s*", "", line).strip()
+        if current is None:
+            title, company, period = _split_preview_experience_heading(line)
+            current = {
+                "title": title,
+                "company": company,
+                "period": period,
+                "bullets": [],
+            }
+            continue
+        if _looks_like_preview_experience_heading(line):
+            flush_current()
+            title, company, period = _split_preview_experience_heading(line)
+            current = {
+                "title": title,
+                "company": company,
+                "period": period,
+                "bullets": [],
+            }
+            continue
+        if not current.get("period") and _looks_like_cv_date_line(line) and len(line) <= 40:
+            current["period"] = line
+            continue
+        if normalized_bullet:
+            current.setdefault("bullets", []).append(normalized_bullet)
+
+    flush_current()
+    return entries[:4]
+
+
+def _build_workspace_cv_preview_profile(
+    cv_text: str,
+    shared_profile: dict[str, Any],
+    *,
+    asset_display_name: str = "",
+) -> dict[str, Any]:
+    parsed_sections = _parse_cv_sections(cv_text)
+    preamble_lines = _cv_preamble_lines(cv_text)
+    display_lines = [line for line in preamble_lines if not _looks_like_cv_contact_line(line)]
+
+    name = str(shared_profile.get("name") or "").strip()
+    if not name and display_lines:
+        name = display_lines[0]
+    if not name:
+        name = asset_display_name or "Candidate"
+
+    role_title = str(shared_profile.get("role_title") or "").strip()
+    if not role_title and len(display_lines) >= 2:
+        role_title = display_lines[1]
+
+    summary = str(parsed_sections.get("summary") or "").strip()
+    if not summary:
+        summary = " ".join(_cv_summary_lines(cv_text)).strip()
+    if not summary:
+        summary_candidates = display_lines[2:] if len(display_lines) > 2 else display_lines[1:]
+        summary = " ".join(summary_candidates[:3]).strip()
+    if not summary:
+        summary = str(shared_profile.get("summary") or "").strip()
+
+    competencies = [
+        str(item).strip()
+        for item in (parsed_sections.get("competencies") or shared_profile.get("competencies") or [])
+        if str(item).strip()
+    ]
+    languages = [
+        str(item).strip()
+        for item in (shared_profile.get("languages") or [])
+        if str(item).strip()
+    ]
+    recent_experience = _build_preview_experience_items(parsed_sections.get("experience_lines") or [])
+    if not recent_experience:
+        recent_experience = [
+            {
+                "title": str(item.get("title") or "").strip(),
+                "company": str(item.get("company") or "").strip(),
+                "period": str(item.get("period") or "").strip(),
+                "bulletsText": str(item.get("bulletsText") or "").strip(),
+            }
+            for item in (shared_profile.get("recent_experience") or [])
+            if isinstance(item, dict)
+        ]
+
+    photo_data_url = str(shared_profile.get("photo_data_url") or shared_profile.get("avatar_url") or "").strip()
+    avatar_url = str(shared_profile.get("avatar_url") or shared_profile.get("photo_data_url") or "").strip()
+
+    return {
+        "name": name,
+        "role_title": role_title,
+        "location": str(shared_profile.get("location") or "").strip(),
+        "email": str(shared_profile.get("email") or "").strip(),
+        "website": str(shared_profile.get("website") or "").strip(),
+        "linkedin_url": str(shared_profile.get("linkedin_url") or "").strip(),
+        "github_url": str(shared_profile.get("github_url") or "").strip(),
+        "summary": summary,
+        "competencies": competencies[:20],
+        "languages": languages[:12],
+        "recent_experience": recent_experience[:4],
+        "photo_data_url": photo_data_url,
+        "avatar_url": avatar_url,
+    }
 
 
 def _parse_multipart_file(content_type_header: str, body: bytes) -> tuple[str, bytes]:
@@ -832,6 +1072,7 @@ TRACKER_EXCEL_BASELINE_COLUMNS = [
     "cv_strategic_initiatives",
     "cv_skills",
     "cv_education",
+    "applied_cv",
     "tailored_cv",
     "cv_docx",
     "cv_pdf",
@@ -944,17 +1185,29 @@ def _tracker_document_summary(document: dict, *, source_scope: str = "") -> dict
 
 def _dedupe_tracker_documents(documents: list[dict]) -> list[dict]:
     deduped: list[dict] = []
-    seen: set[str] = set()
+    seen_index: dict[str, int] = {}
     for document in documents:
         key = (
-            str(document.get("document_id") or "")
+            str(document.get("path") or "")
+            or str(document.get("document_id") or "")
             or str(document.get("download_url") or "")
-            or str(document.get("path") or "")
             or f"{document.get('field')}::{document.get('label')}"
         )
-        if key in seen:
+        if key in seen_index:
+            existing = deduped[seen_index[key]]
+            for field_name in (
+                "document_id",
+                "download_url",
+                "asset_kind",
+                "document_type",
+                "run_id",
+                "workspace_id",
+                "source_origin",
+            ):
+                if not existing.get(field_name) and document.get(field_name):
+                    existing[field_name] = document[field_name]
             continue
-        seen.add(key)
+        seen_index[key] = len(deduped)
         deduped.append(document)
     return deduped
 
@@ -994,6 +1247,36 @@ def _standard_documents_for_workspace(documents: list[dict], workspace_id: str) 
     ]
 
 
+def _tracker_manual_documents_for_job_extra(job_extra: dict[str, object]) -> tuple[dict[str, str], list[dict[str, str]]]:
+    cv_generation_mode = normalize_cv_generation_mode(job_extra.get("cv_generation_mode"))
+    document_fields = {
+        "applied_cv": str(job_extra.get("applied_cv") or ""),
+        "cv_docx": str(job_extra.get("cv_docx") or job_extra.get("original_cv_docx") or ""),
+        "cv_pdf": str(job_extra.get("cv_pdf") or job_extra.get("original_cv_pdf") or ""),
+        "tailored_cv_docx": str(job_extra.get("tailored_cv_docx") or ""),
+        "tailored_cv": str(job_extra.get("tailored_cv") or job_extra.get("tailored_cv_pdf") or ""),
+    }
+    if cv_generation_mode == CV_GENERATION_MODE_STANDARD and document_fields["applied_cv"]:
+        return document_fields, [
+            {
+                "field": "applied_cv",
+                "label": "Applied Workspace CV",
+                "document_type": APPLIED_CV_DOCUMENT_TYPE,
+                "path": document_fields["applied_cv"],
+            }
+        ]
+    return document_fields, [
+        {"field": key, "label": label, "path": value, "document_type": document_type}
+        for key, label, value, document_type in [
+            ("cv_docx", "Original CV DOCX", document_fields["cv_docx"], "Original CV"),
+            ("cv_pdf", "Original CV PDF", document_fields["cv_pdf"], "Original CV"),
+            ("tailored_cv_docx", "Tailored CV DOCX", document_fields["tailored_cv_docx"], "Tailored CV"),
+            ("tailored_cv", "Tailored CV", document_fields["tailored_cv"], "Tailored CV"),
+        ]
+        if value
+    ]
+
+
 def _collect_tracker_entries(application, user) -> list[dict]:
     """Return all reviews that have been approved or have a tracker_status set."""
     workspaces, runs = _collect_authorized_runs(application, user)
@@ -1029,22 +1312,7 @@ def _collect_tracker_entries(application, user) -> list[dict]:
                 or job_extra.get("description")
                 or ""
             )
-            document_fields = {
-                "cv_docx": str(job_extra.get("cv_docx") or job_extra.get("original_cv_docx") or ""),
-                "cv_pdf": str(job_extra.get("cv_pdf") or job_extra.get("original_cv_pdf") or ""),
-                "tailored_cv_docx": str(job_extra.get("tailored_cv_docx") or ""),
-                "tailored_cv": str(job_extra.get("tailored_cv") or job_extra.get("tailored_cv_pdf") or ""),
-            }
-            documents = [
-                {"field": key, "label": label, "path": value}
-                for key, label, value in [
-                    ("cv_docx", "Original CV DOCX", document_fields["cv_docx"]),
-                    ("cv_pdf", "Original CV PDF", document_fields["cv_pdf"]),
-                    ("tailored_cv_docx", "Tailored CV DOCX", document_fields["tailored_cv_docx"]),
-                    ("tailored_cv", "Tailored CV", document_fields["tailored_cv"]),
-                ]
-                if value
-            ]
+            document_fields, documents = _tracker_manual_documents_for_job_extra(job_extra)
             documents = _dedupe_tracker_documents(
                 [
                     *documents,
@@ -1925,10 +2193,12 @@ def _store_candidate_asset_upload(
 
 def _document_group_for_asset_kind(asset_kind: str) -> tuple[str, str]:
     normalized_kind = str(asset_kind or "").strip().lower()
-    if normalized_kind in {"workspace_cv", "generated_cv"}:
-        return "generated_cvs" if normalized_kind == "generated_cv" else "uploaded_cvs", (
-            "Generated CVs" if normalized_kind == "generated_cv" else "Uploaded CVs"
-        )
+    if normalized_kind == "generated_cv":
+        return "generated_cvs", "Generated CVs"
+    if normalized_kind == APPLIED_CV_ASSET_KIND:
+        return "applied_cvs", "Applied CVs"
+    if normalized_kind == "workspace_cv":
+        return "uploaded_cvs", "Uploaded CVs"
     if normalized_kind in {"cover_letter", "motivation_letter"}:
         return "generated_letters", "Generated Letters"
     if normalized_kind == "bundle_export":
@@ -1940,6 +2210,8 @@ def _document_type_for_asset_kind(asset_kind: str) -> str:
     normalized_kind = str(asset_kind or "").strip().lower()
     if normalized_kind == "workspace_cv":
         return "Original CV"
+    if normalized_kind == APPLIED_CV_ASSET_KIND:
+        return APPLIED_CV_DOCUMENT_TYPE
     if normalized_kind == "generated_cv":
         return "Tailored CV"
     if normalized_kind in {"cover_letter", "motivation_letter"}:
@@ -2187,6 +2459,17 @@ def _document_id_for_candidate_asset(asset_id: str) -> str:
 
 
 def _artifact_asset_kind(entry: dict) -> str:
+    metadata = dict(entry.get("metadata") or {})
+    documented_kind = str(
+        metadata.get("document_asset_kind")
+        or metadata.get("asset_kind")
+        or ""
+    ).strip().lower()
+    if documented_kind:
+        return documented_kind
+    artifact_type = str(entry.get("artifact_type") or "").strip().lower()
+    if artifact_type == APPLIED_CV_ASSET_KIND:
+        return APPLIED_CV_ASSET_KIND
     hints = " ".join(
         str(entry.get(key) or "").lower()
         for key in ("artifact_type", "file_name", "relative_path", "source_artifact_type")
@@ -2235,13 +2518,19 @@ def _artifact_entry_is_user_facing_document(entry: dict) -> bool:
 def _artifact_entry_to_document_item(entry: dict) -> dict:
     asset_kind = _artifact_asset_kind(entry)
     group_id, group_label = _document_group_for_asset_kind(asset_kind)
+    metadata = dict(entry.get("metadata") or {})
     return _attach_application_document_contract({
         "document_id": _document_id_for_artifact(entry["run_id"], entry["artifact_id"]),
         "asset_id": "",
         "asset_kind": asset_kind,
         "group_id": group_id,
         "group_label": group_label,
-        "display_name": str(entry.get("file_name") or ""),
+        "display_name": str(
+            metadata.get("document_display_name")
+            or metadata.get("document_name")
+            or entry.get("file_name")
+            or ""
+        ),
         "workspace_id": str(entry.get("workspace_id") or ""),
         "workspace_name": str(entry.get("workspace_name") or ""),
         "run_id": str(entry.get("run_id") or ""),
@@ -2256,16 +2545,29 @@ def _artifact_entry_to_document_item(entry: dict) -> dict:
         "relative_path": str(entry.get("relative_path") or ""),
         "content_type": str(entry.get("content_type") or ""),
         "tags": [],
-        "metadata": dict(entry.get("metadata") or {}),
+        "metadata": metadata,
         "is_generated": True,
     })
 
 
-def _candidate_asset_to_document_item(asset: dict, workspace_names: dict[str, str]) -> dict:
+def _candidate_asset_to_document_item(
+    asset: dict,
+    workspace_names: dict[str, str],
+    shared_profile: dict[str, Any],
+) -> dict:
     asset_kind = str(asset.get("asset_kind") or "uploaded_document")
     group_id, group_label = _document_group_for_asset_kind(asset_kind)
     workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
     metadata = dict(asset.get("metadata") or {})
+    preview_profile: dict[str, Any] = {}
+    if asset_kind == "workspace_cv":
+        asset_path = str(asset.get("file", {}).get("path") or asset.get("path") or "").strip()
+        cv_text = extract_cv_text_from_path(asset_path) if asset_path else ""
+        preview_profile = _build_workspace_cv_preview_profile(
+            cv_text,
+            shared_profile,
+            asset_display_name=str(asset.get("display_name") or ""),
+        )
     return _attach_application_document_contract({
         "document_id": _document_id_for_candidate_asset(str(asset.get("asset_id") or "")),
         "asset_id": str(asset.get("asset_id") or ""),
@@ -2289,6 +2591,7 @@ def _candidate_asset_to_document_item(asset: dict, workspace_names: dict[str, st
         "tags": list(metadata.get("tags") or []),
         "metadata": metadata,
         "is_generated": str(asset.get("source", {}).get("origin") or "upload") != "upload",
+        "preview_profile": preview_profile,
     })
 
 
@@ -2300,6 +2603,22 @@ def _collect_document_entries(
     run_id: str = "",
     asset_kind: str = "",
 ) -> list[dict]:
+    raw_profile = dict((user.metadata or {}).get("profile") or {})
+    shared_profile = {
+        "name": str(raw_profile.get("name") or user.display_name or user.email.split("@")[0]),
+        "role_title": str(raw_profile.get("role_title") or ""),
+        "email": str(raw_profile.get("email") or user.email),
+        "location": str(raw_profile.get("location") or ""),
+        "website": str(raw_profile.get("website") or ""),
+        "linkedin_url": str(raw_profile.get("linkedin_url") or ""),
+        "github_url": str(raw_profile.get("github_url") or ""),
+        "summary": str(raw_profile.get("summary") or ""),
+        "competencies": list(raw_profile.get("competencies") or []),
+        "languages": list(raw_profile.get("languages") or []),
+        "recent_experience": list(raw_profile.get("recent_experience") or []),
+        "photo_data_url": str(raw_profile.get("photo_data_url") or ""),
+        "avatar_url": str(raw_profile.get("avatar_url") or ""),
+    }
     workspaces = {
         workspace.id: workspace.name
         for workspace in application.list_workspaces()
@@ -2314,7 +2633,7 @@ def _collect_document_entries(
         asset_workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
         if workspace_id and asset_workspace_id and asset_workspace_id != workspace_id:
             continue
-        entries.append(_candidate_asset_to_document_item(asset, workspaces))
+        entries.append(_candidate_asset_to_document_item(asset, workspaces, shared_profile))
     if asset_kind:
         entries = [item for item in entries if str(item.get("asset_kind") or "").lower() == asset_kind.lower()]
     entries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)

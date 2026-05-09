@@ -1,7 +1,10 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from backend.capabilities.tailored_documents.cv_structuring import ensure_structured_cv_fields
 from backend.capabilities.tailored_documents.generation import generate_docs_for_job
+from backend.capabilities.tailored_documents.modes import resolve_cv_generation_prompt_settings
 
 
 def _draft(summary: str, *, skill: str = "SQL", bullet: str = "Delivered reporting improvements.") -> dict:
@@ -35,6 +38,26 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             "company": "ACME",
             "full_description": "Need SQL, stakeholder management, and dashboarding.",
         }
+        self.cv_text = "\n".join(
+            [
+                "Professional Summary",
+                "Trusted analyst with delivery experience.",
+                "",
+                "Professional Experience",
+                "Business Analyst | ACME | 2022-2024",
+                "- Baseline bullet one.",
+                "- Baseline bullet two.",
+                "",
+                "Education",
+                "MSc Information Systems",
+                "Master Thesis: Analytics Thesis",
+                "- Built baseline dashboards.",
+                "",
+                "Projects",
+                "Insight Automation",
+                "- Built a baseline workflow.",
+            ]
+        )
 
     @patch("backend.capabilities.tailored_documents.generation._improve_structured_cv_once")
     @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
@@ -58,9 +81,10 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             deepseek_model="deepseek-chat",
             gemini_client=None,
             gemini_model="gemini-2.5-flash",
-            cv_text="Candidate CV",
+            cv_text=self.cv_text,
             job=self.job,
             candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
             extra_instructions="",
             prompt_override="",
             retries=1,
@@ -108,9 +132,10 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             deepseek_model="deepseek-chat",
             gemini_client=None,
             gemini_model="gemini-2.5-flash",
-            cv_text="Candidate CV",
+            cv_text=self.cv_text,
             job=self.job,
             candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
             extra_instructions="",
             prompt_override="",
             retries=1,
@@ -170,9 +195,10 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             deepseek_model="deepseek-chat",
             gemini_client=None,
             gemini_model="gemini-2.5-flash",
-            cv_text="Candidate CV",
+            cv_text=self.cv_text,
             job=self.job,
             candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
             extra_instructions="",
             prompt_override="",
             retries=1,
@@ -188,6 +214,163 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         self.assertEqual(result["ats_export_gate"]["best_score"], 88)
         self.assertIn("Best score reached: 88%", result["ats_export_gate"]["last_warning"])
         self.assertEqual(improve_mock.call_count, 2)
+
+    def test_resolve_cv_generation_prompt_settings_uses_mode_specific_fields(self):
+        settings = SimpleNamespace(
+            light_customization_extra_prompt="Light extra",
+            light_customization_prompt_override="Light override",
+            aggressive_customization_extra_prompt="Aggressive extra",
+            aggressive_customization_prompt_override="Aggressive override",
+            stage4_extra_prompt="Legacy extra",
+            stage4_prompt_override="Legacy override",
+        )
+
+        self.assertEqual(
+            resolve_cv_generation_prompt_settings("light_customization", settings),
+            ("Light extra", "Light override"),
+        )
+        self.assertEqual(
+            resolve_cv_generation_prompt_settings("aggressive_customization", settings),
+            ("Aggressive extra", "Aggressive override"),
+        )
+        self.assertEqual(
+            resolve_cv_generation_prompt_settings(
+                "aggressive_customization",
+                SimpleNamespace(
+                    aggressive_customization_extra_prompt="",
+                    aggressive_customization_prompt_override="",
+                    stage4_extra_prompt="Legacy extra",
+                    stage4_prompt_override="Legacy override",
+                ),
+            ),
+            ("Legacy extra", "Legacy override"),
+        )
+
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_light_mode_clamps_forbidden_changes_after_generation(self, generate_mock, score_mock):
+        generate_mock.return_value = {
+            "cv_professional_summary": "Light-mode summary tuned to the role.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Senior Analyst",
+                    "company": "Different Company",
+                    "period": "2020-2021",
+                    "bullets": ["Rewritten forbidden bullet."],
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "Renamed Degree",
+                    "thesis_title": "Renamed Thesis",
+                    "thesis_bullets": ["Forbidden education rewrite."],
+                }
+            ],
+            "cv_skills": ["SQL", "Dashboarding", "Stakeholder Management"],
+            "tailored_cv": "Light-mode summary tuned to the role.",
+        }
+        score_mock.return_value = {
+            "score": 92,
+            "missing_requirements": [],
+            "improvement_actions": [],
+            "rationale": "Looks good.",
+        }
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            gemini_client=None,
+            gemini_model="gemini-2.5-flash",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="light_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+            payload_postprocessor=lambda payload: self._clamp_payload(payload, "light_customization"),
+        )
+
+        self.assertEqual(result["cv_professional_summary"], "Light-mode summary tuned to the role.")
+        self.assertEqual(result["cv_skills"], ["SQL", "Dashboarding", "Stakeholder Management"])
+        self.assertEqual(result["cv_professional_experience"][0]["role_title"], "Business Analyst")
+        self.assertEqual(result["cv_professional_experience"][0]["company"], "ACME")
+        self.assertEqual(result["cv_professional_experience"][0]["period"], "2022-2024")
+        self.assertEqual(
+            result["cv_professional_experience"][0]["bullets"],
+            ["Baseline bullet one.", "Baseline bullet two."],
+        )
+        self.assertEqual(result["cv_education"][0]["degree_title"], "MSc Information Systems")
+        self.assertEqual(result["cv_education"][0]["thesis_bullets"], ["Built baseline dashboards."])
+
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_aggressive_mode_keeps_identity_but_allows_bullet_rewrites(self, generate_mock, score_mock):
+        generate_mock.return_value = {
+            "cv_professional_summary": "Aggressive summary tuned to the role.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Business Analyst",
+                    "company": "ACME",
+                    "period": "2022-2024",
+                    "bullets": [
+                        "Rewritten aggressive bullet one.",
+                        "Rewritten aggressive bullet two.",
+                        "Extra bullet that should be discarded.",
+                    ],
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "Renamed Degree",
+                    "thesis_title": "Renamed Thesis",
+                    "thesis_bullets": ["Forbidden education rewrite."],
+                }
+            ],
+            "cv_skills": ["SQL", "Dashboarding", "Stakeholder Management"],
+            "tailored_cv": "Aggressive summary tuned to the role.",
+        }
+        score_mock.return_value = {
+            "score": 91,
+            "missing_requirements": [],
+            "improvement_actions": [],
+            "rationale": "Looks good.",
+        }
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            gemini_client=None,
+            gemini_model="gemini-2.5-flash",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+            payload_postprocessor=lambda payload: self._clamp_payload(payload, "aggressive_customization"),
+        )
+
+        self.assertEqual(
+            result["cv_professional_experience"][0]["bullets"],
+            ["Rewritten aggressive bullet one.", "Rewritten aggressive bullet two."],
+        )
+        self.assertEqual(result["cv_professional_experience"][0]["role_title"], "Business Analyst")
+        self.assertEqual(result["cv_education"][0]["degree_title"], "MSc Information Systems")
+        self.assertEqual(result["cv_education"][0]["thesis_bullets"], ["Built baseline dashboards."])
+
+    def _clamp_payload(self, payload, mode):
+        normalized_payload = dict(payload)
+        ensure_structured_cv_fields(
+            normalized_payload,
+            candidate_name="Ahmed",
+            cv_text=self.cv_text,
+            cv_generation_mode=mode,
+        )
+        return normalized_payload
 
 
 if __name__ == "__main__":

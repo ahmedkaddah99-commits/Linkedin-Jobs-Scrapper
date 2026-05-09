@@ -123,6 +123,7 @@ class BackendApplicationTests(unittest.TestCase):
         cv_path: Path,
         cv_text: str,
         workspace_name: str = "Builder Workspace",
+        cv_generation_mode: str = "aggressive_customization",
     ):
         workspace = app.create_workspace_from_scratch(
             {
@@ -140,6 +141,7 @@ class BackendApplicationTests(unittest.TestCase):
                 ),
                 "settings": {
                     "workspace_cv_asset_id": "asset_workspace_cv_primary",
+                    "cv_generation_mode": cv_generation_mode,
                     "keywords": ["analyst"],
                     "geo_id": "101282230",
                     "experience_levels": [2, 3],
@@ -232,6 +234,7 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(run.run_plan.resolved_run_settings["keywords"], ["analyst", "consultant"])
         self.assertEqual(run.run_plan.resolved_run_settings["stage4_max_jobs"], 15)
         self.assertEqual(run.run_plan.resolved_run_settings["target_roles"], ["Business Analyst", "Consultant"])
+        self.assertEqual(run.run_plan.resolved_run_settings["job_filtering_mode"], "Broader Match")
         self.assertEqual(run.run_plan.resolved_run_settings["linkedin_max_pages"], 7)
         self.assertTrue(run.run_plan.resolved_run_settings["reuse_scrape_snapshot"])
         self.assertEqual(run.run_plan.resolved_run_settings["page_fetch_sleep_seconds"], 1.5)
@@ -387,6 +390,60 @@ class BackendApplicationTests(unittest.TestCase):
 
         self.assertEqual(completed_run.status, "completed")
         self.assertEqual(captured_cv_texts, ["Workspace CV Snapshot Text", "Workspace CV Snapshot Text"])
+
+    def test_builder_standard_cv_mode_skips_tailoring_and_reuses_workspace_cv_path(self):
+        temp_dir = self._workspace_tempdir("builder_standard_cv_mode")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.pdf"
+        cv_path.write_bytes(b"%PDF-1.4 standard workspace cv")
+        workspace = self._create_builder_workspace_with_cv_snapshot(
+            app,
+            cv_path=cv_path,
+            cv_text="Workspace CV Snapshot Text",
+            cv_generation_mode="standard_cv",
+        )
+
+        with patch(
+            "backend.adapters.stage_adapters.run_tailored_stage1_pipeline",
+            return_value=[
+                {
+                    "job_id": "builder_job_standard_1",
+                    "title": "Analyst",
+                    "company": "ACME",
+                    "link": "https://example.com/jobs/1",
+                    "apply_link": "https://example.com/jobs/1",
+                }
+            ],
+        ), patch(
+            "backend.adapters.stage_adapters.run_tailored_stage2_pipeline",
+            side_effect=lambda jobs, cli_args: (list(jobs), []),
+        ), patch(
+            "backend.adapters.stage_adapters.run_tailored_stage3_pipeline",
+            side_effect=lambda jobs, cli_args: (list(jobs), []),
+        ), patch(
+            "backend.adapters.stage_adapters.run_tailored_stage4_pipeline",
+        ) as stage4_pipeline:
+            with patch("backend.capabilities.tailored_documents.documents.save_json_file"), patch(
+                "backend.capabilities.tailored_documents.documents.save_to_excel"
+            ):
+                run = app.start_run(workspace.id, execute=True, requested_by="test")
+
+        self.assertEqual(run.status, "completed")
+        stage4_pipeline.assert_not_called()
+
+        generated_jobs = app.list_job_sets(run.id)["generated_jobs"]
+        self.assertEqual(len(generated_jobs), 1)
+        generated_job = generated_jobs[0].to_dict()
+        self.assertEqual(generated_job["cv_generation_mode"], "standard_cv")
+        self.assertEqual(generated_job["applied_cv"], str(cv_path.resolve()))
+        self.assertEqual(generated_job["document_asset_kind"], "applied_cv")
+
+        artifacts = app.list_artifacts(run.id)
+        applied_cv_artifact = next(
+            artifact for artifact in artifacts if artifact.artifact_type == "applied_cv"
+        )
+        self.assertEqual(applied_cv_artifact.path, str(cv_path.resolve()))
+        self.assertEqual(applied_cv_artifact.metadata["job_id"], "builder_job_standard_1")
 
     def test_builder_run_start_rejects_deleted_workspace_cv_asset(self):
         temp_dir = self._workspace_tempdir("builder_missing_cv_snapshot")

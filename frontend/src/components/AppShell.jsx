@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
+const TOP_RIBBON_STORAGE_KEY = "runr.topRibbonCollapsed";
 
 const navItems = [
   {
@@ -74,7 +75,7 @@ const navItems = [
   },
 ];
 
-const topRibbonItems = [
+const secondaryTopRibbonItems = [
   { label: "Support", icon: "contact_support" },
   { label: "Documentation", icon: "menu_book" },
   {
@@ -144,14 +145,23 @@ function SidebarActionButton({ collapsed = false, icon, label, onClick, type = "
   );
 }
 
-function TopRibbonAction({ item }) {
-  const location = useLocation();
-  const isActive = item.to ? isNavItemActive(location.pathname, item) : false;
-  const className = [
+function getTopRibbonActionClassName(isActive) {
+  return [
     "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
     isActive
       ? "border-primary/30 bg-primary/10 text-primary"
       : "border-outline-variant/20 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface",
+  ].join(" ");
+}
+
+function SecondaryTopRibbonMenuItem({ item }) {
+  const location = useLocation();
+  const isActive = item.to ? isNavItemActive(location.pathname, item) : false;
+  const className = [
+    "flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left text-sm font-medium transition-colors",
+    isActive
+      ? "bg-primary/10 text-primary"
+      : "text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface",
   ].join(" ");
 
   const content = (
@@ -162,22 +172,141 @@ function TopRibbonAction({ item }) {
       >
         {item.icon}
       </span>
-      <span className="hidden lg:inline">{item.label}</span>
+      <span>{item.label}</span>
     </>
   );
 
   if (item.to) {
     return (
-      <NavLink aria-label={item.label} className={className} title={item.label} to={item.to}>
+      <NavLink
+        aria-current={isActive ? "page" : undefined}
+        className={className}
+        title={item.label}
+        to={item.to}
+      >
         {content}
       </NavLink>
     );
   }
 
   return (
-    <button aria-label={item.label} className={className} title={item.label} type="button">
+    <button className={className} title={item.label} type="button">
       {content}
     </button>
+  );
+}
+
+function TopRibbonDisclosure({ items }) {
+  const location = useLocation();
+  const menuId = useId();
+  const buttonRef = useRef(null);
+  const containerRef = useRef(null);
+  const menuRef = useRef(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const hasActiveItem = items.some((item) => item.to && isNavItemActive(location.pathname, item));
+
+  useEffect(() => {
+    setIsOpen(false);
+  }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+
+    function handlePointerDown(event) {
+      if (containerRef.current?.contains(event.target)) {
+        return;
+      }
+      setIsOpen(false);
+    }
+
+    function handleKeyDown(event) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      setIsOpen(false);
+      buttonRef.current?.focus();
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  function moveFocusToFirstItem() {
+    requestAnimationFrame(() => {
+      menuRef.current?.querySelector("a, button")?.focus();
+    });
+  }
+
+  function handleButtonClick() {
+    setIsOpen((currentValue) => !currentValue);
+  }
+
+  function handleButtonKeyDown(event) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (!isOpen) {
+        setIsOpen(true);
+      }
+      moveFocusToFirstItem();
+    }
+  }
+
+  function handleBlurCapture(event) {
+    if (!isOpen) {
+      return;
+    }
+
+    const nextFocusedElement = event.relatedTarget;
+    if (!nextFocusedElement || containerRef.current?.contains(nextFocusedElement)) {
+      return;
+    }
+
+    setIsOpen(false);
+  }
+
+  return (
+    <div className="relative" onBlurCapture={handleBlurCapture} ref={containerRef}>
+      <button
+        aria-label="More"
+        aria-controls={menuId}
+        aria-expanded={isOpen ? "true" : "false"}
+        aria-haspopup="true"
+        className={getTopRibbonActionClassName(isOpen || hasActiveItem)}
+        onClick={handleButtonClick}
+        onKeyDown={handleButtonKeyDown}
+        ref={buttonRef}
+        title="More"
+        type="button"
+      >
+        <span
+          className="material-symbols-outlined text-[20px]"
+          style={isOpen || hasActiveItem ? { fontVariationSettings: "'FILL' 1" } : undefined}
+        >
+          more_horiz
+        </span>
+      </button>
+
+      {isOpen ? (
+        <div
+          aria-label="More actions"
+          className="absolute right-0 top-[calc(100%+0.5rem)] z-50 flex min-w-[14rem] flex-col gap-1 rounded-[1.5rem] border border-outline-variant/20 bg-background/95 p-2 shadow-soft backdrop-blur-[20px]"
+          id={menuId}
+          ref={menuRef}
+        >
+          {items.map((item) => (
+            <SecondaryTopRibbonMenuItem item={item} key={item.label} />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -267,6 +396,12 @@ export default function AppShell({ children }) {
     }
     return window.localStorage.getItem(DESKTOP_SIDEBAR_STORAGE_KEY) === "true";
   });
+  const [topRibbonCollapsed, setTopRibbonCollapsed] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(TOP_RIBBON_STORAGE_KEY) === "true";
+  });
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -278,6 +413,10 @@ export default function AppShell({ children }) {
       desktopSidebarCollapsed ? "true" : "false",
     );
   }, [desktopSidebarCollapsed]);
+
+  useEffect(() => {
+    window.localStorage.setItem(TOP_RIBBON_STORAGE_KEY, topRibbonCollapsed ? "true" : "false");
+  }, [topRibbonCollapsed]);
 
   const shellUser = {
     name: user?.display_name || user?.email || "Disconnected",
@@ -322,98 +461,121 @@ export default function AppShell({ children }) {
       </aside>
 
       <div className="app-shell__main">
-        <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] md:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <button
-              aria-label="Open navigation"
-              className="rounded-full p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary md:hidden"
-              onClick={() => setMobileNavOpen(true)}
-              type="button"
-            >
-              <span className="material-symbols-outlined">menu</span>
-            </button>
-            {isRunDetail ? (
-              <>
+        <header
+          className={[
+            "sticky top-0 z-30 overflow-visible transition-all duration-200",
+            topRibbonCollapsed
+              ? "relative h-0 border-b-0 bg-transparent px-0 py-0"
+              : "relative flex h-16 items-center justify-between border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] md:px-8",
+          ].join(" ")}
+        >
+          {topRibbonCollapsed ? null : (
+            <>
+              <div className="flex min-w-0 items-center gap-3">
                 <button
-                  className="rounded p-1 text-on-surface-variant transition-colors hover:text-primary"
-                  onClick={() => navigate(-1)}
+                  aria-label="Open navigation"
+                  className="rounded-full p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary md:hidden"
+                  onClick={() => setMobileNavOpen(true)}
                   type="button"
                 >
-                  <span className="material-symbols-outlined">arrow_back</span>
+                  <span className="material-symbols-outlined">menu</span>
                 </button>
-                <div className="h-4 w-px bg-outline-variant/30" />
-                <div className="min-w-0 text-base">
-          <div className="flex items-baseline gap-3 truncate">
-                    <span className="text-on-surface-variant">Run Detail</span>
-                    <span className="text-on-surface-variant/40">/</span>
-                    <span className="truncate font-bold tracking-tight text-primary">
-                      {runMatch?.params?.runId}
-                    </span>
+                {isRunDetail ? (
+                  <>
+                    <button
+                      className="rounded p-1 text-on-surface-variant transition-colors hover:text-primary"
+                      onClick={() => navigate(-1)}
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined">arrow_back</span>
+                    </button>
+                    <div className="h-4 w-px bg-outline-variant/30" />
+                    <div className="min-w-0 text-base">
+                      <div className="flex items-baseline gap-3 truncate">
+                        <span className="text-on-surface-variant">Run Detail</span>
+                        <span className="text-on-surface-variant/40">/</span>
+                        <span className="truncate font-bold tracking-tight text-primary">
+                          {runMatch?.params?.runId}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="md:hidden">
+                    <h1 className="font-headline text-lg font-extrabold tracking-tight text-on-surface">
+                      runr.
+                    </h1>
                   </div>
-                </div>
-              </>
-            ) : (
-              <div className="md:hidden">
-                <h1 className="font-headline text-lg font-extrabold tracking-tight text-on-surface">
-                  runr.
-                </h1>
+                )}
               </div>
-            )}
-          </div>
 
-          <div className="flex items-center gap-2 md:gap-3">
-            {topRibbonItems.map((item) => (
-              <TopRibbonAction item={item} key={item.label} />
-            ))}
-            {isRunDetail ? (
-              <>
+              <div className="flex items-center gap-2 md:gap-3">
+                <TopRibbonDisclosure items={secondaryTopRibbonItems} />
+                {isRunDetail ? (
+                  <>
+                    <button
+                      className="rounded p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined text-xl">share</span>
+                    </button>
+                    <button
+                      className="rounded p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined text-xl">more_vert</span>
+                    </button>
+                  </>
+                ) : null}
                 <button
-                  className="rounded p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+                  className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+                  onClick={toggleTheme}
+                  title={isDark ? "Switch to light mode" : "Switch to dark mode"}
                   type="button"
                 >
-                  <span className="material-symbols-outlined text-xl">share</span>
+                  <span className="material-symbols-outlined">
+                    {isDark ? "light_mode" : "dark_mode"}
+                  </span>
                 </button>
                 <button
-                  className="rounded p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+                  className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
                   type="button"
                 >
-                  <span className="material-symbols-outlined text-xl">more_vert</span>
+                  <span className="material-symbols-outlined">notifications</span>
                 </button>
-              </>
-            ) : null}
-            <button
-              className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-              onClick={toggleTheme}
-              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              type="button"
-            >
-              <span className="material-symbols-outlined">
-                {isDark ? "light_mode" : "dark_mode"}
-              </span>
-            </button>
-            <button
-              className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-              type="button"
-            >
-              <span className="material-symbols-outlined">notifications</span>
-            </button>
-            <button
-              className="hidden text-sm text-on-surface-variant transition-colors hover:text-primary sm:block"
-              onClick={disconnect}
-              type="button"
-            >
-              Sign Out
-            </button>
-            <div className="hidden min-w-0 text-right xl:block">
-              <p className="truncate text-sm font-semibold text-on-surface">{shellUser.name}</p>
-              <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
-            </div>
-            <img
-              alt={shellUser.name}
-              className="h-8 w-8 rounded-full border border-outline-variant/30 object-cover"
-              src={shellUser.avatar}
-            />
-          </div>
+                <button
+                  className="hidden text-sm text-on-surface-variant transition-colors hover:text-primary sm:block"
+                  onClick={disconnect}
+                  type="button"
+                >
+                  Sign Out
+                </button>
+                <div className="hidden min-w-0 text-right xl:block">
+                  <p className="truncate text-sm font-semibold text-on-surface">{shellUser.name}</p>
+                  <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
+                </div>
+                <img
+                  alt={shellUser.name}
+                  className="h-8 w-8 rounded-full border border-outline-variant/30 object-cover"
+                  src={shellUser.avatar}
+                />
+              </div>
+            </>
+          )}
+          <button
+            aria-label={topRibbonCollapsed ? "Expand top ribbon" : "Collapse top ribbon"}
+            className={[
+              "absolute left-1/2 z-10 inline-flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-outline-variant/20 bg-background/95 text-on-surface-variant shadow-soft backdrop-blur-[20px] transition-colors hover:bg-surface-container-low hover:text-on-surface",
+              topRibbonCollapsed ? "top-3" : "top-full -translate-y-1/2",
+            ].join(" ")}
+            onClick={() => setTopRibbonCollapsed((currentValue) => !currentValue)}
+            title={topRibbonCollapsed ? "Expand top ribbon" : "Collapse top ribbon"}
+            type="button"
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              {topRibbonCollapsed ? "keyboard_arrow_down" : "keyboard_arrow_up"}
+            </span>
+          </button>
         </header>
 
         <main className="w-full px-4 pb-12 pt-6 md:px-8">{children}</main>
