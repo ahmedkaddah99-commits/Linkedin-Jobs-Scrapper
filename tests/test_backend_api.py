@@ -1472,6 +1472,15 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("hiring_manager", manager_payload)
 
+        status, discovery_payload = self._request(
+            "POST",
+            "/outreach/target-contact-discovery",
+            {"run_id": run_id, "job_id": "api_job_1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(len(discovery_payload["candidates"]), 4)
+        self.assertIn("strategy_summary", discovery_payload)
+
         status, updated_contact_payload = self._request(
             "PUT",
             f"/referrals/{contact_id}",

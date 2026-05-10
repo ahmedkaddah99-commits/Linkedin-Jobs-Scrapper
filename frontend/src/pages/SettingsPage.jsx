@@ -16,7 +16,7 @@ import {
 const settingsTabs = [
   "Profile",
   "Defaults",
-  "Documents",
+  "Document Defaults",
   "Account",
 ];
 
@@ -1239,7 +1239,7 @@ export default function SettingsPage() {
             {activeTab === "Defaults" ? (
               <DefaultsTab draft={draft} updateSection={updateSection} />
             ) : null}
-            {activeTab === "Documents" ? (
+            {activeTab === "Document Defaults" ? (
               <DocumentsTab draft={draft} updateSection={updateSection} />
             ) : null}
             {activeTab === "Account" ? (

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
+const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
 
 function SummaryCard({ description, label, value }) {
   return (
@@ -196,9 +197,11 @@ function ExcludedJobRow({ job, onGenerate, pending }) {
 
 export default function RunDetailPage() {
   const { runId } = useParams();
+  const navigate = useNavigate();
   const { request } = useSession();
   const [actionState, setActionState] = useState({
     pendingJobId: "",
+    deletingRun: false,
     message: "",
     error: "",
   });
@@ -228,7 +231,12 @@ export default function RunDetailPage() {
   }, [hasActiveChildRuns, hasActiveRun, refresh]);
 
   async function createDocumentsForExcludedJob(job) {
-    setActionState({ pendingJobId: job.job_id, message: "", error: "" });
+    setActionState((currentValue) => ({
+      ...currentValue,
+      pendingJobId: job.job_id,
+      message: "",
+      error: "",
+    }));
     try {
       const result = await request(`/runs/${runId}/excluded-jobs/${encodeURIComponent(job.job_id)}/generate-documents`, {
         method: "POST",
@@ -239,18 +247,53 @@ export default function RunDetailPage() {
           notes: "Generate documents from the run review.",
         },
       });
-      setActionState({
+      setActionState((currentValue) => ({
+        ...currentValue,
         pendingJobId: "",
         message: `Document run ${result.run?.id || ""} created for ${job.title || "the selected job"}.`,
         error: "",
-      });
+      }));
       refresh().catch(() => undefined);
     } catch (actionError) {
-      setActionState({
+      setActionState((currentValue) => ({
+        ...currentValue,
         pendingJobId: "",
         message: "",
         error: actionError.message || "Unable to create documents for this excluded job.",
+      }));
+    }
+  }
+
+  async function deleteRun() {
+    if (!run) {
+      return;
+    }
+    const runName = run.workspace_name || "this run";
+    const confirmed = window.confirm(`Delete ${runName}? This removes the run review, jobs, reviews, and artifacts saved for it.`);
+    if (!confirmed) {
+      return;
+    }
+    setActionState((currentValue) => ({
+      ...currentValue,
+      deletingRun: true,
+      message: "",
+      error: "",
+    }));
+    try {
+      await request(`/runs/${runId}`, { method: "DELETE" });
+      navigate("/runs", {
+        replace: true,
+        state: {
+          runActionMessage: `${runName} was deleted.`,
+        },
       });
+    } catch (actionError) {
+      setActionState((currentValue) => ({
+        ...currentValue,
+        deletingRun: false,
+        message: "",
+        error: actionError.message || "Unable to delete this run.",
+      }));
     }
   }
 
@@ -274,13 +317,31 @@ export default function RunDetailPage() {
                 </p>
               </div>
             </div>
-            <button
-              className="rounded-full bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-              onClick={() => refresh().catch(() => undefined)}
-              type="button"
-            >
-              Refresh
-            </button>
+            <div className="flex flex-wrap gap-3">
+              <button
+                className="rounded-full bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                onClick={() => refresh().catch(() => undefined)}
+                type="button"
+              >
+                Refresh
+              </button>
+              <button
+                className="rounded-full border border-error/25 bg-error/5 px-4 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={
+                  actionState.deletingRun
+                  || !DELETABLE_RUN_STATUSES.includes(String(run?.status || "").trim())
+                }
+                onClick={deleteRun}
+                title={
+                  DELETABLE_RUN_STATUSES.includes(String(run?.status || "").trim())
+                    ? "Delete this run"
+                    : "Active runs can be deleted after they finish."
+                }
+                type="button"
+              >
+                {actionState.deletingRun ? "Deleting..." : "Delete Run"}
+              </button>
+            </div>
           </div>
 
           <div className="grid gap-3 text-sm text-on-surface-variant md:grid-cols-3">

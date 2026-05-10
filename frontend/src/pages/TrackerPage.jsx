@@ -67,6 +67,19 @@ const COLUMNS = [
     glow: "shadow-black/0",
   },
 ];
+const EMPTY_DISCOVERY_MODAL = {
+  open: false,
+  item: null,
+  payload: null,
+};
+const EMPTY_DISCOVERY_FEEDBACK = {
+  message: "",
+  error: "",
+};
+
+function hasDiscoverableDocuments(item) {
+  return Boolean(item?.run_id && item?.job_id && Array.isArray(item?.documents) && item.documents.length);
+}
 
 function formatDate(iso) {
   if (!iso) return "";
@@ -485,7 +498,7 @@ function TrackerDocumentsCell({ documents, request }) {
   );
 }
 
-function TrackerTable({ items, onUpdate, onDelete, updating, request }) {
+function TrackerTable({ items, onUpdate, onDelete, onDiscoverContacts, discoveringId, updating, request }) {
   if (!items.length) {
     return (
       <div className="rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-8 text-center">
@@ -554,6 +567,19 @@ function TrackerTable({ items, onUpdate, onDelete, updating, request }) {
                     <div className="flex min-w-40 flex-col gap-2">
                       <TrackerLink href={item.apply_link || row.apply_link}>Apply</TrackerLink>
                       <TrackerLink href={item.linkedin_link || row.linkedin_link}>LinkedIn</TrackerLink>
+                      {hasDiscoverableDocuments(item) ? (
+                        <button
+                          className="inline-flex items-center justify-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={discoveringId === item.review_id || updating === item.review_id}
+                          onClick={() => onDiscoverContacts(item)}
+                          type="button"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">
+                            {discoveringId === item.review_id ? "progress_activity" : "travel_explore"}
+                          </span>
+                          {discoveringId === item.review_id ? "Discovering..." : "Discover Contacts"}
+                        </button>
+                      ) : null}
                       {onDelete ? (
                         <button
                           className="inline-flex items-center justify-center gap-1 rounded-full bg-error/10 px-2.5 py-1 text-xs font-semibold text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1104,6 +1130,9 @@ function EmailIntegrationPanel({
 export default function TrackerPage() {
   const { request } = useSession();
   const [deleteFeedback, setDeleteFeedback] = useState({ message: "", error: "" });
+  const [discoveringId, setDiscoveringId] = useState("");
+  const [discoveryModal, setDiscoveryModal] = useState(EMPTY_DISCOVERY_MODAL);
+  const [discoveryFeedback, setDiscoveryFeedback] = useState(EMPTY_DISCOVERY_FEEDBACK);
   const {
     columns,
     items,
@@ -1141,6 +1170,57 @@ export default function TrackerPage() {
       setDeleteFeedback({
         message: "",
         error: deleteError.message || "Unable to delete this job.",
+      });
+    }
+  }
+
+  function closeDiscoveryModal() {
+    setDiscoveryModal(EMPTY_DISCOVERY_MODAL);
+    setDiscoveryFeedback(EMPTY_DISCOVERY_FEEDBACK);
+  }
+
+  async function handleDiscoverContacts(item) {
+    if (!item?.run_id || !item?.job_id) {
+      setDeleteFeedback({
+        message: "",
+        error: "This tracker row is missing the run or job reference needed for contact discovery.",
+      });
+      return;
+    }
+    setDeleteFeedback({ message: "", error: "" });
+    setDiscoveringId(item.review_id || item.job_id || `${item.run_id}:${item.job_id}`);
+    try {
+      const payload = await request("/outreach/target-contact-discovery", {
+        method: "POST",
+        body: {
+          run_id: item.run_id,
+          job_id: item.job_id,
+        },
+      });
+      setDiscoveryModal({
+        open: true,
+        item,
+        payload,
+      });
+      setDiscoveryFeedback(EMPTY_DISCOVERY_FEEDBACK);
+    } catch (discoveryError) {
+      setDeleteFeedback({
+        message: "",
+        error: discoveryError.message || "Unable to generate target contact discovery right now.",
+      });
+    } finally {
+      setDiscoveringId("");
+    }
+  }
+
+  async function copyDiscoveryText(text, successMessage) {
+    try {
+      await navigator.clipboard.writeText(String(text || ""));
+      setDiscoveryFeedback({ message: successMessage, error: "" });
+    } catch (copyError) {
+      setDiscoveryFeedback({
+        message: "",
+        error: copyError.message || "Unable to copy this text.",
       });
     }
   }
@@ -1233,12 +1313,208 @@ export default function TrackerPage() {
 
       {!loading && !error ? (
         <TrackerTable
+          discoveringId={discoveringId}
           items={items}
+          onDiscoverContacts={handleDiscoverContacts}
           onDelete={handleDeleteCard}
           onUpdate={updateCard}
           request={request}
           updating={updating}
         />
+      ) : null}
+
+      {discoveryModal.open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-6 py-10 backdrop-blur-sm">
+          <div className="w-full max-w-5xl rounded-3xl border border-outline-variant/20 bg-surface-container-lowest shadow-2xl">
+            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-outline-variant/10 px-6 py-5">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+                  Target Contact Discovery
+                </div>
+                <h2 className="mt-1 font-headline text-2xl font-bold tracking-tight text-on-surface">
+                  {discoveryModal.item?.title || "Application"}{discoveryModal.item?.company ? ` at ${discoveryModal.item.company}` : ""}
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm text-on-surface-variant">
+                  {discoveryModal.payload?.strategy_summary ||
+                    "Use this shortlist to find people who are more likely to influence referrals, process visibility, or team context."}
+                </p>
+              </div>
+              <button
+                className="rounded-full p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-on-surface"
+                onClick={closeDiscoveryModal}
+                type="button"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-5 px-6 py-5">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Department</div>
+                  <div className="mt-2 text-base font-semibold text-on-surface">
+                    {discoveryModal.payload?.department_label || "Hiring Team"}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Location Hint</div>
+                  <div className="mt-2 text-base font-semibold text-on-surface">
+                    {discoveryModal.payload?.location_hint || "Not specified"}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Candidate Lanes</div>
+                  <div className="mt-2 text-base font-semibold text-on-surface">
+                    {(discoveryModal.payload?.candidates || []).length}
+                  </div>
+                </div>
+              </div>
+
+              {discoveryFeedback.message || discoveryFeedback.error ? (
+                <div
+                  className={[
+                    "rounded-2xl border px-4 py-3 text-sm",
+                    discoveryFeedback.error
+                      ? "border-error/20 bg-error/5 text-error"
+                      : "border-primary/20 bg-primary/5 text-primary",
+                  ].join(" ")}
+                >
+                  {discoveryFeedback.error || discoveryFeedback.message}
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 xl:grid-cols-2">
+                {(discoveryModal.payload?.candidates || []).map((candidate) => (
+                  <article
+                    className="rounded-3xl border border-outline-variant/20 bg-surface p-5"
+                    key={candidate.candidate_id || candidate.role_label}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold text-on-surface">{candidate.role_label}</h3>
+                          <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                            Score {candidate.fit_score || 0}
+                          </span>
+                          <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-semibold text-on-surface-variant">
+                            {candidate.confidence || "medium"}
+                          </span>
+                        </div>
+                        {candidate.guessed_name ? (
+                          <div className="mt-2 text-sm font-medium text-on-surface">
+                            Named signal: {candidate.guessed_name}
+                          </div>
+                        ) : null}
+                      </div>
+                      <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-on-surface-variant">
+                        {candidate.access_hint || "Hiring signal"}
+                      </span>
+                    </div>
+
+                    {candidate.title_variants?.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {candidate.title_variants.map((titleVariant) => (
+                          <span
+                            className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
+                            key={`${candidate.candidate_id}-${titleVariant}`}
+                          >
+                            {titleVariant}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <p className="mt-4 text-sm leading-6 text-on-surface-variant">
+                      {candidate.rationale}
+                    </p>
+
+                    {candidate.search_query ? (
+                      <div className="mt-4 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Search Query</div>
+                        <div className="mt-2 text-sm font-medium text-on-surface">{candidate.search_query}</div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {candidate.linkedin_search_url ? (
+                            <a
+                              className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20"
+                              href={candidate.linkedin_search_url}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              LinkedIn Search
+                              <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+                            </a>
+                          ) : null}
+                          {candidate.google_xray_search_url ? (
+                            <a
+                              className="inline-flex items-center gap-1 rounded-full bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container-high"
+                              href={candidate.google_xray_search_url}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              X-Ray Search
+                              <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+                            </a>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="mt-4 grid gap-4">
+                      <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-semibold text-on-surface">Quick Connect Note</div>
+                          <button
+                            className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary hover:bg-primary/20"
+                            onClick={() =>
+                              copyDiscoveryText(candidate.connection_note, "Connection note copied.")
+                            }
+                            type="button"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-on-surface-variant">
+                          {candidate.connection_note}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-semibold text-on-surface">Follow-Up After They Accept</div>
+                          <button
+                            className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary hover:bg-primary/20"
+                            onClick={() =>
+                              copyDiscoveryText(candidate.follow_up_message, "Follow-up message copied.")
+                            }
+                            type="button"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-on-surface-variant">
+                          {candidate.follow_up_message}
+                        </p>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-outline-variant/10 px-6 py-4">
+              <div className="text-xs text-on-surface-variant">
+                Searches open in LinkedIn or Google so you can verify the real profile before sending anything.
+              </div>
+              <button
+                className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
+                onClick={closeDiscoveryModal}
+                type="button"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

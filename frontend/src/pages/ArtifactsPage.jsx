@@ -6,11 +6,32 @@ import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
 const VIEW_LIBRARY = "library";
+const VIEW_CANVAS = "canvas";
 const VIEW_REJECTED = "rejected";
 const DEFAULT_UPLOAD_KIND = "uploaded_document";
 const DEFAULT_REQUEUE_NOTE = "Override from rejected jobs review.";
+const MASTER_CAREER_PROFILE_KIND = "master_career_profile";
+const CAREER_ASSET_KINDS = new Set([
+  "workspace_cv",
+  MASTER_CAREER_PROFILE_KIND,
+  "uploaded_document",
+  "certification",
+  "recommendation_letter",
+  "motivation_letter",
+]);
+const CANVAS_DEFAULTS = {
+  master_career_profile_asset_id: "",
+  master_career_profile_text: "",
+  career_highlights_text: "",
+  bullet_bank_text: "",
+  professional_hurdles_text: "",
+  motivation_letter_notes: "",
+  ai_canvas_source_asset_ids: [],
+};
 
 const UPLOAD_KIND_OPTIONS = [
+  { value: "workspace_cv", label: "Baseline CV" },
+  { value: MASTER_CAREER_PROFILE_KIND, label: "Master Career Profile" },
   { value: "uploaded_document", label: "Supporting Document" },
   { value: "certification", label: "Certification" },
   { value: "recommendation_letter", label: "Recommendation Letter" },
@@ -77,6 +98,33 @@ function documentStatusLabel(document) {
   return value === "export_blocked" ? "Export Blocked" : labelize(value);
 }
 
+function assetKindLabel(assetKind) {
+  const normalized = String(assetKind || "").trim().toLowerCase();
+  if (normalized === "workspace_cv") return "Baseline CV";
+  if (normalized === MASTER_CAREER_PROFILE_KIND) return "Master Career Profile";
+  if (normalized === "uploaded_document") return "Supporting Document";
+  if (normalized === "recommendation_letter") return "Recommendation Letter";
+  if (normalized === "motivation_letter") return "Motivation Letter";
+  return labelize(assetKind);
+}
+
+function normalizeCanvasDraft(documents = {}) {
+  const sourceAssetIds = Array.isArray(documents.ai_canvas_source_asset_ids)
+    ? documents.ai_canvas_source_asset_ids
+    : [];
+  return {
+    master_career_profile_asset_id: String(documents.master_career_profile_asset_id || ""),
+    master_career_profile_text: String(documents.master_career_profile_text || ""),
+    career_highlights_text: String(documents.career_highlights_text || ""),
+    bullet_bank_text: String(documents.bullet_bank_text || ""),
+    professional_hurdles_text: String(documents.professional_hurdles_text || ""),
+    motivation_letter_notes: String(documents.motivation_letter_notes || ""),
+    ai_canvas_source_asset_ids: Array.from(
+      new Set(sourceAssetIds.map((item) => String(item || "").trim()).filter(Boolean)),
+    ),
+  };
+}
+
 function buildDocumentGroupDescription(group) {
   if (group.group_kind === "application") {
     return [group.workspace_name, group.run_id].filter(Boolean).join(" | ");
@@ -93,8 +141,7 @@ export default function DocumentsPage() {
   const [documentFilters, setDocumentFilters] = useState({
     search: "",
     workspaceId: "",
-    runId: "",
-    status: "",
+    assetKind: "",
   });
   const [rejectedFilters, setRejectedFilters] = useState({
     search: "",
@@ -124,6 +171,17 @@ export default function DocumentsPage() {
     error: "",
   });
   const [requirementsReviewOpen, setRequirementsReviewOpen] = useState(false);
+  const [canvasDraft, setCanvasDraft] = useState(CANVAS_DEFAULTS);
+  const [canvasSaveState, setCanvasSaveState] = useState({
+    saving: false,
+    message: "",
+    error: "",
+  });
+  const [masterProfileUploadState, setMasterProfileUploadState] = useState({
+    uploading: false,
+    message: "",
+    error: "",
+  });
 
   const {
     data: documentsPayload,
@@ -137,12 +195,23 @@ export default function DocumentsPage() {
     error: rejectedError,
     refresh: refreshRejected,
   } = useApiResource(() => request("/rejected-jobs?limit=500"), [request]);
+  const {
+    data: settingsPayload,
+    refresh: refreshSettings,
+  } = useApiResource(() => request("/settings"), [request]);
   const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100"), [request]);
 
   const allDocuments = documentsPayload?.documents || [];
   const documentGroups = documentsPayload?.groups || [];
   const allRejectedItems = rejectedPayload?.items || [];
   const workspaces = workspacesPayload?.workspaces || [];
+
+  useEffect(() => {
+    if (!settingsPayload?.documents) {
+      return;
+    }
+    setCanvasDraft(normalizeCanvasDraft(settingsPayload.documents));
+  }, [settingsPayload?.documents]);
 
   const workspaceOptions = useMemo(
     () =>
@@ -152,16 +221,33 @@ export default function DocumentsPage() {
       })),
     [workspaces],
   );
-  const runOptions = useMemo(
+  const assetDocuments = useMemo(
+    () =>
+      allDocuments.filter((item) => {
+        const assetKind = String(item.asset_kind || "").trim().toLowerCase();
+        return CAREER_ASSET_KINDS.has(assetKind) && String(item.source_origin || "") === "upload";
+      }),
+    [allDocuments],
+  );
+  const cvLikeAssets = useMemo(
+    () =>
+      assetDocuments.filter((item) => {
+        const assetKind = String(item.asset_kind || "").trim().toLowerCase();
+        return assetKind === "workspace_cv" || assetKind === MASTER_CAREER_PROFILE_KIND;
+      }),
+    [assetDocuments],
+  );
+  const documentKindOptions = useMemo(
     () =>
       Array.from(
         new Map(
-          allDocuments
-            .filter((item) => item.run_id)
-            .map((item) => [item.run_id, item.run_id]),
+          assetDocuments.map((item) => [
+            String(item.asset_kind || ""),
+            assetKindLabel(item.asset_kind || item.document_type),
+          ]),
         ).entries(),
       ).map(([value, label]) => ({ value, label })),
-    [allDocuments],
+    [assetDocuments],
   );
   const rejectedReasonOptions = useMemo(
     () =>
@@ -177,14 +263,11 @@ export default function DocumentsPage() {
 
   const filteredDocuments = useMemo(
     () =>
-      allDocuments.filter((item) => {
+      assetDocuments.filter((item) => {
         if (documentFilters.workspaceId && item.workspace_id !== documentFilters.workspaceId) {
           return false;
         }
-        if (documentFilters.runId && item.run_id !== documentFilters.runId) {
-          return false;
-        }
-        if (documentFilters.status && documentStatusValue(item) !== documentFilters.status) {
+        if (documentFilters.assetKind && item.asset_kind !== documentFilters.assetKind) {
           return false;
         }
         return matchesQuery(
@@ -204,17 +287,7 @@ export default function DocumentsPage() {
           documentFilters.search,
         );
       }),
-    [allDocuments, documentFilters],
-  );
-
-  const documentStatusOptions = useMemo(
-    () =>
-      Array.from(
-        new Map(
-          allDocuments.map((item) => [documentStatusValue(item), documentStatusLabel(item)]),
-        ).entries(),
-      ).map(([value, label]) => ({ value, label })),
-    [allDocuments],
+    [assetDocuments, documentFilters],
   );
 
   const filteredRejectedItems = useMemo(
@@ -242,8 +315,8 @@ export default function DocumentsPage() {
   );
 
   const selectedDocuments = useMemo(
-    () => allDocuments.filter((item) => selectedDocumentIds.includes(item.document_id)),
-    [allDocuments, selectedDocumentIds],
+    () => assetDocuments.filter((item) => selectedDocumentIds.includes(item.document_id)),
+    [assetDocuments, selectedDocumentIds],
   );
   const selectedRejectedItems = useMemo(
     () => allRejectedItems.filter((item) => selectedRejectedIds.includes(item.rejected_id)),
@@ -277,6 +350,54 @@ export default function DocumentsPage() {
       ),
     [exportState.gate?.missing_requirements, selectedBlockedDocuments],
   );
+  const masterCareerProfileAsset = useMemo(
+    () =>
+      assetDocuments.find(
+        (item) => String(item.asset_id || "") === String(canvasDraft.master_career_profile_asset_id || ""),
+      ) || null,
+    [assetDocuments, canvasDraft.master_career_profile_asset_id],
+  );
+  const selectedCanvasAssets = useMemo(
+    () =>
+      assetDocuments.filter((item) =>
+        canvasDraft.ai_canvas_source_asset_ids.includes(String(item.asset_id || "")),
+      ),
+    [assetDocuments, canvasDraft.ai_canvas_source_asset_ids],
+  );
+  const canvasCoverage = useMemo(() => {
+    const countForKind = (assetKind) =>
+      assetDocuments.filter((item) => String(item.asset_kind || "") === assetKind).length;
+    return [
+      {
+        label: "Baseline CVs",
+        present: countForKind("workspace_cv") > 0,
+        detail: `${countForKind("workspace_cv")} uploaded`,
+      },
+      {
+        label: "Master Career Profile",
+        present: Boolean(canvasDraft.master_career_profile_asset_id),
+        detail: canvasDraft.master_career_profile_asset_id ? "Configured for AI canvas" : "Not linked yet",
+      },
+      {
+        label: "Certifications",
+        present: countForKind("certification") > 0,
+        detail: `${countForKind("certification")} uploaded`,
+      },
+      {
+        label: "Recommendation Letters",
+        present: countForKind("recommendation_letter") > 0,
+        detail: `${countForKind("recommendation_letter")} uploaded`,
+      },
+      {
+        label: "Motivation-Letter Source Notes",
+        present: Boolean(canvasDraft.motivation_letter_notes.trim()) || countForKind("motivation_letter") > 0,
+        detail:
+          countForKind("motivation_letter") > 0
+            ? `${countForKind("motivation_letter")} uploaded`
+            : "Add notes or upload examples",
+      },
+    ];
+  }, [assetDocuments, canvasDraft.master_career_profile_asset_id, canvasDraft.motivation_letter_notes]);
   const visibleDocumentSections = useMemo(() => {
     const groupMetaById = new Map(
       documentGroups.map((group, index) => [group.group_id, { ...group, sortIndex: index }]),
@@ -340,14 +461,14 @@ export default function DocumentsPage() {
     activeView === VIEW_LIBRARY
       ? [
           {
-            label: "Documents In Library",
-            value: allDocuments.length,
-            description: "Generated files and uploaded assets in one place.",
+            label: "Career Assets",
+            value: assetDocuments.length,
+            description: "Uploaded CVs, certifications, letters, and supporting documents.",
           },
           {
             label: "Visible Groups",
             value: visibleDocumentSections.length,
-            description: "Application packages and shared document collections currently in view.",
+            description: "Shared and workspace-linked asset collections currently in view.",
           },
           {
             label: "Current Selection",
@@ -355,23 +476,41 @@ export default function DocumentsPage() {
             description: "Selected for bulk export.",
           },
         ]
-      : [
-          {
-            label: "Rejected Jobs",
-            value: allRejectedItems.length,
-            description: "Saved screening rejects available for review and requeue.",
-          },
-          {
-            label: "Can Requeue",
-            value: requeueableRejectedCount,
-            description: "Rejected jobs that can be sent back through the pipeline.",
-          },
-          {
-            label: "Current Selection",
-            value: selectedRejectedIds.length,
-            description: "Selected for bulk requeue.",
-          },
-        ];
+      : activeView === VIEW_CANVAS
+        ? [
+            {
+              label: "Selected Source Assets",
+              value: selectedCanvasAssets.length,
+              description: "Assets the canvas can draw from when building personalized documents.",
+            },
+            {
+              label: "Master Profile",
+              value: masterCareerProfileAsset ? "Ready" : "Missing",
+              description: "Detailed career source file for deeper bullet and letter personalization.",
+            },
+            {
+              label: "Coverage Checks",
+              value: canvasCoverage.filter((item) => item.present).length,
+              description: "Recommended source categories already represented in your asset base.",
+            },
+          ]
+        : [
+            {
+              label: "Rejected Jobs",
+              value: allRejectedItems.length,
+              description: "Saved screening rejects available for review and requeue.",
+            },
+            {
+              label: "Can Requeue",
+              value: requeueableRejectedCount,
+              description: "Rejected jobs that can be sent back through the pipeline.",
+            },
+            {
+              label: "Current Selection",
+              value: selectedRejectedIds.length,
+              description: "Selected for bulk requeue.",
+            },
+          ];
 
   function toggleSelection(setter, currentIds, id) {
     setter(
@@ -436,21 +575,106 @@ export default function DocumentsPage() {
       if (uploadForm.workspaceId) {
         params.set("workspace_id", uploadForm.workspaceId);
       }
-      await request(`/documents/upload?${params.toString()}`, {
+      const response = await request(`/documents/upload?${params.toString()}`, {
         method: "POST",
         body: formData,
       });
       await refreshDocuments().catch(() => undefined);
       setUploadState({
         uploading: false,
-        message: `Uploaded ${file.name} to the documents library.`,
+        message: `Uploaded ${file.name} to Career Assets.`,
         error: "",
       });
+      return response?.asset || null;
     } catch (uploadError) {
       setUploadState({
         uploading: false,
         message: "",
         error: uploadError.message || "Unable to upload document.",
+      });
+      return null;
+    }
+  }
+
+  function updateCanvasField(field, value) {
+    setCanvasDraft((current) => ({ ...current, [field]: value }));
+    setCanvasSaveState((current) => ({ ...current, message: "", error: "" }));
+  }
+
+  function toggleCanvasSourceAsset(assetId) {
+    const normalizedAssetId = String(assetId || "");
+    setCanvasDraft((current) => {
+      const selectedIds = current.ai_canvas_source_asset_ids.includes(normalizedAssetId)
+        ? current.ai_canvas_source_asset_ids.filter((item) => item !== normalizedAssetId)
+        : [...current.ai_canvas_source_asset_ids, normalizedAssetId];
+      return {
+        ...current,
+        ai_canvas_source_asset_ids: selectedIds,
+      };
+    });
+    setCanvasSaveState((current) => ({ ...current, message: "", error: "" }));
+  }
+
+  async function saveCanvas() {
+    setCanvasSaveState({ saving: true, message: "", error: "" });
+    try {
+      await request("/settings", {
+        method: "PUT",
+        body: {
+          documents: canvasDraft,
+        },
+      });
+      await refreshSettings().catch(() => undefined);
+      setCanvasSaveState({
+        saving: false,
+        message: "Document AI canvas saved.",
+        error: "",
+      });
+    } catch (saveError) {
+      setCanvasSaveState({
+        saving: false,
+        message: "",
+        error: saveError.message || "Unable to save the AI canvas.",
+      });
+    }
+  }
+
+  async function uploadMasterCareerProfile(file) {
+    if (!file) {
+      return;
+    }
+    setMasterProfileUploadState({ uploading: true, message: "", error: "" });
+    try {
+      const formData = new FormData();
+      formData.append("document_file", file);
+      const params = new URLSearchParams();
+      params.set("asset_kind", MASTER_CAREER_PROFILE_KIND);
+      params.set("display_name", file.name);
+      const response = await request(`/documents/upload?${params.toString()}`, {
+        method: "POST",
+        body: formData,
+      });
+      const uploadedAsset = response?.asset || null;
+      await refreshDocuments().catch(() => undefined);
+      if (uploadedAsset?.asset_id) {
+        setCanvasDraft((current) => ({
+          ...current,
+          master_career_profile_asset_id: String(uploadedAsset.asset_id || ""),
+          master_career_profile_text:
+            String(uploadedAsset?.metadata?.source_text || "").trim() || current.master_career_profile_text,
+        }));
+      }
+      setMasterProfileUploadState({
+        uploading: false,
+        message: `Uploaded ${file.name}. Review the imported text, then save the AI canvas.`,
+        error: "",
+      });
+      setCanvasSaveState((current) => ({ ...current, message: "", error: "" }));
+    } catch (uploadError) {
+      setMasterProfileUploadState({
+        uploading: false,
+        message: "",
+        error: uploadError.message || "Unable to upload the master career profile.",
       });
     }
   }
@@ -527,18 +751,19 @@ export default function DocumentsPage() {
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div className="space-y-2">
           <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
-            Documents
+            Career Assets
           </h1>
           <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
-            Browse application-ready CVs and letters, and keep certifications plus reusable
-            supporting assets in one place.
+            Keep uploaded CVs, certifications, letters, and supporting career evidence in one
+            place, then use the AI canvas to turn that source material into stronger applications.
           </p>
         </div>
       </header>
 
       <section className="flex flex-wrap gap-2 rounded-xl bg-surface-container-low p-2">
         {[
-          { id: VIEW_LIBRARY, label: "Documents Library" },
+          { id: VIEW_LIBRARY, label: "Asset Library" },
+          { id: VIEW_CANVAS, label: "Document AI Canvas" },
           { id: VIEW_REJECTED, label: "Rejected Jobs Review" },
         ].map((view) => (
           <button
@@ -580,17 +805,18 @@ export default function DocumentsPage() {
             <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
               <div className="space-y-2">
                 <h2 className="font-headline text-xl font-bold text-on-surface">
-                  Upload Supporting Documents
+                  Upload Career Assets
                 </h2>
                 <p className="text-sm leading-7 text-on-surface-variant">
-                  Add certifications, recommendation letters, motivation letters, or other
-                  supporting files to the shared document library.
+                  Add baseline CVs, a master career profile, certifications, recommendation
+                  letters, motivation-letter examples, or other supporting files to the shared
+                  asset library.
                 </p>
               </div>
 
               <div className="mt-5 grid gap-4">
                 <label className="space-y-2">
-                  <span className="block text-sm font-semibold text-on-surface">Document Type</span>
+                  <span className="block text-sm font-semibold text-on-surface">Asset Type</span>
                   <FilterSelect
                     onChange={(event) =>
                       setUploadForm((current) => ({ ...current, assetKind: event.target.value }))
@@ -636,7 +862,7 @@ export default function DocumentsPage() {
                     }}
                     type="file"
                   />
-                  {uploadState.uploading ? "Uploading..." : "Upload Document"}
+                  {uploadState.uploading ? "Uploading..." : "Upload Asset"}
                 </label>
 
                 {uploadState.message ? (
@@ -652,10 +878,10 @@ export default function DocumentsPage() {
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <h2 className="font-headline text-xl font-bold text-on-surface">
-                    Documents Library
+                    Asset Library
                   </h2>
                   <p className="mt-1 text-sm text-on-surface-variant">
-                    Preview files, download them individually, or export a selected bundle.
+                    Preview uploaded assets, download them individually, or export a selected bundle.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-3">
@@ -692,7 +918,7 @@ export default function DocumentsPage() {
                   onChange={(event) =>
                     setDocumentFilters((current) => ({ ...current, search: event.target.value }))
                   }
-                  placeholder="Search document, job, company, or run"
+                  placeholder="Search asset, type, workspace, or filename"
                   type="text"
                   value={documentFilters.search}
                 />
@@ -711,27 +937,14 @@ export default function DocumentsPage() {
                 </FilterSelect>
                 <FilterSelect
                   onChange={(event) =>
-                    setDocumentFilters((current) => ({ ...current, runId: event.target.value }))
+                    setDocumentFilters((current) => ({ ...current, assetKind: event.target.value }))
                   }
-                  value={documentFilters.runId}
+                  value={documentFilters.assetKind}
                 >
-                  <option value="">All Runs</option>
-                  {runOptions.map((run) => (
-                    <option key={run.value} value={run.value}>
-                      {run.label}
-                    </option>
-                  ))}
-                </FilterSelect>
-                <FilterSelect
-                  onChange={(event) =>
-                    setDocumentFilters((current) => ({ ...current, status: event.target.value }))
-                  }
-                  value={documentFilters.status}
-                >
-                  <option value="">All Statuses</option>
-                  {documentStatusOptions.map((statusOption) => (
-                    <option key={statusOption.value} value={statusOption.value}>
-                      {statusOption.label}
+                  <option value="">All Asset Types</option>
+                  {documentKindOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
                     </option>
                   ))}
                 </FilterSelect>
@@ -740,17 +953,17 @@ export default function DocumentsPage() {
                   onClick={() => refreshDocuments().catch(() => undefined)}
                   type="button"
                 >
-                  Refresh Library
+                  Refresh Assets
                 </button>
               </div>
 
               <div className="mt-5 flex flex-wrap items-center gap-3 text-sm text-on-surface-variant">
                 <span>
-                  {visibleDocumentSections.length} visible application or library group
+                  {visibleDocumentSections.length} visible shared or workspace asset group
                   {visibleDocumentSections.length === 1 ? "" : "s"}.
                 </span>
                 <span>
-                  {filteredDocuments.length} matching document{filteredDocuments.length === 1 ? "" : "s"}.
+                  {filteredDocuments.length} matching asset{filteredDocuments.length === 1 ? "" : "s"}.
                 </span>
               </div>
 
@@ -901,7 +1114,7 @@ export default function DocumentsPage() {
           <section className="space-y-4">
             {documentsLoading ? (
               <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-on-surface-variant shadow-soft">
-                Loading documents...
+                Loading career assets...
               </div>
             ) : documentsError ? (
               <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-error shadow-soft">
@@ -924,11 +1137,11 @@ export default function DocumentsPage() {
                         </span>
                       </div>
                       <p className="mt-1 text-sm text-on-surface-variant">
-                        {buildDocumentGroupDescription(group) || "Documents linked to this workspace."}
+                        {buildDocumentGroupDescription(group) || "Assets linked to this workspace."}
                       </p>
                     </div>
                     <div className="text-sm text-on-surface-variant">
-                      {group.documents.length} document{group.documents.length === 1 ? "" : "s"}
+                      {group.documents.length} asset{group.documents.length === 1 ? "" : "s"}
                     </div>
                   </div>
 
@@ -955,7 +1168,7 @@ export default function DocumentsPage() {
                               </div>
                               <p className="text-sm text-on-surface-variant">
                                 {[document.job_title, document.company].filter(Boolean).join(" at ") ||
-                                  "Reusable supporting document"}
+                                  "Reusable career asset"}
                               </p>
                             </div>
                             <label className="inline-flex items-center gap-2 text-sm text-on-surface">
@@ -982,7 +1195,7 @@ export default function DocumentsPage() {
                             </div>
                             <div>
                               <span className="font-semibold text-on-surface">Category:</span>{" "}
-                              {document.kind_group_label || labelize(document.asset_kind)}
+                              {assetKindLabel(document.asset_kind)}
                             </div>
                             <div>
                               <span className="font-semibold text-on-surface">Workspace:</span>{" "}
@@ -1061,15 +1274,337 @@ export default function DocumentsPage() {
             ) : (
               <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
                 <h2 className="font-headline text-xl font-bold text-on-surface">
-                  No documents match these filters
+                  No assets match these filters
                 </h2>
                 <p className="mt-2 text-sm leading-7 text-on-surface-variant">
-                  Upload a supporting document, generate a new CV from a run, or widen the
-                  current filters.
+                  Upload a CV or supporting asset, or widen the current filters.
                 </p>
               </div>
             )}
           </section>
+        </div>
+      ) : activeView === VIEW_CANVAS ? (
+        <div className="space-y-6">
+          <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h2 className="font-headline text-xl font-bold text-on-surface">
+                  Document AI Canvas
+                </h2>
+                <p className="mt-1 max-w-3xl text-sm leading-7 text-on-surface-variant">
+                  Build a personal document knowledge base from your detailed CV, certifications,
+                  recommendation letters, and other uploaded evidence. Workspaces can then choose
+                  whether to tailor from only the baseline CV, selected source assets, or the full
+                  career profile.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <Link
+                  className="rounded bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                  to="/workspaces"
+                >
+                  Review Workspace Scope
+                </Link>
+                <button
+                  className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={canvasSaveState.saving}
+                  onClick={saveCanvas}
+                  type="button"
+                >
+                  {canvasSaveState.saving ? "Saving..." : "Save AI Canvas"}
+                </button>
+              </div>
+            </div>
+            {canvasSaveState.message ? (
+              <p className="mt-4 text-sm text-primary">{canvasSaveState.message}</p>
+            ) : null}
+            {canvasSaveState.error ? (
+              <p className="mt-4 text-sm text-error">{canvasSaveState.error}</p>
+            ) : null}
+          </section>
+
+          <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h3 className="font-headline text-lg font-bold text-on-surface">
+                    Master Career Profile
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+                    Link the detailed CV or long-form career document that contains the extra
+                    bullets, context, and achievements you do not want to lose.
+                  </p>
+                </div>
+                <label className="inline-flex cursor-pointer items-center rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high">
+                  <input
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        uploadMasterCareerProfile(file);
+                        event.target.value = "";
+                      }
+                    }}
+                    type="file"
+                  />
+                  {masterProfileUploadState.uploading ? "Uploading..." : "Upload Detailed CV"}
+                </label>
+              </div>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
+                <label className="space-y-2">
+                  <span className="block text-sm font-semibold text-on-surface">
+                    Linked Source File
+                  </span>
+                  <FilterSelect
+                    onChange={(event) =>
+                      updateCanvasField("master_career_profile_asset_id", event.target.value)
+                    }
+                    value={canvasDraft.master_career_profile_asset_id}
+                  >
+                    <option value="">Choose an uploaded detailed CV or master profile</option>
+                    {cvLikeAssets.map((item) => (
+                      <option key={item.asset_id || item.document_id} value={String(item.asset_id || "")}>
+                        {item.display_name} ({assetKindLabel(item.asset_kind)})
+                      </option>
+                    ))}
+                  </FilterSelect>
+                </label>
+                <div className="rounded-lg border border-outline-variant/10 bg-surface p-4 text-sm text-on-surface-variant">
+                  This source is used only when a workspace enables broader personalization.
+                </div>
+              </div>
+
+              {masterProfileUploadState.message ? (
+                <p className="mt-4 text-sm text-primary">{masterProfileUploadState.message}</p>
+              ) : null}
+              {masterProfileUploadState.error ? (
+                <p className="mt-4 text-sm text-error">{masterProfileUploadState.error}</p>
+              ) : null}
+
+              {masterCareerProfileAsset ? (
+                <div className="mt-5 rounded-xl border border-outline-variant/20 bg-surface p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="font-semibold text-on-surface">
+                      {masterCareerProfileAsset.display_name}
+                    </div>
+                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                      {masterCareerProfileAsset.document_type}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-3 text-sm text-on-surface-variant md:grid-cols-3">
+                    <div>
+                      <span className="font-semibold text-on-surface">Workspace:</span>{" "}
+                      {masterCareerProfileAsset.workspace_name || "Shared"}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-on-surface">Created:</span>{" "}
+                      {formatDateTime(masterCareerProfileAsset.created_at)}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-on-surface">Imported Text:</span>{" "}
+                      {masterCareerProfileAsset.metadata?.source_char_count
+                        ? `${masterCareerProfileAsset.metadata.source_char_count} chars`
+                        : "Not extracted"}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              <label className="mt-5 block space-y-2">
+                <span className="block text-sm font-semibold text-on-surface">
+                  Imported Career Context
+                </span>
+                <textarea
+                  className="min-h-56 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                  onChange={(event) =>
+                    updateCanvasField("master_career_profile_text", event.target.value)
+                  }
+                  placeholder="Paste or refine the detailed CV text here. This is the long-form career source that AI can consult when a job calls for different bullet points than the baseline CV."
+                  value={canvasDraft.master_career_profile_text}
+                />
+              </label>
+            </div>
+
+            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+              <h3 className="font-headline text-lg font-bold text-on-surface">
+                Coverage Checklist
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+                These sources help the AI move beyond a thin baseline CV and still stay grounded in
+                your real history.
+              </p>
+              <div className="mt-5 space-y-3">
+                {canvasCoverage.map((item) => (
+                  <div
+                    className="rounded-xl border border-outline-variant/15 bg-surface p-4"
+                    key={item.label}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-on-surface">{item.label}</div>
+                      <span
+                        className={[
+                          "rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                          item.present
+                            ? "bg-primary/10 text-primary"
+                            : "bg-surface-container-low text-on-surface-variant",
+                        ].join(" ")}
+                      >
+                        {item.present ? "Ready" : "Missing"}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm text-on-surface-variant">{item.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+              <h3 className="font-headline text-lg font-bold text-on-surface">
+                Source Asset Selector
+              </h3>
+              <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+                Mark the uploaded assets AI may consult when a workspace uses
+                <span className="font-semibold text-on-surface"> Baseline + selected assets</span>.
+              </p>
+              <div className="mt-5 space-y-3">
+                {assetDocuments.length ? (
+                  assetDocuments.map((document) => {
+                    const isSelected = canvasDraft.ai_canvas_source_asset_ids.includes(
+                      String(document.asset_id || ""),
+                    );
+                    return (
+                      <label
+                        className="flex cursor-pointer items-start gap-3 rounded-xl border border-outline-variant/15 bg-surface p-4"
+                        key={document.document_id}
+                      >
+                        <input
+                          checked={isSelected}
+                          className="mt-1 h-4 w-4 rounded border-outline-variant/40 text-primary focus:ring-primary"
+                          onChange={() => toggleCanvasSourceAsset(document.asset_id)}
+                          type="checkbox"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="font-semibold text-on-surface">{document.display_name}</div>
+                            <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant">
+                              {assetKindLabel(document.asset_kind)}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-sm text-on-surface-variant">
+                            {document.workspace_name || "Shared across workspaces"} |{" "}
+                            {formatDateTime(document.created_at)}
+                          </p>
+                        </div>
+                      </label>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-xl border border-dashed border-outline-variant/20 bg-surface p-6 text-sm text-on-surface-variant">
+                    Upload baseline CVs, certifications, or letters in the Asset Library first.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+                <h3 className="font-headline text-lg font-bold text-on-surface">
+                  Achievement Bank
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+                  Capture the bullet points and quantified wins that may not fit into the shorter
+                  baseline CV but should still be available for job-specific tailoring.
+                </p>
+                <div className="mt-5 grid gap-4">
+                  <label className="space-y-2">
+                    <span className="block text-sm font-semibold text-on-surface">
+                      Career Highlights
+                    </span>
+                    <textarea
+                      className="min-h-32 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                      onChange={(event) =>
+                        updateCanvasField("career_highlights_text", event.target.value)
+                      }
+                      placeholder="Major wins, high-impact projects, quantified outcomes, and patterns you want AI to recognize."
+                      value={canvasDraft.career_highlights_text}
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="block text-sm font-semibold text-on-surface">
+                      Additional Bullet Bank
+                    </span>
+                    <textarea
+                      className="min-h-40 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                      onChange={(event) =>
+                        updateCanvasField("bullet_bank_text", event.target.value)
+                      }
+                      placeholder="Store extra bullets by company, role, or theme. Example: Allianz Technology | led X | automated Y | reduced Z."
+                      value={canvasDraft.bullet_bank_text}
+                    />
+                  </label>
+                </div>
+              </section>
+
+              <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+                <h3 className="font-headline text-lg font-bold text-on-surface">
+                  Story & Letter Notes
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+                  Save narrative material that helps the AI explain your fit, how you overcome
+                  professional hurdles, and what belongs in a motivation letter.
+                </p>
+                <div className="mt-5 grid gap-4">
+                  <label className="space-y-2">
+                    <span className="block text-sm font-semibold text-on-surface">
+                      Professional Hurdles And Context
+                    </span>
+                    <textarea
+                      className="min-h-32 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                      onChange={(event) =>
+                        updateCanvasField("professional_hurdles_text", event.target.value)
+                      }
+                      placeholder="Challenges you solved, difficult transitions, stakeholder situations, and context that makes your achievements more meaningful."
+                      value={canvasDraft.professional_hurdles_text}
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="block text-sm font-semibold text-on-surface">
+                      Motivation-Letter Notes
+                    </span>
+                    <textarea
+                      className="min-h-32 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                      onChange={(event) =>
+                        updateCanvasField("motivation_letter_notes", event.target.value)
+                      }
+                      placeholder="Why you care about certain industries, company types, missions, or problem spaces. Keep this factual and reusable."
+                      value={canvasDraft.motivation_letter_notes}
+                    />
+                  </label>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          {selectedCanvasAssets.length ? (
+            <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+              <h3 className="font-headline text-lg font-bold text-on-surface">
+                Selected Asset Sources
+              </h3>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {selectedCanvasAssets.map((document) => (
+                  <span
+                    className="rounded-full bg-surface-container-low px-3 py-1.5 text-sm text-on-surface"
+                    key={document.document_id}
+                  >
+                    {document.display_name}
+                  </span>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
       ) : (
         <div className="space-y-6">

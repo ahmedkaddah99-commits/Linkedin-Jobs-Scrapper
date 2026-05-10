@@ -34,10 +34,19 @@ JOB_FILTERING_MODES = [
     JOB_FILTERING_MODE_STRICT,
     JOB_FILTERING_MODE_BROADER,
 ]
+PERSONALIZATION_SCOPE_BASELINE = "baseline_cv_only"
+PERSONALIZATION_SCOPE_SELECTED = "baseline_plus_selected_assets"
+PERSONALIZATION_SCOPE_FULL = "full_career_profile"
+PERSONALIZATION_SCOPES = [
+    PERSONALIZATION_SCOPE_BASELINE,
+    PERSONALIZATION_SCOPE_SELECTED,
+    PERSONALIZATION_SCOPE_FULL,
+]
 
 WORKSPACE_USER_FACING_FIELD_IDS = [
     "workspace_cv_asset_id",
     "cv_generation_mode",
+    "personalization_scope",
     "keywords",
     "country_codes",
     "target_roles",
@@ -457,6 +466,20 @@ def normalize_job_filtering_mode(value: Any, *, default: str = JOB_FILTERING_MOD
     return default
 
 
+def normalize_personalization_scope(
+    value: Any,
+    *,
+    default: str = PERSONALIZATION_SCOPE_BASELINE,
+) -> str:
+    text = _clean_text(value)
+    if not text:
+        return default
+    normalized = "_".join(text.casefold().replace("-", "_").split())
+    if normalized in PERSONALIZATION_SCOPES:
+        return normalized
+    return default
+
+
 def derive_job_filtering_target_phrases(settings: Mapping[str, Any]) -> list[str]:
     phrases: list[str] = []
     seen: set[str] = set()
@@ -538,6 +561,7 @@ def default_workspace_configuration_v2() -> dict[str, Any]:
         },
         "document_preferences": {
             "cv_generation_mode": DEFAULT_CV_GENERATION_MODE,
+            "personalization_scope": PERSONALIZATION_SCOPE_BASELINE,
             "cv_template": "",
             "cv_color_scheme": "",
             "cv_font": "",
@@ -643,6 +667,9 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
 
     contract["document_preferences"]["cv_generation_mode"] = normalize_cv_generation_mode(
         settings.get("cv_generation_mode")
+    )
+    contract["document_preferences"]["personalization_scope"] = normalize_personalization_scope(
+        settings.get("personalization_scope")
     )
     contract["document_preferences"]["cv_template"] = _clean_text(settings.get("cv_template"))
     contract["document_preferences"]["cv_color_scheme"] = _clean_text(settings.get("cv_color_scheme"))
@@ -756,8 +783,10 @@ def build_candidate_asset_contract() -> dict[str, Any]:
         "default": default_candidate_asset_descriptor(),
         "asset_kinds": [
             "workspace_cv",
+            "master_career_profile",
             "generated_cv",
             "cover_letter",
+            "motivation_letter",
             "certification",
             "recommendation_letter",
             "uploaded_document",
@@ -1391,6 +1420,10 @@ __all__ = [
     "JOB_FILTERING_MODE_BROADER",
     "JOB_FILTERING_MODES",
     "JOB_FILTERING_MODE_STRICT",
+    "PERSONALIZATION_SCOPE_BASELINE",
+    "PERSONALIZATION_SCOPE_FULL",
+    "PERSONALIZATION_SCOPE_SELECTED",
+    "PERSONALIZATION_SCOPES",
     "MAIL_CONNECTION_CONTRACT_SCHEMA",
     "PHASE0_CONTRACT_VERSION",
     "REFERRAL_RELATIONSHIP_SCHEMA",
@@ -1423,6 +1456,7 @@ __all__ = [
     "normalize_candidate_asset_descriptor",
     "normalize_gmail_application_detection",
     "normalize_job_filtering_mode",
+    "normalize_personalization_scope",
     "normalize_mail_connection_contract",
     "normalize_referral_outreach_status",
     "normalize_referral_relationship",

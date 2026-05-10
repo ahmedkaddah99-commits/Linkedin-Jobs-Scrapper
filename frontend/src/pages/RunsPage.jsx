@@ -1,11 +1,12 @@
-import { useEffect } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
+const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
 
 function RunSummaryCard({ description, label, value }) {
   return (
@@ -21,7 +22,14 @@ function RunSummaryCard({ description, label, value }) {
 
 export default function RunsPage() {
   const { request } = useSession();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [actionState, setActionState] = useState({
+    pendingRunId: "",
+    message: String(location.state?.runActionMessage || ""),
+    error: "",
+  });
   const workspaceId = searchParams.get("workspace_id") || "";
   const status = searchParams.get("status") || "";
 
@@ -45,6 +53,37 @@ export default function RunsPage() {
     }, 5000);
     return () => window.clearInterval(intervalId);
   }, [hasActiveRuns, refresh]);
+
+  useEffect(() => {
+    if (!location.state?.runActionMessage) {
+      return;
+    }
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate]);
+
+  async function deleteRun(run) {
+    const runName = run.workspace_name || run.workspace_id || "this run";
+    const confirmed = window.confirm(`Delete ${runName}? This removes the run review, jobs, reviews, and artifacts saved for it.`);
+    if (!confirmed) {
+      return;
+    }
+    setActionState({ pendingRunId: run.id, message: "", error: "" });
+    try {
+      await request(`/runs/${run.id}`, { method: "DELETE" });
+      setActionState({
+        pendingRunId: "",
+        message: `${runName} was deleted.`,
+        error: "",
+      });
+      refresh().catch(() => undefined);
+    } catch (actionError) {
+      setActionState({
+        pendingRunId: "",
+        message: "",
+        error: actionError.message || "Unable to delete this run.",
+      });
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -116,6 +155,19 @@ export default function RunsPage() {
         </div>
       </section>
 
+      {actionState.message || actionState.error ? (
+        <section
+          className={[
+            "rounded-2xl border px-5 py-4 text-sm",
+            actionState.error
+              ? "border-error/20 bg-error/5 text-error"
+              : "border-primary/20 bg-primary/5 text-primary",
+          ].join(" ")}
+        >
+          {actionState.error || actionState.message}
+        </section>
+      ) : null}
+
       <section className="space-y-4">
         {loading ? (
           <div className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 text-on-surface-variant shadow-soft">
@@ -156,12 +208,30 @@ export default function RunsPage() {
                     </div>
                   </div>
                 </div>
-                <Link
-                  className="rounded-full bg-gradient-to-br from-primary to-primary-container px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
-                  to={`/runs/${run.id}`}
-                >
-                  Open Run Review
-                </Link>
+                <div className="flex flex-wrap gap-3">
+                  <Link
+                    className="rounded-full bg-gradient-to-br from-primary to-primary-container px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
+                    to={`/runs/${run.id}`}
+                  >
+                    Open Run Review
+                  </Link>
+                  <button
+                    className="rounded-full border border-error/25 bg-error/5 px-5 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={
+                      actionState.pendingRunId === run.id
+                      || !DELETABLE_RUN_STATUSES.includes(String(run.status || "").trim())
+                    }
+                    onClick={() => deleteRun(run)}
+                    title={
+                      DELETABLE_RUN_STATUSES.includes(String(run.status || "").trim())
+                        ? "Delete this run"
+                        : "Active runs can be deleted after they finish."
+                    }
+                    type="button"
+                  >
+                    {actionState.pendingRunId === run.id ? "Deleting..." : "Delete Run"}
+                  </button>
+                </div>
               </div>
             </article>
           ))

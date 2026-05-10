@@ -3,9 +3,10 @@ from __future__ import annotations
 import csv
 import io
 import re
-from itertools import zip_longest
 from dataclasses import dataclass
+from itertools import zip_longest
 from typing import TYPE_CHECKING, Any, Iterable
+from urllib.parse import quote_plus
 
 from backend.domain.models import JobRecord, utc_now_iso
 
@@ -64,6 +65,218 @@ _TITLE_PATTERNS = [
     re.compile(r"\b(?P<title>Hiring Manager)\b", re.IGNORECASE),
     re.compile(r"\b(?P<title>Team Lead)\b", re.IGNORECASE),
 ]
+_TARGET_DISCIPLINE_LIBRARY = {
+    "engineering": {
+        "label": "Engineering",
+        "manager_titles": ["Engineering Manager", "Senior Engineering Manager"],
+        "leader_titles": ["Director of Engineering", "Head of Engineering"],
+        "recruiter_titles": ["Technical Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Staff Software Engineer", "Senior Software Engineer"],
+    },
+    "data": {
+        "label": "Data",
+        "manager_titles": ["Analytics Manager", "Data Science Manager"],
+        "leader_titles": ["Director of Data", "Head of Data"],
+        "recruiter_titles": ["Data Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Senior Data Analyst", "Senior Data Scientist"],
+    },
+    "product": {
+        "label": "Product",
+        "manager_titles": ["Senior Product Manager", "Group Product Manager"],
+        "leader_titles": ["Director of Product", "Head of Product"],
+        "recruiter_titles": ["Product Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Senior Product Manager", "Product Lead"],
+    },
+    "operations": {
+        "label": "Operations",
+        "manager_titles": ["Operations Manager", "Regional Operations Manager"],
+        "leader_titles": ["Director of Operations", "Head of Operations"],
+        "recruiter_titles": ["Operations Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Senior Operations Specialist", "Operations Lead"],
+    },
+    "design": {
+        "label": "Design",
+        "manager_titles": ["Design Manager", "Senior Design Manager"],
+        "leader_titles": ["Director of Design", "Head of Design"],
+        "recruiter_titles": ["Design Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Senior Product Designer", "Lead Designer"],
+    },
+    "sales": {
+        "label": "Sales",
+        "manager_titles": ["Sales Manager", "Regional Sales Manager"],
+        "leader_titles": ["Director of Sales", "Head of Sales"],
+        "recruiter_titles": ["Sales Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Senior Account Executive", "Sales Lead"],
+    },
+    "marketing": {
+        "label": "Marketing",
+        "manager_titles": ["Marketing Manager", "Growth Marketing Manager"],
+        "leader_titles": ["Director of Marketing", "Head of Marketing"],
+        "recruiter_titles": ["Marketing Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Senior Marketing Manager", "Growth Lead"],
+    },
+    "finance": {
+        "label": "Finance",
+        "manager_titles": ["Finance Manager", "Accounting Manager"],
+        "leader_titles": ["Director of Finance", "Head of Finance"],
+        "recruiter_titles": ["Finance Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Senior Financial Analyst", "Senior Accountant"],
+    },
+    "people": {
+        "label": "People",
+        "manager_titles": ["People Operations Manager", "Talent Acquisition Manager"],
+        "leader_titles": ["Director of People", "Head of Talent Acquisition"],
+        "recruiter_titles": ["Talent Acquisition Partner", "Recruiter"],
+        "peer_titles": ["Senior Recruiter", "People Operations Lead"],
+    },
+    "customer_success": {
+        "label": "Customer Success",
+        "manager_titles": ["Customer Success Manager", "Support Manager"],
+        "leader_titles": ["Director of Customer Success", "Head of Support"],
+        "recruiter_titles": ["Customer Success Recruiter", "Talent Acquisition Partner"],
+        "peer_titles": ["Senior Customer Success Manager", "Implementation Lead"],
+    },
+    "general": {
+        "label": "Hiring Team",
+        "manager_titles": ["Hiring Manager", "Team Manager"],
+        "leader_titles": ["Department Director", "Department Head"],
+        "recruiter_titles": ["Talent Acquisition Partner", "Recruiter"],
+        "peer_titles": ["Team Lead", "Senior Team Member"],
+    },
+}
+_TARGET_DISCIPLINE_KEYWORDS = [
+    (
+        "people",
+        [
+            "recruiter",
+            "talent acquisition",
+            "talent",
+            "human resources",
+            "people ops",
+            "people operations",
+            "hr",
+        ],
+    ),
+    (
+        "customer_success",
+        [
+            "customer success",
+            "customer support",
+            "support specialist",
+            "support engineer",
+            "implementation",
+            "client success",
+            "customer service",
+            "onboarding",
+        ],
+    ),
+    (
+        "data",
+        [
+            "data scientist",
+            "data science",
+            "data analyst",
+            "analytics",
+            "business intelligence",
+            "machine learning",
+            "artificial intelligence",
+            "ml engineer",
+            "data engineer",
+            "bi ",
+        ],
+    ),
+    (
+        "engineering",
+        [
+            "software engineer",
+            "developer",
+            "backend",
+            "frontend",
+            "full stack",
+            "platform engineer",
+            "devops",
+            "site reliability",
+            "sre",
+            "qa engineer",
+            "test automation",
+            "engineering",
+        ],
+    ),
+    ("design", ["designer", "design", "ux", "ui", "user experience", "product design"]),
+    ("product", ["product manager", "product owner", "product operations", "product "]),
+    ("sales", ["sales", "account executive", "business development", "bdr", "sdr", "revenue"]),
+    (
+        "marketing",
+        ["marketing", "growth", "seo", "content", "brand", "demand generation", "campaign"],
+    ),
+    (
+        "finance",
+        ["finance", "financial", "accounting", "accountant", "controller", "fp&a", "audit", "treasury"],
+    ),
+    (
+        "operations",
+        [
+            "operations",
+            "logistics",
+            "supply chain",
+            "warehouse",
+            "procurement",
+            "fulfillment",
+            "program manager",
+            "process improvement",
+        ],
+    ),
+]
+_TARGET_CONTACT_BLUEPRINTS = [
+    {
+        "candidate_id": "likely_hiring_manager",
+        "role_label": "Likely Hiring Manager",
+        "title_key": "manager_titles",
+        "fit_score": 92,
+        "confidence": "high",
+        "seniority": "manager",
+        "lane": "direct_hiring_chain",
+        "access_hint": "Closest to role fit, interview signals, and shortlist quality.",
+        "rationale": "Start with the manager lane when you need the most direct path into the hiring discussion.",
+        "follow_up_ask": "If you are open to it, I would appreciate any guidance on the team's priorities and how this role is evaluated.",
+    },
+    {
+        "candidate_id": "talent_partner",
+        "role_label": "Recruiter Or Talent Partner",
+        "title_key": "recruiter_titles",
+        "fit_score": 84,
+        "confidence": "high",
+        "seniority": "individual_contributor",
+        "lane": "recruiting",
+        "access_hint": "Best path for routing, process clarity, and recruiter-side visibility.",
+        "rationale": "Use this lane when you need application visibility, recruiter context, or routing help.",
+        "follow_up_ask": "If you are open to it, I would appreciate any advice on alignment with the role and the best next step in the process.",
+    },
+    {
+        "candidate_id": "department_leader",
+        "role_label": "Department Leader",
+        "title_key": "leader_titles",
+        "fit_score": 78,
+        "confidence": "medium",
+        "seniority": "director_plus",
+        "lane": "leadership",
+        "access_hint": "Useful when you need sponsorship one level above the team.",
+        "rationale": "Leadership contacts are useful when the role sits in a strategic team or when manager ownership is unclear.",
+        "follow_up_ask": "If you are open to it, I would value a quick perspective on where this role fits inside the team.",
+    },
+    {
+        "candidate_id": "team_peer",
+        "role_label": "Team Insider",
+        "title_key": "peer_titles",
+        "fit_score": 71,
+        "confidence": "medium",
+        "seniority": "senior_ic",
+        "lane": "peer_context",
+        "access_hint": "Best for practical team context and calibration before you ask for a referral.",
+        "rationale": "Peers often give the clearest read on team reality, manager style, and whether a referral makes sense.",
+        "follow_up_ask": "If you are open to it, I would value any insight on how the team is structured and what usually matters most for this role.",
+    },
+]
 
 
 @dataclass(slots=True)
@@ -79,6 +292,48 @@ class HiringManagerMatch:
             "title": self.title,
             "confidence": self.confidence,
             "source": self.source,
+        }
+
+
+@dataclass(slots=True)
+class TargetContactCandidate:
+    candidate_id: str
+    role_label: str
+    title_variants: list[str]
+    fit_score: int = 0
+    confidence: str = "medium"
+    department: str = ""
+    seniority: str = ""
+    lane: str = ""
+    access_hint: str = ""
+    rationale: str = ""
+    guessed_name: str = ""
+    search_query: str = ""
+    linkedin_search_url: str = ""
+    google_xray_query: str = ""
+    google_xray_search_url: str = ""
+    connection_note: str = ""
+    follow_up_message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
+            "role_label": self.role_label,
+            "title_variants": list(self.title_variants),
+            "fit_score": self.fit_score,
+            "confidence": self.confidence,
+            "department": self.department,
+            "seniority": self.seniority,
+            "lane": self.lane,
+            "access_hint": self.access_hint,
+            "rationale": self.rationale,
+            "guessed_name": self.guessed_name,
+            "search_query": self.search_query,
+            "linkedin_search_url": self.linkedin_search_url,
+            "google_xray_query": self.google_xray_query,
+            "google_xray_search_url": self.google_xray_search_url,
+            "connection_note": self.connection_note,
+            "follow_up_message": self.follow_up_message,
         }
 
 
@@ -406,6 +661,100 @@ def build_hiring_manager_outreach_draft(
     }
 
 
+def build_target_contact_discovery(
+    *,
+    profile: dict[str, Any],
+    job: JobRecord,
+) -> dict[str, Any]:
+    discipline_key = _infer_target_contact_discipline(job)
+    discipline = _TARGET_DISCIPLINE_LIBRARY.get(discipline_key, _TARGET_DISCIPLINE_LIBRARY["general"])
+    discipline_label = str(discipline.get("label") or "Hiring Team").strip() or "Hiring Team"
+    company = str(job.company or "").strip()
+    location_hint = _target_contact_location_hint(job.location_raw)
+    hiring_manager = guess_hiring_manager_from_job(job)
+    candidates: list[TargetContactCandidate] = []
+
+    if hiring_manager.name:
+        candidates.append(
+            _build_target_contact_candidate(
+                profile=profile,
+                job=job,
+                discipline_label=discipline_label,
+                role_label="Named Hiring Signal",
+                title_variants=[
+                    hiring_manager.title or discipline.get("manager_titles", ["Hiring Manager"])[0],
+                    *list(discipline.get("manager_titles", [])),
+                ],
+                fit_score=97,
+                confidence=hiring_manager.confidence or "high",
+                seniority="manager",
+                lane="direct_hiring_chain",
+                access_hint="Highest-signal lead when the job description already points to a specific person.",
+                rationale=(
+                    f"The posting appears to reference {hiring_manager.name}"
+                    + (f" ({hiring_manager.title})" if hiring_manager.title else "")
+                    + ", so start here before widening the search."
+                ),
+                follow_up_ask="If you are open to it, I would value any guidance on the team priorities or where this role sits.",
+                guessed_name=hiring_manager.name,
+            )
+        )
+
+    for blueprint in _TARGET_CONTACT_BLUEPRINTS:
+        title_variants = list(discipline.get(str(blueprint["title_key"]), []))
+        candidates.append(
+            _build_target_contact_candidate(
+                profile=profile,
+                job=job,
+                discipline_label=discipline_label,
+                role_label=str(blueprint["role_label"]),
+                title_variants=title_variants,
+                fit_score=int(blueprint["fit_score"]),
+                confidence=str(blueprint["confidence"]),
+                seniority=str(blueprint["seniority"]),
+                lane=str(blueprint["lane"]),
+                access_hint=str(blueprint["access_hint"]),
+                rationale=str(blueprint["rationale"]),
+                follow_up_ask=str(blueprint["follow_up_ask"]),
+                candidate_id=str(blueprint["candidate_id"]),
+            )
+        )
+
+    deduped_candidates: list[TargetContactCandidate] = []
+    seen_candidate_keys: set[str] = set()
+    for candidate in candidates:
+        key = "::".join(
+            [
+                str(candidate.role_label or "").casefold(),
+                str(candidate.guessed_name or "").casefold(),
+                str(candidate.search_query or "").casefold(),
+            ]
+        )
+        if key in seen_candidate_keys:
+            continue
+        seen_candidate_keys.add(key)
+        deduped_candidates.append(candidate)
+
+    deduped_candidates.sort(key=lambda item: (-int(item.fit_score), item.role_label.casefold()))
+
+    strategy_bits = [f"Search starts in the {discipline_label} lane."]
+    if company:
+        strategy_bits.append(f"Company anchor: {company}.")
+    if location_hint:
+        strategy_bits.append(f"Location hint: {location_hint}.")
+    strategy_bits.append("Use the manager lane first, then widen to recruiting and leadership if needed.")
+
+    return {
+        "job": _job_summary(job),
+        "discipline": discipline_key,
+        "department_label": discipline_label,
+        "location_hint": location_hint,
+        "strategy_summary": " ".join(strategy_bits),
+        "hiring_manager_signal": hiring_manager.to_dict(),
+        "candidates": [candidate.to_dict() for candidate in deduped_candidates],
+    }
+
+
 def _guess_manager_title(description_text: str) -> str:
     for pattern in _TITLE_PATTERNS:
         match = pattern.search(description_text or "")
@@ -449,6 +798,179 @@ def _job_summary(job: JobRecord) -> dict[str, Any]:
         "apply_link": job.apply_link or job.link or job.source_url,
         "source_type": job.source_type,
     }
+
+
+def _build_target_contact_candidate(
+    *,
+    profile: dict[str, Any],
+    job: JobRecord,
+    discipline_label: str,
+    role_label: str,
+    title_variants: list[str],
+    fit_score: int,
+    confidence: str,
+    seniority: str,
+    lane: str,
+    access_hint: str,
+    rationale: str,
+    follow_up_ask: str,
+    candidate_id: str = "",
+    guessed_name: str = "",
+) -> TargetContactCandidate:
+    normalized_titles = [str(item or "").strip() for item in title_variants if str(item or "").strip()]
+    if guessed_name:
+        search_query = _build_target_contact_search_query(
+            job=job,
+            title_variants=normalized_titles,
+            guessed_name=guessed_name,
+        )
+        google_xray_query = _build_target_contact_google_query(
+            job=job,
+            title_variants=normalized_titles,
+            guessed_name=guessed_name,
+        )
+    else:
+        search_query = _build_target_contact_search_query(job=job, title_variants=normalized_titles)
+        google_xray_query = _build_target_contact_google_query(job=job, title_variants=normalized_titles)
+    name_placeholder = "[Name]"
+    return TargetContactCandidate(
+        candidate_id=candidate_id or _NON_ALNUM.sub("_", role_label.casefold()).strip("_") or "target_contact",
+        role_label=role_label,
+        title_variants=normalized_titles,
+        fit_score=max(1, min(99, int(fit_score))),
+        confidence=confidence or "medium",
+        department=discipline_label,
+        seniority=seniority,
+        lane=lane,
+        access_hint=access_hint,
+        rationale=rationale,
+        guessed_name=guessed_name,
+        search_query=search_query,
+        linkedin_search_url=(
+            f"https://www.linkedin.com/search/results/people/?keywords={quote_plus(search_query)}"
+            if search_query
+            else ""
+        ),
+        google_xray_query=google_xray_query,
+        google_xray_search_url=(
+            f"https://www.google.com/search?q={quote_plus(google_xray_query)}" if google_xray_query else ""
+        ),
+        connection_note=_build_target_connection_note(
+            job=job,
+            department_label=discipline_label,
+            role_label=role_label,
+            name_placeholder=name_placeholder,
+        ),
+        follow_up_message=_build_target_follow_up_message(
+            profile=profile,
+            job=job,
+            name_placeholder=name_placeholder,
+            follow_up_ask=follow_up_ask,
+        ),
+    )
+
+
+def _infer_target_contact_discipline(job: JobRecord) -> str:
+    haystack = " ".join(
+        [
+            str(job.title or ""),
+            str(job.description_text or ""),
+            str(job.role_category_name or ""),
+            str(job.role_category_id or ""),
+        ]
+    ).casefold()
+    for discipline, keywords in _TARGET_DISCIPLINE_KEYWORDS:
+        if any(keyword in haystack for keyword in keywords):
+            return discipline
+    return "general"
+
+
+def _target_contact_location_hint(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "remote" in text.casefold():
+        return "Remote"
+    comma_parts = [part.strip() for part in text.split(",") if part.strip()]
+    if comma_parts:
+        return ", ".join(comma_parts[:2])
+    return text
+
+
+def _target_contact_search_location_fragment(value: str) -> str:
+    text = str(value or "").strip()
+    lowered = text.casefold()
+    if not text or "remote" in lowered or "hybrid" in lowered or "on-site" in lowered or "onsite" in lowered:
+        return ""
+    return text
+
+
+def _build_target_contact_search_query(
+    *,
+    job: JobRecord,
+    title_variants: list[str],
+    guessed_name: str = "",
+) -> str:
+    company = str(job.company or "").strip()
+    location_hint = _target_contact_search_location_fragment(_target_contact_location_hint(job.location_raw))
+    primary_title = str(title_variants[0] if title_variants else "").strip()
+    tokens = [guessed_name.strip(), company, primary_title, location_hint] if guessed_name else [company, primary_title, location_hint]
+    return " ".join(token for token in tokens if token)
+
+
+def _build_target_contact_google_query(
+    *,
+    job: JobRecord,
+    title_variants: list[str],
+    guessed_name: str = "",
+) -> str:
+    company = str(job.company or "").strip()
+    location_hint = _target_contact_search_location_fragment(_target_contact_location_hint(job.location_raw))
+    quoted_titles = [f'"{title}"' for title in title_variants[:2] if str(title or "").strip()]
+    clauses = ["site:linkedin.com/in"]
+    if guessed_name:
+        clauses.append(f'"{guessed_name}"')
+    if company:
+        clauses.append(f'"{company}"')
+    if quoted_titles and not guessed_name:
+        clauses.append(f"({' OR '.join(quoted_titles)})")
+    if location_hint:
+        clauses.append(f'"{location_hint}"')
+    return " ".join(clauses)
+
+
+def _build_target_connection_note(
+    *,
+    job: JobRecord,
+    department_label: str,
+    role_label: str,
+    name_placeholder: str,
+) -> str:
+    role_title = str(job.title or "this role").strip() or "this role"
+    company = str(job.company or "your company").strip() or "your company"
+    return (
+        f"Hi {name_placeholder}, I am applying for the {role_title} role at {company}. "
+        f"Your background on the {department_label} side looks especially relevant, so I wanted to connect."
+        if role_label != "Recruiter Or Talent Partner"
+        else f"Hi {name_placeholder}, I am applying for the {role_title} role at {company} and wanted to connect because you may have visibility into the hiring process."
+    )
+
+
+def _build_target_follow_up_message(
+    *,
+    profile: dict[str, Any],
+    job: JobRecord,
+    name_placeholder: str,
+    follow_up_ask: str,
+) -> str:
+    role_title = str(job.title or "this role").strip() or "this role"
+    company = str(job.company or "your company").strip() or "your company"
+    summary = _profile_summary(profile)
+    return (
+        f"Hi {name_placeholder}, thanks for connecting. I recently applied for the {role_title} role at {company}. "
+        f"My background in {summary} maps closely to what the role is asking for. "
+        f"{follow_up_ask}"
+    )
 
 
 def _csv_value(row: dict[str, Any], *keys: str) -> str:

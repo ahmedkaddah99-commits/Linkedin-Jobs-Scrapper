@@ -18,6 +18,21 @@ const REFERRAL_OUTREACH_STATUSES = [
   "Referral offered",
   "No referral",
 ];
+const LINKEDIN_SOURCE_KINDS = new Set(["linkedin_csv", "linkedin_csv_import"]);
+const REFERRAL_SECTION_OPTIONS = [
+  {
+    id: "manual",
+    label: "Personal Contacts",
+    description: "People you add or maintain yourself.",
+    icon: "person_add",
+  },
+  {
+    id: "linkedin",
+    label: "LinkedIn Connections",
+    description: "Imported from your LinkedIn connections export.",
+    icon: "group",
+  },
+];
 
 function ReferralFormField({ label, children, hint = "" }) {
   return (
@@ -77,6 +92,10 @@ function companyEntries(contact) {
 function importedConnectedDate(contact) {
   const row = contact?.metadata?.import_source_row || {};
   return row["connected on"] || row.connected_on || row["connected date"] || "";
+}
+
+function isLinkedInImportedContact(contact) {
+  return LINKEDIN_SOURCE_KINDS.has(String(contact?.source_kind || "").trim());
 }
 
 async function loadAllReferralContacts(request) {
@@ -176,6 +195,7 @@ export default function ReferralsPage() {
   const { request } = useSession();
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState("");
+  const [activeSection, setActiveSection] = useState("manual");
   const [actionState, setActionState] = useState({ message: "", error: "", busyId: "" });
   const [importState, setImportState] = useState({
     csvText: "",
@@ -190,6 +210,20 @@ export default function ReferralsPage() {
 
   const contacts = data?.contacts || [];
   const outreachItems = data?.outreachItems || [];
+  const editingContact = useMemo(
+    () => contacts.find((contact) => contact.contact_id === editingId) || null,
+    [contacts, editingId],
+  );
+  const manualContacts = useMemo(
+    () => contacts.filter((contact) => !isLinkedInImportedContact(contact)),
+    [contacts],
+  );
+  const linkedinContacts = useMemo(
+    () => contacts.filter((contact) => isLinkedInImportedContact(contact)),
+    [contacts],
+  );
+  const visibleContacts = activeSection === "linkedin" ? linkedinContacts : manualContacts;
+  const editingLinkedInContact = isLinkedInImportedContact(editingContact);
   const stats = useMemo(() => {
     const uniqueCompanies = new Set(
       contacts
@@ -199,11 +233,13 @@ export default function ReferralsPage() {
     );
     return {
       total: contacts.length,
+      manual: manualContacts.length,
+      linkedin: linkedinContacts.length,
       companies: uniqueCompanies.size,
       canRefer: contacts.filter((contact) => Boolean(contact.can_refer)).length,
       outreachTracked: outreachItems.length,
     };
-  }, [contacts, outreachItems]);
+  }, [contacts, linkedinContacts.length, manualContacts.length, outreachItems]);
   const outreachByContact = useMemo(() => {
     const groups = new Map();
     outreachItems.forEach((item) => {
@@ -221,6 +257,7 @@ export default function ReferralsPage() {
   }
 
   function startEditing(contact) {
+    setActiveSection(isLinkedInImportedContact(contact) ? "linkedin" : "manual");
     setEditingId(contact.contact_id);
     setForm({
       name: contact.name || "",
@@ -243,6 +280,19 @@ export default function ReferralsPage() {
     try {
       const path = editingId ? `/referrals/${editingId}` : "/referrals";
       const method = editingId ? "PUT" : "POST";
+      const sourcePayload = editingContact
+        ? {
+            source_kind: editingContact.source_kind || "manual",
+            import_batch_id: editingContact.import_batch_id || "",
+            import_ref: editingContact.import_ref || "",
+            is_active: editingContact.is_active !== false,
+            inactive_at: editingContact.inactive_at || "",
+            inactive_reason: editingContact.inactive_reason || "",
+            metadata: editingContact.metadata || {},
+          }
+        : {
+            source_kind: "manual",
+          };
       await request(path, {
         method,
         body: {
@@ -252,6 +302,7 @@ export default function ReferralsPage() {
           linkedin_url: form.linkedin_url,
           relationship_note: form.relationship_note,
           can_refer: form.can_refer,
+          ...sourcePayload,
         },
       });
       resetForm();
@@ -357,6 +408,11 @@ export default function ReferralsPage() {
   }
 
   const manualCompanies = parseCompaniesText(form.companies_text, form.can_refer);
+  const showingLinkedInImportPanel = activeSection === "linkedin" && !editingLinkedInContact;
+  const visibleSectionEmptyCopy =
+    activeSection === "linkedin"
+      ? "No LinkedIn connections imported yet. Upload your CSV here to turn your export into searchable referral matches."
+      : "No personal contacts saved yet. Add people you already know outside LinkedIn or contacts you want to track more deliberately.";
 
   return (
     <div className="space-y-8">
@@ -365,15 +421,15 @@ export default function ReferralsPage() {
           Referrals
         </h1>
         <p className="mt-1 text-sm text-on-surface-variant">
-          Keep a low-friction database of warm contacts, import LinkedIn exports, and link one person to multiple companies when needed.
+          Keep manual warm contacts separate from imported LinkedIn connections, and use both when deciding who to approach for a referral.
         </p>
       </header>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: "Contacts", value: stats.total },
+          { label: "Personal Contacts", value: stats.manual },
+          { label: "LinkedIn Connections", value: stats.linkedin },
           { label: "Target Companies", value: stats.companies },
-          { label: "Can Refer", value: stats.canRefer },
           { label: "Tracked Outreach", value: stats.outreachTracked },
         ].map((card) => (
           <div
@@ -388,209 +444,285 @@ export default function ReferralsPage() {
         ))}
       </section>
 
+      <section className="grid gap-3 lg:grid-cols-2">
+        {REFERRAL_SECTION_OPTIONS.map((section) => {
+          const isActive = activeSection === section.id;
+          const count = section.id === "linkedin" ? stats.linkedin : stats.manual;
+          return (
+            <button
+              key={section.id}
+              className={[
+                "rounded-2xl border p-5 text-left transition-all",
+                isActive
+                  ? "border-primary/30 bg-primary/10 shadow-sm"
+                  : "border-outline-variant/20 bg-surface-container-lowest hover:border-primary/20 hover:bg-surface-container-low",
+              ].join(" ")}
+              onClick={() => {
+                setActiveSection(section.id);
+                if (editingId && section.id !== (editingLinkedInContact ? "linkedin" : "manual")) {
+                  resetForm();
+                }
+              }}
+              type="button"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[20px] text-primary">{section.icon}</span>
+                    <div className="text-base font-semibold text-on-surface">{section.label}</div>
+                  </div>
+                  <div className="mt-2 text-sm text-on-surface-variant">{section.description}</div>
+                </div>
+                <span className="rounded-full bg-surface px-3 py-1 text-xs font-semibold text-on-surface-variant">
+                  {count}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </section>
+
+      <section className="rounded-2xl border border-primary/15 bg-[radial-gradient(circle_at_top_left,rgba(58,130,246,0.12),transparent_45%),linear-gradient(135deg,rgba(15,23,42,0.02),rgba(58,130,246,0.02))] p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-primary">Target Contact Discovery</div>
+            <div className="mt-1 text-lg font-semibold text-on-surface">
+              Need someone beyond your current network?
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-on-surface-variant">
+              Use the new contact-discovery action from live applications in Tracker to generate ranked LinkedIn search targets, quick connect notes, and follow-up drafts.
+            </p>
+          </div>
+          <Link
+            className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            to="/tracker"
+          >
+            <span className="material-symbols-outlined text-[18px]">travel_explore</span>
+            Open Tracker
+          </Link>
+        </div>
+      </section>
+
       <section className="grid gap-8 xl:grid-cols-[1.05fr_1.4fr]">
         <div className="space-y-6">
-          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
-            <div className="mb-5 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
-                  {editingId ? "Edit Contact" : "Add Contact"}
-                </h2>
-                <p className="mt-1 text-sm text-on-surface-variant">
-                  Add a person once, then link them to as many relevant companies as needed.
-                </p>
+          {!showingLinkedInImportPanel ? (
+            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
+                    {editingLinkedInContact
+                      ? "Edit LinkedIn Connection"
+                      : editingId
+                        ? "Edit Personal Contact"
+                        : "Add Personal Contact"}
+                  </h2>
+                  <p className="mt-1 text-sm text-on-surface-variant">
+                    {editingLinkedInContact
+                      ? "Keep the LinkedIn import source, but adjust notes, company mapping, or referability."
+                      : "Add a person once, then link them to as many relevant companies as needed."}
+                  </p>
+                </div>
+                {editingId ? (
+                  <button
+                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    onClick={resetForm}
+                    type="button"
+                  >
+                    Cancel Edit
+                  </button>
+                ) : null}
               </div>
-              {editingId ? (
+
+              <div className="space-y-4">
+                <ReferralFormField label="Contact Name">
+                  <input
+                    className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    onChange={(event) => updateForm({ name: event.target.value })}
+                    placeholder="Jane Doe"
+                    value={form.name}
+                  />
+                </ReferralFormField>
+
+                <ReferralFormField
+                  label="Companies"
+                  hint="Use one company per line. Optional role format: Company Name | Role Title"
+                >
+                  <textarea
+                    className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    onChange={(event) => updateForm({ companies_text: event.target.value })}
+                    placeholder={"Acme GmbH | Engineering Manager\nContoso SE | Former Team Lead"}
+                    value={form.companies_text}
+                  />
+                </ReferralFormField>
+
+                <ReferralFormField label="LinkedIn URL" hint="Used for quick open or copy later.">
+                  <input
+                    className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    onChange={(event) => updateForm({ linkedin_url: event.target.value })}
+                    placeholder="https://www.linkedin.com/in/jane-doe/"
+                    value={form.linkedin_url}
+                  />
+                </ReferralFormField>
+
+                <ReferralFormField label="Relationship Note" hint="How you know them or what context to mention.">
+                  <textarea
+                    className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    onChange={(event) => updateForm({ relationship_note: event.target.value })}
+                    placeholder="Worked together on the Berlin product launch."
+                    value={form.relationship_note}
+                  />
+                </ReferralFormField>
+
+                <label className="flex items-center gap-3 rounded-lg border border-outline-variant/20 bg-surface px-4 py-3">
+                  <input
+                    checked={Boolean(form.can_refer)}
+                    className="h-4 w-4 rounded border-outline-variant/30 text-primary focus:ring-primary/20"
+                    onChange={(event) => updateForm({ can_refer: event.target.checked })}
+                    type="checkbox"
+                  />
+                  <div>
+                    <div className="text-sm font-medium text-on-surface">Can refer me</div>
+                    <div className="text-xs text-on-surface-variant">
+                      Applies to the listed companies unless you change it later.
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              {manualCompanies.length ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {manualCompanies.map((company) => (
+                    <span
+                      key={`${company.company_name}-${company.role_title || "role"}`}
+                      className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
+                    >
+                      {company.company_name}
+                      {company.role_title ? ` | ${company.role_title}` : ""}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+
+              {(actionState.message || actionState.error) && !actionState.busyId ? (
+                <div className={["mt-4 text-sm", actionState.error ? "text-error" : "text-primary"].join(" ")}>
+                  {actionState.error || actionState.message}
+                </div>
+              ) : null}
+
+              <div className="mt-6 flex flex-wrap gap-3">
                 <button
-                  className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                  onClick={resetForm}
+                  className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!form.name.trim() || !manualCompanies.length || Boolean(actionState.busyId)}
+                  onClick={saveContact}
                   type="button"
                 >
-                  Cancel Edit
+                  {editingLinkedInContact
+                    ? "Save Connection"
+                    : editingId
+                      ? "Save Contact"
+                      : "Add Personal Contact"}
                 </button>
-              ) : null}
-            </div>
-
-            <div className="space-y-4">
-              <ReferralFormField label="Contact Name">
-                <input
-                  className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => updateForm({ name: event.target.value })}
-                  placeholder="Jane Doe"
-                  value={form.name}
-                />
-              </ReferralFormField>
-
-              <ReferralFormField
-                label="Companies"
-                hint="Use one company per line. Optional role format: Company Name | Role Title"
-              >
-                <textarea
-                  className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => updateForm({ companies_text: event.target.value })}
-                  placeholder={"Acme GmbH | Engineering Manager\nContoso SE | Former Team Lead"}
-                  value={form.companies_text}
-                />
-              </ReferralFormField>
-
-              <ReferralFormField label="LinkedIn URL" hint="Used for quick open/copy from the app later.">
-                <input
-                  className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => updateForm({ linkedin_url: event.target.value })}
-                  placeholder="https://www.linkedin.com/in/jane-doe/"
-                  value={form.linkedin_url}
-                />
-              </ReferralFormField>
-
-              <ReferralFormField label="Relationship Note" hint="How you know them or what context to mention.">
-                <textarea
-                  className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => updateForm({ relationship_note: event.target.value })}
-                  placeholder="Worked together on the Berlin product launch."
-                  value={form.relationship_note}
-                />
-              </ReferralFormField>
-
-              <label className="flex items-center gap-3 rounded-lg border border-outline-variant/20 bg-surface px-4 py-3">
-                <input
-                  checked={Boolean(form.can_refer)}
-                  className="h-4 w-4 rounded border-outline-variant/30 text-primary focus:ring-primary/20"
-                  onChange={(event) => updateForm({ can_refer: event.target.checked })}
-                  type="checkbox"
-                />
-                <div>
-                  <div className="text-sm font-medium text-on-surface">Can refer me</div>
-                  <div className="text-xs text-on-surface-variant">
-                    Applies to the listed companies unless you change it later.
-                  </div>
-                </div>
-              </label>
-            </div>
-
-            {manualCompanies.length ? (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {manualCompanies.map((company) => (
-                  <span
-                    key={`${company.company_name}-${company.role_title || "role"}`}
-                    className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
-                  >
-                    {company.company_name}
-                    {company.role_title ? ` | ${company.role_title}` : ""}
-                  </span>
-                ))}
+                <button
+                  className="rounded bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                  onClick={() => refresh().catch(() => undefined)}
+                  type="button"
+                >
+                  Refresh
+                </button>
               </div>
-            ) : null}
-
-            {(actionState.message || actionState.error) && !actionState.busyId ? (
-              <div className={["mt-4 text-sm", actionState.error ? "text-error" : "text-primary"].join(" ")}>
-                {actionState.error || actionState.message}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
+              <div className="mb-5">
+                <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
+                  Import LinkedIn Connections
+                </h2>
+                <p className="mt-1 text-sm text-on-surface-variant">
+                  Upload the LinkedIn connections CSV exactly as LinkedIn gives it to you. Notes before the table are ignored automatically, and the newest upload becomes the current source of truth.
+                </p>
+                <Link
+                  className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary-container"
+                  to="/referrals/linkedin-csv-guide"
+                >
+                  <span className="material-symbols-outlined text-[16px]">help</span>
+                  How to export your LinkedIn connections
+                </Link>
               </div>
-            ) : null}
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button
-                className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!form.name.trim() || !manualCompanies.length || Boolean(actionState.busyId)}
-                onClick={saveContact}
-                type="button"
-              >
-                {editingId ? "Save Contact" : "Add Contact"}
-              </button>
-              <button
-                className="rounded bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                onClick={() => refresh().catch(() => undefined)}
-                type="button"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
+              <div className="space-y-4">
+                <label className="inline-flex cursor-pointer items-center gap-3 rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low">
+                  <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                  {importState.fileName ? `Loaded ${importState.fileName}` : "Choose CSV File"}
+                  <input
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    onChange={(event) => {
+                      handleCsvFileChange(event).catch((fileError) => {
+                        setImportState((current) => ({
+                          ...current,
+                          error: fileError.message || "Unable to read the CSV file.",
+                        }));
+                      });
+                    }}
+                    type="file"
+                  />
+                </label>
 
-          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
-            <div className="mb-5">
-              <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
-                Import LinkedIn Connections
-              </h2>
-              <p className="mt-1 text-sm text-on-surface-variant">
-                Upload the LinkedIn connections CSV exactly as LinkedIn gives it to you. Notes before the table are ignored automatically, and the newest upload becomes the current source of truth.
-              </p>
-              <Link
-                className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary-container"
-                to="/referrals/linkedin-csv-guide"
-              >
-                <span className="material-symbols-outlined text-[16px]">help</span>
-                How to export your LinkedIn connections
-              </Link>
-            </div>
-
-            <div className="space-y-4">
-              <label className="inline-flex cursor-pointer items-center gap-3 rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low">
-                <span className="material-symbols-outlined text-[18px]">upload_file</span>
-                {importState.fileName ? `Loaded ${importState.fileName}` : "Choose CSV File"}
-                <input
-                  accept=".csv,text/csv"
-                  className="hidden"
-                  onChange={(event) => {
-                    handleCsvFileChange(event).catch((fileError) => {
+                <ReferralFormField
+                  label="CSV Content"
+                  hint="Runr looks for this LinkedIn header row: First Name, Last Name, URL, Email Address, Company, Position, Connected On. Rows keep the same order as the uploaded file."
+                >
+                  <textarea
+                    className="min-h-40 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    onChange={(event) =>
                       setImportState((current) => ({
                         ...current,
-                        error: fileError.message || "Unable to read the CSV file.",
-                      }));
-                    });
-                  }}
-                  type="file"
-                />
-              </label>
-
-              <ReferralFormField
-                label="CSV Content"
-                hint="Runr looks for this LinkedIn header row: First Name, Last Name, URL, Email Address, Company, Position, Connected On. Rows keep the same order as the uploaded file."
-              >
-                <textarea
-                  className="min-h-40 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => setImportState((current) => ({
-                    ...current,
-                    csvText: event.target.value,
-                    message: "",
-                    error: "",
-                    summary: null,
-                  }))}
-                  placeholder="Paste your LinkedIn connections CSV here if you do not want to upload a file."
-                  value={importState.csvText}
-                />
-              </ReferralFormField>
-            </div>
-
-            {(importState.message || importState.error) ? (
-              <div className={["mt-4 text-sm", importState.error ? "text-error" : "text-primary"].join(" ")}>
-                {importState.error || importState.message}
+                        csvText: event.target.value,
+                        message: "",
+                        error: "",
+                        summary: null,
+                      }))
+                    }
+                    placeholder="Paste your LinkedIn connections CSV here if you do not want to upload a file."
+                    value={importState.csvText}
+                  />
+                </ReferralFormField>
               </div>
-            ) : null}
-            {importState.summary && !importState.error ? (
-              <div className="mt-3 grid gap-2 text-xs text-on-surface-variant sm:grid-cols-3">
-                <div className="rounded-lg bg-surface-container-low px-3 py-2">
-                  Parsed rows: <span className="font-semibold text-on-surface">{importState.summary.parsed || 0}</span>
-                </div>
-                <div className="rounded-lg bg-surface-container-low px-3 py-2">
-                  Added: <span className="font-semibold text-on-surface">{importState.summary.created || 0}</span>
-                </div>
-                <div className="rounded-lg bg-surface-container-low px-3 py-2">
-                  Total saved: <span className="font-semibold text-on-surface">{importState.summary.total_contacts || 0}</span>
-                </div>
-              </div>
-            ) : null}
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button
-                className="rounded bg-primary px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={!String(importState.csvText || "").trim() || importState.busy}
-                onClick={handleImport}
-                type="button"
-              >
-                {importState.busy ? "Importing..." : "Import CSV"}
-              </button>
+              {(importState.message || importState.error) ? (
+                <div className={["mt-4 text-sm", importState.error ? "text-error" : "text-primary"].join(" ")}>
+                  {importState.error || importState.message}
+                </div>
+              ) : null}
+              {importState.summary && !importState.error ? (
+                <div className="mt-3 grid gap-2 text-xs text-on-surface-variant sm:grid-cols-4">
+                  <div className="rounded-lg bg-surface-container-low px-3 py-2">
+                    Parsed rows: <span className="font-semibold text-on-surface">{importState.summary.parsed || 0}</span>
+                  </div>
+                  <div className="rounded-lg bg-surface-container-low px-3 py-2">
+                    Added: <span className="font-semibold text-on-surface">{importState.summary.created || 0}</span>
+                  </div>
+                  <div className="rounded-lg bg-surface-container-low px-3 py-2">
+                    Updated: <span className="font-semibold text-on-surface">{importState.summary.updated || 0}</span>
+                  </div>
+                  <div className="rounded-lg bg-surface-container-low px-3 py-2">
+                    Total saved: <span className="font-semibold text-on-surface">{importState.summary.total_contacts || 0}</span>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <button
+                  className="rounded bg-primary px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!String(importState.csvText || "").trim() || importState.busy}
+                  onClick={handleImport}
+                  type="button"
+                >
+                  {importState.busy ? "Importing..." : "Import CSV"}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest">
@@ -598,10 +730,12 @@ export default function ReferralsPage() {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
-                  Saved Contacts
+                  {activeSection === "linkedin" ? "Imported LinkedIn Connections" : "Personal Contacts"}
                 </h2>
                 <p className="mt-1 text-sm text-on-surface-variant">
-                  These contacts are matched against company names in generated jobs. Outreach status is edited here and summarized per contact.
+                  {activeSection === "linkedin"
+                    ? "Imported connections stay grouped here so you can separate export-based matches from the contacts you maintain yourself."
+                    : "These contacts are matched against generated jobs and keep their outreach history in one place."}
                 </p>
               </div>
             </div>
@@ -612,8 +746,8 @@ export default function ReferralsPage() {
               <div className="px-6 py-10 text-on-surface-variant">Loading contacts...</div>
             ) : error ? (
               <div className="px-6 py-10 text-error">{error}</div>
-            ) : contacts.length ? (
-              contacts.map((contact) => {
+            ) : visibleContacts.length ? (
+              visibleContacts.map((contact) => {
                 const contactOutreach = outreachByContact.get(contact.contact_id) || [];
 
                 return (
@@ -636,6 +770,9 @@ export default function ReferralsPage() {
                               Removed from latest upload
                             </span>
                           ) : null}
+                          <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-semibold text-on-surface-variant">
+                            {isLinkedInImportedContact(contact) ? "LinkedIn Import" : "Personal Contact"}
+                          </span>
                         </div>
 
                         <div className="flex flex-wrap gap-2">
@@ -792,7 +929,7 @@ export default function ReferralsPage() {
               })
             ) : (
               <div className="px-6 py-10 text-on-surface-variant">
-                No referral contacts yet. Add a person manually or import your LinkedIn connections to start surfacing warm paths.
+                {visibleSectionEmptyCopy}
               </div>
             )}
           </div>

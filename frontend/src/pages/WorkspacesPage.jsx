@@ -2576,11 +2576,11 @@ export default function WorkspacesPage() {
                     <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(320px,1.1fr)]">
                       <div className="space-y-4">
                         <div className="rounded-lg border border-outline-variant/10 bg-surface p-4">
-                          <p className="text-sm font-semibold text-on-surface">Workspace-specific style</p>
+                          <p className="text-sm font-semibold text-on-surface">Workspace personalization and style</p>
                           <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                            Blank values inherit your shared document defaults. The live preview uses
-                            the selected baseline CV inside this workspace, so you can validate style
-                            changes without leaving the Workspaces page.
+                            Personalization scope decides whether this workspace can use only the
+                            baseline CV, selected Career Assets, or the full master career profile.
+                            Blank style values still inherit your shared document defaults.
                           </p>
                         </div>
 
@@ -2682,7 +2682,7 @@ export default function WorkspacesPage() {
                           <div>
                             <p className="text-sm font-semibold text-on-surface">Upload a new workspace CV</p>
                             <p className="text-xs leading-6 text-on-surface-variant">
-                              Uploading here also adds the CV to the shared documents library.
+                              Uploading here also adds the CV to the shared Career Assets library.
                             </p>
                           </div>
                           <label className="inline-flex cursor-pointer items-center rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high">

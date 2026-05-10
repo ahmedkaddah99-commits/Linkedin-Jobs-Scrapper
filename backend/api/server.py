@@ -49,6 +49,9 @@ from backend.capabilities.tailored_documents.modes import (
 from backend.capabilities.tailored_documents.rendering import get_document_design_options
 from backend.bootstrap import create_backend
 from backend.domain.phase0_contracts import (
+    PERSONALIZATION_SCOPE_BASELINE,
+    PERSONALIZATION_SCOPE_FULL,
+    PERSONALIZATION_SCOPE_SELECTED,
     legacy_tracker_status_for_application_status,
     normalize_application_document,
     normalize_application_status,
@@ -326,6 +329,22 @@ def _extract_text_from_pdf(data: bytes) -> str:
         return "\n".join(page.extract_text() or "" for page in reader.pages)
     except Exception:
         return ""
+
+
+def _extract_text_from_uploaded_file(filename: str, data: bytes) -> str:
+    extension = Path(filename or "").suffix.lower()
+    if extension == ".docx":
+        return _extract_text_from_docx(data).strip()
+    if extension == ".pdf":
+        return _extract_text_from_pdf(data).strip()
+    for encoding in ("utf-8", "latin-1"):
+        try:
+            return data.decode(encoding).strip()
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            return ""
+    return ""
 
 
 def _parse_cv_sections(cv_text: str) -> dict:
@@ -1323,6 +1342,27 @@ def _merge_web_cv_palette(existing_palette: dict, payload_palette: dict) -> dict
     return merged
 
 
+def _merge_string_list(existing_value: Any, payload_value: Any, *, limit: int = 25) -> list[str]:
+    source = payload_value if payload_value is not None else existing_value
+    if isinstance(source, list):
+        raw_values = source
+    elif source in (None, "", []):
+        raw_values = []
+    else:
+        raw_values = [source]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        normalized = str(raw_value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        cleaned.append(normalized)
+        seen.add(normalized)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
 def _merge_document_metadata(existing_documents: dict, documents_payload: dict) -> dict:
     existing_web_cv_palette = dict(existing_documents.get("web_cv_palette") or {})
     payload_web_cv_palette = dict(documents_payload.get("web_cv_palette") or {})
@@ -1350,6 +1390,48 @@ def _merge_document_metadata(existing_documents: dict, documents_payload: dict) 
         ),
         "web_cv_show_photo": bool(documents_payload.get("web_cv_show_photo", default_web_cv_show_photo)),
         "web_cv_palette": _merge_web_cv_palette(existing_web_cv_palette, payload_web_cv_palette),
+        "master_career_profile_asset_id": str(
+            documents_payload.get("master_career_profile_asset_id")
+            if "master_career_profile_asset_id" in documents_payload
+            else existing_documents.get("master_career_profile_asset_id")
+            or ""
+        ).strip(),
+        "master_career_profile_text": str(
+            documents_payload.get("master_career_profile_text")
+            if "master_career_profile_text" in documents_payload
+            else existing_documents.get("master_career_profile_text")
+            or ""
+        ).strip(),
+        "career_highlights_text": str(
+            documents_payload.get("career_highlights_text")
+            if "career_highlights_text" in documents_payload
+            else existing_documents.get("career_highlights_text")
+            or ""
+        ).strip(),
+        "bullet_bank_text": str(
+            documents_payload.get("bullet_bank_text")
+            if "bullet_bank_text" in documents_payload
+            else existing_documents.get("bullet_bank_text")
+            or ""
+        ).strip(),
+        "professional_hurdles_text": str(
+            documents_payload.get("professional_hurdles_text")
+            if "professional_hurdles_text" in documents_payload
+            else existing_documents.get("professional_hurdles_text")
+            or ""
+        ).strip(),
+        "motivation_letter_notes": str(
+            documents_payload.get("motivation_letter_notes")
+            if "motivation_letter_notes" in documents_payload
+            else existing_documents.get("motivation_letter_notes")
+            or ""
+        ).strip(),
+        "ai_canvas_source_asset_ids": _merge_string_list(
+            existing_documents.get("ai_canvas_source_asset_ids"),
+            documents_payload.get("ai_canvas_source_asset_ids")
+            if "ai_canvas_source_asset_ids" in documents_payload
+            else None,
+        ),
     }
 
 
@@ -1358,6 +1440,9 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
     documents = dict((user.metadata or {}).get("documents") or {})
     overrides = dict(payload.get("run_input_overrides") or {})
     workspace_settings = dict(workspace_settings or {})
+    personalization_scope = str(
+        workspace_settings.get("personalization_scope") or PERSONALIZATION_SCOPE_BASELINE
+    ).strip()
 
     def workspace_has_value(key: str) -> bool:
         value = workspace_settings.get(key)
@@ -1388,6 +1473,27 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
             overrides.setdefault("profile_image", photo_path)
     elif not include_photo_enabled and not workspace_has_value("profile_image"):
         overrides["profile_image"] = ""
+
+    if personalization_scope in {PERSONALIZATION_SCOPE_SELECTED, PERSONALIZATION_SCOPE_FULL}:
+        selected_asset_ids = _merge_string_list(
+            [],
+            documents.get("ai_canvas_source_asset_ids"),
+            limit=50,
+        )
+        if selected_asset_ids and not workspace_has_value("ai_canvas_source_asset_ids"):
+            overrides.setdefault("ai_canvas_source_asset_ids", selected_asset_ids)
+
+    if personalization_scope == PERSONALIZATION_SCOPE_FULL:
+        for field_id in (
+            "master_career_profile_text",
+            "career_highlights_text",
+            "bullet_bank_text",
+            "professional_hurdles_text",
+            "motivation_letter_notes",
+        ):
+            field_value = str(documents.get(field_id) or "").strip()
+            if field_value and not workspace_has_value(field_id):
+                overrides.setdefault(field_id, field_value)
 
     return overrides
 
@@ -2728,6 +2834,8 @@ def _document_group_for_asset_kind(asset_kind: str) -> tuple[str, str]:
         return "applied_cvs", "Applied CVs"
     if normalized_kind == "workspace_cv":
         return "uploaded_cvs", "Uploaded CVs"
+    if normalized_kind == "master_career_profile":
+        return "career_profiles", "Master Career Profiles"
     if normalized_kind in {"cover_letter", "motivation_letter"}:
         return "generated_letters", "Generated Letters"
     if normalized_kind == "bundle_export":
@@ -2739,16 +2847,22 @@ def _document_type_for_asset_kind(asset_kind: str) -> str:
     normalized_kind = str(asset_kind or "").strip().lower()
     if normalized_kind == "workspace_cv":
         return "Original CV"
+    if normalized_kind == "master_career_profile":
+        return "Master Career Profile"
     if normalized_kind == APPLIED_CV_ASSET_KIND:
         return APPLIED_CV_DOCUMENT_TYPE
     if normalized_kind == "generated_cv":
         return "Tailored CV"
     if normalized_kind in {"cover_letter", "motivation_letter"}:
         return "Cover letter"
+    if normalized_kind == "recommendation_letter":
+        return "Recommendation letter"
     if "transcript" in normalized_kind:
         return "Transcript"
     if "certificate" in normalized_kind or "certification" in normalized_kind:
         return "Certificate"
+    if normalized_kind == "uploaded_document":
+        return "Supporting document"
     return "Other"
 
 
@@ -4399,6 +4513,29 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     if workspace_id and not application.user_can_access_workspace(user, workspace_id):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                     display_name = str((query.get("display_name") or [filename])[0]).strip() or filename
+                    tags = [asset_kind]
+                    asset_metadata: dict[str, Any] = {}
+                    if asset_kind in {"workspace_cv", "master_career_profile"}:
+                        cv_text = _extract_text_from_uploaded_file(filename, file_bytes)
+                        if not cv_text:
+                            raise ValueError(f"Could not extract any text from uploaded file '{filename}'.")
+                        extraction = extract_cv_profile(cv_text)
+                        asset_metadata = {
+                            "source_text": cv_text,
+                            "source_char_count": len(cv_text),
+                            "parsed_profile": dict(extraction.get("profile") or {}),
+                            "profile_extraction": {
+                                "provider": str(extraction.get("provider") or ""),
+                                "model": str(extraction.get("model") or ""),
+                                "warnings": list(extraction.get("warnings") or []),
+                                "extracted_at": str(extraction.get("extracted_at") or ""),
+                            },
+                        }
+                        tags = (
+                            ["cv", "workspace_cv"]
+                            if asset_kind == "workspace_cv"
+                            else ["career_profile", "master_career_profile"]
+                        )
                     asset = _store_candidate_asset_upload(
                         application,
                         user,
@@ -4408,7 +4545,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                         display_name=display_name,
                         workspace_id=workspace_id,
                         role=asset_kind,
-                        tags=[asset_kind],
+                        tags=tags,
+                        metadata=asset_metadata,
                     )
                     self._send_json({"asset": asset}, status=HTTPStatus.CREATED)
                     return
@@ -4690,6 +4828,17 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     user, _ = self._require_identity()
                     self._send_json(
                         application.generate_hiring_manager_outreach(
+                            user_id=user.user_id,
+                            run_id=str(payload.get("run_id") or ""),
+                            job_id=str(payload.get("job_id") or ""),
+                        ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                if segments == ["outreach", "target-contact-discovery"]:
+                    user, _ = self._require_identity()
+                    self._send_json(
+                        application.generate_target_contact_discovery(
                             user_id=user.user_id,
                             run_id=str(payload.get("run_id") or ""),
                             job_id=str(payload.get("job_id") or ""),

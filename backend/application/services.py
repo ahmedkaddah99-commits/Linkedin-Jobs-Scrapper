@@ -9,6 +9,7 @@ from uuid import uuid4
 from backend.capabilities.networking import (
     build_hiring_manager_outreach_draft,
     build_referral_outreach_draft,
+    build_target_contact_discovery,
     find_referral_contacts_for_company,
     guess_hiring_manager_from_job,
     merge_referral_contacts,
@@ -968,6 +969,18 @@ class BackendApplication:
             job=job,
             hiring_manager=hiring_manager,
         )
+
+    def generate_target_contact_discovery(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        job = self._get_job_for_run(run_id=run_id, job_id=job_id)
+        profile = dict((user.metadata or {}).get("profile") or {})
+        return build_target_contact_discovery(profile=profile, job=job)
 
     def list_api_tokens(
         self,

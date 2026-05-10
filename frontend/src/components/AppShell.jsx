@@ -44,7 +44,7 @@ const navItems = [
     matchers: [{ path: "/tracker", end: false }],
   },
   {
-    label: "Documents",
+    label: "Career Assets",
     icon: "inventory_2",
     to: "/documents",
     matchers: [

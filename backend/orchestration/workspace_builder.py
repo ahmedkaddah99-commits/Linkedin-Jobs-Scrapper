@@ -29,7 +29,11 @@ from backend.domain.phase0_contracts import (
     DEFAULT_MULTI_PORTAL_IDS,
     JOB_FILTERING_MODE_BROADER,
     JOB_FILTERING_MODE_STRICT,
+    PERSONALIZATION_SCOPE_BASELINE,
+    PERSONALIZATION_SCOPE_FULL,
+    PERSONALIZATION_SCOPE_SELECTED,
     normalize_job_filtering_mode,
+    normalize_personalization_scope,
     normalize_workspace_configuration_v2,
 )
 from backend.domain.models import JobSource, ProfileRef, PromptSetRef, StageDefinition, WorkflowTemplate, WorkspaceDefinition
@@ -190,6 +194,7 @@ COUNTRY_TO_RECOMMENDED_PORTALS = {
 USER_FACING_FIELD_IDS = {
     "workspace_cv_asset_id",
     "cv_generation_mode",
+    "personalization_scope",
     "keywords",
     "country_codes",
     "cities",
@@ -228,6 +233,7 @@ USER_FACING_FIELD_IDS = {
 FIELD_SECTION_BY_ID = {
     "workspace_cv_asset_id": "cv_binding",
     "cv_generation_mode": "advanced",
+    "personalization_scope": "documents",
     "keywords": "targeting",
     "country_codes": "targeting",
     "cities": "targeting",
@@ -266,6 +272,7 @@ FIELD_SECTION_BY_ID = {
 FIELD_SORT_ORDER = {
     "workspace_cv_asset_id": 10,
     "cv_generation_mode": 15,
+    "personalization_scope": 155,
     "keywords": 20,
     "target_roles": 25,
     "country_codes": 30,
@@ -324,8 +331,8 @@ BUILDER_SECTIONS = [
     },
     {
         "id": "documents",
-        "title": "Document Style",
-        "description": "Set the workspace-specific CV design choices used when this workspace generates tailored application documents.",
+        "title": "Personalization & Style",
+        "description": "Choose how much of the candidate knowledge base this workspace may use, then set the workspace-specific CV styling defaults.",
     },
     {
         "id": "prompt_preferences",
@@ -401,6 +408,19 @@ def _configuration_fields() -> list[dict]:
             ],
             "default": DEFAULT_CV_GENERATION_MODE,
             "frontend_visible": False,
+        },
+        {
+            "id": "personalization_scope",
+            "label": "Personalization Scope",
+            "description": "Control whether tailoring should use only the baseline CV, the baseline plus selected source assets, or the full master career profile.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": [
+                {"value": PERSONALIZATION_SCOPE_BASELINE, "label": "Baseline CV only"},
+                {"value": PERSONALIZATION_SCOPE_SELECTED, "label": "Baseline + selected assets"},
+                {"value": PERSONALIZATION_SCOPE_FULL, "label": "Full career profile"},
+            ],
+            "default": PERSONALIZATION_SCOPE_BASELINE,
         },
         {
             "id": "keywords",
@@ -1634,6 +1654,9 @@ def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_setti
     )
     if flow_id == FLOW_TAILORED_DOCUMENTS:
         settings["job_filtering_mode"] = normalize_job_filtering_mode(settings.get("job_filtering_mode"))
+        settings["personalization_scope"] = normalize_personalization_scope(
+            settings.get("personalization_scope")
+        )
     return settings
 
 

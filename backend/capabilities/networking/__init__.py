@@ -1,7 +1,9 @@
 from .outreach import (
     HiringManagerMatch,
+    TargetContactCandidate,
     build_hiring_manager_outreach_draft,
     build_referral_outreach_draft,
+    build_target_contact_discovery,
     find_referral_contacts_for_company,
     guess_hiring_manager_from_job,
     merge_referral_contacts,
@@ -12,8 +14,10 @@ from .outreach import (
 
 __all__ = [
     "HiringManagerMatch",
+    "TargetContactCandidate",
     "build_hiring_manager_outreach_draft",
     "build_referral_outreach_draft",
+    "build_target_contact_discovery",
     "find_referral_contacts_for_company",
     "guess_hiring_manager_from_job",
     "merge_referral_contacts",

@@ -1,12 +1,13 @@
 import unittest
 
 from backend.capabilities.networking import (
+    build_target_contact_discovery,
     find_referral_contacts_for_company,
     merge_referral_contacts,
     parse_referral_contacts_csv,
 )
 from backend.capabilities.networking.outreach import company_names_safely_match
-from backend.domain.models import ReferralContactRecord
+from backend.domain.models import JobRecord, ReferralContactRecord
 
 
 class ReferralNetworkingTests(unittest.TestCase):
@@ -181,6 +182,29 @@ class ReferralNetworkingTests(unittest.TestCase):
         matches = find_referral_contacts_for_company([active_one, inactive, active_two], "Stripe")
 
         self.assertEqual([contact.name for contact in matches], ["One", "Two"])
+
+    def test_target_contact_discovery_builds_ranked_search_candidates(self):
+        payload = build_target_contact_discovery(
+            profile={
+                "name": "Analyst User",
+                "summary": "Analytics specialist who improves dashboards and reporting workflows.",
+            },
+            job=JobRecord(
+                job_id="job_1",
+                title="Senior Data Analyst",
+                company="ACME GmbH",
+                location_raw="Berlin, Germany",
+                description_text="Reporting to Jane Hiringmanager on the analytics team.",
+            ),
+        )
+
+        self.assertEqual(payload["discipline"], "data")
+        self.assertEqual(payload["department_label"], "Data")
+        self.assertGreaterEqual(len(payload["candidates"]), 4)
+        self.assertEqual(payload["candidates"][0]["role_label"], "Named Hiring Signal")
+        self.assertIn("linkedin.com/search/results/people", payload["candidates"][0]["linkedin_search_url"])
+        self.assertIn("site:linkedin.com/in", payload["candidates"][0]["google_xray_query"])
+        self.assertIn("[Name]", payload["candidates"][0]["connection_note"])
 
 
 if __name__ == "__main__":

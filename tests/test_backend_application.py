@@ -645,6 +645,15 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertIn("Analyst", hiring_manager_draft["message"])
         self.assertIn("hiring_manager", hiring_manager_draft)
 
+        target_contact_discovery = app.generate_target_contact_discovery(
+            user_id=user.user_id,
+            run_id=completed_run.id,
+            job_id="job_1",
+        )
+        self.assertIn("candidates", target_contact_discovery)
+        self.assertGreaterEqual(len(target_contact_discovery["candidates"]), 4)
+        self.assertEqual(target_contact_discovery["job"]["job_id"], "job_1")
+
     def test_referral_import_merges_companies_for_one_person(self):
         app, _ = self._create_app_with_test_workflow("referral_import")
         user = app.upsert_user(
