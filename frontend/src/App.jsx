@@ -6,7 +6,6 @@ import { useSession } from "./context/SessionContext";
 import DashboardPage from "./pages/DashboardPage";
 import CvStudioPage from "./pages/CvStudioPage";
 import DocumentsPage from "./pages/ArtifactsPage";
-import ReviewQueuePage from "./pages/ReviewQueuePage";
 import ReferralsPage from "./pages/ReferralsPage";
 import LinkedInConnectionsGuidePage from "./pages/LinkedInConnectionsGuidePage";
 import QuickApplyPage from "./pages/QuickApplyPage";
@@ -29,7 +28,7 @@ export default function App() {
           <Route path="/quick-apply" element={<QuickApplyPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:runId" element={<RunDetailPage />} />
-          <Route path="/review-queue" element={<ReviewQueuePage />} />
+          <Route path="/review-queue" element={<Navigate replace to="/tracker" />} />
           <Route path="/tracker" element={<TrackerPage />} />
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/cv-studio" element={<CvStudioPage />} />

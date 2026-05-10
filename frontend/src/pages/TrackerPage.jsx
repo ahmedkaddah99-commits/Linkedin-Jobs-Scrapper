@@ -158,7 +158,7 @@ function StatusDropdown({ current, onSelect, disabled }) {
   );
 }
 
-function TrackerCard({ item, onUpdate, updating }) {
+function TrackerCard({ item, onUpdate, onDelete, updating }) {
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState(item.rejection_note || "");
   const isBusy = updating === item.review_id;
@@ -257,6 +257,17 @@ function TrackerCard({ item, onUpdate, updating }) {
         </button>
 
         <div className="flex items-center gap-1.5">
+          {onDelete ? (
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-error/10 hover:text-error"
+              disabled={isBusy}
+              onClick={() => onDelete(item)}
+              title="Delete job"
+              type="button"
+            >
+              <span className="material-symbols-outlined text-[16px]">delete</span>
+            </button>
+          ) : null}
           {isRejected && (
             <button
               className="flex h-7 w-7 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary"
@@ -474,14 +485,14 @@ function TrackerDocumentsCell({ documents, request }) {
   );
 }
 
-function TrackerTable({ items, onUpdate, updating, request }) {
+function TrackerTable({ items, onUpdate, onDelete, updating, request }) {
   if (!items.length) {
     return (
       <div className="rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-8 text-center">
         <span className="material-symbols-outlined text-3xl text-on-surface-variant">table</span>
         <p className="mt-3 text-sm font-semibold text-on-surface">No tracker rows yet.</p>
         <p className="mt-1 text-xs text-on-surface-variant">
-          Approved jobs and imported Gmail applications will appear here.
+          Applications and imported Gmail matches will appear here.
         </p>
       </div>
     );
@@ -543,6 +554,17 @@ function TrackerTable({ items, onUpdate, updating, request }) {
                     <div className="flex min-w-40 flex-col gap-2">
                       <TrackerLink href={item.apply_link || row.apply_link}>Apply</TrackerLink>
                       <TrackerLink href={item.linkedin_link || row.linkedin_link}>LinkedIn</TrackerLink>
+                      {onDelete ? (
+                        <button
+                          className="inline-flex items-center justify-center gap-1 rounded-full bg-error/10 px-2.5 py-1 text-xs font-semibold text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={updating === item.review_id}
+                          onClick={() => onDelete(item)}
+                          type="button"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">delete</span>
+                          {updating === item.review_id ? "Deleting..." : "Delete"}
+                        </button>
+                      ) : null}
                     </div>
                   </td>
                   <td className="px-4 py-4 text-on-surface-variant">
@@ -567,7 +589,7 @@ function TrackerTable({ items, onUpdate, updating, request }) {
   );
 }
 
-function KanbanColumn({ colDef, cards, onUpdate, updating }) {
+function KanbanColumn({ colDef, cards, onDelete, onUpdate, updating }) {
   return (
     <div className="flex min-w-[280px] flex-1 flex-col">
       {/* Column header */}
@@ -613,6 +635,7 @@ function KanbanColumn({ colDef, cards, onUpdate, updating }) {
             <TrackerCard
               item={item}
               key={item.review_id}
+              onDelete={onDelete}
               onUpdate={onUpdate}
               updating={updating}
             />
@@ -1080,6 +1103,7 @@ function EmailIntegrationPanel({
 
 export default function TrackerPage() {
   const { request } = useSession();
+  const [deleteFeedback, setDeleteFeedback] = useState({ message: "", error: "" });
   const {
     columns,
     items,
@@ -1088,6 +1112,7 @@ export default function TrackerPage() {
     refresh,
     updating,
     updateCard,
+    deleteCard,
     emailIntegration,
     integrationBusy,
     lastSyncResult,
@@ -1101,6 +1126,25 @@ export default function TrackerPage() {
   } = useTracker();
   const totalCards = items.length;
 
+  async function handleDeleteCard(item) {
+    const confirmed = window.confirm(
+      `Delete ${item.title || "this job"}? This removes it from the tracker${item.external_application ? "" : " and linked generated job data"}.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setDeleteFeedback({ message: "", error: "" });
+    try {
+      await deleteCard(item);
+      setDeleteFeedback({ message: "Deleted job.", error: "" });
+    } catch (deleteError) {
+      setDeleteFeedback({
+        message: "",
+        error: deleteError.message || "Unable to delete this job.",
+      });
+    }
+  }
+
   return (
     <div className="space-y-8">
       {/* Page header */}
@@ -1112,7 +1156,7 @@ export default function TrackerPage() {
           <p className="mt-1 text-sm text-on-surface-variant">
             {totalCards > 0
               ? `Tracking ${totalCards} application${totalCards === 1 ? "" : "s"} across all stages.`
-              : "Applications you've approved in the Review Queue will appear here."}
+              : "Track applications here once they are active."}
           </p>
         </div>
         <button
@@ -1138,6 +1182,21 @@ export default function TrackerPage() {
           {error}
         </div>
       )}
+      {!loading && !error && (deleteFeedback.message || deleteFeedback.error) ? (
+        <div
+          className={[
+            "flex items-center gap-3 rounded-xl border px-6 py-4 text-sm",
+            deleteFeedback.error
+              ? "border-error/20 bg-error/5 text-error"
+              : "border-primary/20 bg-primary/5 text-primary",
+          ].join(" ")}
+        >
+          <span className="material-symbols-outlined">
+            {deleteFeedback.error ? "error" : "task_alt"}
+          </span>
+          {deleteFeedback.error || deleteFeedback.message}
+        </div>
+      ) : null}
 
       {!loading && !error ? (
         <EmailIntegrationPanel
@@ -1173,7 +1232,13 @@ export default function TrackerPage() {
       )}
 
       {!loading && !error ? (
-        <TrackerTable items={items} onUpdate={updateCard} request={request} updating={updating} />
+        <TrackerTable
+          items={items}
+          onDelete={handleDeleteCard}
+          onUpdate={updateCard}
+          request={request}
+          updating={updating}
+        />
       ) : null}
     </div>
   );

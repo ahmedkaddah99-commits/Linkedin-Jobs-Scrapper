@@ -1,9 +1,58 @@
 import unittest
+from contextlib import nullcontext
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from backend.adapters.stage_adapters import _tailored_document_artifacts
+from backend.adapters.stage_adapters import LinkedInAcquireStage, _tailored_document_artifacts
+from backend.domain.models import StageDefinition
 
 
 class StageAdapterTests(unittest.TestCase):
+    def test_linkedin_acquire_stage_persists_stage1_exclusions_as_run_data(self):
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "stage1_output.json"
+            excluded_path = Path(temp_dir) / "stage1_excluded.json"
+            excluded_path.write_text(
+                '[{"job_id": "rejected_1", "title": "Senior Engineer", "reason": "Title mismatch"}]',
+                encoding="utf-8",
+            )
+            context = SimpleNamespace(
+                run=SimpleNamespace(id="run_1"),
+                registries=SimpleNamespace(connector_registry=SimpleNamespace(get=lambda _connector_id: None)),
+            )
+            definition = StageDefinition(
+                stage_id="source_linkedin_search",
+                stage_type="jobs.acquire.search_listings",
+                name="Acquire Search Listings",
+                output_key="source_linkedin_jobs",
+            )
+
+            with (
+                patch("backend.adapters.stage_adapters._build_root_cli_args", return_value=({}, SimpleNamespace())),
+                patch(
+                    "backend.adapters.stage_adapters.build_tailored_stage1_args",
+                    return_value=SimpleNamespace(output=str(output_path), excluded_output=str(excluded_path)),
+                ),
+                patch("backend.adapters.stage_adapters.runtime_cv_override", return_value=nullcontext()),
+                patch(
+                    "backend.adapters.stage_adapters.run_tailored_stage1_pipeline",
+                    return_value=[{"job_id": "accepted_1", "title": "Engineer", "company": "ACME"}],
+                ),
+            ):
+                outcome = LinkedInAcquireStage().execute(context, definition)
+
+        self.assertEqual(outcome.metrics["jobs_found"], 1)
+        self.assertEqual(len(outcome.job_sets["source_linkedin_jobs"]), 1)
+        self.assertEqual(
+            outcome.data["source_linkedin_search_rejected"],
+            [{"job_id": "rejected_1", "title": "Senior Engineer", "reason": "Title mismatch"}],
+        )
+        artifact_types = [artifact.artifact_type for artifact in outcome.artifacts]
+        self.assertIn("stage1_output", artifact_types)
+        self.assertIn("stage1_excluded", artifact_types)
+
     def test_tailored_document_artifacts_emit_per_file_cv_entries_with_ats_metadata(self):
         artifacts = _tailored_document_artifacts(
             "run_1",

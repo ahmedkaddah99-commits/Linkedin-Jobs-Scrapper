@@ -96,6 +96,9 @@ class BackendApiTests(unittest.TestCase):
             shutil.rmtree(self.temp_dir, ignore_errors=True)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.addCleanup(lambda: shutil.rmtree(self.temp_dir, ignore_errors=True))
+        self.deepseek_env_patch = patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}, clear=False)
+        self.deepseek_env_patch.start()
+        self.addCleanup(self.deepseek_env_patch.stop)
 
         self.app = create_backend(self.temp_dir)
         self.app.registries.stage_registry.register("test.api_seed", _ApiSeedStage())
@@ -299,6 +302,176 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(missing_payload["error"]["code"], "not_found")
 
+    def test_api_supports_deleting_completed_run(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+
+        status, delete_payload = self._request("DELETE", f"/runs/{run_payload['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(delete_payload["deleted"], run_payload["id"])
+
+        status, missing_payload = self._request("GET", f"/runs/{run_payload['id']}")
+        self.assertEqual(status, 404)
+        self.assertEqual(missing_payload["error"]["code"], "not_found")
+
+    def test_run_customer_view_includes_stage_jobs_and_rejection_reasons(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+
+        self.app.repositories.job_store.save_blob(
+            run_id,
+            "api_seed_stage_rejected",
+            [
+                {
+                    "job_id": "rejected_api_job_1",
+                    "title": "Senior Engineer",
+                    "company": "Rejected Co",
+                    "apply_link": "https://company.example/jobs/rejected-1",
+                    "reason": "Title does not match the saved target role.",
+                }
+            ],
+        )
+
+        status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
+        self.assertEqual(status, 200)
+        self.assertEqual(customer_view["run"]["workspace_name"], "API Workspace")
+        self.assertEqual(customer_view["summary"]["included_job_count"], 1)
+        self.assertEqual(customer_view["summary"]["excluded_job_count"], 1)
+        self.assertEqual(len(customer_view["review"]["included_jobs"]), 1)
+        self.assertEqual(len(customer_view["review"]["excluded_jobs"]), 1)
+        self.assertEqual(customer_view["review"]["included_jobs"][0]["job_id"], "api_job_1")
+        self.assertEqual(customer_view["review"]["excluded_jobs"][0]["job_id"], "rejected_api_job_1")
+        self.assertEqual(
+            customer_view["review"]["excluded_jobs"][0]["reason_summary"],
+            "This role does not match the target role for this workspace.",
+        )
+        self.assertEqual(len(customer_view["stages"]), 1)
+        stage = customer_view["stages"][0]
+        self.assertEqual(stage["stage_id"], "api_seed_stage")
+        self.assertEqual(stage["included_count"], 1)
+        self.assertEqual(stage["excluded_count"], 1)
+        self.assertEqual(stage["included_jobs"][0]["job_id"], "api_job_1")
+        self.assertEqual(stage["excluded_jobs"][0]["job_id"], "rejected_api_job_1")
+        self.assertEqual(
+            stage["excluded_jobs"][0]["reason_summary"],
+            "This role does not match the target role for this workspace.",
+        )
+
+    def test_run_customer_view_normalizes_language_rejection_messages(self):
+        profile = dict(self.user.metadata or {})
+        profile["profile"] = {
+            **dict(profile.get("profile") or {}),
+            "languages": ["English - C1", "German - B2"],
+        }
+        self.user.metadata = profile
+        self.app.upsert_user(self.user)
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+
+        self.app.repositories.job_store.save_blob(
+            run_id,
+            "api_seed_stage_rejected",
+            [
+                {
+                    "job_id": "rejected_api_job_language_1",
+                    "title": "Consultant",
+                    "company": "Language Co",
+                    "apply_link": "https://company.example/jobs/language-1",
+                    "reason": "Rejected because the role requires German C1.",
+                },
+                {
+                    "job_id": "rejected_api_job_language_2",
+                    "title": "Analyst",
+                    "company": "Language Co",
+                    "apply_link": "https://company.example/jobs/language-2",
+                    "reason": "Rejected because the role requires Spanish.",
+                },
+            ],
+        )
+
+        status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
+        self.assertEqual(status, 200)
+        excluded_jobs = {item["job_id"]: item for item in customer_view["review"]["excluded_jobs"]}
+
+        self.assertEqual(
+            excluded_jobs["rejected_api_job_language_1"]["reason_label"],
+            "Language level not yet reached",
+        )
+        self.assertEqual(
+            excluded_jobs["rejected_api_job_language_1"]["reason_summary"],
+            "This role requires German at C1 level, which is above your saved level.",
+        )
+        self.assertIn("Saved level: B2", excluded_jobs["rejected_api_job_language_1"]["details"])
+
+        self.assertEqual(
+            excluded_jobs["rejected_api_job_language_2"]["reason_label"],
+            "Required language not listed",
+        )
+        self.assertEqual(
+            excluded_jobs["rejected_api_job_language_2"]["reason_summary"],
+            "This role requires Spanish, which is not listed in your saved languages.",
+        )
+
+    def test_api_supports_deleting_single_job_from_run(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+
+        status, review_payload = self._request(
+            "POST",
+            f"/runs/{run_id}/reviews",
+            {"job_id": "api_job_1", "decision": "approved", "status": "approved", "reviewer": "tester"},
+        )
+        self.assertEqual(status, 201)
+        self.assertTrue(review_payload["review_id"])
+
+        status, delete_payload = self._request("DELETE", f"/runs/{run_id}/jobs/by-id/api_job_1")
+        self.assertEqual(status, 200)
+        self.assertEqual(delete_payload["deleted"], "api_job_1")
+
+        status, jobs_payload = self._request("GET", f"/runs/{run_id}/jobs")
+        self.assertEqual(status, 200)
+        self.assertEqual(jobs_payload["job_sets"], {})
+
+        status, reviews_payload = self._request("GET", f"/runs/{run_id}/reviews")
+        self.assertEqual(status, 200)
+        self.assertEqual(reviews_payload["reviews"], [])
+
     def test_api_supports_workspace_and_template_crud(self):
         status, template_payload = self._request(
             "POST",
@@ -348,6 +521,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertIn("workspace_cv_asset_id", user_facing_fields)
         self.assertIn("cv_generation_mode", user_facing_fields)
         self.assertIn("country_codes", user_facing_fields)
+        self.assertIn("cities", user_facing_fields)
         self.assertIn("target_roles", user_facing_fields)
         self.assertIn("job_filtering_mode", user_facing_fields)
         self.assertIn("academic_career_sites", user_facing_fields)
@@ -708,6 +882,10 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(settings_payload["options"]["cv_templates"])
         self.assertTrue(settings_payload["options"]["cv_color_schemes"])
         self.assertTrue(settings_payload["options"]["cv_fonts"])
+        self.assertIn(
+            "plain",
+            {item["id"] for item in settings_payload["options"]["cv_templates"]},
+        )
 
         status, updated_payload = self._request(
             "PUT",
@@ -716,6 +894,22 @@ class BackendApiTests(unittest.TestCase):
                 "profile": {
                     "name": "Admin Tester",
                     "languages": ["English - C1", "German - B1/B2"],
+                    "recent_experience": [
+                        {
+                            "title": "Business Analyst",
+                            "company": "Example GmbH",
+                            "period": "2022 - Present",
+                            "bulletsText": "Built reporting dashboards",
+                        }
+                    ],
+                    "education": [
+                        {
+                            "degree_title": "MSc Operations Management",
+                            "institution": "Example University",
+                            "period": "2019 - 2021",
+                            "detailsText": "Thesis on process optimization",
+                        }
+                    ],
                 },
                 "documents": {
                     "cv_template": "modern",
@@ -731,6 +925,42 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(updated_payload["documents"]["cv_font"], "Georgia")
         self.assertFalse(updated_payload["documents"]["include_photo"])
         self.assertEqual(updated_payload["profile"]["languages"], ["English - C1", "German - B1/B2"])
+        self.assertEqual(updated_payload["profile"]["recent_experience"][0]["title"], "Business Analyst")
+        self.assertEqual(
+            updated_payload["profile"]["recent_experience"][0]["bulletsText"],
+            "Built reporting dashboards",
+        )
+        self.assertEqual(updated_payload["profile"]["education"][0]["degree_title"], "MSc Operations Management")
+        self.assertEqual(updated_payload["profile"]["education"][0]["institution"], "Example University")
+
+    def test_cv_upload_returns_structured_profile_fields_for_settings_population(self):
+        status, payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "structured_resume.txt",
+            (
+                b"Jane Candidate\n"
+                b"Operations Analyst\n"
+                b"jane@example.com | Berlin | https://linkedin.com/in/jane-candidate\n"
+                b"Summary\nExperienced operations analyst focused on process improvement.\n"
+                b"Skills\nExcel, SQL, Stakeholder communication\n"
+                b"Languages\nEnglish - C1\nGerman - B2\n"
+                b"Experience\nBusiness Analyst | Example GmbH\n2022 - Present\n"
+                b"- Built dashboards\n- Improved workflow\n"
+                b"Education\nMSc Operations Management | Example University\n2019 - 2021\n"
+                b"- Thesis on process optimization\n"
+            ),
+        )
+        self.assertEqual(status, 201)
+        self.assertIn(payload["extraction"]["provider"], {"heuristic_fallback", "deepseek"})
+        self.assertEqual(payload["parsed"]["name"], "Jane Candidate")
+        self.assertEqual(payload["parsed"]["role_title"], "Operations Analyst")
+        self.assertEqual(payload["parsed"]["email"], "jane@example.com")
+        self.assertIn("Excel", payload["parsed"]["competencies"])
+        self.assertEqual(payload["parsed"]["languages"], ["English - C1", "German - B2"])
+        self.assertEqual(payload["parsed"]["recent_experience"][0]["title"], "Business Analyst")
+        self.assertEqual(payload["parsed"]["education"][0]["degree_title"], "MSc Operations Management")
+        self.assertEqual(payload["parsed"]["education"][0]["institution"], "Example University")
 
     def test_profile_photo_upload_endpoint_persists_preview_data(self):
         tiny_png = base64.b64decode(
@@ -1055,6 +1285,78 @@ class BackendApiTests(unittest.TestCase):
         status, documents_payload = self._request("GET", f"/documents?run_id={new_run_id}")
         self.assertEqual(status, 200)
         self.assertTrue(any(item["asset_kind"] == "generated_cv" for item in documents_payload["documents"]))
+
+    def test_run_excluded_job_generate_documents_endpoint_updates_customer_view(self):
+        requeue_root = self.temp_dir / "requeue_docs_customer_view"
+        self.app.upsert_workflow_template(
+            {
+                "id": "api_requeue_customer_template",
+                "name": "API Requeue Customer Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="generate_documents",
+                        stage_type="test.api_generate_documents",
+                        name="Generate Documents",
+                        input_keys=["accepted_jobs"],
+                        output_key="generated_jobs",
+                        config={"output_root": str(requeue_root)},
+                        metadata={"supports_requeue": True},
+                    ).to_dict()
+                ],
+            }
+        )
+        self.app.upsert_workspace(
+            {
+                "id": "api_requeue_customer_workspace",
+                "name": "API Requeue Customer Workspace",
+                "workflow_template_id": "api_requeue_customer_template",
+                "workspace_type": "custom",
+                "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
+            }
+        )
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_requeue_customer_workspace", "execution_mode": "planned", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        self.app.repositories.job_store.save_blob(
+            run_id,
+            "generate_documents_rejected",
+            [
+                {
+                    "job_id": "rejected_job_customer_1",
+                    "title": "Senior Engineer",
+                    "company": "Rejected Co",
+                    "apply_link": "https://company.example/jobs/customer-1",
+                    "reason": "Title looks too senior for this workspace.",
+                }
+            ],
+        )
+
+        status, generate_payload = self._request(
+            "POST",
+            f"/runs/{run_id}/excluded-jobs/rejected_job_customer_1/generate-documents",
+            {
+                "source_stage": "generate_documents",
+                "reason_summary": "Title looks too senior for this workspace.",
+                "execution_mode": "sync",
+                "notes": "Create documents anyway.",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(generate_payload["run"]["status"], "completed")
+
+        status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
+        self.assertEqual(status, 200)
+        excluded_job = customer_view["review"]["excluded_jobs"][0]
+        self.assertEqual(excluded_job["job_id"], "rejected_job_customer_1")
+        self.assertEqual(excluded_job["create_documents_run_id"], generate_payload["run"]["id"])
+        self.assertEqual(excluded_job["create_documents_run_status"], "completed")
+        self.assertTrue(excluded_job["create_documents_run_url"].endswith(generate_payload["run"]["id"]))
 
     def test_api_supports_user_and_secret_admin_endpoints(self):
         status, users_payload = self._request("GET", "/users")
@@ -1488,6 +1790,38 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertIn("tracker_status", bad_payload["error"]["message"])
+
+        # --- 8. DELETE /tracker/:review_id removes the linked run job and tracker entry ---
+        self.app.repositories.job_store.save_blob(
+            run_id,
+            "stage2_rejected",
+            [{"job_id": "api_job_1"}, {"job_id": "api_job_2"}],
+        )
+        status, delete_payload = self._request("DELETE", f"/tracker/{review_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(delete_payload["deleted"], review_id)
+        self.assertEqual(delete_payload["job_id"], "api_job_1")
+
+        status, jobs_payload = self._request("GET", f"/runs/{run_id}/jobs")
+        self.assertEqual(status, 200)
+        self.assertEqual(jobs_payload["job_sets"], {})
+
+        status, reviews_payload = self._request("GET", f"/runs/{run_id}/reviews")
+        self.assertEqual(status, 200)
+        self.assertEqual(reviews_payload["reviews"], [])
+
+        status, artifacts_payload = self._request("GET", f"/runs/{run_id}/artifacts")
+        self.assertEqual(status, 200)
+        self.assertEqual(artifacts_payload["artifacts"], [])
+
+        self.assertEqual(
+            self.app.repositories.job_store.load_blob(run_id, "stage2_rejected", []),
+            [{"job_id": "api_job_2"}],
+        )
+
+        status, tracker_payload3 = self._request("GET", "/tracker")
+        self.assertEqual(status, 200)
+        self.assertFalse(any(item["review_id"] == review_id for item in tracker_payload3.get("items", [])))
 
     def test_tracker_email_integration_api(self):
         class _FakeMailboxClient:

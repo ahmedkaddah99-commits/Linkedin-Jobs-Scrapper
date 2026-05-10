@@ -1,14 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { CvExportPreview } from "../components/CvExportPreview";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { getApiErrorDetails, getApiErrorMessage } from "../lib/api";
-import {
-  buildCvStudioHtml,
-  buildWorkspacePreviewDocuments,
-  buildWorkspacePreviewState,
-} from "../lib/cvStudio";
+import { buildWorkspacePreviewDocuments } from "../lib/cvStudio";
 import { labelize } from "../lib/formatters";
+import {
+  deriveDefaultCities,
+  getAllCountryOptions,
+  getCountryByCode,
+  hasCityDataset,
+  loadCityOptions,
+} from "../lib/locationOptions";
 
 const DEFAULT_FLOW_ID = "tailored_documents";
 const DEFAULT_CV_GENERATION_MODE = "aggressive_customization";
@@ -33,6 +37,65 @@ const OPTIONAL_PRIORITY_MODULE_ID = "priority_ranking";
 const JOB_FILTERING_STRICT = "Strict Match";
 const JOB_FILTERING_BROADER = "Broader Match";
 const QUICK_APPLY_ROUTE = "/quick-apply";
+const TARGETING_FIELD_DISPLAY_ORDER = ["keywords", "target_roles", "country_codes", "cities"];
+const TARGETING_FIELD_FALLBACKS = {
+  keywords: {
+    id: "keywords",
+    label: "Target Keywords",
+    description: "Keywords the system should search for when discovering jobs.",
+    type: "tag_list",
+    compatible_flows: ["tailored_documents", "reusable_packages"],
+    placeholder: "analyst, consultant, product manager",
+    user_facing: true,
+    frontend_visible: true,
+    section: "targeting",
+    sort_order: 20,
+  },
+  target_roles: {
+    id: "target_roles",
+    label: "Target Roles",
+    description: "Add the roles this workspace should target. They shape search keywords and document emphasis.",
+    type: "multi_select",
+    compatible_flows: ["tailored_documents", "reusable_packages"],
+    options: [
+      { value: "Product Manager", label: "Product Manager" },
+      { value: "Business Analyst", label: "Business Analyst" },
+      { value: "Project Manager", label: "Project Manager" },
+      { value: "Consultant", label: "Consultant" },
+      { value: "Product Designer", label: "Product Designer" },
+      { value: "Frontend Engineer", label: "Frontend Engineer" },
+      { value: "Data Analyst", label: "Data Analyst" },
+    ],
+    user_facing: true,
+    frontend_visible: true,
+    section: "targeting",
+    sort_order: 25,
+  },
+  country_codes: {
+    id: "country_codes",
+    label: "Target Country",
+    description: "Choose the country this workspace should target.",
+    type: "multi_select",
+    compatible_flows: ["tailored_documents"],
+    options: [],
+    user_facing: true,
+    frontend_visible: true,
+    section: "targeting",
+    sort_order: 30,
+  },
+  cities: {
+    id: "cities",
+    label: "Target City",
+    description: "",
+    type: "tag_list",
+    compatible_flows: ["tailored_documents", "reusable_packages"],
+    placeholder: "Berlin",
+    user_facing: true,
+    frontend_visible: true,
+    section: "targeting",
+    sort_order: 32,
+  },
+};
 const EMPTY_ACTION_STATE = {
   workspaceId: "",
   loading: false,
@@ -87,6 +150,31 @@ function parseDelimitedList(value) {
   return tokens;
 }
 
+function normalizeCountryCodeList(value, limit = 1) {
+  const rawValues =
+    Array.isArray(value)
+      ? value
+      : typeof value === "string"
+        ? value.split(/[,\r\n]+/)
+        : value === undefined || value === null
+          ? []
+          : [value];
+  const codes = [];
+  const seen = new Set();
+  for (const rawValue of rawValues) {
+    const normalized = String(rawValue || "").trim().toUpperCase();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    codes.push(normalized);
+    seen.add(normalized);
+    if (codes.length >= limit) {
+      break;
+    }
+  }
+  return codes;
+}
+
 function parseLineList(text) {
   return parseDelimitedList(text);
 }
@@ -97,29 +185,6 @@ function buildSourceValidationPayload({ flowId, sourceIds, settings }) {
     source_ids: [...(sourceIds || [])],
     settings: { ...(settings || {}) },
   };
-}
-
-function buildCountryOptions() {
-  try {
-    if (typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function") {
-      const supportedValues =
-        typeof Intl.supportedValuesOf === "function"
-          ? Intl.supportedValuesOf("region")
-          : [];
-      const displayNames = new Intl.DisplayNames(["en"], { type: "region" });
-      if (supportedValues.length) {
-        return supportedValues
-          .map((code) => ({
-            value: code,
-            label: displayNames.of(code) || code,
-          }))
-          .sort((left, right) => left.label.localeCompare(right.label));
-      }
-    }
-  } catch {
-    return [];
-  }
-  return [];
 }
 
 function formatCompanySiteEntries(entries) {
@@ -404,6 +469,164 @@ function TokenListInput({
   );
 }
 
+function SuggestedSingleSelectInput({
+  value,
+  onChange,
+  options = [],
+  emptyLabel = "No city",
+  helperText = "",
+  inputDisabled = false,
+  loading = false,
+}) {
+  const selectedValue = Array.isArray(value) ? String(value[0] || "") : String(value || "");
+  const renderedOptions = useMemo(() => {
+    const seen = new Set();
+    const nextOptions = [];
+    for (const option of [selectedValue, ...options]) {
+      const normalizedOption = String(option || "").trim();
+      const dedupeKey = normalizedOption.toLowerCase();
+      if (!normalizedOption || seen.has(dedupeKey)) {
+        continue;
+      }
+      nextOptions.push(normalizedOption);
+      seen.add(dedupeKey);
+    }
+    return nextOptions;
+  }, [options, selectedValue]);
+
+  return (
+    <div className="space-y-2">
+      <select
+        className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface disabled:cursor-not-allowed disabled:text-on-surface-variant"
+        disabled={inputDisabled || loading || !renderedOptions.length}
+        onChange={(event) => onChange(event.target.value ? [event.target.value] : [])}
+        value={selectedValue}
+      >
+        <option value="">{loading ? "Loading cities..." : emptyLabel}</option>
+        {renderedOptions.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+      <div className="flex items-center justify-between gap-3 text-xs text-on-surface-variant">
+        <span>{loading ? "Loading city suggestions..." : helperText}</span>
+        <span>{selectedValue ? "1/1" : "0/1"}</span>
+      </div>
+    </div>
+  );
+}
+
+function SuggestedTokenListInput({
+  value,
+  onChange,
+  options = [],
+  placeholder = "",
+  maxItems = 1,
+  helperText = "",
+  inputDisabled = false,
+  loading = false,
+}) {
+  const listId = useId();
+  const tokens = useMemo(() => parseDelimitedList(value), [value]);
+  const [draft, setDraft] = useState("");
+  const normalizedOptionMap = useMemo(
+    () =>
+      new Map(
+        options
+          .map((option) => String(option || "").trim())
+          .filter(Boolean)
+          .map((option) => [option.toLowerCase(), option]),
+      ),
+    [options],
+  );
+  const filteredOptions = useMemo(() => {
+    const normalizedDraft = draft.trim().toLowerCase();
+    return normalizedDraft
+      ? options.filter((option) => String(option || "").toLowerCase().includes(normalizedDraft))
+      : options;
+  }, [draft, options]);
+
+  function commit(rawValue) {
+    const normalizedValue = String(rawValue || "").trim().toLowerCase();
+    const matchedOption = normalizedOptionMap.get(normalizedValue);
+    if (!matchedOption) {
+      setDraft("");
+      return;
+    }
+    const nextTokens = parseDelimitedList([tokens, matchedOption]).slice(0, maxItems);
+    onChange(nextTokens);
+    setDraft("");
+  }
+
+  function removeToken(tokenToRemove) {
+    onChange(tokens.filter((token) => token !== tokenToRemove));
+  }
+
+  const canAddMore = tokens.length < maxItems;
+
+  return (
+    <div className="space-y-2">
+      <div className="rounded-lg border border-outline-variant/20 bg-surface px-3 py-3">
+        <div className="flex flex-wrap gap-2">
+          {tokens.map((token) => (
+            <span
+              className="inline-flex items-center gap-2 rounded-full bg-surface-container-low px-3 py-1.5 text-sm text-on-surface"
+              key={token}
+            >
+              <span>{token}</span>
+              <button
+                aria-label={`Remove ${token}`}
+                className="text-on-surface-variant transition-colors hover:text-error"
+                onClick={() => removeToken(token)}
+                type="button"
+              >
+                x
+              </button>
+            </span>
+          ))}
+          {canAddMore ? (
+            <>
+              <input
+                className="min-w-[16rem] flex-1 bg-transparent py-1 text-sm text-on-surface outline-none placeholder:text-on-surface-variant disabled:cursor-not-allowed disabled:text-on-surface-variant"
+                disabled={inputDisabled || loading || !options.length}
+                list={listId}
+                onBlur={() => {
+                  if (draft.trim()) {
+                    commit(draft);
+                  }
+                }}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    if (draft.trim()) {
+                      commit(draft);
+                    }
+                  }
+                }}
+                placeholder={placeholder}
+                value={draft}
+              />
+              <datalist id={listId}>
+                {filteredOptions.map((option) => (
+                  <option key={`${listId}-${option}`} value={option} />
+                ))}
+              </datalist>
+            </>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 text-xs text-on-surface-variant">
+        <span>{loading ? "Loading city suggestions..." : helperText}</span>
+        <span>
+          {tokens.length}/{maxItems}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function BuilderSection({ id, title, description, children, emphasized = false }) {
   return (
     <section
@@ -631,6 +854,9 @@ function hydrateFormFromWorkspace(workspace, catalog) {
     }
     settings[key] = normalizeWorkspaceSettingValue(value);
   }
+  if (Object.prototype.hasOwnProperty.call(settings, "country_codes")) {
+    settings.country_codes = normalizeCountryCodeList(settings.country_codes, 1);
+  }
 
   return {
     name: workspace.name || "",
@@ -699,17 +925,14 @@ function FieldRenderer({ field, value, onChange, dynamicOptions = {}, formState 
     const options = dynamicOptions.all_country_options?.length
       ? dynamicOptions.all_country_options
       : field.options || [];
-    const selectedValues = new Set(Array.isArray(value) ? value : []);
+    const selectedValue = normalizeCountryCodeList(value, 1)[0] || "";
     return (
       <select
-        className="min-h-44 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-        multiple
-        onChange={(event) => {
-          const nextValues = [...event.target.selectedOptions].map((option) => option.value);
-          onChange(nextValues);
-        }}
-        value={[...selectedValues]}
+        className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+        onChange={(event) => onChange(event.target.value ? [event.target.value] : [])}
+        value={selectedValue}
       >
+        <option value="">Select a country</option>
         {options.map((option) => (
           <option key={`${field.id}-${option.value}`} value={String(option.value)}>
             {option.label}
@@ -727,6 +950,35 @@ function FieldRenderer({ field, value, onChange, dynamicOptions = {}, formState 
         onChange={onChange}
         placeholder="Business Analyst, Product Manager"
         value={Array.isArray(value) ? value : []}
+      />
+    );
+  }
+
+  if (field.id === "cities") {
+    const maxItems = formState?.flowId === "reusable_packages" ? 8 : 1;
+    if (maxItems === 1) {
+      return (
+        <SuggestedSingleSelectInput
+          emptyLabel="No city"
+          helperText={dynamicOptions.city_helper_text || ""}
+          inputDisabled={dynamicOptions.city_input_disabled === true}
+          loading={dynamicOptions.city_loading === true}
+          onChange={onChange}
+          options={dynamicOptions.city_options || []}
+          value={Array.isArray(value) ? value : parseDelimitedList(value)}
+        />
+      );
+    }
+    return (
+      <SuggestedTokenListInput
+        helperText={dynamicOptions.city_helper_text || ""}
+        inputDisabled={dynamicOptions.city_input_disabled === true}
+        loading={dynamicOptions.city_loading === true}
+        maxItems={maxItems}
+        onChange={onChange}
+        options={dynamicOptions.city_options || []}
+        placeholder={field.placeholder || ""}
+        value={Array.isArray(value) ? value : parseDelimitedList(value)}
       />
     );
   }
@@ -869,7 +1121,6 @@ function FieldRenderer({ field, value, onChange, dynamicOptions = {}, formState 
 }
 
 export default function WorkspacesPage() {
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const focusedSectionId = searchParams.get("focus") || "";
   const { request, resolvePath } = useSession();
@@ -890,6 +1141,14 @@ export default function WorkspacesPage() {
     message: "",
     error: "",
   });
+  const [cityOptionsState, setCityOptionsState] = useState({
+    loading: false,
+    options: [],
+    selectedCountryCode: "",
+    missingDataset: false,
+  });
+  const cityRequestRef = useRef(0);
+  const cityScopeRef = useRef("");
 
   const {
     data: workspacesData,
@@ -909,6 +1168,7 @@ export default function WorkspacesPage() {
     refresh: refreshCvAssets,
   } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request]);
 
+  const allCountryOptions = useMemo(() => getAllCountryOptions(), []);
   const workspaces = workspacesData?.workspaces || [];
   const builderCatalogReady = Boolean(builderCatalog && !builderLoading);
   const focusedWorkspaceId = searchParams.get("workspace_id") || "";
@@ -1014,12 +1274,55 @@ export default function WorkspacesPage() {
     () => new Set(workspaceCvAssets.map((item) => item.value)),
     [workspaceCvAssets],
   );
+  const selectedCountryCodes = useMemo(
+    () => normalizeCountryCodeList(form.settings.country_codes, 1),
+    [form.settings.country_codes],
+  );
+  const selectedCountryCodeForCity = selectedCountryCodes[0] || "";
+  const selectedCountryForCity = useMemo(
+    () => (selectedCountryCodeForCity ? getCountryByCode(selectedCountryCodeForCity) : null),
+    [selectedCountryCodeForCity],
+  );
+  const cityHelperText = useMemo(() => {
+    if (!selectedCountryCodes.length) {
+      return "Select a target country first to enable city suggestions.";
+    }
+    const fallbackCityLabel = selectedCountryForCity?.capital || "the selected country capital";
+    if (cityOptionsState.missingDataset) {
+      return `No packaged city list is available for ${selectedCountryForCity?.label || "this country"} yet. Leave this blank and Runr will use ${fallbackCityLabel}.`;
+    }
+    if (!cityOptionsState.loading && !cityOptionsState.options.length) {
+      return `No city suggestions loaded for ${selectedCountryForCity?.label || "this country"}. Leave this blank and Runr will use ${fallbackCityLabel}.`;
+    }
+    return "";
+  }, [
+    cityOptionsState.loading,
+    cityOptionsState.missingDataset,
+    cityOptionsState.options.length,
+    selectedCountryCodes.length,
+    selectedCountryForCity,
+  ]);
   const dynamicFieldOptions = useMemo(
     () => ({
-      all_country_options: buildCountryOptions(),
+      all_country_options: allCountryOptions,
+      city_options: cityOptionsState.options,
+      city_loading: cityOptionsState.loading,
+      city_input_disabled:
+        !selectedCountryCodes.length ||
+        cityOptionsState.missingDataset ||
+        !cityOptionsState.options.length,
+      city_helper_text: cityHelperText,
       workspace_cv_assets: workspaceCvAssets,
     }),
-    [workspaceCvAssets],
+    [
+      allCountryOptions,
+      cityHelperText,
+      cityOptionsState.loading,
+      cityOptionsState.missingDataset,
+      cityOptionsState.options,
+      selectedCountryCodes.length,
+      workspaceCvAssets,
+    ],
   );
   const workspaceCvAssetsLoaded = cvAssetsPayload !== undefined;
   const resolvedModuleIds = useMemo(
@@ -1030,7 +1333,40 @@ export default function WorkspacesPage() {
     [builderCatalog, form.flowId, form.moduleIds],
   );
   const sourceFields = sectionFields.sources || [];
-  const visibleBuilderSections = builderSections.filter((section) => section.id !== "sources");
+  const targetingSection =
+    builderSections.find((section) => section.id === "targeting") ||
+    builderCatalog?.builder_sections?.find((section) => section.id === "targeting") ||
+    null;
+  const targetingFields = useMemo(
+    () =>
+      TARGETING_FIELD_DISPLAY_ORDER
+        .map((fieldId) => {
+          const fieldDefinition = configurationFieldById.get(fieldId);
+          if (
+            fieldDefinition &&
+            fieldDefinition.user_facing !== false &&
+            fieldDefinition.frontend_visible !== false &&
+            (fieldDefinition.compatible_flows || []).includes(form.flowId)
+          ) {
+            return fieldDefinition;
+          }
+          const fallbackField = TARGETING_FIELD_FALLBACKS[fieldId];
+          if (
+            fallbackField &&
+            fallbackField.user_facing !== false &&
+            fallbackField.frontend_visible !== false &&
+            (fallbackField.compatible_flows || []).includes(form.flowId)
+          ) {
+            return fallbackField;
+          }
+          return null;
+        })
+        .filter(Boolean),
+    [configurationFieldById, form.flowId],
+  );
+  const visibleBuilderSections = builderSections.filter(
+    (section) => section.id !== "sources" && section.id !== "targeting",
+  );
   const selectedLegacySource = legacySources.find((source) => form.sourceIds.includes(source.id)) || null;
   const selectedSource =
     availableSources.find((source) => form.sourceIds.includes(source.id)) || selectedLegacySource || null;
@@ -1060,16 +1396,6 @@ export default function WorkspacesPage() {
     const baseName = source.name || labelize(source.id);
     return source.legacy && includeLegacyBadge ? `${baseName} (Legacy)` : baseName;
   };
-  const selectedWorkspaceCvLabel = useMemo(() => {
-    const selectedAssetId = String(form.settings.workspace_cv_asset_id || "").trim();
-    if (!selectedAssetId) {
-      return "Not selected";
-    }
-    if (!workspaceCvAssetsLoaded) {
-      return "Loading...";
-    }
-    return workspaceCvAssets.find((item) => item.value === selectedAssetId)?.label || "No longer available";
-  }, [form.settings.workspace_cv_asset_id, workspaceCvAssets, workspaceCvAssetsLoaded]);
   const selectedWorkspaceCvAsset = useMemo(() => {
     const selectedAssetId = String(form.settings.workspace_cv_asset_id || "").trim();
     if (!selectedAssetId) {
@@ -1102,23 +1428,6 @@ export default function WorkspacesPage() {
   const effectiveDocumentPreviewDocuments = useMemo(
     () => buildWorkspacePreviewDocuments(sharedDocumentDefaults, form.settings),
     [form.settings, sharedDocumentDefaults],
-  );
-  const workspaceDocumentPreviewState = useMemo(() => {
-    if (!selectedWorkspaceCvAsset || !mergedPreviewProfile) {
-      return null;
-    }
-    return buildWorkspacePreviewState(
-      mergedPreviewProfile,
-      sharedDocumentDefaults,
-      form.settings,
-    );
-  }, [form.settings, mergedPreviewProfile, selectedWorkspaceCvAsset, sharedDocumentDefaults]);
-  const workspaceDocumentPreviewHtml = useMemo(
-    () =>
-      workspaceDocumentPreviewState
-        ? buildCvStudioHtml(workspaceDocumentPreviewState, { forIframe: true })
-        : "",
-    [workspaceDocumentPreviewState],
   );
   const selectedWorkspaceCvMissing = Boolean(
     workspaceCvAssetsLoaded &&
@@ -1212,6 +1521,8 @@ export default function WorkspacesPage() {
       return;
     }
     const defaultFlowId = flows[0]?.id || DEFAULT_FLOW_ID;
+    cityScopeRef.current = "";
+    setCityOptionsState({ loading: false, options: [], selectedCountryCode: "", missingDataset: false });
     setForm(buildBuilderForm(builderCatalog, defaultFlowId));
     setCvUploadState({ uploading: false, message: "", error: "" });
     resetBuilderState({ open: true });
@@ -1226,6 +1537,8 @@ export default function WorkspacesPage() {
     if (!builderCatalogReady) {
       return;
     }
+    cityScopeRef.current = "";
+    setCityOptionsState({ loading: false, options: [], selectedCountryCode: "", missingDataset: false });
     setForm(hydrateFormFromWorkspace(workspace, builderCatalog));
     setCvUploadState({ uploading: false, message: "", error: "" });
     resetBuilderState({
@@ -1239,6 +1552,8 @@ export default function WorkspacesPage() {
     resetBuilderState();
     setForm(EMPTY_BUILDER_FORM);
     setCvUploadState({ uploading: false, message: "", error: "" });
+    cityScopeRef.current = "";
+    setCityOptionsState({ loading: false, options: [], selectedCountryCode: "", missingDataset: false });
     clearBuilderSearchParams();
   }
 
@@ -1247,11 +1562,13 @@ export default function WorkspacesPage() {
   }
 
   function updateSetting(fieldId, value) {
+    const nextValue =
+      fieldId === "country_codes" ? normalizeCountryCodeList(value, 1) : value;
     setForm((current) => ({
       ...current,
       settings: {
         ...current.settings,
-        [fieldId]: value,
+        [fieldId]: nextValue,
       },
     }));
   }
@@ -1280,7 +1597,24 @@ export default function WorkspacesPage() {
         currentModules.delete(OPTIONAL_PRIORITY_MODULE_ID);
       }
       return { ...current, moduleIds: [...currentModules] };
-      });
+    });
+  }
+
+  function settingsWithDerivedLocationDefaults(settings, sourceIds) {
+    const nextSettings = { ...(settings || {}) };
+    nextSettings.country_codes = normalizeCountryCodeList(nextSettings.country_codes, 1);
+    const selectedSourceIds = Array.isArray(sourceIds) ? sourceIds : [];
+    const configuredCities = Array.isArray(nextSettings.cities)
+      ? nextSettings.cities.filter((item) => String(item || "").trim())
+      : parseDelimitedList(nextSettings.cities);
+    if (!selectedSourceIds.includes("job_board_collection") || configuredCities.length) {
+      return nextSettings;
+    }
+    const derivedCities = deriveDefaultCities(nextSettings.country_codes, 8);
+    if (derivedCities.length) {
+      nextSettings.cities = derivedCities;
+    }
+    return nextSettings;
   }
 
   async function submitWorkspace() {
@@ -1309,7 +1643,7 @@ export default function WorkspacesPage() {
           profile_label: form.profileLabel,
           prompt_family: form.promptFamily,
           manual_sources_are_preapproved: form.manualSourcesArePreapproved,
-          settings: form.settings,
+          settings: settingsWithDerivedLocationDefaults(form.settings, form.sourceIds),
         },
       });
       resetBuilderState({
@@ -1360,6 +1694,78 @@ export default function WorkspacesPage() {
   }
 
   useEffect(() => {
+    if (!builderState.open) {
+      return;
+    }
+    const nextScopeKey = selectedCountryCodes.join(",");
+    if (!cityScopeRef.current) {
+      cityScopeRef.current = nextScopeKey;
+      return;
+    }
+    if (cityScopeRef.current === nextScopeKey) {
+      return;
+    }
+    cityScopeRef.current = nextScopeKey;
+    if (parseDelimitedList(form.settings.cities).length) {
+      updateSetting("cities", []);
+    }
+  }, [builderState.open, form.settings.cities, selectedCountryCodes]);
+
+  useEffect(() => {
+    if (!builderState.open || !selectedCountryCodeForCity) {
+      setCityOptionsState({
+        loading: false,
+        options: [],
+        selectedCountryCode: selectedCountryCodeForCity,
+        missingDataset: false,
+      });
+      return;
+    }
+    if (!hasCityDataset(selectedCountryCodeForCity)) {
+      setCityOptionsState({
+        loading: false,
+        options: [],
+        selectedCountryCode: selectedCountryCodeForCity,
+        missingDataset: true,
+      });
+      return;
+    }
+
+    const requestId = cityRequestRef.current + 1;
+    cityRequestRef.current = requestId;
+    setCityOptionsState({
+      loading: true,
+      options: [],
+      selectedCountryCode: selectedCountryCodeForCity,
+      missingDataset: false,
+    });
+
+    loadCityOptions(selectedCountryCodeForCity)
+      .then((options) => {
+        if (cityRequestRef.current !== requestId) {
+          return;
+        }
+        setCityOptionsState({
+          loading: false,
+          options,
+          selectedCountryCode: selectedCountryCodeForCity,
+          missingDataset: false,
+        });
+      })
+      .catch(() => {
+        if (cityRequestRef.current !== requestId) {
+          return;
+        }
+        setCityOptionsState({
+          loading: false,
+          options: [],
+          selectedCountryCode: selectedCountryCodeForCity,
+          missingDataset: true,
+        });
+      });
+  }, [builderState.open, selectedCountryCodeForCity]);
+
+  useEffect(() => {
     if (!builderCatalog || builderState.open) {
       return;
     }
@@ -1401,14 +1807,15 @@ export default function WorkspacesPage() {
 
   function buildWorkspaceValidationPayload(workspace) {
     const flowId = workspaceAutomationFlow(workspace);
+    const sourceIds = workspaceSourceIds(workspace, builderCatalog, flowId);
     return buildSourceValidationPayload({
       flowId,
-      sourceIds: workspaceSourceIds(workspace, builderCatalog, flowId),
-      settings: workspace.settings || {},
+      sourceIds,
+      settings: settingsWithDerivedLocationDefaults(workspace.settings || {}, sourceIds),
     });
   }
 
-  async function triggerRun(workspaceId, executionMode, runInputOverrides = {}) {
+  async function triggerRun(workspaceId, runInputOverrides = {}) {
     const workspace = workspaces.find((item) => item.id === workspaceId);
     if (!workspace) {
       setActionState({
@@ -1435,7 +1842,7 @@ export default function WorkspacesPage() {
       ...EMPTY_ACTION_STATE,
       workspaceId,
       loading: true,
-      message: executionMode === "sync" ? "Checking workspace setup before running..." : "Checking workspace setup before queueing...",
+      message: "Checking workspace setup before starting the run...",
     });
     try {
       const validationPayload = buildWorkspaceValidationPayload(workspace);
@@ -1447,10 +1854,7 @@ export default function WorkspacesPage() {
         setActionState({
           ...EMPTY_ACTION_STATE,
           workspaceId,
-          error:
-            executionMode === "sync"
-              ? "Run blocked until the workspace source setup is fixed."
-              : "Queue request blocked until the workspace source setup is fixed.",
+          error: "Run blocked until the workspace source setup is fixed.",
           details: (validation.source_results || [])
             .filter((result) => result.status !== "valid")
             .flatMap((result) => {
@@ -1467,7 +1871,7 @@ export default function WorkspacesPage() {
         method: "POST",
         body: {
           workspace_id: workspaceId,
-          execution_mode: executionMode,
+          execution_mode: "queued",
           max_attempts: 1,
           run_input_overrides: runInputOverrides,
         },
@@ -1475,15 +1879,9 @@ export default function WorkspacesPage() {
       setActionState({
         ...EMPTY_ACTION_STATE,
         workspaceId,
-        message:
-          executionMode === "sync"
-            ? `Run ${run.id} finished with status ${labelize(run.status)}`
-            : `Queued ${run.id}`,
+        message: `Run ${run.id} added to the queue and will start automatically.`,
       });
       await refresh();
-      if (executionMode === "sync") {
-        navigate(`/runs/${run.id}`);
-      }
     } catch (runError) {
       setActionState({
         ...EMPTY_ACTION_STATE,
@@ -1495,6 +1893,12 @@ export default function WorkspacesPage() {
   }
 
   async function deleteWorkspace(workspaceId) {
+    const confirmed = window.confirm(
+      "Delete this workspace? Existing runs stay in the system until you delete them separately.",
+    );
+    if (!confirmed) {
+      return;
+    }
     setBuilderState((current) => ({
       ...current,
       deleting: workspaceId,
@@ -1566,91 +1970,48 @@ export default function WorkspacesPage() {
 
   function renderWorkspaceRows() {
     return (
-      <div className="overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest shadow-soft">
-        <div className="hidden border-b border-outline-variant/10 bg-surface-container-low px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant md:grid md:grid-cols-12 md:items-center">
-          <div className="md:col-span-4">Workspace</div>
-          <div className="md:col-span-2">Sources</div>
-          <div className="md:col-span-2">Profile</div>
-          <div className="text-right md:col-span-4">Actions</div>
+      <div className="w-full max-w-6xl overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest shadow-soft">
+        <div className="hidden border-b border-outline-variant/10 bg-surface-container-low px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:gap-6">
+          <div>Workspace</div>
+          <div>Actions</div>
         </div>
 
         <div className="divide-y divide-outline-variant/10">
           {workspaces.map((workspace) => {
-            const summary = workspacePresentation(workspace);
             const workspaceActionPending = actionState.workspaceId === workspace.id && actionState.loading;
             return (
               <article
-                className="grid gap-4 px-4 py-4 transition-colors hover:bg-surface-container-low md:grid-cols-12 md:items-center"
+                className="grid gap-4 px-4 py-5 transition-colors hover:bg-surface-container-low md:grid-cols-[minmax(0,1fr)_auto] md:items-start md:gap-6"
                 key={workspace.id}
               >
-                <div className="min-w-0 md:col-span-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="truncate font-headline text-lg font-bold text-on-surface">
-                      {workspace.name}
-                    </h2>
-                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                      {summary.flowLabel}
-                    </span>
-                  </div>
-                  <p className="mt-1 truncate text-sm text-on-surface-variant">
+                <div className="min-w-0">
+                  <h2 className="font-headline text-lg font-bold leading-tight text-on-surface break-words">
+                    {workspace.name}
+                  </h2>
+                  <p className="mt-2 max-w-2xl line-clamp-2 text-sm leading-6 text-on-surface-variant break-words">
                     {workspace.description || "No description provided."}
                   </p>
-                  <p className="mt-1 text-xs text-on-surface-variant">
-                    {summary.modulesLabel}
-                  </p>
                 </div>
 
-                <div className="text-sm text-on-surface-variant md:col-span-2">
-                  <span className="font-semibold text-on-surface md:hidden">Sources: </span>
-                  {summary.sourcesLabel}
-                </div>
-
-                <div className="text-sm text-on-surface-variant md:col-span-2">
-                  <span className="font-semibold text-on-surface md:hidden">Profile: </span>
-                  {summary.profileLabel}
-                </div>
-
-                <div className="flex flex-wrap gap-2 md:col-span-4 md:justify-end">
+                <div className="flex flex-wrap gap-2">
                   <button
-                    className="rounded bg-gradient-to-br from-primary to-primary-container px-3 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
+                    className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary-container px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
                     onClick={() => focusWorkspace(workspace.id)}
                     type="button"
                   >
                     Open
                   </button>
                   <button
-                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={workspaceActionPending}
-                    onClick={() => triggerRun(workspace.id, "sync")}
+                    onClick={() => triggerRun(workspace.id)}
                     type="button"
                   >
                     Run
                   </button>
-                  <Link
-                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                    to={`${QUICK_APPLY_ROUTE}?workspace_id=${workspace.id}`}
-                  >
-                    Quick Apply
-                  </Link>
-                  <button
-                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={workspaceActionPending}
-                    onClick={() => triggerRun(workspace.id, "queued")}
-                    type="button"
-                  >
-                    Queue
-                  </button>
-                  <button
-                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={!builderCatalogReady}
-                    onClick={() => openEditor(workspace)}
-                    type="button"
-                  >
-                    Edit
-                  </button>
                 </div>
 
-                <div className="md:col-span-12">{renderActionFeedback(workspace)}</div>
+                <div className="md:col-span-2">{renderActionFeedback(workspace)}</div>
               </article>
             );
           })}
@@ -1689,14 +2050,7 @@ export default function WorkspacesPage() {
         <article className="space-y-6 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="font-headline text-2xl font-bold text-on-surface">
-                  {workspace.name}
-                </h2>
-                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                  {summary.flowLabel}
-                </span>
-              </div>
+              <h2 className="font-headline text-2xl font-bold text-on-surface">{workspace.name}</h2>
               <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
                 {workspace.description || "No description provided."}
               </p>
@@ -1705,10 +2059,10 @@ export default function WorkspacesPage() {
               <button
                 className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={workspaceActionPending}
-                onClick={() => triggerRun(workspace.id, "sync")}
+                onClick={() => triggerRun(workspace.id)}
                 type="button"
               >
-                Run Now
+                Run
               </button>
               <Link
                 className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
@@ -1716,14 +2070,6 @@ export default function WorkspacesPage() {
               >
                 Quick Apply
               </Link>
-              <button
-                className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={workspaceActionPending}
-                onClick={() => triggerRun(workspace.id, "queued")}
-                type="button"
-              >
-                Queue Run
-              </button>
             </div>
           </div>
 
@@ -1893,9 +2239,6 @@ export default function WorkspacesPage() {
           <p className="text-sm text-on-surface-variant">
             Browse workspaces as simple rows. Use them for recurring sourcing workflows, and use Quick Apply when you already have an exact job link.
           </p>
-          <p className="text-xs uppercase tracking-wider text-on-surface-variant/80">
-            Run Now executes inside the app. Queue Run only waits for a worker.
-          </p>
         </div>
         <div className="flex flex-wrap gap-3">
           <Link
@@ -1935,43 +2278,74 @@ export default function WorkspacesPage() {
       ) : null}
 
       {builderState.open ? (
-        <div className="grid gap-6 xl:grid-cols-12">
-          <div className="space-y-6 xl:col-span-8">
-            {focusedSectionId ? (
-              <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
-                {focusedSection ? (
-                  <>
-                    Opened from rejected-job review. The workspace editor is focused on{" "}
-                    <span className="font-semibold text-primary">{focusedSection.title}</span>.
-                  </>
-                ) : (
-                  <>
-                    Opened from rejected-job review. This rejection does not map to a specific
-                    workspace section, so review the settings below and the review queue together.
-                  </>
-                )}
-              </div>
-            ) : null}
+        <div className="space-y-6">
+          {focusedSectionId ? (
+            <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
+              {focusedSection ? (
+                <>
+                  Opened from rejected-job review. The workspace editor is focused on{" "}
+                  <span className="font-semibold text-primary">{focusedSection.title}</span>.
+                </>
+              ) : (
+                <>
+                  Opened from rejected-job review. This rejection does not map to a specific
+                  workspace section, so review the settings below and the related run details together.
+                </>
+              )}
+            </div>
+          ) : null}
 
             <BuilderSection
               description="Give the workspace a clear name and a short description so it is obvious what kind of jobs and applications it should handle."
               title="Workspace Basics"
             >
-              <div className="grid gap-4">
-                <input
-                  className="rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                  onChange={(event) => updateForm({ name: event.target.value })}
-                  placeholder="Workspace name"
-                  value={form.name}
-                />
-              </div>
-              <textarea
-                className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                onChange={(event) => updateForm({ description: event.target.value })}
-                placeholder="Describe what this workspace is for."
-                value={form.description}
+            <div className="grid gap-4">
+              <input
+                className="rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                onChange={(event) => updateForm({ name: event.target.value })}
+                placeholder="Workspace name"
+                value={form.name}
+              />
+            </div>
+            <textarea
+              className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+              onChange={(event) => updateForm({ description: event.target.value })}
+              placeholder="Describe what this workspace is for."
+              value={form.description}
               />
             </BuilderSection>
+
+            {targetingFields.length ? (
+              <BuilderSection
+                description={
+                  targetingSection?.description ||
+                  "Set the target roles, keywords, countries, and optional city that define what this workspace should pursue."
+                }
+                emphasized={focusedSectionId === "targeting"}
+                id="workspace-builder-targeting"
+                title={targetingSection?.title || "Targeting"}
+              >
+                <div className="grid gap-4 md:grid-cols-2">
+                  {targetingFields.map((field) => (
+                    <label className="space-y-2" key={field.id}>
+                      <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                      <FieldRenderer
+                        dynamicOptions={dynamicFieldOptions}
+                        field={field}
+                        formState={form}
+                        onChange={(nextValue) => updateSetting(field.id, nextValue)}
+                        value={form.settings[field.id]}
+                      />
+                      {field.description ? (
+                        <span className="block text-xs leading-6 text-on-surface-variant">
+                          {field.description}
+                        </span>
+                      ) : null}
+                    </label>
+                  ))}
+                </div>
+              </BuilderSection>
+            ) : null}
 
             <BuilderSection
               description="Choose one recurring source type for this workspace. Source-specific setup appears immediately after you select it."
@@ -1990,7 +2364,7 @@ export default function WorkspacesPage() {
                           : source.id === "company_career_sites"
                             ? "Use this when you want roles from major company career sites worldwide. You can also add up to 50 company or careers URLs of your own."
                             : source.id === "job_board_collection"
-                              ? "Choose from major global job boards here. Regional boards appear automatically after you select matching target countries."
+                              ? "Choose from major global job boards here. Regional boards appear automatically after you select your target country."
                               : source.description
                       }
                       key={source.id}
@@ -2240,9 +2614,10 @@ export default function WorkspacesPage() {
                       <div className="space-y-3">
                         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                           <div>
-                            <div className="text-sm font-semibold text-on-surface">Live CV Preview</div>
+                            <div className="text-sm font-semibold text-on-surface">Live Export Preview</div>
                             <p className="text-xs leading-6 text-on-surface-variant">
-                              Uses the selected workspace baseline CV as the preview content source.
+                              Uses the selected workspace baseline CV content with the active DOCX
+                              template, palette, font, and photo settings.
                             </p>
                           </div>
                           {selectedWorkspaceCvAsset ? (
@@ -2261,12 +2636,13 @@ export default function WorkspacesPage() {
                             The selected baseline CV is no longer available. Choose another workspace
                             CV to restore the preview.
                           </div>
-                        ) : workspaceDocumentPreviewState ? (
-                          <div className="overflow-hidden rounded-2xl border border-outline-variant/15 bg-surface p-3">
-                            <iframe
-                              className="h-[820px] w-full rounded-xl bg-white"
-                              srcDoc={workspaceDocumentPreviewHtml}
-                              title="Workspace CV preview"
+                        ) : mergedPreviewProfile ? (
+                          <div className="rounded-2xl border border-outline-variant/15 bg-surface p-3">
+                            <CvExportPreview
+                              className="min-h-[760px]"
+                              documents={effectiveDocumentPreviewDocuments}
+                              options={settingsPayload?.options || {}}
+                              profile={mergedPreviewProfile}
                             />
                           </div>
                         ) : (
@@ -2276,10 +2652,9 @@ export default function WorkspacesPage() {
                         )}
 
                         <p className="text-xs leading-6 text-on-surface-variant">
-                          This embedded preview reuses the browser CV rendering pipeline and maps your
-                          workspace export settings into a live HTML approximation. Generated DOCX/PDF
-                          artifacts still use the same workspace template, color scheme, font, and
-                          photo selection.
+                          This preview follows the export-template styling rather than the browser CV
+                          studio. Generated DOCX and PDF artifacts use the same workspace template,
+                          color scheme, font, and photo selection.
                         </p>
                       </div>
                     </div>
@@ -2391,74 +2766,46 @@ export default function WorkspacesPage() {
                 </BuilderSection>
               );
             })}
-          </div>
-
-          <div className="space-y-6 xl:col-span-4">
-            <BuilderSection
-              description="Review the selected baseline before saving the workspace."
-              title="Workspace Summary"
-            >
-              <div className="space-y-2 text-sm text-on-surface-variant">
-                <div>
-                  <span className="font-semibold text-on-surface">Flow:</span>{" "}
-                  {labelize(form.flowId)}
-                </div>
-                <div>
-                  <span className="font-semibold text-on-surface">Sources:</span>{" "}
-                  {form.sourceIds.length ? form.sourceIds.map((sourceId) => resolveSourceName(sourceId)).join(", ") : "None selected"}
-                </div>
-                <div>
-                  <span className="font-semibold text-on-surface">Modules:</span>{" "}
-                  {resolvedModuleIds.length
-                    ? resolvedModuleIds.map(labelize).join(", ")
-                    : "Default remediation path"}
-                </div>
-                <div>
-                  <span className="font-semibold text-on-surface">Workspace CV:</span>{" "}
-                  {selectedWorkspaceCvLabel}
-                </div>
+          <div className="space-y-3 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
+            {saveBlockedReason ? (
+              <div className="rounded-lg border border-outline-variant/10 bg-surface px-4 py-3 text-sm text-on-surface-variant">
+                {saveBlockedReason}
               </div>
+            ) : null}
 
-              {saveBlockedReason ? (
-                <div className="rounded-lg border border-outline-variant/10 bg-surface px-4 py-3 text-sm text-on-surface-variant">
-                  {saveBlockedReason}
-                </div>
-              ) : null}
-
-              {builderError ? <p className="text-sm text-error">{builderError}</p> : null}
-              {builderState.error ? <p className="text-sm text-error">{builderState.error}</p> : null}
-              {builderState.details.length ? (
-                <div className="space-y-1 text-xs leading-6 text-error">
-                  {builderState.details.map((detail) => (
-                    <div key={detail}>{detail}</div>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="flex gap-3">
-                <button
-                  className="flex-1 rounded bg-surface-container-low px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                  onClick={closeBuilder}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button
-                  className="flex-1 rounded bg-gradient-to-br from-primary to-primary-container px-4 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={saveDisabled}
-                  onClick={submitWorkspace}
-                  type="button"
-                >
-                  {builderState.submitting
-                    ? builderState.mode === "edit"
-                      ? "Saving..."
-                      : "Creating..."
-                    : builderState.mode === "edit"
-                      ? "Save Workspace"
-                      : "Create Workspace"}
-                </button>
+            {builderError ? <p className="text-sm text-error">{builderError}</p> : null}
+            {builderState.error ? <p className="text-sm text-error">{builderState.error}</p> : null}
+            {builderState.details.length ? (
+              <div className="space-y-1 text-xs leading-6 text-error">
+                {builderState.details.map((detail) => (
+                  <div key={detail}>{detail}</div>
+                ))}
               </div>
-            </BuilderSection>
+            ) : null}
+
+            <div className="flex gap-3">
+              <button
+                className="flex-1 rounded bg-surface-container-low px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                onClick={closeBuilder}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="flex-1 rounded bg-gradient-to-br from-primary to-primary-container px-4 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saveDisabled}
+                onClick={submitWorkspace}
+                type="button"
+              >
+                {builderState.submitting
+                  ? builderState.mode === "edit"
+                    ? "Saving..."
+                    : "Creating..."
+                  : builderState.mode === "edit"
+                    ? "Save Workspace"
+                    : "Create Workspace"}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

@@ -11,6 +11,13 @@ const EMPTY_FORM = {
   relationship_note: "",
   can_refer: false,
 };
+const REFERRAL_OUTREACH_STATUSES = [
+  "Not contacted",
+  "Contacted",
+  "Replied",
+  "Referral offered",
+  "No referral",
+];
 
 function ReferralFormField({ label, children, hint = "" }) {
   return (
@@ -276,6 +283,30 @@ export default function ReferralsPage() {
       setActionState({
         message: "",
         error: deleteError.message || "Unable to delete referral contact.",
+        busyId: "",
+      });
+    }
+  }
+
+  async function updateOutreachStatus(item, outreachStatus) {
+    const busyId = `outreach:${item.run_id}:${item.job_id}:${item.contact_id}`;
+    setActionState({ message: "", error: "", busyId });
+    try {
+      await request("/referrals/outreach-status", {
+        method: "POST",
+        body: {
+          run_id: item.run_id,
+          job_id: item.job_id,
+          contact_id: item.contact_id,
+          outreach_status: outreachStatus,
+        },
+      });
+      setActionState({ message: "Outreach status updated.", error: "", busyId: "" });
+      await refresh();
+    } catch (updateError) {
+      setActionState({
+        message: "",
+        error: updateError.message || "Unable to update outreach status.",
         busyId: "",
       });
     }
@@ -570,16 +601,9 @@ export default function ReferralsPage() {
                   Saved Contacts
                 </h2>
                 <p className="mt-1 text-sm text-on-surface-variant">
-                  These contacts are matched against company names in the review queue. Outreach status is edited there and summarized here per contact.
+                  These contacts are matched against company names in generated jobs. Outreach status is edited here and summarized per contact.
                 </p>
               </div>
-              <Link
-                className="inline-flex items-center gap-1 rounded-lg bg-surface-container-low px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
-                to="/review-queue"
-              >
-                <span className="material-symbols-outlined text-[16px]">fact_check</span>
-                Open Review Queue
-              </Link>
             </div>
           </div>
 
@@ -659,16 +683,9 @@ export default function ReferralsPage() {
                             <div>
                               <h4 className="text-sm font-semibold text-on-surface">Outreach Activity</h4>
                               <p className="mt-1 text-xs text-on-surface-variant">
-                                Stored per run, job, and contact. Update these statuses from the Review Queue.
+                                Stored per run, job, and contact. Update these statuses directly here.
                               </p>
                             </div>
-                            <Link
-                              className="inline-flex items-center gap-1 text-sm font-medium text-primary transition-colors hover:text-primary-container"
-                              to="/review-queue"
-                            >
-                              <span className="material-symbols-outlined text-[15px]">fact_check</span>
-                              Manage statuses
-                            </Link>
                           </div>
                           {contactOutreach.length ? (
                             <div className="mt-4 space-y-3">
@@ -701,7 +718,24 @@ export default function ReferralsPage() {
                                         {item.source_label ? <span>{item.source_label}</span> : null}
                                       </div>
                                     </div>
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <select
+                                        className="rounded border border-outline-variant/20 bg-surface-container-low px-3 py-2 text-sm text-on-surface"
+                                        disabled={
+                                          actionState.busyId ===
+                                          `outreach:${item.run_id}:${item.job_id}:${item.contact_id}`
+                                        }
+                                        onChange={(event) =>
+                                          updateOutreachStatus(item, event.target.value)
+                                        }
+                                        value={item.outreach_status || "Not contacted"}
+                                      >
+                                        {REFERRAL_OUTREACH_STATUSES.map((status) => (
+                                          <option key={`${item.contact_id}-${status}`} value={status}>
+                                            {status}
+                                          </option>
+                                        ))}
+                                      </select>
                                       {item.contact_linkedin_url ? (
                                         <a
                                           className="rounded bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
@@ -729,7 +763,7 @@ export default function ReferralsPage() {
                             </div>
                           ) : (
                             <div className="mt-4 text-sm text-on-surface-variant">
-                              No outreach tracked yet. Once you mark a status in Review Queue, it will appear here for this contact.
+                              No outreach tracked yet. Saved outreach statuses will appear here for this contact.
                             </div>
                           )}
                         </div>

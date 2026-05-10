@@ -38,12 +38,6 @@ const navItems = [
     ],
   },
   {
-    label: "Review Queue",
-    icon: "fact_check",
-    to: "/review-queue",
-    matchers: [{ path: "/review-queue", end: false }],
-  },
-  {
     label: "Tracker",
     icon: "table_rows",
     to: "/tracker",

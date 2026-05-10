@@ -31,6 +31,7 @@ class Phase0ContractsTests(unittest.TestCase):
                 "target_roles": ["Business Analyst", "Consultant"],
                 "job_filtering_mode": "strict_match",
                 "geo_id": "101282230",
+                "cities": ["Berlin"],
                 "time_posted_seconds": 172800,
                 "experience_levels": [2, 3],
                 "manual_url_seed_list": "https://company.example/jobs/1\nhttps://company.example/jobs/1\nhttps://company.example/jobs/2",
@@ -65,6 +66,7 @@ class Phase0ContractsTests(unittest.TestCase):
         )
         self.assertTrue(normalized["source_configuration"]["linkedin_search"]["enabled"])
         self.assertTrue(normalized["source_configuration"]["multi_portal"]["enabled"])
+        self.assertEqual(normalized["source_configuration"]["multi_portal"]["cities"], ["Berlin"])
         self.assertTrue(normalized["source_configuration"]["curated_urls"]["enabled"])
         self.assertTrue(normalized["source_configuration"]["academic_career_sites"]["enabled"])
         self.assertTrue(normalized["source_configuration"]["company_career_sites"]["enabled"])

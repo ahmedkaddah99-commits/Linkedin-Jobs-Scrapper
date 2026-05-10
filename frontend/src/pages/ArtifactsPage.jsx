@@ -87,21 +87,6 @@ function buildDocumentGroupDescription(group) {
   return group.workspace_name || "Reusable candidate assets available across applications.";
 }
 
-function buildReviewQueueTarget(documents) {
-  const params = new URLSearchParams();
-  params.set("status", "approved");
-  const runIds = Array.from(new Set(documents.map((document) => document.run_id).filter(Boolean)));
-  const workspaceIds = Array.from(
-    new Set(documents.map((document) => document.workspace_id).filter(Boolean)),
-  );
-  if (runIds.length === 1) {
-    params.set("run_id", runIds[0]);
-  } else if (workspaceIds.length === 1) {
-    params.set("workspace_id", workspaceIds[0]);
-  }
-  return `/review-queue?${params.toString()}`;
-}
-
 export default function DocumentsPage() {
   const { request } = useSession();
   const [activeView, setActiveView] = useState(VIEW_LIBRARY);
@@ -291,10 +276,6 @@ export default function DocumentsPage() {
         ),
       ),
     [exportState.gate?.missing_requirements, selectedBlockedDocuments],
-  );
-  const reviewQueueTarget = useMemo(
-    () => buildReviewQueueTarget(selectedBlockedDocuments),
-    [selectedBlockedDocuments],
   );
   const visibleDocumentSections = useMemo(() => {
     const groupMetaById = new Map(
@@ -840,7 +821,7 @@ export default function DocumentsPage() {
                       </h3>
                       <p className="mt-1 text-sm leading-6 text-on-surface-variant">
                         Compare the blocked document set with the missing ATS requirements, then
-                        jump into the review queue or profile inputs before trying again.
+                        review the related run details or profile inputs before trying again.
                       </p>
                     </div>
                     <button
@@ -893,9 +874,9 @@ export default function DocumentsPage() {
                   <div className="mt-5 flex flex-wrap gap-3">
                     <Link
                       className="rounded bg-primary/10 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/20"
-                      to={reviewQueueTarget}
+                      to="/tracker"
                     >
-                      Open Review Queue
+                      Open Tracker
                     </Link>
                     <Link
                       className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"

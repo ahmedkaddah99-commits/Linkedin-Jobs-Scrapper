@@ -1,359 +1,400 @@
-import { useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
-function canStopRun(status) {
-  return ["planned", "queued", "running", "cancel_requested"].includes(String(status || "").trim());
-}
+const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 
-function StageCard({ stage, isLast }) {
-  const tone = stage.status === "failed" ? "warning" : stage.status === "completed" ? "success" : "primary";
-  const icon = stage.status === "failed" ? "warning" : stage.status === "completed" ? "check_circle" : "hourglass_top";
-
+function SummaryCard({ description, label, value }) {
   return (
-    <div className="group relative flex rounded-lg p-4 transition-colors hover:bg-surface-container-low">
-      {!isLast ? (
-        <div className="absolute bottom-0 left-[39px] top-12 w-px bg-outline-variant/30" />
-      ) : null}
-      <div className="z-10 mr-6 flex flex-col items-center">
-        <div
-          className={[
-            "flex h-12 w-12 items-center justify-center rounded-full border-4 border-surface-container-lowest",
-            tone === "warning"
-              ? "bg-[#FFF3E0] text-[#E65100]"
-              : tone === "success"
-                ? "bg-[#E5F5E0] text-[#2E7D32]"
-                : "bg-surface-container-high text-primary",
-          ].join(" ")}
-        >
-          <span className="material-symbols-outlined text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>
-            {icon}
-          </span>
-        </div>
+    <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+        {label}
       </div>
-
-      <div className="flex-1 pb-6">
-        <div className="mb-2 flex items-start justify-between">
-          <div>
-            <h4 className="font-headline text-base font-bold text-on-surface">{labelize(stage.stage_id)}</h4>
-            <p className="mt-0.5 text-xs text-on-surface-variant">{labelize(stage.stage_type)}</p>
-          </div>
-          <div className="text-right">
-            <span className="text-xs font-medium text-on-surface-variant">
-              {formatDateTime(stage.started_at)}
-            </span>
-            <p className="mt-1 text-[10px] uppercase tracking-widest text-on-surface-variant/60">
-              {labelize(stage.status)}
-            </p>
-          </div>
-        </div>
-
-        {stage.error ? (
-          <div className="mt-2 flex items-start gap-2 rounded border border-[#FFE0B2] bg-[#FFF3E0]/50 p-2 text-xs text-[#E65100]">
-            <span className="material-symbols-outlined text-[14px]">info</span>
-            <span>{stage.error}</span>
-          </div>
-        ) : null}
-
-        {Object.keys(stage.metrics || {}).length ? (
-          <div className="mt-3 flex flex-wrap gap-4 rounded border border-outline-variant/10 bg-surface p-3">
-            {Object.entries(stage.metrics || {}).map(([key, value]) => (
-              <div key={key} className="flex flex-col">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-on-surface-variant/70">
-                  {labelize(key)}
-                </span>
-                <span className="text-lg font-bold text-on-surface">{String(value)}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
+      <div className="mt-3 font-headline text-3xl font-bold text-on-surface">{value}</div>
+      <div className="mt-1 text-sm text-on-surface-variant">{description}</div>
     </div>
   );
 }
 
+function ReviewSection({ children, count, defaultOpen = true, title, tone = "primary" }) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <section className="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest">
+      <button
+        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+        onClick={() => setOpen((currentValue) => !currentValue)}
+        type="button"
+      >
+        <div className="flex items-center gap-3">
+          <span
+            className={[
+              "rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide",
+              tone === "warning" ? "bg-error/10 text-error" : "bg-primary/10 text-primary",
+            ].join(" ")}
+          >
+            {count}
+          </span>
+          <span className="text-sm font-semibold text-on-surface">{title}</span>
+        </div>
+        <span className="material-symbols-outlined text-on-surface-variant">
+          {open ? "expand_less" : "expand_more"}
+        </span>
+      </button>
+      {open ? <div className="space-y-3 border-t border-outline-variant/10 px-5 py-5">{children}</div> : null}
+    </section>
+  );
+}
+
+function IncludedJobRow({ job }) {
+  return (
+    <article className="rounded-2xl border border-outline-variant/15 bg-surface p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-headline text-lg font-bold text-on-surface">
+              {job.title || "Untitled role"}
+            </h3>
+            {job.document_count ? (
+              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                {job.document_count} doc{job.document_count === 1 ? "" : "s"}
+              </span>
+            ) : null}
+            {job.tracker_status ? (
+              <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                {labelize(job.application_status || job.tracker_status)}
+              </span>
+            ) : null}
+          </div>
+          <p className="text-sm text-on-surface-variant">
+            {[job.company, job.location].filter(Boolean).join(" | ") || "No company details saved yet."}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-on-surface-variant">
+          {job.source_label ? (
+            <span className="rounded-full bg-surface-container-low px-2.5 py-1 font-semibold text-on-surface">
+              {labelize(job.source_label)}
+            </span>
+          ) : null}
+          {job.priority_rank ? (
+            <span className="rounded-full bg-surface-container-low px-2.5 py-1 font-semibold text-on-surface">
+              Rank {job.priority_rank}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-3">
+        {job.apply_link ? (
+          <a
+            className="rounded-full bg-surface-container-low px-3 py-1.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+            href={job.apply_link}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Open Job
+          </a>
+        ) : null}
+        {job.tracker_status ? (
+          <Link
+            className="rounded-full bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+            to="/tracker"
+          >
+            Open Tracker
+          </Link>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function ExcludedJobRow({ job, onGenerate, pending }) {
+  const hasDocumentRun = Boolean(job.create_documents_run_id);
+  const childRunActive = ACTIVE_RUN_STATUSES.includes(String(job.create_documents_run_status || "").trim());
+
+  return (
+    <article className="rounded-2xl border border-outline-variant/15 bg-surface p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-headline text-lg font-bold text-on-surface">
+              {job.title || "Untitled role"}
+            </h3>
+            <span className="rounded-full bg-error/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-error">
+              {job.reason_label || "Not selected"}
+            </span>
+            {hasDocumentRun ? (
+              <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                {childRunActive ? "Document Run Active" : "Document Run Created"}
+              </span>
+            ) : null}
+          </div>
+          <p className="text-sm text-on-surface-variant">{job.company || "Unknown company"}</p>
+          <p className="text-sm leading-7 text-on-surface-variant">
+            {job.reason_summary || "This job was not selected for document generation."}
+          </p>
+        </div>
+        <div className="text-sm text-on-surface-variant">
+          {job.recorded_at ? `Updated ${formatDateTime(job.recorded_at)}` : "Reviewed in this run"}
+        </div>
+      </div>
+
+      {job.details?.length ? (
+        <div className="mt-4 rounded-2xl bg-surface-container-low p-4 text-sm text-on-surface-variant">
+          <div className="font-semibold text-on-surface">Reason details</div>
+          <div className="mt-2 space-y-1">
+            {job.details.map((detail) => (
+              <div key={`${job.job_id}-${detail}`}>{detail}</div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-5 flex flex-wrap gap-3">
+        {job.apply_link ? (
+          <a
+            className="rounded-full bg-surface-container-low px-3 py-1.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+            href={job.apply_link}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Open Job
+          </a>
+        ) : null}
+        {job.workspace_editor_url ? (
+          <Link
+            className="rounded-full bg-surface-container-low px-3 py-1.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+            to={job.workspace_editor_url}
+          >
+            Adjust Matching
+          </Link>
+        ) : null}
+        {hasDocumentRun ? (
+          <Link
+            className="rounded-full bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+            to={job.create_documents_run_url || `/runs/${job.create_documents_run_id}`}
+          >
+            {childRunActive ? "Open Document Run" : "View Document Run"}
+          </Link>
+        ) : (
+          <button
+            className="rounded-full bg-gradient-to-br from-primary to-primary-container px-4 py-1.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!job.can_generate_documents || pending}
+            onClick={() => onGenerate(job)}
+            type="button"
+          >
+            {pending ? "Creating..." : job.can_generate_documents ? "Create Documents" : "Unavailable"}
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export default function RunDetailPage() {
-  const navigate = useNavigate();
   const { runId } = useParams();
   const { request } = useSession();
-  const [actionMessage, setActionMessage] = useState("");
-  const [actionError, setActionError] = useState("");
+  const [actionState, setActionState] = useState({
+    pendingJobId: "",
+    message: "",
+    error: "",
+  });
 
-  const { data: run, loading, error, refresh } = useApiResource(
-    () => request(`/runs/${runId}`),
+  const { data, loading, error, refresh } = useApiResource(
+    () => request(`/runs/${runId}/customer-view`),
     [request, runId],
   );
-  const { data: documentsPayload } = useApiResource(
-    () => request(`/documents?run_id=${encodeURIComponent(runId)}&limit=500`),
-    [request, runId],
+
+  const run = data?.run || null;
+  const summary = data?.summary || {};
+  const tracker = data?.tracker || {};
+  const review = data?.review || { included_jobs: [], excluded_jobs: [] };
+  const hasActiveRun = ACTIVE_RUN_STATUSES.includes(String(run?.status || "").trim());
+  const hasActiveChildRuns = (review.excluded_jobs || []).some((job) =>
+    ACTIVE_RUN_STATUSES.includes(String(job.create_documents_run_status || "").trim()),
   );
 
-  const documents = useMemo(
-    () => documentsPayload?.documents || [],
-    [documentsPayload?.documents],
-  );
-  const stageResults = run?.stage_results || [];
-
-  async function performAction(action) {
-    setActionMessage("");
-    setActionError("");
-    try {
-      let updatedRun = null;
-      if (action === "retry") {
-        updatedRun = await request(`/runs/${runId}/retry`, { method: "POST", body: {} });
-      } else if (action === "resume") {
-        updatedRun = await request(`/runs/${runId}/resume`, { method: "POST", body: {} });
-      } else if (action === "cancel") {
-        updatedRun = await request(`/runs/${runId}/cancel`, { method: "POST", body: {} });
-      } else if (action === "queue_again" && run) {
-        updatedRun = await request("/runs", {
-          method: "POST",
-          body: {
-            workspace_id: run.workspace_id,
-            execution_mode: "queued",
-            max_attempts: run.max_attempts || 1,
-            run_input_overrides: run.run_input_overrides || {},
-          },
-        });
-      }
-      setActionMessage(`${labelize(action)} requested for ${updatedRun?.id || runId}.`);
+  useEffect(() => {
+    if (!hasActiveRun && !hasActiveChildRuns) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
       refresh().catch(() => undefined);
-    } catch (runActionError) {
-      setActionError(runActionError.message || "Unable to update run.");
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [hasActiveChildRuns, hasActiveRun, refresh]);
+
+  async function createDocumentsForExcludedJob(job) {
+    setActionState({ pendingJobId: job.job_id, message: "", error: "" });
+    try {
+      const result = await request(`/runs/${runId}/excluded-jobs/${encodeURIComponent(job.job_id)}/generate-documents`, {
+        method: "POST",
+        body: {
+          source_stage: job.source_stage,
+          reason_summary: job.reason_summary,
+          execution_mode: "queued",
+          notes: "Generate documents from the run review.",
+        },
+      });
+      setActionState({
+        pendingJobId: "",
+        message: `Document run ${result.run?.id || ""} created for ${job.title || "the selected job"}.`,
+        error: "",
+      });
+      refresh().catch(() => undefined);
+    } catch (actionError) {
+      setActionState({
+        pendingJobId: "",
+        message: "",
+        error: actionError.message || "Unable to create documents for this excluded job.",
+      });
     }
   }
-
-  async function downloadDocument(item) {
-    const blob = await request(item.download_url, { responseType: "blob" });
-    const objectUrl = window.URL.createObjectURL(blob);
-    const anchor = window.document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = item.display_name;
-    window.document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.URL.revokeObjectURL(objectUrl);
-  }
-
-  async function openDocument(document) {
-    const blob = await request(document.preview_url || document.download_url, {
-      responseType: "blob",
-    });
-    const objectUrl = window.URL.createObjectURL(blob);
-    const openedWindow = window.open(objectUrl, "_blank", "noopener,noreferrer");
-    if (!openedWindow) {
-      window.location.assign(objectUrl);
-    }
-    window.setTimeout(() => {
-      window.URL.revokeObjectURL(objectUrl);
-    }, 60000);
-  }
-
-  function exportRunLogs() {
-    if (!run) return;
-    const blob = new Blob([JSON.stringify(run, null, 2)], { type: "application/json" });
-    const objectUrl = window.URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = `${run.id}_run_log.json`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.URL.revokeObjectURL(objectUrl);
-  }
-
-  const primaryAction =
-    run?.status === "failed" || run?.status === "cancelled"
-      ? { key: "retry", label: "Retry" }
-      : run?.status === "planned"
-        ? { key: "resume", label: "Resume" }
-        : { key: "queue_again", label: "Queue Again" };
 
   return (
     <div className="space-y-8">
-      <section className="relative overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-[0px_12px_32px_rgba(11,28,48,0.02)]">
-        <div className="pointer-events-none absolute -right-24 -top-24 h-48 w-48 rounded-full bg-primary-fixed-dim/20 blur-3xl" />
-        <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-3">
-              <h2 className="font-headline text-3xl font-extrabold tracking-tighter text-on-surface">
-                {run?.id || runId}
-              </h2>
-              {run ? (
-                <StatusBadge tone={statusTone(run.status)}>{labelize(run.status)}</StatusBadge>
-              ) : null}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-6 text-sm text-on-surface-variant">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-sm opacity-70">calendar_today</span>
-                {run ? formatDateTime(run.created_at) : "Loading..."}
+      <header className="relative overflow-hidden rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-1/2 bg-[radial-gradient(circle_at_top_right,_rgba(0,133,122,0.18),_transparent_60%)]" />
+        <div className="relative z-10 flex flex-col gap-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <StatusBadge tone={statusTone(run?.status)}>{labelize(run?.status || "pending")}</StatusBadge>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-sm opacity-70">timer</span>
-                Attempts {run?.attempt_count ?? 0}/{run?.max_attempts ?? 1}
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-sm opacity-70">account_circle</span>
-                {run?.requested_by || "Unknown initiator"}
+              <div>
+                <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
+                  {run?.workspace_name || "Run Review"}
+                </h1>
+                <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
+                  Review the included and excluded jobs for this run. You can create documents for
+                  excluded jobs when needed, and completed document jobs move to Tracker automatically.
+                </p>
               </div>
             </div>
-
-            {actionMessage || actionError ? (
-              <div className={actionError ? "text-sm text-error" : "text-sm text-primary"}>
-                {actionError || actionMessage}
-              </div>
-            ) : null}
+            <button
+              className="rounded-full bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              onClick={() => refresh().catch(() => undefined)}
+              type="button"
+            >
+              Refresh
+            </button>
           </div>
 
-          <div className="flex w-full items-center gap-3 md:w-auto">
-            <button
-              className="flex flex-1 items-center justify-center gap-2 rounded bg-surface-container-high px-5 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-variant md:flex-none"
-              onClick={exportRunLogs}
-              type="button"
-            >
-              <span className="material-symbols-outlined text-sm">download</span>
-              Export Logs
-            </button>
-            <button
-              className="flex flex-1 items-center justify-center gap-2 rounded bg-gradient-to-br from-primary to-[#0d9488] px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-primary/20 transition-all hover:opacity-90 md:flex-none"
-              onClick={() => performAction(primaryAction.key)}
-              type="button"
-            >
-              <span className="material-symbols-outlined text-sm">restart_alt</span>
-              {primaryAction.label}
-            </button>
-            {canStopRun(run?.status) ? (
-              <button
-                className="flex flex-1 items-center justify-center gap-2 rounded bg-surface-container-high px-5 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-variant md:flex-none"
-                onClick={() => performAction("cancel")}
-                type="button"
-              >
-                <span className="material-symbols-outlined text-sm">stop_circle</span>
-                Stop
-              </button>
-            ) : null}
+          <div className="grid gap-3 text-sm text-on-surface-variant md:grid-cols-3">
+            <div>
+              <span className="font-semibold text-on-surface">Created:</span> {formatDateTime(run?.created_at)}
+            </div>
+            <div>
+              <span className="font-semibold text-on-surface">Updated:</span> {formatDateTime(run?.updated_at)}
+            </div>
+            <div>
+              <span className="font-semibold text-on-surface">Finished:</span>{" "}
+              {run?.finished_at ? formatDateTime(run.finished_at) : "Still in progress"}
+            </div>
           </div>
         </div>
+      </header>
+
+      {actionState.message || actionState.error ? (
+        <section
+          className={[
+            "rounded-2xl border px-5 py-4 text-sm",
+            actionState.error
+              ? "border-error/20 bg-error/5 text-error"
+              : "border-primary/20 bg-primary/5 text-primary",
+          ].join(" ")}
+        >
+          {actionState.error || actionState.message}
+        </section>
+      ) : null}
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard
+          description="Jobs currently selected in this run."
+          label="Included Jobs"
+          value={summary.included_job_count ?? review.included_count ?? 0}
+        />
+        <SummaryCard
+          description="Jobs reviewed out of the run for now."
+          label="Excluded Jobs"
+          value={summary.excluded_job_count ?? review.excluded_count ?? 0}
+        />
+        <SummaryCard
+          description="Excluded jobs that can still have documents created."
+          label="Ready To Create"
+          value={summary.excluded_ready_for_documents_count ?? 0}
+        />
+        <SummaryCard
+          description="Jobs from this run already active in Tracker."
+          label="In Tracker"
+          value={summary.tracker_job_count ?? 0}
+        />
       </section>
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
-          <h3 className="px-1 font-headline text-xl font-bold tracking-tight text-on-surface">
-            Execution Stages
-          </h3>
-          <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-2">
-            {loading ? (
-              <div className="p-6 text-on-surface-variant">Loading run detail...</div>
-            ) : error ? (
-              <div className="p-6 text-error">{error}</div>
-            ) : stageResults.length ? (
-              stageResults.map((stage, index) => (
-                <StageCard
-                  key={`${stage.stage_id}-${index}`}
-                  isLast={index === stageResults.length - 1}
-                  stage={stage}
-                />
-              ))
-            ) : (
-              <div className="p-6 text-on-surface-variant">
-                No stage results exist for this run yet.
-              </div>
-            )}
+      {loading ? (
+        <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest px-6 py-5 text-on-surface-variant shadow-soft">
+          Loading run review...
+        </section>
+      ) : error ? (
+        <section className="rounded-[1.75rem] border border-error/20 bg-error/5 px-6 py-5 text-error shadow-soft">
+          {error}
+        </section>
+      ) : (
+        <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h2 className="font-headline text-2xl font-bold text-on-surface">Run Review</h2>
+              <p className="mt-1 max-w-3xl text-sm leading-7 text-on-surface-variant">
+                Use this view to decide which roles stay out and which excluded roles should still get
+                documents. Once documents are ready, those jobs appear in Tracker.
+              </p>
+            </div>
+            <Link
+              className="rounded-full bg-primary/10 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+              to={tracker.href || "/tracker"}
+            >
+              Open Tracker
+            </Link>
           </div>
-        </div>
 
-        <div className="space-y-6">
-          <h3 className="px-1 font-headline text-xl font-bold tracking-tight text-on-surface">
-            Generated Documents
-          </h3>
-          <div className="overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest">
-            {documents.length ? (
-              documents.map((documentEntry, index) => (
-                <div
-                  key={documentEntry.document_id}
-                  className={[
-                    "group flex items-center justify-between p-4 transition-colors hover:bg-surface-container-low",
-                    index < documents.length - 1 ? "border-b border-outline-variant/10" : "",
-                  ].join(" ")}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="rounded bg-surface-variant p-2 text-primary">
-                      <span className="material-symbols-outlined text-lg">description</span>
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-on-surface">
-                        {documentEntry.display_name}
-                      </p>
-                      <p className="text-xs text-on-surface-variant">
-                        {documentEntry.group_label || labelize(documentEntry.asset_kind)}
-                      </p>
-                      {documentEntry.relative_path &&
-                      documentEntry.relative_path !== documentEntry.display_name ? (
-                        <p className="mt-1 break-all text-[11px] text-on-surface-variant/80">
-                          {documentEntry.relative_path}
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 transition-all group-hover:opacity-100">
-                    <button
-                      className="p-1 text-on-surface-variant hover:text-primary"
-                      onClick={() => openDocument(documentEntry)}
-                      title="Open document"
-                      type="button"
-                    >
-                      <span className="material-symbols-outlined">open_in_new</span>
-                    </button>
-                    <button
-                      className="p-1 text-on-surface-variant hover:text-primary"
-                      onClick={() => downloadDocument(documentEntry)}
-                      title="Download document"
-                      type="button"
-                    >
-                      <span className="material-symbols-outlined">download</span>
-                    </button>
-                  </div>
+          <div className="mt-6 space-y-4">
+            <ReviewSection count={review.included_jobs?.length || 0} title="Included Jobs">
+              {review.included_jobs?.length ? (
+                review.included_jobs.map((job) => <IncludedJobRow job={job} key={job.job_id} />)
+              ) : (
+                <div className="rounded-2xl border border-outline-variant/10 bg-surface p-4 text-sm text-on-surface-variant">
+                  No included jobs are available in this run yet.
                 </div>
-              ))
-            ) : (
-              <div className="p-6 text-on-surface-variant">
-                No documents were generated for this run yet.
-              </div>
-            )}
-          </div>
+              )}
+            </ReviewSection>
 
-          <h3 className="mt-8 px-1 font-headline text-xl font-bold tracking-tight text-on-surface">
-            Run Metadata
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4">
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
-                Workspace
-              </p>
-              <p className="font-headline text-2xl font-bold text-on-surface">{run?.workspace_id || "N/A"}</p>
-            </div>
-            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4">
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
-                Job Sets
-              </p>
-              <p className="font-headline text-2xl font-bold text-on-surface">
-                {run?.final_job_set_keys?.length ?? 0}
-              </p>
-            </div>
+            <ReviewSection
+              count={review.excluded_jobs?.length || 0}
+              defaultOpen={Boolean(review.excluded_jobs?.length)}
+              title="Excluded Jobs"
+              tone="warning"
+            >
+              {review.excluded_jobs?.length ? (
+                review.excluded_jobs.map((job) => (
+                  <ExcludedJobRow
+                    job={job}
+                    key={job.job_id}
+                    onGenerate={createDocumentsForExcludedJob}
+                    pending={actionState.pendingJobId === job.job_id}
+                  />
+                ))
+              ) : (
+                <div className="rounded-2xl border border-outline-variant/10 bg-surface p-4 text-sm text-on-surface-variant">
+                  No excluded jobs were saved for this run.
+                </div>
+              )}
+            </ReviewSection>
           </div>
-          <button
-            className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
-            onClick={() => navigate("/runs")}
-            type="button"
-          >
-            Back To Runs
-          </button>
-        </div>
-      </div>
+        </section>
+      )}
     </div>
   );
 }

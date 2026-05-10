@@ -133,6 +133,7 @@ const DOCX_TO_WEB_TEMPLATE_MAP = {
   modern: "signal_header",
   compact: "mono_nav",
   europass: "europass_lite",
+  plain: "ats_single_column",
 };
 
 const DOCX_COLOR_SCHEME_TO_WEB_PALETTE = {
@@ -193,6 +194,23 @@ function emptyExperienceItem() {
     period: "",
     bulletsText: "",
   };
+}
+
+function educationItemToLine(item) {
+  if (!item || typeof item !== "object") {
+    return String(item || "").trim();
+  }
+  const head = [item.degree_title, item.institution, item.period]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" | ");
+  const details = Array.isArray(item.details)
+    ? item.details.map((value) => String(value || "").trim()).filter(Boolean)
+    : String(item.detailsText || "")
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+  return [head, details[0]].filter(Boolean).join(" - ");
 }
 
 function safeJsonParse(rawValue, fallback) {
@@ -285,10 +303,13 @@ function normalizeExperienceItems(rawItems) {
   const normalizedItems = items
     .filter((item) => item && typeof item === "object")
     .map((item) => ({
-      title: String(item.title || ""),
+      title: String(item.title || item.role || ""),
       company: String(item.company || ""),
       period: String(item.period || ""),
-      bulletsText: String(item.bulletsText || ""),
+      bulletsText:
+        Array.isArray(item.bullets) && item.bullets.length
+          ? item.bullets.map((entry) => String(entry || "").trim()).filter(Boolean).join("\n")
+          : String(item.bulletsText || ""),
     }));
   return normalizedItems.length ? normalizedItems : [emptyExperienceItem()];
 }
@@ -320,11 +341,16 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
     skillsText: Array.isArray(profile.competencies) ? profile.competencies.join("\n") : "",
     languagesText: Array.isArray(profile.languages) ? profile.languages.join("\n") : "",
     availability: "Available immediately for tailored roles.",
-    educationText: "",
+    educationText: Array.isArray(profile.education)
+      ? profile.education
+          .map((item) => educationItemToLine(item))
+          .filter(Boolean)
+          .join("\n")
+      : "",
     experience: normalizeExperienceItems(
       Array.isArray(profile.recent_experience)
         ? profile.recent_experience.map((item) => ({
-            title: item.title || "",
+            title: item.title || item.role || "",
             company: item.company || "",
             period: item.period || "",
             bulletsText:
@@ -402,6 +428,17 @@ export function buildWorkspacePreviewDocuments(sharedDocuments = {}, workspaceSe
   );
   const cvFont = String(normalizedSettings.cv_font || baseDocuments.cv_font || "Calibri");
   const includePhoto = normalizedSettings.include_photo ?? baseDocuments.include_photo ?? true;
+  const webPalette =
+    cvTemplate === "plain"
+      ? normalizePalette({
+          primary: "111111",
+          accent: "111111",
+          surface: "FFFFFF",
+          text: "111111",
+          muted: "444444",
+          border: "111111",
+        })
+      : workspaceDocxColorSchemeToPalette(cvColorScheme);
 
   return {
     ...baseDocuments,
@@ -415,7 +452,7 @@ export function buildWorkspacePreviewDocuments(sharedDocuments = {}, workspaceSe
     ),
     web_cv_font: cvFont,
     web_cv_show_photo: Boolean(includePhoto),
-    web_cv_palette: workspaceDocxColorSchemeToPalette(cvColorScheme),
+    web_cv_palette: webPalette,
   };
 }
 

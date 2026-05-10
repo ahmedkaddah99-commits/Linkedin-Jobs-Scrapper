@@ -67,6 +67,10 @@ BUILDER_CONNECTOR_SOURCE_IDS = {
     "academic_career_sites": "academic_career_sites",
     "job_board_collection": "job_board_collection",
 }
+AUTO_APPROVE_REVIEW_STAGE_TYPES = {
+    "applications.generate.documents",
+    "legacy.white_collar.docs",
+}
 
 
 class BackendValidationError(ValueError):
@@ -203,6 +207,70 @@ def _builder_workspace_cv_asset_field_errors(workspace: WorkspaceDefinition) -> 
             )
         ]
     return []
+
+
+def _auto_approve_review_job_set_keys(workflow: WorkflowTemplate) -> list[str]:
+    job_set_keys: list[str] = []
+    for stage in workflow.stages:
+        if stage.stage_type not in AUTO_APPROVE_REVIEW_STAGE_TYPES:
+            continue
+        output_key = str(stage.output_key or "").strip()
+        if output_key and output_key not in job_set_keys:
+            job_set_keys.append(output_key)
+    return job_set_keys
+
+
+def _artifact_matches_job(artifact: ArtifactRecord, job_id: str) -> bool:
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        return False
+    if str((artifact.metadata or {}).get("job_id") or "").strip() == normalized_job_id:
+        return True
+    lowered_job_id = normalized_job_id.lower()
+    candidate_text = " ".join(
+        value
+        for value in (
+            str(artifact.artifact_id or "").strip(),
+            str(artifact.path or "").strip(),
+            Path(str(artifact.path or "")).name if str(artifact.path or "").strip() else "",
+        )
+        if value
+    ).lower()
+    return bool(lowered_job_id and lowered_job_id in candidate_text)
+
+
+def _artifact_is_generated_document_container(artifact: ArtifactRecord) -> bool:
+    return str(artifact.artifact_type or "").strip().lower() in {
+        "stage5_docs_dir",
+        "documents_json",
+        "documents_xlsx",
+    }
+
+
+def _remove_job_from_blob_payload(value: Any, job_id: str) -> tuple[Any, bool]:
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        return value, False
+    if isinstance(value, list):
+        next_items = []
+        changed = False
+        for item in value:
+            if isinstance(item, dict) and str(item.get("job_id") or "").strip() == normalized_job_id:
+                changed = True
+                continue
+            cleaned_item, item_changed = _remove_job_from_blob_payload(item, normalized_job_id)
+            next_items.append(cleaned_item)
+            changed = changed or item_changed
+        return next_items, changed
+    if isinstance(value, dict):
+        next_value = {}
+        changed = False
+        for key, item in value.items():
+            cleaned_item, item_changed = _remove_job_from_blob_payload(item, normalized_job_id)
+            next_value[key] = cleaned_item
+            changed = changed or item_changed
+        return next_value, changed
+    return value, False
 
 
 def _builder_workspace_run_preflight_field_errors(
@@ -565,7 +633,10 @@ class BackendApplication:
                 if job.job_id == job_id:
                     return job.to_dict()
         for key, value in self.repositories.job_store.load_all_blobs(run_id).items():
-            if not str(key).endswith("_rejected") or not isinstance(value, list):
+            if not (
+                str(key).endswith("_rejected")
+                or str(key).endswith("_dropped_duplicates")
+            ) or not isinstance(value, list):
                 continue
             for item in value:
                 if isinstance(item, dict) and str(item.get("job_id") or "") == job_id:
@@ -586,7 +657,7 @@ class BackendApplication:
         requeue_stages = [
             StageDefinition.from_dict(stage.to_dict())
             for stage in workflow.stages
-            if stage.stage_type == "applications.generate.documents"
+            if stage.stage_type in AUTO_APPROVE_REVIEW_STAGE_TYPES
             or bool((stage.metadata or {}).get("supports_requeue"))
         ]
         if not requeue_stages:
@@ -599,6 +670,54 @@ class BackendApplication:
             stages=requeue_stages,
             default_run_settings=dict(workflow.default_run_settings),
         )
+
+    def _auto_approve_generated_job_reviews(
+        self,
+        *,
+        run_id: str,
+        workflow: WorkflowTemplate,
+        reviewer: str = "system",
+    ) -> None:
+        review_job_set_keys = _auto_approve_review_job_set_keys(workflow)
+        if not review_job_set_keys:
+            return
+
+        job_sets = self.list_job_sets(run_id)
+        existing_reviews_by_job = {
+            review.job_id: review
+            for review in self.list_reviews(run_id=run_id, limit=100000, offset=0)
+        }
+
+        for set_key in review_job_set_keys:
+            for job in job_sets.get(set_key, []):
+                existing_review = existing_reviews_by_job.get(job.job_id)
+                if (
+                    existing_review
+                    and existing_review.status == "approved"
+                    and existing_review.decision == "approved"
+                ):
+                    continue
+                if existing_review and existing_review.decision == "rejected":
+                    continue
+
+                review = self.upsert_review(
+                    run_id=run_id,
+                    review_id=existing_review.review_id if existing_review else "",
+                    payload={
+                        "job_id": job.job_id,
+                        "status": "approved",
+                        "decision": "approved",
+                        "reviewer": (
+                            existing_review.reviewer
+                            if existing_review and existing_review.reviewer
+                            else reviewer
+                        ),
+                        "notes": existing_review.notes if existing_review else "",
+                        "job_set_key": set_key,
+                        "metadata": {"auto_approved": True},
+                    },
+                )
+                existing_reviews_by_job[job.job_id] = review
 
     def requeue_job_for_generation(
         self,
@@ -1021,10 +1140,11 @@ class BackendApplication:
             RUN_STATUS_QUEUED,
             RUN_STATUS_CANCELLED,
             RUN_STATUS_FAILED,
+            RUN_STATUS_COMPLETED,
         }
         if run.status not in deletable_statuses:
             raise ValueError(
-                "only planned, queued, failed, or cancelled runs can be deleted",
+                "only planned, queued, completed, failed, or cancelled runs can be deleted",
             )
 
         self.repositories.job_store.clear_run(run_id)
@@ -1072,6 +1192,71 @@ class BackendApplication:
     def delete_job_set(self, run_id: str, set_key: str) -> None:
         self.repositories.run_repository.get(run_id)
         self.repositories.job_store.delete_job_set(run_id, set_key)
+        self._refresh_run_job_keys(run_id)
+
+    def delete_job(self, run_id: str, job_id: str) -> None:
+        run = self.repositories.run_repository.get(run_id)
+        if run.status in {RUN_STATUS_RUNNING, RUN_STATUS_CANCEL_REQUESTED}:
+            raise ValueError("stop the run before deleting jobs")
+
+        normalized_job_id = str(job_id or "").strip()
+        if not normalized_job_id:
+            raise ValueError("job_id is required")
+
+        removed_from_job_sets = False
+        removed_reviews = False
+        removed_artifacts = False
+        removed_blob_references = False
+        remaining_job_ids: set[str] = set()
+
+        for set_key, jobs in self.list_job_sets(run_id).items():
+            remaining_jobs = [job for job in jobs if job.job_id != normalized_job_id]
+            remaining_job_ids.update(
+                str(job.job_id or "").strip()
+                for job in remaining_jobs
+                if str(job.job_id or "").strip()
+            )
+            if len(remaining_jobs) == len(jobs):
+                continue
+            removed_from_job_sets = True
+            if remaining_jobs:
+                self.repositories.job_store.save_job_set(run_id, set_key, remaining_jobs)
+            else:
+                self.repositories.job_store.delete_job_set(run_id, set_key)
+
+        for review in self.list_reviews(run_id=run_id, limit=100000, offset=0):
+            if review.job_id != normalized_job_id:
+                continue
+            self.repositories.review_store.delete_review(review.review_id)
+            removed_reviews = True
+
+        for artifact in self.list_artifacts(run_id):
+            should_delete_artifact = _artifact_matches_job(artifact, normalized_job_id)
+            if not should_delete_artifact and not remaining_job_ids:
+                should_delete_artifact = _artifact_is_generated_document_container(artifact)
+            if not should_delete_artifact:
+                continue
+            self.repositories.artifact_store.delete_artifact(run_id, artifact.artifact_id)
+            removed_artifacts = True
+
+        for blob_key in self.repositories.job_store.list_blob_keys(run_id):
+            blob_value = self.repositories.job_store.load_blob(run_id, blob_key, None)
+            cleaned_blob_value, blob_changed = _remove_job_from_blob_payload(blob_value, normalized_job_id)
+            if not blob_changed:
+                continue
+            self.repositories.job_store.save_blob(run_id, blob_key, cleaned_blob_value)
+            removed_blob_references = True
+
+        if not any(
+            (
+                removed_from_job_sets,
+                removed_reviews,
+                removed_artifacts,
+                removed_blob_references,
+            )
+        ):
+            raise KeyError(f"Job '{normalized_job_id}' not found for run '{run_id}'.")
+
         self._refresh_run_job_keys(run_id)
 
     def list_artifacts(self, run_id: str) -> list[ArtifactRecord]:
@@ -1125,7 +1310,20 @@ class BackendApplication:
         review = payload if isinstance(payload, ReviewRecord) else ReviewRecord.from_dict(payload)
         if not review.job_id:
             raise ValueError("job_id is required")
-        if not review.review_id:
+        normalized_review_id = str(review_id or review.review_id or "").strip()
+        existing_review = None
+        if normalized_review_id:
+            try:
+                existing_review = self.repositories.review_store.get_review(normalized_review_id)
+            except KeyError:
+                existing_review = None
+        if existing_review is None:
+            matching_reviews = self.list_reviews(run_id=run_id, job_id=review.job_id, limit=1, offset=0)
+            if matching_reviews:
+                existing_review = matching_reviews[0]
+                if not normalized_review_id:
+                    normalized_review_id = existing_review.review_id
+        if not normalized_review_id:
             review = ReviewRecord.create(
                 run_id=run_id,
                 job_id=review.job_id,
@@ -1136,8 +1334,16 @@ class BackendApplication:
                 job_set_key=review.job_set_key,
                 metadata=review.metadata,
             )
-        if review_id:
-            review.review_id = review_id
+        else:
+            review.review_id = normalized_review_id
+            if existing_review is not None:
+                review.created_at = existing_review.created_at
+                if not review.job_set_key:
+                    review.job_set_key = existing_review.job_set_key
+                review.metadata = {
+                    **dict(existing_review.metadata or {}),
+                    **dict(review.metadata or {}),
+                }
         review.run_id = run_id
         review.updated_at = utc_now_iso()
         self.repositories.review_store.upsert_review(review)
@@ -1472,6 +1678,10 @@ class BackendApplication:
                 self._trim_to_resumable_prefix(run)
                 self._queue_run(run)
             return self.repositories.run_repository.get(run.id)
+        try:
+            self._auto_approve_generated_job_reviews(run_id=run.id, workflow=workflow)
+        except Exception:
+            logger.exception("Unable to auto-approve generated jobs for run %s", run.id)
         return self.repositories.run_repository.get(run.id)
 
     def _queue_run(self, run: RunRecord) -> RunRecord:

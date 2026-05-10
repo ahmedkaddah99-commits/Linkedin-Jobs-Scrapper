@@ -422,7 +422,7 @@ def _profile_summary(profile: dict[str, Any]) -> str:
     recent_experience = profile.get("recent_experience") or []
     if isinstance(recent_experience, list) and recent_experience:
         first = recent_experience[0] if isinstance(recent_experience[0], dict) else {}
-        role_title = str(first.get("role") or "").strip()
+        role_title = str(first.get("role") or first.get("title") or "").strip()
         company = str(first.get("company") or "").strip()
         if role_title and company:
             return f"{role_title} work at {company}"

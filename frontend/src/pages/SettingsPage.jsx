@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CvExportPreview } from "../components/CvExportPreview";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import {
@@ -16,12 +17,8 @@ const settingsTabs = [
   "Profile",
   "Defaults",
   "Documents",
-  "Review Preferences",
   "Account",
 ];
-
-const PROFILE_PLACEHOLDER_URL =
-  "https://lh3.googleusercontent.com/aida-public/AB6AXuCEbDDRgu4_REnkpR4gbSify0khawEFxHuQHLBm7Xbd6BmM7LDM-dlp8wOKL0QkSDuiFg7g9UDpYPZnV2uV8Qmu5cxn1MBriXeVmXUz8EGMsgieO36lJEpcY5FCDph2ooQGzwpKRq5qwQluOCY4JB_gfySIUY2T0ozlVp3DEmdnT9aCfADFkC1BXeteFPTxYhtUsABzZLWUOD6fNpuVFVFLjuxpQaEgkpVd_bvuz61H_FfJkq5V_4CESVQjz3tEa3rwtGfzcKHXwJE";
 
 async function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -58,6 +55,35 @@ async function cropImageToSquare(file) {
   }
   const outputFileName = file.name.replace(/\.[^.]+$/, "") || "profile-photo";
   return new File([blob], `${outputFileName}.png`, { type: "image/png" });
+}
+
+function mergeUploadedProfile(currentProfile = {}, parsedProfile = {}) {
+  const nextProfile = { ...(currentProfile || {}) };
+  const scalarFields = [
+    "name",
+    "role_title",
+    "email",
+    "location",
+    "website",
+    "linkedin_url",
+    "github_url",
+    "summary",
+  ];
+
+  scalarFields.forEach((field) => {
+    const value = String(parsedProfile?.[field] || "").trim();
+    if (value) {
+      nextProfile[field] = value;
+    }
+  });
+
+  ["competencies", "languages", "recent_experience", "education"].forEach((field) => {
+    if (Array.isArray(parsedProfile?.[field]) && parsedProfile[field].length) {
+      nextProfile[field] = parsedProfile[field];
+    }
+  });
+
+  return nextProfile;
 }
 
 function sanitizeHexInput(value) {
@@ -136,7 +162,7 @@ function ExperienceEditor({ items, onChange }) {
   }
 
   function addItem() {
-    onChange([...(items || []), { title: "", company: "", period: "" }]);
+    onChange([...(items || []), { title: "", company: "", period: "", bulletsText: "" }]);
   }
 
   function removeItem(index) {
@@ -174,6 +200,13 @@ function ExperienceEditor({ items, onChange }) {
               </button>
             </div>
           </div>
+          <div className="mt-4">
+            <TextArea
+              onChange={(event) => updateItem(index, "bulletsText", event.target.value)}
+              placeholder={"One bullet per line\nKeep the wording factual to the source CV"}
+              value={item.bulletsText || ""}
+            />
+          </div>
         </div>
       ))}
       <button
@@ -182,6 +215,76 @@ function ExperienceEditor({ items, onChange }) {
         type="button"
       >
         Add Experience
+      </button>
+    </div>
+  );
+}
+
+function EducationEditor({ items, onChange }) {
+  function updateItem(index, field, value) {
+    const nextItems = items.map((item, itemIndex) =>
+      itemIndex === index ? { ...item, [field]: value } : item,
+    );
+    onChange(nextItems);
+  }
+
+  function addItem() {
+    onChange([...(items || []), { degree_title: "", institution: "", period: "", detailsText: "" }]);
+  }
+
+  function removeItem(index) {
+    onChange(items.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  return (
+    <div className="space-y-4">
+      {(items || []).map((item, index) => (
+        <div
+          key={`${item.degree_title || item.institution || "education"}-${index}`}
+          className="rounded-lg border border-outline-variant/10 bg-surface p-4"
+        >
+          <div className="grid gap-4 md:grid-cols-3">
+            <TextInput
+              onChange={(event) => updateItem(index, "degree_title", event.target.value)}
+              placeholder="Degree or certificate"
+              value={item.degree_title || ""}
+            />
+            <TextInput
+              onChange={(event) => updateItem(index, "institution", event.target.value)}
+              placeholder="Institution"
+              value={item.institution || ""}
+            />
+            <div className="flex gap-3">
+              <TextInput
+                className="flex-1"
+                onChange={(event) => updateItem(index, "period", event.target.value)}
+                placeholder="2019 - 2022"
+                value={item.period || ""}
+              />
+              <button
+                className="rounded-lg border border-outline-variant/20 px-4 py-3 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
+                onClick={() => removeItem(index)}
+                type="button"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+          <div className="mt-4">
+            <TextArea
+              onChange={(event) => updateItem(index, "detailsText", event.target.value)}
+              placeholder={"Optional details, thesis, or certificate notes\nOne line per detail"}
+              value={item.detailsText || ""}
+            />
+          </div>
+        </div>
+      ))}
+      <button
+        className="rounded-lg bg-surface-container-low px-4 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
+        onClick={addItem}
+        type="button"
+      >
+        Add Education
       </button>
     </div>
   );
@@ -314,6 +417,14 @@ function ProfileTab({ draft, updateSection }) {
             onChange={(value) => updateSection("profile", { recent_experience: value })}
           />
         </div>
+
+        <div>
+          <div className="mb-2 text-sm font-semibold text-on-surface">Education And Certificates</div>
+          <EducationEditor
+            items={profile.education || []}
+            onChange={(value) => updateSection("profile", { education: value })}
+          />
+        </div>
       </div>
     </section>
   );
@@ -335,22 +446,6 @@ function DefaultsTab({ draft, updateSection }) {
             {(options.workspaces || []).map((workspace) => (
               <option key={workspace.id} value={workspace.id}>
                 {workspace.name}
-              </option>
-            ))}
-          </select>
-        </SectionField>
-
-        <SectionField label="Default Execution Mode">
-          <select
-            className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-            onChange={(event) =>
-              updateSection("defaults", { default_execution_mode: event.target.value })
-            }
-            value={defaults.default_execution_mode || ""}
-          >
-            {(options.execution_modes || []).map((mode) => (
-              <option key={mode.id} value={mode.id}>
-                {mode.label}
               </option>
             ))}
           </select>
@@ -514,56 +609,6 @@ function WebColorPresetButton({ preset, selected, onSelect }) {
         <div className="text-xs text-on-surface-variant">Editable hex palette</div>
       </div>
     </button>
-  );
-}
-
-function CvPreviewCard({ documents, profile, options }) {
-  const template =
-    (options.cv_templates || []).find((item) => item.id === documents.cv_template) ||
-    options.cv_templates?.[0] ||
-    { label: "Classic" };
-  const scheme =
-    (options.cv_color_schemes || []).find((item) => item.id === documents.cv_color_scheme) ||
-    options.cv_color_schemes?.[0] ||
-    { primary: "1F3A5F", accent: "2EC4B6", surface: "EAF3FF", label: "Classic Navy" };
-
-  return (
-    <div className="rounded-xl border border-outline-variant/20 bg-surface p-5">
-      <div className="mb-4 flex items-start justify-between gap-4 rounded-xl p-4" style={{ backgroundColor: `#${scheme.surface}` }}>
-        <div style={{ fontFamily: documents.cv_font || "inherit" }}>
-          <div className="text-lg font-bold" style={{ color: `#${scheme.primary}` }}>
-            {profile.name || "Candidate Name"}
-          </div>
-          <div className="text-sm" style={{ color: `#${scheme.accent}` }}>
-            {profile.role_title || template.label}
-          </div>
-        </div>
-        {documents.include_photo ? (
-          <img
-            alt="Profile preview"
-            className="h-14 w-14 rounded-full border-4 border-surface object-cover"
-            src={profile.photo_data_url || profile.avatar_url || PROFILE_PLACEHOLDER_URL}
-          />
-        ) : null}
-      </div>
-      <div className="space-y-4" style={{ fontFamily: documents.cv_font || "inherit" }}>
-        {["Professional Summary", "Experience", "Skills"].map((label) => (
-          <div key={label}>
-            <div
-              className="text-xs font-bold tracking-[0.18em]"
-              style={{ color: `#${scheme.primary}` }}
-            >
-              {template.id === "classic" || template.id === "compact" ? label.toUpperCase() : label}
-            </div>
-            <div className="mt-1 h-px w-full" style={{ backgroundColor: `#${scheme.primary}` }} />
-            <div className="mt-2 space-y-2">
-              <div className="h-2 rounded-full bg-outline-variant/20" />
-              <div className="h-2 w-5/6 rounded-full bg-outline-variant/20" />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -823,7 +868,7 @@ function DocumentsTab({ draft, updateSection }) {
 
               <div>
                 <div className="mb-3 text-sm font-semibold text-on-surface">Export Preview</div>
-                <CvPreviewCard documents={documents} options={options} profile={draft.profile} />
+                <CvExportPreview documents={documents} options={options} profile={draft.profile} />
                 <p className="mt-3 text-xs leading-6 text-on-surface-variant">
                   This preview is approximate. The generated DOCX uses the selected template, palette,
                   font, and photo toggle.
@@ -832,57 +877,6 @@ function DocumentsTab({ draft, updateSection }) {
             </div>
           </div>
         </div>
-      </div>
-    </section>
-  );
-}
-
-function ReviewPreferencesTab({ draft, updateSection }) {
-  const reviewPreferences = draft.review_preferences;
-  const options = draft.options;
-  return (
-    <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8">
-      <div className="space-y-4">
-        <ToggleRow
-          checked={Boolean(reviewPreferences.require_review_before_use)}
-          description="Force a manual review step before the generated application package is used."
-          label="Require Review Before Use"
-          onChange={(value) =>
-            updateSection("review_preferences", { require_review_before_use: value })
-          }
-        />
-        <ToggleRow
-          checked={Boolean(reviewPreferences.rejection_note_required)}
-          description="Require reviewers to enter a note whenever they reject a generated job package."
-          label="Rejection Note Required"
-          onChange={(value) =>
-            updateSection("review_preferences", { rejection_note_required: value })
-          }
-        />
-        <ToggleRow
-          checked={Boolean(reviewPreferences.auto_open_next_item)}
-          description="After an approve or reject action, automatically advance the review queue."
-          label="Auto Open Next Item"
-          onChange={(value) => updateSection("review_preferences", { auto_open_next_item: value })}
-        />
-      </div>
-
-      <div className="mt-6 max-w-md">
-        <SectionField label="Default Review State">
-          <select
-            className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-            onChange={(event) =>
-              updateSection("review_preferences", { default_decision_state: event.target.value })
-            }
-            value={reviewPreferences.default_decision_state || ""}
-          >
-            {(options.review_default_states || []).map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-        </SectionField>
       </div>
     </section>
   );
@@ -999,18 +993,14 @@ export default function SettingsPage() {
         throw new Error(json?.error?.message || "Upload failed");
       }
       const parsed = json.parsed || {};
-      // Auto-fill profile fields from parsed CV sections
+      const extractionProvider = String(json?.extraction?.provider || "").trim();
       setDraft((current) => ({
         ...current,
-        profile: {
-          ...(current?.profile || {}),
-          ...(parsed.summary ? { summary: parsed.summary } : {}),
-          ...(parsed.competencies?.length ? { competencies: parsed.competencies } : {}),
-        },
+        profile: mergeUploadedProfile(current?.profile || {}, parsed),
       }));
       setCvUploadState({
         uploading: false,
-        message: `CV uploaded (${json.char_count?.toLocaleString()} chars). Profile fields pre-filled — review and save.`,
+        message: `CV uploaded (${json.char_count?.toLocaleString()} chars). ${extractionProvider || "Profile"} data populated in the profile blocks - review and save.`,
         error: "",
       });
     } catch (uploadError) {
@@ -1251,9 +1241,6 @@ export default function SettingsPage() {
             ) : null}
             {activeTab === "Documents" ? (
               <DocumentsTab draft={draft} updateSection={updateSection} />
-            ) : null}
-            {activeTab === "Review Preferences" ? (
-              <ReviewPreferencesTab draft={draft} updateSection={updateSection} />
             ) : null}
             {activeTab === "Account" ? (
               <AccountTab draft={draft} updateSection={updateSection} />

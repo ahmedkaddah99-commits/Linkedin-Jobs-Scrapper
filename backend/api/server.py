@@ -81,6 +81,7 @@ from backend.domain.models import (
     utc_plus_seconds,
 )
 from backend.orchestration.workspace_builder import _slugify
+from backend.profiles.cv_profile_extraction import extract_cv_profile, normalize_profile_payload
 from backend.profiles.cv_text import extract_cv_text_from_path
 
 
@@ -561,52 +562,86 @@ def _build_workspace_cv_preview_profile(
     shared_profile: dict[str, Any],
     *,
     asset_display_name: str = "",
+    parsed_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    normalized_shared_profile = normalize_profile_payload(shared_profile)
+    normalized_parsed_profile = normalize_profile_payload(parsed_profile)
     parsed_sections = _parse_cv_sections(cv_text)
     preamble_lines = _cv_preamble_lines(cv_text)
     display_lines = [line for line in preamble_lines if not _looks_like_cv_contact_line(line)]
 
-    name = str(shared_profile.get("name") or "").strip()
+    name = str(normalized_parsed_profile.get("name") or normalized_shared_profile.get("name") or "").strip()
     if not name and display_lines:
         name = display_lines[0]
     if not name:
         name = asset_display_name or "Candidate"
 
-    role_title = str(shared_profile.get("role_title") or "").strip()
+    role_title = str(normalized_parsed_profile.get("role_title") or normalized_shared_profile.get("role_title") or "").strip()
     if not role_title and len(display_lines) >= 2:
         role_title = display_lines[1]
 
-    summary = str(parsed_sections.get("summary") or "").strip()
+    summary = str(normalized_parsed_profile.get("summary") or parsed_sections.get("summary") or "").strip()
     if not summary:
         summary = " ".join(_cv_summary_lines(cv_text)).strip()
     if not summary:
         summary_candidates = display_lines[2:] if len(display_lines) > 2 else display_lines[1:]
         summary = " ".join(summary_candidates[:3]).strip()
     if not summary:
-        summary = str(shared_profile.get("summary") or "").strip()
+        summary = str(normalized_shared_profile.get("summary") or "").strip()
 
     competencies = [
         str(item).strip()
-        for item in (parsed_sections.get("competencies") or shared_profile.get("competencies") or [])
+        for item in (
+            normalized_parsed_profile.get("competencies")
+            or parsed_sections.get("competencies")
+            or normalized_shared_profile.get("competencies")
+            or []
+        )
         if str(item).strip()
     ]
     languages = [
         str(item).strip()
-        for item in (shared_profile.get("languages") or [])
+        for item in (normalized_parsed_profile.get("languages") or normalized_shared_profile.get("languages") or [])
         if str(item).strip()
     ]
-    recent_experience = _build_preview_experience_items(parsed_sections.get("experience_lines") or [])
+    recent_experience = [
+        {
+            "title": str(item.get("title") or item.get("role") or "").strip(),
+            "role": str(item.get("role") or item.get("title") or "").strip(),
+            "company": str(item.get("company") or "").strip(),
+            "period": str(item.get("period") or "").strip(),
+            "bulletsText": str(item.get("bulletsText") or "").strip(),
+            "bullets": list(item.get("bullets") or []),
+        }
+        for item in (normalized_parsed_profile.get("recent_experience") or [])
+        if isinstance(item, dict)
+    ]
+    if not recent_experience:
+        recent_experience = _build_preview_experience_items(parsed_sections.get("experience_lines") or [])
     if not recent_experience:
         recent_experience = [
             {
-                "title": str(item.get("title") or "").strip(),
+                "title": str(item.get("title") or item.get("role") or "").strip(),
+                "role": str(item.get("role") or item.get("title") or "").strip(),
                 "company": str(item.get("company") or "").strip(),
                 "period": str(item.get("period") or "").strip(),
                 "bulletsText": str(item.get("bulletsText") or "").strip(),
+                "bullets": list(item.get("bullets") or []),
             }
-            for item in (shared_profile.get("recent_experience") or [])
+            for item in (normalized_shared_profile.get("recent_experience") or [])
             if isinstance(item, dict)
         ]
+    education = [
+        {
+            "degree_title": str(item.get("degree_title") or "").strip(),
+            "institution": str(item.get("institution") or "").strip(),
+            "period": str(item.get("period") or "").strip(),
+            "details": list(item.get("details") or []),
+            "detailsText": str(item.get("detailsText") or "").strip(),
+        }
+        for item in (normalized_parsed_profile.get("education") or normalized_shared_profile.get("education") or [])
+        if isinstance(item, dict)
+    ]
 
     photo_data_url = str(shared_profile.get("photo_data_url") or shared_profile.get("avatar_url") or "").strip()
     avatar_url = str(shared_profile.get("avatar_url") or shared_profile.get("photo_data_url") or "").strip()
@@ -614,15 +649,20 @@ def _build_workspace_cv_preview_profile(
     return {
         "name": name,
         "role_title": role_title,
-        "location": str(shared_profile.get("location") or "").strip(),
-        "email": str(shared_profile.get("email") or "").strip(),
-        "website": str(shared_profile.get("website") or "").strip(),
-        "linkedin_url": str(shared_profile.get("linkedin_url") or "").strip(),
-        "github_url": str(shared_profile.get("github_url") or "").strip(),
+        "location": str(normalized_parsed_profile.get("location") or normalized_shared_profile.get("location") or "").strip(),
+        "email": str(normalized_parsed_profile.get("email") or normalized_shared_profile.get("email") or "").strip(),
+        "website": str(normalized_parsed_profile.get("website") or normalized_shared_profile.get("website") or "").strip(),
+        "linkedin_url": str(
+            normalized_parsed_profile.get("linkedin_url") or normalized_shared_profile.get("linkedin_url") or ""
+        ).strip(),
+        "github_url": str(
+            normalized_parsed_profile.get("github_url") or normalized_shared_profile.get("github_url") or ""
+        ).strip(),
         "summary": summary,
         "competencies": competencies[:20],
         "languages": languages[:12],
         "recent_experience": recent_experience[:4],
+        "education": education[:6],
         "photo_data_url": photo_data_url,
         "avatar_url": avatar_url,
     }
@@ -736,6 +776,430 @@ def _run_summary(run) -> dict:
     }
 
 
+def _workflow_snapshot_for_run(application, run) -> dict:
+    if run.run_plan and isinstance(run.run_plan.workflow_snapshot, dict) and run.run_plan.workflow_snapshot:
+        return dict(run.run_plan.workflow_snapshot)
+    workflow = application.repositories.workspace_repository.get_workflow_template(run.workflow_template_id)
+    return workflow.to_dict()
+
+
+def _customer_job_payload(job_payload: dict, *, review=None, document_count: int = 0) -> dict:
+    review_meta = dict(review.metadata or {}) if review else {}
+    tracker_status = str(review_meta.get("tracker_status") or "")
+    application_status = normalize_application_status(
+        review_meta.get("application_status") or tracker_status,
+        default="" if not tracker_status else "Unknown",
+    )
+    source_label = str(
+        job_payload.get("portal")
+        or job_payload.get("source_label")
+        or job_payload.get("source_type")
+        or "unknown"
+    )
+    return {
+        "job_id": str(job_payload.get("job_id") or ""),
+        "title": str(job_payload.get("title") or ""),
+        "company": str(job_payload.get("company") or ""),
+        "location": str(job_payload.get("location_raw") or job_payload.get("location") or ""),
+        "apply_link": str(job_payload.get("apply_link") or job_payload.get("link") or job_payload.get("source_url") or ""),
+        "linkedin_link": str(job_payload.get("linkedin_link") or job_payload.get("link") or ""),
+        "source_type": str(job_payload.get("source_type") or ""),
+        "source_label": source_label,
+        "manual_approved": bool(job_payload.get("manual_approved") or False),
+        "priority_rank": job_payload.get("priority_rank"),
+        "priority_bucket": str(job_payload.get("priority_bucket") or ""),
+        "filter_status": str(job_payload.get("filter_status") or ""),
+        "review_id": review.review_id if review else "",
+        "review_status": review.status if review else "",
+        "decision": review.decision if review else "",
+        "tracker_status": tracker_status,
+        "application_status": application_status,
+        "document_count": max(0, int(document_count or 0)),
+    }
+
+
+_CUSTOMER_LANGUAGE_ALIASES: dict[str, tuple[str, ...]] = {
+    "Arabic": ("arabic",),
+    "Chinese": ("chinese", "mandarin", "cantonese"),
+    "Czech": ("czech",),
+    "Danish": ("danish",),
+    "Dutch": ("dutch",),
+    "English": ("english",),
+    "Finnish": ("finnish",),
+    "French": ("french", "francais", "français"),
+    "German": ("german", "deutsch"),
+    "Greek": ("greek",),
+    "Hebrew": ("hebrew",),
+    "Hindi": ("hindi",),
+    "Italian": ("italian",),
+    "Japanese": ("japanese",),
+    "Korean": ("korean",),
+    "Norwegian": ("norwegian",),
+    "Polish": ("polish",),
+    "Portuguese": ("portuguese",),
+    "Romanian": ("romanian",),
+    "Russian": ("russian",),
+    "Spanish": ("spanish", "espanol", "español"),
+    "Swedish": ("swedish",),
+    "Turkish": ("turkish",),
+    "Ukrainian": ("ukrainian",),
+    "Urdu": ("urdu",),
+}
+_CUSTOMER_CEFR_LEVEL_RANK = {
+    "A1": 1,
+    "A2": 2,
+    "B1": 3,
+    "B2": 4,
+    "C1": 5,
+    "C2": 6,
+}
+_CUSTOMER_LANGUAGE_LEVEL_HINTS = (
+    ("C2", ("native", "bilingual")),
+    ("C1", ("fluent", "professional", "business fluent", "verhandlungssicher", "full professional")),
+    ("B2", ("upper intermediate",)),
+    ("B1", ("intermediate",)),
+    ("A2", ("elementary", "basic")),
+    ("A1", ("beginner",)),
+)
+
+
+def _customer_extract_language_name(text: str) -> str:
+    searchable = str(text or "").casefold()
+    for canonical_name, aliases in _CUSTOMER_LANGUAGE_ALIASES.items():
+        if any(alias.casefold() in searchable for alias in aliases):
+            return canonical_name
+    return ""
+
+
+def _customer_extract_language_level(text: str) -> str:
+    searchable = str(text or "")
+    matches = re.findall(r"\b(A1|A2|B1|B2|C1|C2)\b", searchable, flags=re.IGNORECASE)
+    if matches:
+        normalized = [str(item).upper() for item in matches]
+        return max(normalized, key=lambda item: _CUSTOMER_CEFR_LEVEL_RANK.get(item, 0))
+    folded = searchable.casefold()
+    for level, hints in _CUSTOMER_LANGUAGE_LEVEL_HINTS:
+        if any(hint in folded for hint in hints):
+            return level
+    return ""
+
+
+def _customer_profile_language_levels(user) -> dict[str, str]:
+    profile = dict((user.metadata or {}).get("profile") or {})
+    language_levels: dict[str, str] = {}
+    for item in profile.get("languages") or []:
+        raw_value = str(item or "").strip()
+        if not raw_value:
+            continue
+        language_name = _customer_extract_language_name(raw_value)
+        if not language_name:
+            continue
+        level = _customer_extract_language_level(raw_value)
+        existing_level = language_levels.get(language_name, "")
+        if not existing_level or _CUSTOMER_CEFR_LEVEL_RANK.get(level, 0) >= _CUSTOMER_CEFR_LEVEL_RANK.get(existing_level, 0):
+            language_levels[language_name] = level
+    return language_levels
+
+
+def _customer_excluded_reason(entry: dict, user) -> dict[str, object]:
+    reason_code = str(entry.get("reason_code") or "unknown")
+    raw_summary = str(entry.get("reason_summary") or "").strip()
+    raw_details = [str(item).strip() for item in entry.get("details") or [] if str(item).strip()]
+    combined_text = " ".join([raw_summary, *raw_details]).strip()
+
+    if reason_code == "language_mismatch":
+        language_name = _customer_extract_language_name(combined_text)
+        required_level = _customer_extract_language_level(combined_text)
+        profile_language_levels = _customer_profile_language_levels(user)
+        saved_level = profile_language_levels.get(language_name, "") if language_name else ""
+
+        if language_name and language_name not in profile_language_levels:
+            return {
+                "reason_code": "required_language_missing",
+                "reason_label": "Required language not listed",
+                "reason_summary": f"This role requires {language_name}, which is not listed in your saved languages.",
+                "details": [f"Required language: {language_name}"],
+            }
+        if (
+            language_name
+            and required_level
+            and saved_level
+            and _CUSTOMER_CEFR_LEVEL_RANK.get(saved_level, 0) < _CUSTOMER_CEFR_LEVEL_RANK.get(required_level, 0)
+        ):
+            return {
+                "reason_code": "language_level_not_reached",
+                "reason_label": "Language level not yet reached",
+                "reason_summary": (
+                    f"This role requires {language_name} at {required_level} level, "
+                    f"which is above your saved level."
+                ),
+                "details": [
+                    f"Required language: {language_name}",
+                    f"Required level: {required_level}",
+                    f"Saved level: {saved_level}",
+                ],
+            }
+        if language_name:
+            return {
+                "reason_code": "language_mismatch",
+                "reason_label": "Language mismatch",
+                "reason_summary": f"This role requires a {language_name} language match that is not currently met.",
+                "details": [f"Required language: {language_name}"],
+            }
+        return {
+            "reason_code": "language_mismatch",
+            "reason_label": "Language mismatch",
+            "reason_summary": "This role requires a language match that is not currently met.",
+            "details": [],
+        }
+
+    reason_messages = {
+        "keyword_mismatch": (
+            "Role mismatch",
+            "This role does not match the target role for this workspace.",
+        ),
+        "seniority_mismatch": (
+            "Experience level mismatch",
+            "This role is outside the target experience level for this workspace.",
+        ),
+        "location_mismatch": (
+            "Location mismatch",
+            "This role is outside the location scope for this workspace.",
+        ),
+        "duplicate": (
+            "Already tracked",
+            "This job already appears in your tracker or elsewhere in this run.",
+        ),
+        "source_validation_failed": (
+            "Listing not usable",
+            "This job listing could not be used reliably for document generation.",
+        ),
+        "manual_rejection": (
+            "Not selected",
+            "This job was not selected for document generation.",
+        ),
+        "unknown": (
+            "Not selected",
+            raw_summary or "This job was not selected for document generation.",
+        ),
+    }
+    reason_label, reason_summary = reason_messages.get(
+        reason_code,
+        ("Not selected", raw_summary or "This job was not selected for document generation."),
+    )
+    return {
+        "reason_code": reason_code,
+        "reason_label": reason_label,
+        "reason_summary": reason_summary,
+        "details": [],
+    }
+
+
+def _customer_excluded_job_payload(entry: dict, user) -> dict:
+    customer_reason = _customer_excluded_reason(entry, user)
+    return {
+        "job_id": str(entry.get("job_id") or ""),
+        "title": str(entry.get("title") or ""),
+        "company": str(entry.get("company") or ""),
+        "apply_link": str(entry.get("apply_link") or ""),
+        "reason_code": str(customer_reason.get("reason_code") or ""),
+        "reason_label": str(customer_reason.get("reason_label") or ""),
+        "reason_summary": str(customer_reason.get("reason_summary") or ""),
+        "details": [str(item) for item in customer_reason.get("details") or [] if str(item).strip()],
+        "source_stage": str(entry.get("source_stage") or ""),
+        "recorded_at": str(entry.get("recorded_at") or ""),
+        "workspace_editor_url": str(entry.get("workspace_editor_url") or ""),
+        "can_generate_documents": bool(entry.get("can_requeue") or False),
+        "create_documents_run_id": str(entry.get("requeue_run_id") or ""),
+        "create_documents_run_status": str(entry.get("requeue_run_status") or ""),
+        "create_documents_run_finished_at": str(entry.get("requeue_run_finished_at") or ""),
+        "create_documents_run_url": str(entry.get("requeue_run_url") or ""),
+    }
+
+
+def _collect_run_customer_view(application, user, run) -> dict:
+    workflow_snapshot = _workflow_snapshot_for_run(application, run)
+    workflow_stages = [
+        dict(stage)
+        for stage in workflow_snapshot.get("stages") or []
+        if isinstance(stage, dict)
+    ]
+    workspace = application.get_workspace(run.workspace_id)
+    reviews = application.list_reviews(run_id=run.id, limit=1000, offset=0)
+    reviews_by_job = {review.job_id: review for review in reviews}
+    job_sets = application.list_job_sets(run.id)
+    documents = _collect_document_entries(application, user, run_id=run.id)
+    document_count_by_job: dict[str, int] = {}
+    for document in documents:
+        job_id = str(document.get("job_id") or "")
+        if job_id:
+            document_count_by_job[job_id] = document_count_by_job.get(job_id, 0) + 1
+    rejected_entries = _collect_rejected_job_entries(application, user, run_id=run.id)
+    rejected_by_stage: dict[str, list[dict]] = {}
+    for entry in rejected_entries:
+        rejected_by_stage.setdefault(str(entry.get("source_stage") or ""), []).append(entry)
+
+    stage_results_by_id = {result.stage_id: result for result in run.stage_results}
+    included_job_ids: set[str] = set()
+    excluded_job_ids: set[str] = set()
+    included_jobs_by_id: dict[str, dict[str, object]] = {}
+    excluded_jobs_by_id: dict[str, dict[str, object]] = {}
+    stages: list[dict[str, object]] = []
+    known_stage_ids = {str(stage.get("stage_id") or "") for stage in workflow_stages}
+
+    for index, stage_definition in enumerate(workflow_stages, start=1):
+        stage_id = str(stage_definition.get("stage_id") or "")
+        output_key = str(stage_definition.get("output_key") or "")
+        stage_result = stage_results_by_id.get(stage_id)
+        status = str(stage_result.status if stage_result else "pending")
+        included_jobs_raw = job_sets.get(output_key, []) if output_key else []
+        included_jobs = []
+        for job in included_jobs_raw:
+            job_payload = job.to_dict()
+            if job_payload.get("job_id"):
+                included_job_ids.add(str(job_payload.get("job_id")))
+            customer_job = _customer_job_payload(
+                job_payload,
+                review=reviews_by_job.get(job.job_id),
+                document_count=document_count_by_job.get(job.job_id, 0),
+            )
+            included_jobs.append(customer_job)
+            existing_customer_job = included_jobs_by_id.get(job.job_id)
+            if existing_customer_job is None or int(customer_job.get("document_count") or 0) >= int(existing_customer_job.get("document_count") or 0):
+                included_jobs_by_id[job.job_id] = customer_job
+        excluded_jobs = []
+        for item in rejected_by_stage.get(stage_id, []):
+            job_id = str(item.get("job_id") or "")
+            if job_id:
+                excluded_job_ids.add(job_id)
+            customer_excluded_job = _customer_excluded_job_payload(item, user)
+            excluded_jobs.append(customer_excluded_job)
+            if job_id and job_id not in excluded_jobs_by_id:
+                excluded_jobs_by_id[job_id] = customer_excluded_job
+        stages.append(
+            {
+                "stage_id": stage_id,
+                "stage_type": str(stage_definition.get("stage_type") or ""),
+                "stage_name": str(stage_definition.get("name") or stage_id),
+                "stage_description": str(stage_definition.get("description") or ""),
+                "position": index,
+                "status": status,
+                "is_current": bool(run.current_stage_id == stage_id and run.status in {"running", "queued", "planned", "cancel_requested"}),
+                "started_at": str(stage_result.started_at if stage_result else ""),
+                "finished_at": str(stage_result.finished_at if stage_result else ""),
+                "error": str(stage_result.error if stage_result else ""),
+                "metrics": dict(stage_result.metrics if stage_result else {}),
+                "included_count": len(included_jobs),
+                "excluded_count": len(excluded_jobs),
+                "included_jobs": included_jobs,
+                "excluded_jobs": excluded_jobs,
+            }
+        )
+
+    extra_stage_names = {
+        "manual_review": {
+            "stage_name": "Manual Review",
+            "stage_description": "Jobs rejected during later manual review or cleanup.",
+        },
+    }
+    for source_stage, items in rejected_by_stage.items():
+        if not source_stage or source_stage in known_stage_ids:
+            continue
+        excluded_jobs = []
+        for item in items:
+            job_id = str(item.get("job_id") or "")
+            if job_id:
+                excluded_job_ids.add(job_id)
+            customer_excluded_job = _customer_excluded_job_payload(item, user)
+            excluded_jobs.append(customer_excluded_job)
+            if job_id and job_id not in excluded_jobs_by_id:
+                excluded_jobs_by_id[job_id] = customer_excluded_job
+        stage_meta = extra_stage_names.get(
+            source_stage,
+            {
+                "stage_name": str(source_stage).replace("_", " ").title(),
+                "stage_description": "Jobs excluded outside the main workflow stage list.",
+            },
+        )
+        stages.append(
+            {
+                "stage_id": source_stage,
+                "stage_type": "synthetic_review_stage",
+                "stage_name": stage_meta["stage_name"],
+                "stage_description": stage_meta["stage_description"],
+                "position": len(stages) + 1,
+                "status": "completed",
+                "is_current": False,
+                "started_at": "",
+                "finished_at": "",
+                "error": "",
+                "metrics": {},
+                "included_count": 0,
+                "excluded_count": len(excluded_jobs),
+                "included_jobs": [],
+                "excluded_jobs": excluded_jobs,
+            }
+        )
+
+    tracker_items = [item for item in _collect_tracker_entries(application, user) if str(item.get("run_id") or "") == run.id]
+    review_included_jobs = list(included_jobs_by_id.values())
+    review_included_jobs.sort(key=lambda item: (str(item.get("title") or "").casefold(), str(item.get("company") or "").casefold(), str(item.get("job_id") or "")))
+    review_excluded_jobs = list(excluded_jobs_by_id.values())
+    review_excluded_jobs.sort(
+        key=lambda item: (
+            str(item.get("recorded_at") or ""),
+            str(item.get("title") or "").casefold(),
+            str(item.get("job_id") or ""),
+        ),
+        reverse=True,
+    )
+    current_stage_name = next(
+        (
+            str(stage.get("stage_name") or "")
+            for stage in stages
+            if str(stage.get("stage_id") or "") == str(run.current_stage_id or "")
+        ),
+        "",
+    )
+    generated_job_count = 0
+    for key in run.final_job_set_keys or []:
+        generated_job_count += len(job_sets.get(key, []))
+
+    return {
+        "run": {
+            **_run_summary(run),
+            "workspace_name": workspace.name,
+            "workflow_name": str(workflow_snapshot.get("name") or run.workflow_template_id),
+            "current_stage_name": current_stage_name,
+        },
+        "summary": {
+            "stage_count": len(stages),
+            "completed_stage_count": sum(1 for stage in stages if str(stage.get("status") or "") == "completed"),
+            "included_job_count": len(included_job_ids),
+            "excluded_job_count": len(excluded_job_ids),
+            "generated_job_count": generated_job_count,
+            "tracker_job_count": len(tracker_items),
+            "excluded_ready_for_documents_count": sum(
+                1
+                for item in rejected_entries
+                if bool(item.get("can_requeue") or False) and not str(item.get("requeue_run_id") or "")
+            ),
+        },
+        "tracker": {
+            "item_count": len(tracker_items),
+            "href": "/tracker",
+            "note": "Jobs with generated documents appear in Tracker automatically once the document run finishes.",
+        },
+        "review": {
+            "included_count": len(review_included_jobs),
+            "excluded_count": len(review_excluded_jobs),
+            "included_jobs": review_included_jobs,
+            "excluded_jobs": review_excluded_jobs,
+        },
+        "stages": stages,
+    }
+
+
 def _workspace_option(workspace) -> dict:
     return {
         "id": workspace.id,
@@ -746,37 +1210,88 @@ def _workspace_option(workspace) -> dict:
 
 
 def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user) -> dict:
+    normalized_existing = normalize_profile_payload(existing_profile)
+    normalized_payload = normalize_profile_payload(profile_payload)
+    payload_keys = set(profile_payload or {})
     merged = {
-        "name": str(profile_payload.get("name") or existing_profile.get("name") or user.display_name or user.email.split("@")[0]),
-        "role_title": str(profile_payload.get("role_title") or existing_profile.get("role_title") or ""),
-        "email": str(profile_payload.get("email") or existing_profile.get("email") or user.email),
-        "location": str(profile_payload.get("location") or existing_profile.get("location") or ""),
-        "website": str(profile_payload.get("website") or existing_profile.get("website") or ""),
-        "linkedin_url": str(profile_payload.get("linkedin_url") or existing_profile.get("linkedin_url") or ""),
-        "github_url": str(profile_payload.get("github_url") or existing_profile.get("github_url") or ""),
+        "name": str(
+            normalized_payload.get("name")
+            or normalized_existing.get("name")
+            or user.display_name
+            or user.email.split("@")[0]
+        ),
+        "role_title": str(normalized_payload.get("role_title") or normalized_existing.get("role_title") or ""),
+        "email": str(normalized_payload.get("email") or normalized_existing.get("email") or user.email),
+        "location": str(normalized_payload.get("location") or normalized_existing.get("location") or ""),
+        "website": str(normalized_payload.get("website") or normalized_existing.get("website") or ""),
+        "linkedin_url": str(normalized_payload.get("linkedin_url") or normalized_existing.get("linkedin_url") or ""),
+        "github_url": str(normalized_payload.get("github_url") or normalized_existing.get("github_url") or ""),
         "avatar_url": str(profile_payload.get("avatar_url") or existing_profile.get("avatar_url") or ""),
         "photo_data_url": str(profile_payload.get("photo_data_url") or existing_profile.get("photo_data_url") or ""),
         "photo_path": str(profile_payload.get("photo_path") or existing_profile.get("photo_path") or ""),
-        "summary": str(profile_payload.get("summary") or existing_profile.get("summary") or ""),
-        "competencies": [
-            str(item)
-            for item in profile_payload.get("competencies", existing_profile.get("competencies") or [])
-            if str(item).strip()
-        ],
-        "languages": [
-            str(item)
-            for item in profile_payload.get("languages", existing_profile.get("languages") or [])
-            if str(item).strip()
-        ],
-        "recent_experience": [
-            {
-                "title": str(item.get("title") or ""),
-                "company": str(item.get("company") or ""),
-                "period": str(item.get("period") or ""),
-            }
-            for item in profile_payload.get("recent_experience", existing_profile.get("recent_experience") or [])
-            if isinstance(item, dict)
-        ],
+        "summary": str(normalized_payload.get("summary") or normalized_existing.get("summary") or ""),
+        "competencies": (
+            list(normalized_payload.get("competencies") or [])
+            if ("competencies" in payload_keys or "skills" in payload_keys)
+            else list(normalized_existing.get("competencies") or [])
+        ),
+        "languages": (
+            list(normalized_payload.get("languages") or [])
+            if "languages" in payload_keys
+            else list(normalized_existing.get("languages") or [])
+        ),
+        "recent_experience": (
+            [
+                {
+                    "title": str(item.get("title") or item.get("role") or ""),
+                    "role": str(item.get("role") or item.get("title") or ""),
+                    "company": str(item.get("company") or ""),
+                    "period": str(item.get("period") or ""),
+                    "bullets": list(item.get("bullets") or []),
+                    "bulletsText": str(item.get("bulletsText") or ""),
+                }
+                for item in normalized_payload.get("recent_experience") or []
+                if isinstance(item, dict)
+            ]
+            if "recent_experience" in payload_keys or "experience" in payload_keys
+            else [
+                {
+                    "title": str(item.get("title") or item.get("role") or ""),
+                    "role": str(item.get("role") or item.get("title") or ""),
+                    "company": str(item.get("company") or ""),
+                    "period": str(item.get("period") or ""),
+                    "bullets": list(item.get("bullets") or []),
+                    "bulletsText": str(item.get("bulletsText") or ""),
+                }
+                for item in normalized_existing.get("recent_experience") or []
+                if isinstance(item, dict)
+            ]
+        ),
+        "education": (
+            [
+                {
+                    "degree_title": str(item.get("degree_title") or ""),
+                    "institution": str(item.get("institution") or ""),
+                    "period": str(item.get("period") or ""),
+                    "details": list(item.get("details") or []),
+                    "detailsText": str(item.get("detailsText") or ""),
+                }
+                for item in normalized_payload.get("education") or []
+                if isinstance(item, dict)
+            ]
+            if "education" in payload_keys
+            else [
+                {
+                    "degree_title": str(item.get("degree_title") or ""),
+                    "institution": str(item.get("institution") or ""),
+                    "period": str(item.get("period") or ""),
+                    "details": list(item.get("details") or []),
+                    "detailsText": str(item.get("detailsText") or ""),
+                }
+                for item in normalized_existing.get("education") or []
+                if isinstance(item, dict)
+            ]
+        ),
     }
     if not merged["avatar_url"] and merged["photo_data_url"]:
         merged["avatar_url"] = merged["photo_data_url"]
@@ -1757,6 +2272,18 @@ def _update_external_tracker_application(application, user, application_id: str,
     raise KeyError(f"External tracker application '{application_id}' not found.")
 
 
+def _delete_external_tracker_application(application, user, application_id: str) -> tuple[object, dict]:
+    applications = _load_external_tracker_applications(user)
+    for index, item in enumerate(applications):
+        if str(item.get("application_id") or "") != application_id:
+            continue
+        deleted = dict(item)
+        del applications[index]
+        refreshed_user = _persist_external_tracker_applications(application, user, applications)
+        return refreshed_user, deleted
+    raise KeyError(f"External tracker application '{application_id}' not found.")
+
+
 def _clear_tracker_email_config(application, user) -> object:
     metadata = dict(user.metadata or {})
     metadata.pop(TRACKER_EMAIL_INTEGRATION_METADATA_KEY, None)
@@ -2164,6 +2691,7 @@ def _store_candidate_asset_upload(
     workspace_id: str = "",
     role: str = "",
     tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict:
     asset_id = f"asset_{uuid4().hex[:16]}"
     target_path = _candidate_asset_path(user, asset_id, filename)
@@ -2186,6 +2714,7 @@ def _store_candidate_asset_upload(
             "metadata": {
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "tags": list(tags or []),
+                **dict(metadata or {}),
             },
         },
     )
@@ -2567,6 +3096,7 @@ def _candidate_asset_to_document_item(
             cv_text,
             shared_profile,
             asset_display_name=str(asset.get("display_name") or ""),
+            parsed_profile=dict(metadata.get("parsed_profile") or {}),
         )
     return _attach_application_document_contract({
         "document_id": _document_id_for_candidate_asset(str(asset.get("asset_id") or "")),
@@ -2616,6 +3146,7 @@ def _collect_document_entries(
         "competencies": list(raw_profile.get("competencies") or []),
         "languages": list(raw_profile.get("languages") or []),
         "recent_experience": list(raw_profile.get("recent_experience") or []),
+        "education": list(raw_profile.get("education") or []),
         "photo_data_url": str(raw_profile.get("photo_data_url") or ""),
         "avatar_url": str(raw_profile.get("avatar_url") or ""),
     }
@@ -2809,6 +3340,7 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
     workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
     reason_labels = _rejection_reason_labels()
     entries: list[dict] = []
+    requeue_run_cache: dict[str, object | None] = {}
     for run in runs:
         if run_id and run.id != run_id:
             continue
@@ -2820,9 +3352,15 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
         blobs = application.repositories.job_store.load_all_blobs(run.id)
         seen_job_ids: set[str] = set()
         for blob_key, value in blobs.items():
-            if not str(blob_key).endswith("_rejected") or not isinstance(value, list):
+            if not isinstance(value, list):
                 continue
-            source_stage = str(blob_key).removesuffix("_rejected")
+            blob_key_text = str(blob_key)
+            if blob_key_text.endswith("_rejected"):
+                source_stage = blob_key_text.removesuffix("_rejected")
+            elif blob_key_text.endswith("_dropped_duplicates"):
+                source_stage = blob_key_text.removesuffix("_dropped_duplicates")
+            else:
+                continue
             for payload in value:
                 if not isinstance(payload, dict):
                     continue
@@ -2840,13 +3378,18 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                         "status": "rejected",
                         "reason_summary": str(
                             payload.get("local_filter_reason")
+                            or payload.get("stage2_filter_reason")
                             or payload.get("stage3_filter_reason")
                             or payload.get("reason_summary")
+                            or payload.get("reason")
+                            or payload.get("dedupe_reason")
                             or (review.notes if review else "")
                         ),
                         "details": payload.get("local_filter_reasons")
+                        or payload.get("stage2_filter_reasons")
                         or payload.get("stage3_filter_reasons")
                         or payload.get("details")
+                        or ([str(payload.get("dedupe_reason"))] if payload.get("dedupe_reason") else [])
                         or [],
                         "source_stage": source_stage,
                         "updated_at": review.updated_at if review else run.updated_at,
@@ -2861,6 +3404,15 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                     }
                 )
                 reason_code = normalized["rejection"]["reason_code"]
+                requeue_run_id = str(review_meta.get("requeue_run_id") or "")
+                requeue_run = None
+                if requeue_run_id:
+                    if requeue_run_id not in requeue_run_cache:
+                        try:
+                            requeue_run_cache[requeue_run_id] = application.get_run(requeue_run_id)
+                        except KeyError:
+                            requeue_run_cache[requeue_run_id] = None
+                    requeue_run = requeue_run_cache.get(requeue_run_id)
                 entries.append(
                     {
                         "rejected_id": f"rejected::{run.id}::{job_id}::{source_stage}",
@@ -2882,7 +3434,10 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                         "override_requested_at": normalized["override"]["requested_at"],
                         "override_requested_by": normalized["override"]["requested_by"],
                         "override_notes": normalized["override"]["notes"],
-                        "requeue_run_id": str(review_meta.get("requeue_run_id") or ""),
+                        "requeue_run_id": requeue_run_id,
+                        "requeue_run_status": str(getattr(requeue_run, "status", "") or ""),
+                        "requeue_run_finished_at": str(getattr(requeue_run, "finished_at", "") or ""),
+                        "requeue_run_url": f"/runs/{requeue_run_id}" if requeue_run_id else "",
                         "workspace_editor_url": (
                             f"/workspaces?workspace_id={run.workspace_id}&edit={run.workspace_id}"
                             f"&focus={_rejected_focus_for_reason(reason_code)}"
@@ -2918,6 +3473,15 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                 }
             )
             reason_code = normalized["rejection"]["reason_code"]
+            requeue_run_id = str(review_meta.get("requeue_run_id") or "")
+            requeue_run = None
+            if requeue_run_id:
+                if requeue_run_id not in requeue_run_cache:
+                    try:
+                        requeue_run_cache[requeue_run_id] = application.get_run(requeue_run_id)
+                    except KeyError:
+                        requeue_run_cache[requeue_run_id] = None
+                requeue_run = requeue_run_cache.get(requeue_run_id)
             entries.append(
                 {
                     "rejected_id": f"rejected::{run.id}::{review.job_id}::manual_review",
@@ -2939,7 +3503,10 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
                     "override_requested_at": normalized["override"]["requested_at"],
                     "override_requested_by": normalized["override"]["requested_by"],
                     "override_notes": normalized["override"]["notes"],
-                    "requeue_run_id": str(review_meta.get("requeue_run_id") or ""),
+                    "requeue_run_id": requeue_run_id,
+                    "requeue_run_status": str(getattr(requeue_run, "status", "") or ""),
+                    "requeue_run_finished_at": str(getattr(requeue_run, "finished_at", "") or ""),
+                    "requeue_run_url": f"/runs/{requeue_run_id}" if requeue_run_id else "",
                     "workspace_editor_url": (
                         f"/workspaces?workspace_id={run.workspace_id}&edit={run.workspace_id}&focus=review"
                     ),
@@ -3566,10 +4133,21 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     workspace_id = str((query.get("workspace_id") or [""])[0])
                     if workspace_id and not application.user_can_access_workspace(user, workspace_id):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
+                    workspaces = {workspace.id: workspace for workspace in self._authorized_workspaces(user)}
                     runs = self._authorized_runs(user, limit=limit, offset=offset, status=status, workspace_id=workspace_id)
                     self._send_json(
                         {
-                            "runs": [_run_summary(item) for item in runs],
+                            "runs": [
+                                {
+                                    **_run_summary(item),
+                                    "workspace_name": (
+                                        workspaces[item.workspace_id].name
+                                        if item.workspace_id in workspaces
+                                        else item.workspace_id
+                                    ),
+                                }
+                                for item in runs
+                            ],
                             "meta": self._pagination_meta(limit=limit, offset=offset, returned=len(runs)),
                         }
                     )
@@ -3699,6 +4277,13 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     run = application.get_run(segments[1])
                     self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_READ)
                     self._send_json(run.to_dict())
+                    return
+                if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "customer-view":
+                    user, _ = self._require_identity()
+                    run = application.get_run(segments[1])
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    self._send_json(_collect_run_customer_view(application, user, run))
                     return
                 if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "jobs":
                     run = application.get_run(segments[1])
@@ -3850,6 +4435,7 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                             cv_text = file_bytes.decode("latin-1")
                     if not cv_text.strip():
                         raise ValueError(f"Could not extract any text from uploaded file '{filename}'.")
+                    extraction = extract_cv_profile(cv_text)
                     # Save to disk (for legacy pipeline compatibility)
                     cv_save_path = Path("user_config") / "cv_master.txt"
                     cv_save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3863,6 +4449,15 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                         display_name=filename or "Workspace CV",
                         role="workspace_cv",
                         tags=["cv", "workspace_cv"],
+                        metadata={
+                            "parsed_profile": dict(extraction.get("profile") or {}),
+                            "profile_extraction": {
+                                "provider": str(extraction.get("provider") or ""),
+                                "model": str(extraction.get("model") or ""),
+                                "warnings": list(extraction.get("warnings") or []),
+                                "extracted_at": str(extraction.get("extracted_at") or ""),
+                            },
+                        },
                     )
                     # Persist in user metadata
                     user = application.get_user(user.user_id)
@@ -3871,15 +4466,19 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     user.metadata = metadata
                     user.updated_at = datetime.now(timezone.utc).isoformat()
                     application.repositories.auth_repository.upsert_user(user)
-                    # Parse heuristic sections for frontend pre-fill
-                    parsed = _parse_cv_sections(cv_text)
                     self._send_json(
                         {
                             "cv_text": cv_text,
                             "char_count": len(cv_text),
                             "filename": filename,
                             "asset": uploaded_asset,
-                            "parsed": parsed,
+                            "parsed": dict(extraction.get("profile") or {}),
+                            "extraction": {
+                                "provider": str(extraction.get("provider") or ""),
+                                "model": str(extraction.get("model") or ""),
+                                "warnings": list(extraction.get("warnings") or []),
+                                "extracted_at": str(extraction.get("extracted_at") or ""),
+                            },
                         },
                         status=HTTPStatus.CREATED,
                     )
@@ -4305,6 +4904,44 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     else:
                         raise ValueError("execution_mode must be one of: queued, planned, sync")
                     self._send_json(run.to_dict(), status=HTTPStatus.CREATED)
+                    return
+                if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "excluded-jobs" and segments[4] == "generate-documents":
+                    user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
+                    run = application.get_run(segments[1])
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    job_id = str(segments[3] or "").strip()
+                    if not job_id:
+                        raise ValueError("job_id is required")
+                    execution_mode = str(payload.get("execution_mode") or "queued").strip().lower()
+                    document_run = application.requeue_job_for_generation(
+                        run_id=segments[1],
+                        job_id=job_id,
+                        requested_by=f"api:{user.user_id}",
+                        max_attempts=max(1, int(payload.get("max_attempts") or 1)),
+                        execute=execution_mode == "sync",
+                        notes=str(payload.get("notes") or ""),
+                    )
+                    reviewer_name = user.display_name or user.email or user.user_id
+                    reason_summary = str(payload.get("reason_summary") or payload.get("notes") or "")
+                    source_stage = str(payload.get("source_stage") or "rejected_review")
+                    review = _upsert_rejected_review_override(
+                        application,
+                        run_id=segments[1],
+                        job_id=job_id,
+                        reviewer=reviewer_name,
+                        reason_summary=reason_summary,
+                        source_stage=source_stage,
+                        notes=str(payload.get("notes") or ""),
+                        requeue_run_id=document_run.id,
+                    )
+                    self._send_json(
+                        {
+                            "run": document_run.to_dict(),
+                            "review": review,
+                        },
+                        status=HTTPStatus.CREATED,
+                    )
                     return
                 if segments == ["rejected-jobs", "requeue"]:
                     user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
@@ -4843,6 +5480,36 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     application.delete_secret(segments[1])
                     self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)
                     return
+                if segments[:1] == ["tracker"] and len(segments) == 2:
+                    user, _ = self._require_identity()
+                    if segments[1].startswith("external_"):
+                        _, deleted_external = _delete_external_tracker_application(
+                            application,
+                            user,
+                            segments[1],
+                        )
+                        self._send_json(
+                            {
+                                "deleted": deleted_external["review_id"],
+                                "application_id": deleted_external["application_id"],
+                            },
+                            status=HTTPStatus.OK,
+                        )
+                        return
+                    review = application.get_review(segments[1])
+                    run = application.get_run(review.run_id)
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    application.delete_job(review.run_id, review.job_id)
+                    self._send_json(
+                        {
+                            "deleted": review.review_id,
+                            "run_id": review.run_id,
+                            "job_id": review.job_id,
+                        },
+                        status=HTTPStatus.OK,
+                    )
+                    return
                 if segments[:1] == ["workspaces"] and len(segments) == 2:
                     self._require_workspace_access(workspace_id=segments[1], required_scope=TOKEN_SCOPE_WORKSPACES_WRITE)
                     application.delete_workspace(segments[1])
@@ -4852,6 +5519,12 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     self._require_scope(TOKEN_SCOPE_TEMPLATES_WRITE)
                     application.delete_workflow_template(segments[1])
                     self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)
+                    return
+                if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "jobs" and segments[3] == "by-id":
+                    run = application.get_run(segments[1])
+                    self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                    application.delete_job(segments[1], segments[4])
+                    self._send_json({"deleted": segments[4], "run_id": segments[1]}, status=HTTPStatus.OK)
                     return
                 if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "jobs":
                     run = application.get_run(segments[1])

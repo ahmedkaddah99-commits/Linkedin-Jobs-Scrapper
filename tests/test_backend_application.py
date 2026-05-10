@@ -52,6 +52,26 @@ class _CanRunExplodesStage(BaseStage):
         return StageOutcome()
 
 
+class _DocumentGenerationStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        return bool(definition.input_keys and context.get_job_set(definition.input_keys[0]))
+
+    def execute(self, context, definition) -> StageOutcome:
+        jobs = context.get_job_set(definition.input_keys[0])
+        return StageOutcome(
+            job_sets={definition.output_key or "generated_jobs": jobs},
+            artifacts=[
+                ArtifactRecord(
+                    artifact_id="generated_job_1_cv",
+                    artifact_type="cv_docx",
+                    path="generated_docs/job_1_cv.docx",
+                    metadata={"job_id": "job_1"},
+                )
+            ],
+            metrics={"generated_jobs": len(jobs)},
+        )
+
+
 class BackendApplicationTests(unittest.TestCase):
     def _workspace_tempdir(self, name: str) -> Path:
         path = Path.cwd() / ".backend_test_tmp" / name
@@ -67,6 +87,7 @@ class BackendApplicationTests(unittest.TestCase):
         app.registries.stage_registry.register("test.seed_jobs", _SeedJobsStage())
         app.registries.stage_registry.register("test.flaky", _FlakyStage())
         app.registries.stage_registry.register("test.can_run_explodes", _CanRunExplodesStage())
+        app.registries.stage_registry.register("applications.generate.documents", _DocumentGenerationStage())
         app.upsert_workflow_template(
             {
                 "id": "custom_template_v1",
@@ -709,6 +730,89 @@ class BackendApplicationTests(unittest.TestCase):
         app.delete_review(review.review_id)
         self.assertEqual(app.list_reviews(run_id=completed_run.id), [])
 
+    def test_upsert_review_reuses_existing_review_for_same_job(self):
+        app, _ = self._create_app_with_test_workflow("review_upsert_reuse")
+
+        run = app.start_run("custom_workspace", execute=False, requested_by="test")
+        self.assertEqual(run.status, "planned")
+        app.upsert_job_set(
+            run.id,
+            "accepted_jobs",
+            [{"job_id": "job_1", "title": "Analyst", "company": "ACME"}],
+        )
+
+        original = app.upsert_review(
+            run_id=run.id,
+            payload={
+                "job_id": "job_1",
+                "status": "waiting_review",
+                "metadata": {"tracker_status": "applied"},
+            },
+        )
+        updated = app.upsert_review(
+            run_id=run.id,
+            payload={
+                "job_id": "job_1",
+                "decision": "approved",
+                "status": "approved",
+                "reviewer": "tester",
+            },
+        )
+
+        self.assertEqual(original.review_id, updated.review_id)
+        self.assertEqual(updated.decision, "approved")
+        self.assertEqual(updated.status, "approved")
+        self.assertEqual(updated.metadata["tracker_status"], "applied")
+        self.assertEqual(len(app.list_reviews(run_id=run.id)), 1)
+
+    def test_document_generation_runs_auto_approve_generated_jobs(self):
+        app, _ = self._create_app_with_test_workflow("auto_approve_generated_jobs")
+        app.upsert_workflow_template(
+            {
+                "id": "auto_approve_template",
+                "name": "Auto Approve Template",
+                "description": "Auto-approve generated applications.",
+                "stages": [
+                    StageDefinition(
+                        stage_id="seed_jobs",
+                        stage_type="test.seed_jobs",
+                        name="Seed Jobs",
+                        output_key="accepted_jobs",
+                    ).to_dict(),
+                    StageDefinition(
+                        stage_id="generate_documents",
+                        stage_type="applications.generate.documents",
+                        name="Generate Documents",
+                        input_keys=["accepted_jobs"],
+                        output_key="generated_jobs",
+                    ).to_dict(),
+                ],
+                "default_run_settings": {"automation_flow": "tailored_documents"},
+            }
+        )
+        app.upsert_workspace(
+            {
+                "id": "auto_approve_workspace",
+                "name": "Auto Approve Workspace",
+                "workflow_template_id": "auto_approve_template",
+                "workspace_type": "custom",
+                "settings": {"automation_flow": "tailored_documents"},
+                "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
+            }
+        )
+
+        run = app.start_run("auto_approve_workspace", execute=True, requested_by="test")
+        self.assertEqual(run.status, "completed")
+
+        reviews = app.list_reviews(run_id=run.id)
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0].job_id, "job_1")
+        self.assertEqual(reviews[0].job_set_key, "generated_jobs")
+        self.assertEqual(reviews[0].status, "approved")
+        self.assertEqual(reviews[0].decision, "approved")
+        self.assertEqual(reviews[0].reviewer, "system")
+        self.assertTrue(reviews[0].metadata.get("auto_approved"))
+
     def test_resume_and_cancel_lifecycle(self):
         app, _ = self._create_app_with_test_workflow("resume_cancel")
 
@@ -740,6 +844,92 @@ class BackendApplicationTests(unittest.TestCase):
 
         with self.assertRaises(KeyError):
             app.get_run(queued_run.id)
+
+    def test_delete_run_removes_completed_run(self):
+        app, _ = self._create_app_with_test_workflow("delete_completed_run")
+
+        run = app.enqueue_run("custom_workspace", requested_by="test-delete", max_attempts=2)
+        app.process_next_queued_run(auto_retry_failed=True)
+        completed_run = app.process_next_queued_run(auto_retry_failed=True)
+        self.assertEqual(completed_run.status, "completed")
+
+        app.delete_run(completed_run.id)
+
+        with self.assertRaises(KeyError):
+            app.get_run(completed_run.id)
+
+    def test_delete_job_removes_related_run_data(self):
+        app, _ = self._create_app_with_test_workflow("delete_job")
+
+        run = app.enqueue_run("custom_workspace", requested_by="test-delete", max_attempts=2)
+        app.process_next_queued_run(auto_retry_failed=True)
+        completed_run = app.process_next_queued_run(auto_retry_failed=True)
+        self.assertEqual(completed_run.status, "completed")
+
+        review = app.upsert_review(
+            run_id=completed_run.id,
+            payload={
+                "job_id": "job_1",
+                "decision": "approved",
+                "reviewer": "tester",
+                "job_set_key": "accepted_jobs",
+                "status": "approved",
+            },
+        )
+        self.assertEqual(review.job_id, "job_1")
+        app.repositories.job_store.save_blob(
+            completed_run.id,
+            "stage2_rejected",
+            [{"job_id": "job_1"}, {"job_id": "job_2"}],
+        )
+
+        app.delete_job(completed_run.id, "job_1")
+
+        self.assertEqual(app.list_job_sets(completed_run.id), {})
+        self.assertEqual(app.list_reviews(run_id=completed_run.id), [])
+        self.assertEqual(app.list_artifacts(completed_run.id), [])
+        self.assertEqual(
+            app.repositories.job_store.load_blob(completed_run.id, "stage2_rejected", []),
+            [{"job_id": "job_2"}],
+        )
+
+    def test_delete_job_removes_generated_document_containers_when_no_jobs_remain(self):
+        app, temp_dir = self._create_app_with_test_workflow("delete_job_document_containers")
+
+        run = app.enqueue_run("custom_workspace", requested_by="test-delete", max_attempts=2)
+        app.process_next_queued_run(auto_retry_failed=True)
+        completed_run = app.process_next_queued_run(auto_retry_failed=True)
+        self.assertEqual(completed_run.status, "completed")
+
+        docs_dir = temp_dir / "tracker_docs" / completed_run.id
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "job_1_CV.docx").write_bytes(b"docx-content")
+        manifest_path = temp_dir / f"{completed_run.id}_documents.json"
+        manifest_path.write_text("{}", encoding="utf-8")
+
+        app.upsert_artifact(
+            completed_run.id,
+            {
+                "artifact_id": "generated_docs_dir",
+                "artifact_type": "stage5_docs_dir",
+                "path": str(docs_dir),
+                "metadata": {"status": "ready"},
+            },
+        )
+        app.upsert_artifact(
+            completed_run.id,
+            {
+                "artifact_id": "generated_documents_manifest",
+                "artifact_type": "documents_json",
+                "path": str(manifest_path),
+                "metadata": {"status": "ready"},
+            },
+        )
+
+        app.delete_job(completed_run.id, "job_1")
+
+        self.assertEqual(app.list_job_sets(completed_run.id), {})
+        self.assertEqual(app.list_artifacts(completed_run.id), [])
 
     def test_auth_token_and_secret_resolution(self):
         app, _ = self._create_app_with_test_workflow("auth_secrets")

@@ -85,6 +85,32 @@ export function useTracker() {
     }
   }
 
+  async function deleteCard(item) {
+    const reviewId = String(item?.review_id || "").trim();
+    if (!reviewId) {
+      throw new Error("review_id is required");
+    }
+    setUpdating(reviewId);
+    try {
+      const result = await request(`/tracker/${reviewId}`, {
+        method: "DELETE",
+      });
+      setData((prev) => {
+        const tracker = prev?.tracker || { items: [] };
+        return {
+          ...(prev || {}),
+          tracker: {
+            ...tracker,
+            items: (tracker.items || []).filter((entry) => entry.review_id !== reviewId),
+          },
+        };
+      });
+      return result;
+    } finally {
+      setUpdating("");
+    }
+  }
+
   async function startGoogleEmailIntegration(fields) {
     setIntegrationBusy("authorize");
     try {
@@ -195,6 +221,7 @@ export function useTracker() {
     refresh,
     updating,
     updateCard,
+    deleteCard,
     COLUMN_ORDER,
     emailIntegration,
     integrationBusy,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { getApiErrorDetails, getApiErrorMessage } from "../lib/api";
@@ -33,6 +33,19 @@ function workspaceAutomationFlow(workspace) {
   ).trim();
 }
 
+function workspaceSupportsQuickApply(workspace) {
+  if (workspaceAutomationFlow(workspace) === "tailored_documents") {
+    return true;
+  }
+  if (workspace?.feature_flags?.enable_manual_urls) {
+    return true;
+  }
+  return (workspace?.sources || []).some((source) => {
+    const connectorId = String(source?.connector_id || source?.connectorId || "").trim();
+    return connectorId === "manual_url" || connectorId === "curated_job_urls";
+  });
+}
+
 function formatInvalidEntry(entry) {
   const url = String(entry?.url || "").trim();
   const lineNumber = Number(entry?.line_number || 0);
@@ -41,23 +54,6 @@ function formatInvalidEntry(entry) {
     .trim();
   const prefix = lineNumber > 0 ? `Line ${lineNumber}` : "Entry";
   return [prefix, url, reason].filter(Boolean).join(" | ");
-}
-
-function TogglePill({ checked, label, onClick }) {
-  return (
-    <button
-      className={[
-        "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
-        checked
-          ? "border-primary/30 bg-primary/10 text-primary"
-          : "border-outline-variant/20 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high",
-      ].join(" ")}
-      onClick={onClick}
-      type="button"
-    >
-      {label}
-    </button>
-  );
 }
 
 function TokenListInput({ value, onChange, placeholder }) {
@@ -130,12 +126,10 @@ function TokenListInput({ value, onChange, placeholder }) {
 }
 
 export default function QuickApplyPage() {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { request } = useSession();
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
   const [manualUrls, setManualUrls] = useState([]);
-  const [executionMode, setExecutionMode] = useState("sync");
   const [submitState, setSubmitState] = useState({
     submitting: false,
     message: "",
@@ -154,10 +148,7 @@ export default function QuickApplyPage() {
   const { data: settingsPayload } = useApiResource(() => request("/settings"), [request]);
 
   const eligibleWorkspaces = useMemo(
-    () =>
-      (workspacesPayload?.workspaces || []).filter(
-        (workspace) => workspaceAutomationFlow(workspace) === "tailored_documents",
-      ),
+    () => (workspacesPayload?.workspaces || []).filter((workspace) => workspaceSupportsQuickApply(workspace)),
     [workspacesPayload?.workspaces],
   );
   useEffect(() => {
@@ -171,13 +162,6 @@ export default function QuickApplyPage() {
     );
     setSelectedWorkspaceId(preferredWorkspaceId || eligibleWorkspaces[0].id);
   }, [eligibleWorkspaces, searchParams, selectedWorkspaceId, settingsPayload?.defaults?.default_workspace_id]);
-
-  useEffect(() => {
-    const defaultExecutionMode = String(settingsPayload?.defaults?.default_execution_mode || "").trim();
-    if (defaultExecutionMode === "queued" || defaultExecutionMode === "sync") {
-      setExecutionMode(defaultExecutionMode);
-    }
-  }, [settingsPayload?.defaults?.default_execution_mode]);
 
   function resetSubmitFeedback() {
     setSubmitState((current) => {
@@ -220,7 +204,7 @@ export default function QuickApplyPage() {
         method: "POST",
         body: {
           workspace_id: selectedWorkspaceId,
-          execution_mode: executionMode,
+          execution_mode: "queued",
           manual_urls: manualUrls,
         },
       });
@@ -229,19 +213,13 @@ export default function QuickApplyPage() {
       const acceptedUrlCount = Number(payload.accepted_url_count || run.metadata?.accepted_url_count || 0);
       setSubmitState({
         submitting: false,
-        message:
-          executionMode === "sync"
-            ? `Quick application ${run.id} finished with status ${run.status}. Accepted ${acceptedUrlCount} exact job URL${acceptedUrlCount === 1 ? "" : "s"}.`
-            : `Queued quick application ${run.id}. Accepted ${acceptedUrlCount} exact job URL${acceptedUrlCount === 1 ? "" : "s"}.`,
+        message: `Quick application ${run.id} added to the queue. Accepted ${acceptedUrlCount} exact job URL${acceptedUrlCount === 1 ? "" : "s"}.`,
         error: "",
         details: [],
         invalidEntries,
         acceptedUrlCount,
         runId: run.id || "",
       });
-      if (executionMode === "sync" && run.id && !invalidEntries.length) {
-        navigate(`/runs/${run.id}`);
-      }
     } catch (submitError) {
       setSubmitState({
         submitting: false,
@@ -276,7 +254,7 @@ export default function QuickApplyPage() {
       <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
         <h1 className="font-headline text-2xl font-bold text-on-surface">Quick Apply</h1>
         <p className="mt-3 max-w-2xl text-sm leading-7 text-on-surface-variant">
-          Create a workspace first, then come back here to use it with direct job links.
+          Quick Apply needs one tailored-documents workspace first so the app knows which CV baseline and document defaults to use.
         </p>
         <Link
           className="mt-5 inline-flex rounded bg-gradient-to-br from-primary to-primary-container px-5 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
@@ -295,14 +273,17 @@ export default function QuickApplyPage() {
           Quick Apply
         </h1>
         <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
-          Already found a job link? Choose a workspace, paste the link, and start.
+          Already have a job posting link? Choose the workspace for the base CV and defaults, paste the URL, and generate the application package.
+        </p>
+        <p className="text-xs uppercase tracking-wider text-on-surface-variant/80">
+          Exact job links only. No company-site crawling or motivation letters.
         </p>
       </header>
 
       <section>
         <div className="space-y-6 rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
           <label className="space-y-2">
-            <span className="block text-sm font-semibold text-on-surface">Workspace</span>
+            <span className="block text-sm font-semibold text-on-surface">Baseline Workspace</span>
             <select
               className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
               onChange={(event) => {
@@ -315,13 +296,15 @@ export default function QuickApplyPage() {
                 <option key={workspace.id} value={workspace.id}>
                   {workspace.name}
                 </option>
-              ))}
+                ))}
             </select>
-            <span className="block text-xs leading-6 text-on-surface-variant">This is the CV setup we'll use.</span>
+            <span className="block text-xs leading-6 text-on-surface-variant">
+              This workspace supplies the CV baseline, targeting defaults, and document styling.
+            </span>
           </label>
 
           <label className="space-y-2">
-            <span className="block text-sm font-semibold text-on-surface">Job links</span>
+            <span className="block text-sm font-semibold text-on-surface">Exact Job URLs</span>
             <TokenListInput
               onChange={(nextManualUrls) => {
                 resetSubmitFeedback();
@@ -330,30 +313,10 @@ export default function QuickApplyPage() {
               placeholder="https://company.example/jobs/123"
               value={manualUrls}
             />
-            <span className="block text-xs leading-6 text-on-surface-variant">Paste up to 50 direct job links.</span>
+            <span className="block text-xs leading-6 text-on-surface-variant">
+              Paste one or more exact job posting links. Up to 50 URLs.
+            </span>
           </label>
-
-          <div className="space-y-2">
-            <span className="block text-sm font-semibold text-on-surface">When should this run?</span>
-            <div className="flex flex-wrap gap-3">
-              <TogglePill
-                checked={executionMode === "sync"}
-                label="Start now"
-                onClick={() => {
-                  resetSubmitFeedback();
-                  setExecutionMode("sync");
-                }}
-              />
-              <TogglePill
-                checked={executionMode === "queued"}
-                label="Run later"
-                onClick={() => {
-                  resetSubmitFeedback();
-                  setExecutionMode("queued");
-                }}
-              />
-            </div>
-          </div>
 
           {submitState.error ? (
             <div className="rounded-lg bg-error-container px-4 py-3 text-sm text-on-error-container">
@@ -400,13 +363,7 @@ export default function QuickApplyPage() {
               onClick={submitQuickApply}
               type="button"
             >
-              {submitState.submitting
-                ? executionMode === "sync"
-                  ? "Starting..."
-                  : "Queueing..."
-                : executionMode === "sync"
-                  ? "Start"
-                  : "Queue"}
+              {submitState.submitting ? "Starting..." : "Run Quick Application"}
             </button>
             <Link
               className="rounded bg-surface-container-low px-5 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"

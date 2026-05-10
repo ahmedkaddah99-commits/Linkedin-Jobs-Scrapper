@@ -69,6 +69,19 @@ def _json_artifact(run_id: str, stage_id: str, artifact_type: str, path: str) ->
     )
 
 
+def _read_json_list_if_exists(path: str) -> list[dict[str, Any]]:
+    file_path = Path(path or "").expanduser()
+    if not file_path.exists():
+        return []
+    try:
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [dict(item) for item in payload if isinstance(item, dict)]
+
+
 def _tailored_document_artifact_metadata(record: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "job_id": str(record.get("job_id") or ""),
@@ -334,10 +347,17 @@ class LinkedInAcquireStage(BaseStage):
         stage_args = build_tailored_stage1_args(config, cli_args)
         with runtime_cv_override(_workspace_cv_snapshot_from_settings(vars(cli_args))):
             jobs = run_tailored_stage1_pipeline(stage_args)
+        excluded_jobs = _read_json_list_if_exists(str(stage_args.excluded_output))
+        artifacts = [_json_artifact(context.run.id, definition.stage_id, "stage1_output", str(stage_args.output))]
+        if str(stage_args.excluded_output).strip():
+            artifacts.append(
+                _json_artifact(context.run.id, definition.stage_id, "stage1_excluded", str(stage_args.excluded_output))
+            )
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(jobs)},
+            data={f"{definition.stage_id}_rejected": excluded_jobs},
             metrics={"jobs_found": len(jobs)},
-            artifacts=[_json_artifact(context.run.id, definition.stage_id, "stage1_output", str(stage_args.output))],
+            artifacts=artifacts,
         )
 
 

@@ -307,6 +307,41 @@ export default function ReviewQueuePage() {
     }
   }
 
+  async function deleteJob(row) {
+    const rowKey = referralRowKey(row);
+    const feedbackScope = `job:${rowKey}`;
+    const pendingKey = `delete:${rowKey}`;
+    const confirmed = window.confirm(
+      `Delete ${row.title || "this job"} from run ${row.run_id}? This removes the job, its review state, and linked tracker entry.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setScopePending(pendingKey, true);
+    setFeedback(feedbackScope, {});
+    try {
+      await request(`/runs/${row.run_id}/jobs/by-id/${row.job_id}`, {
+        method: "DELETE",
+      });
+      setData((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          items: (current.items || []).filter(
+            (item) => !(item.run_id === row.run_id && item.job_id === row.job_id),
+          ),
+        };
+      });
+      setFeedback(feedbackScope, { message: "Deleted job." });
+    } catch (deleteError) {
+      setFeedback(feedbackScope, {
+        error: deleteError.message || "Unable to delete this job.",
+      });
+    } finally {
+      setScopePending(pendingKey, false);
+    }
+  }
+
   async function markApplied(row) {
     if (!row.review_id) return;
     try {
@@ -448,7 +483,7 @@ export default function ReviewQueuePage() {
             Review Queue
           </h1>
           <p className="mt-1 text-sm text-on-surface-variant">
-            Verify and approve extracted job details before generating final documents.
+            Generated jobs land here automatically. Use this queue to update tracker status, notes, and outreach.
           </p>
         </div>
         <button
@@ -595,6 +630,7 @@ export default function ReviewQueuePage() {
                   const rowKey = referralRowKey(row);
                   const jobFeedbackScope = `job:${rowKey}`;
                   const panelFeedbackScope = `panel:${rowKey}`;
+                  const deletePending = Boolean(pendingScopes[`delete:${rowKey}`]);
                   const isReferralPanelOpen = Boolean(expandedReferralRows[rowKey]);
                   const selectedContacts = selectedContactsForRow(row);
                   const selectedLinkedInCount = selectedContacts.filter((contact) => contact.linkedin_url).length;
@@ -676,6 +712,15 @@ export default function ReviewQueuePage() {
                         </td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex flex-wrap items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
+                            <button
+                              className="flex items-center gap-1 rounded-full bg-error/10 px-2.5 py-1 text-xs font-semibold text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={deletePending}
+                              onClick={() => deleteJob(row)}
+                              type="button"
+                            >
+                              <span className="material-symbols-outlined text-[14px]">delete</span>
+                              {deletePending ? "Deleting..." : "Delete"}
+                            </button>
                             <button
                               className="flex h-8 w-8 items-center justify-center rounded-full bg-surface-container text-on-surface-variant transition-colors hover:bg-error-container hover:text-on-error-container"
                               onClick={() => submitDecision(row, "rejected")}
@@ -1049,7 +1094,7 @@ export default function ReviewQueuePage() {
               ) : (
                 <tr>
                   <td className="px-6 py-10 text-on-surface-variant" colSpan={5}>
-                    No jobs are waiting in the review queue.
+                    No generated jobs are in the queue right now.
                   </td>
                 </tr>
               )}

@@ -24,45 +24,67 @@ CV_TEMPLATE_PRESETS = {
         "id": "classic",
         "label": "Classic",
         "description": "Traditional single-column CV with strong dividers.",
+        "layout": "classic",
         "heading_case": "upper",
         "base_font_size": 10.5,
-        "header_font_size": 12.0,
+        "header_font_size": 17.0,
         "divider_weight": "6",
         "photo_width": 1.5,
         "top_offset_inches": 0.45,
+        "page_margin_inches": 0.18,
     },
     "modern": {
         "id": "modern",
         "label": "Modern",
-        "description": "Crisper spacing and accent-led section styling.",
+        "description": "Banner-style header with softer section blocks and stronger hierarchy.",
+        "layout": "modern",
         "heading_case": "title",
         "base_font_size": 10.8,
-        "header_font_size": 12.5,
+        "header_font_size": 18.0,
         "divider_weight": "10",
         "photo_width": 1.45,
         "top_offset_inches": 0.35,
+        "page_margin_inches": 0.24,
     },
     "compact": {
         "id": "compact",
         "label": "Compact",
-        "description": "Tighter spacing for concise one-page applications.",
+        "description": "Sidebar-style compact layout for concise one-page applications.",
+        "layout": "compact",
         "heading_case": "upper",
         "base_font_size": 10.0,
-        "header_font_size": 11.5,
+        "header_font_size": 15.5,
         "divider_weight": "4",
         "photo_width": 1.25,
         "top_offset_inches": 0.35,
+        "page_margin_inches": 0.18,
     },
     "europass": {
         "id": "europass",
         "label": "EuroPass-style",
-        "description": "Structured section headers with softer neutral styling.",
+        "description": "Structured label-column layout inspired by Europass conventions.",
+        "layout": "europass",
         "heading_case": "title",
         "base_font_size": 10.2,
-        "header_font_size": 11.8,
+        "header_font_size": 16.0,
         "divider_weight": "8",
         "photo_width": 1.35,
         "top_offset_inches": 0.4,
+        "page_margin_inches": 0.22,
+    },
+    "plain": {
+        "id": "plain",
+        "label": "Plain",
+        "description": "Black-only layout with simple separator rules and no accent styling.",
+        "layout": "plain",
+        "heading_case": "upper",
+        "base_font_size": 10.2,
+        "header_font_size": 16.0,
+        "divider_weight": "6",
+        "photo_width": 1.3,
+        "top_offset_inches": 0.4,
+        "page_margin_inches": 0.2,
+        "monochrome": True,
     },
 }
 
@@ -264,9 +286,21 @@ def create_cv_document(
         target_dir = docs_dir / run_date
         target_dir.mkdir(parents=True, exist_ok=True)
         cv_path = target_dir / f"{safe_stem}.docx"
+
     template = _resolve_template(cv_template_id)
     color_scheme = _resolve_color_scheme(cv_color_scheme)
+    if template.get("monochrome"):
+        color_scheme = {
+            "id": "plain_black",
+            "label": "Plain Black",
+            "primary": "111111",
+            "accent": "111111",
+            "surface": "FFFFFF",
+        }
+
     primary_rgb = RGBColor.from_string(color_scheme["primary"])
+    accent_rgb = RGBColor.from_string(color_scheme["accent"])
+    layout = str(template.get("layout") or template["id"]).strip().lower()
 
     doc = Document()
     for style_name in ("Normal", "Heading 1", "Heading 2", "List Bullet"):
@@ -279,11 +313,73 @@ def create_cv_document(
             pass
 
     section = doc.sections[0]
-    margin = Inches(0.1)
+    margin = Inches(float(template.get("page_margin_inches", 0.1)))
     section.top_margin = margin
     section.bottom_margin = margin
     section.left_margin = margin
     section.right_margin = margin
+
+    language_values = [str(line).strip() for line in (languages or DEFAULT_LANGUAGES) if str(line).strip()]
+    language_line = ", ".join(language_values)
+    contact_parts = [header_location, candidate_email]
+    if language_line:
+        contact_parts.append(language_line)
+    contact_line = " | ".join([part for part in contact_parts if part])
+    summary_text = str(record.get("cv_professional_summary") or "").strip()
+    experiences = [item for item in (record.get("cv_professional_experience") or []) if isinstance(item, dict)]
+    initiatives = [item for item in (record.get("cv_strategic_initiatives") or []) if isinstance(item, dict)]
+    skills = [str(skill).strip() for skill in (record.get("cv_skills") or []) if str(skill).strip()]
+    education_items = [item for item in (record.get("cv_education") or []) if isinstance(item, dict)]
+
+    def new_paragraph(target):
+        paragraphs = getattr(target, "paragraphs", None)
+        if paragraphs is not None and len(paragraphs) == 1:
+            paragraph = paragraphs[0]
+            if not paragraph.text and not paragraph.runs:
+                return paragraph
+        return target.add_paragraph()
+
+    def configure_paragraph(paragraph, *, before_pt: float = 0, after_pt: float = 0, line_spacing_pt: float | None = None):
+        paragraph.paragraph_format.space_before = Pt(before_pt)
+        paragraph.paragraph_format.space_after = Pt(after_pt)
+        if line_spacing_pt is not None:
+            paragraph.paragraph_format.line_spacing = Pt(line_spacing_pt)
+
+    def style_run(run, *, size_pt: float | None = None, bold: bool | None = None, color=None):
+        run.font.name = cv_font_name
+        if size_pt is not None:
+            run.font.size = Pt(size_pt)
+        if bold is not None:
+            run.bold = bold
+        if color is not None:
+            run.font.color.rgb = color
+
+    def set_paragraph_shading(paragraph, fill_hex: str) -> None:
+        p_pr = paragraph._p.get_or_add_pPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), fill_hex)
+        p_pr.append(shd)
+
+    def set_paragraph_border(paragraph, *, side: str = "bottom", color_hex: str, size: str, space: str = "0") -> None:
+        p_pr = paragraph._p.get_or_add_pPr()
+        p_bdr = OxmlElement("w:pBdr")
+        border = OxmlElement(f"w:{side}")
+        border.set(qn("w:val"), "single")
+        border.set(qn("w:sz"), str(size))
+        border.set(qn("w:space"), str(space))
+        border.set(qn("w:color"), color_hex)
+        p_bdr.append(border)
+        p_pr.append(p_bdr)
+
+    def set_cell_shading(cell, fill_hex: str) -> None:
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), fill_hex)
+        tc_pr.append(shd)
 
     def add_hyperlink(paragraph, text: str, url: str, font_size_pt: float = 11.0):
         if not (text and url):
@@ -320,7 +416,7 @@ def create_cv_document(
             paragraph._p.append(hyperlink)
         except Exception:
             fallback_run = paragraph.add_run(text)
-            fallback_run.font.color.rgb = None
+            style_run(fallback_run, size_pt=font_size_pt, color=accent_rgb)
 
     valid_profile_links = []
     for item in profile_links or []:
@@ -339,20 +435,6 @@ def create_cv_document(
                 "logo_path": item.get("logo_path"),
             }
         )
-
-    name_paragraph = doc.add_paragraph()
-    name_paragraph.paragraph_format.space_before = Pt(0)
-    name_paragraph.paragraph_format.space_after = Pt(2)
-    language_values = [str(line).strip() for line in (languages or DEFAULT_LANGUAGES) if str(line).strip()]
-    language_line = ", ".join(language_values)
-    header_parts = [candidate_name, header_location, candidate_email]
-    if language_line:
-        header_parts.append(language_line)
-    name_run = name_paragraph.add_run(" | ".join([part for part in header_parts if part]))
-    name_run.bold = True
-    name_run.font.size = Pt(float(template["header_font_size"]))
-    name_run.font.name = cv_font_name
-    name_run.font.color.rgb = primary_rgb
 
     def float_picture_right(run, inline_shape, top_offset_inches: float = 0.45):
         inline = inline_shape._inline
@@ -420,9 +502,21 @@ def create_cv_document(
         drawing.remove(inline)
         drawing.append(anchor)
 
-    if include_profile_image and profile_image_path:
+    def insert_inline_photo(paragraph, *, width_inches: float) -> bool:
+        if not (include_profile_image and profile_image_path):
+            return False
         try:
-            image_run = name_paragraph.add_run()
+            image_run = paragraph.add_run()
+            image_run.add_picture(str(profile_image_path), width=Inches(float(width_inches)))
+            return True
+        except Exception:
+            return False
+
+    def insert_floating_photo(paragraph) -> bool:
+        if not (include_profile_image and profile_image_path):
+            return False
+        try:
+            image_run = paragraph.add_run()
             inline_shape = image_run.add_picture(
                 str(profile_image_path),
                 width=Inches(float(template["photo_width"])),
@@ -432,13 +526,37 @@ def create_cv_document(
                 inline_shape,
                 top_offset_inches=float(template["top_offset_inches"]),
             )
+            return True
         except Exception:
-            pass
+            return False
 
-    if valid_profile_links:
-        links_paragraph = doc.add_paragraph()
-        links_paragraph.paragraph_format.space_before = Pt(0)
-        links_paragraph.paragraph_format.space_after = Pt(2)
+    def write_name_block(target, *, include_contact: bool = True, compact_contact: bool = False):
+        name_paragraph = new_paragraph(target)
+        configure_paragraph(name_paragraph, before_pt=0, after_pt=1)
+        name_run = name_paragraph.add_run(candidate_name)
+        style_run(name_run, size_pt=float(template["header_font_size"]), bold=True, color=primary_rgb)
+        if include_contact and contact_line:
+            contact_paragraph = new_paragraph(target)
+            configure_paragraph(contact_paragraph, before_pt=0, after_pt=2)
+            contact_run = contact_paragraph.add_run(contact_line)
+            style_run(
+                contact_run,
+                size_pt=float(template["base_font_size"]) - (0.2 if compact_contact else 0.0),
+                color=primary_rgb if layout == "plain" else accent_rgb,
+            )
+
+    def write_text_paragraph(target, text: str, *, after_pt: float = 2, size_pt: float | None = None, bold: bool = False):
+        paragraph = new_paragraph(target)
+        configure_paragraph(paragraph, before_pt=0, after_pt=after_pt)
+        run = paragraph.add_run(text)
+        style_run(run, size_pt=size_pt or float(template["base_font_size"]), bold=bold)
+        return paragraph
+
+    def write_profile_links(target, *, font_size_pt: float = 10.2):
+        if not valid_profile_links:
+            return
+        links_paragraph = new_paragraph(target)
+        configure_paragraph(links_paragraph, before_pt=0, after_pt=2)
         icon_size_inches = 16 / 96.0
         for link_index, link_item in enumerate(valid_profile_links):
             if link_index > 0:
@@ -455,100 +573,254 @@ def create_cv_document(
                 links_paragraph,
                 text=link_item["text"],
                 url=link_item["url"],
-                font_size_pt=11.0,
+                font_size_pt=font_size_pt,
             )
 
-    def add_section_separator() -> None:
-        sep = doc.add_paragraph()
-        sep.paragraph_format.space_before = Pt(0)
-        sep.paragraph_format.space_after = Pt(0)
-        sep.paragraph_format.line_spacing = Pt(1)
-        p_pr = sep._p.get_or_add_pPr()
-        p_bdr = OxmlElement("w:pBdr")
-        bottom = OxmlElement("w:bottom")
-        bottom.set(qn("w:val"), "single")
-        bottom.set(qn("w:sz"), str(template["divider_weight"]))
-        bottom.set(qn("w:space"), "0")
-        bottom.set(qn("w:color"), color_scheme["primary"])
-        p_bdr.append(bottom)
-        p_pr.append(p_bdr)
+    def add_section_separator(target, *, color_hex: str | None = None, size: str | None = None) -> None:
+        sep = new_paragraph(target)
+        configure_paragraph(sep, before_pt=0, after_pt=0, line_spacing_pt=1)
+        set_paragraph_border(
+            sep,
+            color_hex=color_hex or color_scheme["primary"],
+            size=size or str(template["divider_weight"]),
+        )
 
-    def add_section_heading(text: str):
-        paragraph = doc.add_paragraph()
+    def add_standard_section_heading(target, text: str, *, variant: str):
+        paragraph = new_paragraph(target)
+        configure_paragraph(paragraph, before_pt=1, after_pt=2)
         heading_text = text.upper() if template["heading_case"] == "upper" else text.title()
         run = paragraph.add_run(heading_text)
-        run.bold = True
-        run.font.color.rgb = primary_rgb
-        run.font.name = cv_font_name
-        run.font.size = Pt(max(float(template["base_font_size"]) + 1.4, 11.0))
-        return paragraph, run
+        style_run(run, size_pt=max(float(template["base_font_size"]) + 1.4, 11.0), bold=True, color=primary_rgb)
+        if variant == "modern":
+            set_paragraph_shading(paragraph, color_scheme["surface"])
+            set_paragraph_border(paragraph, color_hex=color_scheme["accent"], size="4", space="1")
+        elif variant == "compact":
+            set_paragraph_border(paragraph, color_hex=color_scheme["accent"], size="4", space="0")
+        elif variant == "plain":
+            set_paragraph_border(paragraph, color_hex=color_scheme["primary"], size="4", space="0")
 
-    rendered_sections = 0
-
-    def begin_section(title: str) -> None:
-        nonlocal rendered_sections
-        if rendered_sections > 0:
-            add_section_separator()
-        add_section_heading(title)
-        rendered_sections += 1
-
-    summary_text = str(record.get("cv_professional_summary") or "").strip()
-    if summary_text:
-        begin_section("Professional Summary")
-        doc.add_paragraph(summary_text)
-
-    experiences = record.get("cv_professional_experience") or []
-    if experiences:
-        begin_section("Professional Experience")
-        for item in experiences:
-            if not isinstance(item, dict):
-                continue
+    def render_experience(target, *, compact: bool = False):
+        for index, item in enumerate(experiences):
             role_title = str(item.get("role_title") or "").strip()
             exp_company = str(item.get("company") or "").strip()
             period = str(item.get("period") or "").strip()
             headline_parts = [part for part in [role_title, exp_company, period] if part]
             if headline_parts:
-                exp_header = doc.add_paragraph(" | ".join(headline_parts))
-                exp_header.runs[0].bold = True
+                exp_header = new_paragraph(target)
+                configure_paragraph(exp_header, before_pt=0, after_pt=0 if compact else 1)
+                header_run = exp_header.add_run(" | ".join(headline_parts))
+                style_run(header_run, bold=True, color=primary_rgb)
             for bullet in item.get("bullets", []):
-                if str(bullet).strip():
-                    doc.add_paragraph(str(bullet).strip(), style="List Bullet")
+                bullet_text = str(bullet).strip()
+                if not bullet_text:
+                    continue
+                bullet_paragraph = target.add_paragraph(bullet_text, style="List Bullet")
+                configure_paragraph(bullet_paragraph, before_pt=0, after_pt=0 if compact else 1)
+            if index < len(experiences) - 1:
+                spacer = new_paragraph(target)
+                configure_paragraph(spacer, before_pt=0, after_pt=1 if compact else 2)
 
-    initiatives = record.get("cv_strategic_initiatives") or []
-    if initiatives:
-        begin_section("Projects")
-        for item in initiatives:
-            if not isinstance(item, dict):
-                continue
+    def render_projects(target, *, compact: bool = False):
+        for index, item in enumerate(initiatives):
             initiative_title = str(item.get("title") or "").strip()
             if initiative_title:
-                ini_header = doc.add_paragraph(initiative_title)
-                ini_header.runs[0].bold = True
+                ini_header = new_paragraph(target)
+                configure_paragraph(ini_header, before_pt=0, after_pt=0 if compact else 1)
+                header_run = ini_header.add_run(initiative_title)
+                style_run(header_run, bold=True, color=primary_rgb)
             for bullet in item.get("bullets", []):
-                if str(bullet).strip():
-                    doc.add_paragraph(str(bullet).strip(), style="List Bullet")
+                bullet_text = str(bullet).strip()
+                if not bullet_text:
+                    continue
+                bullet_paragraph = target.add_paragraph(bullet_text, style="List Bullet")
+                configure_paragraph(bullet_paragraph, before_pt=0, after_pt=0 if compact else 1)
+            if index < len(initiatives) - 1:
+                spacer = new_paragraph(target)
+                configure_paragraph(spacer, before_pt=0, after_pt=1 if compact else 2)
 
-    skills = [str(skill).strip() for skill in (record.get("cv_skills") or []) if str(skill).strip()]
-    if skills:
-        begin_section("Skills")
-        doc.add_paragraph(", ".join(skills))
-
-    education_items = record.get("cv_education") or []
-    if education_items:
-        begin_section("Education")
-        for item in education_items:
-            if not isinstance(item, dict):
-                continue
+    def render_education(target, *, compact: bool = False):
+        for index, item in enumerate(education_items):
             degree_title = str(item.get("degree_title") or "").strip()
             thesis_title = str(item.get("thesis_title") or "").strip()
             if degree_title:
-                degree_paragraph = doc.add_paragraph(degree_title)
-                degree_paragraph.runs[0].bold = True
+                degree_paragraph = new_paragraph(target)
+                configure_paragraph(degree_paragraph, before_pt=0, after_pt=0 if compact else 1)
+                degree_run = degree_paragraph.add_run(degree_title)
+                style_run(degree_run, bold=True, color=primary_rgb)
             if thesis_title:
-                doc.add_paragraph(thesis_title)
+                thesis_paragraph = new_paragraph(target)
+                configure_paragraph(thesis_paragraph, before_pt=0, after_pt=0 if compact else 1)
+                thesis_paragraph.add_run(thesis_title)
             for bullet in item.get("thesis_bullets", []):
-                if str(bullet).strip():
-                    doc.add_paragraph(str(bullet).strip(), style="List Bullet")
+                bullet_text = str(bullet).strip()
+                if not bullet_text:
+                    continue
+                bullet_paragraph = target.add_paragraph(bullet_text, style="List Bullet")
+                configure_paragraph(bullet_paragraph, before_pt=0, after_pt=0 if compact else 1)
+            if index < len(education_items) - 1:
+                spacer = new_paragraph(target)
+                configure_paragraph(spacer, before_pt=0, after_pt=1 if compact else 2)
+
+    def render_standard_sections(target, *, variant: str, include_summary: bool = True, include_skills: bool = True):
+        rendered_sections = 0
+
+        def begin_section(title: str) -> None:
+            nonlocal rendered_sections
+            if rendered_sections > 0:
+                if variant in {"classic", "plain"}:
+                    add_section_separator(target)
+                else:
+                    spacer = new_paragraph(target)
+                    configure_paragraph(spacer, before_pt=0, after_pt=2)
+            add_standard_section_heading(target, title, variant=variant)
+            rendered_sections += 1
+
+        if include_summary and summary_text:
+            begin_section("Professional Summary")
+            write_text_paragraph(target, summary_text, after_pt=2)
+
+        if experiences:
+            begin_section("Professional Experience")
+            render_experience(target, compact=variant == "compact")
+
+        if initiatives:
+            begin_section("Projects")
+            render_projects(target, compact=variant == "compact")
+
+        if include_skills and skills:
+            begin_section("Skills")
+            write_text_paragraph(target, ", ".join(skills), after_pt=2)
+
+        if education_items:
+            begin_section("Education")
+            render_education(target, compact=variant == "compact")
+
+    def add_sidebar_heading(target, text: str):
+        paragraph = new_paragraph(target)
+        configure_paragraph(paragraph, before_pt=2, after_pt=1)
+        run = paragraph.add_run(text.upper())
+        style_run(run, size_pt=9.4, bold=True, color=primary_rgb)
+
+    def render_classic_like():
+        write_name_block(doc, include_contact=True)
+        insert_floating_photo(doc.paragraphs[0])
+        write_profile_links(doc, font_size_pt=10.0)
+        render_standard_sections(doc, variant="plain" if layout == "plain" else "classic")
+
+    def render_modern():
+        header_table = doc.add_table(rows=1, cols=2)
+        header_table.autofit = False
+        header_table.columns[0].width = Inches(5.65)
+        header_table.columns[1].width = Inches(1.25)
+        left_cell, right_cell = header_table.rows[0].cells
+        left_cell.width = Inches(5.65)
+        right_cell.width = Inches(1.25)
+        set_cell_shading(left_cell, color_scheme["surface"])
+        set_cell_shading(right_cell, color_scheme["surface"])
+
+        write_name_block(left_cell, include_contact=True)
+        write_profile_links(left_cell, font_size_pt=9.8)
+        if include_profile_image and profile_image_path:
+            photo_paragraph = right_cell.paragraphs[0]
+            configure_paragraph(photo_paragraph, before_pt=0, after_pt=0)
+            insert_inline_photo(photo_paragraph, width_inches=float(template["photo_width"]))
+
+        spacer = doc.add_paragraph()
+        configure_paragraph(spacer, before_pt=0, after_pt=3)
+        render_standard_sections(doc, variant="modern")
+
+    def render_compact():
+        write_name_block(doc, include_contact=True, compact_contact=True)
+        body_table = doc.add_table(rows=1, cols=2)
+        body_table.autofit = False
+        body_table.columns[0].width = Inches(2.0)
+        body_table.columns[1].width = Inches(4.9)
+        sidebar_cell, main_cell = body_table.rows[0].cells
+        sidebar_cell.width = Inches(2.0)
+        main_cell.width = Inches(4.9)
+        set_cell_shading(sidebar_cell, color_scheme["surface"])
+
+        if include_profile_image and profile_image_path:
+            photo_paragraph = sidebar_cell.paragraphs[0]
+            configure_paragraph(photo_paragraph, before_pt=0, after_pt=3)
+            insert_inline_photo(photo_paragraph, width_inches=max(float(template["photo_width"]), 1.45))
+
+        if summary_text:
+            add_sidebar_heading(sidebar_cell, "Profile")
+            write_text_paragraph(sidebar_cell, summary_text, after_pt=2, size_pt=float(template["base_font_size"]) - 0.2)
+
+        if skills:
+            add_sidebar_heading(sidebar_cell, "Skills")
+            for skill in skills:
+                write_text_paragraph(sidebar_cell, skill, after_pt=0.5, size_pt=float(template["base_font_size"]) - 0.1)
+
+        if language_values:
+            add_sidebar_heading(sidebar_cell, "Languages")
+            for language in language_values:
+                write_text_paragraph(sidebar_cell, language, after_pt=0.5, size_pt=float(template["base_font_size"]) - 0.1)
+
+        if valid_profile_links:
+            add_sidebar_heading(sidebar_cell, "Links")
+            write_profile_links(sidebar_cell, font_size_pt=9.4)
+
+        render_standard_sections(
+            main_cell,
+            variant="compact",
+            include_summary=False,
+            include_skills=False,
+        )
+
+    def render_europass():
+        header_table = doc.add_table(rows=1, cols=2)
+        header_table.autofit = False
+        header_table.columns[0].width = Inches(5.55)
+        header_table.columns[1].width = Inches(1.35)
+        left_cell, right_cell = header_table.rows[0].cells
+        left_cell.width = Inches(5.55)
+        right_cell.width = Inches(1.35)
+        write_name_block(left_cell, include_contact=True)
+        write_profile_links(left_cell, font_size_pt=9.8)
+        if include_profile_image and profile_image_path:
+            photo_paragraph = right_cell.paragraphs[0]
+            configure_paragraph(photo_paragraph, before_pt=0, after_pt=0)
+            insert_inline_photo(photo_paragraph, width_inches=float(template["photo_width"]))
+
+        def render_europass_section(title: str, content_writer):
+            section_table = doc.add_table(rows=1, cols=2)
+            section_table.autofit = False
+            section_table.columns[0].width = Inches(1.55)
+            section_table.columns[1].width = Inches(5.35)
+            label_cell, body_cell = section_table.rows[0].cells
+            label_cell.width = Inches(1.55)
+            body_cell.width = Inches(5.35)
+            set_cell_shading(label_cell, color_scheme["surface"])
+            label_paragraph = label_cell.paragraphs[0]
+            configure_paragraph(label_paragraph, before_pt=0, after_pt=0)
+            label_run = label_paragraph.add_run(title.title())
+            style_run(label_run, size_pt=9.6, bold=True, color=primary_rgb)
+            content_writer(body_cell)
+
+        if summary_text:
+            render_europass_section("Profile", lambda target: write_text_paragraph(target, summary_text, after_pt=1))
+        if experiences:
+            render_europass_section("Experience", lambda target: render_experience(target, compact=True))
+        if initiatives:
+            render_europass_section("Projects", lambda target: render_projects(target, compact=True))
+        if skills:
+            render_europass_section("Skills", lambda target: write_text_paragraph(target, ", ".join(skills), after_pt=1))
+        if education_items:
+            render_europass_section("Education", lambda target: render_education(target, compact=True))
+        if language_values:
+            render_europass_section("Languages", lambda target: write_text_paragraph(target, language_line, after_pt=1))
+
+    if layout == "modern":
+        render_modern()
+    elif layout == "compact":
+        render_compact()
+    elif layout == "europass":
+        render_europass()
+    else:
+        render_classic_like()
 
     doc.save(cv_path)
     return str(cv_path.resolve())

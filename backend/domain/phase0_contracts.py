@@ -504,6 +504,7 @@ def default_workspace_configuration_v2() -> dict[str, Any]:
             "multi_portal": {
                 "enabled": False,
                 "portals": list(DEFAULT_MULTI_PORTAL_IDS),
+                "cities": [],
                 "validate_before_run": True,
             },
             "curated_urls": {
@@ -597,6 +598,9 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
     )
     if configured_portals:
         contract["source_configuration"]["multi_portal"]["portals"] = configured_portals
+    configured_cities = _clean_tag_list(settings.get("cities"), limit=10)
+    if configured_cities:
+        contract["source_configuration"]["multi_portal"]["cities"] = configured_cities
 
     contract["source_configuration"]["curated_urls"]["enabled"] = "curated_urls" in source_ids
     contract["source_configuration"]["curated_urls"]["urls"] = _clean_tag_list(
@@ -698,6 +702,13 @@ def default_candidate_asset_descriptor() -> dict[str, Any]:
             "job_id": "",
             "created_at": "",
             "tags": [],
+            "parsed_profile": {},
+            "profile_extraction": {
+                "provider": "",
+                "model": "",
+                "warnings": [],
+                "extracted_at": "",
+            },
         },
     }
 
@@ -725,6 +736,16 @@ def normalize_candidate_asset_descriptor(payload: Mapping[str, Any] | None) -> d
     contract["metadata"]["job_id"] = _clean_text(raw.get("job_id") or metadata.get("job_id"))
     contract["metadata"]["created_at"] = _clean_text(raw.get("created_at") or metadata.get("created_at"))
     contract["metadata"]["tags"] = _clean_tag_list(raw.get("tags") or metadata.get("tags"), limit=20)
+    parsed_profile = metadata.get("parsed_profile")
+    contract["metadata"]["parsed_profile"] = dict(parsed_profile) if isinstance(parsed_profile, Mapping) else {}
+    extraction = metadata.get("profile_extraction")
+    extraction_dict = dict(extraction) if isinstance(extraction, Mapping) else {}
+    contract["metadata"]["profile_extraction"] = {
+        "provider": _clean_text(extraction_dict.get("provider")),
+        "model": _clean_text(extraction_dict.get("model")),
+        "warnings": _clean_tag_list(extraction_dict.get("warnings"), limit=20),
+        "extracted_at": _clean_text(extraction_dict.get("extracted_at")),
+    }
     return contract
 
 
