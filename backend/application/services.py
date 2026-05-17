@@ -2,18 +2,26 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
 from backend.capabilities.networking import (
+    PEOPLE_DISCOVERY_STATUS_COMPLETED,
+    PEOPLE_DISCOVERY_STATUS_FAILED,
+    PEOPLE_DISCOVERY_STATUS_RUNNING,
+    build_empty_relevant_people_discovery,
     build_hiring_manager_outreach_draft,
+    build_relevant_people_discovery,
     build_referral_outreach_draft,
     build_target_contact_discovery,
     find_referral_contacts_for_company,
     guess_hiring_manager_from_job,
     merge_referral_contacts,
+    normalize_relevant_people_discovery_run,
     parse_referral_contacts_csv,
+    update_relevant_people_status,
 )
 from backend.capabilities.tailored_documents.manual_urls import normalize_manual_urls
 from backend.domain.models import (
@@ -72,6 +80,16 @@ AUTO_APPROVE_REVIEW_STAGE_TYPES = {
     "applications.generate.documents",
     "legacy.white_collar.docs",
 }
+APPLICATION_CONTEXTS_METADATA_KEY = "application_contexts"
+RELEVANT_PEOPLE_DISCOVERY_CONTEXT_KEY = "relevant_people_discovery"
+WORKSPACE_RUN_SCHEDULE_METADATA_KEY = "run_schedule"
+SCHEDULED_RUN_REQUESTED_BY = "scheduler"
+SCHEDULED_RUN_ACTIVE_STATUSES = {
+    RUN_STATUS_PLANNED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+    RUN_STATUS_CANCEL_REQUESTED,
+}
 
 
 class BackendValidationError(ValueError):
@@ -116,6 +134,49 @@ def _dedupe_field_errors(errors: list[dict[str, Any]]) -> list[dict[str, str]]:
         seen.add(dedupe_key)
         deduped.append(_field_error(field, code, message, source_id=source_id))
     return deduped
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _schedule_interval_days(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _next_schedule_timestamp(*, from_dt: datetime, interval_days: int) -> str:
+    return (from_dt + timedelta(days=max(1, int(interval_days)))).isoformat()
+
+
+def _workspace_run_schedule_payload(workspace: WorkspaceDefinition) -> dict[str, Any]:
+    raw_schedule = dict((workspace.metadata or {}).get(WORKSPACE_RUN_SCHEDULE_METADATA_KEY) or {})
+    interval_days = _schedule_interval_days(raw_schedule.get("interval_days"))
+    enabled = bool(raw_schedule.get("enabled")) and interval_days >= 1
+    return {
+        "enabled": enabled,
+        "interval_days": interval_days if enabled else 0,
+        "next_run_at": str(raw_schedule.get("next_run_at") or ""),
+        "last_enqueued_at": str(raw_schedule.get("last_enqueued_at") or ""),
+        "last_run_id": str(raw_schedule.get("last_run_id") or ""),
+        "last_error": str(raw_schedule.get("last_error") or ""),
+        "last_error_at": str(raw_schedule.get("last_error_at") or ""),
+    }
 
 
 def _is_builder_created_workspace(workspace: WorkspaceDefinition) -> bool:
@@ -487,6 +548,225 @@ class BackendApplication:
     def get_workflow_template(self, template_id: str):
         return self.repositories.workspace_repository.get_workflow_template(template_id)
 
+    def emit_event(
+        self,
+        event_name: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
+        review_id: str | None = None,
+        session_id: str | None = None,
+        route: str = "",
+        source: str = "",
+        payload: Mapping[str, Any] | None = None,
+        **extra_payload,
+    ) -> None:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        if analytics_store is None or not hasattr(analytics_store, "emit_event"):
+            return
+        try:
+            merged_payload = dict(payload or {})
+            merged_payload.update(extra_payload)
+            analytics_store.emit_event(
+                event_id=f"evt_{uuid4().hex[:16]}",
+                event_name=str(event_name or "").strip(),
+                occurred_at=utc_now_iso(),
+                user_id=str(user_id or "").strip(),
+                workspace_id=str(workspace_id or "").strip(),
+                run_id=str(run_id or "").strip(),
+                job_id=str(job_id or "").strip(),
+                review_id=str(review_id or "").strip(),
+                session_id=str(session_id or "").strip(),
+                route=str(route or "").strip(),
+                source=str(source or "").strip(),
+                payload={key: value for key, value in merged_payload.items() if value is not None},
+            )
+        except Exception:
+            logging.getLogger("backend.analytics").exception(
+                "Failed to emit analytics event '%s'.",
+                event_name,
+            )
+
+    def get_analytics_overview(self) -> dict[str, Any]:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        query_rows = getattr(analytics_store, "query_rows", None)
+        if not callable(query_rows):
+            raise ValueError("Analytics overview requires the sqlite storage backend.")
+
+        queries: dict[str, str] = {
+            "automation_success_rate": """
+                SELECT
+                  date(created_at) AS day,
+                  COUNT(*) AS total_runs,
+                  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_runs,
+                  ROUND(
+                    100.0 * SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) / COUNT(*),
+                    1
+                  ) AS success_rate_pct
+                FROM runs
+                GROUP BY date(created_at)
+                ORDER BY day DESC
+            """,
+            "automation_failure_rate_by_stage_type": """
+                SELECT
+                  stage_type,
+                  COUNT(*) AS failed_steps
+                FROM run_stage_results
+                WHERE status = 'failed'
+                GROUP BY stage_type
+                ORDER BY failed_steps DESC
+            """,
+            "jobs_discovered_by_source": """
+                SELECT
+                  COALESCE(NULLIF(portal, ''), NULLIF(source_type, ''), 'unknown') AS source,
+                  COUNT(*) AS jobs
+                FROM run_jobs
+                GROUP BY 1
+                ORDER BY jobs DESC
+            """,
+            "screening_generation_funnel": """
+                SELECT
+                  stage_type,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.jobs_found') AS INTEGER), 0)) AS jobs_found,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.approved') AS INTEGER), 0)) AS approved,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.rejected') AS INTEGER), 0)) AS rejected,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.generated_jobs') AS INTEGER), 0)) AS generated_jobs,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.packaged_jobs') AS INTEGER), 0)) AS packaged_jobs
+                FROM run_stage_results
+                GROUP BY stage_type
+                ORDER BY stage_type
+            """,
+            "applications_per_user": """
+                WITH run_owners AS (
+                  SELECT id AS run_id, user_id
+                  FROM runs
+                  WHERE user_id != ''
+                )
+                SELECT
+                  ro.user_id,
+                  COUNT(*) AS approved_reviews,
+                  SUM(
+                    CASE
+                      WHEN COALESCE(json_extract(r.payload_json, '$.metadata.tracker_status'), '') != ''
+                      THEN 1 ELSE 0
+                    END
+                  ) AS explicit_tracker_updates,
+                  SUM(
+                    CASE
+                      WHEN COALESCE(json_extract(r.payload_json, '$.metadata.email_confirmed'), 0) = 1
+                      THEN 1 ELSE 0
+                    END
+                  ) AS email_confirmed
+                FROM reviews r
+                JOIN run_owners ro ON ro.run_id = r.run_id
+                WHERE json_extract(r.payload_json, '$.decision') = 'approved'
+                GROUP BY ro.user_id
+                ORDER BY email_confirmed DESC, approved_reviews DESC
+            """,
+            "quick_apply_adoption": """
+                SELECT
+                  date(created_at) AS day,
+                  COUNT(*) AS quick_apply_runs,
+                  SUM(COALESCE(CAST(json_extract(metadata_json, '$.accepted_url_count') AS INTEGER), 0)) AS accepted_urls
+                FROM runs
+                WHERE json_extract(metadata_json, '$.run_kind') = 'quick_apply'
+                GROUP BY date(created_at)
+                ORDER BY day DESC
+            """,
+            "referral_outreach_funnel": """
+                SELECT
+                  u.user_id,
+                  COUNT(ro.key) AS outreach_records,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'Not contacted' THEN 1 ELSE 0 END) AS not_contacted,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'Contacted' THEN 1 ELSE 0 END) AS contacted,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'Replied' THEN 1 ELSE 0 END) AS replied,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'Referral offered' THEN 1 ELSE 0 END) AS referral_offered,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'No referral' THEN 1 ELSE 0 END) AS no_referral
+                FROM users u
+                LEFT JOIN json_each(COALESCE(json_extract(u.payload_json, '$.metadata.referral_outreach'), '{}')) ro
+                GROUP BY u.user_id
+                ORDER BY referral_offered DESC, replied DESC
+            """,
+            "users_with_repeated_failures": """
+                WITH run_owners AS (
+                  SELECT id AS run_id, user_id
+                  FROM runs
+                  WHERE user_id != ''
+                )
+                SELECT
+                  ro.user_id,
+                  rs.stage_type,
+                  rs.error,
+                  COUNT(*) AS occurrences
+                FROM run_stage_results rs
+                JOIN run_owners ro ON ro.run_id = rs.run_id
+                WHERE rs.status = 'failed'
+                GROUP BY ro.user_id, rs.stage_type, rs.error
+                HAVING COUNT(*) >= 2
+                ORDER BY occurrences DESC
+            """,
+            "users_not_returned_after_signup": """
+                SELECT
+                  u.user_id,
+                  json_extract(u.payload_json, '$.created_at') AS user_created_at,
+                  MAX(json_extract(t.payload_json, '$.last_used_at')) AS last_token_use
+                FROM users u
+                LEFT JOIN api_tokens t ON t.user_id = u.user_id AND t.is_active = 1
+                GROUP BY u.user_id
+                HAVING COALESCE(MAX(json_extract(t.payload_json, '$.last_used_at')), '') = ''
+            """,
+            "most_successful_job_sources": """
+                SELECT
+                  COALESCE(NULLIF(j.portal, ''), NULLIF(j.source_type, ''), 'unknown') AS source,
+                  COUNT(*) AS reviewed_jobs,
+                  SUM(
+                    CASE
+                      WHEN json_extract(r.payload_json, '$.metadata.application_status') IN ('Interviewing', 'Offer')
+                      THEN 1 ELSE 0
+                    END
+                  ) AS positive_outcomes
+                FROM run_jobs j
+                JOIN reviews r
+                  ON r.run_id = j.run_id
+                 AND r.job_id = j.job_id
+                GROUP BY 1
+                ORDER BY positive_outcomes DESC, reviewed_jobs DESC
+            """,
+        }
+        overview = {"generated_at": utc_now_iso()}
+        for metric_name, sql in queries.items():
+            overview[metric_name] = query_rows(sql)
+        return overview
+
+    def list_analytics_events(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        event_name: str = "",
+        user_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> dict[str, Any]:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        list_events = getattr(analytics_store, "list_events", None)
+        count_events = getattr(analytics_store, "count_events", None)
+        if not callable(list_events) or not callable(count_events):
+            raise ValueError("Analytics event listing requires analytics storage support.")
+
+        normalized_filters = {
+            "event_name": str(event_name or "").strip(),
+            "user_id": str(user_id or "").strip(),
+            "occurred_from": str(occurred_from or "").strip(),
+            "occurred_to": str(occurred_to or "").strip(),
+        }
+        return {
+            "events": list_events(limit=int(limit), offset=int(offset), **normalized_filters),
+            "total": int(count_events(**normalized_filters)),
+        }
+
     def upsert_workflow_template(self, payload: Mapping[str, Any] | WorkflowTemplate):
         workflow_template = payload if isinstance(payload, WorkflowTemplate) else WorkflowTemplate.from_dict(payload)
         if not workflow_template.id:
@@ -625,8 +905,125 @@ class BackendApplication:
         builder_payload.setdefault("workflow_template_id", existing_workspace.workflow_template_id)
         _validate_builder_workspace_payload(builder_payload, workspace_id=existing_workspace.id)
         workflow_template, workspace = build_workspace_from_scratch(builder_payload)
+        existing_schedule = (existing_workspace.metadata or {}).get(WORKSPACE_RUN_SCHEDULE_METADATA_KEY)
+        if isinstance(existing_schedule, dict):
+            workspace.metadata = dict(workspace.metadata or {})
+            workspace.metadata[WORKSPACE_RUN_SCHEDULE_METADATA_KEY] = _workspace_run_schedule_payload(existing_workspace)
         self.upsert_workflow_template(workflow_template)
         return self.upsert_workspace(workspace)
+
+    def update_workspace_schedule(self, workspace_id: str, payload: Mapping[str, Any]) -> WorkspaceDefinition:
+        workspace = self.get_workspace(workspace_id)
+        schedule = _workspace_run_schedule_payload(workspace)
+        interval_days = _schedule_interval_days(payload.get("interval_days"))
+        enabled = bool(payload.get("enabled"))
+        if "enabled" not in payload and interval_days >= 1:
+            enabled = True
+
+        if enabled and interval_days < 1:
+            raise ValueError("interval_days must be at least 1 when recurring scheduling is enabled.")
+
+        if not enabled:
+            schedule.update(
+                {
+                    "enabled": False,
+                    "interval_days": 0,
+                    "next_run_at": "",
+                    "last_error": "",
+                    "last_error_at": "",
+                }
+            )
+            return self._persist_workspace_run_schedule(workspace, schedule)
+
+        preserve_existing_next_run = (
+            schedule["enabled"]
+            and schedule["interval_days"] == interval_days
+            and _parse_utc_datetime(schedule["next_run_at"]) is not None
+        )
+        schedule.update(
+            {
+                "enabled": True,
+                "interval_days": interval_days,
+                "next_run_at": (
+                    schedule["next_run_at"]
+                    if preserve_existing_next_run
+                    else _next_schedule_timestamp(from_dt=_utc_now(), interval_days=interval_days)
+                ),
+                "last_error": "",
+                "last_error_at": "",
+            }
+        )
+        return self._persist_workspace_run_schedule(workspace, schedule)
+
+    def enqueue_due_scheduled_runs(self) -> list[RunRecord]:
+        scheduler_logger = logging.getLogger("backend.scheduler")
+        now = _utc_now()
+        now_iso = now.isoformat()
+        active_workspace_ids = {
+            run.workspace_id
+            for run in self.list_runs(limit=100000, offset=0, status="", workspace_id="")
+            if run.status in SCHEDULED_RUN_ACTIVE_STATUSES
+        }
+        queued_runs: list[RunRecord] = []
+
+        for workspace in self.list_workspaces():
+            schedule = _workspace_run_schedule_payload(workspace)
+            if not schedule["enabled"] or schedule["interval_days"] < 1:
+                continue
+
+            next_run_at = _parse_utc_datetime(schedule["next_run_at"])
+            if next_run_at is None:
+                schedule["next_run_at"] = _next_schedule_timestamp(
+                    from_dt=now,
+                    interval_days=schedule["interval_days"],
+                )
+                self._persist_workspace_run_schedule(workspace, schedule)
+                continue
+
+            if next_run_at > now or workspace.id in active_workspace_ids:
+                continue
+
+            try:
+                run = self.enqueue_run(
+                    workspace.id,
+                    requested_by=SCHEDULED_RUN_REQUESTED_BY,
+                    max_attempts=1,
+                )
+            except Exception as exc:
+                scheduler_logger.exception(
+                    "Unable to enqueue scheduled run for workspace %s",
+                    workspace.id,
+                )
+                schedule.update(
+                    {
+                        "next_run_at": _next_schedule_timestamp(
+                            from_dt=now,
+                            interval_days=schedule["interval_days"],
+                        ),
+                        "last_error": str(exc),
+                        "last_error_at": now_iso,
+                    }
+                )
+                self._persist_workspace_run_schedule(workspace, schedule)
+                continue
+
+            schedule.update(
+                {
+                    "next_run_at": _next_schedule_timestamp(
+                        from_dt=now,
+                        interval_days=schedule["interval_days"],
+                    ),
+                    "last_enqueued_at": now_iso,
+                    "last_run_id": run.id,
+                    "last_error": "",
+                    "last_error_at": "",
+                }
+            )
+            self._persist_workspace_run_schedule(workspace, schedule)
+            active_workspace_ids.add(workspace.id)
+            queued_runs.append(run)
+
+        return queued_runs
 
     def _find_job_payload(self, run_id: str, job_id: str) -> dict[str, Any]:
         for jobs in self.repositories.job_store.load_all_job_sets(run_id).values():
@@ -643,6 +1040,17 @@ class BackendApplication:
                 if isinstance(item, dict) and str(item.get("job_id") or "") == job_id:
                     return dict(item)
         raise KeyError(f"Job '{job_id}' not found in run '{run_id}'.")
+
+    def _persist_workspace_run_schedule(
+        self,
+        workspace: WorkspaceDefinition,
+        schedule: Mapping[str, Any],
+    ) -> WorkspaceDefinition:
+        updated_workspace = WorkspaceDefinition.from_dict(workspace.to_dict())
+        updated_workspace.metadata = dict(updated_workspace.metadata or {})
+        updated_workspace.metadata[WORKSPACE_RUN_SCHEDULE_METADATA_KEY] = dict(schedule)
+        self.repositories.workspace_repository.upsert_workspace(updated_workspace)
+        return self.repositories.workspace_repository.get_workspace(updated_workspace.id)
 
     def _workflow_from_run_snapshot(self, run: RunRecord) -> WorkflowTemplate:
         if run.run_plan and run.run_plan.workflow_snapshot:
@@ -982,6 +1390,155 @@ class BackendApplication:
         profile = dict((user.metadata or {}).get("profile") or {})
         return build_target_contact_discovery(profile=profile, job=job)
 
+    def get_job_workspace(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        run = self.get_run(run_id)
+        workspace = self.get_workspace(run.workspace_id)
+        job = self._get_job_for_run(run_id=run_id, job_id=job_id)
+        return self._job_workspace_payload(
+            user=user,
+            run_id=run_id,
+            job=job,
+            workspace=workspace,
+        )
+
+    def get_relevant_people_discovery_status(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        workspace_payload = self.get_job_workspace(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+        discovery = normalize_relevant_people_discovery_run(
+            workspace_payload.get("relevant_people_discovery") or {}
+        )
+        return {
+            "runId": str(run_id or ""),
+            "jobId": str(job_id or ""),
+            "workspaceId": str(workspace_payload.get("workspace_id") or ""),
+            "peopleDiscoveryStatus": str(discovery.get("peopleDiscoveryStatus") or ""),
+            "selectedPeopleCount": len(discovery.get("selectedPeople") or []),
+            "lastStartedAt": str(discovery.get("lastStartedAt") or ""),
+            "lastCompletedAt": str(discovery.get("lastCompletedAt") or ""),
+            "lastUpdatedAt": str(discovery.get("lastUpdatedAt") or ""),
+            "error": str(discovery.get("error") or ""),
+        }
+
+    def get_relevant_people_discovery_results(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        workspace_payload = self.get_job_workspace(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+        return normalize_relevant_people_discovery_run(
+            workspace_payload.get("relevant_people_discovery") or {}
+        )
+
+    def start_relevant_people_discovery(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        run = self.get_run(run_id)
+        workspace = self.get_workspace(run.workspace_id)
+        job = self._get_job_for_run(run_id=run_id, job_id=job_id)
+        started_at = utc_now_iso()
+        running_payload = build_empty_relevant_people_discovery(
+            job=job,
+            run_id=run_id,
+            workspace_id=workspace.id,
+            status=PEOPLE_DISCOVERY_STATUS_RUNNING,
+            last_started_at=started_at,
+        )
+        self._persist_job_application_context(
+            user,
+            run_id=run_id,
+            job_id=job_id,
+            context_payload={RELEVANT_PEOPLE_DISCOVERY_CONTEXT_KEY: running_payload},
+        )
+
+        profile = dict((user.metadata or {}).get("profile") or {})
+        try:
+            completed_payload = build_relevant_people_discovery(
+                profile=profile,
+                job=job,
+                run_id=run_id,
+                workspace_id=workspace.id,
+                last_started_at=started_at,
+            )
+        except Exception as exc:
+            failed_payload = build_empty_relevant_people_discovery(
+                job=job,
+                run_id=run_id,
+                workspace_id=workspace.id,
+                status=PEOPLE_DISCOVERY_STATUS_FAILED,
+                error=str(exc),
+                last_started_at=started_at,
+            )
+            self._persist_job_application_context(
+                user,
+                run_id=run_id,
+                job_id=job_id,
+                context_payload={RELEVANT_PEOPLE_DISCOVERY_CONTEXT_KEY: failed_payload},
+            )
+            raise
+
+        self._persist_job_application_context(
+            user,
+            run_id=run_id,
+            job_id=job_id,
+            context_payload={RELEVANT_PEOPLE_DISCOVERY_CONTEXT_KEY: completed_payload},
+        )
+        return completed_payload
+
+    def set_relevant_people_status(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+        person_id: str,
+        status: str,
+    ) -> dict[str, Any]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        current_payload = self.get_relevant_people_discovery_results(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+        updated_payload = update_relevant_people_status(
+            current_payload,
+            person_id=person_id,
+            status=status,
+        )
+        self._persist_job_application_context(
+            user,
+            run_id=run_id,
+            job_id=job_id,
+            context_payload={RELEVANT_PEOPLE_DISCOVERY_CONTEXT_KEY: updated_payload},
+        )
+        return updated_payload
+
     def list_api_tokens(
         self,
         *,
@@ -1134,6 +1691,86 @@ class BackendApplication:
         user.metadata = metadata
         user.updated_at = utc_now_iso()
         self.repositories.auth_repository.upsert_user(user)
+
+    def _job_application_context_key(self, *, run_id: str, job_id: str) -> str:
+        return f"{str(run_id or '').strip()}::{str(job_id or '').strip()}"
+
+    def _load_job_application_context(self, user: UserRecord, *, run_id: str, job_id: str) -> dict[str, Any]:
+        metadata = dict(user.metadata or {})
+        all_contexts = dict(metadata.get(APPLICATION_CONTEXTS_METADATA_KEY) or {})
+        context_key = self._job_application_context_key(run_id=run_id, job_id=job_id)
+        return dict(all_contexts.get(context_key) or {})
+
+    def _persist_job_application_context(
+        self,
+        user: UserRecord,
+        *,
+        run_id: str,
+        job_id: str,
+        context_payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        metadata = dict(user.metadata or {})
+        all_contexts = dict(metadata.get(APPLICATION_CONTEXTS_METADATA_KEY) or {})
+        context_key = self._job_application_context_key(run_id=run_id, job_id=job_id)
+        existing_context = dict(all_contexts.get(context_key) or {})
+        merged_context = {
+            **existing_context,
+            **dict(context_payload or {}),
+            "run_id": str(run_id or "").strip(),
+            "job_id": str(job_id or "").strip(),
+            "updated_at": utc_now_iso(),
+        }
+        all_contexts[context_key] = merged_context
+        metadata[APPLICATION_CONTEXTS_METADATA_KEY] = all_contexts
+        user.metadata = metadata
+        user.updated_at = utc_now_iso()
+        self.repositories.auth_repository.upsert_user(user)
+        refreshed_user = self.repositories.auth_repository.get_user(user.user_id)
+        return self._load_job_application_context(refreshed_user, run_id=run_id, job_id=job_id)
+
+    def _job_workspace_payload(
+        self,
+        *,
+        user: UserRecord,
+        run_id: str,
+        job: JobRecord,
+        workspace: WorkspaceDefinition,
+    ) -> dict[str, Any]:
+        stored_context = self._load_job_application_context(user, run_id=run_id, job_id=job.job_id)
+        relevant_people_discovery = stored_context.get(RELEVANT_PEOPLE_DISCOVERY_CONTEXT_KEY)
+        if relevant_people_discovery:
+            normalized_discovery = normalize_relevant_people_discovery_run(
+                dict(relevant_people_discovery or {})
+            )
+        else:
+            normalized_discovery = build_empty_relevant_people_discovery(
+                job=job,
+                run_id=run_id,
+                workspace_id=workspace.id,
+            )
+        job_payload = job.to_dict()
+        description_text = str(job.description_text or job_payload.get("description") or "").strip()
+        return {
+            "run_id": run_id,
+            "workspace_id": workspace.id,
+            "workspace_name": workspace.name,
+            "job": {
+                **job_payload,
+                "job_id": str(job.job_id or ""),
+                "title": str(job.title or ""),
+                "company": str(job.company or ""),
+                "location": str(job.location_raw or ""),
+                "apply_link": str(job.apply_link or job.link or job.source_url or ""),
+                "description_text": description_text,
+            },
+            "selected_relevant_people": [
+                person
+                for person in normalized_discovery.get("selectedPeople") or []
+                if isinstance(person, dict)
+            ],
+            "relevant_people_discovery": normalized_discovery,
+            "application_context": stored_context,
+        }
 
     def _get_job_for_run(self, *, run_id: str, job_id: str) -> JobRecord:
         self.repositories.run_repository.get(run_id)
@@ -1531,6 +2168,7 @@ class BackendApplication:
     ) -> RunRecord | None:
         if worker_id:
             self.recover_stale_workers()
+        self.enqueue_due_scheduled_runs()
         run = self.repositories.run_repository.claim_next_queued()
         if run is None:
             if worker_id:

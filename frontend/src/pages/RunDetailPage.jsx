@@ -4,6 +4,7 @@ import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
+import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
 
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
@@ -50,7 +51,10 @@ function ReviewSection({ children, count, defaultOpen = true, title, tone = "pri
   );
 }
 
-function IncludedJobRow({ job }) {
+function IncludedJobRow({ job, runId }) {
+  const jobWorkspaceUrl =
+    job.job_workspace_url || buildJobWorkspaceRoute({ runId, jobId: job.job_id });
+
   return (
     <article className="rounded-2xl border border-outline-variant/15 bg-surface p-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -107,14 +111,31 @@ function IncludedJobRow({ job }) {
             Open Tracker
           </Link>
         ) : null}
+        {job.job_id ? (
+          <Link
+            className="rounded-full bg-surface-container-low px-3 py-1.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+            to={jobWorkspaceUrl}
+          >
+            Relevant People
+          </Link>
+        ) : null}
       </div>
     </article>
   );
 }
 
-function ExcludedJobRow({ job, onGenerate, pending }) {
+function ExcludedJobRow({ job, runId }) {
   const hasDocumentRun = Boolean(job.create_documents_run_id);
   const childRunActive = ACTIVE_RUN_STATUSES.includes(String(job.create_documents_run_status || "").trim());
+  const jobWorkspaceUrl =
+    job.job_workspace_url
+    || buildJobWorkspaceRoute({
+      runId,
+      jobId: job.job_id,
+      mode: "pre_generation",
+      sourceStage: job.source_stage || "",
+      reasonSummary: job.reason_summary || "",
+    });
 
   return (
     <article className="rounded-2xl border border-outline-variant/15 bg-surface p-4">
@@ -180,14 +201,20 @@ function ExcludedJobRow({ job, onGenerate, pending }) {
           >
             {childRunActive ? "Open Document Run" : "View Document Run"}
           </Link>
+        ) : job.can_generate_documents ? (
+          <Link
+            className="rounded-full bg-gradient-to-br from-primary to-primary-container px-4 py-1.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
+            to={jobWorkspaceUrl}
+          >
+            Customize &amp; Generate
+          </Link>
         ) : (
           <button
             className="rounded-full bg-gradient-to-br from-primary to-primary-container px-4 py-1.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={!job.can_generate_documents || pending}
-            onClick={() => onGenerate(job)}
+            disabled
             type="button"
           >
-            {pending ? "Creating..." : job.can_generate_documents ? "Create Documents" : "Unavailable"}
+            Unavailable
           </button>
         )}
       </div>
@@ -200,7 +227,6 @@ export default function RunDetailPage() {
   const navigate = useNavigate();
   const { request } = useSession();
   const [actionState, setActionState] = useState({
-    pendingJobId: "",
     deletingRun: false,
     message: "",
     error: "",
@@ -229,40 +255,6 @@ export default function RunDetailPage() {
     }, 5000);
     return () => window.clearInterval(intervalId);
   }, [hasActiveChildRuns, hasActiveRun, refresh]);
-
-  async function createDocumentsForExcludedJob(job) {
-    setActionState((currentValue) => ({
-      ...currentValue,
-      pendingJobId: job.job_id,
-      message: "",
-      error: "",
-    }));
-    try {
-      const result = await request(`/runs/${runId}/excluded-jobs/${encodeURIComponent(job.job_id)}/generate-documents`, {
-        method: "POST",
-        body: {
-          source_stage: job.source_stage,
-          reason_summary: job.reason_summary,
-          execution_mode: "queued",
-          notes: "Generate documents from the run review.",
-        },
-      });
-      setActionState((currentValue) => ({
-        ...currentValue,
-        pendingJobId: "",
-        message: `Document run ${result.run?.id || ""} created for ${job.title || "the selected job"}.`,
-        error: "",
-      }));
-      refresh().catch(() => undefined);
-    } catch (actionError) {
-      setActionState((currentValue) => ({
-        ...currentValue,
-        pendingJobId: "",
-        message: "",
-        error: actionError.message || "Unable to create documents for this excluded job.",
-      }));
-    }
-  }
 
   async function deleteRun() {
     if (!run) {
@@ -424,7 +416,9 @@ export default function RunDetailPage() {
           <div className="mt-6 space-y-4">
             <ReviewSection count={review.included_jobs?.length || 0} title="Included Jobs">
               {review.included_jobs?.length ? (
-                review.included_jobs.map((job) => <IncludedJobRow job={job} key={job.job_id} />)
+                review.included_jobs.map((job) => (
+                  <IncludedJobRow job={job} key={job.job_id} runId={runId} />
+                ))
               ) : (
                 <div className="rounded-2xl border border-outline-variant/10 bg-surface p-4 text-sm text-on-surface-variant">
                   No included jobs are available in this run yet.
@@ -443,8 +437,7 @@ export default function RunDetailPage() {
                   <ExcludedJobRow
                     job={job}
                     key={job.job_id}
-                    onGenerate={createDocumentsForExcludedJob}
-                    pending={actionState.pendingJobId === job.job_id}
+                    runId={runId}
                   />
                 ))
               ) : (

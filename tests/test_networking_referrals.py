@@ -1,6 +1,7 @@
 import unittest
 
 from backend.capabilities.networking import (
+    build_relevant_people_discovery,
     build_target_contact_discovery,
     find_referral_contacts_for_company,
     merge_referral_contacts,
@@ -184,6 +185,138 @@ class ReferralNetworkingTests(unittest.TestCase):
         self.assertEqual([contact.name for contact in matches], ["One", "Two"])
 
     def test_target_contact_discovery_builds_ranked_search_candidates(self):
+        def fake_ai_provider(task, prompt, system_prompt):
+            self.assertTrue(prompt)
+            self.assertTrue(system_prompt)
+            if task == "pass_one_queries":
+                return {
+                    "summary": "Broad first pass across manager, recruiting, and peer lanes.",
+                    "query_plans": [
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "Analytics Manager" "Berlin"',
+                            "objective": "Find the likely manager in Berlin.",
+                            "lane": "direct_hiring_chain",
+                            "title_variants": ["Analytics Manager", "Data Science Manager"],
+                            "rationale": "Start with the local analytics manager lane.",
+                        },
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "Talent Acquisition Partner" "Berlin"',
+                            "objective": "Find recruiting ownership in Berlin.",
+                            "lane": "recruiting",
+                            "title_variants": ["Talent Acquisition Partner", "Data Recruiter"],
+                            "rationale": "Search the recruiting lane early.",
+                        },
+                    ],
+                }
+            if task == "pass_two_queries":
+                return {
+                    "summary": "Second pass narrows to the Berlin analytics subgroup.",
+                    "query_plans": [
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "Analytics Manager" "Berlin" "DACH"',
+                            "objective": "Narrow the manager lane to the Berlin DACH subgroup.",
+                            "lane": "direct_hiring_chain",
+                            "title_variants": ["Analytics Manager", "Data Science Manager"],
+                            "rationale": "Pass 1 surfaced DACH and Berlin, so pass 2 keeps both.",
+                        },
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "Talent Acquisition Partner" "Berlin" analytics',
+                            "objective": "Narrow the recruiting lane to analytics hiring in Berlin.",
+                            "lane": "recruiting",
+                            "title_variants": ["Talent Acquisition Partner", "Data Recruiter"],
+                            "rationale": "Pass 1 showed the analytics lane clearly.",
+                        },
+                    ],
+                }
+            if task == "candidate_resolution":
+                return {
+                    "summary": "Resolved manager and recruiter candidates from the public evidence.",
+                    "candidates": [
+                        {
+                            "role_label": "Likely Hiring Manager",
+                            "person_name": "Jane Hiringmanager",
+                            "current_title": "Analytics Manager",
+                            "current_company": "ACME GmbH",
+                            "location": "Berlin, Germany",
+                            "seniority": "manager",
+                            "lane": "direct_hiring_chain",
+                            "confidence": "high",
+                            "fit_score": 96,
+                            "title_variants": ["Analytics Manager", "Data Science Manager"],
+                            "why_this_person": "Search results converge on a Berlin analytics manager at the same company.",
+                            "access_hint": "Closest lane to direct role ownership.",
+                            "evidence": [
+                                "Public profile snippet places Jane Hiringmanager in Berlin on the analytics team.",
+                            ],
+                            "source_urls": [
+                                "https://www.linkedin.com/in/jane-hiringmanager",
+                            ],
+                            "source_titles": [
+                                "Jane Hiringmanager - Analytics Manager - ACME GmbH | LinkedIn",
+                            ],
+                            "search_query": 'Jane Hiringmanager ACME GmbH Analytics Manager Berlin',
+                            "follow_up_ask": "If you are open to it, I would value a quick perspective on the team priorities.",
+                        },
+                        {
+                            "role_label": "Recruiter Or Talent Partner",
+                            "person_name": "Mina Talent",
+                            "current_title": "Talent Acquisition Partner",
+                            "current_company": "ACME GmbH",
+                            "location": "Berlin, Germany",
+                            "seniority": "individual_contributor",
+                            "lane": "recruiting",
+                            "confidence": "medium",
+                            "fit_score": 84,
+                            "title_variants": ["Talent Acquisition Partner", "Data Recruiter"],
+                            "why_this_person": "Public snippets tie Mina Talent to ACME hiring in Berlin.",
+                            "access_hint": "Best lane for routing and recruiter-side visibility.",
+                            "evidence": [
+                                "Public profile snippet connects Mina Talent to Berlin recruiting at ACME GmbH.",
+                            ],
+                            "source_urls": [
+                                "https://www.linkedin.com/in/mina-talent",
+                            ],
+                            "source_titles": [
+                                "Mina Talent - Talent Acquisition Partner - ACME GmbH | LinkedIn",
+                            ],
+                            "search_query": 'Mina Talent ACME GmbH Talent Acquisition Partner Berlin',
+                            "follow_up_ask": "If you are open to it, I would appreciate any advice on the best next step.",
+                        },
+                    ],
+                }
+            raise AssertionError(f"Unexpected AI task: {task}")
+
+        def fake_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):
+            self.assertTrue(query)
+            if "Jane Hiringmanager" in query or ("Analytics Manager" in query and "DACH" in query):
+                return [
+                    {
+                        "title": "Jane Hiringmanager - Analytics Manager - ACME GmbH | LinkedIn",
+                        "url": "https://www.linkedin.com/in/jane-hiringmanager",
+                        "snippet": "Analytics Manager for ACME GmbH in Berlin, focused on DACH reporting.",
+                    },
+                    {
+                        "title": "ACME analytics leadership in Berlin",
+                        "url": "https://www.acme.example/teams/analytics-berlin",
+                        "snippet": "Meet the Berlin analytics leadership team supporting DACH operations.",
+                    },
+                ][:max_results]
+            if "Talent Acquisition Partner" in query:
+                return [
+                    {
+                        "title": "Mina Talent - Talent Acquisition Partner - ACME GmbH | LinkedIn",
+                        "url": "https://www.linkedin.com/in/mina-talent",
+                        "snippet": "Talent Acquisition Partner at ACME GmbH in Berlin hiring across analytics roles.",
+                    },
+                ][:max_results]
+            return [
+                {
+                    "title": "ACME analytics careers Berlin",
+                    "url": "https://www.acme.example/careers/analytics-berlin",
+                    "snippet": "Berlin analytics hiring and reporting team overview.",
+                },
+            ][:max_results]
+
         payload = build_target_contact_discovery(
             profile={
                 "name": "Analyst User",
@@ -196,15 +329,259 @@ class ReferralNetworkingTests(unittest.TestCase):
                 location_raw="Berlin, Germany",
                 description_text="Reporting to Jane Hiringmanager on the analytics team.",
             ),
+            search_provider=fake_search_provider,
+            ai_provider=fake_ai_provider,
         )
 
         self.assertEqual(payload["discipline"], "data")
         self.assertEqual(payload["department_label"], "Data")
         self.assertGreaterEqual(len(payload["candidates"]), 4)
-        self.assertEqual(payload["candidates"][0]["role_label"], "Named Hiring Signal")
+        self.assertEqual(payload["default_pass_count"], 2)
+        self.assertEqual(len(payload["passes"]), 2)
+        self.assertEqual(payload["provider"]["query_planner"], "ai")
+        self.assertEqual(payload["provider"]["resolver"], "ai")
+        self.assertEqual(payload["passes"][1]["pass_index"], 2)
+        self.assertGreaterEqual(payload["passes"][1]["query_count"], 1)
+        self.assertEqual(payload["candidates"][0]["role_label"], "Likely Hiring Manager")
+        self.assertEqual(payload["candidates"][0]["resolved_name"], "Jane Hiringmanager")
+        self.assertEqual(payload["candidates"][0]["resolved_in_pass"], 2)
+        self.assertTrue(payload["candidates"][0]["evidence"])
         self.assertIn("linkedin.com/search/results/people", payload["candidates"][0]["linkedin_search_url"])
         self.assertIn("site:linkedin.com/in", payload["candidates"][0]["google_xray_query"])
         self.assertIn("[Name]", payload["candidates"][0]["connection_note"])
+
+    def test_relevant_people_discovery_builds_workspace_ready_people_context(self):
+        def fake_ai_provider(task, prompt, system_prompt):
+            self.assertTrue(prompt)
+            self.assertTrue(system_prompt)
+            if task == "pass_one_queries":
+                return {
+                    "summary": "Broad first pass across manager, peer, and leadership lanes.",
+                    "query_plans": [
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "Analytics Manager" "Berlin"',
+                            "objective": "Find the likely hiring manager in Berlin.",
+                            "lane": "direct_hiring_chain",
+                            "title_variants": ["Analytics Manager"],
+                            "rationale": "Start with the direct manager lane.",
+                        },
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "Senior Data Analyst" "Berlin"',
+                            "objective": "Find likely peers on the same team.",
+                            "lane": "peer_context",
+                            "title_variants": ["Senior Data Analyst"],
+                            "rationale": "Search for team-level peers in the same discipline.",
+                        },
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "VP Analytics" "Germany"',
+                            "objective": "Find nearby leadership for the function.",
+                            "lane": "leadership",
+                            "title_variants": ["VP Analytics"],
+                            "rationale": "Search the closest leadership lane.",
+                        },
+                    ],
+                }
+            if task == "pass_two_queries":
+                return {
+                    "summary": "Second pass narrows to Berlin analytics leadership and team context.",
+                    "query_plans": [
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "Analytics Manager" "Berlin" "DACH"',
+                            "objective": "Narrow the likely manager lane with the regional signal.",
+                            "lane": "direct_hiring_chain",
+                            "title_variants": ["Analytics Manager"],
+                            "rationale": "Refine the manager lane with the DACH signal.",
+                        },
+                        {
+                            "query": 'site:linkedin.com/in "ACME GmbH" "Senior Data Analyst" "Berlin" analytics',
+                            "objective": "Refine the team-level peer lane.",
+                            "lane": "peer_context",
+                            "title_variants": ["Senior Data Analyst"],
+                            "rationale": "Tighten team-level peer matching.",
+                        },
+                    ],
+                }
+            if task == "candidate_resolution":
+                return {
+                    "summary": "Resolved manager, peer, and executive candidates from public evidence.",
+                    "candidates": [
+                        {
+                            "role_label": "Likely Hiring Manager",
+                            "person_name": "Jane Hiringmanager",
+                            "current_title": "Analytics Manager",
+                            "current_company": "ACME GmbH",
+                            "location": "Berlin, Germany",
+                            "seniority": "manager",
+                            "lane": "direct_hiring_chain",
+                            "confidence": "high",
+                            "fit_score": 96,
+                            "title_variants": ["Analytics Manager"],
+                            "why_this_person": "Public results converge on a Berlin analytics manager at the same company.",
+                            "access_hint": "Closest lane to direct role ownership.",
+                            "evidence": [
+                                "Public profile snippet places Jane Hiringmanager in Berlin on the analytics team.",
+                            ],
+                            "source_urls": [
+                                "https://www.linkedin.com/in/jane-hiringmanager",
+                            ],
+                            "source_titles": [
+                                "Jane Hiringmanager - Analytics Manager - ACME GmbH | LinkedIn",
+                            ],
+                            "search_query": "Jane Hiringmanager ACME GmbH Analytics Manager Berlin",
+                        },
+                        {
+                            "role_label": "Potential Colleague",
+                            "person_name": "Leo Peer",
+                            "current_title": "Senior Data Analyst",
+                            "current_company": "ACME GmbH",
+                            "location": "Berlin, Germany",
+                            "seniority": "individual_contributor",
+                            "lane": "peer_context",
+                            "confidence": "medium",
+                            "fit_score": 82,
+                            "title_variants": ["Senior Data Analyst"],
+                            "why_this_person": "Public snippets connect Leo Peer to the same analytics function in Berlin.",
+                            "access_hint": "Likely same-team or adjacent-team context.",
+                            "evidence": [
+                                "Public profile snippet ties Leo Peer to analytics reporting in Berlin.",
+                            ],
+                            "source_urls": [
+                                "https://www.linkedin.com/in/leo-peer",
+                            ],
+                            "source_titles": [
+                                "Leo Peer - Senior Data Analyst - ACME GmbH | LinkedIn",
+                            ],
+                            "search_query": "Leo Peer ACME GmbH Senior Data Analyst Berlin",
+                        },
+                        {
+                            "role_label": "Executive Sponsor",
+                            "person_name": "Ava Leader",
+                            "current_title": "VP Analytics Europe",
+                            "current_company": "ACME GmbH",
+                            "location": "Berlin, Germany",
+                            "seniority": "executive",
+                            "lane": "leadership",
+                            "confidence": "medium",
+                            "fit_score": 77,
+                            "title_variants": ["VP Analytics Europe"],
+                            "why_this_person": "Public results connect Ava Leader to the analytics function in Europe.",
+                            "access_hint": "Broader leadership visibility.",
+                            "evidence": [
+                                "Public profile snippet connects Ava Leader to European analytics leadership at ACME GmbH.",
+                            ],
+                            "source_urls": [
+                                "https://www.linkedin.com/in/ava-leader",
+                            ],
+                            "source_titles": [
+                                "Ava Leader - VP Analytics Europe - ACME GmbH | LinkedIn",
+                            ],
+                            "search_query": "Ava Leader ACME GmbH VP Analytics Europe",
+                        },
+                    ],
+                }
+            raise AssertionError(f"Unexpected AI task: {task}")
+
+        def fake_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):
+            self.assertTrue(query)
+            lane_results = {
+                "direct_hiring_chain": [
+                    {
+                        "title": "Jane Hiringmanager - Analytics Manager - ACME GmbH | LinkedIn",
+                        "url": "https://www.linkedin.com/in/jane-hiringmanager",
+                        "snippet": "Analytics Manager for ACME GmbH in Berlin, focused on DACH reporting.",
+                    }
+                ],
+                "peer_context": [
+                    {
+                        "title": "Leo Peer - Senior Data Analyst - ACME GmbH | LinkedIn",
+                        "url": "https://www.linkedin.com/in/leo-peer",
+                        "snippet": "Senior Data Analyst at ACME GmbH in Berlin supporting analytics reporting.",
+                    }
+                ],
+                "leadership": [
+                    {
+                        "title": "Ava Leader - VP Analytics Europe - ACME GmbH | LinkedIn",
+                        "url": "https://www.linkedin.com/in/ava-leader",
+                        "snippet": "VP Analytics Europe at ACME GmbH with regional leadership scope.",
+                    }
+                ],
+            }
+            return lane_results.get(lane, [])[:max_results]
+
+        payload = build_relevant_people_discovery(
+            profile={
+                "name": "Analyst User",
+                "summary": "Analytics specialist who improves dashboards and reporting workflows.",
+            },
+            job=JobRecord(
+                job_id="job_1",
+                title="Senior Data Analyst",
+                company="ACME GmbH",
+                location_raw="Berlin, Germany",
+                description_text="Reporting to Jane Hiringmanager on the analytics team.",
+            ),
+            run_id="run_1",
+            workspace_id="workspace_1",
+            search_provider=fake_search_provider,
+            ai_provider=fake_ai_provider,
+        )
+
+        self.assertEqual(payload["peopleDiscoveryStatus"], "completed")
+        self.assertEqual(payload["runId"], "run_1")
+        self.assertEqual(payload["workspaceId"], "workspace_1")
+        self.assertEqual(payload["jobId"], "job_1")
+        self.assertEqual(payload["contextExtraction"]["department"], "Data")
+        self.assertGreaterEqual(len(payload["searchHypotheses"]), 3)
+        self.assertEqual(payload["selectedPeople"], [])
+        self.assertEqual(len(payload["categories"]["hiring_manager"]), 1)
+        self.assertEqual(len(payload["categories"]["potential_colleague"]), 1)
+        self.assertEqual(len(payload["categories"]["executive"]), 1)
+
+        hiring_manager = payload["categories"]["hiring_manager"][0]
+        self.assertEqual(hiring_manager["name"], "Jane Hiringmanager")
+        self.assertEqual(hiring_manager["title"], "Analytics Manager")
+        self.assertEqual(hiring_manager["company"], "ACME GmbH")
+        self.assertEqual(hiring_manager["source"], "public_profile_search")
+        self.assertGreaterEqual(hiring_manager["confidence"], 55)
+        self.assertIn("Likely relevant because", hiring_manager["reasoningNote"])
+        self.assertEqual(
+            hiring_manager["profileUrl"],
+            "https://www.linkedin.com/in/jane-hiringmanager",
+        )
+        self.assertIn("Jane Hiringmanager ACME GmbH Analytics Manager Berlin", hiring_manager["searchQueries"])
+
+    def test_target_contact_discovery_runs_two_pass_fallback_without_ai(self):
+        def fake_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):
+            return [
+                {
+                    "title": f"Search result for {lane or 'general'}",
+                    "url": f"https://example.com/{pass_index}/{lane or 'general'}",
+                    "snippet": f"{query} for Berlin operations at Example GmbH.",
+                }
+            ][:max_results]
+
+        def failing_ai_provider(task, prompt, system_prompt):
+            raise RuntimeError("intentional test fallback")
+
+        payload = build_target_contact_discovery(
+            profile={"summary": "Operations specialist focused on process improvement."},
+            job=JobRecord(
+                job_id="job_2",
+                title="Operations Manager",
+                company="Example GmbH",
+                location_raw="Berlin, Germany",
+                description_text="Operations leadership role for the Berlin site.",
+            ),
+            search_provider=fake_search_provider,
+            ai_provider=failing_ai_provider,
+        )
+
+        self.assertEqual(payload["default_pass_count"], 2)
+        self.assertEqual(len(payload["passes"]), 2)
+        self.assertEqual(payload["provider"]["query_planner"], "heuristic_fallback")
+        self.assertGreaterEqual(payload["passes"][0]["query_count"], 1)
+        self.assertGreaterEqual(payload["passes"][1]["query_count"], 1)
+        self.assertGreaterEqual(len(payload["candidates"]), 1)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,8 @@ from backend.domain.models import (
 from backend.orchestration.seeded_workspaces import DEFAULT_WORKFLOW_TEMPLATES, DEFAULT_WORKSPACES
 from backend.security.auth import API_TOKEN_PREFIX_LENGTH
 
+_APPLICATION_STATUS_HISTORY_SOURCES = {"manual", "gmail_sync", "auto_default"}
+
 
 def _serialize(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
@@ -49,6 +51,11 @@ def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
 def _ensure_run_column(connection: sqlite3.Connection, column_name: str, column_sql: str) -> None:
     if column_name not in _table_columns(connection, "runs"):
         connection.execute(f"ALTER TABLE runs ADD COLUMN {column_name} {column_sql}")
+
+
+def _ensure_user_column(connection: sqlite3.Connection, column_name: str, column_sql: str) -> None:
+    if column_name not in _table_columns(connection, "users"):
+        connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_sql}")
 
 
 def _apply_runtime_migration(connection: sqlite3.Connection) -> None:
@@ -123,6 +130,170 @@ def _apply_runtime_migration(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_run_user_id_migration(connection: sqlite3.Connection) -> None:
+    _ensure_run_column(connection, "user_id", "TEXT NOT NULL DEFAULT ''")
+    normalized_user_id_sql = (
+        "CASE "
+        "WHEN COALESCE(requested_by, '') LIKE 'api:%' THEN TRIM(SUBSTR(COALESCE(requested_by, ''), 5)) "
+        "ELSE '' "
+        "END"
+    )
+    connection.execute(
+        (
+            "UPDATE runs "
+            f"SET user_id = {normalized_user_id_sql} "
+            f"WHERE COALESCE(user_id, '') != {normalized_user_id_sql}"
+        )
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_user_id_created_at ON runs(user_id, created_at DESC)")
+
+
+def _apply_billing_migration(connection: sqlite3.Connection) -> None:
+    _ensure_user_column(connection, "clerk_user_id", "TEXT NOT NULL DEFAULT ''")
+    connection.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_clerk_user_id_unique
+            ON users(clerk_user_id)
+            WHERE clerk_user_id != '';
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            subscription_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            plan_id TEXT NOT NULL DEFAULT 'free',
+            status TEXT NOT NULL DEFAULT 'active',
+            lemonsqueezy_subscription_id TEXT,
+            lemonsqueezy_customer_id TEXT,
+            lemonsqueezy_order_id TEXT,
+            current_period_start TEXT,
+            current_period_end TEXT,
+            cancelled_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS subscription_events (
+            event_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            plan_id TEXT,
+            previous_plan_id TEXT,
+            lemonsqueezy_event_name TEXT,
+            occurred_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS quota_usage (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            quota_type TEXT NOT NULL,
+            period TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, quota_type, period)
+        );
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_subscription_events_user_id
+            ON subscription_events(user_id, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_quota_usage_user_period
+            ON quota_usage(user_id, period, quota_type);
+        """
+    )
+
+
+def _apply_analytics_events_migration(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS analytics_events (
+            event_id TEXT PRIMARY KEY,
+            event_name TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            user_id TEXT,
+            workspace_id TEXT,
+            run_id TEXT,
+            job_id TEXT,
+            review_id TEXT,
+            session_id TEXT,
+            route TEXT,
+            source TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_name_occurred_at
+            ON analytics_events(event_name, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_user_occurred_at
+            ON analytics_events(user_id, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_run_occurred_at
+            ON analytics_events(run_id, occurred_at);
+        """
+    )
+
+
+def _apply_application_status_history_migration(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS application_status_history (
+            review_id TEXT,
+            user_id TEXT,
+            from_status TEXT,
+            to_status TEXT,
+            changed_at TEXT,
+            source TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_application_status_history_review_changed_at
+            ON application_status_history(review_id, changed_at);
+        CREATE INDEX IF NOT EXISTS idx_application_status_history_user_changed_at
+            ON application_status_history(user_id, changed_at);
+        """
+    )
+
+
+def _normalize_application_status_history_entry(
+    *,
+    review_id: Any,
+    user_id: Any,
+    from_status: Any,
+    to_status: Any,
+    changed_at: Any = "",
+    source: Any = "manual",
+) -> dict[str, str]:
+    normalized_review_id = str(review_id or "").strip()
+    if not normalized_review_id:
+        raise ValueError("review_id is required for application status history.")
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise ValueError("user_id is required for application status history.")
+    normalized_source = str(source or "manual").strip() or "manual"
+    if normalized_source not in _APPLICATION_STATUS_HISTORY_SOURCES:
+        raise ValueError(
+            f"source must be one of: {sorted(_APPLICATION_STATUS_HISTORY_SOURCES)}"
+        )
+    return {
+        "review_id": normalized_review_id,
+        "user_id": normalized_user_id,
+        "from_status": str(from_status or "").strip(),
+        "to_status": str(to_status or "").strip(),
+        "changed_at": str(changed_at or utc_now_iso()).strip(),
+        "source": normalized_source,
+    }
+
+
+def _insert_application_status_history_row(
+    connection: sqlite3.Connection,
+    entry: dict[str, str],
+) -> None:
+    connection.execute(
+        (
+            "INSERT INTO application_status_history "
+            "(review_id, user_id, from_status, to_status, changed_at, source) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
+        ),
+        (
+            entry["review_id"],
+            entry["user_id"],
+            entry["from_status"],
+            entry["to_status"],
+            entry["changed_at"],
+            entry["source"],
+        ),
+    )
+
+
 class _SqliteStore:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
@@ -173,6 +344,7 @@ class _SqliteStore:
                     workflow_template_id TEXT NOT NULL,
                     status TEXT NOT NULL,
                     requested_by TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     queued_at TEXT NOT NULL DEFAULT '',
@@ -218,6 +390,14 @@ class _SqliteStore:
                     updated_at TEXT NOT NULL,
                     payload_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS application_status_history (
+                    review_id TEXT,
+                    user_id TEXT,
+                    from_status TEXT,
+                    to_status TEXT,
+                    changed_at TEXT,
+                    source TEXT
+                );
                 CREATE TABLE IF NOT EXISTS users (
                     user_id TEXT PRIMARY KEY,
                     email TEXT NOT NULL UNIQUE,
@@ -246,6 +426,10 @@ class _SqliteStore:
                 CREATE INDEX IF NOT EXISTS idx_runs_workspace_updated_at ON runs(workspace_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_workspaces_template_id ON workspaces(workflow_template_id);
                 CREATE INDEX IF NOT EXISTS idx_reviews_run_updated_at ON reviews(run_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_application_status_history_review_changed_at
+                    ON application_status_history(review_id, changed_at);
+                CREATE INDEX IF NOT EXISTS idx_application_status_history_user_changed_at
+                    ON application_status_history(user_id, changed_at);
                 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                 CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix_active ON api_tokens(token_prefix, is_active, updated_at DESC);
@@ -261,6 +445,30 @@ class _SqliteStore:
                 connection.execute(
                     "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
                     ("001_runtime_normalization", utc_now_iso()),
+                )
+            if "002_analytics_events" not in applied:
+                _apply_analytics_events_migration(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                    ("002_analytics_events", utc_now_iso()),
+                )
+            if "003_application_status_history" not in applied:
+                _apply_application_status_history_migration(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                    ("003_application_status_history", utc_now_iso()),
+                )
+            if "004_runs_user_id" not in applied:
+                _apply_run_user_id_migration(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                    ("004_runs_user_id", utc_now_iso()),
+                )
+            if "005_billing" not in applied:
+                _apply_billing_migration(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                    ("005_billing", utc_now_iso()),
                 )
 
 
@@ -403,18 +611,20 @@ class SqliteWorkspaceRepository(_SqliteStore):
 
 class SqliteRunRepository(_SqliteStore):
     def save(self, run: RunRecord) -> None:
+        run.user_id = run.normalized_user_id
         payload = run.to_dict()
         with self._connect() as connection:
             connection.execute(
                 (
                     "INSERT INTO runs ("
-                    "id, workspace_id, workflow_template_id, status, requested_by, created_at, updated_at, "
+                    "id, workspace_id, workflow_template_id, status, requested_by, user_id, created_at, updated_at, "
                     "queued_at, started_at, finished_at, current_stage_id, last_error, attempt_count, max_attempts, "
                     "run_input_overrides_json, run_plan_json, metadata_json, payload_json"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(id) DO UPDATE SET "
                     "workspace_id=excluded.workspace_id, workflow_template_id=excluded.workflow_template_id, "
-                    "status=excluded.status, requested_by=excluded.requested_by, created_at=excluded.created_at, "
+                    "status=excluded.status, requested_by=excluded.requested_by, user_id=excluded.user_id, "
+                    "created_at=excluded.created_at, "
                     "updated_at=excluded.updated_at, queued_at=excluded.queued_at, started_at=excluded.started_at, "
                     "finished_at=excluded.finished_at, current_stage_id=excluded.current_stage_id, "
                     "last_error=excluded.last_error, attempt_count=excluded.attempt_count, max_attempts=excluded.max_attempts, "
@@ -427,6 +637,7 @@ class SqliteRunRepository(_SqliteStore):
                     run.workflow_template_id,
                     run.status,
                     run.requested_by,
+                    run.user_id,
                     run.created_at,
                     run.updated_at,
                     run.queued_at,
@@ -477,6 +688,8 @@ class SqliteRunRepository(_SqliteStore):
         run.workflow_template_id = str(row["workflow_template_id"])
         run.status = str(row["status"])
         run.requested_by = str(row["requested_by"] or "")
+        run.user_id = str(row["user_id"] or "")
+        run.user_id = run.normalized_user_id
         run.created_at = str(row["created_at"] or run.created_at)
         run.updated_at = str(row["updated_at"] or run.updated_at)
         run.queued_at = str(row["queued_at"] or "")
@@ -811,8 +1024,23 @@ class SqliteArtifactStore(_SqliteStore):
 
 
 class SqliteReviewStore(_SqliteStore):
-    def upsert_review(self, review: ReviewRecord) -> None:
+    def upsert_review(
+        self,
+        review: ReviewRecord,
+        *,
+        application_status_history: dict[str, Any] | None = None,
+    ) -> None:
         review.updated_at = utc_now_iso()
+        history_entry = None
+        if application_status_history is not None:
+            history_entry = _normalize_application_status_history_entry(
+                review_id=application_status_history.get("review_id") or review.review_id,
+                user_id=application_status_history.get("user_id"),
+                from_status=application_status_history.get("from_status"),
+                to_status=application_status_history.get("to_status"),
+                changed_at=application_status_history.get("changed_at") or review.updated_at,
+                source=application_status_history.get("source") or "manual",
+            )
         with self._connect() as connection:
             connection.execute(
                 (
@@ -831,6 +1059,29 @@ class SqliteReviewStore(_SqliteStore):
                     _serialize(review.to_dict()),
                 ),
             )
+            if history_entry is not None:
+                _insert_application_status_history_row(connection, history_entry)
+
+    def append_application_status_history(
+        self,
+        *,
+        review_id: str,
+        user_id: str,
+        from_status: str,
+        to_status: str,
+        changed_at: str = "",
+        source: str = "manual",
+    ) -> None:
+        entry = _normalize_application_status_history_entry(
+            review_id=review_id,
+            user_id=user_id,
+            from_status=from_status,
+            to_status=to_status,
+            changed_at=changed_at,
+            source=source,
+        )
+        with self._connect() as connection:
+            _insert_application_status_history_row(connection, entry)
 
     def get_review(self, review_id: str) -> ReviewRecord:
         with self._connect() as connection:
@@ -867,6 +1118,34 @@ class SqliteReviewStore(_SqliteStore):
             rows = connection.execute(query, tuple(params)).fetchall()
         return [ReviewRecord.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
 
+    def list_application_status_history(
+        self,
+        *,
+        review_id: str = "",
+        user_id: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        query = (
+            "SELECT review_id, user_id, from_status, to_status, changed_at, source "
+            "FROM application_status_history"
+        )
+        where_parts: list[str] = []
+        params: list[Any] = []
+        if review_id:
+            where_parts.append("review_id = ?")
+            params.append(review_id)
+        if user_id:
+            where_parts.append("user_id = ?")
+            params.append(user_id)
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
+        query += " ORDER BY changed_at ASC, rowid ASC LIMIT ? OFFSET ?"
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [{key: row[key] for key in row.keys()} for row in rows]
+
     def delete_review(self, review_id: str) -> None:
         with self._connect() as connection:
             row_count = connection.execute(
@@ -899,6 +1178,46 @@ class SqliteAuthRepository(_SqliteStore):
         if row is None:
             raise KeyError(f"User with email '{email}' not found.")
         return UserRecord.from_dict(_deserialize(row["payload_json"], {}))
+
+    def get_user_by_clerk_user_id(self, clerk_user_id: str) -> UserRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM users WHERE clerk_user_id = ?",
+                (str(clerk_user_id or "").strip(),),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"User with Clerk user id '{clerk_user_id}' not found.")
+        return UserRecord.from_dict(_deserialize(row["payload_json"], {}))
+
+    def get_user_clerk_user_id(self, user_id: str) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT clerk_user_id FROM users WHERE user_id = ?",
+                (str(user_id or "").strip(),),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"User '{user_id}' not found.")
+        return str(row["clerk_user_id"] or "").strip()
+
+    def set_user_clerk_user_id(self, user_id: str, clerk_user_id: str) -> None:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                "UPDATE users SET clerk_user_id = ?, updated_at = ? WHERE user_id = ?",
+                (
+                    str(clerk_user_id or "").strip(),
+                    utc_now_iso(),
+                    str(user_id or "").strip(),
+                ),
+            ).rowcount
+        if row_count == 0:
+            raise KeyError(f"User '{user_id}' not found.")
+
+    def list_user_rows_for_clerk_migration(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT user_id, email, role, is_active, updated_at, clerk_user_id, payload_json FROM users ORDER BY email"
+            ).fetchall()
+        return [{key: row[key] for key in row.keys()} for row in rows]
 
     def upsert_user(self, user: UserRecord) -> None:
         with self._connect() as connection:
@@ -1007,6 +1326,206 @@ class SqliteAuthRepository(_SqliteStore):
             row_count = connection.execute("DELETE FROM api_tokens WHERE token_id = ?", (token_id,)).rowcount
         if row_count == 0:
             raise KeyError(f"API token '{token_id}' not found.")
+
+    def get_subscription(self, subscription_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM subscriptions WHERE subscription_id = ?",
+                (str(subscription_id or "").strip(),),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Subscription '{subscription_id}' not found.")
+        return {key: row[key] for key in row.keys()}
+
+    def get_subscription_by_lemonsqueezy_id(self, lemonsqueezy_subscription_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM subscriptions WHERE lemonsqueezy_subscription_id = ?",
+                (str(lemonsqueezy_subscription_id or "").strip(),),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"LemonSqueezy subscription '{lemonsqueezy_subscription_id}' not found.")
+        return {key: row[key] for key in row.keys()}
+
+    def get_current_subscription_by_user_id(self, user_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                (
+                    "SELECT * FROM subscriptions WHERE user_id = ? "
+                    "ORDER BY "
+                    "CASE WHEN status IN ('active', 'on_trial', 'trialing', 'past_due', 'unpaid', 'paused', 'cancelled') THEN 0 ELSE 1 END, "
+                    "updated_at DESC "
+                    "LIMIT 1"
+                ),
+                (str(user_id or "").strip(),),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"No subscription found for user '{user_id}'.")
+        return {key: row[key] for key in row.keys()}
+
+    def upsert_subscription(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        subscription_id = str(payload.get("subscription_id") or "").strip()
+        if not subscription_id:
+            raise ValueError("subscription_id is required")
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO subscriptions ("
+                    "subscription_id, user_id, plan_id, status, lemonsqueezy_subscription_id, "
+                    "lemonsqueezy_customer_id, lemonsqueezy_order_id, current_period_start, current_period_end, "
+                    "cancelled_at, created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(subscription_id) DO UPDATE SET "
+                    "user_id=excluded.user_id, plan_id=excluded.plan_id, status=excluded.status, "
+                    "lemonsqueezy_subscription_id=excluded.lemonsqueezy_subscription_id, "
+                    "lemonsqueezy_customer_id=excluded.lemonsqueezy_customer_id, "
+                    "lemonsqueezy_order_id=excluded.lemonsqueezy_order_id, "
+                    "current_period_start=excluded.current_period_start, "
+                    "current_period_end=excluded.current_period_end, "
+                    "cancelled_at=excluded.cancelled_at, "
+                    "updated_at=excluded.updated_at"
+                ),
+                (
+                    subscription_id,
+                    str(payload.get("user_id") or "").strip(),
+                    str(payload.get("plan_id") or "free").strip() or "free",
+                    str(payload.get("status") or "active").strip() or "active",
+                    str(payload.get("lemonsqueezy_subscription_id") or "").strip(),
+                    str(payload.get("lemonsqueezy_customer_id") or "").strip(),
+                    str(payload.get("lemonsqueezy_order_id") or "").strip(),
+                    str(payload.get("current_period_start") or "").strip(),
+                    str(payload.get("current_period_end") or "").strip(),
+                    str(payload.get("cancelled_at") or "").strip(),
+                    str(payload.get("created_at") or utc_now_iso()).strip(),
+                    str(payload.get("updated_at") or utc_now_iso()).strip(),
+                ),
+            )
+        return self.get_subscription(subscription_id)
+
+    def cancel_subscriptions_for_user(self, user_id: str, *, cancelled_at: str = "") -> int:
+        normalized_cancelled_at = str(cancelled_at or utc_now_iso()).strip()
+        with self._connect() as connection:
+            row_count = connection.execute(
+                (
+                    "UPDATE subscriptions SET status = 'cancelled', cancelled_at = ?, updated_at = ? "
+                    "WHERE user_id = ? AND status != 'cancelled'"
+                ),
+                (
+                    normalized_cancelled_at,
+                    utc_now_iso(),
+                    str(user_id or "").strip(),
+                ),
+            ).rowcount
+        return int(row_count)
+
+    def insert_subscription_event(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        event_id = str(payload.get("event_id") or "").strip()
+        if not event_id:
+            raise ValueError("event_id is required")
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT OR REPLACE INTO subscription_events ("
+                    "event_id, user_id, event_type, plan_id, previous_plan_id, lemonsqueezy_event_name, occurred_at, payload_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    event_id,
+                    str(payload.get("user_id") or "").strip(),
+                    str(payload.get("event_type") or "").strip(),
+                    str(payload.get("plan_id") or "").strip(),
+                    str(payload.get("previous_plan_id") or "").strip(),
+                    str(payload.get("lemonsqueezy_event_name") or "").strip(),
+                    str(payload.get("occurred_at") or utc_now_iso()).strip(),
+                    _serialize(dict(payload.get("payload_json") or payload.get("payload") or {})),
+                ),
+            )
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM subscription_events WHERE event_id = ?", (event_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Subscription event '{event_id}' not found after insert.")
+        event_payload = {key: row[key] for key in row.keys()}
+        event_payload["payload_json"] = _deserialize(event_payload.get("payload_json"), {})
+        return event_payload
+
+    def get_quota_usage(self, user_id: str, quota_type: str, period: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                (
+                    "SELECT count FROM quota_usage "
+                    "WHERE user_id = ? AND quota_type = ? AND period = ?"
+                ),
+                (
+                    str(user_id or "").strip(),
+                    str(quota_type or "").strip(),
+                    str(period or "").strip(),
+                ),
+            ).fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    def list_quota_usage(self, user_id: str, period: str) -> dict[str, int]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT quota_type, count FROM quota_usage WHERE user_id = ? AND period = ?",
+                (
+                    str(user_id or "").strip(),
+                    str(period or "").strip(),
+                ),
+            ).fetchall()
+        return {str(row["quota_type"]): int(row["count"]) for row in rows}
+
+    def increment_quota_usage(self, user_id: str, quota_type: str, period: str, *, amount: int = 1) -> int:
+        quota_row_id = "::".join(
+            [
+                str(user_id or "").strip(),
+                str(quota_type or "").strip(),
+                str(period or "").strip(),
+            ]
+        )
+        increment_by = max(1, int(amount))
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO quota_usage (id, user_id, quota_type, period, count, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(user_id, quota_type, period) DO UPDATE SET "
+                    "count = quota_usage.count + excluded.count, "
+                    "updated_at = excluded.updated_at"
+                ),
+                (
+                    quota_row_id,
+                    str(user_id or "").strip(),
+                    str(quota_type or "").strip(),
+                    str(period or "").strip(),
+                    increment_by,
+                    utc_now_iso(),
+                ),
+            )
+            row = connection.execute(
+                (
+                    "SELECT count FROM quota_usage "
+                    "WHERE user_id = ? AND quota_type = ? AND period = ?"
+                ),
+                (
+                    str(user_id or "").strip(),
+                    str(quota_type or "").strip(),
+                    str(period or "").strip(),
+                ),
+            ).fetchone()
+        if row is None:
+            raise KeyError("Quota usage row was not found after increment.")
+        return int(row["count"])
+
+    def reset_quota_usage(self, user_id: str, period: str) -> int:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                "DELETE FROM quota_usage WHERE user_id = ? AND period = ?",
+                (
+                    str(user_id or "").strip(),
+                    str(period or "").strip(),
+                ),
+            ).rowcount
+        return int(row_count)
 
 
 class SqliteSecretStore(_SqliteStore):
@@ -1126,3 +1645,147 @@ class SqliteWorkerStore(_SqliteStore):
             row_count = connection.execute("DELETE FROM workers WHERE worker_id = ?", (worker_id,)).rowcount
         if row_count == 0:
             raise KeyError(f"Worker '{worker_id}' not found.")
+
+
+class SqliteAnalyticsStore(_SqliteStore):
+    def emit_event(
+        self,
+        *,
+        event_id: str,
+        event_name: str,
+        occurred_at: str,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        job_id: str = "",
+        review_id: str = "",
+        session_id: str = "",
+        route: str = "",
+        source: str = "",
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO analytics_events ("
+                    "event_id, event_name, occurred_at, user_id, workspace_id, run_id, job_id, "
+                    "review_id, session_id, route, source, payload_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    str(event_id or "").strip(),
+                    str(event_name or "").strip(),
+                    str(occurred_at or utc_now_iso()).strip(),
+                    str(user_id or "").strip(),
+                    str(workspace_id or "").strip(),
+                    str(run_id or "").strip(),
+                    str(job_id or "").strip(),
+                    str(review_id or "").strip(),
+                    str(session_id or "").strip(),
+                    str(route or "").strip(),
+                    str(source or "").strip(),
+                    _serialize(dict(payload or {})),
+                ),
+            )
+
+    def query_rows(self, query: str, params: Iterable[Any] | None = None) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params or ())).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_events(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        event_name: str = "",
+        user_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> list[dict[str, Any]]:
+        filters = []
+        params: list[Any] = []
+        normalized_event_name = str(event_name or "").strip().lower()
+        normalized_user_id = str(user_id or "").strip().lower()
+        normalized_occurred_from = str(occurred_from or "").strip()
+        normalized_occurred_to = str(occurred_to or "").strip()
+
+        if normalized_event_name:
+            filters.append("LOWER(event_name) LIKE ?")
+            params.append(f"%{normalized_event_name}%")
+        if normalized_user_id:
+            filters.append("LOWER(user_id) LIKE ?")
+            params.append(f"%{normalized_user_id}%")
+        if normalized_occurred_from:
+            filters.append("occurred_at >= ?")
+            params.append(normalized_occurred_from)
+        if normalized_occurred_to:
+            filters.append("occurred_at < ?")
+            params.append(normalized_occurred_to)
+
+        where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
+        query = (
+            "SELECT event_id, event_name, occurred_at, user_id, workspace_id, run_id, job_id, "
+            "review_id, session_id, route, source, payload_json "
+            f"FROM analytics_events{where_clause} "
+            "ORDER BY occurred_at DESC, event_id DESC "
+            "LIMIT ? OFFSET ?"
+        )
+        params.extend([int(limit), int(offset)])
+
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+
+        return [
+            {
+                "event_id": str(row["event_id"] or ""),
+                "event_name": str(row["event_name"] or ""),
+                "occurred_at": str(row["occurred_at"] or ""),
+                "user_id": str(row["user_id"] or ""),
+                "workspace_id": str(row["workspace_id"] or ""),
+                "run_id": str(row["run_id"] or ""),
+                "job_id": str(row["job_id"] or ""),
+                "review_id": str(row["review_id"] or ""),
+                "session_id": str(row["session_id"] or ""),
+                "route": str(row["route"] or ""),
+                "source": str(row["source"] or ""),
+                "payload": _deserialize(row["payload_json"], {}),
+            }
+            for row in rows
+        ]
+
+    def count_events(
+        self,
+        *,
+        event_name: str = "",
+        user_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> int:
+        filters = []
+        params: list[Any] = []
+        normalized_event_name = str(event_name or "").strip().lower()
+        normalized_user_id = str(user_id or "").strip().lower()
+        normalized_occurred_from = str(occurred_from or "").strip()
+        normalized_occurred_to = str(occurred_to or "").strip()
+
+        if normalized_event_name:
+            filters.append("LOWER(event_name) LIKE ?")
+            params.append(f"%{normalized_event_name}%")
+        if normalized_user_id:
+            filters.append("LOWER(user_id) LIKE ?")
+            params.append(f"%{normalized_user_id}%")
+        if normalized_occurred_from:
+            filters.append("occurred_at >= ?")
+            params.append(normalized_occurred_from)
+        if normalized_occurred_to:
+            filters.append("occurred_at < ?")
+            params.append(normalized_occurred_to)
+
+        where_clause = f" WHERE {' AND '.join(filters)}" if filters else ""
+        query = f"SELECT COUNT(*) AS total FROM analytics_events{where_clause}"
+
+        with self._connect() as connection:
+            row = connection.execute(query, tuple(params)).fetchone()
+
+        return int(row["total"] if row else 0)

@@ -2,8 +2,9 @@ import { labelize } from "./formatters";
 
 const STORAGE_KEYS = {
   baseUrl: "runr.api.baseUrl",
-  accessToken: "runr.api.accessToken",
 };
+
+export const QUOTA_EXCEEDED_EVENT = "runr:quota-exceeded";
 
 export function getDefaultApiBaseUrl() {
   return String(import.meta.env.VITE_API_BASE_URL || "/v1").replace(/\/$/, "");
@@ -11,21 +12,21 @@ export function getDefaultApiBaseUrl() {
 
 export function loadStoredConnection() {
   const storedBaseUrl = window.localStorage.getItem(STORAGE_KEYS.baseUrl) || "";
-  const storedAccessToken = window.localStorage.getItem(STORAGE_KEYS.accessToken) || "";
   return {
     baseUrl: storedBaseUrl || getDefaultApiBaseUrl(),
-    accessToken: storedAccessToken || String(import.meta.env.VITE_RUNR_ACCESS_TOKEN || "").trim(),
+    accessToken: "",
   };
 }
 
-export function persistConnection({ baseUrl, accessToken }) {
-  window.localStorage.setItem(STORAGE_KEYS.baseUrl, String(baseUrl || "").trim() || getDefaultApiBaseUrl());
-  window.localStorage.setItem(STORAGE_KEYS.accessToken, String(accessToken || "").trim());
+export function persistConnection({ baseUrl }) {
+  window.localStorage.setItem(
+    STORAGE_KEYS.baseUrl,
+    String(baseUrl || "").trim() || getDefaultApiBaseUrl(),
+  );
 }
 
 export function clearStoredConnection() {
   window.localStorage.removeItem(STORAGE_KEYS.baseUrl);
-  window.localStorage.removeItem(STORAGE_KEYS.accessToken);
 }
 
 export function resolveApiUrl(baseUrl, path) {
@@ -53,6 +54,49 @@ function parseJsonText(text) {
   } catch {
     return null;
   }
+}
+
+function normalizeResponseErrorPayload(payload, fallbackMessage) {
+  if (!payload || typeof payload !== "object") {
+    return {
+      message: fallbackMessage,
+      code: "",
+      details: null,
+    };
+  }
+  if (typeof payload.error === "string") {
+    return {
+      message: String(payload.message || payload.error || fallbackMessage),
+      code: String(payload.error || "").trim(),
+      details: payload,
+    };
+  }
+  if (payload.error && typeof payload.error === "object") {
+    return {
+      message: String(payload.error.message || fallbackMessage),
+      code: String(payload.error.code || "").trim(),
+      details: payload.error.details || null,
+    };
+  }
+  return {
+    message: fallbackMessage,
+    code: "",
+    details: payload.details || null,
+  };
+}
+
+async function resolveAccessToken(accessTokenOrResolver) {
+  if (typeof accessTokenOrResolver === "function") {
+    return String(await accessTokenOrResolver()).trim();
+  }
+  return String(await Promise.resolve(accessTokenOrResolver || "")).trim();
+}
+
+function emitQuotaExceeded(detail) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(QUOTA_EXCEEDED_EVENT, { detail }));
 }
 
 export function getApiErrorMessage(error, fallbackMessage = "Request failed.") {
@@ -138,13 +182,41 @@ export function getApiErrorDetails(error) {
     .filter(Boolean);
 }
 
-export async function apiRequest(baseUrl, accessToken, path, options = {}) {
-  const { method = "GET", body, headers = {}, responseType = "json" } = options;
+function buildApiError(response, payload, fallbackText) {
+  const normalized = normalizeResponseErrorPayload(
+    payload,
+    fallbackText || `${response.status} ${response.statusText}`,
+  );
+  const error = new Error(normalized.message);
+  error.status = response.status;
+  error.code = normalized.code;
+  error.details = normalized.details;
+  error.payload = payload;
+  if (response.status === 402 && payload?.error === "quota_exceeded") {
+    emitQuotaExceeded({
+      quota_type: String(payload.quota_type || "").trim(),
+      used: Number(payload.used || 0),
+      limit: Number(payload.limit || 0),
+      plan_id: String(payload.plan_id || "").trim(),
+      upgrade_url: String(payload.upgrade_url || "/pricing").trim() || "/pricing",
+    });
+  }
+  return error;
+}
+
+export async function apiRequest(baseUrl, accessTokenOrResolver, path, options = {}) {
+  const {
+    method = "GET",
+    body,
+    headers = {},
+    responseType = "json",
+  } = options;
+  const resolvedAccessToken = await resolveAccessToken(accessTokenOrResolver);
   const requestHeaders = {
     ...headers,
   };
-  if (accessToken) {
-    requestHeaders.Authorization = `Bearer ${accessToken}`;
+  if (resolvedAccessToken) {
+    requestHeaders.Authorization = `Bearer ${resolvedAccessToken}`;
   }
   let requestBody = body;
   if (body !== undefined && body !== null && !(body instanceof FormData) && responseType !== "blob") {
@@ -158,38 +230,16 @@ export async function apiRequest(baseUrl, accessToken, path, options = {}) {
   });
   if (responseType === "blob") {
     if (!response.ok) {
-      let message = `${response.status} ${response.statusText}`;
-      let details = null;
-      let code = "";
-      let payload = null;
-      try {
-        payload = await response.json();
-        message = payload?.error?.message || message;
-        code = payload?.error?.code || "";
-        details = payload?.error?.details || null;
-      } catch {
-        // ignore blob/json parsing errors on download failures
-      }
-      const error = new Error(message);
-      error.status = response.status;
-      error.code = code;
-      error.details = details;
-      error.payload = payload;
-      throw error;
+      const text = await response.text();
+      const payload = parseJsonText(text);
+      throw buildApiError(response, payload, text);
     }
     return response.blob();
   }
   const text = await response.text();
   const payload = parseJsonText(text);
   if (!response.ok) {
-    const error = new Error(
-      payload?.error?.message || text || `${response.status} ${response.statusText}`,
-    );
-    error.status = response.status;
-    error.code = payload?.error?.code || "";
-    error.details = payload?.error?.details || null;
-    error.payload = payload;
-    throw error;
+    throw buildApiError(response, payload, text);
   }
   return payload || {};
 }

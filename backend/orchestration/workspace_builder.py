@@ -32,8 +32,10 @@ from backend.domain.phase0_contracts import (
     PERSONALIZATION_SCOPE_BASELINE,
     PERSONALIZATION_SCOPE_FULL,
     PERSONALIZATION_SCOPE_SELECTED,
+    WORK_ARRANGEMENT_VALUES,
     normalize_job_filtering_mode,
     normalize_personalization_scope,
+    normalize_work_arrangement,
     normalize_workspace_configuration_v2,
 )
 from backend.domain.models import JobSource, ProfileRef, PromptSetRef, StageDefinition, WorkflowTemplate, WorkspaceDefinition
@@ -101,6 +103,18 @@ COUNTRY_TO_SOURCE_CITIES = {
 }
 
 COUNTRY_LABEL_BY_CODE = {item["value"]: item["label"] for item in COUNTRY_OPTIONS}
+WORK_ARRANGEMENT_OPTIONS = [
+    {
+        "value": option,
+        "label": {
+            "remote": "Remote",
+            "hybrid": "Hybrid",
+            "onsite": "On-site",
+            "any": "Any arrangement",
+        }[option],
+    }
+    for option in WORK_ARRANGEMENT_VALUES
+]
 
 PORTAL_OPTION_DEFINITIONS = [
     {
@@ -196,6 +210,8 @@ USER_FACING_FIELD_IDS = {
     "cv_generation_mode",
     "personalization_scope",
     "keywords",
+    "work_arrangement",
+    "industry",
     "country_codes",
     "cities",
     "target_roles",
@@ -235,6 +251,8 @@ FIELD_SECTION_BY_ID = {
     "cv_generation_mode": "advanced",
     "personalization_scope": "documents",
     "keywords": "targeting",
+    "work_arrangement": "targeting",
+    "industry": "targeting",
     "country_codes": "targeting",
     "cities": "targeting",
     "target_roles": "targeting",
@@ -275,8 +293,10 @@ FIELD_SORT_ORDER = {
     "personalization_scope": 155,
     "keywords": 20,
     "target_roles": 25,
-    "country_codes": 30,
-    "cities": 32,
+    "work_arrangement": 30,
+    "industry": 31,
+    "country_codes": 32,
+    "cities": 34,
     "job_filtering_mode": 35,
     "time_posted_seconds": 40,
     "experience_levels": 50,
@@ -453,6 +473,23 @@ def _configuration_fields() -> list[dict]:
                 {"value": "Frontend Engineer", "label": "Frontend Engineer"},
                 {"value": "Data Analyst", "label": "Data Analyst"},
             ],
+        },
+        {
+            "id": "work_arrangement",
+            "label": "Work Arrangement",
+            "description": "Prefer remote, hybrid, on-site, or accept any work arrangement.",
+            "type": "select",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "options": list(WORK_ARRANGEMENT_OPTIONS),
+            "default": "any",
+        },
+        {
+            "id": "industry",
+            "label": "Industry",
+            "description": "Optional industry focus for this workspace, such as fintech, healthcare, or e-commerce.",
+            "type": "text",
+            "compatible_flows": [FLOW_TAILORED_DOCUMENTS],
+            "placeholder": "Fintech",
         },
         {
             "id": "job_filtering_mode",
@@ -1541,6 +1578,8 @@ def _normalize_setting_value(field_definition: dict, raw_value: "Any") -> "Any":
     field_type = str(field_definition.get("type") or "").strip()
     if field_definition.get("id") == "country_codes":
         return _normalize_country_codes(raw_value)
+    if field_definition.get("id") == "work_arrangement":
+        return normalize_work_arrangement(raw_value)
     if field_type == "tag_list":
         return _normalize_tag_list(raw_value)
     if field_type == "multi_select":

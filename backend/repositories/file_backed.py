@@ -23,6 +23,8 @@ from backend.domain.models import (
 from backend.orchestration.seeded_workspaces import DEFAULT_WORKFLOW_TEMPLATES, DEFAULT_WORKSPACES
 from backend.security.auth import API_TOKEN_PREFIX_LENGTH
 
+_APPLICATION_STATUS_HISTORY_SOURCES = {"manual", "gmail_sync", "auto_default"}
+
 
 def _read_json(path: Path, default: Any):
     if not path.exists():
@@ -260,13 +262,58 @@ class FileReviewStore:
         self.base_dir = Path(base_dir)
         self.reviews_dir = self.base_dir / "reviews"
         self.reviews_dir.mkdir(parents=True, exist_ok=True)
+        self.status_history_path = self.base_dir / "application_status_history.json"
 
     def _review_path(self, review_id: str) -> Path:
         return self.reviews_dir / f"{review_id}.json"
 
-    def upsert_review(self, review: ReviewRecord) -> None:
+    def _normalize_application_status_history_entry(
+        self,
+        *,
+        review_id: Any,
+        user_id: Any,
+        from_status: Any,
+        to_status: Any,
+        changed_at: Any = "",
+        source: Any = "manual",
+    ) -> dict[str, str]:
+        normalized_review_id = str(review_id or "").strip()
+        if not normalized_review_id:
+            raise ValueError("review_id is required for application status history.")
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            raise ValueError("user_id is required for application status history.")
+        normalized_source = str(source or "manual").strip() or "manual"
+        if normalized_source not in _APPLICATION_STATUS_HISTORY_SOURCES:
+            raise ValueError(
+                f"source must be one of: {sorted(_APPLICATION_STATUS_HISTORY_SOURCES)}"
+            )
+        return {
+            "review_id": normalized_review_id,
+            "user_id": normalized_user_id,
+            "from_status": str(from_status or "").strip(),
+            "to_status": str(to_status or "").strip(),
+            "changed_at": str(changed_at or utc_now_iso()).strip(),
+            "source": normalized_source,
+        }
+
+    def upsert_review(
+        self,
+        review: ReviewRecord,
+        *,
+        application_status_history: dict[str, Any] | None = None,
+    ) -> None:
         review.updated_at = utc_now_iso()
         _write_json(self._review_path(review.review_id), review.to_dict())
+        if application_status_history is not None:
+            self.append_application_status_history(
+                review_id=application_status_history.get("review_id") or review.review_id,
+                user_id=application_status_history.get("user_id"),
+                from_status=application_status_history.get("from_status"),
+                to_status=application_status_history.get("to_status"),
+                changed_at=application_status_history.get("changed_at") or review.updated_at,
+                source=application_status_history.get("source") or "manual",
+            )
 
     def get_review(self, review_id: str) -> ReviewRecord:
         payload = _read_json(self._review_path(review_id), {})
@@ -288,6 +335,51 @@ class FileReviewStore:
         if job_id:
             reviews = [review for review in reviews if review.job_id == job_id]
         return reviews[: max(1, int(limit))]
+
+    def append_application_status_history(
+        self,
+        *,
+        review_id: str,
+        user_id: str,
+        from_status: str,
+        to_status: str,
+        changed_at: str = "",
+        source: str = "manual",
+    ) -> None:
+        entry = self._normalize_application_status_history_entry(
+            review_id=review_id,
+            user_id=user_id,
+            from_status=from_status,
+            to_status=to_status,
+            changed_at=changed_at,
+            source=source,
+        )
+        history = _read_json(self.status_history_path, [])
+        if not isinstance(history, list):
+            history = []
+        history.append(entry)
+        _write_json(self.status_history_path, history)
+
+    def list_application_status_history(
+        self,
+        *,
+        review_id: str = "",
+        user_id: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        history = _read_json(self.status_history_path, [])
+        if not isinstance(history, list):
+            return []
+        rows = [item for item in history if isinstance(item, dict)]
+        if review_id:
+            rows = [item for item in rows if str(item.get("review_id") or "") == review_id]
+        if user_id:
+            rows = [item for item in rows if str(item.get("user_id") or "") == user_id]
+        rows.sort(key=lambda item: (str(item.get("changed_at") or ""), str(item.get("review_id") or "")))
+        normalized_offset = max(0, int(offset))
+        normalized_limit = max(1, int(limit))
+        return rows[normalized_offset : normalized_offset + normalized_limit]
 
     def delete_review(self, review_id: str) -> None:
         path = self._review_path(review_id)
@@ -454,6 +546,131 @@ class FileWorkerStore:
         _write_json(self.workers_path, [item.to_dict() for item in workers.values()])
 
 
+class FileAnalyticsStore:
+    def __init__(self, base_dir: Path):
+        self.base_dir = Path(base_dir)
+        self.events_path = self.base_dir / "analytics_events.json"
+        if not self.events_path.exists():
+            _write_json(self.events_path, [])
+
+    def emit_event(
+        self,
+        *,
+        event_id: str,
+        event_name: str,
+        occurred_at: str,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        job_id: str = "",
+        review_id: str = "",
+        session_id: str = "",
+        route: str = "",
+        source: str = "",
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        events = _read_json(self.events_path, [])
+        if not isinstance(events, list):
+            events = []
+        events.append(
+            {
+                "event_id": str(event_id or "").strip(),
+                "event_name": str(event_name or "").strip(),
+                "occurred_at": str(occurred_at or utc_now_iso()).strip(),
+                "user_id": str(user_id or "").strip(),
+                "workspace_id": str(workspace_id or "").strip(),
+                "run_id": str(run_id or "").strip(),
+                "job_id": str(job_id or "").strip(),
+                "review_id": str(review_id or "").strip(),
+                "session_id": str(session_id or "").strip(),
+                "route": str(route or "").strip(),
+                "source": str(source or "").strip(),
+                "payload_json": dict(payload or {}),
+            }
+        )
+        _write_json(self.events_path, events)
+
+    def query_rows(self, query: str, params: Iterable[Any] | None = None) -> list[dict[str, Any]]:
+        raise NotImplementedError("Analytics SQL queries require the sqlite storage backend.")
+
+    def list_events(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        event_name: str = "",
+        user_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> list[dict[str, Any]]:
+        normalized_event_name = str(event_name or "").strip().lower()
+        normalized_user_id = str(user_id or "").strip().lower()
+        normalized_occurred_from = str(occurred_from or "").strip()
+        normalized_occurred_to = str(occurred_to or "").strip()
+        events = _read_json(self.events_path, [])
+        if not isinstance(events, list):
+            events = []
+
+        filtered_events = []
+        for item in events:
+            if not isinstance(item, dict):
+                continue
+            occurred_at = str(item.get("occurred_at") or "").strip()
+            item_event_name = str(item.get("event_name") or "").strip().lower()
+            item_user_id = str(item.get("user_id") or "").strip().lower()
+            if normalized_event_name and normalized_event_name not in item_event_name:
+                continue
+            if normalized_user_id and normalized_user_id not in item_user_id:
+                continue
+            if normalized_occurred_from and occurred_at < normalized_occurred_from:
+                continue
+            if normalized_occurred_to and occurred_at >= normalized_occurred_to:
+                continue
+            filtered_events.append(
+                {
+                    "event_id": str(item.get("event_id") or ""),
+                    "event_name": str(item.get("event_name") or ""),
+                    "occurred_at": occurred_at,
+                    "user_id": str(item.get("user_id") or ""),
+                    "workspace_id": str(item.get("workspace_id") or ""),
+                    "run_id": str(item.get("run_id") or ""),
+                    "job_id": str(item.get("job_id") or ""),
+                    "review_id": str(item.get("review_id") or ""),
+                    "session_id": str(item.get("session_id") or ""),
+                    "route": str(item.get("route") or ""),
+                    "source": str(item.get("source") or ""),
+                    "payload": dict(item.get("payload_json") or {}),
+                }
+            )
+
+        filtered_events.sort(
+            key=lambda entry: (str(entry.get("occurred_at") or ""), str(entry.get("event_id") or "")),
+            reverse=True,
+        )
+        start = max(0, int(offset))
+        stop = start + max(0, int(limit))
+        return filtered_events[start:stop]
+
+    def count_events(
+        self,
+        *,
+        event_name: str = "",
+        user_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> int:
+        return len(
+            self.list_events(
+                limit=10_000_000,
+                offset=0,
+                event_name=event_name,
+                user_id=user_id,
+                occurred_from=occurred_from,
+                occurred_to=occurred_to,
+            )
+        )
+
+
 @dataclass(slots=True)
 class BackendRepositories:
     workspace_repository: Any
@@ -464,3 +681,4 @@ class BackendRepositories:
     auth_repository: Any
     secret_store: Any
     worker_store: Any
+    analytics_store: Any

@@ -1,198 +1,366 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
+import {
+  Bar,
+  BarChart,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { useSession } from "../context/SessionContext";
+import { useApiResource } from "../hooks/useApiResource";
+import { formatDateTime, labelize } from "../lib/formatters";
 
-const DASHBOARD_ANALYTICS_PREVIEW = {
-  periodLabel: "Last 12 weeks",
-  appliedJobs: 154,
-  activePipeline: 36,
-  interviewsAndOffers: 37,
-  acceptanceRate: 24,
-  rejectionRate: 47,
-  averageReplyDays: 6.2,
-  last30DaysApplied: 42,
-  momentum: [
-    { label: "Feb", applications: 8, interviews: 1 },
-    { label: "Mar", applications: 11, interviews: 2 },
-    { label: "Apr", applications: 13, interviews: 3 },
-    { label: "May", applications: 15, interviews: 4 },
-    { label: "Jun", applications: 12, interviews: 3 },
-    { label: "Jul", applications: 14, interviews: 4 },
-    { label: "Aug", applications: 18, interviews: 5 },
-    { label: "Sep", applications: 16, interviews: 4 },
-    { label: "Oct", applications: 12, interviews: 3 },
-    { label: "Nov", applications: 14, interviews: 3 },
-    { label: "Dec", applications: 10, interviews: 2 },
-    { label: "Jan", applications: 11, interviews: 3 },
-  ],
-  outcomes: [
-    { label: "Accepted / progressing", value: 37, color: "#14b8a6" },
-    { label: "Rejected", value: 72, color: "#f97316" },
-    { label: "Awaiting reply", value: 36, color: "#38bdf8" },
-    { label: "Withdrawn", value: 9, color: "#94a3b8" },
-  ],
-  funnel: [
-    { label: "Jobs sourced", value: 462, color: "#0f766e" },
-    { label: "Shortlisted", value: 244, color: "#14b8a6" },
-    { label: "Applied", value: 154, color: "#38bdf8" },
-    { label: "Interviewing", value: 31, color: "#f59e0b" },
-    { label: "Offers", value: 6, color: "#22c55e" },
-  ],
-  dataSources: ["Tracker status", "Review decisions", "Job descriptions", "CV skill artifacts"],
-  roles: [
-    {
-      role: "Product Analyst",
-      focus: "Best-converting lane right now",
-      color: "#14b8a6",
-      applications: 52,
-      positive: 15,
-      pending: 17,
-      rejected: 20,
-      skills: [
-        { name: "SQL", count: 32 },
-        { name: "A/B Testing", count: 26 },
-        { name: "Tableau", count: 23 },
-        { name: "Python", count: 18 },
-        { name: "Stakeholder Management", count: 15 },
-      ],
-    },
-    {
-      role: "Growth Analyst",
-      focus: "Good volume, needs tighter targeting",
-      color: "#38bdf8",
-      applications: 48,
-      positive: 11,
-      pending: 10,
-      rejected: 27,
-      skills: [
-        { name: "SQL", count: 29 },
-        { name: "Experimentation", count: 24 },
-        { name: "GA4", count: 20 },
-        { name: "Looker", count: 17 },
-        { name: "Attribution", count: 14 },
-      ],
-    },
-    {
-      role: "Revenue Operations Analyst",
-      focus: "Lowest yield, strongest tooling demand",
-      color: "#f59e0b",
-      applications: 54,
-      positive: 11,
-      pending: 9,
-      rejected: 34,
-      skills: [
-        { name: "Salesforce", count: 27 },
-        { name: "Excel", count: 24 },
-        { name: "SQL", count: 21 },
-        { name: "Forecasting", count: 18 },
-        { name: "HubSpot", count: 13 },
-      ],
-    },
-  ],
-  cardTrends: {
-    appliedJobs: [10, 12, 14, 11, 17, 18, 20],
-    activePipeline: [24, 27, 25, 29, 31, 34, 36],
-    interviewsAndOffers: [2, 3, 4, 4, 5, 6, 7],
-    averageReplyDays: [9, 8, 8, 7, 7, 6, 6],
-  },
+const APPLICATION_OUTCOME_SEGMENTS = [
+  { label: "Applied", color: "#38bdf8" },
+  { label: "Interviewing", color: "#f59e0b" },
+  { label: "Offer", color: "#22c55e" },
+  { label: "Rejected", color: "#f97316" },
+  { label: "Withdrawn", color: "#94a3b8" },
+];
+
+const SOURCE_KIND_COLORS = ["#0f766e", "#14b8a6", "#38bdf8", "#f59e0b", "#f97316"];
+const ACTIVE_RUN_STATUSES = new Set(["planned", "queued", "running", "cancel_requested"]);
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const REFERRAL_STAGE_INDEX = {
+  "Not contacted": 0,
+  Contacted: 1,
+  Replied: 2,
+  "Referral offered": 3,
+  "No referral": 2,
 };
 
+function buildApiPath(path, params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      return;
+    }
+    query.set(key, String(value));
+  });
+  const queryString = query.toString();
+  return queryString ? `${path}?${queryString}` : path;
+}
+
+async function loadPaginatedCollection(request, path, collectionKey, { limit = 500, params = {} } = {}) {
+  const items = [];
+  let offset = 0;
+
+  while (true) {
+    const payload = await request(buildApiPath(path, { ...params, limit, offset }));
+    const page = Array.isArray(payload?.[collectionKey]) ? payload[collectionKey] : [];
+    const returned = Number(payload?.meta?.returned ?? page.length);
+
+    items.push(...page);
+
+    if (!page.length || returned < limit) {
+      break;
+    }
+    offset += returned;
+  }
+
+  return items;
+}
+
+async function loadDashboardPayload(request) {
+  return request("/dashboard");
+}
+
+function getNumericValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
 function formatNumber(value) {
-  return new Intl.NumberFormat("en-US").format(value);
+  return new Intl.NumberFormat("en-US").format(Number(value || 0));
 }
 
-function formatPercent(value) {
-  return `${Math.round(value)}%`;
+function formatPercent(ratio, digits = 0) {
+  return new Intl.NumberFormat("en-US", {
+    style: "percent",
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+  }).format(Number.isFinite(ratio) ? ratio : 0);
 }
 
-function formatDays(value) {
-  return `${value.toFixed(1)}d`;
+function formatDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return "N/A";
+  }
+  const totalMinutes = Math.round(durationMs / 60000);
+  if (totalMinutes < 1) {
+    return `${Math.max(1, Math.round(durationMs / 1000))}s`;
+  }
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
-function getPositiveRate(role) {
-  if (!role.applications) {
+function formatChartTooltipValue(value) {
+  return formatNumber(value);
+}
+
+function parseTimestamp(value) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function average(values) {
+  if (!values.length) {
     return 0;
   }
-  return (role.positive / role.applications) * 100;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function aggregateSkillDemand(roles) {
-  const totals = new Map();
-  for (const role of roles) {
-    for (const skill of role.skills) {
-      totals.set(skill.name, (totals.get(skill.name) || 0) + skill.count);
+function getRunDurationMs(run) {
+  const start =
+    parseTimestamp(run?.started_at)
+    ?? parseTimestamp(run?.queued_at)
+    ?? parseTimestamp(run?.created_at);
+  const end = parseTimestamp(run?.finished_at);
+  if (start === null || end === null || end <= start) {
+    return null;
+  }
+  return end - start;
+}
+
+function getFailedStageResult(run) {
+  const stageResults = Array.isArray(run?.stage_results) ? run.stage_results : [];
+  return [...stageResults].reverse().find((result) => String(result?.status || "").trim().toLowerCase() === "failed") || null;
+}
+
+function getFailureStageKey(run) {
+  const failedStage = getFailedStageResult(run);
+  return String(failedStage?.stage_id || run?.current_stage_id || "unknown").trim() || "unknown";
+}
+
+function getFailureMessage(run) {
+  const failedStage = getFailedStageResult(run);
+  return (
+    String(failedStage?.error || run?.last_error || "").trim()
+    || "Run failed without a saved error message."
+  );
+}
+
+function isSourceStage(stageId) {
+  return stageId.startsWith("source_") || stageId === "source_search";
+}
+
+function isMergeStage(stageId) {
+  return stageId.includes("merge");
+}
+
+function isScreenStage(stageId) {
+  return stageId.includes("screen");
+}
+
+function isApprovalStage(stageId) {
+  return stageId.includes("prioritize");
+}
+
+function isApplyStage(stageId) {
+  return stageId.includes("generate") || stageId.includes("package");
+}
+
+function deriveRunPipeline(run) {
+  const stageResults = Array.isArray(run?.stage_results) ? run.stage_results : [];
+  let discoveredFromSources = 0;
+  let discoveredFromMerge = 0;
+  let screened = 0;
+  let screenApproved = 0;
+  let approved = 0;
+  let applied = 0;
+
+  stageResults.forEach((result) => {
+    const stageId = String(result?.stage_id || "").trim();
+    const metrics = result?.metrics || {};
+    const jobsFound = getNumericValue(metrics.jobs_found);
+    const jobsIngested = getNumericValue(metrics.jobs_ingested);
+    const mergedJobs = getNumericValue(metrics.merged_jobs);
+    const approvedJobs = getNumericValue(metrics.approved);
+    const rejectedJobs = getNumericValue(metrics.rejected);
+    const generatedJobs = getNumericValue(metrics.generated_jobs);
+    const packagedJobs = getNumericValue(metrics.packaged_jobs);
+
+    if (isSourceStage(stageId)) {
+      discoveredFromSources += jobsFound + jobsIngested;
     }
-  }
-  return Array.from(totals.entries())
-    .map(([name, count]) => ({ name, count }))
-    .sort((left, right) => right.count - left.count);
-}
-
-function buildChartPoints(values, width, height, padding) {
-  const maxValue = Math.max(...values, 1);
-  const innerWidth = width - padding * 2;
-  const innerHeight = height - padding * 2;
-
-  return values.map((value, index) => {
-    const x =
-      values.length === 1 ? width / 2 : padding + (index * innerWidth) / Math.max(values.length - 1, 1);
-    const y = height - padding - (value / maxValue) * innerHeight;
-    return { x, y, value };
+    if (isMergeStage(stageId)) {
+      discoveredFromMerge = Math.max(discoveredFromMerge, mergedJobs);
+    }
+    if (isScreenStage(stageId)) {
+      screenApproved += approvedJobs;
+      screened += approvedJobs + rejectedJobs || approvedJobs;
+    }
+    if (isApprovalStage(stageId)) {
+      approved += approvedJobs;
+    }
+    if (isApplyStage(stageId)) {
+      applied += generatedJobs + packagedJobs;
+    }
   });
-}
-
-function buildLinePath(points) {
-  return points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
-}
-
-function buildAreaPath(points, height, padding) {
-  if (!points.length) {
-    return "";
-  }
-  return [
-    buildLinePath(points),
-    `L ${points[points.length - 1].x} ${height - padding}`,
-    `L ${points[0].x} ${height - padding}`,
-    "Z",
-  ].join(" ");
-}
-
-function buildExecutiveSummary(data) {
-  const rankedRoles = [...data.roles].sort((left, right) => getPositiveRate(right) - getPositiveRate(left));
-  const bestRole = rankedRoles[0];
-  const weakestRole = rankedRoles[rankedRoles.length - 1];
-  const skillDemand = aggregateSkillDemand(data.roles);
-  const topSkill = skillDemand[0];
-  const secondSkill = skillDemand[1];
-  const awaitingReply = data.outcomes.find((segment) => segment.label === "Awaiting reply")?.value || 0;
 
   return {
-    headline: `${bestRole.role} is the clearest lane to double down on.`,
-    body: `${formatPercent(getPositiveRate(bestRole))} of applications in this lane are moving forward, and ${topSkill.name} is the most repeated skill signal across your target roles.`,
-    actions: [
-      {
-        icon: "trending_up",
-        title: `Increase volume on ${bestRole.role}`,
-        detail: `It is returning ${bestRole.positive} positive signals from ${bestRole.applications} tracked applications.`,
-      },
-      {
-        icon: "auto_awesome",
-        title: `Push ${topSkill.name} and ${secondSkill.name} higher in your CV`,
-        detail: "They appear most often in job descriptions and should be visible in your headline, skills block, and first experience bullets.",
-      },
-      {
-        icon: "filter_alt",
-        title: `Tighten targeting for ${weakestRole.role}`,
-        detail: `${weakestRole.rejected} rejections suggest this lane needs better filtering or deeper tailoring before more volume goes out.`,
-      },
-      {
-        icon: "mail",
-        title: "Follow up on slow-moving applications",
-        detail: `${awaitingReply} applications are still in play, which is enough volume to justify a follow-up pass on older submissions.`,
-      },
-    ],
+    discovered: discoveredFromMerge || discoveredFromSources,
+    screened,
+    approved: approved || screenApproved,
+    applied,
   };
 }
 
-function AnalyticsCard({ children, className = "" }) {
+function buildDashboardViewModel({ runs, trackerItems, contacts, outreachItems, recentFailedRuns }) {
+  const terminalRuns = runs.filter((run) => TERMINAL_RUN_STATUSES.has(String(run?.status || "").trim()));
+  const completedRuns = terminalRuns.filter((run) => String(run?.status || "").trim() === "completed");
+  const failedRuns = runs.filter((run) => String(run?.status || "").trim() === "failed");
+  const activeRuns = runs.filter((run) => ACTIVE_RUN_STATUSES.has(String(run?.status || "").trim()));
+  const runDurations = terminalRuns.map(getRunDurationMs).filter((value) => value !== null);
+
+  const failureBreakdownMap = new Map();
+  failedRuns.forEach((run) => {
+    const key = labelize(getFailureStageKey(run));
+    failureBreakdownMap.set(key, (failureBreakdownMap.get(key) || 0) + 1);
+  });
+  const failureBreakdown = Array.from(failureBreakdownMap.entries())
+    .map(([stage, count]) => ({ stage, count }))
+    .sort((left, right) => right.count - left.count);
+
+  const aggregatedPipeline = runs.reduce(
+    (summary, run) => {
+      const pipeline = deriveRunPipeline(run);
+      return {
+        discovered: summary.discovered + pipeline.discovered,
+        screened: summary.screened + pipeline.screened,
+        approved: summary.approved + pipeline.approved,
+        applied: summary.applied + pipeline.applied,
+      };
+    },
+    { discovered: 0, screened: 0, approved: 0, applied: 0 },
+  );
+  const pipelineData = [
+    { label: "Discovered", value: aggregatedPipeline.discovered, color: "#0f766e" },
+    { label: "Screened", value: aggregatedPipeline.screened, color: "#14b8a6" },
+    { label: "Approved", value: aggregatedPipeline.approved, color: "#38bdf8" },
+    { label: "Applied", value: aggregatedPipeline.applied, color: "#f59e0b" },
+  ];
+
+  const applicationStatusMap = new Map();
+  trackerItems.forEach((item) => {
+    const status = String(item?.application_status || "").trim() || "Unknown";
+    applicationStatusMap.set(status, (applicationStatusMap.get(status) || 0) + 1);
+  });
+  const applicationOutcomes = APPLICATION_OUTCOME_SEGMENTS.map((segment) => ({
+    ...segment,
+    value: applicationStatusMap.get(segment.label) || 0,
+  }));
+
+  const sourceKindMap = new Map();
+  contacts.forEach((contact) => {
+    const sourceKind = labelize(String(contact?.source_kind || "manual").trim() || "manual");
+    sourceKindMap.set(sourceKind, (sourceKindMap.get(sourceKind) || 0) + 1);
+  });
+  const contactSources = Array.from(sourceKindMap.entries())
+    .map(([label, value], index) => ({
+      label,
+      value,
+      color: SOURCE_KIND_COLORS[index % SOURCE_KIND_COLORS.length],
+    }))
+    .sort((left, right) => right.value - left.value);
+
+  const highestReferralStageByContact = new Map();
+  const noReferralContacts = new Set();
+  contacts.forEach((contact) => {
+    highestReferralStageByContact.set(String(contact?.contact_id || "").trim(), 0);
+  });
+  outreachItems.forEach((item) => {
+    const contactId = String(item?.contact_id || "").trim();
+    if (!contactId || !highestReferralStageByContact.has(contactId)) {
+      return;
+    }
+    const stageIndex = REFERRAL_STAGE_INDEX[String(item?.outreach_status || "").trim()] ?? 0;
+    if (String(item?.outreach_status || "").trim() === "No referral") {
+      noReferralContacts.add(contactId);
+    }
+    const currentStage = highestReferralStageByContact.get(contactId) || 0;
+    if (stageIndex > currentStage) {
+      highestReferralStageByContact.set(contactId, stageIndex);
+    }
+  });
+
+  const contactStageIndexes = Array.from(highestReferralStageByContact.values());
+  const noReferralCount = noReferralContacts.size;
+  const outreachFunnel = [
+    {
+      label: "Not contacted",
+      value: contactStageIndexes.filter((stageIndex) => stageIndex === 0).length,
+      color: "#94a3b8",
+    },
+    {
+      label: "Contacted",
+      value: contactStageIndexes.filter((stageIndex) => stageIndex >= 1).length,
+      color: "#38bdf8",
+    },
+    {
+      label: "Replied",
+      value: contactStageIndexes.filter((stageIndex) => stageIndex >= 2).length,
+      color: "#14b8a6",
+    },
+    {
+      label: "Referral offered",
+      value: contactStageIndexes.filter((stageIndex) => stageIndex >= 3).length,
+      color: "#22c55e",
+    },
+  ];
+
+  return {
+    automation: {
+      totalRuns: runs.length,
+      terminalRuns: terminalRuns.length,
+      completedRuns: completedRuns.length,
+      failedRuns: failedRuns.length,
+      activeRuns: activeRuns.length,
+      successRate: terminalRuns.length ? completedRuns.length / terminalRuns.length : 0,
+      averageDurationMs: average(runDurations),
+      failureBreakdown,
+    },
+    pipeline: {
+      data: pipelineData,
+    },
+    outcomes: {
+      total: applicationOutcomes.reduce((sum, segment) => sum + segment.value, 0),
+      unknown: applicationStatusMap.get("Unknown") || 0,
+      segments: applicationOutcomes,
+    },
+    referrals: {
+      totalContacts: contacts.length,
+      noReferralCount,
+      trackedOutreachItems: outreachItems.length,
+      contactSources,
+      outreachFunnel,
+    },
+    recentFailures: recentFailedRuns.map((run) => ({
+      id: run.id,
+      workspaceName: run.workspace_name || run.workspace_id || "Unknown workspace",
+      timestamp: run.finished_at || run.updated_at || run.created_at || "",
+      stage: labelize(getFailureStageKey(run)),
+      errorText: getFailureMessage(run),
+    })),
+  };
+}
+
+function DashboardPanel({ children, className = "" }) {
   return (
     <section
       className={[
@@ -205,629 +373,661 @@ function AnalyticsCard({ children, className = "" }) {
   );
 }
 
-function MiniBarStrip({ values, color }) {
-  const maxValue = Math.max(...values, 1);
-
+function PanelHeader({ eyebrow, title, description, action }) {
   return (
-    <div className="mt-4 flex items-end gap-1.5">
-      {values.map((value, index) => {
-        const ratio = value / maxValue;
-        return (
-          <span
-            aria-hidden="true"
-            className="block w-2 rounded-full"
-            key={`${color}-${index}-${value}`}
-            style={{
-              height: `${22 + ratio * 26}px`,
-              background: color,
-              opacity: 0.35 + ratio * 0.65,
-            }}
-          />
-        );
-      })}
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-on-surface-variant">{eyebrow}</p>
+        <h2 className="mt-2 font-headline text-2xl font-bold tracking-tight text-on-surface">{title}</h2>
+        <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">{description}</p>
+      </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
     </div>
   );
 }
 
-function HeroTrendChart({ series }) {
-  const width = 720;
-  const height = 260;
-  const padding = 24;
-  const applicationPoints = buildChartPoints(
-    series.map((item) => item.applications),
-    width,
-    height,
-    padding,
-  );
-  const interviewPoints = buildChartPoints(
-    series.map((item) => item.interviews),
-    width,
-    height,
-    padding,
-  );
-
+function StatTile({ label, value, detail, accentClass = "text-on-surface" }) {
   return (
-    <div className="rounded-[1.75rem] border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="font-headline text-xl font-bold text-white">Application Momentum</h2>
-          <p className="text-sm text-white/65">Weekly applications vs. interview activity.</p>
+    <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{label}</p>
+      <p className={["mt-3 text-3xl font-black tracking-tight", accentClass].join(" ")}>{value}</p>
+      <p className="mt-2 text-sm text-on-surface-variant">{detail}</p>
+    </div>
+  );
+}
+
+function EmptyChartState({ message }) {
+  return (
+    <div className="flex h-full min-h-48 items-center justify-center rounded-[1.35rem] border border-dashed border-outline-variant/20 bg-surface text-sm text-on-surface-variant">
+      {message}
+    </div>
+  );
+}
+
+function SkeletonBlock({ className = "" }) {
+  return <div className={["animate-pulse rounded-2xl bg-surface-container", className].join(" ")} />;
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-8">
+      <section className="rounded-[2rem] bg-slate-950 px-6 py-8 sm:px-8">
+        <SkeletonBlock className="h-5 w-40 bg-white/10" />
+        <SkeletonBlock className="mt-4 h-12 w-64 bg-white/10" />
+        <SkeletonBlock className="mt-4 h-5 w-full max-w-2xl bg-white/10" />
+        <SkeletonBlock className="mt-2 h-5 w-full max-w-xl bg-white/10" />
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          <SkeletonBlock className="h-28 bg-white/10" />
+          <SkeletonBlock className="h-28 bg-white/10" />
+          <SkeletonBlock className="h-28 bg-white/10" />
         </div>
-        <div className="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-[0.22em] text-white/65">
-          <span className="inline-flex items-center gap-2">
-            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-cyan-300" />
-            Applications
-          </span>
-          <span className="inline-flex items-center gap-2">
-            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-amber-300" />
-            Interviews
-          </span>
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <DashboardPanel>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <SkeletonBlock className="h-28" />
+            <SkeletonBlock className="h-28" />
+            <SkeletonBlock className="h-28" />
+            <SkeletonBlock className="h-28" />
+          </div>
+          <SkeletonBlock className="mt-6 h-72" />
+        </DashboardPanel>
+        <DashboardPanel>
+          <SkeletonBlock className="h-72" />
+        </DashboardPanel>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <DashboardPanel>
+          <SkeletonBlock className="h-80" />
+        </DashboardPanel>
+        <DashboardPanel>
+          <SkeletonBlock className="h-80" />
+        </DashboardPanel>
+      </div>
+
+      <DashboardPanel>
+        <SkeletonBlock className="h-96" />
+      </DashboardPanel>
+    </div>
+  );
+}
+
+function DashboardError({ error, onRetry }) {
+  return (
+    <div className="space-y-6">
+      <header className="flex flex-col gap-3">
+        <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">Dashboard</h1>
+        <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
+          Live analytics for run health, application outcomes, and referral outreach.
+        </p>
+      </header>
+
+      <section className="rounded-[1.75rem] border border-error/20 bg-error/5 px-6 py-6 text-error shadow-soft">
+        <p className="font-semibold">Unable to load dashboard data.</p>
+        <p className="mt-2 text-sm">{error || "Request failed."}</p>
+        <button
+          className="mt-4 rounded-full bg-error/10 px-4 py-2 text-sm font-semibold text-error transition-colors hover:bg-error/15"
+          onClick={() => onRetry().catch(() => undefined)}
+          type="button"
+        >
+          Retry
+        </button>
+      </section>
+    </div>
+  );
+}
+
+function DashboardHeader({ model, onRefresh, refreshing }) {
+  return (
+    <section className="relative overflow-hidden rounded-[2rem] bg-slate-950 px-6 py-8 text-white shadow-[0_28px_80px_rgba(15,23,42,0.28)] sm:px-8">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 opacity-90"
+        style={{
+          background:
+            "radial-gradient(circle at top left, rgba(20,184,166,0.34), transparent 35%), radial-gradient(circle at 80% 20%, rgba(56,189,248,0.26), transparent 30%), linear-gradient(135deg, rgba(15,23,42,1), rgba(8,47,73,0.94) 55%, rgba(17,24,39,1))",
+        }}
+      />
+
+      <div className="relative z-10 space-y-8">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-3xl">
+            <div className="mb-4 flex flex-wrap gap-3">
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/8 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/80">
+                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-emerald-300" />
+                Live dashboard
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/8 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/70">
+                Existing API data only
+              </span>
+            </div>
+
+            <h1 className="font-headline text-4xl font-black tracking-[-0.05em] text-white sm:text-5xl">
+              Dashboard
+            </h1>
+            <p className="mt-4 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
+              Run automation health, sourcing throughput, application outcomes, and referral outreach
+              in one live view powered by the current backend endpoints.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <button
+              className="inline-flex items-center justify-center rounded-full border border-white/12 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={refreshing}
+              onClick={() => onRefresh().catch(() => undefined)}
+              type="button"
+            >
+              {refreshing ? "Refreshing..." : "Refresh"}
+            </button>
+            <Link
+              className="inline-flex items-center justify-center rounded-full border border-white/65 bg-slate-50 px-5 py-3 text-sm font-semibold text-slate-950 shadow-[0_12px_30px_rgba(2,6,23,0.2)] transition-all hover:-translate-y-0.5 hover:bg-white"
+              to="/runs"
+            >
+              Open Runs
+            </Link>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Total Runs</p>
+            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
+              {formatNumber(model.automation.totalRuns)}
+            </p>
+            <p className="mt-2 text-sm text-white/68">
+              {formatNumber(model.automation.activeRuns)} active and {formatNumber(model.automation.failedRuns)} failed
+            </p>
+          </div>
+
+          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Tracked Applications</p>
+            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
+              {formatNumber(model.outcomes.total)}
+            </p>
+            <p className="mt-2 text-sm text-white/68">
+              {formatNumber(model.pipeline.data[3].value)} applied in run-stage metrics
+            </p>
+          </div>
+
+          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Referral Contacts</p>
+            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
+              {formatNumber(model.referrals.totalContacts)}
+            </p>
+            <p className="mt-2 text-sm text-white/68">
+              {formatNumber(model.referrals.outreachFunnel[3].value)} reached referral offered
+            </p>
+          </div>
         </div>
       </div>
+    </section>
+  );
+}
 
-      <svg aria-hidden="true" className="h-64 w-full" viewBox={`0 0 ${width} ${height}`}>
-        <defs>
-          <linearGradient id="dashboard-application-area" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="rgba(56, 189, 248, 0.55)" />
-            <stop offset="100%" stopColor="rgba(56, 189, 248, 0.03)" />
-          </linearGradient>
-          <linearGradient id="dashboard-interview-area" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="rgba(245, 158, 11, 0.35)" />
-            <stop offset="100%" stopColor="rgba(245, 158, 11, 0)" />
-          </linearGradient>
-        </defs>
-
-        {Array.from({ length: 5 }).map((_, index) => {
-          const y = padding + (index * (height - padding * 2)) / 4;
-          return (
-            <line
-              key={`grid-${index}`}
-              stroke="rgba(255,255,255,0.08)"
-              strokeDasharray="4 8"
-              x1={padding}
-              x2={width - padding}
-              y1={y}
-              y2={y}
-            />
-          );
-        })}
-
-        <path d={buildAreaPath(applicationPoints, height, padding)} fill="url(#dashboard-application-area)" />
-        <path d={buildAreaPath(interviewPoints, height, padding)} fill="url(#dashboard-interview-area)" />
-        <path
-          d={buildLinePath(applicationPoints)}
-          fill="none"
-          stroke="#7dd3fc"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="4"
-        />
-        <path
-          d={buildLinePath(interviewPoints)}
-          fill="none"
-          stroke="#fcd34d"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="3"
-        />
-
-        {applicationPoints.map((point, index) => (
-          <circle
-            cx={point.x}
-            cy={point.y}
-            fill="#7dd3fc"
-            key={`applications-point-${index}`}
-            r="4.5"
-            stroke="rgba(15, 23, 42, 0.9)"
-            strokeWidth="2"
-          />
-        ))}
-        {interviewPoints.map((point, index) => (
-          <circle
-            cx={point.x}
-            cy={point.y}
-            fill="#fcd34d"
-            key={`interview-point-${index}`}
-            r="4"
-            stroke="rgba(15, 23, 42, 0.9)"
-            strokeWidth="2"
-          />
-        ))}
-      </svg>
-
-      <div className="mt-4 grid grid-cols-4 gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45 sm:grid-cols-6 xl:grid-cols-12">
-        {series.map((item) => (
-          <span className="truncate" key={item.label}>
-            {item.label}
+function AutomationHealthPanel({ automation }) {
+  return (
+    <DashboardPanel>
+      <PanelHeader
+        action={
+          <span className="rounded-full bg-surface-container-low px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">
+            {formatNumber(automation.terminalRuns)} finished runs
           </span>
+        }
+        description="Success rate is based on terminal runs only. Average duration uses completed, failed, and cancelled runs with valid start and finish timestamps."
+        eyebrow="Panel 1"
+        title="Automation Health"
+      />
+
+      <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          detail="All runs visible to the current user."
+          label="Total Runs"
+          value={formatNumber(automation.totalRuns)}
+        />
+        <StatTile
+          accentClass="text-emerald-600"
+          detail={`${formatNumber(automation.completedRuns)} completed`}
+          label="Success Rate"
+          value={formatPercent(automation.successRate)}
+        />
+        <StatTile
+          detail="Average terminal run duration."
+          label="Avg Duration"
+          value={formatDuration(automation.averageDurationMs)}
+        />
+        <StatTile
+          accentClass="text-rose-600"
+          detail={`${formatNumber(automation.activeRuns)} still active`}
+          label="Failed Runs"
+          value={formatNumber(automation.failedRuns)}
+        />
+      </div>
+
+      <div className="mt-8">
+        {automation.failureBreakdown.length ? (
+          <div className="h-72 rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart data={automation.failureBreakdown} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
+                <XAxis allowDecimals={false} stroke="#94a3b8" type="number" />
+                <YAxis dataKey="stage" stroke="#64748b" type="category" width={112} />
+                <Tooltip
+                  contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
+                  cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
+                  formatter={(value) => [formatChartTooltipValue(value), "Failed runs"]}
+                />
+                <Bar dataKey="count" fill="#f97316" radius={[0, 10, 10, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <EmptyChartState message="No failed runs yet, so there is no failure breakdown to chart." />
+        )}
+      </div>
+    </DashboardPanel>
+  );
+}
+
+function JobsPipelinePanel({ pipeline }) {
+  const [discovered, screened, approved, applied] = pipeline.data;
+  const conversions = [
+    {
+      label: "Screened / discovered",
+      value: discovered.value ? screened.value / discovered.value : 0,
+    },
+    {
+      label: "Approved / screened",
+      value: screened.value ? approved.value / screened.value : 0,
+    },
+    {
+      label: "Applied / approved",
+      value: approved.value ? applied.value / approved.value : 0,
+    },
+  ];
+
+  return (
+    <DashboardPanel>
+      <PanelHeader
+        action={
+          <Link
+            className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
+            to="/runs"
+          >
+            Inspect runs
+          </Link>
+        }
+        description="This funnel is derived from persisted run-stage metrics. Discovery prefers merged-job totals when a merge stage is present, then falls back to acquisition-stage counts."
+        eyebrow="Panel 2"
+        title="Jobs Pipeline"
+      />
+
+      <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {pipeline.data.map((stage) => (
+          <StatTile
+            detail="Aggregated from run stage metrics."
+            key={stage.label}
+            label={stage.label}
+            value={formatNumber(stage.value)}
+          />
         ))}
       </div>
-    </div>
-  );
-}
 
-function OutcomeDonutChart({ centerLabel, centerValue, segments }) {
-  const radius = 56;
-  const circumference = 2 * Math.PI * radius;
-  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
-  let offset = 0;
+      <div className="mt-8 grid gap-6 xl:grid-cols-[1fr_0.72fr]">
+        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
+          <div className="h-72">
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart data={pipeline.data} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                <XAxis dataKey="label" stroke="#94a3b8" tickLine={false} />
+                <YAxis allowDecimals={false} stroke="#94a3b8" tickLine={false} />
+                <Tooltip
+                  contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
+                  cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
+                  formatter={(value) => [formatChartTooltipValue(value), "Jobs"]}
+                />
+                <Bar dataKey="value" radius={[14, 14, 0, 0]}>
+                  {pipeline.data.map((entry) => (
+                    <Cell fill={entry.color} key={entry.label} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
 
-  return (
-    <div className="relative mx-auto h-44 w-44">
-      <svg aria-hidden="true" className="h-full w-full" viewBox="0 0 160 160">
-        <circle cx="80" cy="80" fill="none" r={radius} stroke="rgba(148, 163, 184, 0.18)" strokeWidth="16" />
-        {segments.map((segment) => {
-          const segmentLength = (segment.value / total) * circumference;
-          const circle = (
-            <circle
-              cx="80"
-              cy="80"
-              fill="none"
-              key={segment.label}
-              r={radius}
-              stroke={segment.color}
-              strokeDasharray={`${segmentLength} ${circumference - segmentLength}`}
-              strokeDashoffset={-offset}
-              strokeLinecap="round"
-              strokeWidth="16"
-              transform="rotate(-90 80 80)"
-            />
-          );
-          offset += segmentLength;
-          return circle;
-        })}
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-        <p className="text-3xl font-extrabold tracking-tight text-on-surface">{centerValue}</p>
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{centerLabel}</p>
+        <div className="space-y-4">
+          {conversions.map((conversion) => (
+            <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4" key={conversion.label}>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{conversion.label}</p>
+              <p className="mt-3 text-3xl font-black tracking-tight text-on-surface">{formatPercent(conversion.value)}</p>
+              <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-container-low">
+                <div
+                  className="h-full rounded-full bg-primary"
+                  style={{ width: `${Math.max(0, Math.min(100, conversion.value * 100))}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </DashboardPanel>
   );
 }
 
-function FunnelChart({ stages }) {
-  const maxValue = Math.max(...stages.map((stage) => stage.value), 1);
-
+function ApplicationOutcomesPanel({ outcomes }) {
   return (
-    <div className="mt-6 space-y-4">
-      {stages.map((stage, index) => {
-        const previousValue = stages[index - 1]?.value || stage.value;
-        const conversion = Math.round((stage.value / previousValue) * 100);
-        const width = 28 + (stage.value / maxValue) * 72;
+    <DashboardPanel>
+      <PanelHeader
+        action={
+          <Link
+            className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
+            to="/tracker"
+          >
+            Open tracker
+          </Link>
+        }
+        description="Counts come from the explicit `application_status` on tracker items, including external applications that the tracker imports."
+        eyebrow="Panel 3"
+        title="Application Outcomes"
+      />
 
-        return (
-          <div key={stage.label}>
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <span
-                  aria-hidden="true"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold text-white"
-                  style={{ backgroundColor: stage.color }}
-                >
-                  {index + 1}
-                </span>
-                <div>
-                  <p className="font-semibold text-on-surface">{stage.label}</p>
-                  <p className="text-xs text-on-surface-variant">
-                    {index === 0 ? "Starting volume" : `${conversion}% from previous stage`}
-                  </p>
+      <div className="mt-8 grid gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
+          {outcomes.total ? (
+            <div className="h-80">
+              <ResponsiveContainer height="100%" width="100%">
+                <PieChart>
+                  <Pie
+                    cx="50%"
+                    cy="50%"
+                    data={outcomes.segments.filter((segment) => segment.value > 0)}
+                    dataKey="value"
+                    innerRadius={74}
+                    outerRadius={112}
+                    paddingAngle={2}
+                  >
+                    {outcomes.segments.filter((segment) => segment.value > 0).map((segment) => (
+                      <Cell fill={segment.color} key={segment.label} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
+                    formatter={(value) => [formatChartTooltipValue(value), "Applications"]}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <EmptyChartState message="No tracked applications are available yet." />
+          )}
+        </div>
+
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatTile
+              detail="Statuses shown in the chart."
+              label="Tracked Items"
+              value={formatNumber(outcomes.total)}
+            />
+            <StatTile
+              detail="Explicitly marked unknown."
+              label="Unknown"
+              value={formatNumber(outcomes.unknown)}
+            />
+          </div>
+
+          <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
+            <div className="space-y-4">
+              {outcomes.segments.map((segment) => (
+                <div className="flex items-center justify-between gap-4" key={segment.label}>
+                  <div className="flex items-center gap-3">
+                    <span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ backgroundColor: segment.color }} />
+                    <span className="text-sm text-on-surface">{segment.label}</span>
+                  </div>
+                  <span className="text-sm font-semibold text-on-surface">{formatNumber(segment.value)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </DashboardPanel>
+  );
+}
+
+function ReferralOutreachPanel({ referrals }) {
+  return (
+    <DashboardPanel>
+      <PanelHeader
+        action={
+          <Link
+            className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
+            to="/referrals"
+          >
+            Open referrals
+          </Link>
+        }
+        description="Source-kind totals come from referral contacts. The outreach funnel groups contacts by the furthest saved outreach stage reached across their tracked outreach records."
+        eyebrow="Panel 4"
+        title="Referral Outreach"
+      />
+
+      <div className="mt-8 grid gap-4 md:grid-cols-3">
+        <StatTile
+          detail="All referral contacts on record."
+          label="Contacts Total"
+          value={formatNumber(referrals.totalContacts)}
+        />
+        <StatTile
+          detail="Contacts with no tracked outreach yet."
+          label="Not Contacted"
+          value={formatNumber(referrals.outreachFunnel[0].value)}
+        />
+        <StatTile
+          detail={`${formatNumber(referrals.noReferralCount)} ended in no referral`}
+          label="Referral Offered"
+          value={formatNumber(referrals.outreachFunnel[3].value)}
+        />
+      </div>
+
+      <div className="mt-8 grid gap-6 xl:grid-cols-2">
+        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">By Source Kind</p>
+              <p className="mt-1 text-sm text-on-surface-variant">Counts from `GET /referrals`.</p>
+            </div>
+            <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-on-surface-variant">
+              {formatNumber(referrals.totalContacts)} total
+            </span>
+          </div>
+
+          {referrals.contactSources.length ? (
+            <div className="h-72">
+              <ResponsiveContainer height="100%" width="100%">
+                <BarChart data={referrals.contactSources} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                  <XAxis dataKey="label" stroke="#94a3b8" tickLine={false} />
+                  <YAxis allowDecimals={false} stroke="#94a3b8" tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
+                    cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
+                    formatter={(value) => [formatChartTooltipValue(value), "Contacts"]}
+                  />
+                  <Bar dataKey="value" radius={[14, 14, 0, 0]}>
+                    {referrals.contactSources.map((source) => (
+                      <Cell fill={source.color} key={source.label} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <EmptyChartState message="No referral contacts are available yet." />
+          )}
+        </div>
+
+        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Outreach Funnel</p>
+              <p className="mt-1 text-sm text-on-surface-variant">Counts from saved outreach statuses.</p>
+            </div>
+            <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-on-surface-variant">
+              {formatNumber(referrals.trackedOutreachItems)} status updates
+            </span>
+          </div>
+
+          {referrals.totalContacts ? (
+            <div className="h-72">
+              <ResponsiveContainer height="100%" width="100%">
+                <BarChart data={referrals.outreachFunnel} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                  <XAxis dataKey="label" stroke="#94a3b8" tickLine={false} />
+                  <YAxis allowDecimals={false} stroke="#94a3b8" tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
+                    cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
+                    formatter={(value) => [formatChartTooltipValue(value), "Contacts"]}
+                  />
+                  <Bar dataKey="value" radius={[14, 14, 0, 0]}>
+                    {referrals.outreachFunnel.map((stage) => (
+                      <Cell fill={stage.color} key={stage.label} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <EmptyChartState message="Add referral contacts to start tracking outreach progression." />
+          )}
+        </div>
+      </div>
+    </DashboardPanel>
+  );
+}
+
+function RecentFailuresPanel({ items }) {
+  return (
+    <DashboardPanel>
+      <PanelHeader
+        action={
+          <Link
+            className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
+            to="/runs?status=failed"
+          >
+            View failed runs
+          </Link>
+        }
+        description="The five most recent failed runs from `GET /runs?status=failed&limit=5`, including the saved error text and the stage that failed."
+        eyebrow="Panel 5"
+        title="Recent Failures"
+      />
+
+      <div className="mt-8 space-y-4">
+        {items.length ? (
+          items.map((item) => (
+            <article className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4" key={item.id}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="rounded-full bg-error/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-error">
+                      {item.stage}
+                    </span>
+                    <span className="text-sm font-medium text-on-surface">{item.workspaceName}</span>
+                  </div>
+                  <p className="text-sm leading-7 text-on-surface-variant">{item.errorText}</p>
+                </div>
+
+                <div className="flex shrink-0 flex-col items-start gap-3 lg:items-end">
+                  <span className="text-sm text-on-surface-variant">{formatDateTime(item.timestamp)}</span>
+                  <Link
+                    className="rounded-full bg-primary/10 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+                    to={`/runs/${item.id}`}
+                  >
+                    Open run
+                  </Link>
                 </div>
               </div>
-              <span className="text-sm font-semibold text-on-surface">{formatNumber(stage.value)}</span>
-            </div>
-            <div className="flex justify-center">
-              <div
-                className="h-11 rounded-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]"
-                style={{
-                  width: `${width}%`,
-                  background: `linear-gradient(90deg, ${stage.color}, rgba(255,255,255,0.82))`,
-                }}
-              />
-            </div>
+            </article>
+          ))
+        ) : (
+          <div className="rounded-[1.35rem] border border-dashed border-outline-variant/20 bg-surface p-6 text-sm text-on-surface-variant">
+            No recent failures are available.
           </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function RoleSkillCard({ role }) {
-  const maxSkillCount = Math.max(...role.skills.map((skill) => skill.count), 1);
-
-  return (
-    <div className="rounded-[1.5rem] border border-outline-variant/15 bg-surface p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-on-surface-variant">{role.role}</p>
-          <p className="mt-2 text-sm text-on-surface-variant">{role.focus}</p>
-        </div>
-        <span
-          className="rounded-full px-3 py-1 text-xs font-semibold"
-          style={{
-            backgroundColor: `${role.color}1a`,
-            color: role.color,
-          }}
-        >
-          {formatPercent(getPositiveRate(role))} positive
-        </span>
+        )}
       </div>
-
-      <div className="mt-5 flex items-center gap-3 text-xs font-medium text-on-surface-variant">
-        <span>{formatNumber(role.applications)} applications</span>
-        <span aria-hidden="true">/</span>
-        <span>{role.positive} moved forward</span>
-      </div>
-
-      <div className="mt-6 space-y-4">
-        {role.skills.map((skill) => (
-          <div key={`${role.role}-${skill.name}`}>
-            <div className="mb-2 flex items-center justify-between gap-4 text-sm">
-              <span className="font-medium text-on-surface">{skill.name}</span>
-              <span className="text-on-surface-variant">{skill.count}</span>
-            </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-surface-container-low">
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${(skill.count / maxSkillCount) * 100}%`,
-                  background: `linear-gradient(90deg, ${role.color}, rgba(255,255,255,0.92))`,
-                }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function RoleResponseRow({ role }) {
-  const total = role.positive + role.pending + role.rejected;
-
-  return (
-    <div className="space-y-3 rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="font-semibold text-on-surface">{role.role}</p>
-          <p className="text-xs text-on-surface-variant">
-            {role.positive} positive / {role.pending} pending / {role.rejected} rejected
-          </p>
-        </div>
-        <span
-          className="rounded-full px-3 py-1 text-xs font-semibold"
-          style={{
-            backgroundColor: `${role.color}14`,
-            color: role.color,
-          }}
-        >
-          {formatPercent(getPositiveRate(role))}
-        </span>
-      </div>
-
-      <div className="flex h-3 overflow-hidden rounded-full bg-surface-container-low">
-        <span className="h-full bg-teal-500" style={{ width: `${(role.positive / total) * 100}%` }} />
-        <span className="h-full bg-sky-400" style={{ width: `${(role.pending / total) * 100}%` }} />
-        <span className="h-full bg-orange-400" style={{ width: `${(role.rejected / total) * 100}%` }} />
-      </div>
-    </div>
+    </DashboardPanel>
   );
 }
 
 export default function DashboardPage() {
-  const analytics = DASHBOARD_ANALYTICS_PREVIEW;
-  const executiveSummary = buildExecutiveSummary(analytics);
+  const { isConnected, request } = useSession();
+  const { data, loading, error, refresh } = useApiResource(() => loadDashboardPayload(request), [request]);
+
+  useEffect(() => {
+    if (!isConnected) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      refresh().catch(() => undefined);
+    }, 30000);
+    return () => window.clearInterval(intervalId);
+  }, [isConnected, refresh]);
+
+  if (!isConnected && !loading) {
+    return (
+      <div className="space-y-6">
+        <header className="flex flex-col gap-3">
+          <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">Dashboard</h1>
+          <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
+            Connect the frontend to the backend API to load live analytics.
+          </p>
+        </header>
+
+        <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest px-6 py-6 text-on-surface-variant shadow-soft">
+          Use the API connection controls first, then reopen this page.
+        </section>
+      </div>
+    );
+  }
+
+  if (loading && !data) {
+    return <DashboardSkeleton />;
+  }
+
+  if (error && !data) {
+    return <DashboardError error={error} onRetry={refresh} />;
+  }
+
+  const model = data?.analytics || buildDashboardViewModel(data || {
+    runs: [],
+    trackerItems: [],
+    contacts: [],
+    outreachItems: [],
+    recentFailedRuns: [],
+  });
 
   return (
     <div className="space-y-8">
-      <section className="relative overflow-hidden rounded-[2rem] bg-slate-950 px-6 py-8 text-white shadow-[0_28px_80px_rgba(15,23,42,0.28)] sm:px-8">
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 opacity-90"
-          style={{
-            background:
-              "radial-gradient(circle at top left, rgba(20,184,166,0.34), transparent 35%), radial-gradient(circle at 80% 20%, rgba(56,189,248,0.24), transparent 28%), linear-gradient(135deg, rgba(15,23,42,1), rgba(8,47,73,0.94) 55%, rgba(17,24,39,1))",
-          }}
-        />
-        <div className="relative z-10 space-y-8">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div className="max-w-3xl">
-              <div className="mb-4 flex flex-wrap gap-3">
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/8 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/80">
-                  <span aria-hidden="true" className="h-2 w-2 rounded-full bg-emerald-300" />
-                  Analytics Preview
-                </span>
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/8 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/70">
-                  {analytics.periodLabel}
-                </span>
-              </div>
+      <DashboardHeader model={model} onRefresh={refresh} refreshing={loading} />
 
-              <h1 className="font-headline text-4xl font-black tracking-[-0.05em] text-white sm:text-5xl">
-                Dashboard
-              </h1>
-              <p className="mt-4 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
-                An analytics-first view of the job search: application volume, skills requested most by role,
-                acceptance vs. rejection, and the clearest next actions to improve outcomes.
-              </p>
-            </div>
-
-            <div className="max-w-lg rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/60">Executive snapshot</p>
-              <p className="mt-3 text-2xl font-bold tracking-tight text-white">{executiveSummary.headline}</p>
-              <p className="mt-3 text-sm leading-6 text-white/70">{executiveSummary.body}</p>
-            </div>
-          </div>
-
-          <div className="grid gap-8 xl:grid-cols-[1.2fr_0.8fr]">
-            <div className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Applied Jobs</p>
-                  <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-                    {formatNumber(analytics.appliedJobs)}
-                  </p>
-                  <p className="mt-2 text-sm text-white/68">{analytics.last30DaysApplied} submitted in the last 30 days</p>
-                  <MiniBarStrip color="#7dd3fc" values={analytics.cardTrends.appliedJobs} />
-                </div>
-
-                <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Active Pipeline</p>
-                  <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-                    {formatNumber(analytics.activePipeline)}
-                  </p>
-                  <p className="mt-2 text-sm text-white/68">Still waiting for a reply or next step</p>
-                  <MiniBarStrip color="#34d399" values={analytics.cardTrends.activePipeline} />
-                </div>
-
-                <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Interviews + Offers</p>
-                  <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-                    {formatNumber(analytics.interviewsAndOffers)}
-                  </p>
-                  <p className="mt-2 text-sm text-white/68">
-                    {formatPercent(analytics.acceptanceRate)} of applications are moving forward
-                  </p>
-                  <MiniBarStrip color="#fcd34d" values={analytics.cardTrends.interviewsAndOffers} />
-                </div>
-
-                <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Average Reply</p>
-                  <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-                    {formatDays(analytics.averageReplyDays)}
-                  </p>
-                  <p className="mt-2 text-sm text-white/68">Time to first clear signal after applying</p>
-                  <MiniBarStrip color="#c4b5fd" values={analytics.cardTrends.averageReplyDays} />
-                </div>
-              </div>
-
-              <HeroTrendChart series={analytics.momentum} />
-            </div>
-
-            <div className="space-y-6">
-              <div className="rounded-[1.75rem] border border-white/10 bg-white/8 p-6 backdrop-blur-sm">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/60">What this view is modeled on</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {analytics.dataSources.map((source) => (
-                    <span
-                      className="rounded-full border border-white/10 bg-white/8 px-3 py-1.5 text-xs font-medium text-white/72"
-                      key={source}
-                    >
-                      {source}
-                    </span>
-                  ))}
-                </div>
-                <p className="mt-4 text-sm leading-6 text-white/65">
-                  Dummy data is seeded around fields the product already tracks or can derive: application status,
-                  review outcomes, job descriptions, and tailored CV skill data.
-                </p>
-              </div>
-
-              <div className="rounded-[1.75rem] border border-white/10 bg-white/8 p-6 backdrop-blur-sm">
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/60">Focus next</p>
-                <div className="mt-4 space-y-4">
-                  {executiveSummary.actions.slice(0, 3).map((action) => (
-                    <div className="rounded-[1.25rem] border border-white/10 bg-white/8 p-4" key={action.title}>
-                      <div className="flex items-start gap-3">
-                        <span className="material-symbols-outlined text-cyan-200">{action.icon}</span>
-                        <div>
-                          <p className="font-semibold text-white">{action.title}</p>
-                          <p className="mt-1 text-sm leading-6 text-white/68">{action.detail}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-6 flex flex-wrap gap-3">
-                  <Link
-                    className="inline-flex items-center justify-center rounded-full border border-white/65 bg-slate-50 px-5 py-3 text-sm font-semibold text-slate-950 shadow-[0_12px_30px_rgba(2,6,23,0.2)] transition-all hover:-translate-y-0.5 hover:bg-white"
-                    to="/tracker"
-                  >
-                    Open Tracker
-                  </Link>
-                  <Link
-                    className="inline-flex items-center justify-center rounded-full border border-white/12 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10"
-                    to="/quick-apply"
-                  >
-                    Review Quick Apply
-                  </Link>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <AnalyticsCard>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-on-surface-variant">
-                Outcome Split
-              </p>
-              <h2 className="mt-2 font-headline text-2xl font-bold tracking-tight text-on-surface">
-                Acceptance vs. rejection
-              </h2>
-              <p className="mt-2 text-sm text-on-surface-variant">
-                Positive outcomes combine interview invitations and offers so the rate reflects forward motion, not just final offers.
-              </p>
-            </div>
-            <div className="rounded-full bg-surface-container-low px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">
-              {analytics.periodLabel}
-            </div>
-          </div>
-
-          <div className="mt-8 grid gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
-            <OutcomeDonutChart
-              centerLabel="tracked"
-              centerValue={formatNumber(analytics.appliedJobs)}
-              segments={analytics.outcomes}
-            />
-
-            <div className="space-y-5">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Acceptance</p>
-                  <p className="mt-2 text-3xl font-black tracking-tight text-on-surface">
-                    {formatPercent(analytics.acceptanceRate)}
-                  </p>
-                  <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-container-low">
-                    <div className="h-full rounded-full bg-teal-500" style={{ width: `${analytics.acceptanceRate}%` }} />
-                  </div>
-                </div>
-                <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Rejection</p>
-                  <p className="mt-2 text-3xl font-black tracking-tight text-on-surface">
-                    {formatPercent(analytics.rejectionRate)}
-                  </p>
-                  <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-container-low">
-                    <div className="h-full rounded-full bg-orange-400" style={{ width: `${analytics.rejectionRate}%` }} />
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {analytics.outcomes.map((segment) => (
-                  <div className="flex items-center justify-between gap-4" key={segment.label}>
-                    <div className="flex items-center gap-3">
-                      <span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ backgroundColor: segment.color }} />
-                      <span className="text-sm text-on-surface">{segment.label}</span>
-                    </div>
-                    <span className="text-sm font-semibold text-on-surface">
-                      {formatNumber(segment.value)} jobs
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </AnalyticsCard>
-
-        <AnalyticsCard>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-on-surface-variant">
-                Pipeline Funnel
-              </p>
-              <h2 className="mt-2 font-headline text-2xl font-bold tracking-tight text-on-surface">
-                From sourcing to offer
-              </h2>
-              <p className="mt-2 text-sm text-on-surface-variant">
-                A funnel is the cleanest way to show where volume drops and which stage needs the next optimization pass.
-              </p>
-            </div>
-            <span className="rounded-full bg-surface-container-low px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">
-              Workflow health
-            </span>
-          </div>
-
-          <FunnelChart stages={analytics.funnel} />
-        </AnalyticsCard>
-      </div>
+      {error ? (
+        <section className="rounded-2xl border border-error/20 bg-error/5 px-5 py-4 text-sm text-error">
+          {error}
+        </section>
+      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <AnalyticsCard>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-on-surface-variant">
-                Skill Demand By Role
-              </p>
-              <h2 className="mt-2 font-headline text-2xl font-bold tracking-tight text-on-surface">
-                Most requested skills per target role
-              </h2>
-              <p className="mt-2 text-sm text-on-surface-variant">
-                Horizontal bars are the right comparison tool here because they make skill frequency easy to scan within each role.
-              </p>
-            </div>
-            <span className="rounded-full bg-surface-container-low px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">
-              Parsed from job descriptions
-            </span>
-          </div>
-
-          <div className="mt-8 grid gap-5 lg:grid-cols-3">
-            {analytics.roles.map((role) => (
-              <RoleSkillCard key={role.role} role={role} />
-            ))}
-          </div>
-        </AnalyticsCard>
-
-        <div className="space-y-6">
-          <AnalyticsCard>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-on-surface-variant">
-              Executive Summary
-            </p>
-            <h2 className="mt-2 font-headline text-2xl font-bold tracking-tight text-on-surface">
-              What the user should do next
-            </h2>
-            <p className="mt-3 text-sm leading-7 text-on-surface-variant">{executiveSummary.body}</p>
-
-            <div className="mt-6 space-y-4">
-              {executiveSummary.actions.map((action) => (
-                <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4" key={action.title}>
-                  <div className="flex items-start gap-3">
-                    <span className="material-symbols-outlined text-primary">{action.icon}</span>
-                    <div>
-                      <p className="font-semibold text-on-surface">{action.title}</p>
-                      <p className="mt-1 text-sm leading-6 text-on-surface-variant">{action.detail}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </AnalyticsCard>
-
-          <AnalyticsCard>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-on-surface-variant">
-                  Role Response Board
-                </p>
-                <h2 className="mt-2 font-headline text-2xl font-bold tracking-tight text-on-surface">
-                  Which lane is paying off
-                </h2>
-              </div>
-              <div className="flex flex-wrap gap-3 text-xs font-medium text-on-surface-variant">
-                <span className="inline-flex items-center gap-2">
-                  <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-teal-500" />
-                  Positive
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-sky-400" />
-                  Pending
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-orange-400" />
-                  Rejected
-                </span>
-              </div>
-            </div>
-
-            <div className="mt-6 space-y-4">
-              {analytics.roles.map((role) => (
-                <RoleResponseRow key={`${role.role}-response`} role={role} />
-              ))}
-            </div>
-          </AnalyticsCard>
-        </div>
+        <AutomationHealthPanel automation={model.automation} />
+        <RecentFailuresPanel items={model.recentFailures} />
       </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <JobsPipelinePanel pipeline={model.pipeline} />
+        <ApplicationOutcomesPanel outcomes={model.outcomes} />
+      </div>
+
+      <ReferralOutreachPanel referrals={model.referrals} />
     </div>
   );
 }

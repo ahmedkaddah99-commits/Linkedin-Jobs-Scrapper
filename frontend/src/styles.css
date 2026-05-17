@@ -18,9 +18,12 @@ html,
 body,
 #root {
   min-height: 100%;
+  width: 100%;
 }
 
 body {
+  margin: 0;
+  overflow-x: hidden;
   background: #f8f9ff;
   color: #0b1c30;
   font-family: "Plus Jakarta Sans", sans-serif;
@@ -149,6 +152,7 @@ html.dark .backdrop-blur-\[20px\] {
 }
 
 .app-shell {
+  width: 100%;
   --shell-sidebar-width: 14.5rem;
   --shell-sidebar-bg: #ffffff;
   --shell-sidebar-text: #0b1c30;
@@ -182,7 +186,8 @@ html.dark .backdrop-blur-\[20px\] {
 
 .app-shell__main {
   min-height: 100vh;
-  transition: padding-left 220ms ease;
+  width: 100%;
+  transition: margin-left 220ms ease;
 }
 
 .shell-sidebar {
@@ -356,7 +361,7 @@ html.dark .backdrop-blur-\[20px\] {
 .shell-nav-link::after {
   content: "";
   position: absolute;
-  right: -0.75rem;
+  right: 0.35rem;
   top: 0.55rem;
   bottom: 0.55rem;
   width: 0.24rem;
@@ -524,6 +529,63 @@ html.dark .backdrop-blur-\[20px\] {
   transform: translateY(-50%) translateX(0);
 }
 
+html:not(.dark) .top-ribbon--teal {
+  background: var(--shell-sidebar-cta-bg);
+  border-bottom-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 10px 30px rgba(20, 184, 166, 0.18);
+}
+
+html:not(.dark) .top-ribbon--teal,
+html:not(.dark) .top-ribbon--teal .text-on-surface,
+html:not(.dark) .top-ribbon--teal .text-on-surface-variant,
+html:not(.dark) .top-ribbon--teal .text-primary {
+  color: #f7fffe !important;
+}
+
+html:not(.dark) .top-ribbon--teal .border-outline-variant\/30 {
+  border-color: rgba(255, 255, 255, 0.28) !important;
+}
+
+html:not(.dark) .top-ribbon--teal .bg-outline-variant\/30 {
+  background-color: rgba(255, 255, 255, 0.28) !important;
+}
+
+html:not(.dark) .top-ribbon--teal .hover\:bg-surface-container-low:hover,
+html:not(.dark) .top-ribbon--teal .hover\:bg-surface-container-high:hover {
+  background-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+html:not(.dark) .top-ribbon--teal .hover\:text-primary:hover,
+html:not(.dark) .top-ribbon--teal .hover\:text-on-surface:hover {
+  color: #ffffff !important;
+}
+
+html:not(.dark) .top-ribbon__action,
+html:not(.dark) .top-ribbon__toggle {
+  background-color: #6ccfc4 !important;
+  color: #ffffff !important;
+  border-color: rgba(17, 122, 112, 0.34) !important;
+  box-shadow: 0 10px 24px rgba(20, 184, 166, 0.2) !important;
+}
+
+html:not(.dark) .top-ribbon__action:hover,
+html:not(.dark) .top-ribbon__toggle:hover {
+  background-color: #84ddd3 !important;
+  color: #ffffff !important;
+}
+
+html:not(.dark) .top-ribbon__menu {
+  background-color: rgba(255, 255, 255, 0.96) !important;
+  border-color: rgba(11, 28, 48, 0.12) !important;
+  color: #0b1c30 !important;
+}
+
+html:not(.dark) .top-ribbon__menu .text-on-surface,
+html:not(.dark) .top-ribbon__menu .text-on-surface-variant,
+html:not(.dark) .top-ribbon__menu .text-primary {
+  color: #0b1c30 !important;
+}
+
 html.dark .app-shell {
   --shell-sidebar-bg: #0c1b30;
   --shell-sidebar-text: #e6eefc;
@@ -541,9 +603,14 @@ html.dark .app-shell {
   --shell-sidebar-shadow: 0 20px 48px rgba(0, 0, 0, 0.34);
 }
 
+html.dark .tracker-table__row:hover {
+  background-color: transparent !important;
+}
+
 @media (min-width: 768px) {
   .app-shell__main {
-    padding-left: calc(var(--shell-sidebar-width) + 0.5rem);
+    margin-left: var(--shell-sidebar-width);
+    width: calc(100% - var(--shell-sidebar-width));
   }
 
   .app-shell__desktop-sidebar {

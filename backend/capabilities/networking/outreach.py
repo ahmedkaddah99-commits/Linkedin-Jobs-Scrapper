@@ -65,6 +65,7 @@ _TITLE_PATTERNS = [
     re.compile(r"\b(?P<title>Hiring Manager)\b", re.IGNORECASE),
     re.compile(r"\b(?P<title>Team Lead)\b", re.IGNORECASE),
 ]
+_TRAILING_NAME_STOPWORDS = {"and", "at", "for", "in", "of", "on", "to", "with"}
 _TARGET_DISCIPLINE_LIBRARY = {
     "engineering": {
         "label": "Engineering",
@@ -308,10 +309,19 @@ class TargetContactCandidate:
     access_hint: str = ""
     rationale: str = ""
     guessed_name: str = ""
+    resolved_name: str = ""
+    resolved_title: str = ""
+    resolved_company: str = ""
+    resolved_location: str = ""
     search_query: str = ""
     linkedin_search_url: str = ""
     google_xray_query: str = ""
     google_xray_search_url: str = ""
+    evidence: list[str] | None = None
+    source_urls: list[str] | None = None
+    source_titles: list[str] | None = None
+    resolved_in_pass: int = 0
+    result_type: str = "lane"
     connection_note: str = ""
     follow_up_message: str = ""
 
@@ -328,10 +338,19 @@ class TargetContactCandidate:
             "access_hint": self.access_hint,
             "rationale": self.rationale,
             "guessed_name": self.guessed_name,
+            "resolved_name": self.resolved_name,
+            "resolved_title": self.resolved_title,
+            "resolved_company": self.resolved_company,
+            "resolved_location": self.resolved_location,
             "search_query": self.search_query,
             "linkedin_search_url": self.linkedin_search_url,
             "google_xray_query": self.google_xray_query,
             "google_xray_search_url": self.google_xray_search_url,
+            "evidence": list(self.evidence or []),
+            "source_urls": list(self.source_urls or []),
+            "source_titles": list(self.source_titles or []),
+            "resolved_in_pass": self.resolved_in_pass,
+            "result_type": self.result_type,
             "connection_note": self.connection_note,
             "follow_up_message": self.follow_up_message,
         }
@@ -589,7 +608,7 @@ def guess_hiring_manager_from_job(job: JobRecord) -> HiringManagerMatch:
     for pattern in _MANAGER_PATTERNS:
         match = pattern.search(description)
         if match:
-            name = str(match.groupdict().get("name") or "").strip()
+            name = _clean_extracted_person_name(str(match.groupdict().get("name") or "").strip())
             title = _guess_manager_title(description)
             return HiringManagerMatch(
                 name=name,
@@ -605,6 +624,13 @@ def guess_hiring_manager_from_job(job: JobRecord) -> HiringManagerMatch:
         confidence="low",
         source="fallback",
     )
+
+
+def _clean_extracted_person_name(value: str) -> str:
+    tokens = [token for token in str(value or "").strip().split() if token]
+    while tokens and tokens[-1].casefold() in _TRAILING_NAME_STOPWORDS:
+        tokens.pop()
+    return " ".join(tokens).strip()
 
 
 def build_referral_outreach_draft(
@@ -665,94 +691,17 @@ def build_target_contact_discovery(
     *,
     profile: dict[str, Any],
     job: JobRecord,
+    search_provider=None,
+    ai_provider=None,
 ) -> dict[str, Any]:
-    discipline_key = _infer_target_contact_discipline(job)
-    discipline = _TARGET_DISCIPLINE_LIBRARY.get(discipline_key, _TARGET_DISCIPLINE_LIBRARY["general"])
-    discipline_label = str(discipline.get("label") or "Hiring Team").strip() or "Hiring Team"
-    company = str(job.company or "").strip()
-    location_hint = _target_contact_location_hint(job.location_raw)
-    hiring_manager = guess_hiring_manager_from_job(job)
-    candidates: list[TargetContactCandidate] = []
+    from .discovery import build_target_contact_discovery as build_discovery
 
-    if hiring_manager.name:
-        candidates.append(
-            _build_target_contact_candidate(
-                profile=profile,
-                job=job,
-                discipline_label=discipline_label,
-                role_label="Named Hiring Signal",
-                title_variants=[
-                    hiring_manager.title or discipline.get("manager_titles", ["Hiring Manager"])[0],
-                    *list(discipline.get("manager_titles", [])),
-                ],
-                fit_score=97,
-                confidence=hiring_manager.confidence or "high",
-                seniority="manager",
-                lane="direct_hiring_chain",
-                access_hint="Highest-signal lead when the job description already points to a specific person.",
-                rationale=(
-                    f"The posting appears to reference {hiring_manager.name}"
-                    + (f" ({hiring_manager.title})" if hiring_manager.title else "")
-                    + ", so start here before widening the search."
-                ),
-                follow_up_ask="If you are open to it, I would value any guidance on the team priorities or where this role sits.",
-                guessed_name=hiring_manager.name,
-            )
-        )
-
-    for blueprint in _TARGET_CONTACT_BLUEPRINTS:
-        title_variants = list(discipline.get(str(blueprint["title_key"]), []))
-        candidates.append(
-            _build_target_contact_candidate(
-                profile=profile,
-                job=job,
-                discipline_label=discipline_label,
-                role_label=str(blueprint["role_label"]),
-                title_variants=title_variants,
-                fit_score=int(blueprint["fit_score"]),
-                confidence=str(blueprint["confidence"]),
-                seniority=str(blueprint["seniority"]),
-                lane=str(blueprint["lane"]),
-                access_hint=str(blueprint["access_hint"]),
-                rationale=str(blueprint["rationale"]),
-                follow_up_ask=str(blueprint["follow_up_ask"]),
-                candidate_id=str(blueprint["candidate_id"]),
-            )
-        )
-
-    deduped_candidates: list[TargetContactCandidate] = []
-    seen_candidate_keys: set[str] = set()
-    for candidate in candidates:
-        key = "::".join(
-            [
-                str(candidate.role_label or "").casefold(),
-                str(candidate.guessed_name or "").casefold(),
-                str(candidate.search_query or "").casefold(),
-            ]
-        )
-        if key in seen_candidate_keys:
-            continue
-        seen_candidate_keys.add(key)
-        deduped_candidates.append(candidate)
-
-    deduped_candidates.sort(key=lambda item: (-int(item.fit_score), item.role_label.casefold()))
-
-    strategy_bits = [f"Search starts in the {discipline_label} lane."]
-    if company:
-        strategy_bits.append(f"Company anchor: {company}.")
-    if location_hint:
-        strategy_bits.append(f"Location hint: {location_hint}.")
-    strategy_bits.append("Use the manager lane first, then widen to recruiting and leadership if needed.")
-
-    return {
-        "job": _job_summary(job),
-        "discipline": discipline_key,
-        "department_label": discipline_label,
-        "location_hint": location_hint,
-        "strategy_summary": " ".join(strategy_bits),
-        "hiring_manager_signal": hiring_manager.to_dict(),
-        "candidates": [candidate.to_dict() for candidate in deduped_candidates],
-    }
+    return build_discovery(
+        profile=profile,
+        job=job,
+        search_provider=search_provider,
+        ai_provider=ai_provider,
+    )
 
 
 def _guess_manager_title(description_text: str) -> str:

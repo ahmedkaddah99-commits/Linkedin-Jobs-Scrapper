@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Mapping
 
 from backend.domain.models import (
@@ -48,12 +49,19 @@ class BaseStage(ABC):
         return {}
 
 
+DOCUMENT_GENERATION_STAGE_TYPES = {
+    "applications.generate.documents",
+    "legacy.white_collar.docs",
+}
+
+
 class StageEngine:
-    def __init__(self, *, stage_registry, run_repository, job_store, artifact_store):
+    def __init__(self, *, stage_registry, run_repository, job_store, artifact_store, event_emitter=None):
         self.stage_registry = stage_registry
         self.run_repository = run_repository
         self.job_store = job_store
         self.artifact_store = artifact_store
+        self.event_emitter = event_emitter
 
     def build_run_plan(
         self,
@@ -134,6 +142,28 @@ class StageEngine:
                 run.last_error = str(exc)
                 run.updated_at = utc_now_iso()
                 self.run_repository.save(run)
+                self._emit_event(
+                    "automation_step_failed",
+                    user_id=run.normalized_user_id,
+                    workspace_id=run.workspace_id,
+                    run_id=run.id,
+                    job_id="",
+                    source="runtime",
+                    stage_type=definition.stage_type,
+                    error=str(exc),
+                    attempt_count=run.attempt_count,
+                )
+                self._emit_event(
+                    "run_failed",
+                    user_id=run.normalized_user_id,
+                    workspace_id=run.workspace_id,
+                    run_id=run.id,
+                    source="runtime",
+                    status=run.status,
+                    duration_seconds=self._duration_seconds(run.started_at, run.finished_at),
+                    stage_count=len(run.stage_results),
+                    last_error=run.last_error,
+                )
                 raise
 
             output_keys: list[str] = []
@@ -151,6 +181,13 @@ class StageEngine:
             if outcome.artifacts:
                 context.artifacts.extend(outcome.artifacts)
                 self.artifact_store.save_artifacts(run.id, context.artifacts)
+
+            if definition.stage_type in DOCUMENT_GENERATION_STAGE_TYPES:
+                self._emit_document_generation_events(
+                    run=run,
+                    definition=definition,
+                    outcome=outcome,
+                )
 
             self._append_stage_result(
                 context=context,
@@ -170,6 +207,17 @@ class StageEngine:
         run.finished_at = utc_now_iso()
         run.updated_at = utc_now_iso()
         self.run_repository.save(run)
+        self._emit_event(
+            "run_completed",
+            user_id=run.normalized_user_id,
+            workspace_id=run.workspace_id,
+            run_id=run.id,
+            source="runtime",
+            status=run.status,
+            duration_seconds=self._duration_seconds(run.started_at, run.finished_at),
+            stage_count=len(run.stage_results),
+            last_error=run.last_error,
+        )
         return run
 
     def _mark_run_running(self, run) -> None:
@@ -239,3 +287,38 @@ class StageEngine:
         context.run.stage_results.append(result)
         context.run.updated_at = utc_now_iso()
         self.run_repository.save(context.run)
+
+    def _emit_event(self, event_name: str, **payload) -> None:
+        if callable(self.event_emitter):
+            self.event_emitter(event_name, **payload)
+
+    def _emit_document_generation_events(self, *, run, definition: StageDefinition, outcome: StageOutcome) -> None:
+        generated_jobs = int(outcome.metrics.get("generated_jobs") or 0)
+        user_id = run.normalized_user_id
+        for jobs in outcome.job_sets.values():
+            for job in jobs:
+                job_payload = job.to_dict() if isinstance(job, JobRecord) else dict(job or {})
+                self._emit_event(
+                    "cv_generation_completed",
+                    user_id=user_id,
+                    workspace_id=run.workspace_id,
+                    run_id=run.id,
+                    job_id=str(job_payload.get("job_id") or ""),
+                    source=definition.stage_type,
+                    generated_jobs=generated_jobs,
+                    ats_best_score=job_payload.get("ats_best_score"),
+                    ats_stop_reason=job_payload.get("ats_stop_reason"),
+                    doc_generation_errors=job_payload.get("doc_generation_error"),
+                )
+
+    @staticmethod
+    def _duration_seconds(started_at: str, finished_at: str) -> float:
+        started = str(started_at or "").strip()
+        finished = str(finished_at or "").strip()
+        if not started or not finished:
+            return 0.0
+        try:
+            delta = datetime.fromisoformat(finished) - datetime.fromisoformat(started)
+        except ValueError:
+            return 0.0
+        return max(delta.total_seconds(), 0.0)

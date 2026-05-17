@@ -827,6 +827,13 @@ class StageResult:
         )
 
 
+def resolve_run_user_id(requested_by: str, user_id: str = "") -> str:
+    normalized_requested_by = str(requested_by or "").strip()
+    if normalized_requested_by.startswith("api:"):
+        return normalized_requested_by.split(":", 1)[1].strip()
+    return str(user_id or "").strip()
+
+
 @dataclass(slots=True)
 class RunRecord:
     id: str
@@ -834,6 +841,7 @@ class RunRecord:
     workflow_template_id: str
     status: str
     requested_by: str = ""
+    user_id: str = ""
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
     queued_at: str = ""
@@ -867,12 +875,17 @@ class RunRecord:
             workflow_template_id=workflow_template_id,
             status=RUN_STATUS_PLANNED,
             requested_by=requested_by,
+            user_id=resolve_run_user_id(requested_by),
             created_at=now,
             updated_at=now,
             max_attempts=max(1, int(max_attempts)),
             run_input_overrides=dict(run_input_overrides or {}),
             metadata=dict(metadata or {}),
         )
+
+    @property
+    def normalized_user_id(self) -> str:
+        return resolve_run_user_id(self.requested_by, self.user_id)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -881,6 +894,7 @@ class RunRecord:
             "workflow_template_id": self.workflow_template_id,
             "status": self.status,
             "requested_by": self.requested_by,
+            "user_id": self.normalized_user_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "queued_at": self.queued_at,
@@ -900,12 +914,14 @@ class RunRecord:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "RunRecord":
         run_plan_payload = payload.get("run_plan")
+        requested_by = str(payload.get("requested_by") or "")
         return cls(
             id=str(payload.get("id") or ""),
             workspace_id=str(payload.get("workspace_id") or ""),
             workflow_template_id=str(payload.get("workflow_template_id") or ""),
             status=str(payload.get("status") or RUN_STATUS_PLANNED),
-            requested_by=str(payload.get("requested_by") or ""),
+            requested_by=requested_by,
+            user_id=resolve_run_user_id(requested_by, str(payload.get("user_id") or "")),
             created_at=str(payload.get("created_at") or utc_now_iso()),
             updated_at=str(payload.get("updated_at") or utc_now_iso()),
             queued_at=str(payload.get("queued_at") or ""),

@@ -8,6 +8,7 @@ from backend.connectors.job_boards import list_portal_strategy_ids
 from backend.orchestration import BackendRegistries, ComponentDescriptor, Registry, StageEngine
 from backend.repositories import (
     BackendRepositories,
+    FileAnalyticsStore,
     FileAuthRepository,
     FileArtifactStore,
     FileJobStore,
@@ -16,6 +17,7 @@ from backend.repositories import (
     FileSecretStore,
     FileWorkerStore,
     FileWorkspaceRepository,
+    SqliteAnalyticsStore,
     SqliteAuthRepository,
     SqliteArtifactStore,
     SqliteJobStore,
@@ -254,6 +256,7 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             auth_repository=FileAuthRepository(base_path),
             secret_store=FileSecretStore(base_path),
             worker_store=FileWorkerStore(base_path),
+            analytics_store=FileAnalyticsStore(base_path),
         )
     if storage_backend == "sqlite":
         db_path = _resolve_sqlite_path(base_path)
@@ -266,6 +269,7 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             auth_repository=SqliteAuthRepository(db_path),
             secret_store=SqliteSecretStore(db_path),
             worker_store=SqliteWorkerStore(db_path),
+            analytics_store=SqliteAnalyticsStore(db_path),
         )
     raise ValueError(f"Unsupported storage backend: {storage_backend}")
 
@@ -283,9 +287,12 @@ def create_backend(
         run_repository=repositories.run_repository,
         job_store=repositories.job_store,
         artifact_store=repositories.artifact_store,
+        event_emitter=None,
     )
-    return BackendApplication(
+    application = BackendApplication(
         repositories=repositories,
         registries=registries,
         stage_engine=stage_engine,
     )
+    stage_engine.event_emitter = application.emit_event
+    return application

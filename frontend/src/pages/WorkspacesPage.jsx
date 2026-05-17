@@ -37,7 +37,14 @@ const OPTIONAL_PRIORITY_MODULE_ID = "priority_ranking";
 const JOB_FILTERING_STRICT = "Strict Match";
 const JOB_FILTERING_BROADER = "Broader Match";
 const QUICK_APPLY_ROUTE = "/quick-apply";
-const TARGETING_FIELD_DISPLAY_ORDER = ["keywords", "target_roles", "country_codes", "cities"];
+const TARGETING_FIELD_DISPLAY_ORDER = [
+  "keywords",
+  "target_roles",
+  "work_arrangement",
+  "industry",
+  "country_codes",
+  "cities",
+];
 const TARGETING_FIELD_FALLBACKS = {
   keywords: {
     id: "keywords",
@@ -71,6 +78,36 @@ const TARGETING_FIELD_FALLBACKS = {
     section: "targeting",
     sort_order: 25,
   },
+  work_arrangement: {
+    id: "work_arrangement",
+    label: "Work Arrangement",
+    description: "Prefer remote, hybrid, on-site, or accept any work arrangement.",
+    type: "select",
+    compatible_flows: ["tailored_documents"],
+    options: [
+      { value: "remote", label: "Remote" },
+      { value: "hybrid", label: "Hybrid" },
+      { value: "onsite", label: "On-site" },
+      { value: "any", label: "Any arrangement" },
+    ],
+    default: "any",
+    user_facing: true,
+    frontend_visible: true,
+    section: "targeting",
+    sort_order: 30,
+  },
+  industry: {
+    id: "industry",
+    label: "Industry",
+    description: "Optional industry focus for this workspace.",
+    type: "text",
+    compatible_flows: ["tailored_documents"],
+    placeholder: "Fintech",
+    user_facing: true,
+    frontend_visible: true,
+    section: "targeting",
+    sort_order: 31,
+  },
   country_codes: {
     id: "country_codes",
     label: "Target Country",
@@ -81,7 +118,7 @@ const TARGETING_FIELD_FALLBACKS = {
     user_facing: true,
     frontend_visible: true,
     section: "targeting",
-    sort_order: 30,
+    sort_order: 32,
   },
   cities: {
     id: "cities",
@@ -93,7 +130,7 @@ const TARGETING_FIELD_FALLBACKS = {
     user_facing: true,
     frontend_visible: true,
     section: "targeting",
-    sort_order: 32,
+    sort_order: 34,
   },
 };
 const EMPTY_ACTION_STATE = {
@@ -102,6 +139,13 @@ const EMPTY_ACTION_STATE = {
   message: "",
   error: "",
   details: [],
+};
+const EMPTY_SCHEDULE_EDITOR_STATE = {
+  workspaceId: "",
+  enabled: false,
+  intervalDays: "7",
+  saving: false,
+  error: "",
 };
 
 const EMPTY_BUILDER_FORM = {
@@ -179,11 +223,12 @@ function parseLineList(text) {
   return parseDelimitedList(text);
 }
 
-function buildSourceValidationPayload({ flowId, sourceIds, settings }) {
+function buildSourceValidationPayload({ flowId, sourceIds, settings, workspaceId = "" }) {
   return {
     flow_id: flowId,
     source_ids: [...(sourceIds || [])],
     settings: { ...(settings || {}) },
+    ...(workspaceId ? { workspace_id: workspaceId } : {}),
   };
 }
 
@@ -215,6 +260,29 @@ function formatDateTime(value) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function workspaceRunSchedule(workspace) {
+  const rawSchedule =
+    workspace?.schedule && typeof workspace.schedule === "object"
+      ? workspace.schedule
+      : workspace?.metadata?.run_schedule || {};
+  const parsedInterval = Number.parseInt(rawSchedule.interval_days, 10);
+  const intervalDays = Number.isInteger(parsedInterval) && parsedInterval > 0 ? parsedInterval : 0;
+  const enabled = Boolean(rawSchedule.enabled) && intervalDays > 0;
+  return {
+    enabled,
+    intervalDays: enabled ? intervalDays : 0,
+    nextRunAt: String(rawSchedule.next_run_at || ""),
+    lastEnqueuedAt: String(rawSchedule.last_enqueued_at || ""),
+    lastRunId: String(rawSchedule.last_run_id || ""),
+    lastError: String(rawSchedule.last_error || ""),
+    lastErrorAt: String(rawSchedule.last_error_at || ""),
+  };
+}
+
+function scheduleIntervalLabel(intervalDays) {
+  return `Every ${intervalDays} day${intervalDays === 1 ? "" : "s"}`;
 }
 
 function portalOptionsForSelection(field, countryCodes, selectedValues) {
@@ -1125,6 +1193,7 @@ export default function WorkspacesPage() {
   const focusedSectionId = searchParams.get("focus") || "";
   const { request, resolvePath } = useSession();
   const [actionState, setActionState] = useState(EMPTY_ACTION_STATE);
+  const [scheduleEditorState, setScheduleEditorState] = useState(EMPTY_SCHEDULE_EDITOR_STATE);
   const [builderState, setBuilderState] = useState({
     open: false,
     mode: "create",
@@ -1812,6 +1881,7 @@ export default function WorkspacesPage() {
       flowId,
       sourceIds,
       settings: settingsWithDerivedLocationDefaults(workspace.settings || {}, sourceIds),
+      workspaceId: workspace.id,
     });
   }
 
@@ -1925,6 +1995,254 @@ export default function WorkspacesPage() {
     }
   }
 
+  function openScheduleEditor(workspace) {
+    const schedule = workspaceRunSchedule(workspace);
+    setScheduleEditorState({
+      workspaceId: workspace.id,
+      enabled: schedule.enabled,
+      intervalDays: schedule.intervalDays ? String(schedule.intervalDays) : "7",
+      saving: false,
+      error: "",
+    });
+  }
+
+  function closeScheduleEditor() {
+    setScheduleEditorState(EMPTY_SCHEDULE_EDITOR_STATE);
+  }
+
+  async function saveWorkspaceSchedule(workspace) {
+    const enabled = Boolean(scheduleEditorState.enabled);
+    const parsedIntervalDays = Number.parseInt(scheduleEditorState.intervalDays, 10);
+    if (enabled && (!Number.isInteger(parsedIntervalDays) || parsedIntervalDays < 1)) {
+      setScheduleEditorState((current) => ({
+        ...current,
+        error: "Enter a whole number of days greater than 0.",
+      }));
+      return;
+    }
+
+    setScheduleEditorState((current) => ({
+      ...current,
+      saving: true,
+      error: "",
+    }));
+
+    try {
+      const updatedWorkspace = await request(`/workspaces/${workspace.id}/schedule`, {
+        method: "PUT",
+        body: {
+          enabled,
+          interval_days: enabled ? parsedIntervalDays : 0,
+        },
+      });
+      const schedule = workspaceRunSchedule(updatedWorkspace);
+      setActionState({
+        ...EMPTY_ACTION_STATE,
+        workspaceId: workspace.id,
+        message: schedule.enabled
+          ? `Recurring schedule saved. Next queued run: ${schedule.nextRunAt ? formatDateTime(schedule.nextRunAt) : "Pending"}`
+          : "Recurring schedule turned off.",
+      });
+      setScheduleEditorState(EMPTY_SCHEDULE_EDITOR_STATE);
+      await refresh();
+    } catch (scheduleError) {
+      setScheduleEditorState((current) => ({
+        ...current,
+        saving: false,
+        error: getApiErrorMessage(scheduleError, "Unable to save recurring schedule."),
+      }));
+    }
+  }
+
+  function renderScheduleBadges(workspace) {
+    const schedule = workspaceRunSchedule(workspace);
+    return (
+      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+        <span
+          className={[
+            "rounded-full px-3 py-1 font-medium",
+            schedule.enabled
+              ? "bg-primary/10 text-primary"
+              : "bg-surface-container-low text-on-surface-variant",
+          ].join(" ")}
+        >
+          {schedule.enabled ? scheduleIntervalLabel(schedule.intervalDays) : "Manual only"}
+        </span>
+        {schedule.enabled && schedule.nextRunAt ? (
+          <span className="rounded-full bg-surface-container-low px-3 py-1 text-on-surface-variant">
+            Next run {formatDateTime(schedule.nextRunAt)}
+          </span>
+        ) : null}
+        {schedule.lastError ? (
+          <span className="rounded-full bg-error/10 px-3 py-1 text-error">
+            Scheduler issue saved on {formatDateTime(schedule.lastErrorAt)}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderScheduleEditor(workspace) {
+    if (scheduleEditorState.workspaceId !== workspace.id) {
+      return null;
+    }
+
+    return (
+      <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
+        <div className="grid gap-4 xl:grid-cols-[minmax(180px,0.55fr)_minmax(220px,0.75fr)_auto] xl:items-end">
+          <label className="space-y-2">
+            <span className="block text-sm font-semibold text-on-surface">Run mode</span>
+            <select
+              className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+              disabled={scheduleEditorState.saving}
+              onChange={(event) =>
+                setScheduleEditorState((current) => ({
+                  ...current,
+                  enabled: event.target.value === "scheduled",
+                  error: "",
+                }))
+              }
+              value={scheduleEditorState.enabled ? "scheduled" : "manual"}
+            >
+              <option value="manual">Manual only</option>
+              <option value="scheduled">Every N days</option>
+            </select>
+          </label>
+
+          <label className="space-y-2">
+            <span className="block text-sm font-semibold text-on-surface">Interval</span>
+            <div className="flex items-center gap-3">
+              <input
+                className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface disabled:cursor-not-allowed disabled:text-on-surface-variant"
+                disabled={!scheduleEditorState.enabled || scheduleEditorState.saving}
+                min="1"
+                onChange={(event) =>
+                  setScheduleEditorState((current) => ({
+                    ...current,
+                    intervalDays: event.target.value,
+                    error: "",
+                  }))
+                }
+                step="1"
+                type="number"
+                value={scheduleEditorState.intervalDays}
+              />
+              <span className="text-sm text-on-surface-variant">days</span>
+            </div>
+            <span className="block text-xs leading-6 text-on-surface-variant">
+              Runr adds a queued run automatically when the interval elapses and a worker is polling.
+            </span>
+          </label>
+
+          <div className="flex flex-wrap gap-2 xl:justify-end">
+            <button
+              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              disabled={scheduleEditorState.saving}
+              onClick={closeScheduleEditor}
+              type="button"
+            >
+              Cancel
+            </button>
+            <button
+              className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={scheduleEditorState.saving}
+              onClick={() => saveWorkspaceSchedule(workspace)}
+              type="button"
+            >
+              {scheduleEditorState.saving ? "Saving..." : "Save schedule"}
+            </button>
+          </div>
+        </div>
+
+        {scheduleEditorState.error ? (
+          <p className="mt-3 text-sm text-error">{scheduleEditorState.error}</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderSchedulePanel(workspace) {
+    const schedule = workspaceRunSchedule(workspace);
+    const scheduleEditorOpen = scheduleEditorState.workspaceId === workspace.id;
+
+    return (
+      <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-on-surface">Recurring Run Schedule</h3>
+            <p className="mt-1 text-xs leading-6 text-on-surface-variant">
+              {schedule.enabled
+                ? `This workspace will be added to the queue every ${schedule.intervalDays} day${schedule.intervalDays === 1 ? "" : "s"}.`
+                : "This workspace only runs when you start it manually."}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span
+              className={[
+                "rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide",
+                schedule.enabled
+                  ? "bg-primary/10 text-primary"
+                  : "bg-surface-container-low text-on-surface-variant",
+              ].join(" ")}
+            >
+              {schedule.enabled ? scheduleIntervalLabel(schedule.intervalDays) : "Manual only"}
+            </span>
+            <button
+              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              onClick={() =>
+                scheduleEditorOpen ? closeScheduleEditor() : openScheduleEditor(workspace)
+              }
+              type="button"
+            >
+              {scheduleEditorOpen ? "Close" : schedule.enabled ? "Edit schedule" : "Set schedule"}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <div className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+              Next queued run
+            </div>
+            <div className="mt-1 text-sm text-on-surface">
+              {schedule.enabled && schedule.nextRunAt ? formatDateTime(schedule.nextRunAt) : "Not scheduled"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+              Last queued
+            </div>
+            <div className="mt-1 text-sm text-on-surface">
+              {schedule.lastEnqueuedAt ? formatDateTime(schedule.lastEnqueuedAt) : "Not queued yet"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+              Last scheduled run
+            </div>
+            <div className="mt-1 text-sm text-on-surface">
+              {schedule.lastRunId ? (
+                <Link className="text-primary hover:underline" to={`/runs/${schedule.lastRunId}`}>
+                  Open run
+                </Link>
+              ) : (
+                "No scheduled runs yet"
+              )}
+            </div>
+          </div>
+        </div>
+
+        {schedule.lastError ? (
+          <div className="mt-4 rounded-lg border border-error/20 bg-error/5 px-4 py-3 text-sm text-error">
+            Last scheduler issue: {schedule.lastError}
+          </div>
+        ) : null}
+
+        {scheduleEditorOpen ? <div className="mt-4">{renderScheduleEditor(workspace)}</div> : null}
+      </div>
+    );
+  }
+
   function workspacePresentation(workspace) {
     const moduleNames = (workspace.metadata?.modules || []).map((moduleId) => labelize(moduleId));
     const sourceNames = workspaceSourceIds(
@@ -1979,6 +2297,7 @@ export default function WorkspacesPage() {
         <div className="divide-y divide-outline-variant/10">
           {workspaces.map((workspace) => {
             const workspaceActionPending = actionState.workspaceId === workspace.id && actionState.loading;
+            const workspaceScheduleEditorOpen = scheduleEditorState.workspaceId === workspace.id;
             return (
               <article
                 className="grid gap-4 px-4 py-5 transition-colors hover:bg-surface-container-low md:grid-cols-[minmax(0,1fr)_auto] md:items-start md:gap-6"
@@ -1991,6 +2310,7 @@ export default function WorkspacesPage() {
                   <p className="mt-2 max-w-2xl line-clamp-2 text-sm leading-6 text-on-surface-variant break-words">
                     {workspace.description || "No description provided."}
                   </p>
+                  {renderScheduleBadges(workspace)}
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -2006,12 +2326,31 @@ export default function WorkspacesPage() {
                     disabled={workspaceActionPending}
                     onClick={() => triggerRun(workspace.id)}
                     type="button"
-                  >
+                    >
                     Run
+                  </button>
+                  <button
+                    className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={scheduleEditorState.saving && workspaceScheduleEditorOpen}
+                    onClick={() =>
+                      workspaceScheduleEditorOpen
+                        ? closeScheduleEditor()
+                        : openScheduleEditor(workspace)
+                    }
+                    type="button"
+                  >
+                    {workspaceScheduleEditorOpen
+                      ? "Close"
+                      : workspaceRunSchedule(workspace).enabled
+                        ? "Schedule"
+                        : "Set Schedule"}
                   </button>
                 </div>
 
-                <div className="md:col-span-2">{renderActionFeedback(workspace)}</div>
+                <div className="space-y-3 md:col-span-2">
+                  {renderActionFeedback(workspace)}
+                  {workspaceScheduleEditorOpen ? renderScheduleEditor(workspace) : null}
+                </div>
               </article>
             );
           })}
@@ -2024,6 +2363,7 @@ export default function WorkspacesPage() {
     const summary = workspacePresentation(workspace);
     const settingEntries = workspaceSettingEntries(workspace, builderCatalog);
     const workspaceActionPending = actionState.workspaceId === workspace.id && actionState.loading;
+    const workspaceScheduleEditorOpen = scheduleEditorState.workspaceId === workspace.id;
 
     return (
       <div className="space-y-5">
@@ -2070,6 +2410,22 @@ export default function WorkspacesPage() {
               >
                 Quick Apply
               </Link>
+              <button
+                className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={scheduleEditorState.saving && workspaceScheduleEditorOpen}
+                onClick={() =>
+                  workspaceScheduleEditorOpen
+                    ? closeScheduleEditor()
+                    : openScheduleEditor(workspace)
+                }
+                type="button"
+              >
+                {workspaceScheduleEditorOpen
+                  ? "Close schedule"
+                  : workspaceRunSchedule(workspace).enabled
+                    ? "Edit schedule"
+                    : "Set schedule"}
+              </button>
             </div>
           </div>
 
@@ -2105,6 +2461,8 @@ export default function WorkspacesPage() {
               </Link>
             </div>
           </div>
+
+          {renderSchedulePanel(workspace)}
 
           <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
             <div>

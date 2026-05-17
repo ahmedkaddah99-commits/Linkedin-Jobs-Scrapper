@@ -42,12 +42,21 @@ PERSONALIZATION_SCOPES = [
     PERSONALIZATION_SCOPE_SELECTED,
     PERSONALIZATION_SCOPE_FULL,
 ]
+WORK_ARRANGEMENT_ANY = "any"
+WORK_ARRANGEMENT_VALUES = [
+    "remote",
+    "hybrid",
+    "onsite",
+    WORK_ARRANGEMENT_ANY,
+]
 
 WORKSPACE_USER_FACING_FIELD_IDS = [
     "workspace_cv_asset_id",
     "cv_generation_mode",
     "personalization_scope",
     "keywords",
+    "work_arrangement",
+    "industry",
     "country_codes",
     "target_roles",
     "job_filtering_mode",
@@ -466,6 +475,22 @@ def normalize_job_filtering_mode(value: Any, *, default: str = JOB_FILTERING_MOD
     return default
 
 
+def normalize_work_arrangement(value: Any, *, default: str = WORK_ARRANGEMENT_ANY) -> str:
+    text = _clean_text(value)
+    if not text:
+        return default
+    normalized = text.casefold().replace("_", "").replace("-", "").replace(" ", "")
+    if normalized == "remote":
+        return "remote"
+    if normalized == "hybrid":
+        return "hybrid"
+    if normalized == "onsite":
+        return "onsite"
+    if normalized == "any":
+        return WORK_ARRANGEMENT_ANY
+    return default
+
+
 def normalize_personalization_scope(
     value: Any,
     *,
@@ -509,6 +534,8 @@ def default_workspace_configuration_v2() -> dict[str, Any]:
             "method": WORKSPACE_TARGETING_METHOD,
             "keyword_limit": WORKSPACE_KEYWORD_LIMIT,
             "keywords": [],
+            "work_arrangement": WORK_ARRANGEMENT_ANY,
+            "industry": "",
             "inferred_from_cv": True,
         },
         "location_preferences": {
@@ -593,6 +620,8 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
         raw_payload.get("profile_label") or settings.get("profile_label")
     )
     contract["targeting"]["keywords"] = keywords
+    contract["targeting"]["work_arrangement"] = normalize_work_arrangement(settings.get("work_arrangement"))
+    contract["targeting"]["industry"] = _clean_text(settings.get("industry"))
 
     country_codes = _normalize_country_codes(
         settings.get("country_codes")
@@ -1424,6 +1453,8 @@ __all__ = [
     "PERSONALIZATION_SCOPE_FULL",
     "PERSONALIZATION_SCOPE_SELECTED",
     "PERSONALIZATION_SCOPES",
+    "WORK_ARRANGEMENT_ANY",
+    "WORK_ARRANGEMENT_VALUES",
     "MAIL_CONNECTION_CONTRACT_SCHEMA",
     "PHASE0_CONTRACT_VERSION",
     "REFERRAL_RELATIONSHIP_SCHEMA",
@@ -1457,6 +1488,7 @@ __all__ = [
     "normalize_gmail_application_detection",
     "normalize_job_filtering_mode",
     "normalize_personalization_scope",
+    "normalize_work_arrangement",
     "normalize_mail_connection_contract",
     "normalize_referral_outreach_status",
     "normalize_referral_relationship",

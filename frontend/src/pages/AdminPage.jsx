@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -48,13 +49,22 @@ export default function AdminPage() {
 
   return (
     <div className="space-y-8">
-      <header className="flex flex-col gap-2">
-        <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
-          Admin
-        </h1>
-        <p className="text-sm text-on-surface-variant">
-          Internal control room for users, access, secrets, templates, and workers.
-        </p>
+      <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div className="flex flex-col gap-2">
+          <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
+            Admin
+          </h1>
+          <p className="text-sm text-on-surface-variant">
+            Internal control room for users, access, secrets, templates, workers, and analytics events.
+          </p>
+        </div>
+        <Link
+          className="inline-flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
+          to="/admin/events"
+        >
+          <span className="material-symbols-outlined text-[18px]">timeline</span>
+          Event Explorer
+        </Link>
       </header>
 
       <section className="flex flex-wrap gap-2 rounded-xl bg-surface-container-low p-2">

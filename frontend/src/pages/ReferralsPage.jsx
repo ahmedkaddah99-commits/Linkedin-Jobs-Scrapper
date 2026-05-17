@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
+import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
 
 const EMPTY_FORM = {
   name: "",
@@ -153,18 +154,24 @@ async function loadAllReferralOutreachItems(request) {
 }
 
 async function loadReferralWorkspace(request) {
-  const [contactsPayload, outreachPayload] = await Promise.all([
+  const [contactsPayload, outreachPayload, trackerPayload] = await Promise.all([
     loadAllReferralContacts(request),
     loadAllReferralOutreachItems(request),
+    request("/tracker").catch(() => ({ items: [] })),
   ]);
   return {
     contacts: contactsPayload.contacts,
     outreachItems: outreachPayload.items,
+    trackerItems: Array.isArray(trackerPayload?.items) ? trackerPayload.items : [],
     meta: {
       contacts: contactsPayload.meta,
       outreach: outreachPayload.meta,
     },
   };
+}
+
+function buildPeopleFinderTargetKey(runId, jobId) {
+  return `${String(runId || "").trim()}::${String(jobId || "").trim()}`;
 }
 
 function outreachStatusTone(status) {
@@ -210,6 +217,7 @@ export default function ReferralsPage() {
 
   const contacts = data?.contacts || [];
   const outreachItems = data?.outreachItems || [];
+  const trackerItems = data?.trackerItems || [];
   const editingContact = useMemo(
     () => contacts.find((contact) => contact.contact_id === editingId) || null,
     [contacts, editingId],
@@ -251,6 +259,63 @@ export default function ReferralsPage() {
     });
     return groups;
   }, [outreachItems]);
+  const peopleFinderTargets = useMemo(() => {
+    const entries = new Map();
+
+    trackerItems.forEach((item) => {
+      const runId = String(item.run_id || "").trim();
+      const jobId = String(item.job_id || "").trim();
+      if (!runId || !jobId) {
+        return;
+      }
+      const key = buildPeopleFinderTargetKey(runId, jobId);
+      entries.set(key, {
+        key,
+        runId,
+        jobId,
+        title: item.title || "Untitled job",
+        company: item.company || "",
+        location: item.location || "",
+        workspaceName: item.workspace_name || "",
+        applyLink: item.apply_link || "",
+        trackerStatus: item.tracker_status || "",
+        sourceLabel: "Tracker",
+        jobWorkspaceUrl:
+          item.job_workspace_url || buildJobWorkspaceRoute({ runId, jobId }),
+        updatedAt: item.updated_at || item.run_finished_at || "",
+      });
+    });
+
+    outreachItems.forEach((item) => {
+      const runId = String(item.run_id || "").trim();
+      const jobId = String(item.job_id || "").trim();
+      if (!runId || !jobId) {
+        return;
+      }
+      const key = buildPeopleFinderTargetKey(runId, jobId);
+      if (entries.has(key)) {
+        return;
+      }
+      entries.set(key, {
+        key,
+        runId,
+        jobId,
+        title: item.job_title || "Untitled job",
+        company: item.company || "",
+        location: "",
+        workspaceName: item.workspace_name || "",
+        applyLink: item.apply_link || "",
+        trackerStatus: "",
+        sourceLabel: "Outreach history",
+        jobWorkspaceUrl: buildJobWorkspaceRoute({ runId, jobId }),
+        updatedAt: item.updated_at || "",
+      });
+    });
+
+    return Array.from(entries.values()).sort((left, right) =>
+      String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")),
+    );
+  }, [outreachItems, trackerItems]);
 
   function updateForm(patch) {
     setForm((current) => ({ ...current, ...patch }));
@@ -425,6 +490,94 @@ export default function ReferralsPage() {
         </p>
       </header>
 
+      <section className="rounded-2xl border border-primary/15 bg-[radial-gradient(circle_at_top_left,rgba(58,130,246,0.12),transparent_45%),linear-gradient(135deg,rgba(15,23,42,0.02),rgba(58,130,246,0.02))] p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-primary">
+              Relevant People Finder
+            </div>
+            <div className="mt-1 text-xl font-semibold text-on-surface">
+              Find likely hiring managers, team members, and senior leaders from here
+            </div>
+            <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
+              Use this before writing networking messages or asking for a referral. Runr looks for likely relevant people only, and confidence is based on public profile signals rather than certainty.
+            </p>
+          </div>
+          <Link
+            className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            to="/tracker"
+          >
+            <span className="material-symbols-outlined text-[18px]">work</span>
+            Open all applications
+          </Link>
+        </div>
+
+        {peopleFinderTargets.length ? (
+          <div className="mt-5 grid gap-4 xl:grid-cols-3">
+            {peopleFinderTargets.slice(0, 6).map((target) => (
+              <article
+                key={target.key}
+                className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold text-on-surface">
+                      {target.title}
+                    </div>
+                    <div className="mt-1 text-sm text-on-surface-variant">
+                      {[target.company, target.location].filter(Boolean).join(" | ") || "Saved application context"}
+                    </div>
+                  </div>
+                  <span className="rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-on-surface-variant">
+                    {target.sourceLabel}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {target.workspaceName ? (
+                    <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface">
+                      {target.workspaceName}
+                    </span>
+                  ) : null}
+                  {target.trackerStatus ? (
+                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                      {target.trackerStatus.replace(/_/g, " ")}
+                    </span>
+                  ) : null}
+                </div>
+
+                <p className="mt-3 text-sm leading-6 text-on-surface-variant">
+                  Likely relevant only. Use this to review potential matches before outreach, referrals, or tailoring.
+                </p>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Link
+                    className="rounded-full bg-primary px-3 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                    to={target.jobWorkspaceUrl}
+                  >
+                    Find relevant people
+                  </Link>
+                  {target.applyLink ? (
+                    <a
+                      className="rounded-full bg-surface-container-low px-3 py-1.5 text-sm font-semibold text-on-surface transition-colors hover:bg-surface-container-high"
+                      href={target.applyLink}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      Open Job
+                    </a>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-5 text-sm text-on-surface-variant">
+            No application context is available here yet. Once a job reaches Tracker or has saved outreach history, the Relevant People Finder entry point appears in this section.
+          </div>
+        )}
+      </section>
+
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           { label: "Personal Contacts", value: stats.manual },
@@ -480,27 +633,6 @@ export default function ReferralsPage() {
             </button>
           );
         })}
-      </section>
-
-      <section className="rounded-2xl border border-primary/15 bg-[radial-gradient(circle_at_top_left,rgba(58,130,246,0.12),transparent_45%),linear-gradient(135deg,rgba(15,23,42,0.02),rgba(58,130,246,0.02))] p-5">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wider text-primary">Target Contact Discovery</div>
-            <div className="mt-1 text-lg font-semibold text-on-surface">
-              Need someone beyond your current network?
-            </div>
-            <p className="mt-1 max-w-3xl text-sm text-on-surface-variant">
-              Use the new contact-discovery action from live applications in Tracker to generate ranked LinkedIn search targets, quick connect notes, and follow-up drafts.
-            </p>
-          </div>
-          <Link
-            className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-            to="/tracker"
-          >
-            <span className="material-symbols-outlined text-[18px]">travel_explore</span>
-            Open Tracker
-          </Link>
-        </div>
       </section>
 
       <section className="grid gap-8 xl:grid-cols-[1.05fr_1.4fr]">
@@ -892,6 +1024,17 @@ export default function ReferralsPage() {
                                         >
                                           Open Job
                                         </a>
+                                      ) : null}
+                                      {item.run_id && item.job_id ? (
+                                        <Link
+                                          className="rounded bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+                                          to={buildJobWorkspaceRoute({
+                                            runId: item.run_id,
+                                            jobId: item.job_id,
+                                          })}
+                                        >
+                                          Relevant People
+                                        </Link>
                                       ) : null}
                                     </div>
                                   </div>

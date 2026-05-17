@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useUser } from "@clerk/clerk-react";
 import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
+import { isAdminUser } from "../lib/auth";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
 const TOP_RIBBON_STORAGE_KEY = "runr.topRibbonCollapsed";
@@ -73,6 +75,7 @@ const secondaryTopRibbonItems = [
   { label: "Support", icon: "contact_support" },
   { label: "Documentation", icon: "menu_book" },
   {
+    adminOnly: true,
     label: "Admin",
     icon: "admin_panel_settings",
     to: "/admin",
@@ -141,7 +144,7 @@ function SidebarActionButton({ collapsed = false, icon, label, onClick, type = "
 
 function getTopRibbonActionClassName(isActive) {
   return [
-    "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
+    "top-ribbon__action inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
     isActive
       ? "border-primary/30 bg-primary/10 text-primary"
       : "border-outline-variant/20 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface",
@@ -291,7 +294,7 @@ function TopRibbonDisclosure({ items }) {
       {isOpen ? (
         <div
           aria-label="More actions"
-          className="absolute right-0 top-[calc(100%+0.5rem)] z-50 flex min-w-[14rem] flex-col gap-1 rounded-[1.5rem] border border-outline-variant/20 bg-background/95 p-2 shadow-soft backdrop-blur-[20px]"
+          className="top-ribbon__menu absolute right-0 top-[calc(100%+0.5rem)] z-50 flex min-w-[14rem] flex-col gap-1 rounded-[1.5rem] border border-outline-variant/20 bg-background/95 p-2 shadow-soft backdrop-blur-[20px]"
           id={menuId}
           ref={menuRef}
         >
@@ -382,7 +385,9 @@ export default function AppShell({ children }) {
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
   const isRunDetail = Boolean(runMatch);
   const { disconnect, status, user } = useSession();
+  const { user: clerkUser } = useUser();
   const { isDark, toggleTheme } = useTheme();
+  const isAdmin = isAdminUser(user);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(() => {
     if (typeof window === "undefined") {
@@ -412,12 +417,24 @@ export default function AppShell({ children }) {
     window.localStorage.setItem(TOP_RIBBON_STORAGE_KEY, topRibbonCollapsed ? "true" : "false");
   }, [topRibbonCollapsed]);
 
+  const normalizedPlanId = String(
+    clerkUser?.publicMetadata?.plan_id || user?.plan_id || "free",
+  ).trim().toLowerCase() || "free";
+  const planBadgeLabel = normalizedPlanId === "business"
+    ? "Business"
+    : normalizedPlanId === "pro"
+      ? "Pro"
+      : "Free";
   const shellUser = {
     name: user?.display_name || user?.email || "Disconnected",
     subtitle: user?.email || (status === "connected" ? "" : "Backend not connected"),
     avatar:
+      user?.image_url ||
+      user?.metadata?.profile?.photo_data_url ||
+      user?.metadata?.profile?.avatar_url ||
       "https://lh3.googleusercontent.com/aida-public/AB6AXuDeh_GwQ1tyaiUiDvT71g8HFsHEJ5gVS679pFkoWXtNfLFzoFMzeRd4HMomF0XAuq8mfaec3nzeharFzxat1NNtR0s1NGQ8OmsZwjVfuKfX6PFUGr0duTgyC5ItHvMrLbUKmVICPFeD-iyiVRX9E4uWBHxGmGTQWtgvLOpUORp77hhc30XrStvTwhM64ft7fw0EhK8zMcSjQubBgd6isZ-HmuKrN7-OkTq3cDe4ub5eT-F6nWziFtgteycj_e7n3xQafjsJUdJbHiU",
   };
+  const topRibbonItems = secondaryTopRibbonItems.filter((item) => !item.adminOnly || isAdmin);
 
   return (
     <div
@@ -460,7 +477,7 @@ export default function AppShell({ children }) {
             "sticky top-0 z-30 overflow-visible transition-all duration-200",
             topRibbonCollapsed
               ? "relative h-0 border-b-0 bg-transparent px-0 py-0"
-              : "relative flex h-16 items-center justify-between border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] md:px-8",
+              : "top-ribbon top-ribbon--teal relative flex h-16 items-center justify-between border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] md:px-8",
           ].join(" ")}
         >
           {topRibbonCollapsed ? null : (
@@ -504,7 +521,7 @@ export default function AppShell({ children }) {
               </div>
 
               <div className="flex items-center gap-2 md:gap-3">
-                <TopRibbonDisclosure items={secondaryTopRibbonItems} />
+                <TopRibbonDisclosure items={topRibbonItems} />
                 {isRunDetail ? (
                   <>
                     <button
@@ -537,13 +554,25 @@ export default function AppShell({ children }) {
                 >
                   <span className="material-symbols-outlined">notifications</span>
                 </button>
-                <button
-                  className="hidden text-sm text-on-surface-variant transition-colors hover:text-primary sm:block"
-                  onClick={disconnect}
-                  type="button"
-                >
-                  Sign Out
-                </button>
+                {status === "connected" ? (
+                  <button
+                    className="hidden text-sm text-on-surface-variant transition-colors hover:text-primary sm:block"
+                    onClick={disconnect}
+                    type="button"
+                  >
+                    Sign Out
+                  </button>
+                ) : null}
+                {status === "connected" ? (
+                  <button
+                    className="hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-primary transition-colors hover:bg-surface-container-high lg:inline-flex"
+                    onClick={() => navigate("/pricing")}
+                    type="button"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">diamond</span>
+                    {planBadgeLabel}
+                  </button>
+                ) : null}
                 <div className="hidden min-w-0 text-right xl:block">
                   <p className="truncate text-sm font-semibold text-on-surface">{shellUser.name}</p>
                   <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
@@ -559,7 +588,7 @@ export default function AppShell({ children }) {
           <button
             aria-label={topRibbonCollapsed ? "Expand top ribbon" : "Collapse top ribbon"}
             className={[
-              "absolute left-1/2 z-10 inline-flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-outline-variant/20 bg-background/95 text-on-surface-variant shadow-soft backdrop-blur-[20px] transition-colors hover:bg-surface-container-low hover:text-on-surface",
+              "top-ribbon__toggle absolute left-1/2 z-10 inline-flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-outline-variant/20 bg-background/95 text-on-surface-variant shadow-soft backdrop-blur-[20px] transition-colors hover:bg-surface-container-low hover:text-on-surface",
               topRibbonCollapsed ? "top-3" : "top-full -translate-y-1/2",
             ].join(" ")}
             onClick={() => setTopRibbonCollapsed((currentValue) => !currentValue)}

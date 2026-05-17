@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from backend import create_backend
 from backend.application.services import BackendValidationError
+from backend.capabilities.networking import build_empty_relevant_people_discovery
 from backend.domain.phase0_contracts import normalize_candidate_asset_descriptor
 from backend.domain.models import ArtifactRecord, JobRecord, StageDefinition
 from backend.profiles.cv_text import load_cv_text
@@ -214,6 +215,8 @@ class BackendApplicationTests(unittest.TestCase):
                 "settings": {
                     "workspace_cv_asset_id": "asset_workspace_cv_primary",
                     "keywords": ["analyst", "consultant"],
+                    "work_arrangement": "remote",
+                    "industry": "Healthcare",
                     "geo_id": "101282230",
                     "manual_url_seed_list": ["https://company.example/jobs/1"],
                     "experience_levels": [2, 3],
@@ -253,6 +256,8 @@ class BackendApplicationTests(unittest.TestCase):
             "user_config/manual_job_urls.txt",
         )
         self.assertEqual(run.run_plan.resolved_run_settings["keywords"], ["analyst", "consultant"])
+        self.assertEqual(run.run_plan.resolved_run_settings["work_arrangement"], "remote")
+        self.assertEqual(run.run_plan.resolved_run_settings["industry"], "Healthcare")
         self.assertEqual(run.run_plan.resolved_run_settings["stage4_max_jobs"], 15)
         self.assertEqual(run.run_plan.resolved_run_settings["target_roles"], ["Business Analyst", "Consultant"])
         self.assertEqual(run.run_plan.resolved_run_settings["job_filtering_mode"], "Broader Match")
@@ -265,6 +270,57 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(run.run_plan.resolved_run_settings["workspace_cv_asset_id"], "asset_workspace_cv_primary")
         self.assertEqual(run.run_plan.resolved_run_settings["workspace_cv_text"], "Primary workspace CV snapshot")
         self.assertTrue((temp_dir / "backend.sqlite3").exists())
+
+    def test_update_workspace_from_scratch_preserves_run_schedule(self):
+        temp_dir = self._workspace_tempdir("builder_schedule_preserve")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv_schedule.txt"
+        cv_text = "Builder workspace schedule snapshot"
+        cv_path.write_text(cv_text, encoding="utf-8")
+        workspace = self._create_builder_workspace_with_cv_snapshot(
+            app,
+            cv_path=cv_path,
+            cv_text=cv_text,
+            workspace_name="Scheduled Builder Workspace",
+        )
+
+        scheduled_workspace = app.update_workspace_schedule(
+            workspace.id,
+            {"enabled": True, "interval_days": 4},
+        )
+        original_schedule = dict(scheduled_workspace.metadata.get("run_schedule") or {})
+
+        updated_workspace = app.update_workspace_from_scratch(
+            workspace.id,
+            {
+                "name": "Scheduled Builder Workspace Updated",
+                "description": "Updated through application service",
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs"],
+                "workspace_cv_asset": self._workspace_cv_asset_descriptor(
+                    asset_id="asset_workspace_cv_primary",
+                    cv_path=cv_path,
+                ),
+                "module_ids": [
+                    "screening_filter",
+                    "priority_ranking",
+                    "tailored_document_generation",
+                ],
+                "settings": {
+                    **dict(workspace.settings or {}),
+                    "keywords": ["consultant"],
+                    "stage4_max_jobs": 2,
+                },
+            },
+        )
+
+        preserved_schedule = updated_workspace.metadata.get("run_schedule") or {}
+        self.assertTrue(preserved_schedule.get("enabled"))
+        self.assertEqual(preserved_schedule.get("interval_days"), 4)
+        self.assertEqual(
+            preserved_schedule.get("next_run_at"),
+            original_schedule.get("next_run_at"),
+        )
 
     def test_builder_can_update_existing_workspace(self):
         temp_dir = self._workspace_tempdir("builder_update")
@@ -653,6 +709,100 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertIn("candidates", target_contact_discovery)
         self.assertGreaterEqual(len(target_contact_discovery["candidates"]), 4)
         self.assertEqual(target_contact_discovery["job"]["job_id"], "job_1")
+
+    def test_relevant_people_discovery_persists_selected_people_for_job_workspace(self):
+        app, _ = self._create_app_with_test_workflow("relevant_people_workspace_context")
+        user = app.upsert_user(
+            {
+                "email": "peoplefinder@example.com",
+                "display_name": "People Finder User",
+                "role": "admin",
+                "metadata": {"profile": {"summary": "Operations and analytics professional."}},
+            }
+        )
+
+        completed_run = app.start_run("custom_workspace", execute=True, requested_by="test")
+        self.assertEqual(completed_run.status, "failed")
+        completed_run = app.retry_run(completed_run.id)
+        completed_run = app.process_next_queued_run(auto_retry_failed=True)
+        self.assertEqual(completed_run.status, "completed")
+
+        job = app.get_job_set(completed_run.id, "accepted_jobs")[0]
+        discovery_payload = build_empty_relevant_people_discovery(
+            job=job,
+            run_id=completed_run.id,
+            workspace_id="custom_workspace",
+            status="completed",
+        )
+        discovery_payload["categories"] = {
+            "hiring_manager": [
+                {
+                    "id": "person_hiring_manager_jane",
+                    "category": "hiring_manager",
+                    "name": "Jane Hiringmanager",
+                    "title": "Analytics Manager",
+                    "company": "ACME",
+                    "location": "Berlin, Germany",
+                    "profileUrl": "https://www.linkedin.com/in/jane-hiringmanager",
+                    "source": "public_profile_search",
+                    "confidence": 82,
+                    "confidenceLabel": "High",
+                    "reasoningNote": "Likely relevant because this person appears to lead the same function.",
+                    "evidenceSnippets": ["Analytics Manager", "ACME", "Berlin"],
+                    "caveats": [],
+                    "searchQueries": ["ACME Analytics Manager Berlin LinkedIn"],
+                    "discoveredSearchQuery": "ACME Analytics Manager Berlin LinkedIn",
+                    "regionScopeCaveat": "",
+                    "confidenceBreakdown": None,
+                    "status": "unreviewed",
+                }
+            ],
+            "potential_colleague": [],
+            "executive": [],
+        }
+
+        with patch(
+            "backend.application.services.build_relevant_people_discovery",
+            return_value=discovery_payload,
+        ):
+            started = app.start_relevant_people_discovery(
+                user_id=user.user_id,
+                run_id=completed_run.id,
+                job_id=job.job_id,
+            )
+
+        self.assertEqual(started["peopleDiscoveryStatus"], "completed")
+        self.assertEqual(started["selectedPeople"], [])
+
+        status_payload = app.get_relevant_people_discovery_status(
+            user_id=user.user_id,
+            run_id=completed_run.id,
+            job_id=job.job_id,
+        )
+        self.assertEqual(status_payload["peopleDiscoveryStatus"], "completed")
+        self.assertEqual(status_payload["selectedPeopleCount"], 0)
+
+        updated = app.set_relevant_people_status(
+            user_id=user.user_id,
+            run_id=completed_run.id,
+            job_id=job.job_id,
+            person_id="person_hiring_manager_jane",
+            status="confirmed",
+        )
+        self.assertEqual(updated["categories"]["hiring_manager"][0]["status"], "confirmed")
+        self.assertEqual(len(updated["selectedPeople"]), 1)
+        self.assertEqual(updated["selectedPeople"][0]["name"], "Jane Hiringmanager")
+
+        workspace_payload = app.get_job_workspace(
+            user_id=user.user_id,
+            run_id=completed_run.id,
+            job_id=job.job_id,
+        )
+        self.assertEqual(len(workspace_payload["selected_relevant_people"]), 1)
+        self.assertEqual(
+            workspace_payload["selected_relevant_people"][0]["id"],
+            "person_hiring_manager_jane",
+        )
 
     def test_referral_import_merges_companies_for_one_person(self):
         app, _ = self._create_app_with_test_workflow("referral_import")

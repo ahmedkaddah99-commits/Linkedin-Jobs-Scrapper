@@ -1,5 +1,6 @@
 from .file_backed import (
     BackendRepositories,
+    FileAnalyticsStore,
     FileAuthRepository,
     FileArtifactStore,
     FileJobStore,
@@ -10,6 +11,7 @@ from .file_backed import (
     FileWorkspaceRepository,
 )
 from .sqlite_backed import (
+    SqliteAnalyticsStore,
     SqliteAuthRepository,
     SqliteArtifactStore,
     SqliteJobStore,
@@ -22,6 +24,7 @@ from .sqlite_backed import (
 
 __all__ = [
     "BackendRepositories",
+    "FileAnalyticsStore",
     "FileAuthRepository",
     "FileArtifactStore",
     "FileJobStore",
@@ -30,6 +33,7 @@ __all__ = [
     "FileSecretStore",
     "FileWorkerStore",
     "FileWorkspaceRepository",
+    "SqliteAnalyticsStore",
     "SqliteAuthRepository",
     "SqliteArtifactStore",
     "SqliteJobStore",

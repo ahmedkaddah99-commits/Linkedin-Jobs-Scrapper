@@ -77,10 +77,6 @@ const EMPTY_DISCOVERY_FEEDBACK = {
   error: "",
 };
 
-function hasDiscoverableDocuments(item) {
-  return Boolean(item?.run_id && item?.job_id && Array.isArray(item?.documents) && item.documents.length);
-}
-
 function formatDate(iso) {
   if (!iso) return "";
   try {
@@ -348,13 +344,25 @@ function statusKeyFromItem(item) {
   return COLUMNS.some((column) => column.key === trackerStatus) ? trackerStatus : "unknown";
 }
 
+const TRACKER_RESOURCE_BUTTON_CLASS =
+  "inline-flex min-w-[120px] items-center justify-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors";
+
 function TrackerLink({ href, children }) {
   if (!href) {
-    return <span className="text-on-surface-variant/60">Not set</span>;
+    return (
+      <span
+        className={[
+          TRACKER_RESOURCE_BUTTON_CLASS,
+          "cursor-not-allowed bg-surface-container-low text-on-surface-variant/60",
+        ].join(" ")}
+      >
+        {children}
+      </span>
+    );
   }
   return (
     <a
-      className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/20"
+      className={[TRACKER_RESOURCE_BUTTON_CLASS, "bg-primary/10 text-primary hover:bg-primary/20"].join(" ")}
       href={href}
       rel="noreferrer"
       target="_blank"
@@ -362,6 +370,80 @@ function TrackerLink({ href, children }) {
       {children}
       <span className="material-symbols-outlined text-[13px]">open_in_new</span>
     </a>
+  );
+}
+
+function buildTrackerBundleLabel(item) {
+  const base = [item.company, item.title, "application_documents"]
+    .map((segment) => String(segment || "").trim())
+    .filter(Boolean)
+    .join("_")
+    .replace(/[^\w.-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return base || "application_documents";
+}
+
+function TrackerResourceCell({ item, request }) {
+  const [exporting, setExporting] = useState(false);
+  const [error, setError] = useState("");
+  const exportableDocuments = (Array.isArray(item.documents) ? item.documents : []).filter(
+    (document) => Boolean(String(document.document_id || "").trim()) && !document.final_export_blocked,
+  );
+  const documentLabels = exportableDocuments.map((document) => String(document.label || document.document_type || "Document").trim()).filter(Boolean);
+
+  async function downloadBundle() {
+    if (!exportableDocuments.length) {
+      return;
+    }
+    setExporting(true);
+    setError("");
+    try {
+      const bundle = await request("/documents/bulk-export", {
+        method: "POST",
+        body: {
+          label: buildTrackerBundleLabel(item),
+          document_ids: exportableDocuments.map((document) => document.document_id),
+          export_anyway: true,
+        },
+      });
+      const blob = await request(bundle.download_url, { responseType: "blob" });
+      triggerDownload(blob, bundle.file_name || "application_documents.zip");
+    } catch (exportError) {
+      setError(exportError.message || "Unable to export application documents.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div className="min-w-56 max-w-72 space-y-2">
+      <div className="flex flex-wrap gap-2">
+        <TrackerLink href={item.apply_link || item.tracker_table_row?.apply_link}>Apply</TrackerLink>
+        <button
+          className={[
+            TRACKER_RESOURCE_BUTTON_CLASS,
+            exportableDocuments.length
+              ? "bg-primary/10 text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+              : "cursor-not-allowed bg-surface-container-low text-on-surface-variant/60",
+          ].join(" ")}
+          disabled={!exportableDocuments.length || exporting}
+          onClick={downloadBundle}
+          title={
+            documentLabels.length
+              ? `Download application documents: ${documentLabels.join(" | ")}`
+              : "No exportable application documents available"
+          }
+          type="button"
+        >
+          <span className="material-symbols-outlined text-[13px]">
+            {exporting ? "progress_activity" : "folder_zip"}
+          </span>
+          {exporting ? "Preparing..." : "Documents ZIP"}
+        </button>
+      </div>
+      {error ? <div className="text-xs text-error">{error}</div> : null}
+    </div>
   );
 }
 
@@ -432,73 +514,7 @@ function TrackerNotesCell({ item, onUpdate, updating }) {
   );
 }
 
-function TrackerDocumentsCell({ documents, request }) {
-  const [busyId, setBusyId] = useState("");
-  const [error, setError] = useState("");
-  const visibleDocuments = Array.isArray(documents) ? documents : [];
-
-  async function downloadDocument(document) {
-    const downloadUrl = String(document.download_url || "").trim();
-    if (!downloadUrl) return;
-    setBusyId(document.document_id || document.label || downloadUrl);
-    setError("");
-    try {
-      const blob = await request(downloadUrl, { responseType: "blob" });
-      triggerDownload(blob, document.label || document.document_type || "document");
-    } catch (downloadError) {
-      setError(downloadError.message || "Unable to download document.");
-    } finally {
-      setBusyId("");
-    }
-  }
-
-  if (!visibleDocuments.length) {
-    return (
-      <div className="min-w-44">
-        <span className="text-xs text-on-surface-variant/60">No linked documents</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-w-48 max-w-64 space-y-2">
-      <div className="flex flex-wrap gap-1.5">
-        {visibleDocuments.slice(0, 4).map((document) => {
-          const key = document.document_id || document.download_url || document.path || document.label;
-          const canDownload = Boolean(document.download_url);
-          return (
-            <button
-              className={[
-                "inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
-                canDownload
-                  ? "bg-primary/10 text-primary hover:bg-primary/20"
-                  : "bg-surface-container-low text-on-surface-variant",
-              ].join(" ")}
-              disabled={!canDownload || busyId === key}
-              key={key}
-              onClick={() => downloadDocument(document)}
-              title={document.label || document.document_type || "Document"}
-              type="button"
-            >
-              <span className="material-symbols-outlined text-[13px]">
-                {document.source_scope === "standard" ? "verified" : "description"}
-              </span>
-              <span className="truncate">{document.label || document.document_type || "Document"}</span>
-            </button>
-          );
-        })}
-        {visibleDocuments.length > 4 ? (
-          <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-semibold text-on-surface-variant">
-            +{visibleDocuments.length - 4} more
-          </span>
-        ) : null}
-      </div>
-      {error ? <div className="text-xs text-error">{error}</div> : null}
-    </div>
-  );
-}
-
-function TrackerTable({ items, onUpdate, onDelete, onDiscoverContacts, discoveringId, updating, request }) {
+function TrackerTable({ items, onUpdate, updating, request }) {
   if (!items.length) {
     return (
       <div className="rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-8 text-center">
@@ -520,7 +536,7 @@ function TrackerTable({ items, onUpdate, onDelete, onDiscoverContacts, discoveri
         </p>
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-[1180px] w-full table-fixed border-collapse text-left text-sm">
+        <table className="tracker-table min-w-[1060px] w-full table-fixed border-collapse text-left text-sm">
           <thead className="bg-surface-container-low text-[11px] uppercase tracking-[0.14em] text-on-surface-variant">
             <tr>
               <th className="w-36 px-4 py-3">Status</th>
@@ -528,10 +544,8 @@ function TrackerTable({ items, onUpdate, onDelete, onDiscoverContacts, discoveri
               <th className="w-64 px-4 py-3">Role</th>
               <th className="w-44 px-4 py-3">Location</th>
               <th className="w-36 px-4 py-3">Applied</th>
-              <th className="w-40 px-4 py-3">Links</th>
+              <th className="w-56 px-4 py-3">Resource</th>
               <th className="w-28 px-4 py-3">Priority</th>
-              <th className="w-28 px-4 py-3">Applicants</th>
-              <th className="w-64 px-4 py-3">Documents</th>
               <th className="w-64 px-4 py-3">Notes</th>
             </tr>
           </thead>
@@ -539,7 +553,10 @@ function TrackerTable({ items, onUpdate, onDelete, onDiscoverContacts, discoveri
             {items.map((item) => {
               const row = item.tracker_table_row || {};
               return (
-                <tr className="align-top transition-colors hover:bg-surface-container-low/70" key={item.review_id}>
+                <tr
+                  className="tracker-table__row align-top transition-colors hover:bg-surface-container-low/70"
+                  key={item.review_id}
+                >
                   <td className="px-4 py-4">
                     <StatusDropdown
                       current={statusKeyFromItem(item)}
@@ -564,43 +581,10 @@ function TrackerTable({ items, onUpdate, onDelete, onDiscoverContacts, discoveri
                     {formatDate(item.application_date || row.application_date || item.run_finished_at) || "Not set"}
                   </td>
                   <td className="px-4 py-4">
-                    <div className="flex min-w-40 flex-col gap-2">
-                      <TrackerLink href={item.apply_link || row.apply_link}>Apply</TrackerLink>
-                      <TrackerLink href={item.linkedin_link || row.linkedin_link}>LinkedIn</TrackerLink>
-                      {hasDiscoverableDocuments(item) ? (
-                        <button
-                          className="inline-flex items-center justify-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={discoveringId === item.review_id || updating === item.review_id}
-                          onClick={() => onDiscoverContacts(item)}
-                          type="button"
-                        >
-                          <span className="material-symbols-outlined text-[13px]">
-                            {discoveringId === item.review_id ? "progress_activity" : "travel_explore"}
-                          </span>
-                          {discoveringId === item.review_id ? "Discovering..." : "Discover Contacts"}
-                        </button>
-                      ) : null}
-                      {onDelete ? (
-                        <button
-                          className="inline-flex items-center justify-center gap-1 rounded-full bg-error/10 px-2.5 py-1 text-xs font-semibold text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={updating === item.review_id}
-                          onClick={() => onDelete(item)}
-                          type="button"
-                        >
-                          <span className="material-symbols-outlined text-[13px]">delete</span>
-                          {updating === item.review_id ? "Deleting..." : "Delete"}
-                        </button>
-                      ) : null}
-                    </div>
+                    <TrackerResourceCell item={item} request={request} />
                   </td>
                   <td className="px-4 py-4 text-on-surface-variant">
                     {item.priority_rank || row.priority_rank || row.priority_tier || "Not set"}
-                  </td>
-                  <td className="px-4 py-4 text-on-surface-variant">
-                    {item.applicant_count || row.applicant_count || "Not set"}
-                  </td>
-                  <td className="px-4 py-4 text-on-surface-variant">
-                    <TrackerDocumentsCell documents={item.documents} request={request} />
                   </td>
                   <td className="px-4 py-4">
                     <TrackerNotesCell item={item} onUpdate={onUpdate} updating={updating} />
@@ -990,7 +974,7 @@ function EmailIntegrationPanel({
       </form>
 
       {syncSummary ? (
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-6 flex gap-3 overflow-x-auto pb-1">
           {[
             { label: "Checked", value: syncSummary.checked_messages || 0 },
             { label: "Processed", value: syncSummary.processed_messages || 0 },
@@ -999,13 +983,13 @@ function EmailIntegrationPanel({
             { label: "Needs review", value: pendingDetectionCount },
           ].map((item) => (
             <div
-              className="rounded-2xl border border-outline-variant/20 bg-surface-container p-4"
+              className="flex min-w-[180px] flex-1 items-center justify-between gap-4 rounded-2xl border border-outline-variant/20 bg-surface-container px-4 py-3"
               key={item.label}
             >
-              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+              <div className="min-w-0 whitespace-nowrap text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
                 {item.label}
               </div>
-              <div className="mt-2 text-2xl font-bold text-on-surface">{item.value}</div>
+              <div className="shrink-0 text-2xl font-bold text-on-surface">{item.value}</div>
             </div>
           ))}
         </div>
@@ -1313,10 +1297,7 @@ export default function TrackerPage() {
 
       {!loading && !error ? (
         <TrackerTable
-          discoveringId={discoveringId}
           items={items}
-          onDiscoverContacts={handleDiscoverContacts}
-          onDelete={handleDeleteCard}
           onUpdate={updateCard}
           request={request}
           updating={updating}
@@ -1349,7 +1330,7 @@ export default function TrackerPage() {
             </div>
 
             <div className="space-y-5 px-6 py-5">
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-4">
                 <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
                   <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Department</div>
                   <div className="mt-2 text-base font-semibold text-on-surface">
@@ -1368,6 +1349,12 @@ export default function TrackerPage() {
                     {(discoveryModal.payload?.candidates || []).length}
                   </div>
                 </div>
+                <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Default Passes</div>
+                  <div className="mt-2 text-base font-semibold text-on-surface">
+                    {discoveryModal.payload?.default_pass_count || 2}
+                  </div>
+                </div>
               </div>
 
               {discoveryFeedback.message || discoveryFeedback.error ? (
@@ -1380,6 +1367,104 @@ export default function TrackerPage() {
                   ].join(" ")}
                 >
                   {discoveryFeedback.error || discoveryFeedback.message}
+                </div>
+              ) : null}
+
+              {discoveryModal.payload?.warnings?.length ? (
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-700">
+                  {discoveryModal.payload.warnings.join(" | ")}
+                </div>
+              ) : null}
+
+              {(discoveryModal.payload?.passes || []).length ? (
+                <div className="grid gap-4 xl:grid-cols-2">
+                  {(discoveryModal.payload?.passes || []).map((passItem) => (
+                    <section
+                      className="rounded-3xl border border-outline-variant/20 bg-surface p-5"
+                      key={`pass-${passItem.pass_index}`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+                            Pass {passItem.pass_index}
+                          </div>
+                          <div className="mt-2 text-lg font-semibold text-on-surface">
+                            {passItem.result_count || 0} public result{passItem.result_count === 1 ? "" : "s"}
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-on-surface-variant">
+                            {passItem.summary}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl bg-surface-container-low px-4 py-3 text-right">
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+                            Queries
+                          </div>
+                          <div className="mt-1 text-xl font-semibold text-on-surface">
+                            {passItem.query_count || 0}
+                          </div>
+                        </div>
+                      </div>
+
+                      {passItem.top_domains?.length ? (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {passItem.top_domains.map((domain) => (
+                            <span
+                              className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
+                              key={`${passItem.pass_index}-${domain}`}
+                            >
+                              {domain}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {passItem.queries?.length ? (
+                        <div className="mt-4 space-y-2">
+                          {passItem.queries.map((queryPlan, index) => (
+                            <div
+                              className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-3"
+                              key={`pass-${passItem.pass_index}-query-${index}`}
+                            >
+                              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+                                {queryPlan.lane || "general"} query
+                              </div>
+                              <div className="mt-1 text-sm font-medium text-on-surface">{queryPlan.query}</div>
+                              {queryPlan.objective ? (
+                                <div className="mt-1 text-xs leading-5 text-on-surface-variant">
+                                  {queryPlan.objective}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {passItem.results_preview?.length ? (
+                        <div className="mt-4 space-y-2">
+                          {passItem.results_preview.map((result, index) => (
+                            <a
+                              className="block rounded-2xl border border-outline-variant/20 bg-surface-container-low p-3 transition-colors hover:bg-surface-container"
+                              href={result.url}
+                              key={`pass-${passItem.pass_index}-result-${index}`}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              <div className="text-sm font-semibold text-on-surface">{result.title}</div>
+                              <div className="mt-1 text-xs text-on-surface-variant">
+                                {(result.source_domain || "unknown domain")}
+                                {result.lane ? ` | ${result.lane}` : ""}
+                              </div>
+                              {result.snippet ? (
+                                <div className="mt-2 text-xs leading-5 text-on-surface-variant">
+                                  {result.snippet}
+                                </div>
+                              ) : null}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+                    </section>
+                  ))}
                 </div>
               ) : null}
 
@@ -1400,16 +1485,53 @@ export default function TrackerPage() {
                             {candidate.confidence || "medium"}
                           </span>
                         </div>
-                        {candidate.guessed_name ? (
+                        {candidate.resolved_name ? (
+                          <div className="mt-2 text-sm font-medium text-on-surface">
+                            {candidate.resolved_name}
+                          </div>
+                        ) : candidate.guessed_name ? (
                           <div className="mt-2 text-sm font-medium text-on-surface">
                             Named signal: {candidate.guessed_name}
                           </div>
-                        ) : null}
+                        ) : (
+                          <div className="mt-2 text-sm font-medium text-on-surface-variant">
+                            Unresolved lane, keep verifying before outreach.
+                          </div>
+                        )}
                       </div>
                       <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-on-surface-variant">
                         {candidate.access_hint || "Hiring signal"}
                       </span>
                     </div>
+
+                    {(candidate.resolved_title || candidate.resolved_company || candidate.resolved_location) ? (
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-3">
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+                            Title
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-on-surface">
+                            {candidate.resolved_title || "Not resolved"}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-3">
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+                            Company
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-on-surface">
+                            {candidate.resolved_company || "Not resolved"}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-3">
+                          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+                            Location
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-on-surface">
+                            {candidate.resolved_location || "Not resolved"}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
 
                     {candidate.title_variants?.length ? (
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -1428,9 +1550,49 @@ export default function TrackerPage() {
                       {candidate.rationale}
                     </p>
 
+                    {candidate.evidence?.length ? (
+                      <div className="mt-4 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+                          Evidence
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {candidate.evidence.map((item, index) => (
+                            <div
+                              className="rounded-2xl bg-surface px-3 py-2 text-sm leading-6 text-on-surface-variant"
+                              key={`${candidate.candidate_id}-evidence-${index}`}
+                            >
+                              {item}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {candidate.source_urls?.length ? (
+                      <div className="mt-4 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
+                          Source Links
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {candidate.source_urls.map((url, index) => (
+                            <a
+                              className="inline-flex items-center gap-1 rounded-full bg-surface-container px-3 py-1.5 text-xs font-semibold text-on-surface hover:bg-surface-container-high"
+                              href={url}
+                              key={`${candidate.candidate_id}-source-${index}`}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              {candidate.source_titles?.[index] || `Source ${index + 1}`}
+                              <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
                     {candidate.search_query ? (
                       <div className="mt-4 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Search Query</div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Verification Query</div>
                         <div className="mt-2 text-sm font-medium text-on-surface">{candidate.search_query}</div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {candidate.linkedin_search_url ? (
@@ -1455,6 +1617,11 @@ export default function TrackerPage() {
                               <span className="material-symbols-outlined text-[13px]">open_in_new</span>
                             </a>
                           ) : null}
+                        </div>
+                        <div className="mt-3 text-xs text-on-surface-variant">
+                          {candidate.resolved_in_pass
+                            ? `Best evidence surfaced by pass ${candidate.resolved_in_pass}.`
+                            : "Keep verifying this lane before outreach."}
                         </div>
                       </div>
                     ) : null}

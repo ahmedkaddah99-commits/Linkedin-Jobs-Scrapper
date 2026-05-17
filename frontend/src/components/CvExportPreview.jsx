@@ -81,17 +81,14 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
       title: firstNonEmpty(item?.title, item?.role, "Role Title"),
       company: firstNonEmpty(item?.company, "Company"),
       period: firstNonEmpty(item?.period, "2023 - Present"),
-      bullets: normalizeBullets(item).slice(0, 2),
-    }))
-    .slice(0, 2);
+      bullets: normalizeBullets(item),
+    }));
   const skills = (Array.isArray(profile.competencies) ? profile.competencies : [])
     .map((item) => String(item || "").trim())
-    .filter(Boolean)
-    .slice(0, 8);
+    .filter(Boolean);
   const languages = (Array.isArray(profile.languages) ? profile.languages : [])
     .map((item) => String(item || "").trim())
-    .filter(Boolean)
-    .slice(0, 4);
+    .filter(Boolean);
   const contacts = [
     profile.location,
     profile.email,
@@ -99,8 +96,7 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
     profile.linkedin_url,
   ]
     .map((item) => String(item || "").trim())
-    .filter(Boolean)
-    .slice(0, 4);
+    .filter(Boolean);
   const education = (Array.isArray(profile.education) ? profile.education : [])
     .map((item) => {
       if (item && typeof item === "object") {
@@ -117,12 +113,11 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
               .split(/\r?\n/)
               .map((entry) => entry.trim())
               .filter(Boolean);
-        return [head, details[0]].filter(Boolean).join(" - ");
+        return [head, ...details].filter(Boolean).join(" - ");
       }
       return String(item || "").trim();
     })
-    .filter(Boolean)
-    .slice(0, 2);
+    .filter(Boolean);
 
   return {
     template,
@@ -395,7 +390,7 @@ function CompactPreview({ model }) {
               SKILLS
             </div>
             <div className="mt-1 space-y-1 text-[11px] leading-5" style={{ color: model.palette.text }}>
-              {model.skills.slice(0, 5).map((item) => (
+              {model.skills.map((item) => (
                 <div key={item}>{item}</div>
               ))}
             </div>

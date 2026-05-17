@@ -29,6 +29,8 @@ class Phase0ContractsTests(unittest.TestCase):
             "profile_label": "Primary Job Seeker Profile",
             "settings": {
                 "target_roles": ["Business Analyst", "Consultant"],
+                "work_arrangement": "hybrid",
+                "industry": "Fintech",
                 "job_filtering_mode": "strict_match",
                 "geo_id": "101282230",
                 "cities": ["Berlin"],
@@ -60,6 +62,8 @@ class Phase0ContractsTests(unittest.TestCase):
         self.assertEqual(normalized["schema_version"], "workspace_configuration_v2")
         self.assertEqual(normalized["cv_binding"]["profile_label"], "Primary Job Seeker Profile")
         self.assertEqual(normalized["targeting"]["keywords"], ["business analyst", "consultant"])
+        self.assertEqual(normalized["targeting"]["work_arrangement"], "hybrid")
+        self.assertEqual(normalized["targeting"]["industry"], "Fintech")
         self.assertEqual(
             normalized["location_preferences"]["legacy_source_locations"]["linkedin_geo_id"],
             "101282230",

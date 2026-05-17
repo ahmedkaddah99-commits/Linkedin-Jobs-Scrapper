@@ -3,21 +3,29 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import mimetypes
 import os
 import re
+import sqlite3
 import zipfile
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.parser import BytesFeedParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse
 from uuid import uuid4
 
-from backend.application.services import BackendValidationError
+from backend.application.services import (
+    BackendValidationError,
+    _builder_workspace_flow_id,
+    _builder_workspace_source_ids,
+)
+from backend.application.quota import QuotaExceededError, check_and_increment_quota
 from backend.capabilities.networking import find_referral_contacts_for_company
 from backend.capabilities.tracker import (
     TRACKER_EMAIL_INTEGRATION_METADATA_KEY,
@@ -48,6 +56,16 @@ from backend.capabilities.tailored_documents.modes import (
 )
 from backend.capabilities.tailored_documents.rendering import get_document_design_options
 from backend.bootstrap import create_backend
+from backend.config.plans import (
+    DEFAULT_PLAN_ID,
+    PLANS,
+    compare_plan_tiers,
+    get_plan,
+    get_plan_for_variant_id,
+    get_quota,
+    list_plans,
+    normalize_plan_id,
+)
 from backend.domain.phase0_contracts import (
     PERSONALIZATION_SCOPE_BASELINE,
     PERSONALIZATION_SCOPE_FULL,
@@ -66,6 +84,8 @@ from backend.domain.phase0_contracts import (
 from backend.domain.ats_export_gate import evaluate_ats_export_gate
 from backend.tools.discover_company_careers import run_discovery as run_career_url_discovery
 from backend.domain.models import (
+    ROLE_ADMIN,
+    TOKEN_SCOPE_ADMIN,
     TOKEN_SCOPE_ARTIFACTS_READ,
     TOKEN_SCOPE_ARTIFACTS_WRITE,
     TOKEN_SCOPE_REVIEWS_READ,
@@ -81,11 +101,29 @@ from backend.domain.models import (
     TOKEN_SCOPE_WORKER_EXECUTE,
     TOKEN_SCOPE_WORKSPACES_READ,
     TOKEN_SCOPE_WORKSPACES_WRITE,
+    UserRecord,
     utc_plus_seconds,
 )
 from backend.orchestration.workspace_builder import _slugify
 from backend.profiles.cv_profile_extraction import extract_cv_profile, normalize_profile_payload
 from backend.profiles.cv_text import extract_cv_text_from_path
+from backend.integrations.clerk import (
+    build_synthetic_token,
+    get_user as get_clerk_user,
+    get_display_name as get_clerk_display_name,
+    get_primary_email_address as get_clerk_primary_email_address,
+    get_signup_source as get_clerk_signup_source,
+    normalize_clerk_role,
+    update_user_metadata as update_clerk_user_metadata,
+    verify_session_token,
+    verify_webhook as verify_clerk_webhook,
+)
+from backend.integrations.lemonsqueezy import (
+    get_checkout_url as get_lemonsqueezy_checkout_url,
+    get_customer_portal_url as get_lemonsqueezy_customer_portal_url,
+    update_user_plan_in_clerk,
+    verify_webhook_signature as verify_lemonsqueezy_webhook_signature,
+)
 
 
 def _json_bytes(payload) -> bytes:
@@ -112,6 +150,28 @@ def _file_timestamp_iso(path: Path, *, fallback: str) -> str:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
     except Exception:
         return str(fallback or "")
+
+
+def _schedule_interval_days(value) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _workspace_schedule_summary(workspace) -> dict:
+    raw_schedule = dict((workspace.metadata or {}).get("run_schedule") or {})
+    interval_days = _schedule_interval_days(raw_schedule.get("interval_days"))
+    enabled = bool(raw_schedule.get("enabled")) and interval_days >= 1
+    return {
+        "enabled": enabled,
+        "interval_days": interval_days if enabled else 0,
+        "next_run_at": str(raw_schedule.get("next_run_at") or ""),
+        "last_enqueued_at": str(raw_schedule.get("last_enqueued_at") or ""),
+        "last_run_id": str(raw_schedule.get("last_run_id") or ""),
+        "last_error": str(raw_schedule.get("last_error") or ""),
+        "last_error_at": str(raw_schedule.get("last_error_at") or ""),
+    }
 
 
 def _is_cv_like_artifact(
@@ -394,7 +454,7 @@ def _parse_cv_sections(cv_text: str) -> dict:
 
     summary_lines = sections.get("summary", [])
     if summary_lines:
-        result["summary"] = " ".join(summary_lines[:6])  # cap at ~6 sentences
+        result["summary"] = " ".join(summary_lines)
 
     skills_lines = sections.get("skills", [])
     if skills_lines:
@@ -405,11 +465,11 @@ def _parse_cv_sections(cv_text: str) -> dict:
                 part = part.strip(" .-")
                 if part and len(part) < 60:
                     competencies.append(part)
-        result["competencies"] = competencies[:20]  # cap at 20
+        result["competencies"] = competencies
 
     exp_lines = sections.get("experience", [])
     if exp_lines:
-        result["experience_lines"] = exp_lines[:40]  # cap at 40 raw lines
+        result["experience_lines"] = exp_lines
 
     return result
 
@@ -477,8 +537,6 @@ def _cv_summary_lines(cv_text: str) -> list[str]:
             break
         if capture_summary:
             summary_lines.append(line)
-            if len(summary_lines) >= 4:
-                break
     return summary_lines
 
 
@@ -537,12 +595,12 @@ def _build_preview_experience_items(lines: list[str]) -> list[dict[str, str]]:
                     "title": title or "Experience Highlight",
                     "company": company,
                     "period": period,
-                    "bulletsText": "\n".join(bullets[:4]),
+                    "bulletsText": "\n".join(bullets),
                 }
             )
         current = None
 
-    for raw_line in lines[:40]:
+    for raw_line in lines:
         line = str(raw_line or "").strip()
         if not line or _looks_like_cv_section_header(line):
             continue
@@ -573,7 +631,7 @@ def _build_preview_experience_items(lines: list[str]) -> list[dict[str, str]]:
             current.setdefault("bullets", []).append(normalized_bullet)
 
     flush_current()
-    return entries[:4]
+    return entries
 
 
 def _build_workspace_cv_preview_profile(
@@ -604,7 +662,7 @@ def _build_workspace_cv_preview_profile(
         summary = " ".join(_cv_summary_lines(cv_text)).strip()
     if not summary:
         summary_candidates = display_lines[2:] if len(display_lines) > 2 else display_lines[1:]
-        summary = " ".join(summary_candidates[:3]).strip()
+        summary = " ".join(summary_candidates).strip()
     if not summary:
         summary = str(normalized_shared_profile.get("summary") or "").strip()
 
@@ -668,6 +726,7 @@ def _build_workspace_cv_preview_profile(
     return {
         "name": name,
         "role_title": role_title,
+        "industry": str(normalized_parsed_profile.get("industry") or normalized_shared_profile.get("industry") or "").strip(),
         "location": str(normalized_parsed_profile.get("location") or normalized_shared_profile.get("location") or "").strip(),
         "email": str(normalized_parsed_profile.get("email") or normalized_shared_profile.get("email") or "").strip(),
         "website": str(normalized_parsed_profile.get("website") or normalized_shared_profile.get("website") or "").strip(),
@@ -678,10 +737,10 @@ def _build_workspace_cv_preview_profile(
             normalized_parsed_profile.get("github_url") or normalized_shared_profile.get("github_url") or ""
         ).strip(),
         "summary": summary,
-        "competencies": competencies[:20],
-        "languages": languages[:12],
-        "recent_experience": recent_experience[:4],
-        "education": education[:6],
+        "competencies": competencies,
+        "languages": languages,
+        "recent_experience": recent_experience,
+        "education": education,
         "photo_data_url": photo_data_url,
         "avatar_url": avatar_url,
     }
@@ -752,6 +811,7 @@ def _workspace_summary(workspace) -> dict:
         "prompt_sets": [prompt_set.to_dict() for prompt_set in workspace.prompt_sets],
         "sources": [source.to_dict() for source in workspace.sources],
         "metadata": dict(workspace.metadata),
+        "schedule": _workspace_schedule_summary(workspace),
     }
 
 
@@ -802,7 +862,24 @@ def _workflow_snapshot_for_run(application, run) -> dict:
     return workflow.to_dict()
 
 
-def _customer_job_payload(job_payload: dict, *, review=None, document_count: int = 0) -> dict:
+def _job_workspace_url(
+    run_id: str,
+    job_id: str,
+    *,
+    mode: str = "context_only",
+    source_stage: str = "",
+    reason_summary: str = "",
+) -> str:
+    params = {"mode": str(mode or "context_only").strip() or "context_only"}
+    if source_stage:
+        params["source_stage"] = str(source_stage).strip()
+    if reason_summary:
+        params["reason_summary"] = str(reason_summary).strip()
+    query = urlencode(params)
+    return f"/job-workspaces/{run_id}/{job_id}" + (f"?{query}" if query else "")
+
+
+def _customer_job_payload(job_payload: dict, *, run_id: str = "", review=None, document_count: int = 0) -> dict:
     review_meta = dict(review.metadata or {}) if review else {}
     tracker_status = str(review_meta.get("tracker_status") or "")
     application_status = normalize_application_status(
@@ -834,6 +911,11 @@ def _customer_job_payload(job_payload: dict, *, review=None, document_count: int
         "tracker_status": tracker_status,
         "application_status": application_status,
         "document_count": max(0, int(document_count or 0)),
+        "job_workspace_url": (
+            _job_workspace_url(str(run_id or ""), str(job_payload.get("job_id") or ""))
+            if run_id and str(job_payload.get("job_id") or "").strip()
+            else ""
+        ),
     }
 
 
@@ -1028,6 +1110,13 @@ def _customer_excluded_job_payload(entry: dict, user) -> dict:
         "source_stage": str(entry.get("source_stage") or ""),
         "recorded_at": str(entry.get("recorded_at") or ""),
         "workspace_editor_url": str(entry.get("workspace_editor_url") or ""),
+        "job_workspace_url": _job_workspace_url(
+            str(entry.get("run_id") or ""),
+            str(entry.get("job_id") or ""),
+            mode="pre_generation",
+            source_stage=str(entry.get("source_stage") or ""),
+            reason_summary=str(customer_reason.get("reason_summary") or ""),
+        ),
         "can_generate_documents": bool(entry.get("can_requeue") or False),
         "create_documents_run_id": str(entry.get("requeue_run_id") or ""),
         "create_documents_run_status": str(entry.get("requeue_run_status") or ""),
@@ -1079,6 +1168,7 @@ def _collect_run_customer_view(application, user, run) -> dict:
                 included_job_ids.add(str(job_payload.get("job_id")))
             customer_job = _customer_job_payload(
                 job_payload,
+                run_id=run.id,
                 review=reviews_by_job.get(job.job_id),
                 document_count=document_count_by_job.get(job.job_id, 0),
             )
@@ -1240,6 +1330,7 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
             or user.email.split("@")[0]
         ),
         "role_title": str(normalized_payload.get("role_title") or normalized_existing.get("role_title") or ""),
+        "industry": str(normalized_payload.get("industry") or normalized_existing.get("industry") or ""),
         "email": str(normalized_payload.get("email") or normalized_existing.get("email") or user.email),
         "location": str(normalized_payload.get("location") or normalized_existing.get("location") or ""),
         "website": str(normalized_payload.get("website") or normalized_existing.get("website") or ""),
@@ -1363,6 +1454,64 @@ def _merge_string_list(existing_value: Any, payload_value: Any, *, limit: int = 
     return cleaned
 
 
+def _merge_memory_cards(existing_value: Any, payload_value: Any, *, limit: int = 150) -> list[dict]:
+    source = payload_value if payload_value is not None else existing_value
+    if not isinstance(source, list):
+        return []
+    cleaned: list[dict] = []
+    for raw_item in source:
+        if not isinstance(raw_item, dict):
+            continue
+        structured_notes_raw = raw_item.get("structuredNotes")
+        structured_notes: dict[str, Any] = {}
+        if isinstance(structured_notes_raw, dict):
+            for note_key, note_value in structured_notes_raw.items():
+                key = str(note_key or "").strip()
+                if not key:
+                    continue
+                if isinstance(note_value, list):
+                    values = _merge_string_list([], note_value, limit=25)
+                    if values:
+                        structured_notes[key] = values
+                    continue
+                value = str(note_value or "").strip()
+                if value:
+                    structured_notes[key] = value
+        card = {
+            "id": str(raw_item.get("id") or "").strip(),
+            "title": str(raw_item.get("title") or "").strip(),
+            "category": str(raw_item.get("category") or "").strip(),
+            "source": str(raw_item.get("source") or "").strip(),
+            "status": str(raw_item.get("status") or "").strip(),
+            "rawNote": str(raw_item.get("rawNote") or "").strip(),
+            "structuredNotes": structured_notes,
+            "cvBulletSuggestion": str(
+                raw_item.get("cvBulletSuggestion") or raw_item.get("polishedCvBullet") or ""
+            ).strip(),
+            "coverLetterAngle": str(raw_item.get("coverLetterAngle") or "").strip(),
+            "tags": _merge_string_list([], raw_item.get("tags"), limit=12),
+            "missingDetails": _merge_string_list([], raw_item.get("missingDetails"), limit=12),
+            "confidenceLabel": str(raw_item.get("confidenceLabel") or "").strip(),
+            "useInCv": bool(raw_item.get("useInCv", True)),
+            "useInLetter": bool(raw_item.get("useInLetter", False)),
+            "createdAt": str(raw_item.get("createdAt") or "").strip(),
+            "updatedAt": str(raw_item.get("updatedAt") or "").strip(),
+        }
+        if not any(
+            (
+                card["title"],
+                card["rawNote"],
+                card["cvBulletSuggestion"],
+                card["coverLetterAngle"],
+            )
+        ):
+            continue
+        cleaned.append(card)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
 def _merge_document_metadata(existing_documents: dict, documents_payload: dict) -> dict:
     existing_web_cv_palette = dict(existing_documents.get("web_cv_palette") or {})
     payload_web_cv_palette = dict(documents_payload.get("web_cv_palette") or {})
@@ -1432,6 +1581,12 @@ def _merge_document_metadata(existing_documents: dict, documents_payload: dict) 
             if "ai_canvas_source_asset_ids" in documents_payload
             else None,
         ),
+        "generated_memory_cards": _merge_memory_cards(
+            existing_documents.get("generated_memory_cards"),
+            documents_payload.get("generated_memory_cards")
+            if "generated_memory_cards" in documents_payload
+            else None,
+        ),
     }
 
 
@@ -1494,6 +1649,9 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
             field_value = str(documents.get(field_id) or "").strip()
             if field_value and not workspace_has_value(field_id):
                 overrides.setdefault(field_id, field_value)
+        memory_cards = _merge_memory_cards([], documents.get("generated_memory_cards"), limit=150)
+        if memory_cards and not workspace_has_value("generated_memory_cards"):
+            overrides.setdefault("generated_memory_cards", memory_cards)
 
     return overrides
 
@@ -1654,6 +1812,7 @@ def _collect_review_queue_entries(application, user, *, workspace_id: str = "", 
                         "filter_status": job.filter_status,
                         "manual_approved": bool(job.manual_approved),
                         "updated_at": review.updated_at if review else run.updated_at,
+                        "job_workspace_url": _job_workspace_url(run.id, job.job_id),
                         # Tracker fields (REQ-09 / REQ-10)
                         "tracker_status": tracker_status,
                         "application_status": application_status,
@@ -1714,11 +1873,8 @@ TRACKER_TABLE_COLUMNS = [
     {"key": "title", "label": "Role"},
     {"key": "location_raw", "label": "Location"},
     {"key": "application_date", "label": "Application date"},
-    {"key": "apply_link", "label": "Application link"},
-    {"key": "linkedin_link", "label": "LinkedIn link"},
+    {"key": "apply_link", "label": "Resource"},
     {"key": "priority_rank", "label": "Priority"},
-    {"key": "applicant_count", "label": "Applicants"},
-    {"key": "documents", "label": "Documents"},
     {"key": "notes", "label": "Notes"},
 ]
 
@@ -1786,8 +1942,13 @@ def _tracker_document_summary(document: dict, *, source_scope: str = "") -> dict
     metadata = dict(document.get("metadata") or {})
     label = str(document.get("display_name") or document.get("document_name") or document.get("relative_path") or "").strip()
     document_type = str(document.get("document_type") or _document_type_for_asset_kind(str(document.get("asset_kind") or ""))).strip()
+    suffix = Path(
+        str(document.get("relative_path") or document.get("path") or document.get("display_name") or "")
+    ).suffix.lower()
     if not label:
         label = document_type or "Document"
+    if label and document_type and label.casefold() == document_type.casefold() and suffix:
+        label = f"{document_type} {suffix.lstrip('.').upper()}".strip()
     return {
         "document_id": str(document.get("document_id") or ""),
         "field": str(document.get("asset_kind") or ""),
@@ -1801,6 +1962,7 @@ def _tracker_document_summary(document: dict, *, source_scope: str = "") -> dict
         "job_id": str(metadata.get("job_id") or document.get("job_id") or ""),
         "source_origin": str(document.get("source_origin") or ""),
         "source_scope": source_scope,
+        "final_export_blocked": bool(document.get("final_export_blocked") or False),
     }
 
 
@@ -1898,6 +2060,10 @@ def _tracker_manual_documents_for_job_extra(job_extra: dict[str, object]) -> tup
     ]
 
 
+def _is_explicit_tracker_application(*, tracker_status: object = "", email_confirmed: object = False) -> bool:
+    return bool(str(tracker_status or "").strip()) or bool(email_confirmed)
+
+
 def _collect_tracker_entries(application, user) -> list[dict]:
     """Return all reviews that have been approved or have a tracker_status set."""
     workspaces, runs = _collect_authorized_runs(application, user)
@@ -1915,10 +2081,12 @@ def _collect_tracker_entries(application, user) -> list[dict]:
         workspace = workspaces_map.get(run.workspace_id)
         for review in review_records:
             review_meta = dict(review.metadata or {})
-            tracker_status = str(review_meta.get("tracker_status") or "")
+            raw_tracker_status = str(review_meta.get("tracker_status") or "")
+            email_confirmed = bool(review_meta.get("email_confirmed") or False)
             # include if approved decision OR has any tracker status already set
-            if review.decision != "approved" and not tracker_status:
+            if review.decision != "approved" and not raw_tracker_status:
                 continue
+            tracker_status = raw_tracker_status
             if not tracker_status:
                 tracker_status = "applied"
             application_status = normalize_application_status(
@@ -1955,7 +2123,11 @@ def _collect_tracker_entries(application, user) -> list[dict]:
                 "full_description": description_text,
                 "tracker_status": tracker_status,
                 "application_status": application_status,
-                "email_confirmed": bool(review_meta.get("email_confirmed") or False),
+                "email_confirmed": email_confirmed,
+                "is_explicit_application": _is_explicit_tracker_application(
+                    tracker_status=raw_tracker_status,
+                    email_confirmed=email_confirmed,
+                ),
                 "rejection_note": str(review_meta.get("rejection_note") or ""),
                 "rejected_at": str(review_meta.get("rejected_at") or ""),
                 "application_date": str(review_meta.get("application_date") or review_meta.get("applied_at") or ""),
@@ -1964,6 +2136,7 @@ def _collect_tracker_entries(application, user) -> list[dict]:
                 "posted_time_text": str(job_extra.get("posted_time_text") or job_extra.get("listed_at_text") or ""),
                 "priority_rank": job.priority_rank if job else job_extra.get("priority_rank"),
                 "priority_bucket": str(job_extra.get("priority_bucket") or job_extra.get("priority_tier") or ""),
+                "job_workspace_url": _job_workspace_url(run.id, review.job_id),
                 **document_fields,
                 "documents": documents,
                 "updated_at": review.updated_at,
@@ -1979,12 +2152,14 @@ def _collect_tracker_entries(application, user) -> list[dict]:
             entry["tracker_application"] = normalize_tracker_application({**entry, "metadata": review_meta})
             entries.append(entry)
     for external in _load_external_tracker_applications(user):
+        raw_tracker_status = str(external.get("tracker_status") or "")
+        email_confirmed = bool(external.get("email_confirmed") or False)
         application_status = normalize_application_status(
-            external.get("application_status") or external.get("tracker_status"),
+            external.get("application_status") or raw_tracker_status,
             default="Unknown",
         )
         tracker_status = str(
-            external.get("tracker_status")
+            raw_tracker_status
             or legacy_tracker_status_for_application_status(application_status)
         )
         entry = {
@@ -2002,7 +2177,11 @@ def _collect_tracker_entries(application, user) -> list[dict]:
             "full_description": str(external.get("full_description") or ""),
             "tracker_status": tracker_status,
             "application_status": application_status,
-            "email_confirmed": bool(external.get("email_confirmed") or False),
+            "email_confirmed": email_confirmed,
+            "is_explicit_application": _is_explicit_tracker_application(
+                tracker_status=raw_tracker_status,
+                email_confirmed=email_confirmed,
+            ),
             "rejection_note": str(external.get("rejection_note") or ""),
             "rejected_at": str(external.get("rejected_at") or ""),
             "application_date": str(external.get("application_date") or ""),
@@ -2270,7 +2449,7 @@ def _collect_referral_outreach_entries(
     return entries
 
 
-def _save_referral_outreach_status_from_payload(application, user, payload: dict) -> dict:
+def _save_referral_outreach_status_from_payload(application, user, payload: dict) -> tuple[dict, str]:
     contact_id = str(payload.get("contact_id") or "").strip()
     run_id = str(payload.get("run_id") or "").strip()
     job_id = str(payload.get("job_id") or "").strip()
@@ -2280,6 +2459,7 @@ def _save_referral_outreach_status_from_payload(application, user, payload: dict
     if not application.user_can_access_workspace(user, run.workspace_id):
         raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
     contact = application.get_referral_contact(user.user_id, contact_id)
+    previous_status = _get_referral_outreach_status(user, run_id=run_id, job_id=job_id, contact_id=contact_id)
     _, record = _persist_referral_outreach_status(
         application,
         user,
@@ -2289,7 +2469,7 @@ def _save_referral_outreach_status_from_payload(application, user, payload: dict
         outreach_status=str(payload.get("outreach_status") or ""),
         contact_snapshot=contact.to_dict(),
     )
-    return record
+    return record, previous_status
 
 
 def _load_external_tracker_applications(user) -> list[dict]:
@@ -3162,18 +3342,23 @@ def _artifact_entry_to_document_item(entry: dict) -> dict:
     asset_kind = _artifact_asset_kind(entry)
     group_id, group_label = _document_group_for_asset_kind(asset_kind)
     metadata = dict(entry.get("metadata") or {})
+    raw_display_name = str(
+        metadata.get("document_display_name")
+        or metadata.get("document_name")
+        or entry.get("file_name")
+        or ""
+    ).strip()
+    display_name = raw_display_name
+    if not str(metadata.get("document_display_name") or metadata.get("document_name") or "").strip():
+        if asset_kind in {"generated_cv", APPLIED_CV_ASSET_KIND, "cover_letter", "motivation_letter"}:
+            display_name = str(_document_type_for_asset_kind(asset_kind) or raw_display_name or "Document").strip()
     return _attach_application_document_contract({
         "document_id": _document_id_for_artifact(entry["run_id"], entry["artifact_id"]),
         "asset_id": "",
         "asset_kind": asset_kind,
         "group_id": group_id,
         "group_label": group_label,
-        "display_name": str(
-            metadata.get("document_display_name")
-            or metadata.get("document_name")
-            or entry.get("file_name")
-            or ""
-        ),
+        "display_name": display_name,
         "workspace_id": str(entry.get("workspace_id") or ""),
         "workspace_name": str(entry.get("workspace_name") or ""),
         "run_id": str(entry.get("run_id") or ""),
@@ -3251,6 +3436,7 @@ def _collect_document_entries(
     shared_profile = {
         "name": str(raw_profile.get("name") or user.display_name or user.email.split("@")[0]),
         "role_title": str(raw_profile.get("role_title") or ""),
+        "industry": str(raw_profile.get("industry") or ""),
         "email": str(raw_profile.get("email") or user.email),
         "location": str(raw_profile.get("location") or ""),
         "website": str(raw_profile.get("website") or ""),
@@ -3312,14 +3498,30 @@ def _resolve_document_selection(
     document = _find_document_entry(application, user, document_id)
     _assert_document_export_allowed(document, export_anyway=export_anyway)
     kind, _, remainder = str(document_id or "").partition("::")
+    file_path = ""
+    fallback_name = ""
     if kind == "artifact":
         run_id, _, artifact_id = remainder.partition("::")
         if not run_id or not artifact_id:
             raise KeyError(f"Document '{document_id}' not found.")
-        return _resolve_artifact_download(application, run_id, artifact_id)
-    if kind == "asset":
-        return _resolve_candidate_asset_download(user, remainder)
-    raise KeyError(f"Document '{document_id}' not found.")
+        file_path, fallback_name = _resolve_artifact_download(application, run_id, artifact_id)
+    elif kind == "asset":
+        file_path, fallback_name = _resolve_candidate_asset_download(user, remainder)
+    else:
+        raise KeyError(f"Document '{document_id}' not found.")
+
+    preferred_name = str(document.get("display_name") or document.get("document_name") or "").strip()
+    if not preferred_name:
+        return file_path, fallback_name
+    fallback_path = Path(fallback_name or "")
+    target_path = Path(file_path or "")
+    preferred_path = Path(preferred_name).name or fallback_path.name or "document"
+    if Path(preferred_path).suffix:
+        return file_path, preferred_path
+    resolved_suffix = fallback_path.suffix or target_path.suffix
+    if resolved_suffix:
+        return file_path, f"{preferred_path}{resolved_suffix}"
+    return file_path, preferred_path
 
 
 def _safe_zip_entry_name(original_name: str, *, used_names: set[str]) -> str:
@@ -3631,9 +3833,342 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
     return entries
 
 
+_DASHBOARD_APPLICATION_OUTCOME_SEGMENTS = [
+    {"label": "Applied", "color": "#38bdf8"},
+    {"label": "Interviewing", "color": "#f59e0b"},
+    {"label": "Offer", "color": "#22c55e"},
+    {"label": "Rejected", "color": "#f97316"},
+    {"label": "Withdrawn", "color": "#94a3b8"},
+]
+_DASHBOARD_SOURCE_KIND_COLORS = ["#0f766e", "#14b8a6", "#38bdf8", "#f59e0b", "#f97316"]
+_DASHBOARD_ACTIVE_RUN_STATUSES = {"planned", "queued", "running", "cancel_requested"}
+_DASHBOARD_TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
+_DASHBOARD_REFERRAL_STAGE_INDEX = {
+    "Not contacted": 0,
+    "Contacted": 1,
+    "Replied": 2,
+    "Referral offered": 3,
+    "No referral": 2,
+}
+
+
+def _dashboard_item_value(item, field: str, default=None):
+    if isinstance(item, dict):
+        return item.get(field, default)
+    return getattr(item, field, default)
+
+
+def _dashboard_labelize(value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").replace("_", " ").replace("-", " ")).strip()
+    return re.sub(r"\b\w", lambda match: match.group(0).upper(), text)
+
+
+def _dashboard_numeric_value(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def _dashboard_parse_timestamp(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _dashboard_run_duration_ms(run) -> float | None:
+    start = (
+        _dashboard_parse_timestamp(getattr(run, "started_at", ""))
+        or _dashboard_parse_timestamp(getattr(run, "queued_at", ""))
+        or _dashboard_parse_timestamp(getattr(run, "created_at", ""))
+    )
+    end = _dashboard_parse_timestamp(getattr(run, "finished_at", ""))
+    if start is None or end is None or end <= start:
+        return None
+    return (end - start).total_seconds() * 1000
+
+
+def _dashboard_failed_stage_result(run):
+    stage_results = list(getattr(run, "stage_results", []) or [])
+    for result in reversed(stage_results):
+        status = str(_dashboard_item_value(result, "status", "") or "").strip().lower()
+        if status == "failed":
+            return result
+    return None
+
+
+def _dashboard_failure_stage_key(run) -> str:
+    failed_stage = _dashboard_failed_stage_result(run)
+    key = str(
+        _dashboard_item_value(failed_stage, "stage_id", "")
+        or getattr(run, "current_stage_id", "")
+        or "unknown"
+    ).strip()
+    return key or "unknown"
+
+
+def _dashboard_failure_message(run) -> str:
+    failed_stage = _dashboard_failed_stage_result(run)
+    message = str(
+        _dashboard_item_value(failed_stage, "error", "")
+        or getattr(run, "last_error", "")
+        or ""
+    ).strip()
+    return message or "Run failed without a saved error message."
+
+
+def _dashboard_is_source_stage(stage_id: str) -> bool:
+    return stage_id.startswith("source_") or stage_id == "source_search"
+
+
+def _dashboard_is_merge_stage(stage_id: str) -> bool:
+    return "merge" in stage_id
+
+
+def _dashboard_is_screen_stage(stage_id: str) -> bool:
+    return "screen" in stage_id
+
+
+def _dashboard_is_approval_stage(stage_id: str) -> bool:
+    return "prioritize" in stage_id
+
+
+def _dashboard_is_apply_stage(stage_id: str) -> bool:
+    return "generate" in stage_id or "package" in stage_id
+
+
+def _dashboard_run_pipeline(run) -> dict[str, float]:
+    stage_results = list(getattr(run, "stage_results", []) or [])
+    discovered_from_sources = 0.0
+    discovered_from_merge = 0.0
+    screened = 0.0
+    screen_approved = 0.0
+    approved = 0.0
+    applied = 0.0
+
+    for result in stage_results:
+        stage_id = str(_dashboard_item_value(result, "stage_id", "") or "").strip()
+        metrics = _dashboard_item_value(result, "metrics", {}) or {}
+        jobs_found = _dashboard_numeric_value(_dashboard_item_value(metrics, "jobs_found", 0))
+        jobs_ingested = _dashboard_numeric_value(_dashboard_item_value(metrics, "jobs_ingested", 0))
+        merged_jobs = _dashboard_numeric_value(_dashboard_item_value(metrics, "merged_jobs", 0))
+        approved_jobs = _dashboard_numeric_value(_dashboard_item_value(metrics, "approved", 0))
+        rejected_jobs = _dashboard_numeric_value(_dashboard_item_value(metrics, "rejected", 0))
+        generated_jobs = _dashboard_numeric_value(_dashboard_item_value(metrics, "generated_jobs", 0))
+        packaged_jobs = _dashboard_numeric_value(_dashboard_item_value(metrics, "packaged_jobs", 0))
+
+        if _dashboard_is_source_stage(stage_id):
+            discovered_from_sources += jobs_found + jobs_ingested
+        if _dashboard_is_merge_stage(stage_id):
+            discovered_from_merge = max(discovered_from_merge, merged_jobs)
+        if _dashboard_is_screen_stage(stage_id):
+            screen_approved += approved_jobs
+            screened_total = approved_jobs + rejected_jobs
+            screened += screened_total or approved_jobs
+        if _dashboard_is_approval_stage(stage_id):
+            approved += approved_jobs
+        if _dashboard_is_apply_stage(stage_id):
+            applied += generated_jobs + packaged_jobs
+
+    return {
+        "discovered": discovered_from_merge or discovered_from_sources,
+        "screened": screened,
+        "approved": approved or screen_approved,
+        "applied": applied,
+    }
+
+
+def _dashboard_analytics_payload(application, user, workspaces: dict[str, object], runs: list[object]) -> dict:
+    terminal_runs = [
+        run for run in runs if str(getattr(run, "status", "") or "").strip() in _DASHBOARD_TERMINAL_RUN_STATUSES
+    ]
+    completed_runs = [
+        run for run in terminal_runs if str(getattr(run, "status", "") or "").strip() == "completed"
+    ]
+    failed_runs = [run for run in runs if str(getattr(run, "status", "") or "").strip() == "failed"]
+    active_runs = [
+        run for run in runs if str(getattr(run, "status", "") or "").strip() in _DASHBOARD_ACTIVE_RUN_STATUSES
+    ]
+    run_durations = [value for value in (_dashboard_run_duration_ms(run) for run in terminal_runs) if value is not None]
+
+    failure_breakdown_map: dict[str, int] = {}
+    for run in failed_runs:
+        key = _dashboard_labelize(_dashboard_failure_stage_key(run))
+        failure_breakdown_map[key] = failure_breakdown_map.get(key, 0) + 1
+    failure_breakdown = [
+        {"stage": stage, "count": count}
+        for stage, count in sorted(failure_breakdown_map.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+    aggregated_pipeline = {"discovered": 0.0, "screened": 0.0, "approved": 0.0, "applied": 0.0}
+    application_status_map: dict[str, int] = {}
+    waiting_review_count = 0
+    for run in runs:
+        pipeline = _dashboard_run_pipeline(run)
+        for key, value in pipeline.items():
+            aggregated_pipeline[key] += value
+
+        for review in application.list_reviews(run_id=run.id, limit=1000, offset=0):
+            review_status = str(getattr(review, "status", "") or "").strip().lower()
+            if review_status in {"waiting_review", "pending"}:
+                waiting_review_count += 1
+            review_meta = dict(getattr(review, "metadata", {}) or {})
+            raw_tracker_status = str(review_meta.get("tracker_status") or "")
+            if getattr(review, "decision", "") != "approved" and not raw_tracker_status:
+                continue
+            tracker_status = raw_tracker_status or "applied"
+            application_status = normalize_application_status(
+                review_meta.get("application_status") or tracker_status,
+                default="Applied",
+            )
+            application_status_map[application_status] = application_status_map.get(application_status, 0) + 1
+
+    for external in _load_external_tracker_applications(user):
+        raw_tracker_status = str(external.get("tracker_status") or "")
+        application_status = normalize_application_status(
+            external.get("application_status") or raw_tracker_status,
+            default="Unknown",
+        )
+        application_status_map[application_status] = application_status_map.get(application_status, 0) + 1
+
+    pipeline_data = [
+        {"label": "Discovered", "value": int(aggregated_pipeline["discovered"]), "color": "#0f766e"},
+        {"label": "Screened", "value": int(aggregated_pipeline["screened"]), "color": "#14b8a6"},
+        {"label": "Approved", "value": int(aggregated_pipeline["approved"]), "color": "#38bdf8"},
+        {"label": "Applied", "value": int(aggregated_pipeline["applied"]), "color": "#f59e0b"},
+    ]
+    application_outcomes = [
+        {
+            **segment,
+            "value": application_status_map.get(segment["label"], 0),
+        }
+        for segment in _DASHBOARD_APPLICATION_OUTCOME_SEGMENTS
+    ]
+
+    contacts = application.list_referral_contacts(user.user_id)
+    source_kind_map: dict[str, int] = {}
+    for contact in contacts:
+        source_kind = _dashboard_labelize(str(getattr(contact, "source_kind", "manual") or "manual").strip() or "manual")
+        source_kind_map[source_kind] = source_kind_map.get(source_kind, 0) + 1
+    contact_sources = [
+        {
+            "label": label,
+            "value": value,
+            "color": _DASHBOARD_SOURCE_KIND_COLORS[index % len(_DASHBOARD_SOURCE_KIND_COLORS)],
+        }
+        for index, (label, value) in enumerate(
+            sorted(source_kind_map.items(), key=lambda item: (-item[1], item[0]))
+        )
+    ]
+
+    highest_referral_stage_by_contact = {
+        str(getattr(contact, "contact_id", "") or "").strip(): 0
+        for contact in contacts
+        if str(getattr(contact, "contact_id", "") or "").strip()
+    }
+    no_referral_contacts: set[str] = set()
+    outreach_records = _load_referral_outreach_records(user)
+    for record in outreach_records:
+        contact_id = str(record.get("contact_id") or "").strip()
+        if not contact_id or contact_id not in highest_referral_stage_by_contact:
+            continue
+        outreach_status = normalize_referral_outreach_status(record.get("outreach_status"))
+        stage_index = _DASHBOARD_REFERRAL_STAGE_INDEX.get(outreach_status, 0)
+        if outreach_status == "No referral":
+            no_referral_contacts.add(contact_id)
+        highest_referral_stage_by_contact[contact_id] = max(
+            highest_referral_stage_by_contact.get(contact_id, 0),
+            stage_index,
+        )
+
+    contact_stage_indexes = list(highest_referral_stage_by_contact.values())
+    outreach_funnel = [
+        {
+            "label": "Not contacted",
+            "value": sum(1 for stage_index in contact_stage_indexes if stage_index == 0),
+            "color": "#94a3b8",
+        },
+        {
+            "label": "Contacted",
+            "value": sum(1 for stage_index in contact_stage_indexes if stage_index >= 1),
+            "color": "#38bdf8",
+        },
+        {
+            "label": "Replied",
+            "value": sum(1 for stage_index in contact_stage_indexes if stage_index >= 2),
+            "color": "#14b8a6",
+        },
+        {
+            "label": "Referral offered",
+            "value": sum(1 for stage_index in contact_stage_indexes if stage_index >= 3),
+            "color": "#22c55e",
+        },
+    ]
+
+    recent_failures = []
+    for run in sorted(
+        failed_runs,
+        key=lambda item: str(item.finished_at or item.updated_at or item.created_at or ""),
+        reverse=True,
+    )[:5]:
+        workspace = workspaces.get(run.workspace_id)
+        recent_failures.append(
+            {
+                "id": run.id,
+                "workspaceName": workspace.name if workspace else run.workspace_id,
+                "timestamp": run.finished_at or run.updated_at or run.created_at or "",
+                "stage": _dashboard_labelize(_dashboard_failure_stage_key(run)),
+                "errorText": _dashboard_failure_message(run),
+            }
+        )
+
+    average_duration_ms = (sum(run_durations) / len(run_durations)) if run_durations else 0
+    return {
+        "waitingReviewCount": waiting_review_count,
+        "automation": {
+            "totalRuns": len(runs),
+            "terminalRuns": len(terminal_runs),
+            "completedRuns": len(completed_runs),
+            "failedRuns": len(failed_runs),
+            "activeRuns": len(active_runs),
+            "successRate": (len(completed_runs) / len(terminal_runs)) if terminal_runs else 0,
+            "averageDurationMs": average_duration_ms,
+            "failureBreakdown": failure_breakdown,
+        },
+        "pipeline": {"data": pipeline_data},
+        "outcomes": {
+            "total": sum(segment["value"] for segment in application_outcomes),
+            "unknown": application_status_map.get("Unknown", 0),
+            "segments": application_outcomes,
+        },
+        "referrals": {
+            "totalContacts": len(contacts),
+            "noReferralCount": len(no_referral_contacts),
+            "trackedOutreachItems": len(outreach_records),
+            "contactSources": contact_sources,
+            "outreachFunnel": outreach_funnel,
+        },
+        "recentFailures": recent_failures,
+    }
+
+
 def _dashboard_payload(application, user) -> dict:
     workspaces, runs = _collect_authorized_runs(application, user)
-    review_queue = _collect_review_queue_entries(application, user)
+    analytics = _dashboard_analytics_payload(application, user, workspaces, runs)
     workers = application.list_workers(limit=100, offset=0, status="")
     today_iso = datetime.now(timezone.utc).date().isoformat()
     completed_today = sum(
@@ -3663,12 +4198,579 @@ def _dashboard_payload(application, user) -> dict:
             {"label": "Running Workers", "value": sum(1 for worker in workers if worker.status == "running")},
             {
                 "label": "Jobs Waiting Review",
-                "value": sum(1 for item in review_queue if item["status"] in {"waiting_review", "pending"}),
+                "value": analytics["waitingReviewCount"],
             },
             {"label": "Completed Today", "value": completed_today},
         ],
         "recent_runs": recent_runs,
+        "analytics": {key: value for key, value in analytics.items() if key != "waitingReviewCount"},
     }
+
+
+def _current_period_key() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _quota_limit_for_user(plan_id: str, quota_type: str, quota_overrides: dict[str, object] | None = None) -> int:
+    if isinstance(quota_overrides, dict) and quota_type in quota_overrides:
+        try:
+            return int(quota_overrides[quota_type])
+        except (TypeError, ValueError):
+            pass
+    return int(get_quota(plan_id, quota_type))
+
+
+def _auth_repository(application):
+    return application.repositories.auth_repository
+
+
+def _resolve_user_clerk_user_id(application, user) -> str:
+    lookup = getattr(_auth_repository(application), "get_user_clerk_user_id", None)
+    if callable(lookup):
+        try:
+            return str(lookup(user.user_id) or "").strip()
+        except KeyError:
+            return ""
+    return ""
+
+
+def _lookup_subscription_record(application, user_id: str) -> dict[str, object] | None:
+    lookup = getattr(_auth_repository(application), "get_current_subscription_by_user_id", None)
+    if not callable(lookup):
+        return None
+    try:
+        record = lookup(user_id)
+    except KeyError:
+        return None
+    return dict(record or {})
+
+
+def _serialize_authenticated_user(
+    application,
+    user,
+    *,
+    auth_method: str,
+    clerk_user_id: str = "",
+    role: str = "user",
+    plan_id: str = DEFAULT_PLAN_ID,
+    quota_overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload = user.to_dict()
+    public_metadata = {
+        "role": normalize_clerk_role(role),
+        "plan_id": normalize_plan_id(plan_id),
+        "quota_overrides": dict(quota_overrides or {}),
+    }
+    payload["role"] = public_metadata["role"]
+    payload["plan_id"] = public_metadata["plan_id"]
+    payload["clerk_user_id"] = str(clerk_user_id or _resolve_user_clerk_user_id(application, user) or "").strip()
+    payload["publicMetadata"] = public_metadata
+    payload["auth_method"] = str(auth_method or "").strip()
+    return payload
+
+
+def _lookup_user_by_email(application, email_address: str):
+    normalized_email = str(email_address or "").strip()
+    if not normalized_email:
+        raise KeyError("Missing user email address.")
+    repository = _auth_repository(application)
+    lookup = getattr(repository, "get_user_by_email", None)
+    if not callable(lookup):
+        raise KeyError("The configured auth repository does not support email lookups.")
+    return lookup(normalized_email)
+
+
+def _provision_user_from_clerk(application, clerk_user_id: str):
+    normalized_clerk_user_id = str(clerk_user_id or "").strip()
+    if not normalized_clerk_user_id:
+        raise KeyError("Missing Clerk user identifier.")
+    clerk_user_payload = get_clerk_user(normalized_clerk_user_id)
+    email_address = get_clerk_primary_email_address(clerk_user_payload)
+    display_name = get_clerk_display_name(clerk_user_payload)
+    public_metadata = _ensure_clerk_plan_defaults(
+        normalized_clerk_user_id,
+        dict(
+            clerk_user_payload.get("public_metadata")
+            or clerk_user_payload.get("publicMetadata")
+            or {}
+        ),
+    )
+    role_value = ROLE_ADMIN if public_metadata["role"] == "admin" else "user"
+    try:
+        user = _lookup_user_by_email(application, email_address) if email_address else None
+    except KeyError:
+        user = None
+    if user is None:
+        user = UserRecord(
+            user_id=normalized_clerk_user_id,
+            email=email_address,
+            display_name=display_name,
+            role=role_value,
+            created_at=utc_plus_seconds(0),
+            updated_at=utc_plus_seconds(0),
+            metadata={},
+        )
+    else:
+        user.email = email_address or user.email
+        user.display_name = display_name or user.display_name
+        user.role = role_value
+        user.is_active = True
+        user.updated_at = datetime.now(timezone.utc).isoformat()
+    repository = _auth_repository(application)
+    repository.upsert_user(user)
+    set_clerk_id = getattr(repository, "set_user_clerk_user_id", None)
+    if callable(set_clerk_id):
+        set_clerk_id(user.user_id, normalized_clerk_user_id)
+    refreshed_user = application.get_user(user.user_id)
+    refreshed_user.role = role_value
+    return refreshed_user
+
+
+def _lookup_user_by_clerk_subject(application, clerk_user_id: str):
+    normalized_clerk_user_id = str(clerk_user_id or "").strip()
+    if not normalized_clerk_user_id:
+        raise KeyError("Missing Clerk user identifier.")
+    repository = _auth_repository(application)
+    lookup = getattr(repository, "get_user_by_clerk_user_id", None)
+    if callable(lookup):
+        try:
+            return lookup(normalized_clerk_user_id)
+        except KeyError:
+            pass
+    try:
+        return application.get_user(normalized_clerk_user_id)
+    except KeyError as exc:
+        try:
+            return _provision_user_from_clerk(application, normalized_clerk_user_id)
+        except Exception as provision_exc:
+            raise KeyError(f"User for Clerk subject '{normalized_clerk_user_id}' not found.") from provision_exc
+
+
+def _build_clerk_auth_context(application, token_value: str):
+    claims = verify_session_token(token_value)
+    user = _lookup_user_by_clerk_subject(application, claims.clerk_user_id)
+    subscription_record = _lookup_subscription_record(application, user.user_id) or {}
+    plan_id = normalize_plan_id(subscription_record.get("plan_id") or claims.plan_id or DEFAULT_PLAN_ID)
+    role = normalize_clerk_role(claims.role or user.role)
+    user.role = role
+    synthetic_token = build_synthetic_token(
+        user_id=user.user_id,
+        auth_method="clerk_jwt",
+        role=role,
+        session_id=claims.session_id,
+        expires_at=claims.expires_at,
+        metadata={
+            "clerk_user_id": claims.clerk_user_id,
+            "plan_id": plan_id,
+        },
+    )
+    return SimpleNamespace(
+        user=user,
+        token=synthetic_token,
+        auth_method="clerk_jwt",
+        clerk_user_id=claims.clerk_user_id,
+        role=role,
+        plan_id=plan_id,
+        quota_overrides=dict(claims.quota_overrides or {}),
+        session_id=claims.session_id,
+    )
+
+
+def _build_legacy_auth_context(application, token_value: str):
+    user, legacy_token = application.authenticate_access_token(token_value)
+    subscription_record = _lookup_subscription_record(application, user.user_id) or {}
+    plan_id = normalize_plan_id(subscription_record.get("plan_id") or DEFAULT_PLAN_ID)
+    role = normalize_clerk_role(user.role)
+    return SimpleNamespace(
+        user=user,
+        token=legacy_token,
+        auth_method="api_token",
+        clerk_user_id=_resolve_user_clerk_user_id(application, user),
+        role=role,
+        plan_id=plan_id,
+        quota_overrides={},
+        session_id="",
+    )
+
+
+def _resolve_auth_context(application, token_value: str):
+    normalized_token = str(token_value or "").strip()
+    if not normalized_token:
+        raise PermissionError("Missing bearer token.")
+    auth_logger = logging.getLogger("backend.auth")
+    if normalized_token.count(".") == 2:
+        try:
+            return _build_clerk_auth_context(application, normalized_token)
+        except Exception as clerk_exc:
+            try:
+                legacy_context = _build_legacy_auth_context(application, normalized_token)
+            except Exception:
+                raise PermissionError(str(clerk_exc)) from clerk_exc
+            auth_logger.warning(
+                "Accepted legacy api_token fallback for %s while Clerk JWT verification failed: %s",
+                legacy_context.user.user_id,
+                clerk_exc,
+            )
+            return legacy_context
+
+    legacy_context = _build_legacy_auth_context(application, normalized_token)
+    auth_logger.warning(
+        "Accepted legacy api_token fallback for %s during Clerk migration window.",
+        legacy_context.user.user_id,
+    )
+    return legacy_context
+
+
+def _quota_usage_snapshot(
+    application,
+    *,
+    user_id: str,
+    plan_id: str,
+    quota_overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
+    repository = _auth_repository(application)
+    list_quota_usage = getattr(repository, "list_quota_usage", None)
+    if not callable(list_quota_usage):
+        raise ValueError("The configured auth repository does not support quota usage persistence.")
+    period = _current_period_key()
+    usage_counts = dict(list_quota_usage(user_id, period) or {})
+    quotas: dict[str, dict[str, object]] = {}
+    for quota_type in get_plan(plan_id).get("quotas", {}).keys():
+        limit = _quota_limit_for_user(plan_id, quota_type, quota_overrides)
+        used = int(usage_counts.get(quota_type) or 0)
+        quotas[quota_type] = {
+            "used": used,
+            "limit": limit,
+            "remaining": -1 if limit == -1 else max(0, limit - used),
+            "is_unlimited": limit == -1,
+        }
+    return {
+        "period": period,
+        "quotas": quotas,
+    }
+
+
+def _subscription_response_payload(
+    application,
+    *,
+    user_id: str,
+    plan_id: str,
+    quota_overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
+    subscription_record = _lookup_subscription_record(application, user_id) or {}
+    normalized_plan_id = normalize_plan_id(subscription_record.get("plan_id") or plan_id)
+    return {
+        "plan_id": normalized_plan_id,
+        "plan": get_plan(normalized_plan_id),
+        "subscription": {
+            "subscription_id": str(subscription_record.get("subscription_id") or ""),
+            "status": str(subscription_record.get("status") or ("active" if normalized_plan_id != DEFAULT_PLAN_ID else "free")),
+            "lemonsqueezy_subscription_id": str(subscription_record.get("lemonsqueezy_subscription_id") or ""),
+            "lemonsqueezy_customer_id": str(subscription_record.get("lemonsqueezy_customer_id") or ""),
+            "current_period_start": str(subscription_record.get("current_period_start") or ""),
+            "current_period_end": str(subscription_record.get("current_period_end") or ""),
+            "cancelled_at": str(subscription_record.get("cancelled_at") or ""),
+        },
+        "usage": _quota_usage_snapshot(
+            application,
+            user_id=user_id,
+            plan_id=normalized_plan_id,
+            quota_overrides=quota_overrides,
+        ),
+    }
+
+
+def _primary_email_domain(email_address: str) -> str:
+    local_part, delimiter, domain = str(email_address or "").strip().partition("@")
+    if not delimiter or not local_part or not domain:
+        return ""
+    return domain.lower()
+
+
+def _months_between(started_at: str, ended_at: str) -> int:
+    try:
+        start_dt = datetime.fromisoformat(str(started_at or "").strip()).astimezone(timezone.utc)
+        end_dt = datetime.fromisoformat(str(ended_at or "").strip()).astimezone(timezone.utc)
+    except Exception:
+        return 0
+    if end_dt <= start_dt:
+        return 0
+    return max(0, int((end_dt - start_dt).days / 30))
+
+
+def _ensure_clerk_plan_defaults(clerk_user_id: str, public_metadata: dict[str, object]) -> dict[str, object]:
+    normalized_role = normalize_clerk_role(public_metadata.get("role"))
+    normalized_plan_id = normalize_plan_id(public_metadata.get("plan_id") or DEFAULT_PLAN_ID)
+    quota_overrides = public_metadata.get("quota_overrides")
+    normalized_quota_overrides = dict(quota_overrides) if isinstance(quota_overrides, dict) else {}
+    if (
+        public_metadata.get("role") != normalized_role
+        or public_metadata.get("plan_id") != normalized_plan_id
+        or quota_overrides != normalized_quota_overrides
+    ):
+        update_clerk_user_metadata(
+            clerk_user_id,
+            public_metadata={
+                "role": normalized_role,
+                "plan_id": normalized_plan_id,
+                "quota_overrides": normalized_quota_overrides,
+            },
+        )
+    return {
+        "role": normalized_role,
+        "plan_id": normalized_plan_id,
+        "quota_overrides": normalized_quota_overrides,
+    }
+
+
+def _handle_clerk_webhook_event(application, event_payload: dict[str, object]) -> dict[str, object]:
+    event_type = str(event_payload.get("type") or "").strip()
+    event_data = dict(event_payload.get("data") or {})
+    clerk_user_id = str(event_data.get("id") or "").strip()
+    if not event_type or not clerk_user_id:
+        raise ValueError("Clerk webhook payload is missing the event type or user id.")
+
+    repository = _auth_repository(application)
+    email_address = get_clerk_primary_email_address(event_data)
+    display_name = get_clerk_display_name(event_data)
+    public_metadata = _ensure_clerk_plan_defaults(
+        clerk_user_id,
+        dict(event_data.get("public_metadata") or event_data.get("publicMetadata") or {}),
+    )
+    role_value = ROLE_ADMIN if public_metadata["role"] == "admin" else "user"
+
+    if event_type == "user.created":
+        try:
+            user = repository.get_user_by_clerk_user_id(clerk_user_id)
+        except Exception:
+            if email_address:
+                try:
+                    user = _lookup_user_by_email(application, email_address)
+                except Exception:
+                    user = None
+            else:
+                user = None
+        if user is None:
+            user = UserRecord(
+                user_id=clerk_user_id,
+                email=email_address,
+                display_name=display_name,
+                role=role_value,
+                created_at=utc_plus_seconds(0),
+                updated_at=utc_plus_seconds(0),
+                metadata={},
+            )
+        else:
+            user.email = email_address or user.email
+            user.display_name = display_name or user.display_name
+            user.role = role_value
+            user.is_active = True
+        application.repositories.auth_repository.upsert_user(user)
+        set_clerk_id = getattr(repository, "set_user_clerk_user_id", None)
+        if callable(set_clerk_id):
+            set_clerk_id(user.user_id, clerk_user_id)
+        application.emit_event(
+            "user_signed_up",
+            user_id=user.user_id,
+            source=get_clerk_signup_source(event_data),
+            payload={
+                "user_id": user.user_id,
+                "email_domain": _primary_email_domain(email_address),
+                "clerk_user_id": clerk_user_id,
+            },
+        )
+        return {"status": "ok", "event_type": event_type, "user_id": user.user_id}
+
+    if event_type == "user.updated":
+        user = _lookup_user_by_clerk_subject(application, clerk_user_id)
+        if email_address:
+            user.email = email_address
+        if display_name:
+            user.display_name = display_name
+        user.role = role_value
+        user.updated_at = datetime.now(timezone.utc).isoformat()
+        application.repositories.auth_repository.upsert_user(user)
+        return {"status": "ok", "event_type": event_type, "user_id": user.user_id}
+
+    if event_type == "user.deleted":
+        user = _lookup_user_by_clerk_subject(application, clerk_user_id)
+        user.is_active = False
+        user.updated_at = datetime.now(timezone.utc).isoformat()
+        application.repositories.auth_repository.upsert_user(user)
+        cancel_subscriptions = getattr(repository, "cancel_subscriptions_for_user", None)
+        if callable(cancel_subscriptions):
+            cancel_subscriptions(user.user_id, cancelled_at=datetime.now(timezone.utc).isoformat())
+        return {"status": "ok", "event_type": event_type, "user_id": user.user_id}
+
+    return {"status": "ignored", "event_type": event_type}
+
+
+def _handle_lemonsqueezy_webhook_event(
+    application,
+    *,
+    event_name: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    repository = _auth_repository(application)
+    data = dict(payload.get("data") or {})
+    attributes = dict(data.get("attributes") or {})
+    meta = dict(payload.get("meta") or {})
+    custom_data = dict(meta.get("custom_data") or {})
+    occurred_at = str(attributes.get("updated_at") or attributes.get("created_at") or utc_plus_seconds(0)).strip()
+    user_id = str(custom_data.get("user_id") or "").strip()
+    if not user_id:
+        lookup_email = str(attributes.get("user_email") or "").strip()
+        if lookup_email:
+            try:
+                user_id = _lookup_user_by_email(application, lookup_email).user_id
+            except Exception:
+                user_id = ""
+    if not user_id:
+        raise ValueError("Unable to resolve a local user for the LemonSqueezy webhook payload.")
+
+    current_subscription = _lookup_subscription_record(application, user_id) or {}
+    variant_id = str(attributes.get("variant_id") or custom_data.get("variant_id") or "").strip()
+    plan_id = normalize_plan_id(get_plan_for_variant_id(variant_id))
+    subscription_id = str(data.get("id") or attributes.get("subscription_id") or "").strip()
+    lemonsqueezy_subscription_id = str(attributes.get("subscription_id") or subscription_id or "").strip()
+    subscription_record = {
+        "subscription_id": subscription_id or lemonsqueezy_subscription_id,
+        "user_id": user_id,
+        "plan_id": plan_id,
+        "status": str(attributes.get("status") or "active").strip() or "active",
+        "lemonsqueezy_subscription_id": lemonsqueezy_subscription_id,
+        "lemonsqueezy_customer_id": str(attributes.get("customer_id") or "").strip(),
+        "lemonsqueezy_order_id": str(attributes.get("order_id") or "").strip(),
+        "current_period_start": str(attributes.get("created_at") or current_subscription.get("current_period_start") or ""),
+        "current_period_end": str(
+            attributes.get("renews_at")
+            or attributes.get("ends_at")
+            or current_subscription.get("current_period_end")
+            or ""
+        ),
+        "cancelled_at": str(attributes.get("ends_at") or current_subscription.get("cancelled_at") or ""),
+        "created_at": str(current_subscription.get("created_at") or attributes.get("created_at") or utc_plus_seconds(0)),
+        "updated_at": str(attributes.get("updated_at") or utc_plus_seconds(0)),
+    }
+
+    user = application.get_user(user_id)
+    clerk_user_id = _resolve_user_clerk_user_id(application, user)
+    previous_plan_id = normalize_plan_id(current_subscription.get("plan_id") or DEFAULT_PLAN_ID)
+
+    if event_name == "subscription_created":
+        repository.upsert_subscription(subscription_record)
+        if clerk_user_id:
+            update_user_plan_in_clerk(clerk_user_id, plan_id)
+        repository.insert_subscription_event(
+            {
+                "event_id": f"subevt_{uuid4().hex[:16]}",
+                "user_id": user_id,
+                "event_type": "subscription_started",
+                "plan_id": plan_id,
+                "previous_plan_id": previous_plan_id,
+                "lemonsqueezy_event_name": event_name,
+                "occurred_at": occurred_at,
+                "payload": payload,
+            }
+        )
+        application.emit_event(
+            "subscription_started",
+            user_id=user_id,
+            source="lemonsqueezy",
+            payload={
+                "user_id": user_id,
+                "plan_id": plan_id,
+                "price_eur": int(get_plan(plan_id).get("price_eur") or 0),
+                "lemonsqueezy_subscription_id": lemonsqueezy_subscription_id,
+            },
+        )
+        return {"status": "ok", "event_type": event_name, "user_id": user_id}
+
+    if event_name == "subscription_updated":
+        repository.upsert_subscription(subscription_record)
+        if clerk_user_id and previous_plan_id != plan_id:
+            update_user_plan_in_clerk(clerk_user_id, plan_id)
+        if compare_plan_tiers(previous_plan_id, plan_id) < 0:
+            reset_quota_usage = getattr(repository, "reset_quota_usage", None)
+            if callable(reset_quota_usage):
+                reset_quota_usage(user_id, _current_period_key())
+        if previous_plan_id != plan_id:
+            direction = "upgrade" if compare_plan_tiers(previous_plan_id, plan_id) < 0 else "downgrade"
+            repository.insert_subscription_event(
+                {
+                    "event_id": f"subevt_{uuid4().hex[:16]}",
+                    "user_id": user_id,
+                    "event_type": "subscription_changed",
+                    "plan_id": plan_id,
+                    "previous_plan_id": previous_plan_id,
+                    "lemonsqueezy_event_name": event_name,
+                    "occurred_at": occurred_at,
+                    "payload": payload,
+                }
+            )
+            application.emit_event(
+                "subscription_changed",
+                user_id=user_id,
+                source="lemonsqueezy",
+                payload={
+                    "user_id": user_id,
+                    "previous_plan_id": previous_plan_id,
+                    "new_plan_id": plan_id,
+                    "direction": direction,
+                },
+            )
+        return {"status": "ok", "event_type": event_name, "user_id": user_id}
+
+    if event_name == "subscription_cancelled":
+        subscription_record["status"] = "cancelled"
+        subscription_record["cancelled_at"] = str(attributes.get("updated_at") or utc_plus_seconds(0))
+        repository.upsert_subscription(subscription_record)
+        if clerk_user_id:
+            update_user_plan_in_clerk(clerk_user_id, DEFAULT_PLAN_ID)
+        repository.insert_subscription_event(
+            {
+                "event_id": f"subevt_{uuid4().hex[:16]}",
+                "user_id": user_id,
+                "event_type": "subscription_cancelled",
+                "plan_id": plan_id,
+                "previous_plan_id": previous_plan_id,
+                "lemonsqueezy_event_name": event_name,
+                "occurred_at": occurred_at,
+                "payload": payload,
+            }
+        )
+        application.emit_event(
+            "subscription_cancelled",
+            user_id=user_id,
+            source="lemonsqueezy",
+            payload={
+                "user_id": user_id,
+                "plan_id": plan_id,
+                "months_active": _months_between(
+                    str(current_subscription.get("created_at") or attributes.get("created_at") or ""),
+                    str(attributes.get("updated_at") or utc_plus_seconds(0)),
+                ),
+                "cancellation_reason": str(attributes.get("status_formatted") or ""),
+            },
+        )
+        return {"status": "ok", "event_type": event_name, "user_id": user_id}
+
+    if event_name == "order_created":
+        repository.insert_subscription_event(
+            {
+                "event_id": f"subevt_{uuid4().hex[:16]}",
+                "user_id": user_id,
+                "event_type": "order_created",
+                "plan_id": plan_id,
+                "previous_plan_id": previous_plan_id,
+                "lemonsqueezy_event_name": event_name,
+                "occurred_at": occurred_at,
+                "payload": payload,
+            }
+        )
+        return {"status": "ok", "event_type": event_name, "user_id": user_id}
+
+    return {"status": "ignored", "event_type": event_name}
 
 
 def _extract_bearer_token(header_value: str) -> str:
@@ -3676,6 +4778,23 @@ def _extract_bearer_token(header_value: str) -> str:
     if not value.lower().startswith("bearer "):
         return ""
     return value[7:].strip()
+
+
+def _is_unauthorized_permission_error(exc: PermissionError) -> bool:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    return any(
+        fragment in message
+        for fragment in (
+            "missing bearer token",
+            "invalid or expired access token",
+            "session token",
+            "jwt",
+            "authorized party",
+            "bearer token",
+        )
+    )
 
 
 def _normalize_segments(raw_segments: list[str]) -> list[str]:
@@ -3700,6 +4819,634 @@ def _parse_bool_param(query: dict[str, list[str]], name: str, *, default: bool =
     if raw_value in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _review_application_status_sql(payload_column: str) -> str:
+    return f"""
+        COALESCE(
+            NULLIF(json_extract({payload_column}, '$.metadata.application_status'), ''),
+            CASE lower(COALESCE(json_extract({payload_column}, '$.metadata.tracker_status'), ''))
+                WHEN 'applied' THEN 'Applied'
+                WHEN 'email_confirmed' THEN 'Applied'
+                WHEN 'interview_invited' THEN 'Interviewing'
+                WHEN 'interviewing' THEN 'Interviewing'
+                WHEN 'rejected' THEN 'Rejected'
+                WHEN 'offer' THEN 'Offer'
+                WHEN 'withdrawn' THEN 'Withdrawn'
+                WHEN 'not_applied' THEN 'Not applied'
+                ELSE 'Unknown'
+            END
+        )
+    """.strip()
+
+
+def _admin_analytics_snapshot_queries() -> dict[str, str]:
+    review_application_status = _review_application_status_sql("r.payload_json")
+    review_application_status_for_best_sources = _review_application_status_sql("reviews.payload_json")
+    return {
+        "automation_success_rate": """
+            WITH run_enrichment AS (
+                SELECT
+                    runs.id AS run_id,
+                    runs.status,
+                    COALESCE(
+                        NULLIF(json_extract(runs.metadata_json, '$.run_kind'), ''),
+                        CASE
+                            WHEN EXISTS (
+                                SELECT 1
+                                FROM json_each(runs.run_input_overrides_json, '$.manual_urls_inline')
+                            ) THEN 'quick_apply'
+                            ELSE 'standard'
+                        END
+                    ) AS run_kind,
+                    COALESCE(
+                        NULLIF(json_extract(runs.run_plan_json, '$.workspace_snapshot.metadata.automation_flow'), ''),
+                        NULLIF(json_extract(runs.run_plan_json, '$.workspace_snapshot.settings.automation_flow'), ''),
+                        NULLIF(json_extract(runs.metadata_json, '$.workspace_type'), ''),
+                        'unknown'
+                    ) AS automation_flow
+                FROM runs
+            )
+            SELECT
+                automation_flow,
+                run_kind,
+                COUNT(*) AS total_runs,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS successful_runs,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_runs,
+                ROUND(
+                    100.0 * SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0),
+                    2
+                ) AS success_rate_pct
+            FROM run_enrichment
+            GROUP BY automation_flow, run_kind
+            ORDER BY total_runs DESC, automation_flow, run_kind
+        """,
+        "stage_failure_rate_by_type": """
+            SELECT
+                stage_type,
+                COUNT(*) AS total_stage_executions,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_stage_executions,
+                ROUND(
+                    100.0 * SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0),
+                    2
+                ) AS failure_rate_pct,
+                SUM(COALESCE(CAST(json_extract(metrics_json, '$.failures') AS INTEGER), 0)) AS metric_failures,
+                SUM(COALESCE(CAST(json_extract(metrics_json, '$.rejected') AS INTEGER), 0)) AS metric_rejected
+            FROM run_stage_results
+            GROUP BY stage_type
+            ORDER BY failed_stage_executions DESC, total_stage_executions DESC, stage_type
+        """,
+        "jobs_by_source": """
+            WITH configured_sources AS (
+                SELECT
+                    runs.id AS run_id,
+                    COALESCE(
+                        NULLIF(json_extract(source.value, '$.connector_id'), ''),
+                        NULLIF(json_extract(source.value, '$.id'), ''),
+                        'unknown'
+                    ) AS configured_source
+                FROM runs
+                LEFT JOIN json_each(runs.run_plan_json, '$.workspace_snapshot.sources') AS source
+            ),
+            observed_jobs AS (
+                SELECT
+                    run_jobs.run_id,
+                    COALESCE(
+                        NULLIF(run_jobs.source_type, ''),
+                        NULLIF(run_jobs.portal, ''),
+                        NULLIF(json_extract(run_jobs.payload_json, '$.source_type'), ''),
+                        NULLIF(json_extract(run_jobs.payload_json, '$.portal'), ''),
+                        'unknown'
+                    ) AS source,
+                    COUNT(*) AS jobs_count
+                FROM run_jobs
+                GROUP BY run_jobs.run_id, source
+            )
+            SELECT
+                observed_jobs.source,
+                COUNT(DISTINCT observed_jobs.run_id) AS run_count,
+                SUM(observed_jobs.jobs_count) AS job_count,
+                COUNT(DISTINCT configured_sources.configured_source) AS configured_source_variants
+            FROM observed_jobs
+            LEFT JOIN configured_sources ON configured_sources.run_id = observed_jobs.run_id
+            GROUP BY observed_jobs.source
+            ORDER BY job_count DESC, observed_jobs.source
+        """,
+        "screening_funnel": """
+            WITH funnel_stages AS (
+                SELECT
+                    CASE
+                        WHEN stage_type IN (
+                            'jobs.acquire.search_listings',
+                            'jobs.acquire.company_sites',
+                            'jobs.acquire.job_boards',
+                            'jobs.ingest.curated_urls',
+                            'legacy.linkedin.acquire',
+                            'legacy.blue_collar.stage1'
+                        ) THEN 'acquired'
+                        WHEN stage_type IN (
+                            'jobs.merge.dedupe'
+                        ) THEN 'deduped'
+                        WHEN stage_type IN (
+                            'jobs.screen.filter',
+                            'legacy.white_collar.local_filter',
+                            'legacy.blue_collar.stage2'
+                        ) THEN 'screened_approved'
+                        WHEN stage_type IN (
+                            'jobs.prioritize.rank',
+                            'legacy.white_collar.rank',
+                            'legacy.blue_collar.stage3'
+                        ) THEN 'prioritized_approved'
+                        WHEN stage_type IN (
+                            'applications.generate.documents',
+                            'legacy.white_collar.docs',
+                            'profiles.generate.reusable',
+                            'legacy.blue_collar.stage4',
+                            'applications.package.export',
+                            'legacy.blue_collar.stage5'
+                        ) THEN 'documents_generated'
+                        ELSE 'other'
+                    END AS funnel_stage,
+                    SUM(
+                        COALESCE(CAST(json_extract(metrics_json, '$.jobs_found') AS INTEGER), 0)
+                        + COALESCE(CAST(json_extract(metrics_json, '$.jobs_ingested') AS INTEGER), 0)
+                        + COALESCE(CAST(json_extract(metrics_json, '$.merged_jobs') AS INTEGER), 0)
+                        + COALESCE(CAST(json_extract(metrics_json, '$.approved') AS INTEGER), 0)
+                    ) AS stage_volume
+                FROM run_stage_results
+                GROUP BY funnel_stage
+            ),
+            review_stage AS (
+                SELECT
+                    'review_approved' AS funnel_stage,
+                    COUNT(*) AS stage_volume
+                FROM reviews
+                WHERE lower(status) = 'approved'
+            )
+            SELECT funnel_stage, stage_volume
+            FROM (
+                SELECT funnel_stage, stage_volume FROM funnel_stages
+                UNION ALL
+                SELECT funnel_stage, stage_volume FROM review_stage
+            )
+            WHERE funnel_stage <> 'other'
+            ORDER BY
+                CASE funnel_stage
+                    WHEN 'acquired' THEN 1
+                    WHEN 'deduped' THEN 2
+                    WHEN 'screened_approved' THEN 3
+                    WHEN 'prioritized_approved' THEN 4
+                    WHEN 'documents_generated' THEN 5
+                    WHEN 'review_approved' THEN 6
+                    ELSE 99
+                END
+        """,
+        "applications_per_user": f"""
+            WITH review_outcomes AS (
+                SELECT
+                    r.run_id,
+                    {review_application_status} AS application_status
+                FROM reviews AS r
+            ),
+            runs_by_user AS (
+                SELECT
+                    runs.id AS run_id,
+                    runs.user_id AS user_id
+                FROM runs
+                WHERE runs.user_id != ''
+            )
+            SELECT
+                users.user_id,
+                COALESCE(NULLIF(json_extract(users.payload_json, '$.display_name'), ''), users.email) AS user_label,
+                COUNT(DISTINCT runs_by_user.run_id) AS run_count,
+                SUM(
+                    CASE
+                        WHEN review_outcomes.application_status IN ('Applied', 'Interviewing', 'Rejected', 'Offer', 'Withdrawn')
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS application_count,
+                ROUND(
+                    1.0 * SUM(
+                        CASE
+                            WHEN review_outcomes.application_status IN ('Applied', 'Interviewing', 'Rejected', 'Offer', 'Withdrawn')
+                                THEN 1
+                            ELSE 0
+                        END
+                    ) / NULLIF(COUNT(DISTINCT runs_by_user.run_id), 0),
+                    2
+                ) AS applications_per_run
+            FROM users
+            LEFT JOIN runs_by_user ON runs_by_user.user_id = users.user_id
+            LEFT JOIN review_outcomes ON review_outcomes.run_id = runs_by_user.run_id
+            GROUP BY users.user_id, user_label
+            ORDER BY application_count DESC, run_count DESC, user_label
+        """,
+        "quick_apply_adoption": """
+            WITH run_kinds AS (
+                SELECT
+                    runs.id AS run_id,
+                    runs.user_id AS user_id,
+                    COALESCE(NULLIF(json_extract(runs.metadata_json, '$.run_kind'), ''), 'standard') AS run_kind,
+                    (
+                        SELECT COUNT(*)
+                        FROM json_each(runs.run_input_overrides_json, '$.manual_urls_inline')
+                    ) AS manual_url_count
+                FROM runs
+                WHERE runs.user_id != ''
+            )
+            SELECT
+                users.user_id,
+                COALESCE(NULLIF(json_extract(users.payload_json, '$.display_name'), ''), users.email) AS user_label,
+                COUNT(run_kinds.run_id) AS total_runs,
+                SUM(CASE WHEN run_kinds.run_kind = 'quick_apply' THEN 1 ELSE 0 END) AS quick_apply_runs,
+                SUM(CASE WHEN run_kinds.run_kind = 'quick_apply' THEN run_kinds.manual_url_count ELSE 0 END) AS quick_apply_urls,
+                ROUND(
+                    100.0 * SUM(CASE WHEN run_kinds.run_kind = 'quick_apply' THEN 1 ELSE 0 END)
+                    / NULLIF(COUNT(run_kinds.run_id), 0),
+                    2
+                ) AS quick_apply_run_share_pct
+            FROM users
+            LEFT JOIN run_kinds ON run_kinds.user_id = users.user_id
+            GROUP BY users.user_id, user_label
+            ORDER BY quick_apply_runs DESC, total_runs DESC, user_label
+        """,
+        "referral_outreach_funnel": """
+            WITH outreach AS (
+                SELECT
+                    users.user_id,
+                    COALESCE(NULLIF(json_extract(outreach_entry.value, '$.outreach_status'), ''), 'Not contacted') AS outreach_status,
+                    CASE
+                        WHEN json_extract(outreach_entry.value, '$.contact_can_refer') IN (1, '1', 'true', 'TRUE') THEN 1
+                        ELSE 0
+                    END AS contact_can_refer
+                FROM users
+                JOIN json_each(users.payload_json, '$.metadata.referral_outreach') AS outreach_entry
+            )
+            SELECT
+                outreach_status,
+                COUNT(*) AS outreach_count,
+                SUM(contact_can_refer) AS referable_contact_count,
+                COUNT(DISTINCT user_id) AS user_count
+            FROM outreach
+            GROUP BY outreach_status
+            ORDER BY
+                CASE outreach_status
+                    WHEN 'Not contacted' THEN 1
+                    WHEN 'Contacted' THEN 2
+                    WHEN 'Replied' THEN 3
+                    WHEN 'Referral offered' THEN 4
+                    WHEN 'No referral' THEN 5
+                    ELSE 99
+                END
+        """,
+        "repeat_failures": """
+            WITH failure_events AS (
+                SELECT
+                    runs.workspace_id,
+                    runs.user_id AS user_id,
+                    run_stage_results.stage_type,
+                    COALESCE(
+                        NULLIF(run_stage_results.error, ''),
+                        NULLIF(json_extract(runs.metadata_json, '$.preflight_error.message'), ''),
+                        NULLIF(runs.last_error, ''),
+                        'unknown_error'
+                    ) AS error_message
+                FROM run_stage_results
+                JOIN runs ON runs.id = run_stage_results.run_id
+                WHERE run_stage_results.status = 'failed' OR runs.status = 'failed'
+            )
+            SELECT
+                workspace_id,
+                user_id,
+                stage_type,
+                error_message,
+                COUNT(*) AS failure_count
+            FROM failure_events
+            GROUP BY workspace_id, user_id, stage_type, error_message
+            HAVING COUNT(*) > 1
+            ORDER BY failure_count DESC, workspace_id, user_id, stage_type
+        """,
+        "churn_risk_users": f"""
+            WITH review_outcomes AS (
+                SELECT
+                    reviews.run_id,
+                    {review_application_status_for_best_sources} AS application_status
+                FROM reviews
+            ),
+            user_activity AS (
+                SELECT
+                    users.user_id,
+                    COALESCE(NULLIF(json_extract(users.payload_json, '$.display_name'), ''), users.email) AS user_label,
+                    json_extract(users.payload_json, '$.created_at') AS user_created_at,
+                    MAX(runs.created_at) AS last_run_at,
+                    SUM(
+                        CASE
+                            WHEN review_outcomes.application_status IN ('Applied', 'Interviewing', 'Rejected', 'Offer', 'Withdrawn')
+                                THEN 1
+                            ELSE 0
+                        END
+                    ) AS application_count
+                FROM users
+                LEFT JOIN runs ON runs.user_id = users.user_id
+                LEFT JOIN review_outcomes ON review_outcomes.run_id = runs.id
+                WHERE users.is_active = 1
+                GROUP BY users.user_id, user_label, user_created_at
+            ),
+            scored_users AS (
+                SELECT
+                    user_id,
+                    user_label,
+                    user_created_at,
+                    last_run_at,
+                    application_count,
+                    CASE
+                        WHEN last_run_at IS NULL THEN 'high'
+                        WHEN julianday('now') - julianday(last_run_at) >= 30 AND application_count = 0 THEN 'high'
+                        WHEN julianday('now') - julianday(last_run_at) >= 14 AND application_count <= 1 THEN 'medium'
+                        ELSE 'low'
+                    END AS churn_risk
+                FROM user_activity
+            )
+            SELECT
+                user_id,
+                user_label,
+                user_created_at,
+                last_run_at,
+                application_count,
+                churn_risk
+            FROM scored_users
+            WHERE churn_risk <> 'low'
+            ORDER BY
+                CASE churn_risk
+                    WHEN 'high' THEN 1
+                    WHEN 'medium' THEN 2
+                    ELSE 99
+                END,
+                COALESCE(last_run_at, user_created_at) ASC
+        """,
+        "best_sources_by_outcome": f"""
+            WITH review_outcomes AS (
+                SELECT
+                    reviews.run_id,
+                    reviews.job_id,
+                    {review_application_status_for_best_sources} AS application_status
+                FROM reviews
+            ),
+            job_sources AS (
+                SELECT
+                    run_jobs.run_id,
+                    run_jobs.job_id,
+                    COALESCE(
+                        NULLIF(run_jobs.source_type, ''),
+                        NULLIF(run_jobs.portal, ''),
+                        NULLIF(json_extract(run_jobs.payload_json, '$.source_type'), ''),
+                        NULLIF(json_extract(run_jobs.payload_json, '$.portal'), ''),
+                        'unknown'
+                    ) AS source
+                FROM run_jobs
+            )
+            SELECT
+                job_sources.source,
+                COUNT(*) AS reviewed_jobs,
+                SUM(CASE WHEN review_outcomes.application_status = 'Applied' THEN 1 ELSE 0 END) AS applied_count,
+                SUM(CASE WHEN review_outcomes.application_status = 'Interviewing' THEN 1 ELSE 0 END) AS interviewing_count,
+                SUM(CASE WHEN review_outcomes.application_status = 'Offer' THEN 1 ELSE 0 END) AS offer_count,
+                SUM(CASE WHEN review_outcomes.application_status = 'Rejected' THEN 1 ELSE 0 END) AS rejected_count,
+                ROUND(
+                    100.0 * SUM(
+                        CASE
+                            WHEN review_outcomes.application_status IN ('Applied', 'Interviewing', 'Offer') THEN 1
+                            ELSE 0
+                        END
+                    ) / NULLIF(COUNT(*), 0),
+                    2
+                ) AS positive_outcome_rate_pct
+            FROM job_sources
+            JOIN review_outcomes
+                ON review_outcomes.run_id = job_sources.run_id
+               AND review_outcomes.job_id = job_sources.job_id
+            GROUP BY job_sources.source
+            HAVING COUNT(*) > 0
+            ORDER BY positive_outcome_rate_pct DESC, reviewed_jobs DESC, job_sources.source
+        """,
+    }
+
+
+def _resolve_sqlite_db_path(application) -> Path | None:
+    repositories = getattr(application, "repositories", None)
+    if repositories is None:
+        return None
+    for repository_name in (
+        "run_repository",
+        "job_store",
+        "review_store",
+        "workspace_repository",
+        "auth_repository",
+    ):
+        repository = getattr(repositories, repository_name, None)
+        db_path = getattr(repository, "db_path", None)
+        if db_path:
+            return Path(db_path)
+    return None
+
+
+def _fetch_sqlite_query_rows(
+    connection: sqlite3.Connection,
+    query: str,
+    params: tuple[object, ...] | list[object] | None = None,
+) -> list[dict]:
+    cursor = connection.execute(query, tuple(params or ()))
+    rows = cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+def _build_admin_analytics_snapshot(application) -> dict[str, object]:
+    db_path = _resolve_sqlite_db_path(application)
+    if not db_path or not db_path.exists():
+        raise RuntimeError("Admin analytics snapshot requires the sqlite storage backend.")
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        snapshot: dict[str, object] = {"generated_at": datetime.now(timezone.utc).isoformat()}
+        for metric_name, query in _admin_analytics_snapshot_queries().items():
+            try:
+                snapshot[metric_name] = {
+                    "rows": _fetch_sqlite_query_rows(connection, query),
+                    "error": None,
+                }
+            except Exception as exc:
+                snapshot[metric_name] = {
+                    "rows": [],
+                    "error": str(exc),
+                }
+        return snapshot
+    finally:
+        connection.close()
+
+
+def _admin_user_health_segment_queries(
+    *,
+    now: datetime | None = None,
+) -> dict[str, tuple[str, tuple[object, ...]]]:
+    resolved_now = now or datetime.now(timezone.utc)
+    cutoff_3_days = (resolved_now - timedelta(days=3)).isoformat()
+    cutoff_5_days = (resolved_now - timedelta(days=5)).isoformat()
+    cutoff_7_days = (resolved_now - timedelta(days=7)).isoformat()
+    cutoff_14_days = (resolved_now - timedelta(days=14)).isoformat()
+    return {
+        "no_cv_uploaded": (
+            """
+            SELECT users.user_id
+            FROM users
+            WHERE users.is_active = 1
+              AND COALESCE(json_extract(users.payload_json, '$.created_at'), '') != ''
+              AND json_extract(users.payload_json, '$.created_at') < ?
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM json_each(users.payload_json, '$.metadata.candidate_assets') AS asset
+                )
+            ORDER BY users.user_id
+            """,
+            (cutoff_3_days,),
+        ),
+        "no_run_yet": (
+            """
+            SELECT users.user_id
+            FROM users
+            WHERE users.is_active = 1
+              AND EXISTS (
+                    SELECT 1
+                    FROM json_each(users.payload_json, '$.metadata.candidate_assets') AS asset
+                    WHERE lower(COALESCE(json_extract(asset.value, '$.asset_kind'), '')) = 'workspace_cv'
+                )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM runs
+                    WHERE runs.user_id = users.user_id
+                )
+            ORDER BY users.user_id
+            """,
+            (),
+        ),
+        "stuck_approvals": (
+            """
+            WITH approved_reviews AS (
+                SELECT
+                    runs.user_id AS user_id,
+                    COUNT(*) AS approved_review_count,
+                    SUM(
+                        CASE
+                            WHEN NULLIF(trim(COALESCE(json_extract(reviews.payload_json, '$.metadata.tracker_status'), '')), '') IS NOT NULL
+                                THEN 1
+                            ELSE 0
+                        END
+                    ) AS explicit_tracker_status_count
+                FROM reviews
+                JOIN runs ON runs.id = reviews.run_id
+                WHERE runs.user_id != ''
+                  AND (
+                        lower(COALESCE(json_extract(reviews.payload_json, '$.decision'), '')) = 'approved'
+                        OR lower(COALESCE(reviews.status, '')) = 'approved'
+                    )
+                GROUP BY runs.user_id
+            )
+            SELECT approved_reviews.user_id
+            FROM approved_reviews
+            JOIN users ON users.user_id = approved_reviews.user_id
+            WHERE users.is_active = 1
+              AND approved_reviews.approved_review_count >= 3
+              AND approved_reviews.explicit_tracker_status_count = 0
+            ORDER BY approved_reviews.user_id
+            """,
+            (),
+        ),
+        "repeated_failures": (
+            """
+            SELECT runs.user_id AS user_id
+            FROM runs
+            JOIN users ON users.user_id = runs.user_id
+            WHERE users.is_active = 1
+              AND runs.user_id != ''
+              AND lower(COALESCE(runs.status, '')) = 'failed'
+              AND COALESCE(NULLIF(runs.finished_at, ''), NULLIF(runs.updated_at, ''), runs.created_at) >= ?
+            GROUP BY runs.user_id
+            HAVING COUNT(*) > 3
+            ORDER BY user_id
+            """,
+            (cutoff_7_days,),
+        ),
+        "gmail_stale": (
+            """
+            SELECT users.user_id
+            FROM users
+            WHERE users.is_active = 1
+              AND lower(COALESCE(json_extract(users.payload_json, '$.metadata.tracker_email_integration.provider_id'), '')) = 'gmail'
+              AND COALESCE(json_extract(users.payload_json, '$.metadata.tracker_email_integration.email_address'), '') != ''
+              AND COALESCE(json_extract(users.payload_json, '$.metadata.tracker_email_integration.connected_at'), '') != ''
+              AND COALESCE(json_extract(users.payload_json, '$.metadata.tracker_email_integration.last_sync_at'), '') != ''
+              AND json_extract(users.payload_json, '$.metadata.tracker_email_integration.last_sync_at') < ?
+            ORDER BY users.user_id
+            """,
+            (cutoff_5_days,),
+        ),
+        "churn_risk": (
+            """
+            WITH token_activity AS (
+                SELECT
+                    user_id,
+                    MAX(COALESCE(NULLIF(json_extract(payload_json, '$.last_used_at'), ''), '')) AS last_token_used_at
+                FROM api_tokens
+                WHERE is_active = 1
+                GROUP BY user_id
+            ),
+            run_activity AS (
+                SELECT
+                    user_id,
+                    MAX(COALESCE(NULLIF(finished_at, ''), NULLIF(updated_at, ''), created_at)) AS last_run_at
+                FROM runs
+                WHERE user_id != ''
+                GROUP BY user_id
+            )
+            SELECT users.user_id
+            FROM users
+            JOIN token_activity ON token_activity.user_id = users.user_id
+            LEFT JOIN run_activity ON run_activity.user_id = users.user_id
+            WHERE users.is_active = 1
+              AND token_activity.last_token_used_at != ''
+              AND token_activity.last_token_used_at < ?
+              AND (
+                    run_activity.last_run_at IS NULL
+                    OR run_activity.last_run_at < ?
+                )
+            ORDER BY users.user_id
+            """,
+            (cutoff_14_days, cutoff_14_days),
+        ),
+    }
+
+
+def _build_admin_user_health_snapshot(application) -> dict[str, object]:
+    db_path = _resolve_sqlite_db_path(application)
+    if not db_path or not db_path.exists():
+        raise RuntimeError("Admin user health requires the sqlite storage backend.")
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        snapshot: dict[str, object] = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "segments": {},
+        }
+        for segment_name, (query, params) in _admin_user_health_segment_queries().items():
+            rows = _fetch_sqlite_query_rows(connection, query, params)
+            user_ids = [str(row.get("user_id") or "").strip() for row in rows if str(row.get("user_id") or "").strip()]
+            snapshot["segments"][segment_name] = {
+                "count": len(user_ids),
+                "user_ids": user_ids,
+            }
+        return snapshot
+    finally:
+        connection.close()
 
 
 def _normalize_origin_value(value: str) -> str:
@@ -3788,11 +5535,30 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 payload["error"]["details"] = details
             self._send_json(payload, status=status, headers=headers)
 
-        def _read_json_body(self):
+        def _send_quota_exceeded(self, exc: QuotaExceededError) -> None:
+            self._send_json(
+                {
+                    "error": "quota_exceeded",
+                    "quota_type": exc.quota_type,
+                    "used": exc.used,
+                    "limit": exc.limit,
+                    "plan_id": exc.plan_id,
+                    "upgrade_url": "/pricing",
+                },
+                status=HTTPStatus.PAYMENT_REQUIRED,
+            )
+
+        def _read_raw_body(self) -> bytes:
+            cached_body = getattr(self, "_cached_raw_body", None)
+            if cached_body is not None:
+                return cached_body
             content_length = int(self.headers.get("Content-Length", "0"))
-            if content_length <= 0:
-                return {}
-            raw = self.rfile.read(content_length)
+            raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+            self._cached_raw_body = raw_body
+            return raw_body
+
+        def _read_json_body(self):
+            raw = self._read_raw_body()
             if not raw:
                 return {}
             payload = json.loads(raw.decode("utf-8"))
@@ -3849,16 +5615,43 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             self.end_headers()
             self.wfile.write(body)
 
-        def _require_identity(self):
+        def _auth_context(self):
+            cached_context = getattr(self, "_cached_auth_context", None)
+            if cached_context is not None:
+                return cached_context
             token_value = _extract_bearer_token(self.headers.get("Authorization", ""))
             if not token_value:
                 raise PermissionError("Missing bearer token.")
-            return application.authenticate_access_token(token_value)
+            context = _resolve_auth_context(application, token_value)
+            if not getattr(context.user, "is_active", True):
+                raise PermissionError("User is inactive.")
+            logging.getLogger("backend.auth").info(
+                "Authenticated %s request for %s via %s",
+                self.command,
+                getattr(context.user, "user_id", ""),
+                getattr(context, "auth_method", "unknown"),
+            )
+            self._cached_auth_context = context
+            return context
+
+        def _require_identity(self):
+            context = self._auth_context()
+            return context.user, context.token
 
         def _require_scope(self, required_scope: str):
-            user, token = self._require_identity()
+            context = self._auth_context()
+            user, token = context.user, context.token
             if not application.user_has_scope(token, required_scope):
                 raise PermissionError(f"Missing scope: {required_scope}")
+            return user, token
+
+        def _require_admin(self):
+            context = self._auth_context()
+            user, token = context.user, context.token
+            if str(user.role or "").strip().lower() != "admin":
+                raise PermissionError("Admin access required.")
+            if not application.user_has_scope(token, TOKEN_SCOPE_ADMIN):
+                raise PermissionError(f"Missing scope: {TOKEN_SCOPE_ADMIN}")
             return user, token
 
         def _require_workspace_access(self, *, workspace_id: str, required_scope: str):
@@ -3902,6 +5695,9 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
                 if segments == ["health"]:
                     self._send_json({"status": "ok"})
+                    return
+                if segments == ["billing", "plans"]:
+                    self._send_json({"plans": list_plans()})
                     return
                 if segments == ["tracker", "email-integration", "google", "callback"]:
                     state = str((query.get("state") or [""])[0]).strip()
@@ -4020,8 +5816,82 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                         )
                         return
                 if segments == ["auth", "me"]:
-                    user, token = self._require_identity()
-                    self._send_json({"user": user.to_dict(), "token": token.to_public_dict()})
+                    context = self._auth_context()
+                    user, token = context.user, context.token
+                    token_payload = token.to_public_dict() if hasattr(token, "to_public_dict") else {
+                        "user_id": user.user_id,
+                        "scopes": list(getattr(token, "scopes", []) or []),
+                        "auth_method": getattr(context, "auth_method", "unknown"),
+                    }
+                    self._send_json(
+                        {
+                            "user": _serialize_authenticated_user(
+                                application,
+                                user,
+                                auth_method=context.auth_method,
+                                clerk_user_id=context.clerk_user_id,
+                                role=context.role,
+                                plan_id=context.plan_id,
+                                quota_overrides=context.quota_overrides,
+                            ),
+                            "token": token_payload,
+                        }
+                    )
+                    return
+                if segments == ["billing", "subscription"]:
+                    context = self._auth_context()
+                    self._send_json(
+                        _subscription_response_payload(
+                            application,
+                            user_id=context.user.user_id,
+                            plan_id=context.plan_id,
+                            quota_overrides=context.quota_overrides,
+                        )
+                    )
+                    return
+                if segments == ["analytics", "overview"]:
+                    user, _ = self._require_identity()
+                    if str(user.role or "").strip().lower() != ROLE_ADMIN:
+                        raise PermissionError("Admin access required.")
+                    self._send_json(application.get_analytics_overview())
+                    return
+                if segments == ["admin", "analytics", "snapshot"]:
+                    self._require_admin()
+                    self._send_json(_build_admin_analytics_snapshot(application))
+                    return
+                if segments == ["admin", "events"]:
+                    self._require_admin()
+                    limit = _parse_int_param(query, "limit", default=50, maximum=200)
+                    offset = _parse_int_param(query, "offset", default=0, maximum=100000)
+                    event_name = str((query.get("event_name") or [""])[0]).strip()
+                    user_id = str((query.get("user_id") or [""])[0]).strip()
+                    occurred_from = str((query.get("occurred_from") or [""])[0]).strip()
+                    occurred_to = str((query.get("occurred_to") or [""])[0]).strip()
+                    events_payload = application.list_analytics_events(
+                        limit=limit,
+                        offset=offset,
+                        event_name=event_name,
+                        user_id=user_id,
+                        occurred_from=occurred_from,
+                        occurred_to=occurred_to,
+                    )
+                    self._send_json(
+                        {
+                            "events": events_payload["events"],
+                            "meta": {
+                                **self._pagination_meta(
+                                    limit=limit,
+                                    offset=offset,
+                                    returned=len(events_payload["events"]),
+                                ),
+                                "total": int(events_payload["total"]),
+                            },
+                        }
+                    )
+                    return
+                if segments == ["admin", "users", "health"]:
+                    self._require_admin()
+                    self._send_json(_build_admin_user_health_snapshot(application))
                     return
                 if segments == ["dev", "bootstrap-auth"]:
                     user = application.upsert_user(
@@ -4289,6 +6159,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 if segments == ["tracker"]:
                     user, _ = self._require_identity()
                     entries = _collect_tracker_entries(application, user)
+                    if _parse_bool_param(query, "explicit_only"):
+                        entries = [item for item in entries if bool(item.get("is_explicit_application"))]
                     self._send_json(
                         {
                             "items": entries,
@@ -4399,6 +6271,62 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                         raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                     self._send_json(_collect_run_customer_view(application, user, run))
                     return
+                if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "jobs" and segments[3] == "by-id":
+                    user, _ = self._require_identity()
+                    run = application.get_run(segments[1])
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    self._send_json(
+                        application.get_job_workspace(
+                            user_id=user.user_id,
+                            run_id=segments[1],
+                            job_id=segments[4],
+                        ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                if (
+                    segments[:1] == ["runs"]
+                    and len(segments) == 7
+                    and segments[2] == "jobs"
+                    and segments[3] == "by-id"
+                    and segments[5] == "people-discovery"
+                    and segments[6] == "status"
+                ):
+                    user, _ = self._require_identity()
+                    run = application.get_run(segments[1])
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    self._send_json(
+                        application.get_relevant_people_discovery_status(
+                            user_id=user.user_id,
+                            run_id=segments[1],
+                            job_id=segments[4],
+                        ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                if (
+                    segments[:1] == ["runs"]
+                    and len(segments) == 7
+                    and segments[2] == "jobs"
+                    and segments[3] == "by-id"
+                    and segments[5] == "people-discovery"
+                    and segments[6] == "results"
+                ):
+                    user, _ = self._require_identity()
+                    run = application.get_run(segments[1])
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    self._send_json(
+                        application.get_relevant_people_discovery_results(
+                            user_id=user.user_id,
+                            run_id=segments[1],
+                            job_id=segments[4],
+                        ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
                 if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "jobs":
                     run = application.get_run(segments[1])
                     self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_READ)
@@ -4477,10 +6405,12 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")
             except PermissionError as exc:
-                if "Missing bearer token" in str(exc) or "Invalid or expired access token" in str(exc):
+                if _is_unauthorized_permission_error(exc):
                     self._send_unauthorized(str(exc))
                 else:
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
+            except QuotaExceededError as exc:
+                self._send_quota_exceeded(exc)
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
             except BackendValidationError as exc:
@@ -4494,8 +6424,33 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
         def do_POST(self):  # noqa: N802
             try:
-                self._enforce_origin_policy()
                 _, segments, query = self._parse_request()
+                is_webhook_route = segments in (["webhooks", "clerk"], ["webhooks", "lemonsqueezy"])
+                if not is_webhook_route:
+                    self._enforce_origin_policy()
+
+                if segments == ["webhooks", "clerk"]:
+                    event_payload = verify_clerk_webhook(self._read_raw_body(), self.headers)
+                    self._send_json(_handle_clerk_webhook_event(application, event_payload), status=HTTPStatus.OK)
+                    return
+                if segments == ["webhooks", "lemonsqueezy"]:
+                    raw_body = self._read_raw_body()
+                    verify_lemonsqueezy_webhook_signature(raw_body, self.headers.get("X-Signature", ""))
+                    webhook_payload = json.loads(raw_body.decode("utf-8") or "{}")
+                    if not isinstance(webhook_payload, dict):
+                        raise ValueError("LemonSqueezy webhook body must be a JSON object.")
+                    event_name = str((webhook_payload.get("meta") or {}).get("event_name") or "").strip()
+                    if not event_name:
+                        raise ValueError("LemonSqueezy webhook payload is missing meta.event_name.")
+                    self._send_json(
+                        _handle_lemonsqueezy_webhook_event(
+                            application,
+                            event_name=event_name,
+                            payload=webhook_payload,
+                        ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
 
                 # ---- CV upload (multipart/form-data — must be handled before JSON body read) ----
                 if segments == ["documents", "upload"]:
@@ -4547,6 +6502,18 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                         role=asset_kind,
                         tags=tags,
                         metadata=asset_metadata,
+                    )
+                    profile_extraction = dict(asset_metadata.get("profile_extraction") or {})
+                    application.emit_event(
+                        "document_uploaded",
+                        user_id=user.user_id,
+                        workspace_id=workspace_id,
+                        source="api",
+                        route="/documents/upload",
+                        asset_kind=asset_kind,
+                        mime_type=str(asset.get("mime_type") or ""),
+                        char_count=int(asset_metadata.get("source_char_count") or 0),
+                        warning_count=len(profile_extraction.get("warnings") or []),
                     )
                     self._send_json({"asset": asset}, status=HTTPStatus.CREATED)
                     return
@@ -4658,6 +6625,73 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
                 payload = self._read_json_body()
 
+                if segments == ["analytics", "events"]:
+                    context = self._auth_context()
+                    event_name = str(payload.get("event_name") or "").strip()
+                    if not event_name:
+                        raise ValueError("event_name is required")
+                    route_value = str(payload.get("route") or payload.get("page") or "").strip()
+                    event_payload = dict(payload.get("payload") or {})
+                    for key, value in payload.items():
+                        if key in {"event_name", "payload", "route", "source"}:
+                            continue
+                        event_payload[key] = value
+                    application.emit_event(
+                        event_name,
+                        user_id=context.user.user_id,
+                        session_id=context.session_id,
+                        route=route_value,
+                        source=str(payload.get("source") or "frontend").strip(),
+                        payload=event_payload,
+                    )
+                    self._send_json({"status": "ok", "event_name": event_name}, status=HTTPStatus.ACCEPTED)
+                    return
+                if segments == ["billing", "checkout"]:
+                    context = self._auth_context()
+                    target_plan_id = normalize_plan_id(payload.get("plan_id") or DEFAULT_PLAN_ID)
+                    if target_plan_id == DEFAULT_PLAN_ID:
+                        raise ValueError("Checkout is only available for paid plans.")
+                    plan = get_plan(target_plan_id)
+                    variant_id = str(plan.get("lemonsqueezy_variant_id") or "").strip()
+                    if not variant_id:
+                        raise ValueError(f"LemonSqueezy variant id is not configured for plan '{target_plan_id}'.")
+                    source_page = str(payload.get("source_page") or payload.get("sourcePage") or "").strip()
+                    checkout_url = get_lemonsqueezy_checkout_url(
+                        context.user.user_id,
+                        variant_id,
+                        context.user.email,
+                        name=context.user.display_name,
+                        custom_data={
+                            "plan_id": target_plan_id,
+                            "source_page": source_page,
+                            "clerk_user_id": context.clerk_user_id,
+                        },
+                        redirect_url=f"{self._request_origin()}/pricing",
+                    )
+                    application.emit_event(
+                        "checkout_started",
+                        user_id=context.user.user_id,
+                        session_id=context.session_id,
+                        route="/billing/checkout",
+                        source="api",
+                        payload={
+                            "user_id": context.user.user_id,
+                            "target_plan_id": target_plan_id,
+                            "current_plan_id": context.plan_id,
+                            "source_page": source_page,
+                        },
+                    )
+                    self._send_json({"checkout_url": checkout_url}, status=HTTPStatus.OK)
+                    return
+                if segments == ["billing", "portal"]:
+                    context = self._auth_context()
+                    subscription_record = _lookup_subscription_record(application, context.user.user_id) or {}
+                    portal_url = get_lemonsqueezy_customer_portal_url(
+                        subscription_id=str(subscription_record.get("lemonsqueezy_subscription_id") or "").strip(),
+                        customer_id=str(subscription_record.get("lemonsqueezy_customer_id") or "").strip(),
+                    )
+                    self._send_json({"portal_url": portal_url}, status=HTTPStatus.OK)
+                    return
                 if segments == ["ats", "export-gate", "evaluate"]:
                     self._require_identity()
                     gate = _evaluate_ats_export_gate_payload(
@@ -4807,20 +6841,53 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
                 if segments == ["referrals", "outreach-status"]:
                     user, _ = self._require_identity()
+                    record, previous_status = _save_referral_outreach_status_from_payload(application, user, payload)
+                    application.emit_event(
+                        "outreach_status_changed",
+                        user_id=user.user_id,
+                        run_id=str(record.get("run_id") or ""),
+                        job_id=str(record.get("job_id") or ""),
+                        source="api",
+                        route="/referrals/outreach-status",
+                        contact_id=str(record.get("contact_id") or ""),
+                        previous_status=previous_status,
+                        next_status=str(record.get("outreach_status") or ""),
+                    )
                     self._send_json(
-                        _save_referral_outreach_status_from_payload(application, user, payload),
+                        record,
                         status=HTTPStatus.OK,
                     )
                     return
                 if segments == ["outreach", "referral-draft"]:
                     user, _ = self._require_identity()
+                    context = self._auth_context()
+                    check_and_increment_quota(
+                        application,
+                        user.user_id,
+                        "referral_drafts_per_month",
+                        context.plan_id,
+                        route="/outreach/referral-draft",
+                        quota_overrides=context.quota_overrides,
+                    )
+                    draft = application.generate_referral_outreach(
+                        user_id=user.user_id,
+                        run_id=str(payload.get("run_id") or ""),
+                        job_id=str(payload.get("job_id") or ""),
+                        contact_id=str(payload.get("contact_id") or ""),
+                    )
+                    draft_contact = dict(draft.get("contact") or {})
+                    application.emit_event(
+                        "referral_draft_generated",
+                        user_id=user.user_id,
+                        run_id=str(payload.get("run_id") or ""),
+                        job_id=str(payload.get("job_id") or ""),
+                        source="api",
+                        route="/outreach/referral-draft",
+                        contact_id=str(draft_contact.get("contact_id") or payload.get("contact_id") or ""),
+                        draft_type="referral",
+                    )
                     self._send_json(
-                        application.generate_referral_outreach(
-                            user_id=user.user_id,
-                            run_id=str(payload.get("run_id") or ""),
-                            job_id=str(payload.get("job_id") or ""),
-                            contact_id=str(payload.get("contact_id") or ""),
-                        ),
+                        draft,
                         status=HTTPStatus.OK,
                     )
                     return
@@ -4940,11 +7007,20 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
                 if segments == ["quick-apply", "runs"]:
                     user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
+                    context = self._auth_context()
                     workspace_id = str(payload.get("workspace_id") or "").strip()
                     if not workspace_id:
                         raise ValueError("workspace_id is required")
                     if not application.user_can_access_workspace(user, workspace_id):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
+                    check_and_increment_quota(
+                        application,
+                        user.user_id,
+                        "runs_per_month",
+                        context.plan_id,
+                        route="/quick-apply/runs",
+                        quota_overrides=context.quota_overrides,
+                    )
                     execution_mode = str(payload.get("execution_mode") or "sync").strip().lower()
                     max_attempts = max(1, int(payload.get("max_attempts") or 1))
                     manual_urls = payload.get("manual_urls") or payload.get("urls") or []
@@ -4988,14 +7064,41 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
                 if segments == ["workspace-builder", "workspaces"]:
                     user, _ = self._require_scope(TOKEN_SCOPE_WORKSPACES_WRITE)
+                    context = self._auth_context()
+                    check_and_increment_quota(
+                        application,
+                        user.user_id,
+                        "workspaces",
+                        context.plan_id,
+                        route="/workspace-builder/workspaces",
+                        quota_overrides=context.quota_overrides,
+                    )
                     prepared_payload, runtime_settings = _prepare_workspace_builder_payload_with_cv(payload, user)
                     workspace = application.create_workspace_from_scratch(prepared_payload)
                     workspace = _persist_workspace_runtime_settings(application, workspace, runtime_settings)
                     self._send_json(workspace.to_dict(), status=HTTPStatus.CREATED)
                     return
                 if segments == ["workspace-builder", "source-validation"]:
-                    self._require_scope(TOKEN_SCOPE_WORKSPACES_READ)
-                    self._send_json(application.validate_workspace_builder_sources(payload), status=HTTPStatus.OK)
+                    user, _ = self._require_scope(TOKEN_SCOPE_WORKSPACES_READ)
+                    validation = application.validate_workspace_builder_sources(payload)
+                    workspace_id = str((payload or {}).get("workspace_id") or "").strip()
+                    application.emit_event(
+                        (
+                            "workspace_source_validation_passed"
+                            if validation.get("valid")
+                            else "workspace_source_validation_failed"
+                        ),
+                        user_id=user.user_id,
+                        workspace_id=workspace_id,
+                        source="api",
+                        route="/workspace-builder/source-validation",
+                        payload={
+                            "workspace_id": workspace_id,
+                            "field_errors": list(validation.get("field_errors") or []),
+                            "source_results": list(validation.get("source_results") or []),
+                        },
+                    )
+                    self._send_json(validation, status=HTTPStatus.OK)
                     return
                 if segments == ["workflow-templates"]:
                     self._require_scope(TOKEN_SCOPE_TEMPLATES_WRITE)
@@ -5014,11 +7117,20 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
                 if segments == ["runs"]:
                     user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
+                    context = self._auth_context()
                     workspace_id = str(payload.get("workspace_id") or "").strip()
                     if not workspace_id:
                         raise ValueError("workspace_id is required")
                     if not application.user_can_access_workspace(user, workspace_id):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
+                    check_and_increment_quota(
+                        application,
+                        user.user_id,
+                        "runs_per_month",
+                        context.plan_id,
+                        route="/runs",
+                        quota_overrides=context.quota_overrides,
+                    )
                     workspace = application.get_workspace(workspace_id)
                     execution_mode = str(payload.get("execution_mode") or "queued").strip().lower()
                     max_attempts = max(1, int(payload.get("max_attempts") or 1))
@@ -5052,16 +7164,88 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                         )
                     else:
                         raise ValueError("execution_mode must be one of: queued, planned, sync")
+                    application.emit_event(
+                        "run_started",
+                        user_id=user.user_id,
+                        workspace_id=workspace.id,
+                        run_id=run.id,
+                        source="api",
+                        route="/runs",
+                        automation_flow=_builder_workspace_flow_id(workspace) or "unknown",
+                        source_ids=_builder_workspace_source_ids(workspace),
+                        run_kind=str((run.metadata or {}).get("run_kind") or "standard"),
+                    )
                     self._send_json(run.to_dict(), status=HTTPStatus.CREATED)
+                    return
+                if (
+                    segments[:1] == ["runs"]
+                    and len(segments) == 7
+                    and segments[2] == "jobs"
+                    and segments[3] == "by-id"
+                    and segments[5] == "people-discovery"
+                    and segments[6] == "start"
+                ):
+                    user, _ = self._require_identity()
+                    run = application.get_run(segments[1])
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    self._send_json(
+                        application.start_relevant_people_discovery(
+                            user_id=user.user_id,
+                            run_id=segments[1],
+                            job_id=segments[4],
+                        ),
+                        status=HTTPStatus.OK,
+                    )
+                    return
+                if (
+                    segments[:1] == ["runs"]
+                    and len(segments) == 7
+                    and segments[2] == "jobs"
+                    and segments[3] == "by-id"
+                    and segments[5] == "people-discovery"
+                    and segments[6] in {"confirm", "reject", "save-for-outreach"}
+                ):
+                    user, _ = self._require_identity()
+                    run = application.get_run(segments[1])
+                    if not application.user_can_access_workspace(user, run.workspace_id):
+                        raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                    person_id = str(payload.get("person_id") or payload.get("personId") or "").strip()
+                    if not person_id:
+                        raise ValueError("person_id is required")
+                    next_status = {
+                        "confirm": "confirmed",
+                        "reject": "rejected",
+                        "save-for-outreach": "saved_for_outreach",
+                    }[segments[6]]
+                    self._send_json(
+                        application.set_relevant_people_status(
+                            user_id=user.user_id,
+                            run_id=segments[1],
+                            job_id=segments[4],
+                            person_id=person_id,
+                            status=next_status,
+                        ),
+                        status=HTTPStatus.OK,
+                    )
                     return
                 if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "excluded-jobs" and segments[4] == "generate-documents":
                     user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
+                    context = self._auth_context()
                     run = application.get_run(segments[1])
                     if not application.user_can_access_workspace(user, run.workspace_id):
                         raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                     job_id = str(segments[3] or "").strip()
                     if not job_id:
                         raise ValueError("job_id is required")
+                    check_and_increment_quota(
+                        application,
+                        user.user_id,
+                        "cv_exports_per_month",
+                        context.plan_id,
+                        route="/runs/.../generate-documents",
+                        quota_overrides=context.quota_overrides,
+                    )
                     execution_mode = str(payload.get("execution_mode") or "queued").strip().lower()
                     document_run = application.requeue_job_for_generation(
                         run_id=segments[1],
@@ -5282,10 +7466,12 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")
             except PermissionError as exc:
-                if "Missing bearer token" in str(exc) or "Invalid or expired access token" in str(exc):
+                if _is_unauthorized_permission_error(exc):
                     self._send_unauthorized(str(exc))
                 else:
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
+            except QuotaExceededError as exc:
+                self._send_quota_exceeded(exc)
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
             except BackendValidationError as exc:
@@ -5352,8 +7538,20 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
                 if segments == ["referrals", "outreach-status"]:
                     user, _ = self._require_identity()
+                    record, previous_status = _save_referral_outreach_status_from_payload(application, user, payload)
+                    application.emit_event(
+                        "outreach_status_changed",
+                        user_id=user.user_id,
+                        run_id=str(record.get("run_id") or ""),
+                        job_id=str(record.get("job_id") or ""),
+                        source="api",
+                        route="/referrals/outreach-status",
+                        contact_id=str(record.get("contact_id") or ""),
+                        previous_status=previous_status,
+                        next_status=str(record.get("outreach_status") or ""),
+                    )
                     self._send_json(
-                        _save_referral_outreach_status_from_payload(application, user, payload),
+                        record,
                         status=HTTPStatus.OK,
                     )
                     return
@@ -5447,21 +7645,68 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     # PUT /tracker/:review_id — update tracker_status, email_confirmed, rejection_note
                     user, _ = self._require_identity()
                     if segments[1].startswith("external_"):
+                        existing_external = next(
+                            (
+                                item
+                                for item in _load_external_tracker_applications(user)
+                                if str(item.get("application_id") or "") == segments[1]
+                            ),
+                            None,
+                        )
+                        previous_status = normalize_application_status(
+                            (existing_external or {}).get("application_status")
+                            or (existing_external or {}).get("tracker_status"),
+                            default="Unknown",
+                        )
+                        previous_email_confirmed = bool((existing_external or {}).get("email_confirmed") or False)
                         _, updated_external = _update_external_tracker_application(
                             application,
                             user,
                             segments[1],
                             payload,
                         )
+                        next_status = normalize_application_status(
+                            updated_external.get("application_status") or updated_external.get("tracker_status"),
+                            default="Unknown",
+                        )
+                        next_email_confirmed = bool(updated_external.get("email_confirmed") or False)
+                        if previous_status != next_status:
+                            application.repositories.review_store.append_application_status_history(
+                                review_id=str(
+                                    updated_external.get("review_id")
+                                    or updated_external.get("application_id")
+                                    or segments[1]
+                                ),
+                                user_id=user.user_id,
+                                from_status=previous_status,
+                                to_status=next_status,
+                                changed_at=str(updated_external.get("updated_at") or ""),
+                                source="manual",
+                            )
+                        if previous_status != next_status or previous_email_confirmed != next_email_confirmed:
+                            application.emit_event(
+                                "application_status_updated",
+                                user_id=user.user_id,
+                                job_id=str(updated_external.get("application_id") or ""),
+                                review_id=str(updated_external.get("review_id") or updated_external.get("application_id") or ""),
+                                source="api",
+                                route=f"/tracker/{segments[1]}",
+                                from_status=previous_status,
+                                to_status=next_status,
+                                explicit=True,
+                                email_confirmed=next_email_confirmed,
+                            )
                         self._send_json(
                             {
                                 "review_id": updated_external["review_id"],
                                 "application_id": updated_external["application_id"],
                                 "tracker_status": str(updated_external.get("tracker_status") or ""),
-                                "application_status": normalize_application_status(
-                                    updated_external.get("application_status") or updated_external.get("tracker_status"),
+                                "application_status": next_status,
+                                "email_confirmed": next_email_confirmed,
+                                "is_explicit_application": _is_explicit_tracker_application(
+                                    tracker_status=updated_external.get("tracker_status"),
+                                    email_confirmed=updated_external.get("email_confirmed"),
                                 ),
-                                "email_confirmed": bool(updated_external.get("email_confirmed") or False),
                                 "rejection_note": str(updated_external.get("rejection_note") or ""),
                                 "notes": str(updated_external.get("notes") or ""),
                                 "updated_at": str(updated_external.get("updated_at") or ""),
@@ -5474,6 +7719,11 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     if not application.user_can_access_workspace(user, run.workspace_id):
                         raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                     review_meta = dict(review.metadata or {})
+                    previous_status = normalize_application_status(
+                        review_meta.get("application_status") or review_meta.get("tracker_status"),
+                        default="Applied" if review.decision == "approved" else "Unknown",
+                    )
+                    previous_email_confirmed = bool(review_meta.get("email_confirmed") or False)
                     allowed_tracker_statuses = {
                         "applied",
                         "email_confirmed",
@@ -5509,15 +7759,49 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     ) and not review_meta.get("rejected_at"):
                         review_meta["rejected_at"] = datetime.now(timezone.utc).isoformat()
                     review.metadata = review_meta
-                    application.repositories.review_store.upsert_review(review)
+                    next_status = normalize_application_status(
+                        review_meta.get("application_status") or review_meta.get("tracker_status"),
+                        default="Applied" if review.decision == "approved" else "Unknown",
+                    )
+                    if previous_status != next_status:
+                        application.repositories.review_store.upsert_review(
+                            review,
+                            application_status_history={
+                                "review_id": review.review_id,
+                                "user_id": user.user_id,
+                                "from_status": previous_status,
+                                "to_status": next_status,
+                                "source": "manual",
+                            },
+                        )
+                    else:
+                        application.repositories.review_store.upsert_review(review)
+                    next_email_confirmed = bool(review_meta.get("email_confirmed") or False)
+                    if previous_status != next_status or previous_email_confirmed != next_email_confirmed:
+                        application.emit_event(
+                            "application_status_updated",
+                            user_id=user.user_id,
+                            workspace_id=run.workspace_id,
+                            run_id=run.id,
+                            job_id=review.job_id,
+                            review_id=review.review_id,
+                            source="api",
+                            route=f"/tracker/{review.review_id}",
+                            from_status=previous_status,
+                            to_status=next_status,
+                            explicit=True,
+                            email_confirmed=next_email_confirmed,
+                        )
                     self._send_json(
                         {
                             "review_id": review.review_id,
                             "tracker_status": str(review_meta.get("tracker_status") or ""),
-                            "application_status": normalize_application_status(
-                                review_meta.get("application_status") or review_meta.get("tracker_status"),
+                            "application_status": next_status,
+                            "email_confirmed": next_email_confirmed,
+                            "is_explicit_application": _is_explicit_tracker_application(
+                                tracker_status=review_meta.get("tracker_status"),
+                                email_confirmed=review_meta.get("email_confirmed"),
                             ),
-                            "email_confirmed": bool(review_meta.get("email_confirmed") or False),
                             "rejection_note": str(review_meta.get("rejection_note") or ""),
                             "notes": str(review.notes or review_meta.get("notes") or ""),
                             "rejected_at": str(review_meta.get("rejected_at") or ""),
@@ -5533,6 +7817,14 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     if workspace_id and not application.user_can_access_workspace(user, workspace_id):
                         raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                     self._send_json(application.upsert_secret(payload).to_public_dict(), status=HTTPStatus.OK)
+                    return
+                if segments[:1] == ["workspaces"] and len(segments) == 3 and segments[2] == "schedule":
+                    self._require_workspace_access(
+                        workspace_id=segments[1],
+                        required_scope=TOKEN_SCOPE_WORKSPACES_WRITE,
+                    )
+                    workspace = application.update_workspace_schedule(segments[1], payload)
+                    self._send_json(_workspace_summary(workspace), status=HTTPStatus.OK)
                     return
                 if segments[:1] == ["workspaces"] and len(segments) == 2:
                     self._require_workspace_access(workspace_id=segments[1], required_scope=TOKEN_SCOPE_WORKSPACES_WRITE)
@@ -5567,10 +7859,12 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")
             except PermissionError as exc:
-                if "Missing bearer token" in str(exc) or "Invalid or expired access token" in str(exc):
+                if _is_unauthorized_permission_error(exc):
                     self._send_unauthorized(str(exc))
                 else:
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
+            except QuotaExceededError as exc:
+                self._send_quota_exceeded(exc)
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
             except BackendValidationError as exc:
@@ -5703,10 +7997,12 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")
             except PermissionError as exc:
-                if "Missing bearer token" in str(exc) or "Invalid or expired access token" in str(exc):
+                if _is_unauthorized_permission_error(exc):
                     self._send_unauthorized(str(exc))
                 else:
                     self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
+            except QuotaExceededError as exc:
+                self._send_quota_exceeded(exc)
             except KeyError as exc:
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", str(exc))
             except BackendValidationError as exc:

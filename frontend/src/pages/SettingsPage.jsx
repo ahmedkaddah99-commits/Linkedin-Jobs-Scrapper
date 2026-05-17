@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { CvExportPreview } from "../components/CvExportPreview";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -19,6 +20,44 @@ const settingsTabs = [
   "Document Defaults",
   "Account",
 ];
+
+const usageLabels = {
+  runs_per_month: "Runs",
+  applications_per_month: "Applications",
+  cv_exports_per_month: "CV exports",
+  referral_drafts_per_month: "Referral drafts",
+  workspaces: "Workspaces",
+};
+
+function formatUsageLimit(limit) {
+  return Number(limit) === -1 ? "Unlimited" : String(limit ?? 0);
+}
+
+function UsageMetric({ label, quota }) {
+  const used = Number(quota?.used || 0);
+  const limit = Number(quota?.limit ?? 0);
+  const isUnlimited = Boolean(quota?.is_unlimited) || limit === -1;
+  const width = isUnlimited
+    ? 24
+    : Math.max(8, Math.min(100, (used / Math.max(1, limit)) * 100));
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-4 text-sm">
+        <span className="font-medium text-on-surface">{label}</span>
+        <span className="text-on-surface-variant">
+          {used} / {formatUsageLimit(limit)}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-surface-container-high">
+        <div
+          className="h-full rounded-full bg-primary"
+          style={{ width: `${width}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 async function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -62,6 +101,7 @@ function mergeUploadedProfile(currentProfile = {}, parsedProfile = {}) {
   const scalarFields = [
     "name",
     "role_title",
+    "industry",
     "email",
     "location",
     "website",
@@ -309,6 +349,16 @@ function ProfileTab({ draft, updateSection }) {
             <TextInput
               onChange={(event) => updateSection("profile", { role_title: event.target.value })}
               value={profile.role_title || ""}
+            />
+          </SectionField>
+        </div>
+
+        <div className="max-w-xl">
+          <SectionField label="Industry">
+            <TextInput
+              onChange={(event) => updateSection("profile", { industry: event.target.value })}
+              placeholder="Fintech"
+              value={profile.industry || ""}
             />
           </SectionField>
         </div>
@@ -921,7 +971,7 @@ function AccountTab({ draft, updateSection }) {
 }
 
 export default function SettingsPage() {
-  const { request, apiBaseUrl, accessToken } = useSession();
+  const { request, getAccessToken, resolvePath } = useSession();
   const [activeTab, setActiveTab] = useState("Profile");
   const [draft, setDraft] = useState(null);
   const [saveState, setSaveState] = useState({ message: "", error: "" });
@@ -931,6 +981,12 @@ export default function SettingsPage() {
   const photoFileInputRef = useRef(null);
 
   const { data, loading, error, refresh } = useApiResource(() => request("/settings"), [request]);
+  const {
+    data: subscriptionData,
+    loading: usageLoading,
+    error: usageError,
+    refresh: refreshUsage,
+  } = useApiResource(() => request("/billing/subscription"), [request]);
 
   useEffect(() => {
     if (data) {
@@ -979,9 +1035,10 @@ export default function SettingsPage() {
     if (!file) return;
     setCvUploadState({ uploading: true, message: "", error: "" });
     try {
+      const accessToken = await getAccessToken();
       const formData = new FormData();
       formData.append("cv_file", file, file.name);
-      const res = await fetch(`${apiBaseUrl}/cv-upload`, {
+      const res = await fetch(resolvePath("/cv-upload"), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -1024,10 +1081,11 @@ export default function SettingsPage() {
     }
     setPhotoUploadState({ uploading: true, message: "", error: "" });
     try {
+      const accessToken = await getAccessToken();
       const croppedFile = await cropImageToSquare(file);
       const formData = new FormData();
       formData.append("photo_file", croppedFile, croppedFile.name);
-      const res = await fetch(`${apiBaseUrl}/profile-photo-upload`, {
+      const res = await fetch(resolvePath("/profile-photo-upload"), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -1070,6 +1128,9 @@ export default function SettingsPage() {
 
   const profile = draft?.profile || {};
   const account = draft?.account || {};
+  const usageQuotas = subscriptionData?.usage?.quotas || {};
+  const currentPlanId = String(subscriptionData?.plan_id || "free").trim() || "free";
+  const currentPlanName = String(subscriptionData?.plan?.display_name || "Free").trim() || "Free";
 
   return (
     <div className="space-y-10">
@@ -1229,6 +1290,54 @@ export default function SettingsPage() {
                   </p>
                 ) : null}
               </div>
+            </section>
+
+            <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="font-headline text-lg font-bold text-on-surface">Usage this month</h3>
+                  <p className="mt-2 text-sm text-on-surface-variant">
+                    Current plan:
+                    {" "}
+                    <span className="font-semibold text-on-surface">{currentPlanName}</span>
+                  </p>
+                </div>
+                <button
+                  className="rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                  onClick={() => refreshUsage().catch(() => undefined)}
+                  type="button"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              <div className="mt-5 space-y-4">
+                {usageLoading && !Object.keys(usageQuotas).length ? (
+                  <p className="text-sm text-on-surface-variant">Loading usage...</p>
+                ) : null}
+                {usageError ? (
+                  <p className="rounded-lg bg-error-container px-3 py-2 text-xs leading-5 text-on-error-container">
+                    {usageError}
+                  </p>
+                ) : null}
+                {Object.entries(usageLabels).map(([quotaType, label]) => (
+                  <UsageMetric
+                    key={quotaType}
+                    label={label}
+                    quota={usageQuotas[quotaType] || { used: 0, limit: 0 }}
+                  />
+                ))}
+              </div>
+
+              {currentPlanId === "free" ? (
+                <Link
+                  className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-primary transition-colors hover:text-primary"
+                  to="/pricing"
+                >
+                  <span className="material-symbols-outlined text-[18px]">trending_up</span>
+                  Upgrade for higher limits
+                </Link>
+              ) : null}
             </section>
           </div>
 

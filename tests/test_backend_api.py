@@ -1,16 +1,20 @@
 import base64
+import io
 import json
 import os
 import shutil
 import threading
 import unittest
+import zipfile
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote
 from unittest.mock import patch
 
 from backend import create_backend
 from backend.api.server import build_handler
+from backend.capabilities.networking import build_empty_relevant_people_discovery
 from backend.capabilities.tracker.email_integration import TrackerMailboxMessage
 from backend.domain.models import ArtifactRecord, JobRecord, StageDefinition
 from backend.orchestration import BaseStage, StageOutcome
@@ -374,6 +378,99 @@ class BackendApiTests(unittest.TestCase):
             "This role does not match the target role for this workspace.",
         )
 
+    def test_job_workspace_people_discovery_endpoints_persist_selected_people(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+
+        job = self.app.get_job_set(run_id, "accepted_jobs")[0]
+        discovery_payload = build_empty_relevant_people_discovery(
+            job=job,
+            run_id=run_id,
+            workspace_id="api_workspace",
+            status="completed",
+        )
+        discovery_payload["categories"] = {
+            "hiring_manager": [
+                {
+                    "id": "person_hiring_manager_jane",
+                    "category": "hiring_manager",
+                    "name": "Jane Hiringmanager",
+                    "title": "Engineering Manager",
+                    "company": "ACME API",
+                    "location": "Berlin, Germany",
+                    "profileUrl": "https://www.linkedin.com/in/jane-hiringmanager",
+                    "source": "public_profile_search",
+                    "confidence": 80,
+                    "confidenceLabel": "High",
+                    "reasoningNote": "Likely relevant because this person appears to manage the same function.",
+                    "evidenceSnippets": ["Engineering Manager", "ACME API", "Berlin"],
+                    "caveats": [],
+                    "searchQueries": ["ACME API Engineering Manager Berlin LinkedIn"],
+                    "discoveredSearchQuery": "ACME API Engineering Manager Berlin LinkedIn",
+                    "regionScopeCaveat": "",
+                    "confidenceBreakdown": None,
+                    "status": "unreviewed",
+                }
+            ],
+            "potential_colleague": [],
+            "executive": [],
+        }
+
+        status, workspace_payload = self._request("GET", f"/runs/{run_id}/jobs/by-id/{job.job_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(workspace_payload["job"]["job_id"], job.job_id)
+        self.assertEqual(
+            workspace_payload["relevant_people_discovery"]["peopleDiscoveryStatus"],
+            "not_started",
+        )
+
+        with patch(
+            "backend.application.services.build_relevant_people_discovery",
+            return_value=discovery_payload,
+        ):
+            status, started_payload = self._request(
+                "POST",
+                f"/runs/{run_id}/jobs/by-id/{job.job_id}/people-discovery/start",
+                {},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(started_payload["peopleDiscoveryStatus"], "completed")
+        self.assertEqual(started_payload["selectedPeople"], [])
+
+        status, discovery_status_payload = self._request(
+            "GET",
+            f"/runs/{run_id}/jobs/by-id/{job.job_id}/people-discovery/status",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(discovery_status_payload["peopleDiscoveryStatus"], "completed")
+        self.assertEqual(discovery_status_payload["selectedPeopleCount"], 0)
+
+        status, confirm_payload = self._request(
+            "POST",
+            f"/runs/{run_id}/jobs/by-id/{job.job_id}/people-discovery/confirm",
+            {"person_id": "person_hiring_manager_jane"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(confirm_payload["categories"]["hiring_manager"][0]["status"], "confirmed")
+        self.assertEqual(len(confirm_payload["selectedPeople"]), 1)
+
+        status, results_payload = self._request(
+            "GET",
+            f"/runs/{run_id}/jobs/by-id/{job.job_id}/people-discovery/results",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(results_payload["selectedPeople"][0]["id"], "person_hiring_manager_jane")
+        self.assertEqual(results_payload["selectedPeople"][0]["status"], "confirmed")
+
     def test_run_customer_view_normalizes_language_rejection_messages(self):
         profile = dict(self.user.metadata or {})
         profile["profile"] = {
@@ -500,6 +597,57 @@ class BackendApiTests(unittest.TestCase):
         status, _ = self._request("DELETE", "/workflow-templates/api_custom_template")
         self.assertEqual(status, 200)
 
+    def test_api_updates_workspace_recurring_schedule(self):
+        status, schedule_payload = self._request(
+            "PUT",
+            "/workspaces/api_workspace/schedule",
+            {"enabled": True, "interval_days": 3},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(schedule_payload["schedule"]["enabled"])
+        self.assertEqual(schedule_payload["schedule"]["interval_days"], 3)
+        self.assertTrue(schedule_payload["schedule"]["next_run_at"])
+
+        status, workspaces_payload = self._request("GET", "/workspaces?limit=100")
+        self.assertEqual(status, 200)
+        workspace = next(item for item in workspaces_payload["workspaces"] if item["id"] == "api_workspace")
+        self.assertTrue(workspace["schedule"]["enabled"])
+        self.assertEqual(workspace["schedule"]["interval_days"], 3)
+
+        status, disabled_payload = self._request(
+            "PUT",
+            "/workspaces/api_workspace/schedule",
+            {"enabled": False},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(disabled_payload["schedule"]["enabled"])
+        self.assertEqual(disabled_payload["schedule"]["interval_days"], 0)
+        self.assertEqual(disabled_payload["schedule"]["next_run_at"], "")
+
+    def test_worker_endpoint_processes_due_scheduled_workspace_runs(self):
+        workspace_payload = self.app.get_workspace("api_workspace").to_dict()
+        workspace_payload["metadata"] = {
+            **dict(workspace_payload.get("metadata") or {}),
+            "run_schedule": {
+                "enabled": True,
+                "interval_days": 2,
+                "next_run_at": "2000-01-01T00:00:00+00:00",
+            },
+        }
+        self.app.upsert_workspace(workspace_payload)
+
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["status"], "processed")
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+        self.assertEqual(worker_payload["run"]["requested_by"], "scheduler")
+
+        scheduled_workspace = self.app.get_workspace("api_workspace")
+        schedule = scheduled_workspace.metadata.get("run_schedule") or {}
+        self.assertEqual(schedule.get("last_run_id"), worker_payload["run"]["id"])
+        self.assertTrue(schedule.get("last_enqueued_at"))
+        self.assertTrue(schedule.get("next_run_at"))
+
     def test_api_supports_workspace_builder_catalog_and_create(self):
         workspace_cv_asset_id = self._upload_workspace_cv()["asset_id"]
 
@@ -520,6 +668,8 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(source_by_id["linkedin_jobs"].get("legacy"))
         self.assertIn("workspace_cv_asset_id", user_facing_fields)
         self.assertIn("cv_generation_mode", user_facing_fields)
+        self.assertIn("work_arrangement", user_facing_fields)
+        self.assertIn("industry", user_facing_fields)
         self.assertIn("country_codes", user_facing_fields)
         self.assertIn("cities", user_facing_fields)
         self.assertIn("target_roles", user_facing_fields)
@@ -553,6 +703,8 @@ class BackendApiTests(unittest.TestCase):
                     "workspace_cv_asset_id": workspace_cv_asset_id,
                     "cv_generation_mode": "standard_cv",
                     "keywords": ["analyst"],
+                    "work_arrangement": "hybrid",
+                    "industry": "Fintech",
                     "geo_id": "101282230",
                     "time_posted_seconds": 86400,
                     "experience_levels": [2, 3],
@@ -581,6 +733,8 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(workspace_payload["settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
         self.assertEqual(workspace_payload["settings"]["cv_generation_mode"], "standard_cv")
         self.assertEqual(workspace_payload["settings"]["keywords"], ["analyst"])
+        self.assertEqual(workspace_payload["settings"]["work_arrangement"], "hybrid")
+        self.assertEqual(workspace_payload["settings"]["industry"], "Fintech")
         self.assertEqual(workspace_payload["settings"]["experience_levels"], [2, 3])
         self.assertEqual(workspace_payload["settings"]["target_roles"], ["Business Analyst", "Consultant"])
         self.assertEqual(workspace_payload["settings"]["job_filtering_mode"], "Strict Match")
@@ -622,6 +776,8 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_generation_mode"], "standard_cv")
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["work_arrangement"], "hybrid")
+        self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["industry"], "Fintech")
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["job_filtering_mode"], "Strict Match")
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_template"], "compact")
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_color_scheme"], "burgundy")
@@ -651,6 +807,8 @@ class BackendApiTests(unittest.TestCase):
                 "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
                 "settings": {
                     "keywords": ["designer"],
+                    "work_arrangement": "remote",
+                    "industry": "B2B SaaS",
                     "geo_id": "101282230",
                     "manual_url_seed_list": ["https://company.example/jobs/updated"],
                     "stage4_max_jobs": 8,
@@ -663,6 +821,8 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(updated_workspace_payload["name"], "Builder Workspace Updated")
         self.assertEqual(updated_workspace_payload["description"], "Updated through API")
         self.assertEqual(updated_workspace_payload["settings"]["keywords"], ["designer"])
+        self.assertEqual(updated_workspace_payload["settings"]["work_arrangement"], "remote")
+        self.assertEqual(updated_workspace_payload["settings"]["industry"], "B2B SaaS")
         self.assertEqual(updated_workspace_payload["metadata"]["source_ids"], ["linkedin_jobs", "curated_job_urls"])
 
     def test_builder_run_falls_back_to_shared_document_style_defaults(self):
@@ -834,6 +994,41 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(source_status["linkedin_jobs"], "valid")
         self.assertEqual(source_status["job_board_collection"], "valid")
 
+    def test_workspace_builder_source_validation_emits_passed_analytics_event(self):
+        status, payload = self._request(
+            "POST",
+            "/workspace-builder/source-validation",
+            {
+                "flow_id": "tailored_documents",
+                "source_ids": ["linkedin_jobs", "job_board_collection"],
+                "workspace_id": "api_workspace",
+                "settings": {
+                    "keywords": ["analyst"],
+                    "country_codes": ["DE"],
+                    "portals": ["indeed", "stepstone"],
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["valid"])
+
+        event_rows = self.app.repositories.analytics_store.query_rows(
+            (
+                "SELECT event_name, workspace_id, route, source, payload_json "
+                "FROM analytics_events WHERE event_name = ? ORDER BY occurred_at DESC LIMIT 1"
+            ),
+            ("workspace_source_validation_passed",),
+        )
+        self.assertEqual(len(event_rows), 1)
+        event_payload = json.loads(event_rows[0]["payload_json"])
+        self.assertEqual(event_rows[0]["event_name"], "workspace_source_validation_passed")
+        self.assertEqual(event_rows[0]["workspace_id"], "api_workspace")
+        self.assertEqual(event_rows[0]["route"], "/workspace-builder/source-validation")
+        self.assertEqual(event_rows[0]["source"], "api")
+        self.assertEqual(event_payload["workspace_id"], "api_workspace")
+        self.assertEqual(event_payload["field_errors"], payload["field_errors"])
+        self.assertEqual(event_payload["source_results"], payload["source_results"])
+
     def test_workspace_builder_source_validation_supplies_default_multi_portals(self):
         status, payload = self._request(
             "POST",
@@ -876,6 +1071,41 @@ class BackendApiTests(unittest.TestCase):
             any(item["code"] == "country_mismatch" for item in portal_result["field_errors"])
         )
 
+    def test_workspace_builder_source_validation_emits_failed_analytics_event(self):
+        status, payload = self._request(
+            "POST",
+            "/workspace-builder/source-validation",
+            {
+                "flow_id": "tailored_documents",
+                "source_ids": ["job_board_collection"],
+                "workspace_id": "api_workspace",
+                "settings": {
+                    "keywords": ["analyst"],
+                    "country_codes": ["DE"],
+                    "portals": ["jobsdb"],
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["valid"])
+
+        event_rows = self.app.repositories.analytics_store.query_rows(
+            (
+                "SELECT event_name, workspace_id, route, source, payload_json "
+                "FROM analytics_events WHERE event_name = ? ORDER BY occurred_at DESC LIMIT 1"
+            ),
+            ("workspace_source_validation_failed",),
+        )
+        self.assertEqual(len(event_rows), 1)
+        event_payload = json.loads(event_rows[0]["payload_json"])
+        self.assertEqual(event_rows[0]["event_name"], "workspace_source_validation_failed")
+        self.assertEqual(event_rows[0]["workspace_id"], "api_workspace")
+        self.assertEqual(event_rows[0]["route"], "/workspace-builder/source-validation")
+        self.assertEqual(event_rows[0]["source"], "api")
+        self.assertEqual(event_payload["workspace_id"], "api_workspace")
+        self.assertEqual(event_payload["field_errors"], payload["field_errors"])
+        self.assertEqual(event_payload["source_results"], payload["source_results"])
+
     def test_settings_payload_includes_document_design_options_and_persists_phase2_preferences(self):
         status, settings_payload = self._request("GET", "/settings")
         self.assertEqual(status, 200)
@@ -893,6 +1123,7 @@ class BackendApiTests(unittest.TestCase):
             {
                 "profile": {
                     "name": "Admin Tester",
+                    "industry": "Operations and Analytics",
                     "languages": ["English - C1", "German - B1/B2"],
                     "recent_experience": [
                         {
@@ -924,6 +1155,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(updated_payload["documents"]["cv_color_scheme"], "ocean_teal")
         self.assertEqual(updated_payload["documents"]["cv_font"], "Georgia")
         self.assertFalse(updated_payload["documents"]["include_photo"])
+        self.assertEqual(updated_payload["profile"]["industry"], "Operations and Analytics")
         self.assertEqual(updated_payload["profile"]["languages"], ["English - C1", "German - B1/B2"])
         self.assertEqual(updated_payload["profile"]["recent_experience"][0]["title"], "Business Analyst")
         self.assertEqual(
@@ -932,6 +1164,56 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(updated_payload["profile"]["education"][0]["degree_title"], "MSc Operations Management")
         self.assertEqual(updated_payload["profile"]["education"][0]["institution"], "Example University")
+
+    def test_settings_round_trip_persists_generated_memory_cards(self):
+        memory_cards = [
+            {
+                "id": "memory_1",
+                "title": "Automated weekly tracker",
+                "category": "project",
+                "source": "user_added",
+                "status": "ready_for_tailoring",
+                "rawNote": "Automated a weekly spreadsheet update that used to be manual.",
+                "structuredNotes": {
+                    "change": "Automated a weekly spreadsheet update",
+                    "impactEstimate": "Saved 4 hours per week",
+                },
+                "cvBulletSuggestion": "Reduced manual reporting work by automating a weekly spreadsheet update.",
+                "coverLetterAngle": "Shows initiative and practical workflow improvement.",
+                "tags": ["automation", "reporting"],
+                "missingDetails": [],
+                "confidenceLabel": "High confidence",
+                "useInCv": True,
+                "useInLetter": True,
+                "createdAt": "2026-05-15T08:00:00Z",
+                "updatedAt": "2026-05-15T09:00:00Z",
+            }
+        ]
+        status, updated_payload = self._request(
+            "PUT",
+            "/settings",
+            {
+                "documents": {
+                    "master_career_profile_text": "Long-form profile import",
+                    "career_highlights_text": "Imported highlight block",
+                    "generated_memory_cards": memory_cards,
+                }
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated_payload["documents"]["generated_memory_cards"][0]["title"], "Automated weekly tracker")
+        self.assertEqual(
+            updated_payload["documents"]["generated_memory_cards"][0]["structuredNotes"]["impactEstimate"],
+            "Saved 4 hours per week",
+        )
+        self.assertEqual(updated_payload["documents"]["generated_memory_cards"][0]["tags"], ["automation", "reporting"])
+
+        status, settings_payload = self._request("GET", "/settings")
+        self.assertEqual(status, 200)
+        self.assertEqual(settings_payload["documents"]["generated_memory_cards"][0]["category"], "project")
+        self.assertEqual(settings_payload["documents"]["generated_memory_cards"][0]["status"], "ready_for_tailoring")
+        self.assertTrue(settings_payload["documents"]["generated_memory_cards"][0]["useInCv"])
+        self.assertTrue(settings_payload["documents"]["generated_memory_cards"][0]["useInLetter"])
 
     def test_cv_upload_returns_structured_profile_fields_for_settings_population(self):
         status, payload = self._multipart_request(
@@ -1045,7 +1327,8 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(generated_cv["related_application"]["title"], "Engineer")
         self.assertEqual(generated_cv["status"], "ready")
         self.assertEqual(generated_cv["display_status"], "ready")
-        self.assertIn("api_job_1_cover_letter.txt", {item["display_name"] for item in documents_payload["documents"]})
+        self.assertEqual(generated_cv["display_name"], "Tailored CV")
+        self.assertIn("Cover letter", {item["display_name"] for item in documents_payload["documents"]})
         self.assertNotIn("api_job_1_email.txt", {item["display_name"] for item in documents_payload["documents"]})
         self.assertNotIn("stage4_documents.json", {item["display_name"] for item in documents_payload["documents"]})
         application_group = next(
@@ -1493,6 +1776,207 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(delete_payload["deleted"], contact_id)
 
+    def test_phase1_analytics_events_and_overview_endpoint(self):
+        self.app.upsert_workflow_template(
+            {
+                "id": "analytics_template_v1",
+                "name": "Analytics Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="analytics_seed_stage",
+                        stage_type="test.api_seed",
+                        name="Seed Jobs",
+                        output_key="accepted_jobs",
+                    ).to_dict(),
+                    StageDefinition(
+                        stage_id="analytics_docs_stage",
+                        stage_type="applications.generate.documents",
+                        name="Generate Documents",
+                        input_keys=["accepted_jobs"],
+                        output_key="generated_jobs",
+                    ).to_dict(),
+                ],
+            }
+        )
+        self.app.upsert_workspace(
+            {
+                "id": "analytics_workspace",
+                "name": "Analytics Workspace",
+                "workflow_template_id": "analytics_template_v1",
+                "workspace_type": "custom",
+                "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
+            }
+        )
+
+        status, upload_payload = self._multipart_request(
+            "/documents/upload?asset_kind=workspace_cv&workspace_id=analytics_workspace",
+            "document",
+            "resume.txt",
+            b"Runr Candidate\nProduct-minded operator with analytics ownership.",
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(upload_payload["asset"]["asset_kind"], "workspace_cv")
+
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "analytics_workspace", "execution_mode": "sync", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(run_payload["user_id"], self.user.user_id)
+        run_id = run_payload["id"]
+
+        status, review_payload = self._request(
+            "POST",
+            f"/runs/{run_id}/reviews",
+            {"job_id": "api_job_1", "decision": "approved", "status": "approved", "reviewer": "tester"},
+        )
+        self.assertEqual(status, 201)
+        review_id = review_payload["review_id"]
+
+        status, tracker_payload = self._request(
+            "PUT",
+            f"/tracker/{review_id}",
+            {"application_status": "Applied", "email_confirmed": True},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(tracker_payload["email_confirmed"])
+        self.assertTrue(tracker_payload["is_explicit_application"])
+
+        status, contact_payload = self._request(
+            "POST",
+            "/referrals",
+            {
+                "name": "Jane Referrer",
+                "company": "ACME API",
+                "linkedin_url": "https://linkedin.com/in/jane-referrer",
+                "can_refer": True,
+            },
+        )
+        self.assertEqual(status, 201)
+        contact_id = contact_payload["contact_id"]
+
+        status, draft_payload = self._request(
+            "POST",
+            "/outreach/referral-draft",
+            {"run_id": run_id, "job_id": "api_job_1", "contact_id": contact_id},
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("Jane Referrer", draft_payload["message"])
+
+        status, outreach_payload = self._request(
+            "POST",
+            "/referrals/outreach-status",
+            {
+                "run_id": run_id,
+                "job_id": "api_job_1",
+                "contact_id": contact_id,
+                "outreach_status": "Contacted",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(outreach_payload["outreach_status"], "Contacted")
+
+        status, overview_payload = self._request("GET", "/analytics/overview")
+        self.assertEqual(status, 200)
+        self.assertIn("automation_success_rate", overview_payload)
+        self.assertIn("applications_per_user", overview_payload)
+        self.assertIn("referral_outreach_funnel", overview_payload)
+        overview_user_row = next(
+            (row for row in overview_payload["applications_per_user"] if row["user_id"] == self.user.user_id),
+            None,
+        )
+        self.assertIsNotNone(overview_user_row)
+        self.assertEqual(overview_user_row["approved_reviews"], 1)
+
+        status, snapshot_payload = self._request("GET", "/admin/analytics/snapshot")
+        self.assertEqual(status, 200)
+        snapshot_user_row = next(
+            (
+                row
+                for row in snapshot_payload["applications_per_user"]["rows"]
+                if row["user_id"] == self.user.user_id
+            ),
+            None,
+        )
+        self.assertIsNotNone(snapshot_user_row)
+        self.assertEqual(snapshot_user_row["run_count"], 1)
+
+        event_rows = self.app.repositories.analytics_store.query_rows(
+            "SELECT event_name FROM analytics_events ORDER BY occurred_at ASC"
+        )
+        event_names = [row["event_name"] for row in event_rows]
+        self.assertIn("document_uploaded", event_names)
+        self.assertIn("run_started", event_names)
+        self.assertIn("run_completed", event_names)
+        self.assertIn("cv_generation_completed", event_names)
+        self.assertIn("application_status_updated", event_names)
+        self.assertIn("referral_draft_generated", event_names)
+        self.assertIn("outreach_status_changed", event_names)
+
+    def test_admin_events_endpoint_supports_filters_pagination_and_admin_role(self):
+        analytics_store = self.app.repositories.analytics_store
+        analytics_store.emit_event(
+            event_id="evt_admin_1",
+            event_name="page_view",
+            occurred_at="2026-01-10T08:00:00+00:00",
+            user_id=self.user.user_id,
+            payload={"route": "/dashboard"},
+        )
+        analytics_store.emit_event(
+            event_id="evt_admin_2",
+            event_name="session_started",
+            occurred_at="2026-01-11T08:00:00+00:00",
+            user_id="usr_other",
+            payload={"session_id": "session_2"},
+        )
+        analytics_store.emit_event(
+            event_id="evt_admin_3",
+            event_name="page_view",
+            occurred_at="2026-01-12T08:00:00+00:00",
+            user_id=self.user.user_id,
+            payload={"route": "/tracker"},
+        )
+
+        status, payload = self._request("GET", "/admin/events?limit=2&offset=0")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["meta"]["limit"], 2)
+        self.assertEqual(payload["meta"]["offset"], 0)
+        self.assertEqual(payload["meta"]["returned"], 2)
+        self.assertEqual(payload["meta"]["total"], 3)
+        self.assertEqual([item["event_id"] for item in payload["events"]], ["evt_admin_3", "evt_admin_2"])
+        self.assertEqual(payload["events"][0]["payload"]["route"], "/tracker")
+
+        status, second_page_payload = self._request("GET", "/admin/events?limit=2&offset=2")
+        self.assertEqual(status, 200)
+        self.assertEqual([item["event_id"] for item in second_page_payload["events"]], ["evt_admin_1"])
+
+        occurred_from = quote("2026-01-11T00:00:00+00:00", safe="")
+        occurred_to = quote("2026-01-13T00:00:00+00:00", safe="")
+        status, filtered_payload = self._request(
+            "GET",
+            f"/admin/events?event_name=page_view&user_id={self.user.user_id}&occurred_from={occurred_from}&occurred_to={occurred_to}",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(filtered_payload["meta"]["total"], 1)
+        self.assertEqual([item["event_id"] for item in filtered_payload["events"]], ["evt_admin_3"])
+
+        viewer = self.app.upsert_user(
+            {
+                "email": "viewer@example.com",
+                "display_name": "Viewer",
+                "role": "viewer",
+            }
+        )
+        _, viewer_token = self.app.issue_api_token(user_id=viewer.user_id, name="viewer-test")
+        status, _, unauthorized_payload = self._request_with_headers(
+            "GET",
+            "/admin/events",
+            headers={"Authorization": f"Bearer {viewer_token}"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(unauthorized_payload["error"]["code"], "forbidden")
+
     def test_referrals_import_endpoint_merges_companies(self):
         status, import_payload = self._request(
             "POST",
@@ -1723,6 +2207,8 @@ class BackendApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(status, 200)
+        standard_certificate_path = self.temp_dir / "asset_cert_api.pdf"
+        standard_certificate_path.write_bytes(b"%PDF-1.4 standard certificate")
         user = self.app.get_user(self.user.user_id)
         user.metadata = {
             **dict(user.metadata or {}),
@@ -1732,7 +2218,7 @@ class BackendApiTests(unittest.TestCase):
                     "asset_kind": "certification",
                     "display_name": "Standard certificate",
                     "download_url": "/documents/assets/asset_cert_api/download",
-                    "path": "user_config/candidate_assets/asset_cert_api.pdf",
+                    "path": str(standard_certificate_path),
                 }
             ],
         }
@@ -1747,38 +2233,91 @@ class BackendApiTests(unittest.TestCase):
         self.assertIsNotNone(item, "Approved review should appear in tracker")
         self.assertEqual(item["tracker_status"], "applied")
         self.assertFalse(item["email_confirmed"])
+        self.assertFalse(item["is_explicit_application"])
         self.assertIn("excel_baseline_columns", tracker_payload)
         self.assertIn("applied?", tracker_payload["excel_baseline_columns"])
         self.assertEqual(item["tracker_table_row"]["Status"], "Applied")
         self.assertEqual(item["tracker_table_row"]["applied?"], "Applied")
         self.assertEqual(item["tracker_table_row"]["company"], item["company"])
         document_labels = [document["label"] for document in item["documents"]]
-        self.assertIn("api_job_1_CV.docx", document_labels)
-        self.assertIn("api_job_1_cover_letter.txt", document_labels)
+        self.assertIn("Tailored CV DOCX", document_labels)
+        self.assertIn("Cover letter TXT", document_labels)
         self.assertIn("Standard certificate", document_labels)
         self.assertNotIn("api_job_1_email.txt", document_labels)
         self.assertNotIn(f"{run_id}_documents.json", document_labels)
         self.assertTrue(any(document["source_scope"] == "application" for document in item["documents"]))
+        blocked_document = next(
+            (document for document in item["documents"] if document["label"] == "Tailored CV DOCX"),
+            None,
+        )
+        self.assertIsNotNone(blocked_document)
+        self.assertTrue(blocked_document["final_export_blocked"])
+        self.assertEqual(
+            [column["label"] for column in tracker_payload.get("columns", [])],
+            ["Status", "Company", "Role", "Location", "Application date", "Resource", "Priority", "Notes"],
+        )
 
-        # --- 4. PUT /tracker/:review_id to update status and email_confirmed ---
+        exportable_document_ids = [
+            str(document["document_id"])
+            for document in item["documents"]
+            if str(document.get("document_id") or "").strip() and not document.get("final_export_blocked")
+        ]
+        status, bundle_payload = self._request(
+            "POST",
+            "/documents/bulk-export",
+            {
+                "label": "tracker_resource_export",
+                "document_ids": exportable_document_ids,
+                "export_anyway": True,
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(bundle_payload["document_count"], 2)
+
+        status, headers, body = self._binary_request("GET", bundle_payload["download_url"])
+        self.assertEqual(status, 200)
+        self.assertIn(headers.get("Content-Type"), {"application/zip", "application/x-zip-compressed"})
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            self.assertEqual(
+                sorted(archive.namelist()),
+                ["Cover letter.txt", "Standard certificate.pdf"],
+            )
+
+        status, explicit_tracker_payload = self._request("GET", "/tracker?explicit_only=true")
+        self.assertEqual(status, 200)
+        self.assertFalse(any(entry["review_id"] == review_id for entry in explicit_tracker_payload.get("items", [])))
+
+        # --- 4. PUT /tracker/:review_id to mark the application explicit without changing visible status ---
         status, update_payload = self._request(
             "PUT",
             f"/tracker/{review_id}",
-            {"tracker_status": "email_confirmed", "email_confirmed": True, "notes": "Follow up next week."},
+            {"email_confirmed": True, "notes": "Follow up next week."},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(update_payload["tracker_status"], "email_confirmed")
         self.assertTrue(update_payload["email_confirmed"])
+        self.assertTrue(update_payload["is_explicit_application"])
         self.assertEqual(update_payload["notes"], "Follow up next week.")
+        self.assertEqual(
+            self.app.repositories.review_store.list_application_status_history(review_id=review_id),
+            [],
+        )
 
-        # --- 5. GET /tracker reflects updated fields ---
+        # --- 5. GET /tracker reflects updated fields while preserving the Applied view ---
         status, tracker_payload2 = self._request("GET", "/tracker")
         self.assertEqual(status, 200)
         item2 = next((i for i in tracker_payload2.get("items", []) if i["review_id"] == review_id), None)
         self.assertIsNotNone(item2)
-        self.assertEqual(item2["tracker_status"], "email_confirmed")
+        self.assertEqual(item2["tracker_status"], "applied")
         self.assertTrue(item2["email_confirmed"])
+        self.assertTrue(item2["is_explicit_application"])
+        self.assertEqual(item2["tracker_table_row"]["Status"], "Applied")
         self.assertEqual(item2["notes"], "Follow up next week.")
+
+        status, explicit_tracker_payload2 = self._request("GET", "/tracker?explicit_only=true")
+        self.assertEqual(status, 200)
+        explicit_item = next((i for i in explicit_tracker_payload2.get("items", []) if i["review_id"] == review_id), None)
+        self.assertIsNotNone(explicit_item)
+        self.assertTrue(explicit_item["is_explicit_application"])
 
         # --- 6. Move to rejected with a note; rejected_at should be auto-set ---
         status, reject_payload = self._request(
@@ -1788,8 +2327,22 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(reject_payload["tracker_status"], "rejected")
+        self.assertTrue(reject_payload["is_explicit_application"])
         self.assertEqual(reject_payload["rejection_note"], "They went with an internal candidate.")
         self.assertTrue(reject_payload["rejected_at"])  # should be non-empty ISO timestamp
+        self.assertEqual(
+            self.app.repositories.review_store.list_application_status_history(review_id=review_id),
+            [
+                {
+                    "review_id": review_id,
+                    "user_id": self.user.user_id,
+                    "from_status": "Applied",
+                    "to_status": "Rejected",
+                    "changed_at": reject_payload["updated_at"],
+                    "source": "manual",
+                }
+            ],
+        )
 
         # --- 7. Invalid tracker_status raises 400 ---
         status, bad_payload = self._request(
@@ -2250,6 +2803,21 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(updated_payload["application_status"], "Interviewing")
+        self.assertEqual(
+            self.app.repositories.review_store.list_application_status_history(
+                review_id=imported["application_id"]
+            ),
+            [
+                {
+                    "review_id": imported["application_id"],
+                    "user_id": self.user.user_id,
+                    "from_status": "Applied",
+                    "to_status": "Interviewing",
+                    "changed_at": updated_payload["updated_at"],
+                    "source": "manual",
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

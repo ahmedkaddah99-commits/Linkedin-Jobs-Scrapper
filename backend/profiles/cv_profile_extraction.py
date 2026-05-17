@@ -532,6 +532,7 @@ def normalize_profile_payload(payload: Mapping[str, Any] | None) -> dict[str, An
     return {
         "name": compact_whitespace(str(raw.get("name") or "")),
         "role_title": compact_whitespace(str(raw.get("role_title") or raw.get("headline") or "")),
+        "industry": compact_whitespace(str(raw.get("industry") or "")),
         "email": compact_whitespace(str(raw.get("email") or "")),
         "location": compact_whitespace(str(raw.get("location") or "")),
         "website": _normalize_url(str(raw.get("website") or "")),

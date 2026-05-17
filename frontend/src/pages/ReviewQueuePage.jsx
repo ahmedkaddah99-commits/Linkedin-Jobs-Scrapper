@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
+import { logEvent } from "../lib/analytics";
 import { labelize, statusTone } from "../lib/formatters";
+import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
 
 const REFERRAL_OUTREACH_STATUSES = [
   "Not contacted",
@@ -296,6 +298,10 @@ export default function ReviewQueuePage() {
           body: payload,
         });
       }
+      logEvent("review_decision_submitted", {
+        decision,
+        job_id: row.job_id,
+      });
       setFeedback(feedbackScope, {
         message: decision === "approved" ? "Approved." : "Rejected.",
       });
@@ -378,6 +384,11 @@ export default function ReviewQueuePage() {
       return;
     }
     window.open(row.apply_link, "_blank", "noopener,noreferrer");
+    logEvent("apply_link_opened", {
+      job_id: row.job_id,
+      source: row.source_type || "unknown",
+      portal: row.source_label || row.source_type || "unknown",
+    });
     setFeedback(feedbackScope, {
       message: "Opened application link in a new tab.",
     });
@@ -635,6 +646,8 @@ export default function ReviewQueuePage() {
                   const selectedContacts = selectedContactsForRow(row);
                   const selectedLinkedInCount = selectedContacts.filter((contact) => contact.linkedin_url).length;
                   const bulkStatus = bulkOutreachStatusByRow[rowKey] || "";
+                  const jobWorkspaceUrl =
+                    row.job_workspace_url || buildJobWorkspaceRoute({ runId: row.run_id, jobId: row.job_id });
                   const panelFeedback =
                     actionState.scope === panelFeedbackScope && (actionState.message || actionState.error)
                       ? actionState
@@ -792,6 +805,12 @@ export default function ReviewQueuePage() {
                             >
                               Find Hiring Manager
                             </button>
+                            <Link
+                              className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
+                              to={jobWorkspaceUrl}
+                            >
+                              Relevant People
+                            </Link>
                             <a
                               className="text-sm font-medium text-primary transition-colors hover:text-primary-container"
                               href={row.apply_link || "#"}

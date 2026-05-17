@@ -99,6 +99,38 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(recovered_run.status, "queued")
         self.assertEqual(recovered_run.current_stage_id, "")
 
+    def test_worker_service_enqueues_and_processes_due_scheduled_runs(self):
+        app = self._create_app("worker_service_schedule")
+        workspace_payload = app.get_workspace("worker_workspace").to_dict()
+        workspace_payload["metadata"] = {
+            **dict(workspace_payload.get("metadata") or {}),
+            "run_schedule": {
+                "enabled": True,
+                "interval_days": 3,
+                "next_run_at": "2000-01-01T00:00:00+00:00",
+            },
+        }
+        app.upsert_workspace(workspace_payload)
+
+        worker = WorkerService(
+            application=app,
+            worker_id="worker_service_schedule_a",
+            lease_seconds=6,
+            poll_interval_seconds=0.1,
+        )
+        processed = worker.run_loop(max_runs=1, auto_retry_failed=True)
+
+        self.assertEqual(processed, 1)
+        runs = app.list_runs(limit=10, offset=0, status="", workspace_id="worker_workspace")
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].requested_by, "scheduler")
+        self.assertEqual(runs[0].status, "completed")
+
+        schedule = app.get_workspace("worker_workspace").metadata["run_schedule"]
+        self.assertEqual(schedule["last_run_id"], runs[0].id)
+        self.assertTrue(schedule["last_enqueued_at"])
+        self.assertTrue(schedule["next_run_at"])
+
 
 if __name__ == "__main__":
     unittest.main()
