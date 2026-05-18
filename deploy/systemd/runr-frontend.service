@@ -1,0 +1,13 @@
+[Unit]
+Description=Runr frontend static server
+After=network.target
+PartOf=runr.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/runr
+EnvironmentFile=/opt/runr/.env
+ExecStart=/opt/runr/.venv/bin/python backend/static_server.py
+Restart=always
+RestartSec=5
+

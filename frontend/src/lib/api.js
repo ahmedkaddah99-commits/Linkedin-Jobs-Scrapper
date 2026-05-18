@@ -4,6 +4,9 @@ const STORAGE_KEYS = {
   baseUrl: "runr.api.baseUrl",
 };
 
+// This must match the Clerk JWT Template name configured in the Clerk dashboard.
+export const CLERK_JWT_TEMPLATE_NAME = "runr_backend";
+
 export const QUOTA_EXCEEDED_EVENT = "runr:quota-exceeded";
 
 export function getDefaultApiBaseUrl() {

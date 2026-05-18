@@ -34,6 +34,13 @@ cd frontend
 npm install
 ```
 
+Create `frontend/.env.local` for the Vite client:
+
+```env
+VITE_API_BASE_URL=/v1
+VITE_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+```
+
 ## Secrets
 
 Create `user_config/.env` for local external-service credentials:

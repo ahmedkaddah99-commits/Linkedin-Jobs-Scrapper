@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { useUser } from "@clerk/clerk-react";
+import { Show, SignInButton, SignUpButton, UserButton, useUser } from "@clerk/react";
 import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
@@ -384,7 +384,7 @@ export default function AppShell({ children }) {
   const location = useLocation();
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
   const isRunDetail = Boolean(runMatch);
-  const { disconnect, status, user } = useSession();
+  const { status, user } = useSession();
   const { user: clerkUser } = useUser();
   const { isDark, toggleTheme } = useTheme();
   const isAdmin = isAdminUser(user);
@@ -428,11 +428,6 @@ export default function AppShell({ children }) {
   const shellUser = {
     name: user?.display_name || user?.email || "Disconnected",
     subtitle: user?.email || (status === "connected" ? "" : "Backend not connected"),
-    avatar:
-      user?.image_url ||
-      user?.metadata?.profile?.photo_data_url ||
-      user?.metadata?.profile?.avatar_url ||
-      "https://lh3.googleusercontent.com/aida-public/AB6AXuDeh_GwQ1tyaiUiDvT71g8HFsHEJ5gVS679pFkoWXtNfLFzoFMzeRd4HMomF0XAuq8mfaec3nzeharFzxat1NNtR0s1NGQ8OmsZwjVfuKfX6PFUGr0duTgyC5ItHvMrLbUKmVICPFeD-iyiVRX9E4uWBHxGmGTQWtgvLOpUORp77hhc30XrStvTwhM64ft7fw0EhK8zMcSjQubBgd6isZ-HmuKrN7-OkTq3cDe4ub5eT-F6nWziFtgteycj_e7n3xQafjsJUdJbHiU",
   };
   const topRibbonItems = secondaryTopRibbonItems.filter((item) => !item.adminOnly || isAdmin);
 
@@ -554,34 +549,47 @@ export default function AppShell({ children }) {
                 >
                   <span className="material-symbols-outlined">notifications</span>
                 </button>
-                {status === "connected" ? (
-                  <button
-                    className="hidden text-sm text-on-surface-variant transition-colors hover:text-primary sm:block"
-                    onClick={disconnect}
-                    type="button"
-                  >
-                    Sign Out
-                  </button>
-                ) : null}
-                {status === "connected" ? (
-                  <button
-                    className="hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-primary transition-colors hover:bg-surface-container-high lg:inline-flex"
-                    onClick={() => navigate("/pricing")}
-                    type="button"
-                  >
-                    <span className="material-symbols-outlined text-[16px]">diamond</span>
-                    {planBadgeLabel}
-                  </button>
-                ) : null}
-                <div className="hidden min-w-0 text-right xl:block">
-                  <p className="truncate text-sm font-semibold text-on-surface">{shellUser.name}</p>
-                  <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
-                </div>
-                <img
-                  alt={shellUser.name}
-                  className="h-8 w-8 rounded-full border border-outline-variant/30 object-cover"
-                  src={shellUser.avatar}
-                />
+                <Show when="signed-out">
+                  <div className="hidden items-center gap-2 sm:flex">
+                    <SignInButton fallbackRedirectUrl="/" mode="modal">
+                      <button
+                        className="rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                        type="button"
+                      >
+                        Sign In
+                      </button>
+                    </SignInButton>
+                    <SignUpButton fallbackRedirectUrl="/" mode="modal">
+                      <button
+                        className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                        type="button"
+                      >
+                        Create Account
+                      </button>
+                    </SignUpButton>
+                  </div>
+                </Show>
+                <Show when="signed-in">
+                  <>
+                    {status === "connected" ? (
+                      <button
+                        className="hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-primary transition-colors hover:bg-surface-container-high lg:inline-flex"
+                        onClick={() => navigate("/pricing")}
+                        type="button"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">diamond</span>
+                        {planBadgeLabel}
+                      </button>
+                    ) : null}
+                    <div className="hidden min-w-0 text-right xl:block">
+                      <p className="truncate text-sm font-semibold text-on-surface">{shellUser.name}</p>
+                      <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
+                    </div>
+                    <div className="shrink-0">
+                      <UserButton />
+                    </div>
+                  </>
+                </Show>
               </div>
             </>
           )}

@@ -42,6 +42,8 @@ _CLERK_API_BASE_URL = "https://api.clerk.com/v1"
 _CLERK_JWKS_URL = f"{_CLERK_API_BASE_URL}/jwks"
 _JWKS_CACHE_TTL_SECONDS = 300
 _WEBHOOK_TOLERANCE_SECONDS = 300
+CLERK_JWT_TEMPLATE_NAME = "runr_backend"
+# This must match the Clerk JWT Template name in the Clerk dashboard exactly.
 
 _JWKS_CACHE: dict[str, Any] = {
     "fetched_at": 0.0,
@@ -219,18 +221,9 @@ def _public_key_from_jwk(jwk: Mapping[str, Any]):
 
 
 def _extract_public_metadata(claims: Mapping[str, Any]) -> dict[str, Any]:
-    candidates = [
-        claims.get("publicMetadata"),
-        claims.get("public_metadata"),
-        claims.get("metadata"),
-    ]
-    for candidate in candidates:
-        if isinstance(candidate, Mapping):
-            if "publicMetadata" in candidate and isinstance(candidate.get("publicMetadata"), Mapping):
-                return dict(candidate.get("publicMetadata") or {})
-            if "public_metadata" in candidate and isinstance(candidate.get("public_metadata"), Mapping):
-                return dict(candidate.get("public_metadata") or {})
-            return dict(candidate)
+    candidate = claims.get("publicMetadata")
+    if isinstance(candidate, Mapping):
+        return dict(candidate)
     return {}
 
 
@@ -307,11 +300,9 @@ def verify_session_token(
     return ClerkSessionClaims(
         clerk_user_id=str(claims.get("sub") or "").strip(),
         session_id=str(claims.get("sid") or "").strip(),
-        role=normalize_clerk_role(public_metadata.get("role") or claims.get("role")),
-        plan_id=normalize_plan_id(public_metadata.get("plan_id") or claims.get("plan_id")),
-        quota_overrides=_normalize_quota_overrides(
-            public_metadata.get("quota_overrides") or claims.get("quota_overrides")
-        ),
+        role=normalize_clerk_role(public_metadata.get("role")),
+        plan_id=normalize_plan_id(public_metadata.get("plan_id")),
+        quota_overrides=_normalize_quota_overrides(public_metadata.get("quota_overrides")),
         issued_at=_unix_timestamp_to_iso(claims.get("iat")),
         expires_at=_unix_timestamp_to_iso(claims.get("exp")),
         authorized_party=authorized_party,

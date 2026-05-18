@@ -1,15 +1,14 @@
-import { useAuth, useUser } from "@clerk/clerk-react";
+import { useAuth, useUser } from "@clerk/react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   apiRequest,
+  CLERK_JWT_TEMPLATE_NAME,
   getDefaultApiBaseUrl,
   loadStoredConnection,
   persistConnection,
   resolveApiUrl,
 } from "../lib/api";
 import { identify, logEvent } from "../lib/analytics";
-
-const CLERK_TOKEN_TEMPLATE = "runr_backend";
 
 const SessionContext = createContext(null);
 
@@ -63,11 +62,7 @@ export function SessionProvider({ children }) {
     if (!isSignedIn) {
       return "";
     }
-    try {
-      return String(await getToken({ template: CLERK_TOKEN_TEMPLATE }) || "").trim();
-    } catch {
-      return String(await getToken() || "").trim();
-    }
+    return String(await getToken({ template: CLERK_JWT_TEMPLATE_NAME }) || "").trim();
   }, [getToken, isSignedIn]);
 
   const trackSessionStart = useCallback((baseUrl, nextUser, nextSessionId) => {

@@ -2,6 +2,8 @@
 
 Full contents of all files changed for the Clerk/LemonSqueezy monetization rollout and follow-up test fix.
 
+Note: This document is a historical rollout snapshot. For the current Clerk React + Vite integration, use the active source files under `frontend/src/` and `frontend/package.json`.
+
 ## `.env.example`
 
 ```dotenv

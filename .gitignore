@@ -26,6 +26,8 @@ working-file.xlsx
 .backend_data_cli_test/
 frontend/node_modules/
 frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
 manual_url_jobs.json
 manual_url_failures.json
 stage3_checkpoint.json

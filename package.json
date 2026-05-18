@@ -1,5 +1,22 @@
 {
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --names \"API,WORKER,UI\" --prefix-colors \"cyan,yellow,magenta\" \".venv/Scripts/python.exe workspace_runner.py serve-api\" \".venv/Scripts/python.exe workspace_runner.py run-worker --worker-id local_worker\" \"npm --prefix frontend run dev\"",
+    "dev:api": ".venv/Scripts/python.exe workspace_runner.py serve-api",
+    "dev:worker": ".venv/Scripts/python.exe workspace_runner.py run-worker --worker-id local_worker",
+    "dev:ui": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "prod:build": "npm --prefix frontend run build",
+    "pm2:dev": "pm2 start ecosystem.config.cjs && pm2 logs",
+    "pm2:stop": "pm2 stop all",
+    "pm2:prod": "npm run build && pm2 start ecosystem.config.cjs --env production && pm2 save",
+    "pm2:logs": "pm2 logs",
+    "pm2:status": "pm2 status"
+  },
   "dependencies": {
-    "@clerk/clerk-react": "^5.61.6"
+    "@clerk/react": "^6.6.4"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
   }
 }

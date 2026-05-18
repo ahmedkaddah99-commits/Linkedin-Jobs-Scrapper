@@ -1,9 +1,4 @@
-import {
-  ClerkProvider,
-  RedirectToSignIn,
-  SignedIn,
-  SignedOut,
-} from "@clerk/clerk-react";
+import { RedirectToSignIn, Show } from "@clerk/react";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import AppShell from "./components/AppShell";
@@ -146,29 +141,19 @@ function AuthenticatedApp() {
 
 function ProtectedAppRoute() {
   return (
-    <>
-      <SignedIn>
-        <AuthenticatedApp />
-      </SignedIn>
-      <SignedOut>
-        <RedirectToSignIn />
-      </SignedOut>
-    </>
+    <Show fallback={<RedirectToSignIn />} when="signed-in">
+      <AuthenticatedApp />
+    </Show>
   );
 }
 
 function PublicAuthRoute({ mode }) {
   return (
-    <>
-      <SignedIn>
-        <Navigate replace to="/" />
-      </SignedIn>
-      <SignedOut>
-        <AppShell>
-          <ConnectionPanel mode={mode} />
-        </AppShell>
-      </SignedOut>
-    </>
+    <Show fallback={<Navigate replace to="/" />} when="signed-out">
+      <AppShell>
+        <ConnectionPanel mode={mode} />
+      </AppShell>
+    </Show>
   );
 }
 
@@ -183,28 +168,9 @@ function AppRoutes() {
 }
 
 export default function App() {
-  const publishableKey = String(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || "").trim();
-
-  if (!publishableKey) {
-    return (
-      <div className="mx-auto flex min-h-screen max-w-3xl items-center px-6 py-12">
-        <div className="w-full rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
-          <h1 className="font-headline text-3xl font-extrabold tracking-tight text-on-surface">
-            Clerk Configuration Missing
-          </h1>
-          <p className="mt-3 text-sm leading-7 text-on-surface-variant">
-            Set `VITE_CLERK_PUBLISHABLE_KEY` before starting the frontend.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <ClerkProvider publishableKey={publishableKey}>
-      <SessionProvider>
-        <AppRoutes />
-      </SessionProvider>
-    </ClerkProvider>
+    <SessionProvider>
+      <AppRoutes />
+    </SessionProvider>
   );
 }

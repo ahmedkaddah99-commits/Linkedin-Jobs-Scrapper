@@ -1,0 +1,13 @@
+[Unit]
+Description=Runr worker
+After=runr-api.service
+PartOf=runr.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/runr
+EnvironmentFile=/opt/runr/.env
+ExecStart=/opt/runr/.venv/bin/python workspace_runner.py run-worker --worker-id prod_worker
+Restart=always
+RestartSec=5
+
