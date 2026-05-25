@@ -17,6 +17,19 @@ from backend.domain.pipeline_jobs import (
     PipelineJob,
     stable_manual_job_id,
 )
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_PROXY_ENDPOINT,
+    ScrapeOpsOutOfCreditsError,
+    ScrapeOpsRequestError,
+    billed_status_code,
+    build_proxy_params,
+    estimate_mode_native_credits,
+    estimate_mode_runner_credits,
+    raise_for_failure,
+    request_mode_label,
+    sanitize_scrapeops_text,
+    sanitize_url_for_logs,
+)
 
 from .linkedin_connector import build_scrape_requests_client, enrich_job
 
@@ -246,8 +259,81 @@ def fetch_generic_manual_job(
     url: str,
     *,
     request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    force_scrapeops: bool = False,
+    scrapeops_api_key: str = "",
+    scrapeops_mode: str = "render_js_residential",
+    scrapeops_country_code: str = "",
+    usage_callback=None,
+    usage_stage: str = "normalize_company_job",
+    usage_company_name: str = "",
 ) -> dict[str, Any]:
-    response = requests.get(url, headers=DEFAULT_HEADERS, timeout=request_timeout_seconds)
+    if force_scrapeops:
+        resolved_api_key = str(scrapeops_api_key or "").strip()
+        if not resolved_api_key:
+            resolved_api_key, _ = build_scrape_requests_client()
+        response = None
+        try:
+            response = requests.get(
+                SCRAPEOPS_PROXY_ENDPOINT,
+                params=build_proxy_params(
+                    api_key=resolved_api_key,
+                    url=url,
+                    mode=scrapeops_mode,
+                    country_code=scrapeops_country_code,
+                ),
+                headers=DEFAULT_HEADERS,
+                timeout=max(10, int(request_timeout_seconds)),
+            )
+        except requests.RequestException as exc:
+            safe_message = sanitize_scrapeops_text(str(exc)) or "ScrapeOps request failed."
+            if callable(usage_callback):
+                usage_callback(
+                    {
+                        "target_url": sanitize_url_for_logs(url),
+                        "domain": (urlparse(url).netloc or "").lower(),
+                        "status_code": 0,
+                        "billed": False,
+                        "request_mode": scrapeops_mode,
+                        "request_mode_label": request_mode_label(scrapeops_mode),
+                        "native_credits": 0,
+                        "runner_credits": 0,
+                        "request_stage": usage_stage,
+                        "company_name": usage_company_name,
+                        "error_category": "network_error",
+                        "error_message": safe_message,
+                    }
+                )
+            raise RuntimeError(f"scrapeops: {safe_message}") from exc
+        billed = billed_status_code(int(response.status_code or 0))
+        failure: ScrapeOpsRequestError | None = None
+        if response.status_code >= 400:
+            try:
+                raise_for_failure(response, fallback_message="ScrapeOps request failed.")
+            except ScrapeOpsRequestError as exc:
+                failure = exc
+        if callable(usage_callback):
+            usage_callback(
+                {
+                    "target_url": sanitize_url_for_logs(url),
+                    "domain": (urlparse(url).netloc or "").lower(),
+                    "status_code": int(response.status_code or 0),
+                    "billed": billed,
+                    "request_mode": scrapeops_mode,
+                    "request_mode_label": request_mode_label(scrapeops_mode),
+                    "native_credits": estimate_mode_native_credits(scrapeops_mode) if billed else 0,
+                    "runner_credits": estimate_mode_runner_credits(scrapeops_mode) if billed else 0,
+                    "request_stage": usage_stage,
+                    "company_name": usage_company_name,
+                    "error_category": failure.failure.category if failure else "",
+                    "error_message": str(failure) if failure else "",
+                }
+            )
+        if failure is not None:
+            if isinstance(failure, ScrapeOpsOutOfCreditsError):
+                raise failure
+            raise RuntimeError(f"scrapeops: {failure}") from failure
+    else:
+        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=request_timeout_seconds)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -358,6 +444,12 @@ def fetch_and_normalize_manual_job(
     debug_enrich_blocks: bool = False,
     use_proxy_fallback: bool = False,
     request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    force_scrapeops: bool = False,
+    scrapeops_mode: str = "render_js_residential",
+    scrapeops_country_code: str = "",
+    usage_callback=None,
+    usage_stage: str = "",
+    usage_company_name: str = "",
 ) -> dict[str, Any]:
     if extract_linkedin_job_id(url):
         if so_requests is None or not scrapeops_api_key:
@@ -371,7 +463,17 @@ def fetch_and_normalize_manual_job(
             request_timeout_seconds=request_timeout_seconds,
         )
 
-    return fetch_generic_manual_job(url, request_timeout_seconds=request_timeout_seconds)
+    return fetch_generic_manual_job(
+        url,
+        request_timeout_seconds=request_timeout_seconds,
+        force_scrapeops=force_scrapeops,
+        scrapeops_api_key=scrapeops_api_key,
+        scrapeops_mode=scrapeops_mode,
+        scrapeops_country_code=scrapeops_country_code,
+        usage_callback=usage_callback,
+        usage_stage=usage_stage or "manual_url_fetch",
+        usage_company_name=usage_company_name,
+    )
 
 
 def fetch_manual_jobs_from_file(

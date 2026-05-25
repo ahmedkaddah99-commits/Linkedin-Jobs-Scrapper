@@ -6,7 +6,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from backend.config.env_schema import require_env
 from backend.integrations.clerk import update_user_metadata
@@ -68,12 +68,138 @@ def update_user_plan_in_clerk(
     )
 
 
+def _normalize_discount_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    attributes = dict(payload.get("attributes") or {})
+    return {
+        "discount_id": str(payload.get("id") or "").strip(),
+        "name": str(attributes.get("name") or "").strip(),
+        "code": str(attributes.get("code") or "").strip(),
+        "amount": int(attributes.get("amount") or 0),
+        "amount_type": str(attributes.get("amount_type") or "").strip(),
+        "is_limited_to_products": bool(attributes.get("is_limited_to_products")),
+        "is_limited_redemptions": bool(attributes.get("is_limited_redemptions")),
+        "max_redemptions": int(attributes.get("max_redemptions") or 0),
+        "starts_at": str(attributes.get("starts_at") or "").strip(),
+        "expires_at": str(attributes.get("expires_at") or "").strip(),
+        "duration": str(attributes.get("duration") or "").strip(),
+        "duration_in_months": int(attributes.get("duration_in_months") or 0),
+        "status": str(attributes.get("status") or "").strip(),
+        "status_formatted": str(attributes.get("status_formatted") or "").strip(),
+        "test_mode": bool(attributes.get("test_mode")),
+        "created_at": str(attributes.get("created_at") or "").strip(),
+        "updated_at": str(attributes.get("updated_at") or "").strip(),
+    }
+
+
+def list_discounts(
+    *,
+    store_id: str | int | None = None,
+    page_number: int = 1,
+    page_size: int = 100,
+) -> dict[str, Any]:
+    query_params = {
+        "page[number]": max(1, int(page_number)),
+        "page[size]": max(1, int(page_size)),
+    }
+    normalized_store_id = str(store_id or require_env("LEMONSQUEEZY_STORE_ID")).strip()
+    if normalized_store_id:
+        query_params["filter[store_id]"] = normalized_store_id
+    response = _lemonsqueezy_request(
+        "GET",
+        f"/discounts?{urllib.parse.urlencode(query_params)}",
+    )
+    items = response.get("data") or []
+    page = ((response.get("meta") or {}).get("page") or {})
+    return {
+        "discounts": [
+            _normalize_discount_payload(item)
+            for item in items
+            if isinstance(item, dict)
+        ],
+        "meta": {
+            "current_page": int(page.get("currentPage") or page_number or 1),
+            "per_page": int(page.get("perPage") or page_size or 0),
+            "total": int(page.get("total") or 0),
+            "last_page": int(page.get("lastPage") or 1),
+        },
+    }
+
+
+def create_discount(
+    *,
+    name: str,
+    code: str,
+    amount: int,
+    amount_type: str,
+    starts_at: str = "",
+    expires_at: str = "",
+    max_redemptions: int = 0,
+    duration: str = "once",
+    duration_in_months: int = 1,
+    variant_ids: Sequence[str | int] | None = None,
+    test_mode: bool | None = None,
+) -> dict[str, Any]:
+    normalized_variant_ids = [str(item).strip() for item in (variant_ids or []) if str(item).strip()]
+    payload = {
+        "data": {
+            "type": "discounts",
+            "attributes": {
+                "name": str(name or "").strip(),
+                "code": str(code or "").strip(),
+                "amount": int(amount or 0),
+                "amount_type": str(amount_type or "").strip(),
+                "is_limited_to_products": bool(normalized_variant_ids),
+                "is_limited_redemptions": int(max_redemptions or 0) > 0,
+                "max_redemptions": max(0, int(max_redemptions or 0)),
+                "duration": str(duration or "once").strip() or "once",
+                "duration_in_months": max(1, int(duration_in_months or 1)),
+            },
+            "relationships": {
+                "store": {
+                    "data": {
+                        "type": "stores",
+                        "id": str(require_env("LEMONSQUEEZY_STORE_ID")),
+                    }
+                },
+            },
+        }
+    }
+    if normalized_variant_ids:
+        payload["data"]["relationships"]["variants"] = {
+            "data": [
+                {
+                    "type": "variants",
+                    "id": item,
+                }
+                for item in normalized_variant_ids
+            ]
+        }
+    normalized_starts_at = str(starts_at or "").strip()
+    if normalized_starts_at:
+        payload["data"]["attributes"]["starts_at"] = normalized_starts_at
+    normalized_expires_at = str(expires_at or "").strip()
+    if normalized_expires_at:
+        payload["data"]["attributes"]["expires_at"] = normalized_expires_at
+    if test_mode is not None:
+        payload["data"]["attributes"]["test_mode"] = bool(test_mode)
+    response = _lemonsqueezy_request("POST", "/discounts", payload=payload)
+    return _normalize_discount_payload(dict(response.get("data") or {}))
+
+
+def delete_discount(discount_id: str | int) -> None:
+    normalized_discount_id = urllib.parse.quote(str(discount_id or "").strip())
+    if not normalized_discount_id:
+        raise ValueError("discount_id is required")
+    _lemonsqueezy_request("DELETE", f"/discounts/{normalized_discount_id}")
+
+
 def get_checkout_url(
     user_id: str,
     variant_id: str | int,
     email: str,
     *,
     name: str = "",
+    discount_code: str = "",
     custom_data: Mapping[str, Any] | None = None,
     redirect_url: str = "",
 ) -> str:
@@ -89,9 +215,13 @@ def get_checkout_url(
                     "enabled_variants": [int(normalized_variant_id)],
                     "redirect_url": str(redirect_url or "").strip(),
                 },
+                "checkout_options": {
+                    "discount": True,
+                },
                 "checkout_data": {
                     "email": str(email or "").strip(),
                     "name": str(name or "").strip(),
+                    "discount_code": str(discount_code or "").strip(),
                     "custom": {
                         "user_id": str(user_id or "").strip(),
                         **dict(custom_data or {}),

@@ -67,6 +67,7 @@ WORKSPACE_USER_FACING_FIELD_IDS = [
     "company_career_sites",
     "portals",
     "forbidden_title_keywords",
+    "german_special_char_threshold",
     "max_german_level",
     "french_special_char_threshold",
     "spanish_special_char_threshold",
@@ -581,6 +582,7 @@ def default_workspace_configuration_v2() -> dict[str, Any]:
             "forbidden_title_keywords": [],
             "language_preferences": {
                 "profile_languages": [],
+                "allow_german": True,
                 "max_german_level": "any",
                 "allow_french": True,
                 "allow_spanish": True,
@@ -684,6 +686,9 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
         settings.get("languages"),
         limit=20,
     )
+    contract["filter_preferences"]["language_preferences"]["allow_german"] = int(
+        settings.get("german_special_char_threshold") or 9999
+    ) != 0
     contract["filter_preferences"]["language_preferences"]["max_german_level"] = (
         _clean_text(settings.get("max_german_level") or "any") or "any"
     )

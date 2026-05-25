@@ -13,7 +13,6 @@ import {
 } from "recharts";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
-import { formatDateTime, labelize } from "../lib/formatters";
 
 const APPLICATION_OUTCOME_SEGMENTS = [
   { label: "Applied", color: "#38bdf8" },
@@ -23,50 +22,28 @@ const APPLICATION_OUTCOME_SEGMENTS = [
   { label: "Withdrawn", color: "#94a3b8" },
 ];
 
-const SOURCE_KIND_COLORS = ["#0f766e", "#14b8a6", "#38bdf8", "#f59e0b", "#f97316"];
-const ACTIVE_RUN_STATUSES = new Set(["planned", "queued", "running", "cancel_requested"]);
-const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
-const REFERRAL_STAGE_INDEX = {
-  "Not contacted": 0,
-  Contacted: 1,
-  Replied: 2,
-  "Referral offered": 3,
-  "No referral": 2,
+const REFERRAL_FUNNEL_STAGES = [
+  { label: "Not contacted", color: "#94a3b8" },
+  { label: "Contacted", color: "#38bdf8" },
+  { label: "Replied", color: "#14b8a6" },
+  { label: "Referral offered", color: "#22c55e" },
+];
+
+const EMPTY_OUTCOMES = {
+  total: 0,
+  unknown: 0,
+  segments: APPLICATION_OUTCOME_SEGMENTS.map((segment) => ({ ...segment, value: 0 })),
 };
 
-function buildApiPath(path, params = {}) {
-  const query = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === "") {
-      return;
-    }
-    query.set(key, String(value));
-  });
-  const queryString = query.toString();
-  return queryString ? `${path}?${queryString}` : path;
-}
+const EMPTY_REFERRALS = {
+  totalContacts: 0,
+  noReferralCount: 0,
+  trackedOutreachItems: 0,
+  contactSources: [],
+  outreachFunnel: REFERRAL_FUNNEL_STAGES.map((stage) => ({ ...stage, value: 0 })),
+};
 
-async function loadPaginatedCollection(request, path, collectionKey, { limit = 500, params = {} } = {}) {
-  const items = [];
-  let offset = 0;
-
-  while (true) {
-    const payload = await request(buildApiPath(path, { ...params, limit, offset }));
-    const page = Array.isArray(payload?.[collectionKey]) ? payload[collectionKey] : [];
-    const returned = Number(payload?.meta?.returned ?? page.length);
-
-    items.push(...page);
-
-    if (!page.length || returned < limit) {
-      break;
-    }
-    offset += returned;
-  }
-
-  return items;
-}
-
-async function loadDashboardPayload(request) {
+function loadDashboardPayload(request) {
   return request("/dashboard");
 }
 
@@ -93,270 +70,135 @@ function formatPercent(ratio, digits = 0) {
   }).format(Number.isFinite(ratio) ? ratio : 0);
 }
 
-function formatDuration(durationMs) {
-  if (!Number.isFinite(durationMs) || durationMs <= 0) {
-    return "N/A";
-  }
-  const totalMinutes = Math.round(durationMs / 60000);
-  if (totalMinutes < 1) {
-    return `${Math.max(1, Math.round(durationMs / 1000))}s`;
-  }
-  if (totalMinutes < 60) {
-    return `${totalMinutes}m`;
-  }
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
-}
-
 function formatChartTooltipValue(value) {
   return formatNumber(value);
 }
 
-function parseTimestamp(value) {
-  const timestamp = Date.parse(String(value || ""));
-  return Number.isFinite(timestamp) ? timestamp : null;
+function findValueByLabel(items, label) {
+  const match = Array.isArray(items)
+    ? items.find((item) => String(item?.label || "").trim() === label)
+    : null;
+  return getNumericValue(match?.value);
 }
 
-function average(values) {
-  if (!values.length) {
-    return 0;
-  }
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
-function getRunDurationMs(run) {
-  const start =
-    parseTimestamp(run?.started_at)
-    ?? parseTimestamp(run?.queued_at)
-    ?? parseTimestamp(run?.created_at);
-  const end = parseTimestamp(run?.finished_at);
-  if (start === null || end === null || end <= start) {
-    return null;
-  }
-  return end - start;
-}
-
-function getFailedStageResult(run) {
-  const stageResults = Array.isArray(run?.stage_results) ? run.stage_results : [];
-  return [...stageResults].reverse().find((result) => String(result?.status || "").trim().toLowerCase() === "failed") || null;
-}
-
-function getFailureStageKey(run) {
-  const failedStage = getFailedStageResult(run);
-  return String(failedStage?.stage_id || run?.current_stage_id || "unknown").trim() || "unknown";
-}
-
-function getFailureMessage(run) {
-  const failedStage = getFailedStageResult(run);
-  return (
-    String(failedStage?.error || run?.last_error || "").trim()
-    || "Run failed without a saved error message."
-  );
-}
-
-function isSourceStage(stageId) {
-  return stageId.startsWith("source_") || stageId === "source_search";
-}
-
-function isMergeStage(stageId) {
-  return stageId.includes("merge");
-}
-
-function isScreenStage(stageId) {
-  return stageId.includes("screen");
-}
-
-function isApprovalStage(stageId) {
-  return stageId.includes("prioritize");
-}
-
-function isApplyStage(stageId) {
-  return stageId.includes("generate") || stageId.includes("package");
-}
-
-function deriveRunPipeline(run) {
-  const stageResults = Array.isArray(run?.stage_results) ? run.stage_results : [];
-  let discoveredFromSources = 0;
-  let discoveredFromMerge = 0;
-  let screened = 0;
-  let screenApproved = 0;
-  let approved = 0;
-  let applied = 0;
-
-  stageResults.forEach((result) => {
-    const stageId = String(result?.stage_id || "").trim();
-    const metrics = result?.metrics || {};
-    const jobsFound = getNumericValue(metrics.jobs_found);
-    const jobsIngested = getNumericValue(metrics.jobs_ingested);
-    const mergedJobs = getNumericValue(metrics.merged_jobs);
-    const approvedJobs = getNumericValue(metrics.approved);
-    const rejectedJobs = getNumericValue(metrics.rejected);
-    const generatedJobs = getNumericValue(metrics.generated_jobs);
-    const packagedJobs = getNumericValue(metrics.packaged_jobs);
-
-    if (isSourceStage(stageId)) {
-      discoveredFromSources += jobsFound + jobsIngested;
-    }
-    if (isMergeStage(stageId)) {
-      discoveredFromMerge = Math.max(discoveredFromMerge, mergedJobs);
-    }
-    if (isScreenStage(stageId)) {
-      screenApproved += approvedJobs;
-      screened += approvedJobs + rejectedJobs || approvedJobs;
-    }
-    if (isApprovalStage(stageId)) {
-      approved += approvedJobs;
-    }
-    if (isApplyStage(stageId)) {
-      applied += generatedJobs + packagedJobs;
-    }
-  });
-
+function normalizeOutcomes(rawOutcomes) {
   return {
-    discovered: discoveredFromMerge || discoveredFromSources,
-    screened,
-    approved: approved || screenApproved,
-    applied,
+    total: getNumericValue(rawOutcomes?.total),
+    unknown: getNumericValue(rawOutcomes?.unknown),
+    segments: APPLICATION_OUTCOME_SEGMENTS.map((segment) => ({
+      ...segment,
+      value: findValueByLabel(rawOutcomes?.segments, segment.label),
+    })),
   };
 }
 
-function buildDashboardViewModel({ runs, trackerItems, contacts, outreachItems, recentFailedRuns }) {
-  const terminalRuns = runs.filter((run) => TERMINAL_RUN_STATUSES.has(String(run?.status || "").trim()));
-  const completedRuns = terminalRuns.filter((run) => String(run?.status || "").trim() === "completed");
-  const failedRuns = runs.filter((run) => String(run?.status || "").trim() === "failed");
-  const activeRuns = runs.filter((run) => ACTIVE_RUN_STATUSES.has(String(run?.status || "").trim()));
-  const runDurations = terminalRuns.map(getRunDurationMs).filter((value) => value !== null);
-
-  const failureBreakdownMap = new Map();
-  failedRuns.forEach((run) => {
-    const key = labelize(getFailureStageKey(run));
-    failureBreakdownMap.set(key, (failureBreakdownMap.get(key) || 0) + 1);
-  });
-  const failureBreakdown = Array.from(failureBreakdownMap.entries())
-    .map(([stage, count]) => ({ stage, count }))
-    .sort((left, right) => right.count - left.count);
-
-  const aggregatedPipeline = runs.reduce(
-    (summary, run) => {
-      const pipeline = deriveRunPipeline(run);
+function normalizeReferrals(rawReferrals) {
+  return {
+    totalContacts: getNumericValue(rawReferrals?.totalContacts),
+    noReferralCount: getNumericValue(rawReferrals?.noReferralCount),
+    trackedOutreachItems: getNumericValue(rawReferrals?.trackedOutreachItems),
+    contactSources: Array.isArray(rawReferrals?.contactSources) ? rawReferrals.contactSources : [],
+    outreachFunnel: REFERRAL_FUNNEL_STAGES.map((stage) => {
+      const match = Array.isArray(rawReferrals?.outreachFunnel)
+        ? rawReferrals.outreachFunnel.find((item) => String(item?.label || "").trim() === stage.label)
+        : null;
       return {
-        discovered: summary.discovered + pipeline.discovered,
-        screened: summary.screened + pipeline.screened,
-        approved: summary.approved + pipeline.approved,
-        applied: summary.applied + pipeline.applied,
+        ...stage,
+        value: getNumericValue(match?.value),
+        color: String(match?.color || stage.color),
       };
-    },
-    { discovered: 0, screened: 0, approved: 0, applied: 0 },
-  );
-  const pipelineData = [
-    { label: "Discovered", value: aggregatedPipeline.discovered, color: "#0f766e" },
-    { label: "Screened", value: aggregatedPipeline.screened, color: "#14b8a6" },
-    { label: "Approved", value: aggregatedPipeline.approved, color: "#38bdf8" },
-    { label: "Applied", value: aggregatedPipeline.applied, color: "#f59e0b" },
-  ];
+    }),
+  };
+}
 
-  const applicationStatusMap = new Map();
-  trackerItems.forEach((item) => {
-    const status = String(item?.application_status || "").trim() || "Unknown";
-    applicationStatusMap.set(status, (applicationStatusMap.get(status) || 0) + 1);
-  });
-  const applicationOutcomes = APPLICATION_OUTCOME_SEGMENTS.map((segment) => ({
-    ...segment,
-    value: applicationStatusMap.get(segment.label) || 0,
-  }));
+function buildUserDashboardModel(payload) {
+  const outcomes = normalizeOutcomes(payload?.analytics?.outcomes || EMPTY_OUTCOMES);
+  const referrals = normalizeReferrals(payload?.analytics?.referrals || EMPTY_REFERRALS);
 
-  const sourceKindMap = new Map();
-  contacts.forEach((contact) => {
-    const sourceKind = labelize(String(contact?.source_kind || "manual").trim() || "manual");
-    sourceKindMap.set(sourceKind, (sourceKindMap.get(sourceKind) || 0) + 1);
-  });
-  const contactSources = Array.from(sourceKindMap.entries())
-    .map(([label, value], index) => ({
-      label,
-      value,
-      color: SOURCE_KIND_COLORS[index % SOURCE_KIND_COLORS.length],
-    }))
-    .sort((left, right) => right.value - left.value);
+  const applied = findValueByLabel(outcomes.segments, "Applied");
+  const interviewing = findValueByLabel(outcomes.segments, "Interviewing");
+  const offers = findValueByLabel(outcomes.segments, "Offer");
+  const rejected = findValueByLabel(outcomes.segments, "Rejected");
+  const withdrawn = findValueByLabel(outcomes.segments, "Withdrawn");
+  const waitingReviewCount = findValueByLabel(payload?.cards, "Jobs Waiting Review");
 
-  const highestReferralStageByContact = new Map();
-  const noReferralContacts = new Set();
-  contacts.forEach((contact) => {
-    highestReferralStageByContact.set(String(contact?.contact_id || "").trim(), 0);
-  });
-  outreachItems.forEach((item) => {
-    const contactId = String(item?.contact_id || "").trim();
-    if (!contactId || !highestReferralStageByContact.has(contactId)) {
-      return;
-    }
-    const stageIndex = REFERRAL_STAGE_INDEX[String(item?.outreach_status || "").trim()] ?? 0;
-    if (String(item?.outreach_status || "").trim() === "No referral") {
-      noReferralContacts.add(contactId);
-    }
-    const currentStage = highestReferralStageByContact.get(contactId) || 0;
-    if (stageIndex > currentStage) {
-      highestReferralStageByContact.set(contactId, stageIndex);
-    }
-  });
+  const notContacted = findValueByLabel(referrals.outreachFunnel, "Not contacted");
+  const contacted = findValueByLabel(referrals.outreachFunnel, "Contacted");
+  const replied = findValueByLabel(referrals.outreachFunnel, "Replied");
+  const referralOffered = findValueByLabel(referrals.outreachFunnel, "Referral offered");
 
-  const contactStageIndexes = Array.from(highestReferralStageByContact.values());
-  const noReferralCount = noReferralContacts.size;
-  const outreachFunnel = [
+  const knownApplications = Math.max(0, outcomes.total - outcomes.unknown);
+  const activeApplications = applied + interviewing + offers;
+  const heardBackCount = interviewing + offers + rejected;
+  const heardBackRate = knownApplications ? heardBackCount / knownApplications : 0;
+
+  const focusItems = [
     {
-      label: "Not contacted",
-      value: contactStageIndexes.filter((stageIndex) => stageIndex === 0).length,
-      color: "#94a3b8",
+      title: "Jobs Waiting Review",
+      value: waitingReviewCount,
+      detail: waitingReviewCount
+        ? "Open your runs and decide which jobs should move forward."
+        : "Nothing is waiting on a review decision right now.",
+      icon: "fact_check",
+      to: "/runs",
+      actionLabel: waitingReviewCount ? "Review jobs" : "Open runs",
+      accentClass: waitingReviewCount ? "text-primary" : "text-on-surface",
     },
     {
-      label: "Contacted",
-      value: contactStageIndexes.filter((stageIndex) => stageIndex >= 1).length,
-      color: "#38bdf8",
+      title: "Tracker Cleanup",
+      value: outcomes.unknown,
+      detail: outcomes.unknown
+        ? "Some tracked applications still need a real status."
+        : "Tracker statuses are already clean and up to date.",
+      icon: "rule",
+      to: "/tracker",
+      actionLabel: outcomes.unknown ? "Clean up tracker" : "Open tracker",
+      accentClass: outcomes.unknown ? "text-amber-600" : "text-on-surface",
     },
     {
-      label: "Replied",
-      value: contactStageIndexes.filter((stageIndex) => stageIndex >= 2).length,
-      color: "#14b8a6",
+      title: "Interviews In Motion",
+      value: interviewing,
+      detail: interviewing
+        ? "Keep follow-up notes and scheduling details current."
+        : "Interview invites will show up here once employers reply.",
+      icon: "calendar_month",
+      to: "/tracker",
+      actionLabel: interviewing ? "View interviews" : "Open tracker",
+      accentClass: interviewing ? "text-emerald-600" : "text-on-surface",
     },
     {
-      label: "Referral offered",
-      value: contactStageIndexes.filter((stageIndex) => stageIndex >= 3).length,
-      color: "#22c55e",
+      title: "People To Contact",
+      value: notContacted,
+      detail: notContacted
+        ? "These contacts are saved but still waiting for outreach."
+        : "No saved contacts are waiting on a first message.",
+      icon: "outgoing_mail",
+      to: "/referrals",
+      actionLabel: notContacted ? "Open referrals" : "Manage referrals",
+      accentClass: notContacted ? "text-sky-600" : "text-on-surface",
     },
   ];
 
   return {
-    automation: {
-      totalRuns: runs.length,
-      terminalRuns: terminalRuns.length,
-      completedRuns: completedRuns.length,
-      failedRuns: failedRuns.length,
-      activeRuns: activeRuns.length,
-      successRate: terminalRuns.length ? completedRuns.length / terminalRuns.length : 0,
-      averageDurationMs: average(runDurations),
-      failureBreakdown,
+    focusItems,
+    outcomes,
+    referrals,
+    summary: {
+      waitingReviewCount,
+      trackedApplications: outcomes.total,
+      activeApplications,
+      interviewing,
+      offers,
+      rejected,
+      withdrawn,
+      unknownApplications: outcomes.unknown,
+      heardBackCount,
+      heardBackRate,
+      notContacted,
+      contacted,
+      replied,
+      referralOffered,
     },
-    pipeline: {
-      data: pipelineData,
-    },
-    outcomes: {
-      total: applicationOutcomes.reduce((sum, segment) => sum + segment.value, 0),
-      unknown: applicationStatusMap.get("Unknown") || 0,
-      segments: applicationOutcomes,
-    },
-    referrals: {
-      totalContacts: contacts.length,
-      noReferralCount,
-      trackedOutreachItems: outreachItems.length,
-      contactSources,
-      outreachFunnel,
-    },
-    recentFailures: recentFailedRuns.map((run) => ({
-      id: run.id,
-      workspaceName: run.workspace_name || run.workspace_id || "Unknown workspace",
-      timestamp: run.finished_at || run.updated_at || run.created_at || "",
-      stage: labelize(getFailureStageKey(run)),
-      errorText: getFailureMessage(run),
-    })),
   };
 }
 
@@ -386,7 +228,7 @@ function PanelHeader({ eyebrow, title, description, action }) {
   );
 }
 
-function StatTile({ label, value, detail, accentClass = "text-on-surface" }) {
+function MetricTile({ label, value, detail, accentClass = "text-on-surface" }) {
   return (
     <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
       <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{label}</p>
@@ -413,28 +255,32 @@ function DashboardSkeleton() {
     <div className="space-y-8">
       <section className="rounded-[2rem] bg-slate-950 px-6 py-8 sm:px-8">
         <SkeletonBlock className="h-5 w-40 bg-white/10" />
-        <SkeletonBlock className="mt-4 h-12 w-64 bg-white/10" />
+        <SkeletonBlock className="mt-4 h-12 w-72 bg-white/10" />
         <SkeletonBlock className="mt-4 h-5 w-full max-w-2xl bg-white/10" />
-        <SkeletonBlock className="mt-2 h-5 w-full max-w-xl bg-white/10" />
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
+        <div className="mt-8 grid gap-4 md:grid-cols-4">
+          <SkeletonBlock className="h-28 bg-white/10" />
           <SkeletonBlock className="h-28 bg-white/10" />
           <SkeletonBlock className="h-28 bg-white/10" />
           <SkeletonBlock className="h-28 bg-white/10" />
         </div>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <DashboardPanel>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <SkeletonBlock className="h-28" />
-            <SkeletonBlock className="h-28" />
-            <SkeletonBlock className="h-28" />
-            <SkeletonBlock className="h-28" />
+          <div className="grid gap-4 md:grid-cols-2">
+            <SkeletonBlock className="h-40" />
+            <SkeletonBlock className="h-40" />
+            <SkeletonBlock className="h-40" />
+            <SkeletonBlock className="h-40" />
           </div>
-          <SkeletonBlock className="mt-6 h-72" />
         </DashboardPanel>
         <DashboardPanel>
-          <SkeletonBlock className="h-72" />
+          <div className="grid gap-4 md:grid-cols-2">
+            <SkeletonBlock className="h-32" />
+            <SkeletonBlock className="h-32" />
+            <SkeletonBlock className="h-32" />
+            <SkeletonBlock className="h-32" />
+          </div>
         </DashboardPanel>
       </div>
 
@@ -446,10 +292,6 @@ function DashboardSkeleton() {
           <SkeletonBlock className="h-80" />
         </DashboardPanel>
       </div>
-
-      <DashboardPanel>
-        <SkeletonBlock className="h-96" />
-      </DashboardPanel>
     </div>
   );
 }
@@ -460,12 +302,12 @@ function DashboardError({ error, onRetry }) {
       <header className="flex flex-col gap-3">
         <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">Dashboard</h1>
         <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
-          Live analytics for run health, application outcomes, and referral outreach.
+          Track applications, review work, and referral follow-up from one place.
         </p>
       </header>
 
       <section className="rounded-[1.75rem] border border-error/20 bg-error/5 px-6 py-6 text-error shadow-soft">
-        <p className="font-semibold">Unable to load dashboard data.</p>
+        <p className="font-semibold">Unable to load your dashboard.</p>
         <p className="mt-2 text-sm">{error || "Request failed."}</p>
         <button
           className="mt-4 rounded-full bg-error/10 px-4 py-2 text-sm font-semibold text-error transition-colors hover:bg-error/15"
@@ -500,7 +342,7 @@ function DashboardHeader({ model, onRefresh, refreshing }) {
                 Live dashboard
               </span>
               <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/8 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/70">
-                Existing API data only
+                Candidate view
               </span>
             </div>
 
@@ -508,8 +350,8 @@ function DashboardHeader({ model, onRefresh, refreshing }) {
               Dashboard
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
-              Run automation health, sourcing throughput, application outcomes, and referral outreach
-              in one live view powered by the current backend endpoints.
+              See what needs attention across applications, pending reviews, and referral outreach
+              without the internal run telemetry.
             </p>
           </div>
 
@@ -524,41 +366,51 @@ function DashboardHeader({ model, onRefresh, refreshing }) {
             </button>
             <Link
               className="inline-flex items-center justify-center rounded-full border border-white/65 bg-slate-50 px-5 py-3 text-sm font-semibold text-slate-950 shadow-[0_12px_30px_rgba(2,6,23,0.2)] transition-all hover:-translate-y-0.5 hover:bg-white"
-              to="/runs"
+              to="/tracker"
             >
-              Open Runs
+              Open Tracker
             </Link>
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Total Runs</p>
-            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-              {formatNumber(model.automation.totalRuns)}
-            </p>
-            <p className="mt-2 text-sm text-white/68">
-              {formatNumber(model.automation.activeRuns)} active and {formatNumber(model.automation.failedRuns)} failed
-            </p>
-          </div>
-
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Tracked Applications</p>
             <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-              {formatNumber(model.outcomes.total)}
+              {formatNumber(model.summary.trackedApplications)}
             </p>
             <p className="mt-2 text-sm text-white/68">
-              {formatNumber(model.pipeline.data[3].value)} applied in run-stage metrics
+              {formatNumber(model.summary.activeApplications)} still active
             </p>
           </div>
 
           <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Referral Contacts</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Jobs To Review</p>
             <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-              {formatNumber(model.referrals.totalContacts)}
+              {formatNumber(model.summary.waitingReviewCount)}
             </p>
             <p className="mt-2 text-sm text-white/68">
-              {formatNumber(model.referrals.outreachFunnel[3].value)} reached referral offered
+              Waiting in runs for your decision
+            </p>
+          </div>
+
+          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Interviews</p>
+            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
+              {formatNumber(model.summary.interviewing)}
+            </p>
+            <p className="mt-2 text-sm text-white/68">
+              {formatNumber(model.summary.heardBackCount)} employer responses tracked
+            </p>
+          </div>
+
+          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">People To Contact</p>
+            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
+              {formatNumber(model.summary.notContacted)}
+            </p>
+            <p className="mt-2 text-sm text-white/68">
+              {formatNumber(model.summary.referralOffered)} referral offers so far
             </p>
           </div>
         </div>
@@ -567,169 +419,63 @@ function DashboardHeader({ model, onRefresh, refreshing }) {
   );
 }
 
-function AutomationHealthPanel({ automation }) {
+function FocusPanel({ items }) {
   return (
     <DashboardPanel>
       <PanelHeader
-        action={
-          <span className="rounded-full bg-surface-container-low px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">
-            {formatNumber(automation.terminalRuns)} finished runs
-          </span>
-        }
-        description="Success rate is based on terminal runs only. Average duration uses completed, failed, and cancelled runs with valid start and finish timestamps."
-        eyebrow="Panel 1"
-        title="Automation Health"
+        eyebrow="Focus"
+        title="What Needs Attention"
+        description="These are the places where a small update from you moves the search forward fastest."
       />
 
-      <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatTile
-          detail="All runs visible to the current user."
-          label="Total Runs"
-          value={formatNumber(automation.totalRuns)}
-        />
-        <StatTile
-          accentClass="text-emerald-600"
-          detail={`${formatNumber(automation.completedRuns)} completed`}
-          label="Success Rate"
-          value={formatPercent(automation.successRate)}
-        />
-        <StatTile
-          detail="Average terminal run duration."
-          label="Avg Duration"
-          value={formatDuration(automation.averageDurationMs)}
-        />
-        <StatTile
-          accentClass="text-rose-600"
-          detail={`${formatNumber(automation.activeRuns)} still active`}
-          label="Failed Runs"
-          value={formatNumber(automation.failedRuns)}
-        />
-      </div>
+      <div className="mt-8 grid gap-4 md:grid-cols-2">
+        {items.map((item) => (
+          <article className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-5" key={item.title}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{item.title}</p>
+                <p className={["mt-3 text-4xl font-black tracking-tight", item.accentClass].join(" ")}>
+                  {formatNumber(item.value)}
+                </p>
+              </div>
+              <span className={["material-symbols-outlined text-2xl", item.accentClass].join(" ")}>
+                {item.icon}
+              </span>
+            </div>
 
-      <div className="mt-8">
-        {automation.failureBreakdown.length ? (
-          <div className="h-72 rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-            <ResponsiveContainer height="100%" width="100%">
-              <BarChart data={automation.failureBreakdown} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
-                <XAxis allowDecimals={false} stroke="#94a3b8" type="number" />
-                <YAxis dataKey="stage" stroke="#64748b" type="category" width={112} />
-                <Tooltip
-                  contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
-                  cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
-                  formatter={(value) => [formatChartTooltipValue(value), "Failed runs"]}
-                />
-                <Bar dataKey="count" fill="#f97316" radius={[0, 10, 10, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        ) : (
-          <EmptyChartState message="No failed runs yet, so there is no failure breakdown to chart." />
-        )}
-      </div>
-    </DashboardPanel>
-  );
-}
+            <p className="mt-3 text-sm leading-7 text-on-surface-variant">{item.detail}</p>
 
-function JobsPipelinePanel({ pipeline }) {
-  const [discovered, screened, approved, applied] = pipeline.data;
-  const conversions = [
-    {
-      label: "Screened / discovered",
-      value: discovered.value ? screened.value / discovered.value : 0,
-    },
-    {
-      label: "Approved / screened",
-      value: screened.value ? approved.value / screened.value : 0,
-    },
-    {
-      label: "Applied / approved",
-      value: approved.value ? applied.value / approved.value : 0,
-    },
-  ];
-
-  return (
-    <DashboardPanel>
-      <PanelHeader
-        action={
-          <Link
-            className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
-            to="/runs"
-          >
-            Inspect runs
-          </Link>
-        }
-        description="This funnel is derived from persisted run-stage metrics. Discovery prefers merged-job totals when a merge stage is present, then falls back to acquisition-stage counts."
-        eyebrow="Panel 2"
-        title="Jobs Pipeline"
-      />
-
-      <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {pipeline.data.map((stage) => (
-          <StatTile
-            detail="Aggregated from run stage metrics."
-            key={stage.label}
-            label={stage.label}
-            value={formatNumber(stage.value)}
-          />
+            <Link
+              className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
+              to={item.to}
+            >
+              {item.actionLabel}
+              <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+            </Link>
+          </article>
         ))}
       </div>
-
-      <div className="mt-8 grid gap-6 xl:grid-cols-[1fr_0.72fr]">
-        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-          <div className="h-72">
-            <ResponsiveContainer height="100%" width="100%">
-              <BarChart data={pipeline.data} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                <XAxis dataKey="label" stroke="#94a3b8" tickLine={false} />
-                <YAxis allowDecimals={false} stroke="#94a3b8" tickLine={false} />
-                <Tooltip
-                  contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
-                  cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
-                  formatter={(value) => [formatChartTooltipValue(value), "Jobs"]}
-                />
-                <Bar dataKey="value" radius={[14, 14, 0, 0]}>
-                  {pipeline.data.map((entry) => (
-                    <Cell fill={entry.color} key={entry.label} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {conversions.map((conversion) => (
-            <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4" key={conversion.label}>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{conversion.label}</p>
-              <p className="mt-3 text-3xl font-black tracking-tight text-on-surface">{formatPercent(conversion.value)}</p>
-              <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-surface-container-low">
-                <div
-                  className="h-full rounded-full bg-primary"
-                  style={{ width: `${Math.max(0, Math.min(100, conversion.value * 100))}%` }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
     </DashboardPanel>
   );
 }
 
-function ApplicationOutcomesPanel({ outcomes }) {
+function ApplicationProgressPanel({ outcomes, summary }) {
+  const visibleSegments = outcomes.segments.filter((segment) => segment.value > 0);
+
   return (
     <DashboardPanel>
       <PanelHeader
-        action={
+        action={(
           <Link
             className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
             to="/tracker"
           >
             Open tracker
           </Link>
-        }
-        description="Counts come from the explicit `application_status` on tracker items, including external applications that the tracker imports."
-        eyebrow="Panel 3"
-        title="Application Outcomes"
+        )}
+        eyebrow="Applications"
+        title="Application Progress"
+        description="Everything already in your tracker, including imported email confirmations and manual status updates."
       />
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
@@ -741,13 +487,13 @@ function ApplicationOutcomesPanel({ outcomes }) {
                   <Pie
                     cx="50%"
                     cy="50%"
-                    data={outcomes.segments.filter((segment) => segment.value > 0)}
+                    data={visibleSegments}
                     dataKey="value"
                     innerRadius={74}
                     outerRadius={112}
                     paddingAngle={2}
                   >
-                    {outcomes.segments.filter((segment) => segment.value > 0).map((segment) => (
+                    {visibleSegments.map((segment) => (
                       <Cell fill={segment.color} key={segment.label} />
                     ))}
                   </Pie>
@@ -759,21 +505,33 @@ function ApplicationOutcomesPanel({ outcomes }) {
               </ResponsiveContainer>
             </div>
           ) : (
-            <EmptyChartState message="No tracked applications are available yet." />
+            <EmptyChartState message="Tracked applications will appear here once they move into the tracker." />
           )}
         </div>
 
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            <StatTile
-              detail="Statuses shown in the chart."
-              label="Tracked Items"
-              value={formatNumber(outcomes.total)}
+            <MetricTile
+              detail="Applied, interviewing, and offer stages combined."
+              label="Active"
+              value={formatNumber(summary.activeApplications)}
             />
-            <StatTile
-              detail="Explicitly marked unknown."
+            <MetricTile
+              detail={`${formatPercent(summary.heardBackRate)} of known statuses heard back`}
+              label="Heard Back"
+              value={formatNumber(summary.heardBackCount)}
+            />
+            <MetricTile
+              accentClass="text-emerald-600"
+              detail="Offers currently saved in the tracker."
+              label="Offers"
+              value={formatNumber(summary.offers)}
+            />
+            <MetricTile
+              accentClass={summary.unknownApplications ? "text-amber-600" : "text-on-surface"}
+              detail="Rows that still need a clearer application status."
               label="Unknown"
-              value={formatNumber(outcomes.unknown)}
+              value={formatNumber(summary.unknownApplications)}
             />
           </div>
 
@@ -796,77 +554,55 @@ function ApplicationOutcomesPanel({ outcomes }) {
   );
 }
 
-function ReferralOutreachPanel({ referrals }) {
+function ReferralOutreachPanel({ referrals, summary }) {
+  const sourceScaleMax = Math.max(
+    1,
+    ...referrals.contactSources.map((source) => getNumericValue(source?.value)),
+  );
+
   return (
     <DashboardPanel>
       <PanelHeader
-        action={
+        action={(
           <Link
             className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
             to="/referrals"
           >
             Open referrals
           </Link>
-        }
-        description="Source-kind totals come from referral contacts. The outreach funnel groups contacts by the furthest saved outreach stage reached across their tracked outreach records."
-        eyebrow="Panel 4"
-        title="Referral Outreach"
+        )}
+        eyebrow="Referrals"
+        title="Referral Follow-Up"
+        description="Keep warm contacts moving forward and spot where you still need to send a first message."
       />
 
-      <div className="mt-8 grid gap-4 md:grid-cols-3">
-        <StatTile
-          detail="All referral contacts on record."
-          label="Contacts Total"
+      <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricTile
+          detail="All referral contacts currently saved."
+          label="Contacts"
           value={formatNumber(referrals.totalContacts)}
         />
-        <StatTile
-          detail="Contacts with no tracked outreach yet."
+        <MetricTile
+          accentClass={summary.notContacted ? "text-sky-600" : "text-on-surface"}
+          detail="Saved contacts still waiting for outreach."
           label="Not Contacted"
-          value={formatNumber(referrals.outreachFunnel[0].value)}
+          value={formatNumber(summary.notContacted)}
         />
-        <StatTile
-          detail={`${formatNumber(referrals.noReferralCount)} ended in no referral`}
+        <MetricTile
+          accentClass={summary.replied ? "text-teal-600" : "text-on-surface"}
+          detail="Contacts who already replied."
+          label="Replied"
+          value={formatNumber(summary.replied)}
+        />
+        <MetricTile
+          accentClass={summary.referralOffered ? "text-emerald-600" : "text-on-surface"}
+          detail={`${formatNumber(referrals.noReferralCount)} ended with no referral`}
           label="Referral Offered"
-          value={formatNumber(referrals.outreachFunnel[3].value)}
+          value={formatNumber(summary.referralOffered)}
         />
       </div>
 
-      <div className="mt-8 grid gap-6 xl:grid-cols-2">
-        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-          <div className="mb-4 flex items-center justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">By Source Kind</p>
-              <p className="mt-1 text-sm text-on-surface-variant">Counts from `GET /referrals`.</p>
-            </div>
-            <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-on-surface-variant">
-              {formatNumber(referrals.totalContacts)} total
-            </span>
-          </div>
-
-          {referrals.contactSources.length ? (
-            <div className="h-72">
-              <ResponsiveContainer height="100%" width="100%">
-                <BarChart data={referrals.contactSources} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                  <XAxis dataKey="label" stroke="#94a3b8" tickLine={false} />
-                  <YAxis allowDecimals={false} stroke="#94a3b8" tickLine={false} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
-                    cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
-                    formatter={(value) => [formatChartTooltipValue(value), "Contacts"]}
-                  />
-                  <Bar dataKey="value" radius={[14, 14, 0, 0]}>
-                    {referrals.contactSources.map((source) => (
-                      <Cell fill={source.color} key={source.label} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyChartState message="No referral contacts are available yet." />
-          )}
-        </div>
-
+      <div className="mt-8 grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
@@ -874,7 +610,7 @@ function ReferralOutreachPanel({ referrals }) {
               <p className="mt-1 text-sm text-on-surface-variant">Counts from saved outreach statuses.</p>
             </div>
             <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-on-surface-variant">
-              {formatNumber(referrals.trackedOutreachItems)} status updates
+              {formatNumber(referrals.trackedOutreachItems)} updates
             </span>
           </div>
 
@@ -898,7 +634,52 @@ function ReferralOutreachPanel({ referrals }) {
               </ResponsiveContainer>
             </div>
           ) : (
-            <EmptyChartState message="Add referral contacts to start tracking outreach progression." />
+            <EmptyChartState message="Add or import contacts to start tracking referral outreach." />
+          )}
+        </div>
+
+        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
+          <div className="mb-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Contact Sources</p>
+            <p className="mt-1 text-sm text-on-surface-variant">
+              A quick look at where your referral pool currently comes from.
+            </p>
+          </div>
+
+          {referrals.contactSources.length ? (
+            <div className="space-y-4">
+              {referrals.contactSources.map((source) => {
+                const sourceValue = getNumericValue(source?.value);
+                return (
+                  <div key={source.label}>
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <span
+                          aria-hidden="true"
+                          className="h-3 w-3 rounded-full"
+                          style={{ backgroundColor: String(source.color || "#38bdf8") }}
+                        />
+                        <span className="text-sm text-on-surface">{source.label}</span>
+                      </div>
+                      <span className="text-sm font-semibold text-on-surface">{formatNumber(sourceValue)}</span>
+                    </div>
+                    <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-surface-container-low">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${Math.max(6, (sourceValue / sourceScaleMax) * 100)}%`,
+                          backgroundColor: String(source.color || "#38bdf8"),
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-[1.15rem] border border-dashed border-outline-variant/20 bg-surface-container-low p-6 text-sm text-on-surface-variant">
+              No referral contacts are saved yet.
+            </div>
           )}
         </div>
       </div>
@@ -906,62 +687,8 @@ function ReferralOutreachPanel({ referrals }) {
   );
 }
 
-function RecentFailuresPanel({ items }) {
-  return (
-    <DashboardPanel>
-      <PanelHeader
-        action={
-          <Link
-            className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
-            to="/runs?status=failed"
-          >
-            View failed runs
-          </Link>
-        }
-        description="The five most recent failed runs from `GET /runs?status=failed&limit=5`, including the saved error text and the stage that failed."
-        eyebrow="Panel 5"
-        title="Recent Failures"
-      />
-
-      <div className="mt-8 space-y-4">
-        {items.length ? (
-          items.map((item) => (
-            <article className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4" key={item.id}>
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span className="rounded-full bg-error/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-error">
-                      {item.stage}
-                    </span>
-                    <span className="text-sm font-medium text-on-surface">{item.workspaceName}</span>
-                  </div>
-                  <p className="text-sm leading-7 text-on-surface-variant">{item.errorText}</p>
-                </div>
-
-                <div className="flex shrink-0 flex-col items-start gap-3 lg:items-end">
-                  <span className="text-sm text-on-surface-variant">{formatDateTime(item.timestamp)}</span>
-                  <Link
-                    className="rounded-full bg-primary/10 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
-                    to={`/runs/${item.id}`}
-                  >
-                    Open run
-                  </Link>
-                </div>
-              </div>
-            </article>
-          ))
-        ) : (
-          <div className="rounded-[1.35rem] border border-dashed border-outline-variant/20 bg-surface p-6 text-sm text-on-surface-variant">
-            No recent failures are available.
-          </div>
-        )}
-      </div>
-    </DashboardPanel>
-  );
-}
-
 export default function DashboardPage() {
-  const { isConnected, request } = useSession();
+  const { error: sessionError, isConnected, request, status } = useSession();
   const { data, loading, error, refresh } = useApiResource(() => loadDashboardPayload(request), [request]);
 
   useEffect(() => {
@@ -975,17 +702,20 @@ export default function DashboardPage() {
   }, [isConnected, refresh]);
 
   if (!isConnected && !loading) {
+    const guidance = status === "error"
+      ? (sessionError || "The frontend could not authenticate with the backend API.")
+      : "Sign in and let the frontend finish the backend session check.";
     return (
       <div className="space-y-6">
         <header className="flex flex-col gap-3">
           <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">Dashboard</h1>
           <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
-            Connect the frontend to the backend API to load live analytics.
+            Connect the frontend to load your application and referral view.
           </p>
         </header>
 
         <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest px-6 py-6 text-on-surface-variant shadow-soft">
-          Use the API connection controls first, then reopen this page.
+          {guidance}
         </section>
       </div>
     );
@@ -999,13 +729,7 @@ export default function DashboardPage() {
     return <DashboardError error={error} onRetry={refresh} />;
   }
 
-  const model = data?.analytics || buildDashboardViewModel(data || {
-    runs: [],
-    trackerItems: [],
-    contacts: [],
-    outreachItems: [],
-    recentFailedRuns: [],
-  });
+  const model = buildUserDashboardModel(data || {});
 
   return (
     <div className="space-y-8">
@@ -1017,17 +741,12 @@ export default function DashboardPage() {
         </section>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <AutomationHealthPanel automation={model.automation} />
-        <RecentFailuresPanel items={model.recentFailures} />
-      </div>
+      <FocusPanel items={model.focusItems} />
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <JobsPipelinePanel pipeline={model.pipeline} />
-        <ApplicationOutcomesPanel outcomes={model.outcomes} />
+        <ApplicationProgressPanel outcomes={model.outcomes} summary={model.summary} />
+        <ReferralOutreachPanel referrals={model.referrals} summary={model.summary} />
       </div>
-
-      <ReferralOutreachPanel referrals={model.referrals} />
     </div>
   );
 }

@@ -525,12 +525,6 @@ export default function AppShell({ children }) {
                     >
                       <span className="material-symbols-outlined text-xl">share</span>
                     </button>
-                    <button
-                      className="rounded p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-                      type="button"
-                    >
-                      <span className="material-symbols-outlined text-xl">more_vert</span>
-                    </button>
                   </>
                 ) : null}
                 <button
@@ -573,7 +567,7 @@ export default function AppShell({ children }) {
                   <>
                     {status === "connected" ? (
                       <button
-                        className="hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-primary transition-colors hover:bg-surface-container-high lg:inline-flex"
+                        className="top-ribbon__action hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface lg:inline-flex"
                         onClick={() => navigate("/pricing")}
                         type="button"
                       >

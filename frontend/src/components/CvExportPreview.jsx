@@ -1,4 +1,4 @@
-const PROFILE_PLACEHOLDER_URL =
+export const PROFILE_PLACEHOLDER_URL =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuCEbDDRgu4_REnkpR4gbSify0khawEFxHuQHLBm7Xbd6BmM7LDM-dlp8wOKL0QkSDuiFg7g9UDpYPZnV2uV8Qmu5cxn1MBriXeVmXUz8EGMsgieO36lJEpcY5FCDph2ooQGzwpKRq5qwQluOCY4JB_gfySIUY2T0ozlVp3DEmdnT9aCfADFkC1BXeteFPTxYhtUsABzZLWUOD6fNpuVFVFLjuxpQaEgkpVd_bvuz61H_FfJkq5V_4CESVQjz3tEa3rwtGfzcKHXwJE";
 
 const DEFAULT_TEMPLATE = {
@@ -154,6 +154,337 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
       education.length > 0 ? education : ["Education and certifications appear here"],
     photoUrl: firstNonEmpty(profile.photo_data_url, profile.avatar_url, PROFILE_PLACEHOLDER_URL),
   };
+}
+
+function parseNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildAtsPreviewState(documents = {}) {
+  const nestedGate =
+    documents?.ats_export_gate && typeof documents.ats_export_gate === "object"
+      ? documents.ats_export_gate
+      : null;
+  const targetScore = parseNumber(nestedGate?.target_score ?? documents?.ats_target_score);
+  const bestScore = parseNumber(
+    nestedGate?.best_score ?? documents?.ats_best_score ?? documents?.ats_score,
+  );
+  const attemptCount = parseNumber(nestedGate?.attempt_count ?? documents?.ats_attempt_count);
+  const maxAttempts = parseNumber(nestedGate?.max_attempts ?? documents?.ats_max_attempts);
+  const gateState = String(
+    nestedGate?.gate_state ?? documents?.ats_gate_state ?? "",
+  )
+    .trim()
+    .toLowerCase();
+  const missingRequirements = (
+    Array.isArray(nestedGate?.missing_requirements)
+      ? nestedGate.missing_requirements
+      : Array.isArray(documents?.ats_missing_requirements)
+        ? documents.ats_missing_requirements
+        : []
+  )
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean);
+  const hasLiveGate =
+    Boolean(nestedGate) ||
+    targetScore !== null ||
+    bestScore !== null ||
+    attemptCount !== null ||
+    maxAttempts !== null ||
+    Boolean(gateState);
+
+  if (!hasLiveGate) {
+    return {
+      badge: "ATS loop before export",
+      callout:
+        "Before the final DOCX or PDF is delivered, the tailored CV goes through repeated ATS scoring and improvement passes.",
+      metrics: ["Up to 3 ATS passes", "Final export waits for the target score"],
+      missingRequirements: [],
+      state: "preview",
+      steps: [
+        {
+          id: "tailor",
+          label: "Tailor draft",
+          copy: "Role-specific content is assembled from the baseline CV.",
+          status: "complete",
+        },
+        {
+          id: "ats",
+          label: "ATS review loop",
+          copy: "Score, refine, and retry until the draft is export-ready.",
+          status: "running",
+        },
+        {
+          id: "final",
+          label: "Final DOCX/PDF",
+          copy: "The final file is released only after ATS review finishes.",
+          status: "pending",
+        },
+      ],
+    };
+  }
+
+  const state =
+    gateState === "passed"
+      ? "passed"
+      : gateState === "exported_anyway"
+        ? "warning"
+        : gateState === "blocked"
+          ? "blocked"
+          : "running";
+  const badge =
+    state === "passed"
+      ? "ATS cleared for export"
+      : state === "warning"
+        ? "Export allowed with warning"
+        : state === "blocked"
+          ? "ATS gate blocking export"
+          : "ATS review in progress";
+  const scoreLabel =
+    bestScore !== null && targetScore !== null
+      ? `Best score ${bestScore}% of ${targetScore}% target`
+      : targetScore !== null
+        ? `Target score ${targetScore}%`
+        : "ATS review attached";
+  const attemptLabel =
+    attemptCount !== null && maxAttempts !== null
+      ? `Attempt ${attemptCount} of ${maxAttempts}`
+      : maxAttempts !== null
+        ? `Up to ${maxAttempts} passes`
+        : "Repeated review loop";
+  const callout =
+    state === "passed"
+      ? "This draft already cleared the ATS export gate and can be released as the final CV."
+      : state === "warning"
+        ? "The ATS target was not fully reached, but export was explicitly allowed after the warning state."
+        : state === "blocked"
+          ? "The final CV is still held back until ATS gaps are fixed or the export warning is acknowledged."
+          : "The tailored CV is still being scored and improved before final export is released.";
+
+  return {
+    badge,
+    callout,
+    metrics: [scoreLabel, attemptLabel],
+    missingRequirements,
+    state,
+    steps: [
+      {
+        id: "tailor",
+        label: "Tailor draft",
+        copy: "Role-specific content is generated from the source CV.",
+        status: "complete",
+      },
+      {
+        id: "ats",
+        label: "ATS review loop",
+        copy:
+          state === "passed"
+            ? "The ATS target has been met."
+            : state === "warning"
+              ? "The loop finished with a warning override."
+              : state === "blocked"
+                ? "The loop stopped below the target and blocked export."
+                : "The draft is still being scored and improved.",
+        status: state === "passed" || state === "warning" ? "complete" : state === "blocked" ? "blocked" : "running",
+      },
+      {
+        id: "final",
+        label: "Final DOCX/PDF",
+        copy:
+          state === "passed" || state === "warning"
+            ? "Final export can be delivered."
+            : "Final export stays locked until ATS review is resolved.",
+        status: state === "passed" || state === "warning" ? "complete" : "pending",
+      },
+    ],
+  };
+}
+
+function atsStepStyles(stepState, palette) {
+  if (stepState === "complete") {
+    return {
+      backgroundColor: withAlpha(palette.accent, 0.1),
+      borderColor: withAlpha(palette.accent, 0.22),
+      circleBackground: palette.accent,
+      circleColor: "#FFFFFF",
+      headingColor: palette.primary,
+      bodyColor: palette.text,
+    };
+  }
+  if (stepState === "blocked") {
+    return {
+      backgroundColor: "rgba(239, 68, 68, 0.08)",
+      borderColor: "rgba(239, 68, 68, 0.2)",
+      circleBackground: "#EF4444",
+      circleColor: "#FFFFFF",
+      headingColor: "#B91C1C",
+      bodyColor: palette.text,
+    };
+  }
+  if (stepState === "running") {
+    return {
+      backgroundColor: withAlpha(palette.primary, 0.08),
+      borderColor: withAlpha(palette.primary, 0.2),
+      circleBackground: palette.primary,
+      circleColor: "#FFFFFF",
+      headingColor: palette.primary,
+      bodyColor: palette.text,
+    };
+  }
+  return {
+    backgroundColor: "#FFFFFF",
+    borderColor: palette.softBorder,
+    circleBackground: withAlpha(palette.primary, 0.08),
+    circleColor: palette.primary,
+    headingColor: palette.muted,
+    bodyColor: palette.muted,
+  };
+}
+
+function AtsStep({ index, step, palette }) {
+  const styles = atsStepStyles(step.status, palette);
+  return (
+    <div
+      className="rounded-2xl border p-3"
+      style={{
+        backgroundColor: styles.backgroundColor,
+        borderColor: styles.borderColor,
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className={[
+            "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold",
+            step.status === "running" ? "animate-pulse" : "",
+          ].join(" ")}
+          style={{
+            backgroundColor: styles.circleBackground,
+            color: styles.circleColor,
+          }}
+        >
+          {index + 1}
+        </div>
+        <div className="min-w-0">
+          <div
+            className="text-[11px] font-bold uppercase tracking-[0.18em]"
+            style={{ color: styles.headingColor }}
+          >
+            {step.label}
+          </div>
+          <div className="mt-1 text-xs leading-5" style={{ color: styles.bodyColor }}>
+            {step.copy}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AtsExportFlow({ model, documents }) {
+  const atsState = buildAtsPreviewState(documents);
+  const badgeStyles =
+    atsState.state === "passed"
+      ? {
+          backgroundColor: withAlpha(model.palette.accent, 0.12),
+          color: model.palette.primary,
+        }
+      : atsState.state === "warning"
+        ? {
+            backgroundColor: "rgba(245, 158, 11, 0.12)",
+            color: "#B45309",
+          }
+        : atsState.state === "blocked"
+          ? {
+              backgroundColor: "rgba(239, 68, 68, 0.1)",
+              color: "#B91C1C",
+            }
+          : {
+              backgroundColor: withAlpha(model.palette.primary, 0.1),
+              color: model.palette.primary,
+            };
+
+  return (
+    <div
+      className="mb-5 rounded-2xl border p-4"
+      style={{
+        borderColor: model.palette.softBorder,
+        background: `linear-gradient(135deg, ${withAlpha(model.palette.primary, 0.04)} 0%, #FFFFFF 100%)`,
+      }}
+    >
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div
+            className="text-[11px] font-bold uppercase tracking-[0.2em]"
+            style={{ color: model.palette.primary }}
+          >
+            Pre-export pipeline
+          </div>
+          <div className="mt-1 text-sm font-semibold" style={{ color: model.palette.text }}>
+            ATS review keeps running before the final CV is released
+          </div>
+          <div className="mt-1 text-xs leading-5" style={{ color: model.palette.muted }}>
+            {atsState.callout}
+          </div>
+        </div>
+        <span
+          className="inline-flex w-fit rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]"
+          style={badgeStyles}
+        >
+          {atsState.badge}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        {atsState.steps.map((step, index) => (
+          <AtsStep index={index} key={step.id} palette={model.palette} step={step} />
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {atsState.metrics.map((metric) => (
+          <span
+            className="rounded-full px-2.5 py-1 text-[11px] font-medium"
+            key={metric}
+            style={{
+              color: model.palette.primary,
+              backgroundColor: withAlpha(model.palette.primary, 0.08),
+            }}
+          >
+            {metric}
+          </span>
+        ))}
+      </div>
+
+      {atsState.missingRequirements.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {atsState.missingRequirements.slice(0, 3).map((requirement) => (
+            <span
+              className="rounded-full px-2.5 py-1 text-[11px]"
+              key={requirement}
+              style={{
+                color: model.palette.text,
+                backgroundColor: withAlpha(model.palette.primary, 0.06),
+              }}
+            >
+              {requirement}
+            </span>
+          ))}
+          {atsState.missingRequirements.length > 3 ? (
+            <span
+              className="rounded-full px-2.5 py-1 text-[11px]"
+              style={{
+                color: model.palette.muted,
+                backgroundColor: withAlpha(model.palette.primary, 0.04),
+              }}
+            >
+              +{atsState.missingRequirements.length - 3} more gaps
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function SectionHeading({ label, templateId, palette }) {
@@ -564,6 +895,7 @@ export function CvExportPreview({ documents = {}, profile = {}, options = {}, cl
       ].join(" ")}
       style={{ borderColor: model.template.id === "plain" ? "#111111" : model.palette.softBorder }}
     >
+      <AtsExportFlow documents={documents} model={model} />
       {content}
     </div>
   );

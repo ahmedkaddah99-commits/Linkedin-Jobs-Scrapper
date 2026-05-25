@@ -23,6 +23,7 @@ export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) 
   const { request, user } = useSession();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [promoCode, setPromoCode] = useState("");
 
   useEffect(() => {
     if (!quotaEvent) {
@@ -47,6 +48,15 @@ export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) 
     return undefined;
   }, [currentPage, quotaEvent, request, user?.user_id]);
 
+  useEffect(() => {
+    if (quotaEvent) {
+      return;
+    }
+    setPromoCode("");
+    setError("");
+    setLoading(false);
+  }, [quotaEvent]);
+
   if (!quotaEvent) {
     return null;
   }
@@ -60,6 +70,7 @@ export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) 
         method: "POST",
         body: {
           plan_id: targetPlanId,
+          promo_code: promoCode.trim().toUpperCase(),
           source_page: currentPage,
         },
       });
@@ -104,6 +115,17 @@ export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) 
               />
             </div>
           </div>
+
+          <label className="block space-y-2">
+            <span className="text-sm font-medium text-on-surface">Promo code</span>
+            <input
+              className="w-full rounded-2xl border border-outline-variant/20 bg-surface-container-low px-4 py-3 font-mono uppercase text-on-surface outline-none transition-colors focus:border-primary/40"
+              onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
+              placeholder="Optional"
+              type="text"
+              value={promoCode}
+            />
+          </label>
 
           {error ? (
             <p className="rounded-2xl bg-error-container px-4 py-3 text-sm text-on-error-container">

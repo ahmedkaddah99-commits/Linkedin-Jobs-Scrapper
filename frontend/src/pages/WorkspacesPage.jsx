@@ -122,8 +122,8 @@ const TARGETING_FIELD_FALLBACKS = {
   },
   cities: {
     id: "cities",
-    label: "Target City",
-    description: "",
+    label: "Target City (Optional)",
+    description: "Leave this blank to search across the selected country instead of one city.",
     type: "tag_list",
     compatible_flows: ["tailored_documents", "reusable_packages"],
     placeholder: "Berlin",
@@ -159,6 +159,116 @@ const EMPTY_BUILDER_FORM = {
   manualSourcesArePreapproved: true,
   settings: {},
 };
+const CEFR_LEVEL_ORDER = {
+  A1: 1,
+  A2: 2,
+  B1: 3,
+  B2: 4,
+  C1: 5,
+  C2: 6,
+};
+const LANGUAGE_LEVEL_HINTS = [
+  ["C2", ["native", "bilingual"]],
+  ["C1", ["fluent", "professional", "business fluent", "verhandlungssicher", "full professional"]],
+  ["B2", ["upper intermediate"]],
+  ["B1", ["intermediate"]],
+  ["A2", ["elementary", "basic"]],
+  ["A1", ["beginner"]],
+];
+const LANGUAGE_FILTER_FIELD_IDS = new Set([
+  "german_special_char_threshold",
+  "max_german_level",
+  "french_special_char_threshold",
+  "spanish_special_char_threshold",
+]);
+const SUPPORTED_LANGUAGE_FILTERS = [
+  { key: "german", label: "German", aliases: ["german", "deutsch"] },
+  { key: "french", label: "French", aliases: ["french", "francais", "français"] },
+  { key: "spanish", label: "Spanish", aliases: ["spanish", "espanol", "español", "castilian"] },
+];
+
+function normalizeStringList(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function normalizeLanguageSearchText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function pickHigherLanguageLevel(currentLevel, nextLevel) {
+  const currentRank = CEFR_LEVEL_ORDER[currentLevel] || 0;
+  const nextRank = CEFR_LEVEL_ORDER[nextLevel] || 0;
+  return nextRank > currentRank ? nextLevel : currentLevel;
+}
+
+function extractLanguageLineLevel(value) {
+  const rawValue = String(value || "");
+  const explicitLevels = rawValue.toUpperCase().match(/\b(A1|A2|B1|B2|C1|C2)\b/g) || [];
+  if (explicitLevels.length) {
+    return explicitLevels.reduce((bestLevel, level) => pickHigherLanguageLevel(bestLevel, level), "");
+  }
+  const searchable = normalizeLanguageSearchText(rawValue);
+  for (const [level, hints] of LANGUAGE_LEVEL_HINTS) {
+    if (hints.some((hint) => searchable.includes(normalizeLanguageSearchText(hint)))) {
+      return level;
+    }
+  }
+  return "";
+}
+
+function deriveSupportedLanguageState(languageLines) {
+  const languageState = Object.fromEntries(
+    SUPPORTED_LANGUAGE_FILTERS.map((language) => [
+      language.key,
+      {
+        ...language,
+        detected: false,
+        level: "",
+        lines: [],
+      },
+    ]),
+  );
+
+  for (const languageLine of normalizeStringList(languageLines)) {
+    const searchable = normalizeLanguageSearchText(languageLine);
+    for (const language of SUPPORTED_LANGUAGE_FILTERS) {
+      if (!language.aliases.some((alias) => searchable.includes(normalizeLanguageSearchText(alias)))) {
+        continue;
+      }
+      const current = languageState[language.key];
+      current.detected = true;
+      current.lines.push(languageLine);
+      current.level = pickHigherLanguageLevel(current.level, extractLanguageLineLevel(languageLine));
+      break;
+    }
+  }
+
+  return languageState;
+}
+
+function deriveLanguageFilterDefaults(languageState) {
+  return {
+    german_special_char_threshold: languageState.german.detected ? 9999 : 0,
+    ...(languageState.german.level ? { max_german_level: languageState.german.level } : {}),
+    french_special_char_threshold: languageState.french.detected ? 9999 : 0,
+    spanish_special_char_threshold: languageState.spanish.detected ? 9999 : 0,
+  };
+}
+
+function areStringListsEqual(left, right) {
+  const normalizedLeft = normalizeStringList(left);
+  const normalizedRight = normalizeStringList(right);
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+  return normalizedLeft.every((item, index) => item === normalizedRight[index]);
+}
 
 function defaultProfileLabelForFlow(flowId) {
   return flowId === "reusable_packages"
@@ -1114,7 +1224,11 @@ function FieldRenderer({ field, value, onChange, dynamicOptions = {}, formState 
           : parseDelimitedList(value);
     return (
       <TokenListInput
-        helperText="Separate each URL with Enter or a comma."
+        helperText={
+          field.type === "company_site_list"
+            ? "Optional. Add company career page URLs, separated by Enter or a comma."
+            : "Separate each URL with Enter or a comma."
+        }
         maxItems={50}
         onChange={onChange}
         placeholder={field.placeholder || ""}
@@ -1218,6 +1332,7 @@ export default function WorkspacesPage() {
   });
   const cityRequestRef = useRef(0);
   const cityScopeRef = useRef("");
+  const languageSyncSourceRef = useRef("");
 
   const {
     data: workspacesData,
@@ -1433,9 +1548,15 @@ export default function WorkspacesPage() {
         .filter(Boolean),
     [configurationFieldById, form.flowId],
   );
-  const visibleBuilderSections = builderSections.filter(
-    (section) => section.id !== "sources" && section.id !== "targeting",
-  );
+  const visibleBuilderSections = builderSections.filter((section) => {
+    if (section.id === "sources" || section.id === "targeting") {
+      return false;
+    }
+    if (section.id !== "filters") {
+      return true;
+    }
+    return (sectionFields.filters || []).some((field) => !LANGUAGE_FILTER_FIELD_IDS.has(field.id));
+  });
   const selectedLegacySource = legacySources.find((source) => form.sourceIds.includes(source.id)) || null;
   const selectedSource =
     availableSources.find((source) => form.sourceIds.includes(source.id)) || selectedLegacySource || null;
@@ -1494,6 +1615,25 @@ export default function WorkspacesPage() {
         "",
     };
   }, [selectedWorkspaceCvAsset, settingsPayload?.profile]);
+  const effectiveLanguageLines = useMemo(() => {
+    const previewLanguageLines = normalizeStringList(selectedWorkspaceCvAsset?.previewProfile?.languages);
+    if (previewLanguageLines.length) {
+      return previewLanguageLines;
+    }
+    return normalizeStringList(settingsPayload?.profile?.languages);
+  }, [selectedWorkspaceCvAsset, settingsPayload?.profile?.languages]);
+  const supportedLanguageState = useMemo(
+    () => deriveSupportedLanguageState(effectiveLanguageLines),
+    [effectiveLanguageLines],
+  );
+  const languageSyncSourceKey = useMemo(
+    () =>
+      JSON.stringify({
+        assetId: String(form.settings.workspace_cv_asset_id || "").trim(),
+        languageLines: effectiveLanguageLines,
+      }),
+    [effectiveLanguageLines, form.settings.workspace_cv_asset_id],
+  );
   const effectiveDocumentPreviewDocuments = useMemo(
     () => buildWorkspacePreviewDocuments(sharedDocumentDefaults, form.settings),
     [form.settings, sharedDocumentDefaults],
@@ -1589,6 +1729,7 @@ export default function WorkspacesPage() {
     if (!builderCatalogReady) {
       return;
     }
+    languageSyncSourceRef.current = "";
     const defaultFlowId = flows[0]?.id || DEFAULT_FLOW_ID;
     cityScopeRef.current = "";
     setCityOptionsState({ loading: false, options: [], selectedCountryCode: "", missingDataset: false });
@@ -1606,6 +1747,7 @@ export default function WorkspacesPage() {
     if (!builderCatalogReady) {
       return;
     }
+    languageSyncSourceRef.current = "";
     cityScopeRef.current = "";
     setCityOptionsState({ loading: false, options: [], selectedCountryCode: "", missingDataset: false });
     setForm(hydrateFormFromWorkspace(workspace, builderCatalog));
@@ -1618,6 +1760,7 @@ export default function WorkspacesPage() {
   }
 
   function closeBuilder() {
+    languageSyncSourceRef.current = "";
     resetBuilderState();
     setForm(EMPTY_BUILDER_FORM);
     setCvUploadState({ uploading: false, message: "", error: "" });
@@ -1641,6 +1784,43 @@ export default function WorkspacesPage() {
       },
     }));
   }
+
+  useEffect(() => {
+    if (!builderState.open || form.flowId !== DEFAULT_FLOW_ID) {
+      return;
+    }
+    if (languageSyncSourceRef.current === languageSyncSourceKey) {
+      return;
+    }
+    languageSyncSourceRef.current = languageSyncSourceKey;
+
+    const nextLanguageSettings = {
+      languages: effectiveLanguageLines,
+      ...deriveLanguageFilterDefaults(supportedLanguageState),
+    };
+    setForm((current) => {
+      let changed = false;
+      const nextSettings = { ...current.settings };
+      for (const [fieldId, nextValue] of Object.entries(nextLanguageSettings)) {
+        const currentValue = current.settings[fieldId];
+        const valuesMatch = Array.isArray(nextValue)
+          ? areStringListsEqual(currentValue, nextValue)
+          : String(currentValue ?? "") === String(nextValue ?? "");
+        if (valuesMatch) {
+          continue;
+        }
+        nextSettings[fieldId] = nextValue;
+        changed = true;
+      }
+      return changed ? { ...current, settings: nextSettings } : current;
+    });
+  }, [
+    builderState.open,
+    effectiveLanguageLines,
+    form.flowId,
+    languageSyncSourceKey,
+    supportedLanguageState,
+  ]);
 
   function selectSingleSource(sourceId) {
     setForm((current) => {
@@ -1937,6 +2117,34 @@ export default function WorkspacesPage() {
         });
         return;
       }
+      const preRunDetails = (validation.source_results || [])
+        .filter((result) => result.runner_credit_estimate)
+        .map((result) => {
+          const estimate = result.runner_credit_estimate || {};
+          const prefix = resolveSourceName(result.source_id);
+          return (
+            `${prefix}: estimated ${estimate.min_runner_credits ?? 0}-` +
+            `${estimate.max_runner_credits ?? 0} runner credits ` +
+            `(likely ${estimate.likely_runner_credits ?? 0}).`
+          );
+        });
+      const companyPolicy = validation.company_site_policy || {};
+      if (companyPolicy.company_sites_per_run) {
+        preRunDetails.push(
+          `Company-site plan limit: ${
+            Number(companyPolicy.company_sites_per_run) === -1
+              ? "Unlimited sites per run"
+              : `${companyPolicy.company_sites_per_run} site(s) per run`
+          }.`,
+        );
+      }
+      setActionState({
+        ...EMPTY_ACTION_STATE,
+        workspaceId,
+        loading: true,
+        message: "Pre-run company-site estimate calculated. Starting the run...",
+        details: preRunDetails,
+      });
       const run = await request("/runs", {
         method: "POST",
         body: {
@@ -1950,6 +2158,7 @@ export default function WorkspacesPage() {
         ...EMPTY_ACTION_STATE,
         workspaceId,
         message: `Run ${run.id} added to the queue and will start automatically.`,
+        details: preRunDetails,
       });
       await refresh();
     } catch (runError) {
@@ -2720,7 +2929,7 @@ export default function WorkspacesPage() {
                         source.id === "academic_career_sites"
                           ? "Use this for universities, departments, chairs, institutes, and research organizations. The saved academic website list is used automatically, and you can still add up to 50 academic URLs of your own."
                           : source.id === "company_career_sites"
-                            ? "Use this when you want roles from major company career sites worldwide. You can also add up to 50 company or careers URLs of your own."
+                            ? "Search company career sites. You can also add your own company career page URLs."
                             : source.id === "job_board_collection"
                               ? "Choose from major global job boards here. Regional boards appear automatically after you select your target country."
                               : source.description
@@ -2770,32 +2979,26 @@ export default function WorkspacesPage() {
               ) : null}
 
               {selectedSource && sourceFields.length ? (
-                <div className="space-y-4 rounded-xl border border-outline-variant/10 bg-surface p-4">
-                  <div>
-                    <div className="text-sm font-semibold text-on-surface">
-                      {selectedSource.name} setup
-                    </div>
-                    <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                      Only settings relevant to the selected source are shown here.
-                    </p>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    {sourceFields.map((field) => (
-                      <label className="space-y-2" key={field.id}>
-                        <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
-                        <FieldRenderer
-                          dynamicOptions={dynamicFieldOptions}
-                          field={field}
-                          formState={form}
-                          onChange={(nextValue) => updateSetting(field.id, nextValue)}
-                          value={form.settings[field.id]}
-                        />
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  {sourceFields.map((field) => (
+                    <label className="space-y-2" key={field.id}>
+                      <span className="block text-sm font-semibold text-on-surface">
+                        {field.type === "company_site_list" ? `${field.label} (Optional)` : field.label}
+                      </span>
+                      <FieldRenderer
+                        dynamicOptions={dynamicFieldOptions}
+                        field={field}
+                        formState={form}
+                        onChange={(nextValue) => updateSetting(field.id, nextValue)}
+                        value={form.settings[field.id]}
+                      />
+                      {field.type === "company_site_list" ? null : (
                         <span className="block text-xs leading-6 text-on-surface-variant">
                           {field.description}
                         </span>
-                      </label>
-                    ))}
-                  </div>
+                      )}
+                    </label>
+                  ))}
                 </div>
               ) : null}
 
@@ -2926,11 +3129,26 @@ export default function WorkspacesPage() {
                   title={section.title}
                 >
                   {section.id === "filters" ? (
-                    <div className="rounded-lg border border-outline-variant/10 bg-surface p-4 text-xs leading-6 text-on-surface-variant">
-                      Language filtering uses the languages saved in your profile. Update them in Settings if your CV language baseline changes.
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {fields
+                        .filter((field) => !LANGUAGE_FILTER_FIELD_IDS.has(field.id))
+                        .map((field) => (
+                          <label className="space-y-2" key={field.id}>
+                            <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                            <FieldRenderer
+                              dynamicOptions={dynamicFieldOptions}
+                              field={field}
+                              formState={form}
+                              onChange={(nextValue) => updateSetting(field.id, nextValue)}
+                              value={form.settings[field.id]}
+                            />
+                            <span className="block text-xs leading-6 text-on-surface-variant">
+                              {field.description}
+                            </span>
+                          </label>
+                        ))}
                     </div>
-                  ) : null}
-                  {section.id === "documents" ? (
+                  ) : section.id === "documents" ? (
                     <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(320px,1.1fr)]">
                       <div className="space-y-4">
                         <div className="rounded-lg border border-outline-variant/10 bg-surface p-4">

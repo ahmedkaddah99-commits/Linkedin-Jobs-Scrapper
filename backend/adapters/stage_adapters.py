@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
+
 
 from backend.capabilities.reusable_packages.acquisition import build_stage1_args as build_reusable_stage1_args
 from backend.capabilities.reusable_packages.acquisition import run_stage1_pipeline as run_reusable_stage1_pipeline
@@ -38,10 +40,12 @@ from backend.connectors.company_career_sites import (
     ACADEMIC_CAREER_SITE_FILES,
     REGULAR_COMPANY_SITE_FILES,
     load_discovered_company_site_entries,
+    parse_company_site_entries,
     scrape_company_career_sites,
 )
+from backend.domain.job_identity import canonicalize_url
 from backend.domain.phase0_contracts import derive_job_filtering_target_phrases, normalize_job_filtering_mode
-from backend.domain.models import ArtifactRecord, JobRecord, StageContext, StageDefinition
+from backend.domain.models import ArtifactRecord, JobRecord, StageContext, StageDefinition, utc_now_iso
 from backend.orchestration.engine import BaseStage, StageOutcome
 from backend.orchestration.workspace_builder import derive_runtime_defaults_from_settings
 from backend.profiles.cv_text import runtime_cv_override
@@ -276,6 +280,24 @@ def _harmonize_tailored_runtime_settings(settings: dict[str, Any]) -> dict[str, 
     return settings
 
 
+def _merge_company_site_entries(*raw_sources: Any) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen_urls = set()
+    for raw_source in raw_sources:
+        for entry in parse_company_site_entries(raw_source, limit=None):
+            normalized_url = canonicalize_url(str(entry.get("url") or "")) or str(entry.get("url") or "")
+            if not normalized_url or normalized_url in seen_urls:
+                continue
+            merged.append(
+                {
+                    "company_name": str(entry.get("company_name") or "").strip(),
+                    "url": normalized_url,
+                }
+            )
+            seen_urls.add(normalized_url)
+    return merged
+
+
 def _prepare_company_site_source_settings(settings: dict[str, Any], definition: StageDefinition) -> dict[str, Any]:
     normalized = dict(settings)
     config = dict(definition.config or {})
@@ -296,12 +318,10 @@ def _prepare_company_site_source_settings(settings: dict[str, Any], definition: 
             discovered_site_paths = [str(path) for path in REGULAR_COMPANY_SITE_FILES]
 
     configured_sites = normalized.get(site_settings_key)
-    if configured_sites and not normalized.get("company_career_sites"):
-        normalized["company_career_sites"] = configured_sites
-    if not normalized.get("company_career_sites"):
-        discovered_company_sites = load_discovered_company_site_entries(discovered_site_paths)
-        if discovered_company_sites:
-            normalized["company_career_sites"] = discovered_company_sites
+    discovered_company_sites = load_discovered_company_site_entries(discovered_site_paths)
+    merged_company_sites = _merge_company_site_entries(configured_sites, discovered_company_sites)
+    if merged_company_sites:
+        normalized["company_career_sites"] = merged_company_sites
     if timeout_setting_key in normalized and "company_site_request_timeout_seconds" not in normalized:
         normalized["company_site_request_timeout_seconds"] = normalized[timeout_setting_key]
     if max_jobs_setting_key in normalized and "company_site_max_jobs_per_site" not in normalized:
@@ -401,21 +421,111 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
         return bool(getattr(cli_args, "company_career_sites", None))
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
+        from backend.application.quota import check_and_increment_quota_amount
+
         _, cli_args = _build_root_cli_args(
             context,
             definition,
             settings_transform=_prepare_company_site_source_settings,
         )
+        stage_name = str(definition.name or definition.stage_id)
+        user_id = str(
+            getattr(context.run, "normalized_user_id", "")
+            or getattr(context.run, "user_id", "")
+            or ""
+        ).strip()
+        plan_id = str(getattr(cli_args, "run_user_plan_id", "") or "").strip()
+        quota_overrides = dict(getattr(cli_args, "run_user_quota_overrides", {}) or {})
+        run_credit_budget = int(getattr(cli_args, "company_site_runner_credit_budget", 0) or 0)
+        run_credit_consumed = 0
+
+        def _record_usage_event(event: dict[str, Any]) -> None:
+            nonlocal run_credit_consumed
+            runner_credits = int(event.get("runner_credits") or 0)
+            if bool(event.get("billed")) and run_credit_budget > 0 and run_credit_consumed + runner_credits > run_credit_budget:
+                raise RuntimeError("This run reached its runner-credit budget before the next company-site request.")
+            if bool(event.get("billed")):
+                run_credit_consumed += runner_credits
+                if user_id and plan_id and runner_credits > 0:
+                    check_and_increment_quota_amount(
+                        context.repositories,
+                        user_id,
+                        "runner_credits_per_month",
+                        plan_id,
+                        amount=runner_credits,
+                        route=f"/runs/{context.run.id}",
+                        quota_overrides=quota_overrides,
+                    )
+            analytics_store = getattr(context.repositories, "analytics_store", None)
+            if analytics_store is not None and hasattr(analytics_store, "emit_event"):
+                analytics_store.emit_event(
+                    event_id=f"evt_{uuid4().hex[:16]}",
+                    event_name="scrapeops_request",
+                    occurred_at=utc_now_iso(),
+                    user_id=user_id,
+                    workspace_id=context.workspace.id,
+                    run_id=context.run.id,
+                    route=f"/runs/{context.run.id}",
+                    source="worker",
+                    payload={
+                        "policy_version": str(getattr(cli_args, "company_site_policy_version", "") or ""),
+                        "stage_id": definition.stage_id,
+                        "stage_type": definition.stage_type,
+                        **dict(event or {}),
+                    },
+                )
+
+        def _progress_callback(payload: dict[str, Any]) -> None:
+            context.update_run_progress(
+                stage_id=definition.stage_id,
+                stage_type=definition.stage_type,
+                stage_name=stage_name,
+                message=str(payload.get("message") or f"Running {stage_name}"),
+                counters=dict(payload.get("counters") or {}),
+                current_item=dict(payload.get("current_item") or {}),
+                recent_failures=list(payload.get("recent_failures") or []),
+                status="running",
+                extra={"stage_description": str(definition.description or "")},
+            )
+
+        def _should_cancel() -> bool:
+            try:
+                latest = context.repositories.run_repository.get(context.run.id)
+            except Exception:
+                return False
+            return str(latest.status or "") in {"cancel_requested", "cancelled"}
+
         jobs, failures = scrape_company_career_sites(
             company_sites=getattr(cli_args, "company_career_sites", []),
             keywords=getattr(cli_args, "keywords", []),
             request_timeout_seconds=int(getattr(cli_args, "company_site_request_timeout_seconds", 30)),
-            max_jobs_per_site=int(getattr(cli_args, "company_site_max_jobs_per_site", 10)),
+            max_jobs_per_site=int(getattr(cli_args, "company_site_max_jobs_per_site", 0)),
+            use_proxy_fallback=bool(getattr(cli_args, "use_proxy_fallback", False)),
+            target_country_codes=getattr(cli_args, "country_codes", []),
+            target_cities=getattr(cli_args, "cities", []),
+            locality_mode=str(getattr(cli_args, "company_site_locality_mode", "local_preferred") or "local_preferred"),
+            max_sites_per_run=int(getattr(cli_args, "company_site_max_sites_per_run", 0) or 0),
+            run_credit_budget=run_credit_budget,
+            emergency_max_job_links_per_site=int(
+                getattr(cli_args, "company_site_emergency_max_job_links_per_site", 75) or 75
+            ),
+            domain_policies=getattr(cli_args, "scrapeops_domain_policies", []),
+            usage_callback=_record_usage_event,
             logger=context.logger,
+            progress_callback=_progress_callback,
+            should_cancel=_should_cancel,
         )
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(jobs)},
-            data={"company_site_failures": failures},
+            data={
+                "company_site_failures": failures,
+                "company_site_policy": {
+                    "policy_version": str(getattr(cli_args, "company_site_policy_version", "") or ""),
+                    "locality_mode": str(getattr(cli_args, "company_site_locality_mode", "local_preferred") or "local_preferred"),
+                    "max_sites_per_run": int(getattr(cli_args, "company_site_max_sites_per_run", 0) or 0),
+                    "runner_credit_budget": run_credit_budget,
+                },
+            },
             metrics={"jobs_found": len(jobs), "failures": len(failures)},
         )
 

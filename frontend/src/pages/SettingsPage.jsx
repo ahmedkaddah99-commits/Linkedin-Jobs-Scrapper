@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { CvExportPreview } from "../components/CvExportPreview";
+import { CvExportPreview, PROFILE_PLACEHOLDER_URL } from "../components/CvExportPreview";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import {
@@ -26,6 +26,7 @@ const usageLabels = {
   applications_per_month: "Applications",
   cv_exports_per_month: "CV exports",
   referral_drafts_per_month: "Referral drafts",
+  runner_credits_per_month: "Runner credits",
   workspaces: "Workspaces",
 };
 
@@ -124,6 +125,10 @@ function mergeUploadedProfile(currentProfile = {}, parsedProfile = {}) {
   });
 
   return nextProfile;
+}
+
+function getProfilePhotoSrc(profile = {}) {
+  return profile.photo_data_url || profile.avatar_url || PROFILE_PLACEHOLDER_URL;
 }
 
 function sanitizeHexInput(value) {
@@ -1119,6 +1124,19 @@ export default function SettingsPage() {
     }
   }
 
+  function handlePhotoRemove() {
+    updateSection("profile", {
+      photo_data_url: "",
+      avatar_url: "",
+      photo_path: "",
+    });
+    setPhotoUploadState({
+      uploading: false,
+      message: "Profile photo removed. Save settings to keep this change.",
+      error: "",
+    });
+  }
+
   function handleDiscard() {
     if (data) {
       setDraft(data);
@@ -1128,9 +1146,11 @@ export default function SettingsPage() {
 
   const profile = draft?.profile || {};
   const account = draft?.account || {};
+  const hasProfilePhoto = Boolean(String(profile.photo_data_url || profile.avatar_url || "").trim());
   const usageQuotas = subscriptionData?.usage?.quotas || {};
   const currentPlanId = String(subscriptionData?.plan_id || "free").trim() || "free";
   const currentPlanName = String(subscriptionData?.plan?.display_name || "Free").trim() || "Free";
+  const scrapeopsPolicy = subscriptionData?.scrapeops_usage?.policy || {};
 
   return (
     <div className="space-y-10">
@@ -1193,11 +1213,7 @@ export default function SettingsPage() {
                   <img
                     alt={profile.name || account.display_name}
                     className="mx-auto h-28 w-28 rounded-full border-4 border-surface-container-lowest object-cover shadow-sm"
-                    src={
-                      profile.photo_data_url ||
-                      profile.avatar_url ||
-                      PROFILE_PLACEHOLDER_URL
-                    }
+                    src={getProfilePhotoSrc(profile)}
                   />
                   <button
                     className="absolute bottom-0 right-0 rounded-full border border-outline-variant/20 bg-surface-container-lowest p-2 text-on-surface-variant shadow-sm transition-colors hover:text-primary"
@@ -1206,6 +1222,26 @@ export default function SettingsPage() {
                   >
                     <span className="material-symbols-outlined text-[18px]">edit</span>
                   </button>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+                  <button
+                    className="inline-flex items-center gap-2 rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:border-primary/30 hover:text-primary"
+                    onClick={() => photoFileInputRef.current?.click()}
+                    type="button"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">upload</span>
+                    {hasProfilePhoto ? "Choose new photo" : "Choose photo"}
+                  </button>
+                  {hasProfilePhoto ? (
+                    <button
+                      className="inline-flex items-center gap-2 rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-3 py-2 text-sm font-medium text-on-surface-variant transition-colors hover:border-error/30 hover:text-error"
+                      onClick={handlePhotoRemove}
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">delete</span>
+                      Remove photo
+                    </button>
+                  ) : null}
                 </div>
               </div>
 
@@ -1327,6 +1363,26 @@ export default function SettingsPage() {
                     quota={usageQuotas[quotaType] || { used: 0, limit: 0 }}
                   />
                 ))}
+              </div>
+
+              <div className="mt-5 rounded-lg border border-outline-variant/10 bg-surface p-4 text-sm text-on-surface-variant">
+                <div className="font-semibold text-on-surface">Company-site policy</div>
+                <div className="mt-2">
+                  Company sites per run:{" "}
+                  <span className="font-medium text-on-surface">
+                    {Number(scrapeopsPolicy.company_sites_per_run) === -1
+                      ? "Unlimited"
+                      : String(scrapeopsPolicy.company_sites_per_run ?? 0)}
+                  </span>
+                </div>
+                <div className="mt-1">
+                  Runner-credit budget per run:{" "}
+                  <span className="font-medium text-on-surface">
+                    {Number(scrapeopsPolicy.effective_runner_credits_per_run) === -1
+                      ? "Unlimited"
+                      : String(scrapeopsPolicy.effective_runner_credits_per_run ?? 0)}
+                  </span>
+                </div>
               </div>
 
               {currentPlanId === "free" ? (

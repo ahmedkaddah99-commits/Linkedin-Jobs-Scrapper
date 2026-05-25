@@ -5,7 +5,12 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend.adapters.stage_adapters import LinkedInAcquireStage, _tailored_document_artifacts
+from backend.adapters.stage_adapters import (
+    CompanyCareerSiteAcquisitionStage,
+    LinkedInAcquireStage,
+    _prepare_company_site_source_settings,
+    _tailored_document_artifacts,
+)
 from backend.domain.models import StageDefinition
 
 
@@ -125,6 +130,68 @@ class StageAdapterTests(unittest.TestCase):
         self.assertEqual(applied_cv_artifact.path, "candidate_assets/workspace_cv.pdf")
         self.assertEqual(applied_cv_artifact.metadata["cv_generation_mode"], "standard_cv")
         self.assertEqual(applied_cv_artifact.metadata["document_asset_kind"], "applied_cv")
+
+    def test_prepare_company_site_source_settings_merges_pasted_and_discovered_sites(self):
+        definition = StageDefinition(
+            stage_id="source_company_career_sites",
+            stage_type="jobs.acquire.company_sites",
+            name="Acquire Company Career Site Jobs",
+            config={"site_settings_key": "company_career_sites", "discovered_site_paths": ["dummy.txt"]},
+        )
+        settings = {
+            "company_career_sites": [
+                {"company_name": "Manual", "url": "https://manual.example/jobs"},
+                {"company_name": "Shared", "url": "https://shared.example/careers"},
+            ]
+        }
+
+        with patch(
+            "backend.adapters.stage_adapters.load_discovered_company_site_entries",
+            return_value=[
+                {"company_name": "Shared Duplicate", "url": "https://shared.example/careers"},
+                {"company_name": "Saved", "url": "https://saved.example/careers"},
+            ],
+        ):
+            normalized = _prepare_company_site_source_settings(settings, definition)
+
+        self.assertEqual(
+            normalized["company_career_sites"],
+            [
+                {"company_name": "Manual", "url": "https://manual.example/jobs"},
+                {"company_name": "Shared", "url": "https://shared.example/careers"},
+                {"company_name": "Saved", "url": "https://saved.example/careers"},
+            ],
+        )
+
+    def test_company_career_site_stage_passes_proxy_fallback_flag(self):
+        context = SimpleNamespace(
+            run=SimpleNamespace(id="run_1"),
+            logger=None,
+            registries=SimpleNamespace(connector_registry=SimpleNamespace(get=lambda _connector_id: None)),
+        )
+        definition = StageDefinition(
+            stage_id="source_company_career_sites",
+            stage_type="jobs.acquire.company_sites",
+            name="Acquire Company Career Site Jobs",
+            output_key="source_company_career_jobs",
+            config={"connector_id": "company_career_sites"},
+        )
+        cli_args = SimpleNamespace(
+            company_career_sites=[{"company_name": "Acme", "url": "https://careers.acme.example"}],
+            keywords=["product owner"],
+            company_site_request_timeout_seconds=30,
+            company_site_max_jobs_per_site=10,
+            use_proxy_fallback=True,
+        )
+
+        with (
+            patch("backend.adapters.stage_adapters._build_root_cli_args", return_value=({}, cli_args)),
+            patch("backend.adapters.stage_adapters.scrape_company_career_sites", return_value=([], [])) as mock_scrape,
+        ):
+            outcome = CompanyCareerSiteAcquisitionStage().execute(context, definition)
+
+        self.assertEqual(outcome.metrics["jobs_found"], 0)
+        self.assertTrue(mock_scrape.call_args.kwargs["use_proxy_fallback"])
 
 
 if __name__ == "__main__":

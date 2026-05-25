@@ -964,3 +964,50 @@ class StageContext:
             item if isinstance(item, JobRecord) else JobRecord.from_mapping(item)
             for item in jobs
         ]
+
+    def update_run_progress(
+        self,
+        *,
+        stage_id: str,
+        stage_type: str = "",
+        stage_name: str = "",
+        message: str = "",
+        counters: Mapping[str, Any] | None = None,
+        current_item: Mapping[str, Any] | None = None,
+        recent_failures: list[Mapping[str, Any]] | None = None,
+        status: str = "running",
+        extra: Mapping[str, Any] | None = None,
+        save: bool = True,
+    ) -> None:
+        now = utc_now_iso()
+        progress_payload = {
+            "stage_id": str(stage_id or self.run.current_stage_id or ""),
+            "stage_type": str(stage_type or ""),
+            "stage_name": str(stage_name or ""),
+            "status": str(status or "running"),
+            "message": str(message or ""),
+            "started_at": str(
+                (
+                    (self.run.metadata.get("progress") or {}).get("started_at")
+                    if isinstance(self.run.metadata.get("progress"), dict)
+                    else ""
+                )
+                or now
+            ),
+            "last_progress_at": now,
+            "counters": dict(counters or {}),
+            "current_item": dict(current_item or {}),
+            "recent_failures": [dict(item) for item in recent_failures or [] if item is not None],
+        }
+        if extra:
+            progress_payload.update(dict(extra))
+        self.run.metadata["progress"] = progress_payload
+        self.run.updated_at = now
+        if save:
+            self.repositories.run_repository.save(self.run)
+
+    def clear_run_progress(self, *, save: bool = True) -> None:
+        self.run.metadata.pop("progress", None)
+        self.run.updated_at = utc_now_iso()
+        if save:
+            self.repositories.run_repository.save(self.run)

@@ -1,9 +1,9 @@
 {
   "private": true,
   "scripts": {
-    "dev": "concurrently --names \"API,WORKER,UI\" --prefix-colors \"cyan,yellow,magenta\" \".venv/Scripts/python.exe workspace_runner.py serve-api\" \".venv/Scripts/python.exe workspace_runner.py run-worker --worker-id local_worker\" \"npm --prefix frontend run dev\"",
-    "dev:api": ".venv/Scripts/python.exe workspace_runner.py serve-api",
-    "dev:worker": ".venv/Scripts/python.exe workspace_runner.py run-worker --worker-id local_worker",
+    "dev": "concurrently --names \"API,WORKER,UI\" --prefix-colors \"cyan,yellow,magenta\" \"node scripts/run-python.cjs workspace_runner.py serve-api\" \"node scripts/run-python.cjs workspace_runner.py run-worker --worker-id local_worker\" \"npm --prefix frontend run dev\"",
+    "dev:api": "node scripts/run-python.cjs workspace_runner.py serve-api",
+    "dev:worker": "node scripts/run-python.cjs workspace_runner.py run-worker --worker-id local_worker",
     "dev:ui": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build",
     "prod:build": "npm --prefix frontend run build",

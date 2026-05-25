@@ -6,6 +6,7 @@ import shutil
 import threading
 import unittest
 import zipfile
+from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -103,6 +104,9 @@ class BackendApiTests(unittest.TestCase):
         self.deepseek_env_patch = patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}, clear=False)
         self.deepseek_env_patch.start()
         self.addCleanup(self.deepseek_env_patch.stop)
+        self.quota_env_patch = patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": ""}, clear=False)
+        self.quota_env_patch.start()
+        self.addCleanup(self.quota_env_patch.stop)
 
         self.app = create_backend(self.temp_dir)
         self.app.registries.stage_registry.register("test.api_seed", _ApiSeedStage())
@@ -211,6 +215,11 @@ class BackendApiTests(unittest.TestCase):
         response_headers = dict(response.getheaders())
         conn.close()
         return response.status, response_headers, json.loads(raw) if raw else {}
+
+    def _recent_tracker_timestamp(self, *, days_ago: int, hour: int, minute: int = 0) -> str:
+        return (
+            datetime.now(timezone.utc) - timedelta(days=days_ago)
+        ).replace(hour=hour, minute=minute, second=0, microsecond=0).isoformat()
 
     def _upload_workspace_cv(
         self,
@@ -377,6 +386,55 @@ class BackendApiTests(unittest.TestCase):
             stage["excluded_jobs"][0]["reason_summary"],
             "This role does not match the target role for this workspace.",
         )
+
+    def test_run_customer_view_includes_live_progress_snapshot(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        run = self.app.get_run(run_id)
+        run.status = "running"
+        run.current_stage_id = "api_seed_stage"
+        run.metadata["progress"] = {
+            "stage_id": "api_seed_stage",
+            "stage_type": "jobs.acquire.company_sites",
+            "stage_name": "Acquire Company Career Site Jobs",
+            "status": "running",
+            "message": "Scanning Example Company",
+            "started_at": "2026-05-24T18:00:00+00:00",
+            "last_progress_at": "2026-05-24T18:10:00+00:00",
+            "stage_description": "Scrape backend-prepared company career pages for matching open roles.",
+            "counters": {
+                "total_sites": 100,
+                "processed_sites": 12,
+                "failed_sites": 2,
+                "jobs_found": 7,
+            },
+            "current_item": {
+                "company_name": "Example Company",
+                "site_url": "https://example.com/careers",
+            },
+            "recent_failures": [{"company_name": "Broken Co", "error": "timeout"}],
+        }
+        self.app.repositories.run_repository.save(run)
+
+        status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
+        self.assertEqual(status, 200)
+        self.assertEqual(customer_view["run"]["progress"]["stage_id"], "api_seed_stage")
+        self.assertEqual(customer_view["run"]["progress"]["counters"]["processed_sites"], 12)
+        self.assertEqual(customer_view["run"]["progress"]["current_item"]["company_name"], "Example Company")
+        self.assertIn(customer_view["run"]["progress"]["health"], {"active", "slow", "stale"})
+        self.assertTrue(customer_view["summary"]["run_health_label"])
+
+        status, runs_payload = self._request("GET", "/runs")
+        self.assertEqual(status, 200)
+        matching_runs = [item for item in runs_payload["runs"] if item["id"] == run_id]
+        self.assertEqual(len(matching_runs), 1)
+        self.assertEqual(matching_runs[0]["progress"]["message"], "Scanning Example Company")
 
     def test_job_workspace_people_discovery_endpoints_persist_selected_people(self):
         status, run_payload = self._request(
@@ -994,6 +1052,39 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(source_status["linkedin_jobs"], "valid")
         self.assertEqual(source_status["job_board_collection"], "valid")
 
+    def test_workspace_builder_source_validation_includes_company_site_policy_estimate(self):
+        with patch(
+            "backend.application.services._scrapeops_account_state",
+            return_value={
+                "available": True,
+                "status": "healthy",
+                "summary": "ScrapeOps account is healthy.",
+                "usage": {"used": 100, "limit": 1000, "remaining": 900},
+            },
+        ):
+            status, payload = self._request(
+                "POST",
+                "/workspace-builder/source-validation",
+                {
+                    "flow_id": "tailored_documents",
+                    "source_ids": ["company_career_sites"],
+                    "settings": {
+                        "country_codes": ["DE"],
+                        "company_career_sites": [
+                            "Acme | https://company.example/de/careers",
+                            "Global Co | https://company.example/global/careers",
+                        ],
+                    },
+                },
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["valid"])
+        self.assertEqual(payload["company_site_policy"]["policy_version"], "2026-05-25.local-market-v1")
+        result = next(item for item in payload["source_results"] if item["source_id"] == "company_career_sites")
+        self.assertIn("runner_credit_estimate", result)
+        self.assertGreaterEqual(result["runner_credit_estimate"]["max_runner_credits"], 0)
+        self.assertEqual(payload["policy_run_overrides"]["company_site_locality_mode"], "local_preferred")
+
     def test_workspace_builder_source_validation_emits_passed_analytics_event(self):
         status, payload = self._request(
             "POST",
@@ -1105,6 +1196,182 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(event_payload["workspace_id"], "api_workspace")
         self.assertEqual(event_payload["field_errors"], payload["field_errors"])
         self.assertEqual(event_payload["source_results"], payload["source_results"])
+
+    def test_billing_subscription_includes_scrapeops_usage_summary(self):
+        self.app.repositories.analytics_store.emit_event(
+            event_id="evt_scrapeops_usage_1",
+            event_name="scrapeops_request",
+            occurred_at="2026-05-25T12:00:00+00:00",
+            user_id=self.user.user_id,
+            workspace_id="api_workspace",
+            run_id="run_usage_1",
+            route="/runs/run_usage_1",
+            source="worker",
+            payload={
+                "domain": "company.example",
+                "request_mode": "basic",
+                "billed": True,
+                "runner_credits": 3,
+                "native_credits": 3,
+            },
+        )
+
+        status, payload = self._request("GET", "/billing/subscription")
+        self.assertEqual(status, 200)
+        self.assertIn("scrapeops_usage", payload)
+        self.assertEqual(payload["usage"]["quotas"]["runner_credits_per_month"]["limit"], 1000)
+        self.assertEqual(payload["scrapeops_usage"]["usage"]["totals"]["runner_credits"], 3)
+        self.assertEqual(payload["scrapeops_usage"]["policy"]["company_sites_per_run"], 25)
+
+    def test_run_customer_view_includes_scrapeops_usage_summary(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+        self.app.repositories.analytics_store.emit_event(
+            event_id="evt_scrapeops_usage_2",
+            event_name="scrapeops_request",
+            occurred_at="2026-05-25T12:10:00+00:00",
+            user_id=self.user.user_id,
+            workspace_id="api_workspace",
+            run_id=run_id,
+            route=f"/runs/{run_id}",
+            source="worker",
+            payload={
+                "domain": "company.example",
+                "request_mode": "render_js_cheap",
+                "billed": True,
+                "runner_credits": 5,
+                "native_credits": 5,
+            },
+        )
+
+        status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
+        self.assertEqual(status, 200)
+        self.assertEqual(customer_view["run"]["scrapeops_usage"]["totals"]["runner_credits"], 5)
+
+    def test_admin_scrapeops_policy_can_be_saved_and_loaded(self):
+        policy_payload = {
+            "plan_policies": {
+                "free": {
+                    "runner_credits_per_month": 150,
+                    "company_sites_per_run": 3,
+                    "runner_credits_per_run": 40,
+                }
+            },
+            "user_overrides": [
+                {
+                    "user_id": self.user.user_id,
+                    "plan_id": "business",
+                    "runner_credits_per_month": -1,
+                    "company_sites_per_run": -1,
+                    "runner_credits_per_run": -1,
+                    "notes": "internal admin test",
+                }
+            ],
+            "domain_policies": [
+                {
+                    "policy_id": "workday_basic_first",
+                    "domain_pattern": "*.myworkdayjobs.com",
+                    "site_request_modes": ["basic", "render_js_cheap"],
+                    "job_detail_request_modes": ["basic"],
+                    "locality_mode": "strict_local_only",
+                    "country_code": "DE",
+                    "priority": 10,
+                }
+            ],
+            "alert_policy": {
+                "enabled": True,
+                "cadence_hours": 4,
+                "low_remaining_credits_threshold": 50,
+                "discrepancy_threshold": 25,
+                "history_days": 14,
+            },
+        }
+
+        status, saved = self._request("PUT", "/admin/scrapeops/policy", policy_payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["plan_policies"]["free"]["company_sites_per_run"], 3)
+        self.assertEqual(saved["user_overrides"][0]["user_id"], self.user.user_id)
+        self.assertEqual(saved["domain_policies"][0]["policy_id"], "workday_basic_first")
+        self.assertEqual(saved["alert_policy"]["cadence_hours"], 4)
+
+        status, fetched = self._request("GET", "/admin/scrapeops/policy")
+        self.assertEqual(status, 200)
+        self.assertEqual(fetched["domain_policies"][0]["domain_pattern"], "*.myworkdayjobs.com")
+
+    def test_admin_scrapeops_dashboard_returns_trends_policy_and_alerts(self):
+        self.app.repositories.analytics_store.emit_event(
+            event_id="evt_scrapeops_admin_usage_1",
+            event_name="scrapeops_request",
+            occurred_at="2026-05-25T12:10:00+00:00",
+            user_id=self.user.user_id,
+            workspace_id="api_workspace",
+            run_id="run_usage_admin",
+            route="/runs/run_usage_admin",
+            source="worker",
+            payload={
+                "domain": "company.example",
+                "request_mode": "basic",
+                "billed": True,
+                "runner_credits": 2,
+                "native_credits": 2,
+            },
+        )
+        with (
+            patch(
+                "backend.application.services._scrapeops_account_state",
+                return_value={
+                    "available": True,
+                    "status": "healthy",
+                    "summary": "ScrapeOps account is healthy.",
+                    "usage": {"used": 12, "limit": 1000, "remaining": 988},
+                },
+            ),
+            patch("backend.application.services.fetch_domain_stats", return_value={"results": []}),
+        ):
+            status, payload = self._request("GET", "/admin/scrapeops/usage")
+
+        self.assertEqual(status, 200)
+        self.assertIn("policy", payload)
+        self.assertEqual(payload["usage"]["totals"]["runner_credits"], 2)
+        self.assertEqual(payload["usage_series"][0]["runner_credits"], 2)
+        self.assertIn("reconciliation_series", payload)
+        self.assertIn("alerts", payload)
+
+    def test_admin_scrapeops_reconciliation_run_records_alerts(self):
+        self.app.save_scrapeops_admin_policy(
+            {
+                "alert_policy": {
+                    "enabled": True,
+                    "cadence_hours": 6,
+                    "low_remaining_credits_threshold": 100,
+                    "discrepancy_threshold": 10,
+                    "history_days": 30,
+                }
+            }
+        )
+        with (
+            patch(
+                "backend.application.services._scrapeops_account_state",
+                return_value={
+                    "available": True,
+                    "status": "healthy",
+                    "summary": "ScrapeOps account is low on credits.",
+                    "usage": {"used": 950, "limit": 1000, "remaining": 50},
+                },
+            ),
+            patch("backend.application.services.fetch_domain_stats", return_value={"results": []}),
+        ):
+            status, payload = self._request("POST", "/admin/scrapeops/reconciliation/run", {})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "completed")
+        self.assertTrue(payload["alerts"])
+        self.assertEqual(payload["alerts"][0]["alert_type"], "low_remaining_credits")
 
     def test_settings_payload_includes_document_design_options_and_persists_phase2_preferences(self):
         status, settings_payload = self._request("GET", "/settings")
@@ -1977,6 +2244,162 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(unauthorized_payload["error"]["code"], "forbidden")
 
+    def test_admin_promo_code_endpoints_proxy_to_lemonsqueezy(self):
+        list_response = {
+            "discounts": [
+                {
+                    "discount_id": "disc_1",
+                    "name": "Spring campaign",
+                    "code": "SPRING25",
+                    "amount": 25,
+                    "amount_type": "percent",
+                    "max_redemptions": 100,
+                    "starts_at": "2026-05-01T00:00:00+00:00",
+                    "expires_at": "2026-05-31T23:59:59+00:00",
+                    "status": "published",
+                    "status_formatted": "Published",
+                    "created_at": "2026-04-30T10:00:00+00:00",
+                }
+            ],
+            "meta": {"current_page": 1, "per_page": 10, "total": 1},
+        }
+        created_discount = {
+            "discount_id": "disc_2",
+            "name": "Launch code",
+            "code": "LAUNCH10",
+            "amount": 1000,
+            "amount_type": "fixed",
+            "max_redemptions": 0,
+            "starts_at": "",
+            "expires_at": "2026-06-30T22:00:00+00:00",
+            "status": "published",
+            "status_formatted": "Published",
+            "created_at": "2026-05-23T08:00:00+00:00",
+        }
+        viewer = self.app.upsert_user(
+            {
+                "email": "viewer@example.com",
+                "display_name": "Viewer",
+                "role": "viewer",
+            }
+        )
+        _, viewer_token = self.app.issue_api_token(user_id=viewer.user_id, name="viewer-test")
+
+        with (
+            patch("backend.api.server._configured_paid_plan_variant_ids", return_value=["101", "202"]),
+            patch("backend.api.server._configured_paid_plan_labels", return_value="Pro, Business"),
+            patch("backend.api.server.list_lemonsqueezy_discounts", return_value=list_response),
+            patch("backend.api.server.create_lemonsqueezy_discount", return_value=created_discount) as create_mock,
+            patch("backend.api.server.delete_lemonsqueezy_discount") as delete_mock,
+        ):
+            status, list_payload = self._request("GET", "/admin/promo-codes?limit=10&offset=0")
+            self.assertEqual(status, 200)
+            self.assertEqual(list_payload["meta"]["total"], 1)
+            self.assertEqual(list_payload["promo_codes"][0]["code"], "SPRING25")
+            self.assertEqual(list_payload["promo_codes"][0]["discount"], "25%")
+            self.assertEqual(list_payload["promo_codes"][0]["scope"], "Pro, Business")
+
+            status, create_payload = self._request(
+                "POST",
+                "/admin/promo-codes",
+                {
+                    "name": "Launch code",
+                    "code": "launch10",
+                    "amount_type": "fixed",
+                    "amount": "10.00",
+                    "expires_at": "2026-07-01T00:00:00+02:00",
+                },
+            )
+            self.assertEqual(status, 201)
+            self.assertEqual(create_payload["promo_code"]["code"], "LAUNCH10")
+            self.assertEqual(create_payload["promo_code"]["discount"], "EUR 10.00")
+            create_mock.assert_called_once_with(
+                name="Launch code",
+                code="LAUNCH10",
+                amount=1000,
+                amount_type="fixed",
+                starts_at="",
+                expires_at="2026-06-30T22:00:00+00:00",
+                max_redemptions=0,
+                duration="once",
+                variant_ids=["101", "202"],
+            )
+
+            status, delete_payload = self._request("DELETE", "/admin/promo-codes/disc_2")
+            self.assertEqual(status, 200)
+            self.assertEqual(delete_payload["deleted"], "disc_2")
+            delete_mock.assert_called_once_with("disc_2")
+
+            status, _, unauthorized_payload = self._request_with_headers(
+                "GET",
+                "/admin/promo-codes",
+                headers={"Authorization": f"Bearer {viewer_token}"},
+            )
+            self.assertEqual(status, 403)
+            self.assertEqual(unauthorized_payload["error"]["code"], "forbidden")
+
+    def test_billing_checkout_accepts_valid_promo_code_without_logging_raw_code(self):
+        with (
+            patch(
+                "backend.api.server.get_plan",
+                return_value={
+                    "display_name": "Pro",
+                    "price_eur": 29,
+                    "lemonsqueezy_variant_id": "variant_123",
+                    "quotas": {},
+                },
+            ),
+            patch(
+                "backend.api.server.get_lemonsqueezy_checkout_url",
+                return_value="https://checkout.example/session_123",
+            ) as checkout_mock,
+        ):
+            status, payload = self._request(
+                "POST",
+                "/billing/checkout",
+                {
+                    "plan_id": "pro",
+                    "promo_code": "summer10",
+                    "source_page": "/pricing",
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["checkout_url"], "https://checkout.example/session_123")
+            checkout_mock.assert_called_once()
+            self.assertEqual(checkout_mock.call_args.kwargs["discount_code"], "SUMMER10")
+            self.assertNotIn("promo_code", checkout_mock.call_args.kwargs["custom_data"])
+
+        event_rows = self.app.repositories.analytics_store.query_rows(
+            "SELECT payload_json FROM analytics_events WHERE event_name = 'checkout_started'"
+        )
+        self.assertEqual(len(event_rows), 1)
+        event_payload = json.loads(event_rows[0]["payload_json"])
+        self.assertTrue(event_payload["promo_code_present"])
+        self.assertNotIn("promo_code", event_payload)
+
+    def test_billing_checkout_rejects_invalid_promo_code_format(self):
+        with patch(
+            "backend.api.server.get_plan",
+            return_value={
+                "display_name": "Pro",
+                "price_eur": 29,
+                "lemonsqueezy_variant_id": "variant_123",
+                "quotas": {},
+            },
+        ):
+            status, payload = self._request(
+                "POST",
+                "/billing/checkout",
+                {
+                    "plan_id": "pro",
+                    "promo_code": "bad-code!",
+                    "source_page": "/pricing",
+                },
+            )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "bad_request")
+        self.assertIn("uppercase letters and numbers", payload["error"]["message"])
+
     def test_referrals_import_endpoint_merges_companies(self):
         status, import_payload = self._request(
             "POST",
@@ -2386,6 +2809,9 @@ class BackendApiTests(unittest.TestCase):
         self.assertFalse(any(item["review_id"] == review_id for item in tracker_payload3.get("items", [])))
 
     def test_tracker_email_integration_api(self):
+        confirm_sent_at = self._recent_tracker_timestamp(days_ago=7, hour=9)
+        interview_sent_at = self._recent_tracker_timestamp(days_ago=7, hour=12)
+
         class _FakeMailboxClient:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
@@ -2401,14 +2827,14 @@ class BackendApiTests(unittest.TestCase):
                         message_id="msg-confirm-1",
                         subject="ACME API application received",
                         from_address="jobs@acmeapi.com",
-                        sent_at="2026-04-18T09:00:00+00:00",
+                        sent_at=confirm_sent_at,
                         text="We have received your application for Engineer at ACME API.",
                     ),
                     TrackerMailboxMessage(
                         message_id="msg-interview-1",
                         subject="Interview invitation from ACME API",
                         from_address="recruiting@acmeapi.com",
-                        sent_at="2026-04-18T12:00:00+00:00",
+                        sent_at=interview_sent_at,
                         text="We would like to invite you to interview for the Engineer role at ACME API.",
                     ),
                 ]
@@ -2470,6 +2896,10 @@ class BackendApiTests(unittest.TestCase):
         self.assertFalse(delete_payload["integration"]["config"]["connected"])
 
     def test_tracker_google_email_integration_api(self):
+        confirm_sent_at = self._recent_tracker_timestamp(days_ago=7, hour=9)
+        interview_sent_at = self._recent_tracker_timestamp(days_ago=7, hour=12)
+        false_positive_sent_at = self._recent_tracker_timestamp(days_ago=7, hour=13)
+
         class _FakeGmailMailboxClient:
             def __init__(self, *, access_token):
                 self.access_token = access_token
@@ -2483,21 +2913,21 @@ class BackendApiTests(unittest.TestCase):
                             message_id="gmail-confirm-1",
                             subject="ACME API application received",
                             from_address="jobs@acmeapi.com",
-                            sent_at="2026-04-18T09:00:00+00:00",
+                            sent_at=confirm_sent_at,
                             text="We have received your application for Engineer at ACME API.",
                         ),
                         TrackerMailboxMessage(
                             message_id="gmail-interview-1",
                             subject="Interview invitation from ACME API",
                             from_address="recruiting@acmeapi.com",
-                            sent_at="2026-04-18T12:00:00+00:00",
+                            sent_at=interview_sent_at,
                             text="We would like to invite you to interview for the Engineer role at ACME API.",
                         ),
                         TrackerMailboxMessage(
                             message_id="gmail-false-positive-1",
                             subject="Interview with the Vampire fan club update",
                             from_address="newsletter@movieclub.example",
-                            sent_at="2026-04-18T13:00:00+00:00",
+                            sent_at=false_positive_sent_at,
                             text="Join our interview series and get a snack-bar offer tonight.",
                         ),
                     ],
@@ -2587,6 +3017,8 @@ class BackendApiTests(unittest.TestCase):
                 self.assertEqual(sync_payload["integration"]["config"]["history_id"], "history-123")
 
     def test_tracker_google_email_review_queue_persists_and_supports_dismiss(self):
+        interview_sent_at = self._recent_tracker_timestamp(days_ago=7, hour=12)
+
         class _FakeGmailMailboxClient:
             def __init__(self, *, access_token):
                 self.access_token = access_token
@@ -2600,7 +3032,7 @@ class BackendApiTests(unittest.TestCase):
                             message_id="gmail-review-1",
                             subject="Interview invitation from ACME API",
                             from_address="updates@acmeapi.com",
-                            sent_at="2026-04-18T12:00:00+00:00",
+                            sent_at=interview_sent_at,
                             text="We would like to speak with you about Engineer at ACME API on Thursday.",
                         ),
                     ],

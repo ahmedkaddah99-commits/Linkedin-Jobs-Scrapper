@@ -49,35 +49,82 @@ Create `user_config/.env` for local external-service credentials:
 SCRAPEOPS_API_KEY=your_scrapeops_key
 DEEPSEEK_API_KEY=your_deepseek_key
 GEMINI_API_KEY=your_gemini_key
+# Optional: disable billing quota enforcement during local development.
+RUNR_DISABLE_QUOTAS=true
 ```
 
 For the unified backend, prefer persisted backend secrets instead of raw config values.
 
 ## Run The Product
 
-Backend API:
+All successful local start commands currently available in this repo are below.
+
+Start API + worker + frontend from one terminal at the repo root:
 
 ```powershell
-.\.venv\Scripts\python.exe workspace_runner.py serve-api
+npm run dev
 ```
 
-Worker:
+Start only the API from the repo root:
 
 ```powershell
-.\.venv\Scripts\python.exe workspace_runner.py run-worker --worker-id local_worker
+npm run dev:api
 ```
 
-Frontend:
+Start only the worker from the repo root:
+
+```powershell
+npm run dev:worker
+```
+
+Start only the frontend from the repo root:
+
+```powershell
+npm run dev:ui
+```
+
+Start only the frontend from inside `frontend/`:
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-Open:
+If you start services individually, the equivalent direct Python commands are:
+
+```powershell
+.\.venv\Scripts\python.exe workspace_runner.py serve-api
+.\.venv\Scripts\python.exe workspace_runner.py run-worker --worker-id local_worker
+```
+
+Local URLs:
 
 ```text
-http://127.0.0.1:4173
+Frontend: http://127.0.0.1:4173
+API health: http://127.0.0.1:8000/health
+```
+
+## Production
+
+Do not use `npm run dev` for production. Production expects:
+
+- a ready Python virtualenv at `.venv`
+- frontend dependencies installed
+- required backend environment variables configured from `.env.example`
+- a process manager such as PM2
+
+Build and start the production stack with:
+
+```powershell
+npm run pm2:prod
+```
+
+Useful production process commands:
+
+```powershell
+npm run pm2:status
+npm run pm2:logs
+npm run pm2:stop
 ```
 
 ## Create And Run Workspaces

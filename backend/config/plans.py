@@ -15,7 +15,12 @@ PLANS: dict[str, dict[str, Any]] = {
             "applications_per_month": 10,
             "cv_exports_per_month": 3,
             "referral_drafts_per_month": 5,
+            "runner_credits_per_month": 1000,
             "workspaces": 1,
+        },
+        "limits": {
+            "company_sites_per_run": 25,
+            "runner_credits_per_run": 250,
         },
     },
     "pro": {
@@ -27,7 +32,12 @@ PLANS: dict[str, dict[str, Any]] = {
             "applications_per_month": 200,
             "cv_exports_per_month": 50,
             "referral_drafts_per_month": 100,
+            "runner_credits_per_month": 25000,
             "workspaces": 5,
+        },
+        "limits": {
+            "company_sites_per_run": 250,
+            "runner_credits_per_run": 5000,
         },
     },
     "business": {
@@ -39,7 +49,12 @@ PLANS: dict[str, dict[str, Any]] = {
             "applications_per_month": -1,
             "cv_exports_per_month": -1,
             "referral_drafts_per_month": -1,
+            "runner_credits_per_month": -1,
             "workspaces": -1,
+        },
+        "limits": {
+            "company_sites_per_run": -1,
+            "runner_credits_per_run": -1,
         },
     },
 }
@@ -57,6 +72,11 @@ def get_plan(plan_id: str | None) -> dict[str, Any]:
 def get_quota(plan_id: str, quota_type: str) -> int:
     plan = PLANS.get(normalize_plan_id(plan_id), PLANS[DEFAULT_PLAN_ID])
     return int(plan["quotas"].get(str(quota_type or "").strip(), 0))
+
+
+def get_limit(plan_id: str, limit_type: str) -> int:
+    plan = PLANS.get(normalize_plan_id(plan_id), PLANS[DEFAULT_PLAN_ID])
+    return int(plan.get("limits", {}).get(str(limit_type or "").strip(), 0))
 
 
 def get_plan_for_variant_id(variant_id: str | int | None) -> str:

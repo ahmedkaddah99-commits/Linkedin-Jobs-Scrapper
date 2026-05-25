@@ -69,9 +69,17 @@ class WorkerService:
 
     def run_loop(self, *, max_runs: int = 0, auto_retry_failed: bool = True) -> int:
         processed = 0
+        last_maintenance_check = 0.0
         self.heartbeat(status=WORKER_STATUS_IDLE, current_run_id="")
         try:
             while not self._stop_event.is_set():
+                now = time.monotonic()
+                if now - last_maintenance_check >= 60.0:
+                    last_maintenance_check = now
+                    try:
+                        self.application.maybe_run_scheduled_scrapeops_maintenance(source="worker")
+                    except Exception:
+                        self.logger.exception("Scheduled ScrapeOps maintenance failed for %s", self.worker_id)
                 if max_runs > 0 and processed >= max_runs:
                     break
                 run = self.process_next(auto_retry_failed=auto_retry_failed)

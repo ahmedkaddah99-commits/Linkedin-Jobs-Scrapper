@@ -84,13 +84,14 @@ class StageEngine:
         run = context.run
         self._restore_context(context)
         self._mark_run_running(run)
+        total_stage_count = len(context.workflow.stages)
         completed_stage_ids = {
             result.stage_id
             for result in run.stage_results
             if result.status in {STAGE_STATUS_COMPLETED, STAGE_STATUS_SKIPPED}
         }
 
-        for definition in context.workflow.stages:
+        for stage_index, definition in enumerate(context.workflow.stages, start=1):
             if definition.stage_id in completed_stage_ids:
                 continue
             if self._cancel_requested(run.id):
@@ -100,6 +101,19 @@ class StageEngine:
             run.current_stage_id = definition.stage_id
             run.updated_at = utc_now_iso()
             self.run_repository.save(run)
+            context.update_run_progress(
+                stage_id=definition.stage_id,
+                stage_type=definition.stage_type,
+                stage_name=definition.name,
+                message=f"Running {definition.name or definition.stage_id}",
+                counters={
+                    "stage_index": stage_index,
+                    "total_stages": total_stage_count,
+                    "completed_stages": len(completed_stage_ids),
+                },
+                status="running",
+                extra={"stage_description": str(definition.description or "")},
+            )
 
             if not definition.enabled:
                 self._append_stage_result(
@@ -141,6 +155,17 @@ class StageEngine:
                 run.current_stage_id = definition.stage_id
                 run.last_error = str(exc)
                 run.updated_at = utc_now_iso()
+                context.update_run_progress(
+                    stage_id=definition.stage_id,
+                    stage_type=definition.stage_type,
+                    stage_name=definition.name,
+                    message=f"{definition.name or definition.stage_id} failed",
+                    counters={},
+                    recent_failures=[{"stage": definition.stage_id, "error": str(exc)}],
+                    status="failed",
+                    extra={"stage_description": str(definition.description or "")},
+                    save=False,
+                )
                 self.run_repository.save(run)
                 self._emit_event(
                     "automation_step_failed",
@@ -199,6 +224,7 @@ class StageEngine:
                 output_keys=output_keys,
                 artifact_ids=[artifact.artifact_id for artifact in outcome.artifacts],
             )
+            completed_stage_ids.add(definition.stage_id)
 
         run.status = RUN_STATUS_COMPLETED
         run.final_job_set_keys = sorted(context.job_sets.keys())
@@ -206,6 +232,7 @@ class StageEngine:
         run.last_error = ""
         run.finished_at = utc_now_iso()
         run.updated_at = utc_now_iso()
+        context.clear_run_progress(save=False)
         self.run_repository.save(run)
         self._emit_event(
             "run_completed",
@@ -258,6 +285,7 @@ class StageEngine:
         context.run.current_stage_id = ""
         context.run.finished_at = utc_now_iso()
         context.run.updated_at = utc_now_iso()
+        context.clear_run_progress(save=False)
         self.run_repository.save(context.run)
 
     def _append_stage_result(

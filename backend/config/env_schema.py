@@ -52,6 +52,11 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Optional opt-in for live DuckDuckGo and DeepSeek target-contact discovery. Disabled by default for deterministic local/test behavior.",
     },
+    "RUNR_DISABLE_QUOTAS": {
+        "required": False,
+        "scope": "backend",
+        "description": "Optional local-development switch that bypasses quota enforcement when set to 1/true/yes/on.",
+    },
 }
 
 

@@ -384,9 +384,91 @@ function buildTrackerBundleLabel(item) {
   return base || "application_documents";
 }
 
+function parseTrackerNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function summarizeTrackerAtsState(documents = []) {
+  const atsDocuments = (Array.isArray(documents) ? documents : []).filter((document) => {
+    const gate = document?.ats_export_gate;
+    const documentType = String(document?.document_type || "").trim().toLowerCase();
+    const assetKind = String(document?.asset_kind || "").trim().toLowerCase();
+    return (
+      Boolean(document?.final_export_blocked) ||
+      (gate && typeof gate === "object") ||
+      documentType === "tailored cv" ||
+      assetKind === "generated_cv"
+    );
+  });
+  if (!atsDocuments.length) {
+    return null;
+  }
+
+  const pickDocument =
+    atsDocuments.find((document) => Boolean(document.final_export_blocked)) ||
+    atsDocuments.find((document) => {
+      const gateState = String(document?.ats_export_gate?.gate_state || "").trim().toLowerCase();
+      return gateState === "blocked";
+    }) ||
+    atsDocuments.find((document) => {
+      const gateState = String(document?.ats_export_gate?.gate_state || "").trim().toLowerCase();
+      return gateState === "passed" || gateState === "exported_anyway";
+    }) ||
+    atsDocuments[0];
+
+  const gate =
+    pickDocument?.ats_export_gate && typeof pickDocument.ats_export_gate === "object"
+      ? pickDocument.ats_export_gate
+      : {};
+  const gateState = String(gate.gate_state || "").trim().toLowerCase();
+  const bestScore = parseTrackerNumber(gate.best_score ?? pickDocument?.ats_best_score ?? pickDocument?.ats_score);
+  const targetScore = parseTrackerNumber(gate.target_score ?? pickDocument?.ats_target_score);
+  const attemptCount = parseTrackerNumber(gate.attempt_count ?? pickDocument?.ats_attempt_count);
+  const maxAttempts = parseTrackerNumber(gate.max_attempts ?? pickDocument?.ats_max_attempts);
+
+  const summary =
+    pickDocument?.final_export_blocked || gateState === "blocked"
+      ? {
+          badgeClass: "bg-error/10 text-error",
+          label: "ATS gate active",
+          message:
+            "The tailored CV is still blocked by ATS review, so the application bundle omits it until the target is met.",
+        }
+      : gateState === "passed"
+        ? {
+            badgeClass: "bg-teal-500/10 text-teal-600",
+            label: "ATS cleared",
+            message: "The tailored CV cleared ATS review before export and is ready to hand to the applicant.",
+          }
+        : gateState === "exported_anyway"
+          ? {
+              badgeClass: "bg-amber-500/10 text-amber-600",
+              label: "ATS override",
+              message:
+                "The tailored CV was released with an acknowledged ATS warning instead of a clean pass.",
+            }
+          : {
+              badgeClass: "bg-primary/10 text-primary",
+              label: "ATS preflight",
+              message: "ATS scoring runs before the final tailored CV is released in the application bundle.",
+            };
+
+  const metrics = [
+    bestScore !== null && targetScore !== null ? `${bestScore}% / ${targetScore}% target` : "",
+    attemptCount !== null && maxAttempts !== null ? `Attempt ${attemptCount}/${maxAttempts}` : "",
+  ].filter(Boolean);
+
+  return {
+    ...summary,
+    metrics,
+  };
+}
+
 function TrackerResourceCell({ item, request }) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
+  const atsSummary = summarizeTrackerAtsState(item.documents);
   const exportableDocuments = (Array.isArray(item.documents) ? item.documents : []).filter(
     (document) => Boolean(String(document.document_id || "").trim()) && !document.final_export_blocked,
   );
@@ -442,6 +524,26 @@ function TrackerResourceCell({ item, request }) {
           {exporting ? "Preparing..." : "Documents ZIP"}
         </button>
       </div>
+      {atsSummary ? (
+        <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={["rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide", atsSummary.badgeClass].join(" ")}>
+              {atsSummary.label}
+            </span>
+            {atsSummary.metrics.map((metric) => (
+              <span
+                className="rounded-full bg-surface-container-lowest px-2.5 py-1 text-[10px] font-medium text-on-surface-variant"
+                key={metric}
+              >
+                {metric}
+              </span>
+            ))}
+          </div>
+          <div className="mt-2 text-[11px] leading-5 text-on-surface-variant">
+            {atsSummary.message}
+          </div>
+        </div>
+      ) : null}
       {error ? <div className="text-xs text-error">{error}</div> : null}
     </div>
   );
@@ -1338,7 +1440,7 @@ export default function TrackerPage() {
                   </div>
                 </div>
                 <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-low p-4">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Location Hint</div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Location Hint (Optional)</div>
                   <div className="mt-2 text-base font-semibold text-on-surface">
                     {discoveryModal.payload?.location_hint || "Not specified"}
                   </div>

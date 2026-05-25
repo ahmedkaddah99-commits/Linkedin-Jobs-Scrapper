@@ -29,6 +29,7 @@ function buildFeatureRows(plans) {
 export default function PricingPage() {
   const { request, user } = useSession();
   const [actionState, setActionState] = useState({ loadingPlanId: "", managing: false, error: "" });
+  const [promoCode, setPromoCode] = useState("");
   const {
     data: plansPayload,
     loading: plansLoading,
@@ -53,6 +54,7 @@ export default function PricingPage() {
         method: "POST",
         body: {
           plan_id: planId,
+          promo_code: promoCode.trim().toUpperCase(),
           source_page: "/pricing",
         },
       });
@@ -95,10 +97,6 @@ export default function PricingPage() {
             <h1 className="font-headline text-[2.35rem] font-extrabold leading-tight tracking-tight text-on-surface">
               Pick the plan that fits your job-search operating rhythm.
             </h1>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-on-surface-variant">
-              LemonSqueezy handles checkout, tax, and invoices. Clerk keeps plan metadata in sync so
-              quotas can be enforced directly in the app.
-            </p>
           </div>
           <Link
             className="inline-flex items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
@@ -115,6 +113,26 @@ export default function PricingPage() {
           {combinedError}
         </div>
       ) : null}
+
+      <section className="rounded-[1.5rem] border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-on-surface">Promo code</p>
+            <p className="mt-1 text-sm text-on-surface-variant">
+              If you have a code, add it here and it will be prefilled in checkout.
+            </p>
+          </div>
+          <div className="w-full md:max-w-sm">
+            <input
+              className="w-full rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-3 font-mono uppercase text-on-surface outline-none transition-colors focus:border-primary/40"
+              onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
+              placeholder="SUMMER10"
+              type="text"
+              value={promoCode}
+            />
+          </div>
+        </div>
+      </section>
 
       {isLoading ? (
         <div className="grid gap-6 lg:grid-cols-3">

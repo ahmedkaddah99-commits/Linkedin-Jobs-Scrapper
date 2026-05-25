@@ -8,6 +8,22 @@ import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
 
+function formatDuration(seconds) {
+  const total = Math.max(0, Number.parseInt(seconds || 0, 10) || 0);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainingSeconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
+  return `${remainingSeconds}s`;
+}
+
+function progressTone(health) {
+  if (health === "stale") return "warning";
+  if (health === "slow") return "primary";
+  return "success";
+}
+
 function RunSummaryCard({ description, label, value }) {
   return (
     <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
@@ -195,8 +211,38 @@ export default function RunsPage() {
                     <h2 className="font-headline text-2xl font-bold text-on-surface">
                       {run.workspace_name || run.workspace_id || run.id}
                     </h2>
-                    <p className="mt-1 text-sm text-on-surface-variant">Review included and excluded jobs for this run.</p>
+                    <p className="mt-1 text-sm text-on-surface-variant">
+                      {run.progress?.message || "Review included and excluded jobs for this run."}
+                    </p>
                   </div>
+                  {run.progress?.stage_id ? (
+                    <div className="rounded-2xl bg-surface p-4 text-sm text-on-surface-variant">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge tone={progressTone(run.progress.health)}>
+                          {run.progress.health_label || "Running"}
+                        </StatusBadge>
+                        <span className="font-semibold text-on-surface">
+                          {run.progress.stage_name || labelize(run.progress.stage_id)}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-4">
+                        <div>Elapsed: {formatDuration(run.progress.elapsed_seconds)}</div>
+                        {run.progress.counters?.total_sites ? (
+                          <div>
+                            Sites: {run.progress.counters.processed_sites ?? 0}/{run.progress.counters.total_sites}
+                          </div>
+                        ) : null}
+                        {run.progress.counters?.jobs_found !== undefined ? (
+                          <div>Jobs: {run.progress.counters.jobs_found}</div>
+                        ) : null}
+                      </div>
+                      {run.progress.current_item?.company_name || run.progress.current_item?.site_url ? (
+                        <div className="mt-2 truncate">
+                          Current: {run.progress.current_item.company_name || run.progress.current_item.site_url}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="flex flex-wrap gap-6 text-sm text-on-surface-variant">
                     <div>
                       <span className="font-semibold text-on-surface">Created:</span>{" "}

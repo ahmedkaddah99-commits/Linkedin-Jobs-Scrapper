@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import re
+from fnmatch import fnmatch
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -13,20 +17,72 @@ from backend.capabilities.tailored_documents.manual_urls import (
     fetch_and_normalize_manual_job,
     is_valid_job_url,
 )
+from backend.connectors.company_career_discovery import detect_ats_type
 from backend.domain.job_identity import canonicalize_url, compact_whitespace, dedupe_job_records
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_POLICY_VERSION,
+    SCRAPEOPS_PROXY_ENDPOINT,
+    SCRAPEOPS_REQUEST_MODES,
+    ScrapeOpsOutOfCreditsError,
+    ScrapeOpsRequestError,
+    billed_status_code,
+    build_proxy_params,
+    estimate_mode_native_credits,
+    estimate_mode_runner_credits,
+    normalize_scrapeops_country_code,
+    raise_for_failure,
+    request_mode_label,
+    sanitize_scrapeops_text,
+    sanitize_url_for_logs,
+)
 
 
 JOB_LINK_HINTS = (
     "job",
     "jobs",
+    "karriere",
     "career",
     "careers",
+    "stelle",
+    "stellen",
+    "stellenanzeige",
+    "stellenangebot",
+    "bewerb",
     "vacanc",
     "opening",
     "position",
     "role",
     "opportunit",
     "work-with-us",
+)
+DIRECT_JOB_LINK_HINTS = (
+    "/job/",
+    "/jobs/view/",
+    "/jobs/details/",
+    "/job-details/",
+    "/job-detail/",
+    "/position/",
+    "/positions/",
+    "/vacancy/",
+    "/vacancies/",
+    "/offer/",
+    "/offers/",
+    "/stellenanzeige/",
+    "/stellenangebot/",
+)
+LISTING_LINK_HINTS = (
+    "/career",
+    "/careers",
+    "/jobs",
+    "/karriere",
+    "/jobangebote",
+    "/stellenangebote",
+    "/stellenanzeigen",
+    "all jobs",
+    "open positions",
+    "job search",
+    "stellenanzeigen",
+    "stellenangebote",
 )
 IGNORED_LINK_HINTS = (
     "mailto:",
@@ -56,6 +112,64 @@ DISCOVERED_COMPANY_SITE_FILES = (
     *ACADEMIC_CAREER_SITE_FILES,
     Path("user_config") / "discovered_company_career_sites.txt",
 )
+ACTIVE_COMPANY_SITE_ACCESS_METHOD = "scrapeops_proxy"
+LEGACY_DIRECT_SCRAPER_STATUS = "inactive"
+LOCALITY_MODE_LOCAL_PREFERRED = "local_preferred"
+LOCALITY_MODE_STRICT_LOCAL_ONLY = "strict_local_only"
+DEFAULT_SITE_REQUEST_MODES = ("basic", "render_js_cheap", "render_js_residential")
+DEFAULT_JOB_DETAIL_REQUEST_MODES = ("basic", "render_js_cheap", "render_js", "render_js_residential")
+DEFAULT_EMERGENCY_MAX_JOB_LINKS_PER_SITE = 75
+GLOBAL_URL_HINTS = (
+    "/global",
+    "/worldwide",
+    "/international",
+)
+COUNTRY_URL_TOKENS = {
+    "DE": {"de", "de-de", "germany", "deutschland", "german"},
+    "GB": {"gb", "uk", "en-gb", "united-kingdom", "britain", "england"},
+    "NL": {"nl", "netherlands", "nederland"},
+    "AT": {"at", "austria", "osterreich", "österreich"},
+    "CH": {"ch", "switzerland", "schweiz", "suisse"},
+    "BE": {"be", "belgium", "belgie", "belgique"},
+    "LU": {"lu", "luxembourg"},
+    "FR": {"fr", "france", "fr-fr"},
+    "ES": {"es", "spain", "espana", "españa"},
+    "HK": {"hk", "hong-kong"},
+    "PL": {"pl", "poland", "polska"},
+    "SE": {"se", "sweden", "sverige"},
+    "TH": {"th", "thailand"},
+    "US": {"us", "usa", "united-states", "america"},
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PageFetchResult:
+    requested_url: str
+    final_url: str
+    status_code: int
+    text: str
+    used_proxy: bool = False
+    request_mode: str = "basic"
+    request_mode_label: str = "Basic Proxy"
+    billed_native_credits: int = 0
+    billed_runner_credits: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CompanySiteScopePlan:
+    selected_sites: list[dict[str, Any]]
+    skipped_sites: list[dict[str, Any]]
+    stats: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class SiteCandidateCollection:
+    candidates: list[dict[str, Any]]
+    discovered_count: int
+    followed_count: int
+    skipped_count: int
+    skipped_reasons: list[dict[str, Any]]
+    emergency_ceiling_hit: bool = False
 
 
 def _discovery_path_variants(path_value: Any) -> list[Path]:
@@ -100,16 +214,427 @@ def _normalize_keywords(raw_keywords: Any) -> list[str]:
     return deduped
 
 
+def _has_any_hint(haystack: str, hints: tuple[str, ...]) -> bool:
+    lowered = haystack.lower()
+    return any(token in lowered for token in hints)
+
+
+def _normalize_country_codes(raw_value: Any) -> list[str]:
+    if isinstance(raw_value, str):
+        values = [item.strip().upper() for item in raw_value.replace(",", "\n").splitlines() if item.strip()]
+    elif isinstance(raw_value, (list, tuple, set)):
+        values = [str(item).strip().upper() for item in raw_value if str(item).strip()]
+    else:
+        return []
+    deduped: list[str] = []
+    seen = set()
+    for value in values:
+        if value in seen:
+            continue
+        deduped.append(value)
+        seen.add(value)
+    return deduped
+
+
+def _normalize_city_names(raw_value: Any) -> list[str]:
+    if isinstance(raw_value, str):
+        values = [item.strip() for item in raw_value.replace(",", "\n").splitlines() if item.strip()]
+    elif isinstance(raw_value, (list, tuple, set)):
+        values = [compact_whitespace(str(item)) for item in raw_value if compact_whitespace(str(item))]
+    else:
+        return []
+    deduped: list[str] = []
+    seen = set()
+    for value in values:
+        lowered = value.casefold()
+        if lowered in seen:
+            continue
+        deduped.append(value)
+        seen.add(lowered)
+    return deduped
+
+
+def _normalized_text_tokens(value: str) -> str:
+    lowered = sanitize_scrapeops_text(value).casefold()
+    lowered = re.sub(r"[^a-z0-9]+", "-", lowered)
+    return f"-{lowered.strip('-')}-" if lowered.strip("-") else ""
+
+
+def _country_tokens(country_codes: list[str]) -> dict[str, set[str]]:
+    return {code: set(COUNTRY_URL_TOKENS.get(code, {code.lower()})) for code in country_codes}
+
+
+def _locality_signal_for_text(
+    value: str,
+    *,
+    target_country_codes: list[str],
+    target_cities: list[str],
+) -> dict[str, Any]:
+    normalized = _normalized_text_tokens(value)
+    matched_target_cities: list[str] = []
+    matched_target_countries: list[str] = []
+    matched_foreign_countries: list[str] = []
+    for city in target_cities:
+        city_token = _normalized_text_tokens(city)
+        if city_token and city_token in normalized:
+            matched_target_cities.append(city)
+    target_tokens = _country_tokens(target_country_codes)
+    for code, tokens in target_tokens.items():
+        if any(f"-{token}-" in normalized for token in tokens):
+            matched_target_countries.append(code)
+    for code, tokens in COUNTRY_URL_TOKENS.items():
+        if code in target_country_codes:
+            continue
+        if any(f"-{token}-" in normalized for token in tokens):
+            matched_foreign_countries.append(code)
+    is_global = any(token in value.lower() for token in GLOBAL_URL_HINTS)
+    if matched_target_cities or matched_target_countries:
+        return {
+            "signal": "local",
+            "matched_target_cities": matched_target_cities,
+            "matched_target_countries": matched_target_countries,
+            "matched_foreign_countries": matched_foreign_countries,
+            "is_global": is_global,
+        }
+    if matched_foreign_countries:
+        return {
+            "signal": "foreign",
+            "matched_target_cities": [],
+            "matched_target_countries": [],
+            "matched_foreign_countries": matched_foreign_countries,
+            "is_global": is_global,
+        }
+    if is_global:
+        return {
+            "signal": "global",
+            "matched_target_cities": [],
+            "matched_target_countries": [],
+            "matched_foreign_countries": [],
+            "is_global": True,
+        }
+    return {
+        "signal": "unknown",
+        "matched_target_cities": [],
+        "matched_target_countries": [],
+        "matched_foreign_countries": [],
+        "is_global": False,
+    }
+
+
+def _site_locality_signal(
+    site_url: str,
+    *,
+    target_country_codes: list[str],
+    target_cities: list[str],
+) -> dict[str, Any]:
+    return _locality_signal_for_text(
+        f"{urlparse(site_url).netloc} {(urlparse(site_url).path or '').replace('/', ' ')}",
+        target_country_codes=target_country_codes,
+        target_cities=target_cities,
+    )
+
+
+def _candidate_locality_signal(
+    *,
+    label: str,
+    url: str,
+    target_country_codes: list[str],
+    target_cities: list[str],
+) -> dict[str, Any]:
+    return _locality_signal_for_text(
+        f"{label} {urlparse(url).netloc} {(urlparse(url).path or '').replace('/', ' ')}",
+        target_country_codes=target_country_codes,
+        target_cities=target_cities,
+    )
+
+
+def _normalize_locality_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == LOCALITY_MODE_STRICT_LOCAL_ONLY:
+        return LOCALITY_MODE_STRICT_LOCAL_ONLY
+    return LOCALITY_MODE_LOCAL_PREFERRED
+
+
+def _normalize_request_modes(raw_value: Any, default_modes: tuple[str, ...]) -> tuple[str, ...]:
+    raw_items = raw_value if isinstance(raw_value, (list, tuple, set)) else default_modes
+    normalized: list[str] = []
+    for item in raw_items:
+        mode = str(item or "").strip()
+        if not mode or mode not in SCRAPEOPS_REQUEST_MODES or mode in normalized:
+            continue
+        normalized.append(mode)
+    return tuple(normalized or list(default_modes))
+
+
+def _matches_domain_pattern(pattern: str, host: str) -> bool:
+    normalized_pattern = str(pattern or "").strip().lower()
+    normalized_host = str(host or "").strip().lower().split(":")[0]
+    if not normalized_pattern or not normalized_host:
+        return False
+    if "://" in normalized_pattern:
+        normalized_pattern = (urlparse(normalized_pattern).netloc or "").lower()
+    normalized_pattern = normalized_pattern.lstrip(".")
+    if "*" in normalized_pattern:
+        return fnmatch(normalized_host, normalized_pattern) or fnmatch(f".{normalized_host}", normalized_pattern)
+    return (
+        normalized_host == normalized_pattern
+        or normalized_host.endswith(f".{normalized_pattern}")
+        or normalized_pattern in normalized_host
+    )
+
+
+def _matches_text_pattern(pattern: str, value: str) -> bool:
+    normalized_pattern = str(pattern or "").strip().casefold()
+    normalized_value = str(value or "").strip().casefold()
+    if not normalized_pattern or not normalized_value:
+        return False
+    if "*" in normalized_pattern:
+        return fnmatch(normalized_value, normalized_pattern)
+    return normalized_pattern in normalized_value
+
+
+def _normalize_domain_policies(raw_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, (list, tuple)):
+        return []
+    policies: list[dict[str, Any]] = []
+    for item in raw_value:
+        if not isinstance(item, dict) or not bool(item.get("is_active", True)):
+            continue
+        domain_pattern = str(item.get("domain_pattern") or "").strip()
+        company_name_pattern = str(item.get("company_name_pattern") or "").strip()
+        if not domain_pattern and not company_name_pattern:
+            continue
+        try:
+            priority = int(item.get("priority") or 100)
+        except (TypeError, ValueError):
+            priority = 100
+        policies.append(
+            {
+                **item,
+                "domain_pattern": domain_pattern,
+                "company_name_pattern": company_name_pattern,
+                "priority": max(0, priority),
+            }
+        )
+    policies.sort(key=lambda policy: (int(policy.get("priority") or 0), str(policy.get("policy_id") or "")))
+    return policies
+
+
+def _select_domain_policy(
+    *,
+    site_url: str,
+    company_name: str,
+    domain_policies: list[dict[str, Any]],
+) -> dict[str, Any]:
+    host = (urlparse(site_url).netloc or "").lower()
+    for policy in domain_policies:
+        domain_pattern = str(policy.get("domain_pattern") or "")
+        company_name_pattern = str(policy.get("company_name_pattern") or "")
+        if domain_pattern and _matches_domain_pattern(domain_pattern, host):
+            return policy
+        if company_name_pattern and _matches_text_pattern(company_name_pattern, company_name):
+            return policy
+    return {}
+
+
+def plan_company_site_scope(
+    *,
+    company_sites: Any,
+    target_country_codes: Any = None,
+    target_cities: Any = None,
+    locality_mode: str = LOCALITY_MODE_LOCAL_PREFERRED,
+    max_sites_per_run: int = -1,
+    domain_policies: Any = None,
+) -> CompanySiteScopePlan:
+    parsed_sites = parse_company_site_entries(company_sites, limit=None)
+    normalized_country_codes = _normalize_country_codes(target_country_codes)
+    normalized_target_cities = _normalize_city_names(target_cities)
+    normalized_locality_mode = _normalize_locality_mode(locality_mode)
+    normalized_domain_policies = _normalize_domain_policies(domain_policies)
+    ranked_sites: list[tuple[int, dict[str, Any]]] = []
+    skipped_sites: list[dict[str, Any]] = []
+    foreign_skipped = 0
+    for entry in parsed_sites:
+        site_policy = _select_domain_policy(
+            site_url=str(entry.get("url") or ""),
+            company_name=str(entry.get("company_name") or ""),
+            domain_policies=normalized_domain_policies,
+        )
+        site_country_codes = normalized_country_codes
+        if str(site_policy.get("country_code") or "").strip():
+            site_country_codes = _normalize_country_codes([site_policy.get("country_code")])
+        site_locality_mode = _normalize_locality_mode(site_policy.get("locality_mode") or normalized_locality_mode)
+        signal = _site_locality_signal(
+            str(entry.get("url") or ""),
+            target_country_codes=site_country_codes,
+            target_cities=normalized_target_cities,
+        )
+        enriched_entry = {
+            **entry,
+            "locality_signal": signal["signal"],
+            "matched_target_countries": list(signal.get("matched_target_countries") or []),
+            "matched_target_cities": list(signal.get("matched_target_cities") or []),
+            "matched_foreign_countries": list(signal.get("matched_foreign_countries") or []),
+            "domain_policy_id": str(site_policy.get("policy_id") or ""),
+        }
+        if site_country_codes and signal["signal"] == "foreign":
+            skipped_sites.append(
+                {
+                    **enriched_entry,
+                    "skip_reason": "foreign_market_site",
+                }
+            )
+            foreign_skipped += 1
+            continue
+        score = {
+            "local": 0,
+            "global": 1,
+            "unknown": 2,
+        }.get(signal["signal"], 3)
+        if site_locality_mode == LOCALITY_MODE_STRICT_LOCAL_ONLY and signal["signal"] == "unknown":
+            score = 2
+        ranked_sites.append((score, enriched_entry))
+
+    ranked_sites.sort(
+        key=lambda item: (
+            item[0],
+            str(item[1].get("company_name") or "").casefold(),
+            str(item[1].get("url") or "").casefold(),
+        )
+    )
+    selected_sites = [item for _, item in ranked_sites]
+    truncated_sites = 0
+    normalized_site_limit = int(max_sites_per_run or 0)
+    if normalized_site_limit > 0 and len(selected_sites) > normalized_site_limit:
+        kept_sites = selected_sites[:normalized_site_limit]
+        overflow_sites = selected_sites[normalized_site_limit:]
+        truncated_sites = len(overflow_sites)
+        selected_sites = kept_sites
+        skipped_sites.extend(
+            [
+                {
+                    **entry,
+                    "skip_reason": "plan_company_site_limit",
+                }
+                for entry in overflow_sites
+            ]
+        )
+
+    local_site_count = sum(1 for item in selected_sites if str(item.get("locality_signal") or "") == "local")
+    global_site_count = sum(1 for item in selected_sites if str(item.get("locality_signal") or "") == "global")
+    unknown_site_count = sum(1 for item in selected_sites if str(item.get("locality_signal") or "") == "unknown")
+    return CompanySiteScopePlan(
+        selected_sites=selected_sites,
+        skipped_sites=skipped_sites,
+        stats={
+            "policy_version": SCRAPEOPS_POLICY_VERSION,
+            "target_country_codes": list(normalized_country_codes),
+            "target_cities": list(normalized_target_cities),
+            "locality_mode": normalized_locality_mode,
+            "input_site_count": len(parsed_sites),
+            "selected_site_count": len(selected_sites),
+            "skipped_site_count": len(skipped_sites),
+            "foreign_site_skipped_count": foreign_skipped,
+            "plan_site_limit_applied_count": truncated_sites,
+            "local_site_count": local_site_count,
+            "global_site_count": global_site_count,
+            "unknown_site_count": unknown_site_count,
+        },
+    )
+
+
+def estimate_company_site_runner_credit_range(
+    *,
+    site_count: int,
+    locality_mode: str,
+    has_target_country: bool,
+    run_credit_budget: int = -1,
+) -> dict[str, Any]:
+    normalized_site_count = max(0, int(site_count))
+    normalized_locality_mode = _normalize_locality_mode(locality_mode)
+    if normalized_site_count == 0:
+        return {
+            "min_runner_credits": 0,
+            "likely_runner_credits": 0,
+            "max_runner_credits": 0,
+            "confidence": "high",
+        }
+    base_min = normalized_site_count * estimate_mode_runner_credits("basic")
+    likely_multiplier = 6 if has_target_country else 8
+    max_multiplier = 16 if normalized_locality_mode == LOCALITY_MODE_STRICT_LOCAL_ONLY else 20
+    estimate = {
+        "min_runner_credits": base_min,
+        "likely_runner_credits": normalized_site_count * likely_multiplier,
+        "max_runner_credits": normalized_site_count * max_multiplier,
+        "confidence": "medium",
+    }
+    if int(run_credit_budget or 0) > 0:
+        estimate["max_runner_credits"] = min(int(run_credit_budget), int(estimate["max_runner_credits"]))
+        estimate["likely_runner_credits"] = min(int(run_credit_budget), int(estimate["likely_runner_credits"]))
+    return estimate
+
+
+def _looks_like_direct_job_link(url: str, label: str = "") -> bool:
+    haystack = f"{label} {url}".lower()
+    if _has_any_hint(haystack, DIRECT_JOB_LINK_HINTS):
+        return True
+    path = (urlparse(url).path or "").lower()
+    path_segments = [segment for segment in re.split(r"/+", path) if segment]
+    if len(path_segments) >= 2:
+        parent_segment = path_segments[-2]
+        leaf_segment = path_segments[-1]
+        if parent_segment in {
+            "job",
+            "jobs",
+            "career",
+            "careers",
+            "position",
+            "positions",
+            "opening",
+            "openings",
+            "offer",
+            "offers",
+            "role",
+            "roles",
+            "stelle",
+            "stellen",
+            "posting",
+            "postings",
+            "vacancy",
+            "vacancies",
+        } and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,}", leaf_segment):
+            return True
+    return bool(re.search(r"(?:^|[-_/])(job|req|position|offer|stelle|posting)[-_]?[a-z0-9]{2,}", path))
+
+
+def _looks_like_listing_link(url: str, label: str = "") -> bool:
+    if _looks_like_direct_job_link(url, label):
+        return False
+    haystack = f"{label} {url}".lower()
+    if _has_any_hint(haystack, LISTING_LINK_HINTS):
+        return True
+    if not detect_ats_type(url):
+        return False
+    normalized_path = re.sub(r"/{2,}", "/", (urlparse(url).path or "/")).rstrip("/")
+    return normalized_path.count("/") <= 2
+
+
 def _job_like_link_score(text: str, href: str) -> int:
     haystack = f"{text} {href}".lower()
     score = 0
     for token in JOB_LINK_HINTS:
         if token in haystack:
             score += 1
+    if detect_ats_type(href):
+        score += 2
+    if _looks_like_listing_link(href, text):
+        score += 1
+    if _looks_like_direct_job_link(href, text):
+        score += 4
     return score
 
 
-def parse_company_site_entries(raw_value: Any) -> list[dict[str, str]]:
+def parse_company_site_entries(raw_value: Any, *, limit: int | None = None) -> list[dict[str, str]]:
     if isinstance(raw_value, str):
         raw_entries = [
             line.strip()
@@ -128,6 +653,7 @@ def parse_company_site_entries(raw_value: Any) -> list[dict[str, str]]:
     else:
         return []
 
+    max_entries = None if limit is None else max(0, int(limit))
     parsed_entries: list[dict[str, str]] = []
     seen_urls = set()
     for entry in raw_entries:
@@ -178,7 +704,7 @@ def parse_company_site_entries(raw_value: Any) -> list[dict[str, str]]:
                 "url": normalized_url,
             }
         )
-        if len(parsed_entries) >= 50:
+        if max_entries is not None and len(parsed_entries) >= max_entries:
             break
     return parsed_entries
 
@@ -192,7 +718,7 @@ def load_discovered_company_site_entries(paths: Any = None) -> list[dict[str, st
         for path in _discovery_path_variants(path_value):
             if not path.exists() or not path.is_file():
                 continue
-            parsed_entries = parse_company_site_entries(path.read_text(encoding="utf-8"))
+            parsed_entries = parse_company_site_entries(path.read_text(encoding="utf-8"), limit=None)
             for entry in parsed_entries:
                 url = entry.get("url") or ""
                 if not url or url in seen_urls:
@@ -205,13 +731,16 @@ def load_discovered_company_site_entries(paths: Any = None) -> list[dict[str, st
 
 def extract_company_job_links_from_html(
     *,
-    site_url: str,
+    page_url: str,
+    homepage_url: str = "",
     html: str,
     max_links: int = 20,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
-    candidates: list[tuple[int, dict[str, str]]] = []
+    candidates: list[tuple[int, dict[str, Any]]] = []
     seen = set()
+    normalized_page_url = canonicalize_url(page_url) or page_url
+    base_homepage_url = homepage_url or page_url
 
     for anchor in soup.select("a[href]"):
         raw_href = compact_whitespace(str(anchor.get("href") or ""))
@@ -220,13 +749,13 @@ def extract_company_job_links_from_html(
         lower_href = raw_href.lower()
         if any(token in lower_href for token in IGNORED_LINK_HINTS):
             continue
-        href = urljoin(site_url, raw_href)
+        href = urljoin(page_url, raw_href)
         if not is_valid_job_url(href):
             continue
         normalized_href = canonicalize_url(href) or href
-        if normalized_href == (canonicalize_url(site_url) or site_url):
+        if normalized_href == normalized_page_url:
             continue
-        if not _same_host_family(normalized_href, site_url):
+        if not detect_ats_type(normalized_href) and not _same_host_family(normalized_href, base_homepage_url):
             continue
         if normalized_href in seen:
             continue
@@ -243,12 +772,381 @@ def extract_company_job_links_from_html(
                 {
                     "url": normalized_href,
                     "label": text or normalized_href,
+                    "is_listing_page": _looks_like_listing_link(normalized_href, text),
                 },
             )
         )
 
     candidates.sort(key=lambda item: (-item[0], item[1]["label"].lower()))
-    return [payload for _, payload in candidates[: max(1, int(max_links))]]
+    normalized_max_links = int(max_links or 0)
+    if normalized_max_links <= 0:
+        return [payload for _, payload in candidates]
+    return [payload for _, payload in candidates[: max(1, normalized_max_links)]]
+
+
+def _fetch_page_content_direct_inactive(
+    url: str,
+    *,
+    request_timeout_seconds: int,
+) -> PageFetchResult:
+    """Inactive legacy direct-fetch path preserved for future experiments.
+
+    Live company-site acquisition uses ScrapeOps only.
+    """
+    requested_url = canonicalize_url(url) or compact_whitespace(url)
+    timeout_seconds = max(5, int(request_timeout_seconds))
+    response = requests.get(
+        requested_url,
+        headers=DEFAULT_HEADERS,
+        timeout=timeout_seconds,
+    )
+    response.raise_for_status()
+    return PageFetchResult(
+        requested_url=requested_url,
+        final_url=response.url or requested_url,
+        status_code=int(response.status_code),
+        text=response.text,
+        used_proxy=False,
+    )
+
+
+def _fetch_page_content(
+    url: str,
+    *,
+    request_timeout_seconds: int,
+    request_mode: str = "basic",
+    country_code: str = "",
+    company_name: str = "",
+    request_stage: str = "fetch_company_site",
+    usage_callback=None,
+) -> PageFetchResult:
+    requested_url = canonicalize_url(url) or compact_whitespace(url)
+    timeout_seconds = max(5, int(request_timeout_seconds))
+    scrapeops_api_key = os.getenv("SCRAPEOPS_API_KEY", "").strip()
+    if not scrapeops_api_key:
+        raise RuntimeError(
+            "SCRAPEOPS_API_KEY is required for company career site acquisition. "
+            "The legacy direct scraper is inactive."
+        )
+
+    proxy_params = build_proxy_params(
+        api_key=scrapeops_api_key,
+        url=requested_url,
+        mode=request_mode,
+        country_code=country_code,
+    )
+    sanitized_target_url = sanitize_url_for_logs(requested_url)
+    domain = (urlparse(requested_url).netloc or "").lower()
+    response = None
+    try:
+        response = requests.get(
+            SCRAPEOPS_PROXY_ENDPOINT,
+            params=proxy_params,
+            headers=DEFAULT_HEADERS,
+            timeout=max(10, timeout_seconds),
+        )
+    except requests.RequestException as exc:
+        safe_message = sanitize_scrapeops_text(str(exc)) or "ScrapeOps request failed."
+        if callable(usage_callback):
+            usage_callback(
+                {
+                    "target_url": sanitized_target_url,
+                    "domain": domain,
+                    "status_code": 0,
+                    "billed": False,
+                    "request_mode": request_mode,
+                    "request_mode_label": request_mode_label(request_mode),
+                    "native_credits": 0,
+                    "runner_credits": 0,
+                    "request_stage": request_stage,
+                    "company_name": company_name,
+                    "error_category": "network_error",
+                    "error_message": safe_message,
+                }
+            )
+        raise RuntimeError(f"scrapeops: {safe_message}") from exc
+
+    billed = billed_status_code(int(response.status_code or 0))
+    native_credits = estimate_mode_native_credits(request_mode) if billed else 0
+    runner_credits = estimate_mode_runner_credits(request_mode) if billed else 0
+    failure: ScrapeOpsRequestError | None = None
+    if response.status_code >= 400:
+        try:
+            raise_for_failure(response, fallback_message="ScrapeOps request failed.")
+        except ScrapeOpsRequestError as exc:
+            failure = exc
+    if callable(usage_callback):
+        usage_callback(
+            {
+                "target_url": sanitized_target_url,
+                "domain": domain,
+                "status_code": int(response.status_code or 0),
+                "billed": billed,
+                "request_mode": request_mode,
+                "request_mode_label": request_mode_label(request_mode),
+                "native_credits": native_credits,
+                "runner_credits": runner_credits,
+                "request_stage": request_stage,
+                "company_name": company_name,
+                "error_category": failure.failure.category if failure else "",
+                "error_message": str(failure) if failure else "",
+            }
+        )
+    if failure is not None:
+        if isinstance(failure, ScrapeOpsOutOfCreditsError):
+            raise failure
+        raise RuntimeError(f"scrapeops: {failure}") from failure
+
+    return PageFetchResult(
+        requested_url=requested_url,
+        final_url=requested_url,
+        status_code=int(response.status_code),
+        text=response.text,
+        used_proxy=True,
+        request_mode=request_mode,
+        request_mode_label=request_mode_label(request_mode),
+        billed_native_credits=native_credits,
+        billed_runner_credits=runner_credits,
+    )
+
+
+def _collect_candidate_links_for_page(
+    page_url: str,
+    *,
+    homepage_url: str,
+    request_timeout_seconds: int,
+    max_links: int,
+    request_mode: str,
+    country_code: str,
+    company_name: str,
+    usage_callback=None,
+) -> list[dict[str, Any]]:
+    fetch_result = _fetch_page_content(
+        page_url,
+        request_timeout_seconds=request_timeout_seconds,
+        request_mode=request_mode,
+        country_code=country_code,
+        company_name=company_name,
+        request_stage="fetch_company_site",
+        usage_callback=usage_callback,
+    )
+
+    links = extract_company_job_links_from_html(
+        page_url=fetch_result.final_url or page_url,
+        homepage_url=homepage_url,
+        html=fetch_result.text,
+        max_links=max_links,
+    )
+    return links
+
+
+def _dedupe_candidate_links(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen_urls = set()
+    for candidate in candidates:
+        normalized_url = canonicalize_url(str(candidate.get("url") or "")) or str(candidate.get("url") or "")
+        if not normalized_url or normalized_url in seen_urls:
+            continue
+        deduped.append({**candidate, "url": normalized_url})
+        seen_urls.add(normalized_url)
+    return deduped
+
+
+def _expand_listing_page_candidates(
+    candidate: dict[str, Any],
+    *,
+    homepage_url: str,
+    request_timeout_seconds: int,
+    max_links: int,
+    request_mode: str,
+    country_code: str,
+    company_name: str,
+    usage_callback=None,
+) -> list[dict[str, Any]]:
+    nested_links = _collect_candidate_links_for_page(
+        str(candidate.get("url") or ""),
+        homepage_url=homepage_url,
+        request_timeout_seconds=request_timeout_seconds,
+        max_links=max_links,
+        request_mode=request_mode,
+        country_code=country_code,
+        company_name=company_name,
+        usage_callback=usage_callback,
+    )
+    direct_links = [
+        item for item in nested_links
+        if _looks_like_direct_job_link(str(item.get("url") or ""), str(item.get("label") or ""))
+    ]
+    non_listing_links = [item for item in nested_links if not bool(item.get("is_listing_page"))]
+    return direct_links or non_listing_links
+
+
+def _collect_job_candidates_for_site(
+    *,
+    site_url: str,
+    request_timeout_seconds: int,
+    company_name: str,
+    request_modes: tuple[str, ...],
+    country_code: str,
+    locality_mode: str,
+    target_country_codes: list[str],
+    target_cities: list[str],
+    emergency_max_job_links_per_site: int,
+    usage_callback=None,
+) -> SiteCandidateCollection:
+    last_error: Exception | None = None
+    initial_candidates: list[dict[str, Any]] = []
+    for request_mode in request_modes or DEFAULT_SITE_REQUEST_MODES:
+        try:
+            initial_candidates = _collect_candidate_links_for_page(
+                site_url,
+                homepage_url=site_url,
+                request_timeout_seconds=request_timeout_seconds,
+                max_links=emergency_max_job_links_per_site,
+                request_mode=request_mode,
+                country_code=country_code,
+                company_name=company_name,
+                usage_callback=usage_callback,
+            )
+        except Exception as exc:
+            last_error = exc
+            continue
+        if initial_candidates:
+            break
+    if last_error is not None and not initial_candidates:
+        raise last_error
+    if not initial_candidates:
+        return SiteCandidateCollection(
+            candidates=[],
+            discovered_count=0,
+            followed_count=0,
+            skipped_count=0,
+            skipped_reasons=[],
+        )
+
+    direct_candidates = [candidate for candidate in initial_candidates if not bool(candidate.get("is_listing_page"))]
+    listing_candidates = [candidate for candidate in initial_candidates if bool(candidate.get("is_listing_page"))]
+    collected_candidates = _dedupe_candidate_links(direct_candidates)
+    skipped_reasons: list[dict[str, Any]] = []
+
+    for candidate in listing_candidates:
+        if len(collected_candidates) >= max(1, int(emergency_max_job_links_per_site)):
+            break
+        expanded_candidates: list[dict[str, Any]] = []
+        for request_mode in request_modes or DEFAULT_SITE_REQUEST_MODES:
+            try:
+                expanded_candidates = _expand_listing_page_candidates(
+                    candidate,
+                    homepage_url=site_url,
+                    request_timeout_seconds=request_timeout_seconds,
+                    max_links=emergency_max_job_links_per_site,
+                    request_mode=request_mode,
+                    country_code=country_code,
+                    company_name=company_name,
+                    usage_callback=usage_callback,
+                )
+            except Exception:
+                continue
+            if expanded_candidates:
+                break
+        for expanded_candidate in _dedupe_candidate_links(expanded_candidates):
+            if len(collected_candidates) >= max(1, int(emergency_max_job_links_per_site)):
+                break
+            if any(existing.get("url") == expanded_candidate.get("url") for existing in collected_candidates):
+                continue
+            collected_candidates.append(expanded_candidate)
+
+    discovered_candidates = _dedupe_candidate_links(collected_candidates)
+    followed_candidates: list[dict[str, Any]] = []
+    for candidate in discovered_candidates:
+        signal = _candidate_locality_signal(
+            label=str(candidate.get("label") or ""),
+            url=str(candidate.get("url") or ""),
+            target_country_codes=target_country_codes,
+            target_cities=target_cities,
+        )
+        if target_country_codes and signal["signal"] == "foreign":
+            skipped_reasons.append(
+                {
+                    "url": str(candidate.get("url") or ""),
+                    "reason": "foreign_market_candidate",
+                }
+            )
+            continue
+        followed_candidates.append(
+            {
+                **candidate,
+                "locality_signal": signal["signal"],
+                "matched_target_cities": list(signal.get("matched_target_cities") or []),
+                "matched_target_countries": list(signal.get("matched_target_countries") or []),
+            }
+        )
+
+    discovered_count = len(discovered_candidates)
+    capped_candidates = followed_candidates
+    emergency_ceiling_hit = False
+    normalized_ceiling = max(1, int(emergency_max_job_links_per_site))
+    if len(capped_candidates) > normalized_ceiling:
+        emergency_ceiling_hit = True
+        overflow = capped_candidates[normalized_ceiling:]
+        capped_candidates = capped_candidates[:normalized_ceiling]
+        skipped_reasons.extend(
+            [
+                {
+                    "url": str(item.get("url") or ""),
+                    "reason": "emergency_job_link_ceiling",
+                }
+                for item in overflow
+            ]
+        )
+
+    return SiteCandidateCollection(
+        candidates=capped_candidates,
+        discovered_count=discovered_count,
+        followed_count=len(capped_candidates),
+        skipped_count=max(0, discovered_count - len(capped_candidates)),
+        skipped_reasons=skipped_reasons,
+        emergency_ceiling_hit=emergency_ceiling_hit,
+    )
+
+
+def _normalize_company_job_with_modes(
+    candidate_url: str,
+    *,
+    scrapeops_api_key: str,
+    request_timeout_seconds: int,
+    job_detail_request_modes: tuple[str, ...],
+    country_code: str,
+    company_name: str,
+    usage_callback=None,
+) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for request_mode in job_detail_request_modes or DEFAULT_JOB_DETAIL_REQUEST_MODES:
+        try:
+            job = fetch_and_normalize_manual_job(
+                candidate_url,
+                scrapeops_api_key=scrapeops_api_key,
+                force_scrapeops=True,
+                request_timeout_seconds=request_timeout_seconds,
+                scrapeops_mode=request_mode,
+                scrapeops_country_code=country_code,
+                usage_callback=usage_callback,
+                usage_stage="normalize_company_job",
+                usage_company_name=company_name,
+            )
+        except Exception as exc:
+            last_error = exc
+            if isinstance(exc, ScrapeOpsOutOfCreditsError):
+                raise
+            continue
+        title = compact_whitespace(str(job.get("title") or ""))
+        description = compact_whitespace(str(job.get("full_description") or ""))
+        if title or description:
+            return job
+        last_error = RuntimeError("Normalized job payload was empty.")
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Unable to normalize company job.")
 
 
 def scrape_company_career_sites(
@@ -256,25 +1154,173 @@ def scrape_company_career_sites(
     company_sites: Any,
     keywords: Any = None,
     request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
-    max_jobs_per_site: int = 10,
+    max_jobs_per_site: int = 0,
+    use_proxy_fallback: bool = False,
+    target_country_codes: Any = None,
+    target_cities: Any = None,
+    locality_mode: str = LOCALITY_MODE_LOCAL_PREFERRED,
+    site_request_modes: tuple[str, ...] = DEFAULT_SITE_REQUEST_MODES,
+    job_detail_request_modes: tuple[str, ...] = DEFAULT_JOB_DETAIL_REQUEST_MODES,
+    domain_policies: Any = None,
+    max_sites_per_run: int = -1,
+    run_credit_budget: int = -1,
+    emergency_max_job_links_per_site: int = DEFAULT_EMERGENCY_MAX_JOB_LINKS_PER_SITE,
+    usage_callback=None,
     logger=None,
+    progress_callback=None,
+    should_cancel=None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    parsed_sites = parse_company_site_entries(company_sites)
+    scope_plan = plan_company_site_scope(
+        company_sites=company_sites,
+        target_country_codes=target_country_codes,
+        target_cities=target_cities,
+        locality_mode=locality_mode,
+        max_sites_per_run=max_sites_per_run,
+        domain_policies=domain_policies,
+    )
+    parsed_sites = list(scope_plan.selected_sites)
     normalized_keywords = _normalize_keywords(keywords)
+    normalized_country_codes = _normalize_country_codes(target_country_codes)
+    normalized_target_cities = _normalize_city_names(target_cities)
+    normalized_locality_mode = _normalize_locality_mode(locality_mode)
+    normalized_domain_policies = _normalize_domain_policies(domain_policies)
+    base_site_request_modes = _normalize_request_modes(site_request_modes, DEFAULT_SITE_REQUEST_MODES)
+    base_job_detail_request_modes = _normalize_request_modes(job_detail_request_modes, DEFAULT_JOB_DETAIL_REQUEST_MODES)
+    scrapeops_api_key = os.getenv("SCRAPEOPS_API_KEY", "").strip()
     collected_jobs: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    processed_sites = 0
+    failed_sites = 0
+    discovered_candidates_total = 0
+    followed_candidates_total = 0
+    skipped_candidates_total = 0
+    emergency_ceiling_hits = 0
+    keyword_filtered_jobs = 0
+    runner_credits_consumed = 0
+    native_credits_consumed = 0
+    billed_request_count = 0
+    request_count = 0
+    explicit_job_cap = max(0, int(max_jobs_per_site or 0))
+
+    def on_usage_event(event: dict[str, Any]) -> None:
+        nonlocal request_count, billed_request_count, runner_credits_consumed, native_credits_consumed
+        request_count += 1
+        if bool(event.get("billed")):
+            billed_request_count += 1
+            runner_credits_consumed += int(event.get("runner_credits") or 0)
+            native_credits_consumed += int(event.get("native_credits") or 0)
+        if callable(usage_callback):
+            usage_callback(event)
+
+    def emit_progress(
+        *,
+        company_name: str = "",
+        site_url: str = "",
+        message: str = "",
+        active_locality_mode: str = "",
+        domain_policy_id: str = "",
+    ) -> None:
+        if not callable(progress_callback):
+            return
+        recent_failures = failures[-3:] if failures else []
+        progress_callback(
+            {
+                "message": message,
+                "counters": {
+                    "policy_version": SCRAPEOPS_POLICY_VERSION,
+                    "input_sites": int(scope_plan.stats.get("input_site_count") or len(parsed_sites)),
+                    "total_sites": len(parsed_sites),
+                    "processed_sites": processed_sites,
+                    "skipped_sites": int(scope_plan.stats.get("skipped_site_count") or 0),
+                    "failed_sites": failed_sites,
+                    "jobs_found": len(collected_jobs),
+                    "candidate_jobs_discovered": discovered_candidates_total,
+                    "candidate_jobs_followed": followed_candidates_total,
+                    "candidate_jobs_skipped": skipped_candidates_total,
+                    "keyword_filtered_jobs": keyword_filtered_jobs,
+                    "legacy_jobs_per_site_cap": explicit_job_cap,
+                    "legacy_jobs_per_site_cap_active": explicit_job_cap > 0,
+                    "emergency_max_job_links_per_site": int(emergency_max_job_links_per_site),
+                    "emergency_ceiling_hits": emergency_ceiling_hits,
+                    "runner_credits_consumed": runner_credits_consumed,
+                    "native_credits_consumed": native_credits_consumed,
+                    "billed_request_count": billed_request_count,
+                    "request_count": request_count,
+                    "run_credit_budget": int(run_credit_budget or 0),
+                    "locality_mode": normalized_locality_mode,
+                    "request_timeout_seconds": int(request_timeout_seconds),
+                },
+                "current_item": {
+                    "company_name": company_name,
+                    "site_url": site_url,
+                    "access_method": ACTIVE_COMPANY_SITE_ACCESS_METHOD,
+                    "locality_mode": active_locality_mode or normalized_locality_mode,
+                    "target_country_codes": list(normalized_country_codes),
+                    "domain_policy_id": domain_policy_id,
+                },
+                "recent_failures": recent_failures,
+            }
+        )
+
+    emit_progress(message="Preparing company career site discovery.")
 
     for site in parsed_sites:
+        if callable(should_cancel) and should_cancel():
+            raise RuntimeError("Run cancellation requested.")
         company_name = site.get("company_name") or ""
         site_url = site.get("url") or ""
+        site_domain_policy = _select_domain_policy(
+            site_url=site_url,
+            company_name=company_name,
+            domain_policies=normalized_domain_policies,
+        )
+        site_policy_id = str(site_domain_policy.get("policy_id") or "").strip()
+        site_locality_mode = _normalize_locality_mode(
+            site_domain_policy.get("locality_mode") or normalized_locality_mode
+        )
+        active_site_request_modes = _normalize_request_modes(
+            site_domain_policy.get("site_request_modes"),
+            base_site_request_modes,
+        )
+        active_job_detail_request_modes = _normalize_request_modes(
+            site_domain_policy.get("job_detail_request_modes"),
+            base_job_detail_request_modes,
+        )
+        site_target_country_codes = normalized_country_codes
+        if str(site_domain_policy.get("country_code") or "").strip():
+            site_target_country_codes = _normalize_country_codes([site_domain_policy.get("country_code")])
+        site_country_code = normalize_scrapeops_country_code(
+            str(site_domain_policy.get("country_code") or "").strip()
+            or (site_target_country_codes[0] if len(site_target_country_codes) == 1 else "")
+        )
+        emit_progress(
+            company_name=company_name,
+            site_url=site_url,
+            message=f"Scanning {company_name or site_url}",
+            active_locality_mode=site_locality_mode,
+            domain_policy_id=site_policy_id,
+        )
+
+        def on_site_usage_event(event: dict[str, Any]) -> None:
+            enriched_event = dict(event or {})
+            if site_policy_id:
+                enriched_event["domain_policy_id"] = site_policy_id
+            on_usage_event(enriched_event)
+
         try:
-            response = requests.get(
-                site_url,
-                headers=DEFAULT_HEADERS,
-                timeout=max(5, int(request_timeout_seconds)),
+            candidate_collection = _collect_job_candidates_for_site(
+                site_url=site_url,
+                request_timeout_seconds=request_timeout_seconds,
+                company_name=company_name,
+                request_modes=active_site_request_modes,
+                country_code=site_country_code,
+                locality_mode=site_locality_mode,
+                target_country_codes=site_target_country_codes,
+                target_cities=normalized_target_cities,
+                emergency_max_job_links_per_site=emergency_max_job_links_per_site,
+                usage_callback=on_site_usage_event,
             )
-            response.raise_for_status()
-        except Exception as exc:
+        except ScrapeOpsOutOfCreditsError as exc:
             failures.append(
                 {
                     "company_name": company_name,
@@ -283,39 +1329,125 @@ def scrape_company_career_sites(
                     "stage": "fetch_company_site",
                 }
             )
+            failed_sites += 1
+            processed_sites += 1
+            emit_progress(
+                company_name=company_name,
+                site_url=site_url,
+                message="ScrapeOps is out of credits.",
+                active_locality_mode=site_locality_mode,
+                domain_policy_id=site_policy_id,
+            )
+            raise RuntimeError(str(exc)) from exc
+        except Exception as exc:
+            failures.append(
+                {
+                    "company_name": company_name,
+                    "url": site_url,
+                    "error": sanitize_scrapeops_text(str(exc)),
+                    "stage": "fetch_company_site",
+                }
+            )
+            failed_sites += 1
+            processed_sites += 1
+            emit_progress(
+                company_name=company_name,
+                site_url=site_url,
+                message=f"Failed to fetch {company_name or site_url}",
+                active_locality_mode=site_locality_mode,
+                domain_policy_id=site_policy_id,
+            )
             continue
 
-        candidate_links = extract_company_job_links_from_html(
-            site_url=site_url,
-            html=response.text,
-            max_links=max_jobs_per_site,
-        )
+        discovered_candidates_total += int(candidate_collection.discovered_count)
+        followed_candidates_total += int(candidate_collection.followed_count)
+        skipped_candidates_total += int(candidate_collection.skipped_count)
+        if candidate_collection.emergency_ceiling_hit:
+            emergency_ceiling_hits += 1
+        for skipped in candidate_collection.skipped_reasons:
+            failures.append(
+                {
+                    "company_name": company_name,
+                    "url": str(skipped.get("url") or site_url),
+                    "error": str(skipped.get("reason") or "candidate_skipped"),
+                    "stage": "company_site_candidate_filter",
+                }
+            )
+
+        candidate_links = list(candidate_collection.candidates)
+        if explicit_job_cap > 0 and len(candidate_links) > explicit_job_cap:
+            skipped_candidates_total += len(candidate_links) - explicit_job_cap
+            failures.extend(
+                [
+                    {
+                        "company_name": company_name,
+                        "url": str(item.get("url") or site_url),
+                        "error": "explicit_jobs_per_site_cap",
+                        "stage": "company_site_candidate_filter",
+                    }
+                    for item in candidate_links[explicit_job_cap:]
+                ]
+            )
+            candidate_links = candidate_links[:explicit_job_cap]
 
         if not candidate_links:
             failures.append(
                 {
                     "company_name": company_name,
                     "url": site_url,
-                    "error": "No job links discovered on career site.",
+                    "error": "No job posting links discovered from the career site entry point.",
                     "stage": "discover_company_jobs",
                 }
+            )
+            failed_sites += 1
+            processed_sites += 1
+            emit_progress(
+                company_name=company_name,
+                site_url=site_url,
+                message=f"No jobs found on {company_name or site_url}",
+                active_locality_mode=site_locality_mode,
+                domain_policy_id=site_policy_id,
             )
             continue
 
         for candidate in candidate_links:
-            candidate_url = candidate["url"]
-            candidate_label = candidate["label"]
+            if callable(should_cancel) and should_cancel():
+                raise RuntimeError("Run cancellation requested.")
+            candidate_url = str(candidate.get("url") or "")
+            candidate_label = str(candidate.get("label") or "")
             try:
-                job = fetch_and_normalize_manual_job(
+                job = _normalize_company_job_with_modes(
                     candidate_url,
+                    scrapeops_api_key=scrapeops_api_key,
                     request_timeout_seconds=request_timeout_seconds,
+                    job_detail_request_modes=active_job_detail_request_modes,
+                    country_code=site_country_code,
+                    company_name=company_name,
+                    usage_callback=on_site_usage_event,
                 )
-            except Exception as exc:
+            except ScrapeOpsOutOfCreditsError as exc:
                 failures.append(
                     {
                         "company_name": company_name,
                         "url": candidate_url,
                         "error": str(exc),
+                        "stage": "normalize_company_job",
+                    }
+                )
+                emit_progress(
+                    company_name=company_name,
+                    site_url=site_url,
+                    message="ScrapeOps is out of credits.",
+                    active_locality_mode=site_locality_mode,
+                    domain_policy_id=site_policy_id,
+                )
+                raise RuntimeError(str(exc)) from exc
+            except Exception as exc:
+                failures.append(
+                    {
+                        "company_name": company_name,
+                        "url": candidate_url,
+                        "error": sanitize_scrapeops_text(str(exc)),
                         "stage": "normalize_company_job",
                     }
                 )
@@ -330,6 +1462,7 @@ def scrape_company_career_sites(
                 ]
             ).lower()
             if normalized_keywords and not any(keyword in searchable for keyword in normalized_keywords):
+                keyword_filtered_jobs += 1
                 continue
 
             if not compact_whitespace(str(job.get("title") or "")):
@@ -341,7 +1474,18 @@ def scrape_company_career_sites(
             job["manual_approved"] = False
             job["career_site_url"] = site_url
             job["career_site_company_name"] = company_name
+            job["company_site_locality_mode"] = site_locality_mode
+            if site_policy_id:
+                job["company_site_domain_policy_id"] = site_policy_id
             collected_jobs.append(job)
+        processed_sites += 1
+        emit_progress(
+            company_name=company_name,
+            site_url=site_url,
+            message=f"Completed {company_name or site_url}",
+            active_locality_mode=site_locality_mode,
+            domain_policy_id=site_policy_id,
+        )
 
     deduped_jobs, dropped_duplicates = dedupe_job_records(collected_jobs, logger=logger)
     for dropped in dropped_duplicates:
@@ -353,14 +1497,25 @@ def scrape_company_career_sites(
                 "stage": "dedupe_company_jobs",
             }
         )
+    if dropped_duplicates:
+        emit_progress(message="Deduplicating discovered jobs.")
     return deduped_jobs, failures
 
 
 __all__ = [
     "ACADEMIC_CAREER_SITE_FILES",
+    "CompanySiteScopePlan",
+    "DEFAULT_EMERGENCY_MAX_JOB_LINKS_PER_SITE",
+    "DEFAULT_JOB_DETAIL_REQUEST_MODES",
+    "DEFAULT_SITE_REQUEST_MODES",
+    "LOCALITY_MODE_LOCAL_PREFERRED",
+    "LOCALITY_MODE_STRICT_LOCAL_ONLY",
+    "estimate_company_site_runner_credit_range",
     "extract_company_job_links_from_html",
     "load_discovered_company_site_entries",
+    "PageFetchResult",
     "parse_company_site_entries",
+    "plan_company_site_scope",
     "REGULAR_COMPANY_SITE_FILES",
     "scrape_company_career_sites",
 ]

@@ -39,15 +39,15 @@ from backend.domain.models import (
 )
 
 _CLERK_API_BASE_URL = "https://api.clerk.com/v1"
-_CLERK_JWKS_URL = f"{_CLERK_API_BASE_URL}/jwks"
 _JWKS_CACHE_TTL_SECONDS = 300
 _WEBHOOK_TOLERANCE_SECONDS = 300
+_DEFAULT_HTTP_USER_AGENT = "runr-backend/0.1 (+https://127.0.0.1 local-dev)"
 CLERK_JWT_TEMPLATE_NAME = "runr_backend"
 # This must match the Clerk JWT Template name in the Clerk dashboard exactly.
 
 _JWKS_CACHE: dict[str, Any] = {
-    "fetched_at": 0.0,
-    "keys": {},
+    "fetched_at_by_url": {},
+    "keys_by_url": {},
 }
 
 _USER_SCOPES = [
@@ -162,6 +162,37 @@ def _urlsafe_b64decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(f"{normalized}{'=' * padding_length}")
 
 
+def _decode_clerk_publishable_key_host(value: str) -> str:
+    publishable_key = str(value or "").strip()
+    if not publishable_key:
+        return ""
+    parts = publishable_key.split("_", 2)
+    if len(parts) != 3:
+        return ""
+    try:
+        decoded = _urlsafe_b64decode(parts[2]).decode("utf-8")
+    except Exception:
+        return ""
+    return decoded.rstrip("$").strip().strip("/")
+
+
+def _configured_clerk_issuer() -> str:
+    configured = str(os.getenv("CLERK_ISSUER") or "").strip().rstrip("/")
+    if configured:
+        return configured
+    publishable_host = _decode_clerk_publishable_key_host(os.getenv("CLERK_PUBLISHABLE_KEY") or "")
+    if publishable_host:
+        return f"https://{publishable_host}"
+    return ""
+
+
+def _jwks_url_for_issuer(issuer: str) -> str:
+    normalized = str(issuer or "").strip().rstrip("/")
+    if not normalized:
+        raise RuntimeError("Missing Clerk issuer; cannot determine JWKS endpoint.")
+    return f"{normalized}/.well-known/jwks.json"
+
+
 def _json_request(
     method: str,
     url: str,
@@ -172,6 +203,7 @@ def _json_request(
     encoded_body = None
     request_headers = {
         "Accept": "application/json",
+        "User-Agent": _DEFAULT_HTTP_USER_AGENT,
     }
     if payload is not None:
         encoded_body = json.dumps(payload).encode("utf-8")
@@ -194,13 +226,16 @@ def _json_request(
     return json.loads(response_body or "{}")
 
 
-def _fetch_jwks(*, force: bool = False) -> dict[str, Any]:
+def _fetch_jwks(issuer: str, *, force: bool = False) -> dict[str, Any]:
+    jwks_url = _jwks_url_for_issuer(issuer)
     now = time.time()
-    cached_keys = _JWKS_CACHE.get("keys") or {}
-    fetched_at = float(_JWKS_CACHE.get("fetched_at") or 0.0)
+    keys_by_url = _JWKS_CACHE.get("keys_by_url") or {}
+    fetched_at_by_url = _JWKS_CACHE.get("fetched_at_by_url") or {}
+    cached_keys = keys_by_url.get(jwks_url) or {}
+    fetched_at = float(fetched_at_by_url.get(jwks_url) or 0.0)
     if not force and cached_keys and now - fetched_at < _JWKS_CACHE_TTL_SECONDS:
         return dict(cached_keys)
-    payload = _json_request("GET", _CLERK_JWKS_URL)
+    payload = _json_request("GET", jwks_url)
     keys_by_id = {
         str(item.get("kid") or "").strip(): dict(item)
         for item in payload.get("keys") or []
@@ -208,8 +243,10 @@ def _fetch_jwks(*, force: bool = False) -> dict[str, Any]:
     }
     if not keys_by_id:
         raise RuntimeError("Clerk JWKS endpoint returned no signing keys.")
-    _JWKS_CACHE["keys"] = keys_by_id
-    _JWKS_CACHE["fetched_at"] = now
+    keys_by_url[jwks_url] = keys_by_id
+    fetched_at_by_url[jwks_url] = now
+    _JWKS_CACHE["keys_by_url"] = keys_by_url
+    _JWKS_CACHE["fetched_at_by_url"] = fetched_at_by_url
     return dict(keys_by_id)
 
 
@@ -269,10 +306,18 @@ def verify_session_token(
     if not key_id:
         raise ValueError("Missing Clerk JWT key identifier.")
 
-    jwks = _fetch_jwks()
+    configured_issuer = _configured_clerk_issuer()
+    token_issuer = str(claims.get("iss") or "").strip().rstrip("/")
+    if configured_issuer and token_issuer and token_issuer != configured_issuer:
+        raise ValueError("Clerk session token issuer does not match the configured Clerk instance.")
+    issuer = token_issuer or configured_issuer
+    if not issuer:
+        raise ValueError("Missing Clerk session token issuer.")
+
+    jwks = _fetch_jwks(issuer)
     jwk = jwks.get(key_id)
     if jwk is None:
-        jwks = _fetch_jwks(force=True)
+        jwks = _fetch_jwks(issuer, force=True)
         jwk = jwks.get(key_id)
     if jwk is None:
         raise ValueError(f"Unable to find Clerk JWKS key '{key_id}'.")
@@ -339,7 +384,13 @@ def list_users(*, email_addresses: list[str] | None = None, external_ids: list[s
     if external_ids:
         query["external_id"] = [item for item in external_ids if str(item).strip()]
     payload = _clerk_api_request("GET", "/users", query=query)
-    return [dict(item) for item in payload.get("data") or [] if isinstance(item, Mapping)]
+    if isinstance(payload, Mapping):
+        items = payload.get("data") or []
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        items = []
+    return [dict(item) for item in items if isinstance(item, Mapping)]
 
 
 def find_user_by_email(email_address: str) -> dict[str, Any] | None:

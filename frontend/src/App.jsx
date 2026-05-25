@@ -11,6 +11,7 @@ import { isAdminUser } from "./lib/auth";
 
 const AdminPage = lazy(() => import("./pages/AdminPage"));
 const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
+const AdminScrapeOpsPage = lazy(() => import("./pages/AdminScrapeOpsPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
 const DocumentsPage = lazy(() => import("./pages/ArtifactsPage"));
@@ -129,6 +130,14 @@ function AuthenticatedApp() {
             element={(
               <RequireAdminRoute>
                 <AdminEventsPage />
+              </RequireAdminRoute>
+            )}
+          />
+          <Route
+            path="/admin/scrapeops"
+            element={(
+              <RequireAdminRoute>
+                <AdminScrapeOpsPage />
               </RequireAdminRoute>
             )}
           />

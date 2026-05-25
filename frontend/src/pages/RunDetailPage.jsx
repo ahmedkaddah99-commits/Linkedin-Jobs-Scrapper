@@ -9,16 +9,28 @@ import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
 
-function SummaryCard({ description, label, value }) {
-  return (
-    <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
-      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">
-        {label}
-      </div>
-      <div className="mt-3 font-headline text-3xl font-bold text-on-surface">{value}</div>
-      <div className="mt-1 text-sm text-on-surface-variant">{description}</div>
-    </div>
-  );
+function formatDuration(seconds) {
+  const total = Math.max(0, Number.parseInt(seconds || 0, 10) || 0);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainingSeconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
+  return `${remainingSeconds}s`;
+}
+
+function progressTone(health) {
+  if (health === "stale") return "warning";
+  if (health === "slow") return "primary";
+  return "success";
+}
+
+function formatAccessMethod(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "scrapeops_proxy") return "ScrapeOps Proxy";
+  if (normalized === "direct_only") return "Direct Request";
+  if (normalized === "proxy_fallback_enabled") return "Direct With Proxy Fallback";
+  return labelize(value || "");
 }
 
 function ReviewSection({ children, count, defaultOpen = true, title, tone = "primary" }) {
@@ -222,6 +234,122 @@ function ExcludedJobRow({ job, runId }) {
   );
 }
 
+function RunProgressPanel({ progress, usage }) {
+  if (!progress || !progress.stage_id) {
+    return null;
+  }
+  const counters = progress.counters || {};
+  const currentItem = progress.current_item || {};
+  const accessMethod = currentItem.access_method || currentItem.transport || "";
+  const recentFailures = progress.recent_failures || [];
+  const usageTotals = usage?.totals || {};
+  const stagePosition =
+    counters.stage_index && counters.total_stages
+      ? `Stage ${counters.stage_index} of ${counters.total_stages}`
+      : "Active stage";
+
+  return (
+    <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusBadge tone={progressTone(progress.health)}>{progress.health_label || "Running"}</StatusBadge>
+            <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+              {stagePosition}
+            </span>
+          </div>
+          <h2 className="mt-3 font-headline text-2xl font-bold text-on-surface">
+            {progress.stage_name || labelize(progress.stage_id)}
+          </h2>
+          <p className="mt-1 text-sm leading-7 text-on-surface-variant">
+            {progress.message || "Run progress is being updated while this stage executes."}
+          </p>
+        </div>
+        <div className="grid gap-2 text-sm text-on-surface-variant">
+          <div>
+            <span className="font-semibold text-on-surface">Elapsed:</span> {formatDuration(progress.elapsed_seconds)}
+          </div>
+          <div>
+            <span className="font-semibold text-on-surface">Last movement:</span> {formatDuration(progress.idle_seconds)} ago
+          </div>
+          {progress.last_progress_at ? (
+            <div>
+              <span className="font-semibold text-on-surface">Updated:</span> {formatDateTime(progress.last_progress_at)}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl bg-surface p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Jobs Found</div>
+          <div className="mt-2 text-2xl font-bold text-on-surface">{counters.jobs_found ?? 0}</div>
+        </div>
+        <div className="rounded-2xl bg-surface p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Sites Processed</div>
+          <div className="mt-2 text-2xl font-bold text-on-surface">
+            {counters.processed_sites ?? counters.completed_stages ?? 0}
+            {counters.total_sites ? ` / ${counters.total_sites}` : ""}
+          </div>
+        </div>
+        <div className="rounded-2xl bg-surface p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Failed Sites</div>
+          <div className="mt-2 text-2xl font-bold text-on-surface">{counters.failed_sites ?? 0}</div>
+        </div>
+        <div className="rounded-2xl bg-surface p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Timeout</div>
+          <div className="mt-2 text-2xl font-bold text-on-surface">
+            {counters.request_timeout_seconds ? `${counters.request_timeout_seconds}s` : "N/A"}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl bg-surface p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Runner Credits</div>
+          <div className="mt-2 text-2xl font-bold text-on-surface">{usageTotals.runner_credits ?? 0}</div>
+        </div>
+        <div className="rounded-2xl bg-surface p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Candidates Followed</div>
+          <div className="mt-2 text-2xl font-bold text-on-surface">{counters.candidate_jobs_followed ?? 0}</div>
+        </div>
+        <div className="rounded-2xl bg-surface p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Candidates Skipped</div>
+          <div className="mt-2 text-2xl font-bold text-on-surface">{counters.candidate_jobs_skipped ?? 0}</div>
+        </div>
+        <div className="rounded-2xl bg-surface p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Locality Mode</div>
+          <div className="mt-2 text-lg font-bold capitalize text-on-surface">
+            {String(counters.locality_mode || currentItem.locality_mode || "").replaceAll("_", " ") || "N/A"}
+          </div>
+        </div>
+      </div>
+
+      {currentItem.company_name || currentItem.site_url ? (
+        <div className="mt-5 rounded-2xl bg-surface p-4 text-sm text-on-surface-variant">
+          <div className="font-semibold text-on-surface">Current item</div>
+          <div className="mt-2">{currentItem.company_name || currentItem.site_url}</div>
+          {currentItem.site_url ? <div className="mt-1 break-all">{currentItem.site_url}</div> : null}
+          {accessMethod ? <div className="mt-1">Access Method: {formatAccessMethod(accessMethod)}</div> : null}
+        </div>
+      ) : null}
+
+      {recentFailures.length ? (
+        <div className="mt-5 rounded-2xl border border-error/20 bg-error/5 p-4 text-sm text-error">
+          <div className="font-semibold">Recent issues</div>
+          <div className="mt-2 space-y-1">
+            {recentFailures.map((item, index) => (
+              <div key={`${item.url || item.error || index}`}>
+                {item.company_name || item.stage || "Issue"}: {item.error || "Unknown error"}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export default function RunDetailPage() {
   const { runId } = useParams();
   const navigate = useNavigate();
@@ -238,9 +366,9 @@ export default function RunDetailPage() {
   );
 
   const run = data?.run || null;
-  const summary = data?.summary || {};
   const tracker = data?.tracker || {};
   const review = data?.review || { included_jobs: [], excluded_jobs: [] };
+  const progress = run?.progress || null;
   const hasActiveRun = ACTIVE_RUN_STATUSES.includes(String(run?.status || "").trim());
   const hasActiveChildRuns = (review.excluded_jobs || []).some((job) =>
     ACTIVE_RUN_STATUSES.includes(String(job.create_documents_run_status || "").trim()),
@@ -364,28 +492,7 @@ export default function RunDetailPage() {
         </section>
       ) : null}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard
-          description="Jobs currently selected in this run."
-          label="Included Jobs"
-          value={summary.included_job_count ?? review.included_count ?? 0}
-        />
-        <SummaryCard
-          description="Jobs reviewed out of the run for now."
-          label="Excluded Jobs"
-          value={summary.excluded_job_count ?? review.excluded_count ?? 0}
-        />
-        <SummaryCard
-          description="Excluded jobs that can still have documents created."
-          label="Ready To Create"
-          value={summary.excluded_ready_for_documents_count ?? 0}
-        />
-        <SummaryCard
-          description="Jobs from this run already active in Tracker."
-          label="In Tracker"
-          value={summary.tracker_job_count ?? 0}
-        />
-      </section>
+      <RunProgressPanel progress={progress} usage={run?.scrapeops_usage || null} />
 
       {loading ? (
         <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest px-6 py-5 text-on-surface-variant shadow-soft">

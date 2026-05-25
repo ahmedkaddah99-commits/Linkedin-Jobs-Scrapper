@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+from backend.application.quota import get_usage_snapshot
 from backend.capabilities.networking import (
     PEOPLE_DISCOVERY_STATUS_COMPLETED,
     PEOPLE_DISCOVERY_STATUS_FAILED,
@@ -24,6 +27,21 @@ from backend.capabilities.networking import (
     update_relevant_people_status,
 )
 from backend.capabilities.tailored_documents.manual_urls import normalize_manual_urls
+from backend.config.plans import get_limit, normalize_plan_id
+from backend.config.scrapeops_admin_policy import (
+    SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY,
+    default_scrapeops_admin_policy,
+    normalize_scrapeops_admin_policy,
+    plan_policy_limits,
+)
+from backend.connectors.company_career_sites import (
+    ACADEMIC_CAREER_SITE_FILES,
+    REGULAR_COMPANY_SITE_FILES,
+    estimate_company_site_runner_credit_range,
+    load_discovered_company_site_entries,
+    parse_company_site_entries,
+    plan_company_site_scope,
+)
 from backend.domain.models import (
     ROLE_ADMIN,
     ROLE_EDITOR,
@@ -58,11 +76,21 @@ from backend.domain.models import (
     utc_plus_seconds,
     utc_now_iso,
 )
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_POLICY_VERSION,
+    SCRAPEOPS_USAGE_EVENT_NAME,
+    fetch_account_usage,
+    fetch_domain_stats,
+)
 from backend.orchestration import (
     build_quick_apply_workflow_template,
     build_workspace_from_scratch,
     validate_workspace_source_configuration,
     workspace_builder_catalog,
+)
+from backend.orchestration.workspace_builder import (
+    SOURCE_ACADEMIC_CAREER_SITES,
+    SOURCE_COMPANY_CAREER_SITES,
 )
 from backend.security import issue_api_token, resolve_secret_references, token_has_scope, token_is_expired, verify_token_value
 
@@ -90,6 +118,8 @@ SCHEDULED_RUN_ACTIVE_STATUSES = {
     RUN_STATUS_RUNNING,
     RUN_STATUS_CANCEL_REQUESTED,
 }
+SCRAPEOPS_RECONCILIATION_EVENT_NAME = "scrapeops_reconciliation_snapshot"
+SCRAPEOPS_ALERT_EVENT_NAME = "scrapeops_alert"
 
 
 class BackendValidationError(ValueError):
@@ -510,6 +540,182 @@ def _validate_builder_workspace_definition(
     )
 
 
+def _load_scrapeops_admin_policy(repositories: Any) -> dict[str, Any]:
+    config_store = getattr(repositories, "config_store", None)
+    if config_store is None or not hasattr(config_store, "get_value"):
+        return default_scrapeops_admin_policy()
+    payload = config_store.get_value(SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY, default_scrapeops_admin_policy())
+    return normalize_scrapeops_admin_policy(payload if isinstance(payload, Mapping) else {})
+
+
+def _save_scrapeops_admin_policy(repositories: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = normalize_scrapeops_admin_policy(payload)
+    normalized["updated_at"] = utc_now_iso()
+    config_store = getattr(repositories, "config_store", None)
+    if config_store is None or not hasattr(config_store, "set_value"):
+        raise ValueError("The configured repository does not support app configuration persistence.")
+    config_store.set_value(SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY, normalized)
+    return normalized
+
+
+def _effective_scrapeops_policy_limits(
+    repositories: Any,
+    *,
+    user_id: str,
+    plan_id: str,
+    quota_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, int | str]:
+    admin_policy = _load_scrapeops_admin_policy(repositories)
+    limits = plan_policy_limits(
+        admin_policy,
+        plan_id=plan_id,
+        user_id=user_id,
+    )
+    if isinstance(quota_overrides, Mapping):
+        for field_name in ("runner_credits_per_month", "company_sites_per_run", "runner_credits_per_run"):
+            override_value = quota_overrides.get(field_name)
+            if override_value in {None, ""}:
+                continue
+            try:
+                limits[field_name] = int(override_value)
+            except (TypeError, ValueError):
+                continue
+    return limits
+
+
+def _plan_limit_for_user(
+    repositories: Any,
+    *,
+    user_id: str,
+    plan_id: str,
+    limit_type: str,
+    quota_overrides: Mapping[str, Any] | None = None,
+) -> int:
+    limits = _effective_scrapeops_policy_limits(
+        repositories,
+        user_id=user_id,
+        plan_id=plan_id,
+        quota_overrides=quota_overrides,
+    )
+    if limit_type in limits:
+        return int(limits.get(limit_type) or 0)
+    return int(get_limit(plan_id, limit_type))
+
+
+def _company_site_discovery_paths_for_source_id(source_id: str) -> tuple[Path, ...]:
+    if str(source_id or "").strip() == BUILDER_CONNECTOR_SOURCE_IDS.get("academic_career_sites"):
+        return tuple(ACADEMIC_CAREER_SITE_FILES)
+    return tuple(REGULAR_COMPANY_SITE_FILES)
+
+
+def _merge_company_site_entries(*raw_sources: Any) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen_urls = set()
+    for raw_source in raw_sources:
+        for entry in parse_company_site_entries(raw_source, limit=None):
+            url = str(entry.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            merged.append(
+                {
+                    "company_name": str(entry.get("company_name") or "").strip(),
+                    "url": url,
+                }
+            )
+            seen_urls.add(url)
+    return merged
+
+
+def _current_company_site_policy_snapshot(
+    repositories: Any,
+    *,
+    user_id: str,
+    plan_id: str,
+    quota_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    effective_limits = _effective_scrapeops_policy_limits(
+        repositories,
+        user_id=user_id,
+        plan_id=plan_id,
+        quota_overrides=quota_overrides,
+    )
+    normalized_plan_id = normalize_plan_id(effective_limits.get("plan_id") or plan_id)
+    effective_quota_overrides = {
+        **dict(quota_overrides or {}),
+        "runner_credits_per_month": int(effective_limits.get("runner_credits_per_month") or 0),
+    }
+    runner_credit_usage = get_usage_snapshot(
+        repositories,
+        user_id,
+        "runner_credits_per_month",
+        normalized_plan_id,
+        quota_overrides=effective_quota_overrides,
+    )
+    monthly_remaining = int(runner_credit_usage.get("remaining") or 0)
+    per_run_budget = _plan_limit_for_user(
+        repositories,
+        user_id=user_id,
+        plan_id=normalized_plan_id,
+        limit_type="runner_credits_per_run",
+        quota_overrides=effective_quota_overrides,
+    )
+    if per_run_budget == -1:
+        effective_run_budget = monthly_remaining if monthly_remaining != -1 else -1
+    elif monthly_remaining == -1:
+        effective_run_budget = per_run_budget
+    else:
+        effective_run_budget = max(0, min(per_run_budget, monthly_remaining))
+    return {
+        "policy_version": SCRAPEOPS_POLICY_VERSION,
+        "plan_id": normalized_plan_id,
+        "runner_credits_per_month": runner_credit_usage,
+        "company_sites_per_run": _plan_limit_for_user(
+            repositories,
+            user_id=user_id,
+            plan_id=normalized_plan_id,
+            limit_type="company_sites_per_run",
+            quota_overrides=effective_quota_overrides,
+        ),
+        "runner_credits_per_run": per_run_budget,
+        "effective_runner_credits_per_run": effective_run_budget,
+    }
+
+
+def _scrapeops_account_state() -> dict[str, Any]:
+    api_key = str(os.getenv("SCRAPEOPS_API_KEY") or "").strip()
+    if not api_key:
+        return {
+            "available": False,
+            "status": "missing_api_key",
+            "summary": "SCRAPEOPS_API_KEY is not configured.",
+            "usage": {},
+        }
+    try:
+        usage_payload = fetch_account_usage(api_key, timeout_seconds=6)
+    except Exception as exc:
+        return {
+            "available": False,
+            "status": "unavailable",
+            "summary": str(exc),
+            "usage": {},
+        }
+    used = int(usage_payload.get("API Credits Used") or usage_payload.get("credits_used") or 0)
+    limit = int(usage_payload.get("API Credit Limit") or usage_payload.get("credit_limit") or 0)
+    remaining = max(0, limit - used) if limit > 0 else 0
+    status = "healthy" if remaining > 0 else "out_of_credits"
+    summary = "ScrapeOps account is healthy." if remaining > 0 else "ScrapeOps account is out of credits."
+    return {
+        "available": True,
+        "status": status,
+        "summary": summary,
+        "usage": {
+            "used": used,
+            "limit": limit,
+            "remaining": remaining,
+        },
+    }
+
+
 @dataclass(slots=True)
 class BackendApplication:
     repositories: Any
@@ -767,6 +973,561 @@ class BackendApplication:
             "total": int(count_events(**normalized_filters)),
         }
 
+    def _scrapeops_event_rows(
+        self,
+        *,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> list[dict[str, Any]]:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        query_rows = getattr(analytics_store, "query_rows", None)
+        if not callable(query_rows):
+            raise ValueError("ScrapeOps usage reporting requires analytics storage support.")
+        filters = ["event_name = ?"]
+        params: list[Any] = [SCRAPEOPS_USAGE_EVENT_NAME]
+        if str(user_id or "").strip():
+            filters.append("user_id = ?")
+            params.append(str(user_id).strip())
+        if str(workspace_id or "").strip():
+            filters.append("workspace_id = ?")
+            params.append(str(workspace_id).strip())
+        if str(run_id or "").strip():
+            filters.append("run_id = ?")
+            params.append(str(run_id).strip())
+        if str(occurred_from or "").strip():
+            filters.append("occurred_at >= ?")
+            params.append(str(occurred_from).strip())
+        if str(occurred_to or "").strip():
+            filters.append("occurred_at < ?")
+            params.append(str(occurred_to).strip())
+        where_clause = " AND ".join(filters)
+        rows = query_rows(
+            (
+                "SELECT occurred_at, user_id, workspace_id, run_id, payload_json "
+                f"FROM analytics_events WHERE {where_clause} "
+                "ORDER BY occurred_at DESC"
+            ),
+            tuple(params),
+        )
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            payload = json.loads(row.get("payload_json") or "{}")
+            if not isinstance(payload, dict):
+                payload = {}
+            events.append(
+                {
+                    "occurred_at": str(row.get("occurred_at") or ""),
+                    "user_id": str(row.get("user_id") or ""),
+                    "workspace_id": str(row.get("workspace_id") or ""),
+                    "run_id": str(row.get("run_id") or ""),
+                    **payload,
+                }
+            )
+        return events
+
+    def get_scrapeops_usage_summary(
+        self,
+        *,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> dict[str, Any]:
+        events = self._scrapeops_event_rows(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        totals = {
+            "requests": len(events),
+            "billed_requests": 0,
+            "failed_requests": 0,
+            "runner_credits": 0,
+            "native_credits": 0,
+        }
+        by_mode: dict[str, dict[str, Any]] = {}
+        by_domain: dict[str, dict[str, Any]] = {}
+        by_run: dict[str, dict[str, Any]] = {}
+        for event in events:
+            billed = bool(event.get("billed"))
+            runner_credits = int(event.get("runner_credits") or 0)
+            native_credits = int(event.get("native_credits") or 0)
+            request_mode = str(event.get("request_mode") or "basic").strip() or "basic"
+            domain = str(event.get("domain") or "unknown").strip() or "unknown"
+            event_run_id = str(event.get("run_id") or "").strip()
+            totals["runner_credits"] += runner_credits
+            totals["native_credits"] += native_credits
+            if billed:
+                totals["billed_requests"] += 1
+            else:
+                totals["failed_requests"] += 1
+
+            mode_bucket = by_mode.setdefault(
+                request_mode,
+                {"request_mode": request_mode, "requests": 0, "billed_requests": 0, "runner_credits": 0, "native_credits": 0},
+            )
+            mode_bucket["requests"] += 1
+            mode_bucket["runner_credits"] += runner_credits
+            mode_bucket["native_credits"] += native_credits
+            if billed:
+                mode_bucket["billed_requests"] += 1
+
+            domain_bucket = by_domain.setdefault(
+                domain,
+                {"domain": domain, "requests": 0, "billed_requests": 0, "runner_credits": 0, "native_credits": 0},
+            )
+            domain_bucket["requests"] += 1
+            domain_bucket["runner_credits"] += runner_credits
+            domain_bucket["native_credits"] += native_credits
+            if billed:
+                domain_bucket["billed_requests"] += 1
+
+            if event_run_id:
+                run_bucket = by_run.setdefault(
+                    event_run_id,
+                    {
+                        "run_id": event_run_id,
+                        "requests": 0,
+                        "billed_requests": 0,
+                        "runner_credits": 0,
+                        "native_credits": 0,
+                        "jobs_found": 0,
+                        "runner_credits_per_job": 0,
+                    },
+                )
+                run_bucket["requests"] += 1
+                run_bucket["runner_credits"] += runner_credits
+                run_bucket["native_credits"] += native_credits
+                if billed:
+                    run_bucket["billed_requests"] += 1
+
+        job_store = getattr(self.repositories, "job_store", None)
+        load_all_job_sets = getattr(job_store, "load_all_job_sets", None)
+        if callable(load_all_job_sets):
+            for run_bucket in by_run.values():
+                run_id_value = str(run_bucket.get("run_id") or "")
+                try:
+                    job_sets = load_all_job_sets(run_id_value)
+                except Exception:
+                    continue
+                seen_job_ids: set[str] = set()
+                jobs_found = 0
+                for jobs in job_sets.values():
+                    for job_record in jobs:
+                        job_payload = job_record.to_dict() if hasattr(job_record, "to_dict") else dict(job_record or {})
+                        source_type = str(job_payload.get("source_type") or "").strip()
+                        portal = str(job_payload.get("portal") or "").strip()
+                        if source_type != "company_career_site" and portal != "company_career_site":
+                            continue
+                        job_id = str(
+                            job_payload.get("job_id")
+                            or job_payload.get("apply_link")
+                            or job_payload.get("source_url")
+                            or job_payload.get("link")
+                            or ""
+                        ).strip()
+                        if job_id and job_id in seen_job_ids:
+                            continue
+                        if job_id:
+                            seen_job_ids.add(job_id)
+                        jobs_found += 1
+                run_bucket["jobs_found"] = jobs_found
+                run_bucket["runner_credits_per_job"] = (
+                    round(float(run_bucket["runner_credits"]) / jobs_found, 2) if jobs_found > 0 else 0
+                )
+
+        return {
+            "filters": {
+                "user_id": str(user_id or "").strip(),
+                "workspace_id": str(workspace_id or "").strip(),
+                "run_id": str(run_id or "").strip(),
+                "occurred_from": str(occurred_from or "").strip(),
+                "occurred_to": str(occurred_to or "").strip(),
+            },
+            "totals": totals,
+            "by_request_mode": sorted(by_mode.values(), key=lambda item: (-int(item["runner_credits"]), str(item["request_mode"]))),
+            "by_domain": sorted(by_domain.values(), key=lambda item: (-int(item["runner_credits"]), str(item["domain"]))),
+            "by_run": sorted(by_run.values(), key=lambda item: (-int(item["runner_credits"]), str(item["run_id"]))),
+        }
+
+    def get_scrapeops_user_usage_summary(
+        self,
+        *,
+        user_id: str,
+        plan_id: str,
+        quota_overrides: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        current_period = datetime.now(timezone.utc).strftime("%Y-%m")
+        month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        usage = self.get_scrapeops_usage_summary(
+            user_id=user_id,
+            occurred_from=month_start.isoformat(),
+        )
+        policy_snapshot = _current_company_site_policy_snapshot(
+            self.repositories,
+            user_id=user_id,
+            plan_id=plan_id,
+            quota_overrides=quota_overrides,
+        )
+        return {
+            "period": current_period,
+            "policy": policy_snapshot,
+            "usage": usage,
+        }
+
+    def get_scrapeops_reconciliation(self, *, date: str = "") -> dict[str, Any]:
+        account_state = _scrapeops_account_state()
+        month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        internal_usage = self.get_scrapeops_usage_summary(occurred_from=month_start.isoformat())
+        internal_native_credits = int(internal_usage.get("totals", {}).get("native_credits") or 0)
+        remote_usage = dict(account_state.get("usage") or {})
+        remote_used_credits = int(remote_usage.get("used") or 0)
+        discrepancy = remote_used_credits - internal_native_credits
+        domain_stats: dict[str, Any] = {}
+        if account_state.get("available"):
+            try:
+                domain_stats = fetch_domain_stats(
+                    str(os.getenv("SCRAPEOPS_API_KEY") or "").strip(),
+                    date=str(date or "").strip(),
+                    timeout_seconds=6,
+                )
+            except Exception as exc:
+                domain_stats = {"error": str(exc)}
+        return {
+            "generated_at": utc_now_iso(),
+            "account_state": account_state,
+            "internal_native_credits": internal_native_credits,
+            "remote_used_credits": remote_used_credits,
+            "discrepancy": discrepancy,
+            "domain_stats": domain_stats,
+        }
+
+    def get_scrapeops_admin_policy(self) -> dict[str, Any]:
+        return _load_scrapeops_admin_policy(self.repositories)
+
+    def save_scrapeops_admin_policy(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        normalized = _save_scrapeops_admin_policy(self.repositories, payload)
+        self.emit_event(
+            "scrapeops_admin_policy_updated",
+            source="admin",
+            payload={
+                "policy_version": str(normalized.get("policy_version") or ""),
+                "updated_at": str(normalized.get("updated_at") or ""),
+                "domain_policy_count": len(normalized.get("domain_policies") or []),
+                "user_override_count": len(normalized.get("user_overrides") or []),
+            },
+        )
+        return normalized
+
+    def build_scrapeops_quota_overrides(
+        self,
+        *,
+        user_id: str,
+        plan_id: str,
+        quota_overrides: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        limits = _effective_scrapeops_policy_limits(
+            self.repositories,
+            user_id=user_id,
+            plan_id=plan_id,
+            quota_overrides=quota_overrides,
+        )
+        return {
+            **dict(quota_overrides or {}),
+            "runner_credits_per_month": int(limits.get("runner_credits_per_month") or 0),
+            "company_sites_per_run": int(limits.get("company_sites_per_run") or 0),
+            "runner_credits_per_run": int(limits.get("runner_credits_per_run") or 0),
+        }
+
+    def _list_named_analytics_events(
+        self,
+        *,
+        event_name: str,
+        occurred_from: str = "",
+        occurred_to: str = "",
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        list_events = getattr(analytics_store, "list_events", None)
+        if not callable(list_events):
+            return []
+        return list_events(
+            limit=max(1, int(limit)),
+            offset=0,
+            event_name=str(event_name or "").strip(),
+            occurred_from=str(occurred_from or "").strip(),
+            occurred_to=str(occurred_to or "").strip(),
+        )
+
+    def get_scrapeops_usage_series(
+        self,
+        *,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+        days: int = 30,
+    ) -> list[dict[str, Any]]:
+        if not str(occurred_from or "").strip():
+            occurred_from = (
+                datetime.now(timezone.utc)
+                .replace(hour=0, minute=0, second=0, microsecond=0)
+                - timedelta(days=max(1, int(days)) - 1)
+            ).isoformat()
+        events = self._scrapeops_event_rows(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        by_day: dict[str, dict[str, Any]] = {}
+        for event in events:
+            day = str(event.get("occurred_at") or "")[:10]
+            if not day:
+                continue
+            bucket = by_day.setdefault(
+                day,
+                {
+                    "day": day,
+                    "requests": 0,
+                    "billed_requests": 0,
+                    "failed_requests": 0,
+                    "runner_credits": 0,
+                    "native_credits": 0,
+                },
+            )
+            bucket["requests"] += 1
+            if bool(event.get("billed")):
+                bucket["billed_requests"] += 1
+            else:
+                bucket["failed_requests"] += 1
+            bucket["runner_credits"] += int(event.get("runner_credits") or 0)
+            bucket["native_credits"] += int(event.get("native_credits") or 0)
+        return [by_day[key] for key in sorted(by_day)]
+
+    def get_scrapeops_reconciliation_history(self, *, days: int = 30) -> list[dict[str, Any]]:
+        occurred_from = (
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=max(1, int(days)) - 1)
+        ).isoformat()
+        events = self._list_named_analytics_events(
+            event_name=SCRAPEOPS_RECONCILIATION_EVENT_NAME,
+            occurred_from=occurred_from,
+            limit=max(100, int(days) * 8),
+        )
+        history: list[dict[str, Any]] = []
+        for event in reversed(events):
+            payload = dict(event.get("payload") or {})
+            account_state = dict(payload.get("account_state") or {})
+            account_usage = dict(account_state.get("usage") or {})
+            history.append(
+                {
+                    "day": str(event.get("occurred_at") or "")[:10],
+                    "occurred_at": str(event.get("occurred_at") or ""),
+                    "remote_used_credits": int(payload.get("remote_used_credits") or 0),
+                    "internal_native_credits": int(payload.get("internal_native_credits") or 0),
+                    "discrepancy": int(payload.get("discrepancy") or 0),
+                    "remaining_credits": int(account_usage.get("remaining") or 0),
+                    "account_status": str(account_state.get("status") or ""),
+                }
+            )
+        return history
+
+    def get_scrapeops_alert_history(self, *, days: int = 30, limit: int = 50) -> dict[str, Any]:
+        occurred_from = (
+            datetime.now(timezone.utc)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=max(1, int(days)) - 1)
+        ).isoformat()
+        events = self._list_named_analytics_events(
+            event_name=SCRAPEOPS_ALERT_EVENT_NAME,
+            occurred_from=occurred_from,
+            limit=max(int(limit), int(days) * 8),
+        )
+        latest: list[dict[str, Any]] = []
+        by_day: dict[str, dict[str, Any]] = {}
+        for event in events:
+            payload = dict(event.get("payload") or {})
+            occurred_at = str(event.get("occurred_at") or "")
+            day = occurred_at[:10]
+            severity = str(payload.get("severity") or "warning")
+            bucket = by_day.setdefault(day, {"day": day, "alerts": 0, "critical_alerts": 0})
+            bucket["alerts"] += 1
+            if severity in {"critical", "error"}:
+                bucket["critical_alerts"] += 1
+            latest.append(
+                {
+                    "occurred_at": occurred_at,
+                    "alert_type": str(payload.get("alert_type") or ""),
+                    "severity": severity,
+                    "message": str(payload.get("message") or ""),
+                }
+            )
+        latest.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
+        return {
+            "latest": latest[: max(1, int(limit))],
+            "series": [by_day[key] for key in sorted(by_day)],
+        }
+
+    def run_scrapeops_reconciliation_cycle(self, *, force: bool = False, source: str = "system") -> dict[str, Any]:
+        policy = self.get_scrapeops_admin_policy()
+        alert_policy = dict(policy.get("alert_policy") or {})
+        cadence_hours = max(1, int(alert_policy.get("cadence_hours") or 6))
+        now = datetime.now(timezone.utc)
+        bucket_hour = now.hour - (now.hour % cadence_hours)
+        bucket_start = now.replace(hour=bucket_hour, minute=0, second=0, microsecond=0)
+        bucket_end = bucket_start + timedelta(hours=cadence_hours)
+        bucket_key = bucket_start.strftime("%Y%m%d%H")
+        if not force:
+            existing = self._list_named_analytics_events(
+                event_name=SCRAPEOPS_RECONCILIATION_EVENT_NAME,
+                occurred_from=bucket_start.isoformat(),
+                occurred_to=bucket_end.isoformat(),
+                limit=1,
+            )
+            if existing:
+                return {
+                    "status": "skipped",
+                    "reason": "not_due",
+                    "snapshot": dict(existing[0].get("payload") or {}),
+                    "alerts": [],
+                }
+
+        snapshot = self.get_scrapeops_reconciliation(date=now.strftime("%Y-%m-%d"))
+        snapshot_payload = {
+            **snapshot,
+            "bucket_start": bucket_start.isoformat(),
+            "bucket_end": bucket_end.isoformat(),
+            "policy_version": str(policy.get("policy_version") or SCRAPEOPS_POLICY_VERSION),
+            "source": str(source or "system"),
+        }
+        self.emit_event(
+            SCRAPEOPS_RECONCILIATION_EVENT_NAME,
+            source=source,
+            payload=snapshot_payload,
+        )
+
+        alerts: list[dict[str, Any]] = []
+        account_state = dict(snapshot.get("account_state") or {})
+        account_usage = dict(account_state.get("usage") or {})
+        discrepancy = int(snapshot.get("discrepancy") or 0)
+        low_remaining_threshold = max(0, int(alert_policy.get("low_remaining_credits_threshold") or 0))
+        discrepancy_threshold = max(0, int(alert_policy.get("discrepancy_threshold") or 0))
+
+        if str(account_state.get("status") or "") == "out_of_credits":
+            alerts.append(
+                {
+                    "alert_type": "out_of_credits",
+                    "severity": "critical",
+                    "message": "ScrapeOps account is out of credits.",
+                }
+            )
+        elif account_state.get("available") and low_remaining_threshold > 0 and int(account_usage.get("remaining") or 0) <= low_remaining_threshold:
+            alerts.append(
+                {
+                    "alert_type": "low_remaining_credits",
+                    "severity": "warning",
+                    "message": (
+                        f"ScrapeOps account is below the remaining-credit threshold "
+                        f"({int(account_usage.get('remaining') or 0)} <= {low_remaining_threshold})."
+                    ),
+                }
+            )
+        if discrepancy_threshold > 0 and abs(discrepancy) >= discrepancy_threshold:
+            alerts.append(
+                {
+                    "alert_type": "reconciliation_discrepancy",
+                    "severity": "warning",
+                    "message": (
+                        f"ScrapeOps reconciliation discrepancy reached {discrepancy}, "
+                        f"which exceeds the threshold of {discrepancy_threshold}."
+                    ),
+                }
+            )
+
+        for alert in alerts:
+            self.emit_event(
+                SCRAPEOPS_ALERT_EVENT_NAME,
+                source=source,
+                payload={
+                    **alert,
+                    "bucket_key": bucket_key,
+                    "snapshot_generated_at": str(snapshot.get("generated_at") or ""),
+                    "account_status": str(account_state.get("status") or ""),
+                    "remaining_credits": int(account_usage.get("remaining") or 0),
+                    "discrepancy": discrepancy,
+                },
+            )
+
+        return {
+            "status": "completed",
+            "snapshot": snapshot_payload,
+            "alerts": alerts,
+        }
+
+    def maybe_run_scheduled_scrapeops_maintenance(self, *, source: str = "system") -> dict[str, Any]:
+        policy = self.get_scrapeops_admin_policy()
+        alert_policy = dict(policy.get("alert_policy") or {})
+        if not bool(alert_policy.get("enabled", True)):
+            return {"status": "disabled", "reason": "alert_policy_disabled"}
+        try:
+            return self.run_scrapeops_reconciliation_cycle(force=False, source=source)
+        except Exception as exc:
+            self.emit_event(
+                SCRAPEOPS_ALERT_EVENT_NAME,
+                source=source,
+                payload={
+                    "alert_type": "reconciliation_cycle_failed",
+                    "severity": "warning",
+                    "message": str(exc),
+                },
+            )
+            return {"status": "failed", "reason": str(exc)}
+
+    def get_scrapeops_admin_dashboard(
+        self,
+        *,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+        date: str = "",
+    ) -> dict[str, Any]:
+        policy = self.get_scrapeops_admin_policy()
+        history_days = max(7, int(dict(policy.get("alert_policy") or {}).get("history_days") or 30))
+        usage = self.get_scrapeops_usage_summary(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        return {
+            "policy": policy,
+            "usage": usage,
+            "usage_series": self.get_scrapeops_usage_series(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                occurred_from=occurred_from,
+                occurred_to=occurred_to,
+                days=history_days,
+            ),
+            "reconciliation": self.get_scrapeops_reconciliation(date=date),
+            "reconciliation_series": self.get_scrapeops_reconciliation_history(days=history_days),
+            "alerts": self.get_scrapeops_alert_history(days=history_days),
+        }
+
     def upsert_workflow_template(self, payload: Mapping[str, Any] | WorkflowTemplate):
         workflow_template = payload if isinstance(payload, WorkflowTemplate) else WorkflowTemplate.from_dict(payload)
         if not workflow_template.id:
@@ -822,8 +1583,178 @@ class BackendApplication:
         ]
         return catalog
 
-    def validate_workspace_builder_sources(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        return validate_workspace_source_configuration(dict(payload))
+    def validate_workspace_builder_sources(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        user_id: str = "",
+        plan_id: str = "",
+        quota_overrides: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        report = validate_workspace_source_configuration(dict(payload))
+        source_ids = [str(item).strip() for item in report.get("source_ids") or [] if str(item).strip()]
+        if not source_ids:
+            return report
+
+        selected_company_sources = [
+            source_id
+            for source_id in source_ids
+            if source_id in {SOURCE_COMPANY_CAREER_SITES, SOURCE_ACADEMIC_CAREER_SITES}
+        ]
+        if not selected_company_sources:
+            return report
+
+        effective_settings = dict(payload.get("settings") or {})
+        for key, value in dict(report.get("derived_runtime_defaults") or {}).items():
+            current_value = effective_settings.get(key)
+            if key not in effective_settings or current_value is None or current_value == "" or current_value == [] or current_value == {}:
+                effective_settings[key] = value
+
+        locality_mode = str(effective_settings.get("company_site_locality_mode") or "local_preferred").strip() or "local_preferred"
+        account_state = _scrapeops_account_state()
+        admin_policy = self.get_scrapeops_admin_policy()
+        active_domain_policies = [
+            dict(item)
+            for item in admin_policy.get("domain_policies") or []
+            if isinstance(item, Mapping) and bool(item.get("is_active", True))
+        ]
+        policy_snapshot = (
+            _current_company_site_policy_snapshot(
+                self.repositories,
+                user_id=user_id,
+                plan_id=plan_id,
+                quota_overrides=quota_overrides,
+            )
+            if user_id and plan_id
+            else {}
+        )
+        runtime_quota_overrides = (
+            self.build_scrapeops_quota_overrides(
+                user_id=user_id,
+                plan_id=plan_id,
+                quota_overrides=quota_overrides,
+            )
+            if user_id and plan_id
+            else dict(quota_overrides or {})
+        )
+        source_results = list(report.get("source_results") or [])
+        updated_results: list[dict[str, Any]] = []
+        for result in source_results:
+            source_id = str(result.get("source_id") or "").strip()
+            if source_id not in {SOURCE_COMPANY_CAREER_SITES, SOURCE_ACADEMIC_CAREER_SITES}:
+                updated_results.append(result)
+                continue
+            configured_sites = effective_settings.get(source_id) or []
+            discovered_sites = load_discovered_company_site_entries(
+                _company_site_discovery_paths_for_source_id(source_id)
+            )
+            merged_sites = _merge_company_site_entries(configured_sites, discovered_sites)
+            scope_plan = plan_company_site_scope(
+                company_sites=merged_sites,
+                target_country_codes=effective_settings.get("country_codes") or [],
+                target_cities=effective_settings.get("cities") or [],
+                locality_mode=locality_mode,
+                max_sites_per_run=int(policy_snapshot.get("company_sites_per_run") or 0),
+                domain_policies=active_domain_policies,
+            )
+            run_budget = int(policy_snapshot.get("effective_runner_credits_per_run") or 0)
+            estimate = estimate_company_site_runner_credit_range(
+                site_count=int(scope_plan.stats.get("selected_site_count") or 0),
+                locality_mode=locality_mode,
+                has_target_country=bool(effective_settings.get("country_codes") or []),
+                run_credit_budget=run_budget,
+            )
+            details = list(result.get("details") or [])
+            details.append(
+                (
+                    f"{int(scope_plan.stats.get('selected_site_count') or 0)} of "
+                    f"{int(scope_plan.stats.get('input_site_count') or 0)} site(s) remain after locality filtering."
+                )
+            )
+            if int(scope_plan.stats.get("plan_site_limit_applied_count") or 0) > 0:
+                details.append(
+                    f"Plan policy trims {int(scope_plan.stats['plan_site_limit_applied_count'])} site(s) from this run."
+                )
+            details.append(
+                (
+                    "Estimated runner credits: "
+                    f"{int(estimate.get('min_runner_credits') or 0)}-"
+                    f"{int(estimate.get('max_runner_credits') or 0)} "
+                    f"(likely {int(estimate.get('likely_runner_credits') or 0)})."
+                )
+            )
+            if policy_snapshot:
+                remaining_runner_credits = dict(policy_snapshot.get("runner_credits_per_month") or {}).get("remaining")
+                details.append(
+                    "Remaining monthly runner credits: "
+                    + ("Unlimited" if int(remaining_runner_credits or 0) == -1 else str(int(remaining_runner_credits or 0)))
+                )
+            source_field_errors = list(result.get("field_errors") or [])
+            status = str(result.get("status") or "valid")
+            summary = str(result.get("summary") or "")
+            if account_state.get("status") in {"missing_api_key", "out_of_credits"}:
+                status = "invalid"
+                summary = str(account_state.get("summary") or summary)
+                source_field_errors.append(
+                    _field_error(
+                        "company_career_sites",
+                        str(account_state.get("status") or "scrapeops_unavailable"),
+                        str(account_state.get("summary") or "ScrapeOps is not available."),
+                        source_id=source_id,
+                    )
+                )
+            updated_results.append(
+                {
+                    **dict(result),
+                    "status": status,
+                    "summary": summary,
+                    "details": details,
+                    "field_errors": _dedupe_field_errors(source_field_errors),
+                    "scope_plan": {
+                        "selected_site_count": int(scope_plan.stats.get("selected_site_count") or 0),
+                        "input_site_count": int(scope_plan.stats.get("input_site_count") or 0),
+                        "skipped_site_count": int(scope_plan.stats.get("skipped_site_count") or 0),
+                        "local_site_count": int(scope_plan.stats.get("local_site_count") or 0),
+                        "global_site_count": int(scope_plan.stats.get("global_site_count") or 0),
+                        "unknown_site_count": int(scope_plan.stats.get("unknown_site_count") or 0),
+                    },
+                    "runner_credit_estimate": estimate,
+                }
+            )
+
+        report["source_results"] = updated_results
+        report["field_errors"] = _dedupe_field_errors(
+            [
+                *(report.get("field_errors") or []),
+                *[
+                    item
+                    for result in updated_results
+                    if str(result.get("status") or "") == "invalid"
+                    for item in result.get("field_errors") or []
+                ],
+            ]
+        )
+        report["valid"] = not report["field_errors"] and all(
+            str(item.get("status") or "") == "valid" for item in updated_results
+        )
+        report["company_site_policy"] = {
+            **dict(policy_snapshot or {}),
+            "account_state": account_state,
+            "locality_mode": locality_mode,
+            "policy_version": SCRAPEOPS_POLICY_VERSION,
+            "domain_policy_count": len(active_domain_policies),
+        }
+        report["policy_run_overrides"] = {
+            "company_site_locality_mode": locality_mode,
+            "company_site_max_sites_per_run": int(policy_snapshot.get("company_sites_per_run") or 0),
+            "company_site_runner_credit_budget": int(policy_snapshot.get("effective_runner_credits_per_run") or 0),
+            "company_site_emergency_max_job_links_per_site": 75,
+            "company_site_policy_version": SCRAPEOPS_POLICY_VERSION,
+            "scrapeops_domain_policies": active_domain_policies,
+            "run_user_plan_id": normalize_plan_id(plan_id) if plan_id else "",
+            "run_user_quota_overrides": runtime_quota_overrides,
+        }
+        return report
 
     def start_quick_apply_run(
         self,
@@ -2074,6 +3005,7 @@ class BackendApplication:
                     run.current_stage_id = ""
                     run.updated_at = now
                     run.last_error = "Recovered from expired worker lease."
+                    run.metadata.pop("progress", None)
                     self.repositories.run_repository.save(run)
             worker.status = WORKER_STATUS_STALE
             worker.current_run_id = ""
@@ -2097,6 +3029,7 @@ class BackendApplication:
         run.last_error = str(exc)
         run.finished_at = now
         run.updated_at = now
+        run.metadata.pop("progress", None)
         self.repositories.run_repository.save(run)
         return self.repositories.run_repository.get(run.id)
 
@@ -2255,6 +3188,7 @@ class BackendApplication:
             run.status = RUN_STATUS_CANCELLED
             run.finished_at = now
             run.current_stage_id = ""
+            run.metadata.pop("progress", None)
         run.updated_at = now
         self.repositories.run_repository.save(run)
         return self.repositories.run_repository.get(run.id)
@@ -2277,6 +3211,7 @@ class BackendApplication:
         run.last_error = ""
         run.started_at = ""
         run.finished_at = ""
+        run.metadata.pop("progress", None)
         return self._queue_run(run)
 
     def resume_run(self, run_id: str) -> RunRecord:
@@ -2295,6 +3230,7 @@ class BackendApplication:
         run.last_error = ""
         run.started_at = ""
         run.finished_at = ""
+        run.metadata.pop("progress", None)
         return self._queue_run(run)
 
     def _execute_run(
@@ -2343,6 +3279,7 @@ class BackendApplication:
         run.started_at = ""
         run.finished_at = ""
         run.updated_at = now
+        run.metadata.pop("progress", None)
         self.repositories.run_repository.save(run)
         return self.repositories.run_repository.get(run.id)
 

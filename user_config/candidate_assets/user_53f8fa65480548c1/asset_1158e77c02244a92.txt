@@ -1,0 +1,19 @@
+Jane Candidate
+Operations Analyst
+jane@example.com | Berlin | https://linkedin.com/in/jane-candidate
+Summary
+Experienced operations analyst focused on process improvement.
+Skills
+Excel, SQL, Stakeholder communication
+Languages
+English - C1
+German - B2
+Experience
+Business Analyst | Example GmbH
+2022 - Present
+- Built dashboards
+- Improved workflow
+Education
+MSc Operations Management | Example University
+2019 - 2021
+- Thesis on process optimization

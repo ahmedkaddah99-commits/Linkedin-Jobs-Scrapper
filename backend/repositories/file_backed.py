@@ -671,6 +671,56 @@ class FileAnalyticsStore:
         )
 
 
+class FileConfigStore:
+    def __init__(self, base_dir: Path):
+        self.base_dir = Path(base_dir)
+        self.config_path = self.base_dir / "app_config.json"
+
+    def _read_all(self) -> dict[str, Any]:
+        payload = _read_json(self.config_path, {})
+        if not isinstance(payload, dict):
+            return {}
+        return dict(payload)
+
+    def _write_all(self, payload: dict[str, Any]) -> None:
+        _write_json(self.config_path, payload)
+
+    def get_value(self, config_key: str, default: Any = None):
+        payload = self._read_all()
+        normalized_key = str(config_key or "").strip()
+        if not normalized_key:
+            return default
+        return payload.get(normalized_key, default)
+
+    def set_value(self, config_key: str, value: Any) -> None:
+        normalized_key = str(config_key or "").strip()
+        if not normalized_key:
+            raise ValueError("config_key is required")
+        payload = self._read_all()
+        payload[normalized_key] = value
+        self._write_all(payload)
+
+    def delete_value(self, config_key: str) -> None:
+        normalized_key = str(config_key or "").strip()
+        if not normalized_key:
+            raise ValueError("config_key is required")
+        payload = self._read_all()
+        if normalized_key in payload:
+            del payload[normalized_key]
+            self._write_all(payload)
+
+    def list_values(self, *, prefix: str = "") -> dict[str, Any]:
+        payload = self._read_all()
+        normalized_prefix = str(prefix or "").strip()
+        if not normalized_prefix:
+            return payload
+        return {
+            key: value
+            for key, value in payload.items()
+            if str(key).startswith(normalized_prefix)
+        }
+
+
 @dataclass(slots=True)
 class BackendRepositories:
     workspace_repository: Any
@@ -682,3 +732,4 @@ class BackendRepositories:
     secret_store: Any
     worker_store: Any
     analytics_store: Any
+    config_store: Any

@@ -11,6 +11,7 @@ from backend.repositories import (
     FileAnalyticsStore,
     FileAuthRepository,
     FileArtifactStore,
+    FileConfigStore,
     FileJobStore,
     FileReviewStore,
     FileRunRepository,
@@ -20,6 +21,7 @@ from backend.repositories import (
     SqliteAnalyticsStore,
     SqliteAuthRepository,
     SqliteArtifactStore,
+    SqliteConfigStore,
     SqliteJobStore,
     SqliteReviewStore,
     SqliteRunRepository,
@@ -257,6 +259,7 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             secret_store=FileSecretStore(base_path),
             worker_store=FileWorkerStore(base_path),
             analytics_store=FileAnalyticsStore(base_path),
+            config_store=FileConfigStore(base_path),
         )
     if storage_backend == "sqlite":
         db_path = _resolve_sqlite_path(base_path)
@@ -270,6 +273,7 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             secret_store=SqliteSecretStore(db_path),
             worker_store=SqliteWorkerStore(db_path),
             analytics_store=SqliteAnalyticsStore(db_path),
+            config_store=SqliteConfigStore(db_path),
         )
     raise ValueError(f"Unsupported storage backend: {storage_backend}")
 

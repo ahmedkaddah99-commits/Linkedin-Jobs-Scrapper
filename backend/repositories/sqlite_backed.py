@@ -224,6 +224,20 @@ def _apply_analytics_events_migration(connection: sqlite3.Connection) -> None:
     )
 
 
+def _apply_app_config_migration(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS app_config (
+            config_key TEXT PRIMARY KEY,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_app_config_updated_at
+            ON app_config(updated_at);
+        """
+    )
+
+
 def _apply_application_status_history_migration(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
@@ -469,6 +483,12 @@ class _SqliteStore:
                 connection.execute(
                     "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
                     ("005_billing", utc_now_iso()),
+                )
+            if "006_app_config" not in applied:
+                _apply_app_config_migration(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                    ("006_app_config", utc_now_iso()),
                 )
 
 
@@ -1789,3 +1809,57 @@ class SqliteAnalyticsStore(_SqliteStore):
             row = connection.execute(query, tuple(params)).fetchone()
 
         return int(row["total"] if row else 0)
+
+
+class SqliteConfigStore(_SqliteStore):
+    def get_value(self, config_key: str, default: Any = None):
+        normalized_key = str(config_key or "").strip()
+        if not normalized_key:
+            return default
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM app_config WHERE config_key = ?",
+                (normalized_key,),
+            ).fetchone()
+        if row is None:
+            return default
+        return _deserialize(row["payload_json"], default)
+
+    def set_value(self, config_key: str, value: Any) -> None:
+        normalized_key = str(config_key or "").strip()
+        if not normalized_key:
+            raise ValueError("config_key is required")
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO app_config (config_key, updated_at, payload_json) VALUES (?, ?, ?) "
+                    "ON CONFLICT(config_key) DO UPDATE SET updated_at=excluded.updated_at, payload_json=excluded.payload_json"
+                ),
+                (
+                    normalized_key,
+                    utc_now_iso(),
+                    _serialize(value),
+                ),
+            )
+
+    def delete_value(self, config_key: str) -> None:
+        normalized_key = str(config_key or "").strip()
+        if not normalized_key:
+            raise ValueError("config_key is required")
+        with self._connect() as connection:
+            connection.execute("DELETE FROM app_config WHERE config_key = ?", (normalized_key,))
+
+    def list_values(self, *, prefix: str = "") -> dict[str, Any]:
+        normalized_prefix = str(prefix or "").strip()
+        params: list[Any] = []
+        query = "SELECT config_key, payload_json FROM app_config"
+        if normalized_prefix:
+            query += " WHERE config_key LIKE ?"
+            params.append(f"{normalized_prefix}%")
+        query += " ORDER BY config_key"
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return {
+            str(row["config_key"] or ""): _deserialize(row["payload_json"], None)
+            for row in rows
+        }

@@ -10,13 +10,14 @@ import re
 import sqlite3
 import zipfile
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, timedelta, timezone
 from email.parser import BytesFeedParser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qs, urlencode, urlparse
 from uuid import uuid4
 
@@ -56,6 +57,7 @@ from backend.capabilities.tailored_documents.modes import (
 )
 from backend.capabilities.tailored_documents.rendering import get_document_design_options
 from backend.bootstrap import create_backend
+from backend.config import load_project_dotenv
 from backend.config.plans import (
     DEFAULT_PLAN_ID,
     PLANS,
@@ -119,8 +121,11 @@ from backend.integrations.clerk import (
     verify_webhook as verify_clerk_webhook,
 )
 from backend.integrations.lemonsqueezy import (
+    create_discount as create_lemonsqueezy_discount,
+    delete_discount as delete_lemonsqueezy_discount,
     get_checkout_url as get_lemonsqueezy_checkout_url,
     get_customer_portal_url as get_lemonsqueezy_customer_portal_url,
+    list_discounts as list_lemonsqueezy_discounts,
     update_user_plan_in_clerk,
     verify_webhook_signature as verify_lemonsqueezy_webhook_signature,
 )
@@ -133,6 +138,7 @@ def _json_bytes(payload) -> bytes:
 _EXPANDED_ARTIFACT_DELIMITER = "__item__"
 _EXPANDED_ARTIFACT_SUFFIXES = {".csv", ".docx", ".json", ".md", ".pdf", ".txt", ".xlsx"}
 _LOOPBACK_ORIGIN_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_PROMO_CODE_PATTERN = re.compile(r"^[A-Z0-9]{3,256}$")
 
 
 class AtsExportBlockedError(ValueError):
@@ -852,6 +858,57 @@ def _run_summary(run) -> dict:
         "last_error": run.last_error,
         "stage_results": [result.to_dict() for result in run.stage_results],
         "final_job_set_keys": run.final_job_set_keys,
+        "progress": dict(run.metadata.get("progress") or {}),
+    }
+
+
+def _iso_to_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _run_progress_payload(run, *, now: datetime | None = None) -> dict[str, Any]:
+    progress = dict(run.metadata.get("progress") or {})
+    if not progress:
+        return {}
+    resolved_now = now or datetime.now(timezone.utc)
+    started_at = _iso_to_datetime(progress.get("started_at"))
+    last_progress_at = _iso_to_datetime(progress.get("last_progress_at"))
+    elapsed_seconds = 0
+    idle_seconds = 0
+    if started_at is not None:
+        elapsed_seconds = max(int((resolved_now - started_at).total_seconds()), 0)
+    if last_progress_at is not None:
+        idle_seconds = max(int((resolved_now - last_progress_at).total_seconds()), 0)
+    health = "active"
+    health_label = "Running normally"
+    if idle_seconds >= 900:
+        health = "stale"
+        health_label = "Possibly stale"
+    elif idle_seconds >= 180:
+        health = "slow"
+        health_label = "Slow but active"
+    return {
+        "stage_id": str(progress.get("stage_id") or run.current_stage_id or ""),
+        "stage_type": str(progress.get("stage_type") or ""),
+        "stage_name": str(progress.get("stage_name") or ""),
+        "stage_description": str(progress.get("stage_description") or ""),
+        "status": str(progress.get("status") or run.status or ""),
+        "message": str(progress.get("message") or ""),
+        "started_at": str(progress.get("started_at") or ""),
+        "last_progress_at": str(progress.get("last_progress_at") or ""),
+        "elapsed_seconds": elapsed_seconds,
+        "idle_seconds": idle_seconds,
+        "health": health,
+        "health_label": health_label,
+        "counters": dict(progress.get("counters") or {}),
+        "current_item": dict(progress.get("current_item") or {}),
+        "recent_failures": [dict(item) for item in progress.get("recent_failures") or [] if isinstance(item, dict)],
     }
 
 
@@ -1126,6 +1183,8 @@ def _customer_excluded_job_payload(entry: dict, user) -> dict:
 
 
 def _collect_run_customer_view(application, user, run) -> dict:
+    progress = _run_progress_payload(run)
+    scrapeops_usage = application.get_scrapeops_usage_summary(run_id=run.id)
     workflow_snapshot = _workflow_snapshot_for_run(application, run)
     workflow_stages = [
         dict(stage)
@@ -1268,7 +1327,7 @@ def _collect_run_customer_view(application, user, run) -> dict:
             for stage in stages
             if str(stage.get("stage_id") or "") == str(run.current_stage_id or "")
         ),
-        "",
+        str(progress.get("stage_name") or ""),
     )
     generated_job_count = 0
     for key in run.final_job_set_keys or []:
@@ -1280,6 +1339,8 @@ def _collect_run_customer_view(application, user, run) -> dict:
             "workspace_name": workspace.name,
             "workflow_name": str(workflow_snapshot.get("name") or run.workflow_template_id),
             "current_stage_name": current_stage_name,
+            "progress": progress,
+            "scrapeops_usage": scrapeops_usage,
         },
         "summary": {
             "stage_count": len(stages),
@@ -1293,6 +1354,9 @@ def _collect_run_customer_view(application, user, run) -> dict:
                 for item in rejected_entries
                 if bool(item.get("can_requeue") or False) and not str(item.get("requeue_run_id") or "")
             ),
+            "run_health": str(progress.get("health") or ""),
+            "run_health_label": str(progress.get("health_label") or ""),
+            "runner_credits_consumed": int(scrapeops_usage.get("totals", {}).get("runner_credits") or 0),
         },
         "tracker": {
             "item_count": len(tracker_items),
@@ -1336,9 +1400,21 @@ def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user)
         "website": str(normalized_payload.get("website") or normalized_existing.get("website") or ""),
         "linkedin_url": str(normalized_payload.get("linkedin_url") or normalized_existing.get("linkedin_url") or ""),
         "github_url": str(normalized_payload.get("github_url") or normalized_existing.get("github_url") or ""),
-        "avatar_url": str(profile_payload.get("avatar_url") or existing_profile.get("avatar_url") or ""),
-        "photo_data_url": str(profile_payload.get("photo_data_url") or existing_profile.get("photo_data_url") or ""),
-        "photo_path": str(profile_payload.get("photo_path") or existing_profile.get("photo_path") or ""),
+        "avatar_url": (
+            str(profile_payload.get("avatar_url") or "")
+            if "avatar_url" in payload_keys
+            else str(existing_profile.get("avatar_url") or "")
+        ),
+        "photo_data_url": (
+            str(profile_payload.get("photo_data_url") or "")
+            if "photo_data_url" in payload_keys
+            else str(existing_profile.get("photo_data_url") or "")
+        ),
+        "photo_path": (
+            str(profile_payload.get("photo_path") or "")
+            if "photo_path" in payload_keys
+            else str(existing_profile.get("photo_path") or "")
+        ),
         "summary": str(normalized_payload.get("summary") or normalized_existing.get("summary") or ""),
         "competencies": (
             list(normalized_payload.get("competencies") or [])
@@ -4212,6 +4288,8 @@ def _current_period_key() -> str:
 
 
 def _quota_limit_for_user(plan_id: str, quota_type: str, quota_overrides: dict[str, object] | None = None) -> int:
+    if str(os.getenv("RUNR_DISABLE_QUOTAS") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return -1
     if isinstance(quota_overrides, dict) and quota_type in quota_overrides:
         try:
             return int(quota_overrides[quota_type])
@@ -4280,6 +4358,92 @@ def _lookup_user_by_email(application, email_address: str):
     return lookup(normalized_email)
 
 
+def _claim_string(raw_claims: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = raw_claims.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                return normalized
+        elif isinstance(value, (int, float)):
+            return str(value)
+    return ""
+
+
+def _claim_display_name(raw_claims: dict[str, Any], email_address: str) -> str:
+    explicit_name = _claim_string(raw_claims, "name", "full_name", "fullName", "username", "preferred_username")
+    if explicit_name:
+        return explicit_name
+    first_name = _claim_string(raw_claims, "given_name", "first_name", "firstName")
+    last_name = _claim_string(raw_claims, "family_name", "last_name", "lastName")
+    joined_name = " ".join(part for part in (first_name, last_name) if part).strip()
+    if joined_name:
+        return joined_name
+    if "@" in email_address:
+        return email_address.split("@", 1)[0].strip()
+    return ""
+
+
+def _claim_email_address(raw_claims: dict[str, Any], clerk_user_id: str) -> str:
+    explicit_email = _claim_string(raw_claims, "email", "email_address", "primary_email_address")
+    if explicit_email:
+        return explicit_email
+    email_addresses = raw_claims.get("email_addresses")
+    if isinstance(email_addresses, list):
+        for item in email_addresses:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+            if isinstance(item, dict):
+                candidate = _claim_string(item, "email_address", "emailAddress")
+                if candidate:
+                    return candidate
+    return f"{clerk_user_id}@clerk.local"
+
+
+def _provision_user_from_clerk_claims(application, claims) -> UserRecord:
+    normalized_clerk_user_id = str(getattr(claims, "clerk_user_id", "") or "").strip()
+    if not normalized_clerk_user_id:
+        raise KeyError("Missing Clerk user identifier.")
+    raw_claims = dict(getattr(claims, "raw_claims", {}) or {})
+    email_address = _claim_email_address(raw_claims, normalized_clerk_user_id)
+    display_name = _claim_display_name(raw_claims, email_address)
+    role_value = ROLE_ADMIN if normalize_clerk_role(getattr(claims, "role", "user")) == "admin" else "user"
+    try:
+        user = _lookup_user_by_email(application, email_address) if email_address else None
+    except KeyError:
+        user = None
+    if user is None:
+        user = UserRecord(
+            user_id=normalized_clerk_user_id,
+            email=email_address,
+            display_name=display_name,
+            role=role_value,
+            created_at=utc_plus_seconds(0),
+            updated_at=utc_plus_seconds(0),
+            metadata={"provisioned_from": "clerk_session_claims"},
+        )
+    else:
+        user.email = email_address or user.email
+        user.display_name = display_name or user.display_name
+        user.role = role_value
+        user.is_active = True
+        user.updated_at = datetime.now(timezone.utc).isoformat()
+        user.metadata = {
+            **(user.metadata or {}),
+            "provisioned_from": "clerk_session_claims",
+        }
+    repository = _auth_repository(application)
+    repository.upsert_user(user)
+    set_clerk_id = getattr(repository, "set_user_clerk_user_id", None)
+    if callable(set_clerk_id):
+        set_clerk_id(user.user_id, normalized_clerk_user_id)
+    refreshed_user = application.get_user(user.user_id)
+    refreshed_user.role = role_value
+    return refreshed_user
+
+
 def _provision_user_from_clerk(application, clerk_user_id: str):
     normalized_clerk_user_id = str(clerk_user_id or "").strip()
     if not normalized_clerk_user_id:
@@ -4326,7 +4490,7 @@ def _provision_user_from_clerk(application, clerk_user_id: str):
     return refreshed_user
 
 
-def _lookup_user_by_clerk_subject(application, clerk_user_id: str):
+def _lookup_user_by_clerk_subject(application, clerk_user_id: str, *, claims=None):
     normalized_clerk_user_id = str(clerk_user_id or "").strip()
     if not normalized_clerk_user_id:
         raise KeyError("Missing Clerk user identifier.")
@@ -4340,6 +4504,11 @@ def _lookup_user_by_clerk_subject(application, clerk_user_id: str):
     try:
         return application.get_user(normalized_clerk_user_id)
     except KeyError as exc:
+        if claims is not None:
+            try:
+                return _provision_user_from_clerk_claims(application, claims)
+            except Exception:
+                pass
         try:
             return _provision_user_from_clerk(application, normalized_clerk_user_id)
         except Exception as provision_exc:
@@ -4348,7 +4517,7 @@ def _lookup_user_by_clerk_subject(application, clerk_user_id: str):
 
 def _build_clerk_auth_context(application, token_value: str):
     claims = verify_session_token(token_value)
-    user = _lookup_user_by_clerk_subject(application, claims.clerk_user_id)
+    user = _lookup_user_by_clerk_subject(application, claims.clerk_user_id, claims=claims)
     subscription_record = _lookup_subscription_record(application, user.user_id) or {}
     plan_id = normalize_plan_id(subscription_record.get("plan_id") or claims.plan_id or DEFAULT_PLAN_ID)
     role = normalize_clerk_role(claims.role or user.role)
@@ -4477,6 +4646,170 @@ def _subscription_response_payload(
             plan_id=normalized_plan_id,
             quota_overrides=quota_overrides,
         ),
+        "scrapeops_usage": application.get_scrapeops_user_usage_summary(
+            user_id=user_id,
+            plan_id=normalized_plan_id,
+            quota_overrides=quota_overrides,
+        ),
+    }
+
+
+def _configured_paid_plan_variant_ids() -> list[str]:
+    variant_ids: list[str] = []
+    for plan in PLANS.values():
+        if int(plan.get("price_eur") or 0) <= 0:
+            continue
+        variant_id = str(plan.get("lemonsqueezy_variant_id") or "").strip()
+        if variant_id and variant_id not in variant_ids:
+            variant_ids.append(variant_id)
+    return variant_ids
+
+
+def _configured_paid_plan_labels() -> str:
+    labels: list[str] = []
+    for plan_id, plan in PLANS.items():
+        if int(plan.get("price_eur") or 0) <= 0:
+            continue
+        label = str(plan.get("display_name") or plan_id).strip() or plan_id
+        if label not in labels:
+            labels.append(label)
+    return ", ".join(labels) if labels else "Paid plans"
+
+
+def _normalize_promo_code(value: Any) -> str:
+    normalized = str(value or "").strip().upper()
+    if not normalized:
+        raise ValueError("promo code is required")
+    if not _PROMO_CODE_PATTERN.fullmatch(normalized):
+        raise ValueError("promo code must be 3-256 characters of uppercase letters and numbers only")
+    return normalized
+
+
+def _parse_optional_iso_datetime(value: Any, *, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a valid ISO 8601 date-time.") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _parse_promo_discount_amount(amount_type: str, raw_amount: Any) -> int:
+    normalized_type = str(amount_type or "").strip().lower()
+    if normalized_type not in {"percent", "fixed"}:
+        raise ValueError("amount_type must be either 'percent' or 'fixed'.")
+    normalized_amount = str(raw_amount or "").strip()
+    if not normalized_amount:
+        raise ValueError("amount is required")
+    try:
+        parsed_amount = Decimal(normalized_amount)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("amount must be a valid number") from exc
+    if parsed_amount <= 0:
+        raise ValueError("amount must be greater than zero")
+    if normalized_type == "percent":
+        if parsed_amount != parsed_amount.to_integral_value():
+            raise ValueError("percent discounts must use a whole number")
+        percent_value = int(parsed_amount)
+        if percent_value < 1 or percent_value > 100:
+            raise ValueError("percent discounts must be between 1 and 100")
+        return percent_value
+    cents = int((parsed_amount * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if cents < 1:
+        raise ValueError("fixed discounts must be at least 0.01")
+    return cents
+
+
+def _parse_promo_redemption_limit(value: Any) -> int:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return 0
+    try:
+        parsed = int(normalized)
+    except ValueError as exc:
+        raise ValueError("max_redemptions must be an integer") from exc
+    if parsed < 0:
+        raise ValueError("max_redemptions cannot be negative")
+    return parsed
+
+
+def _promo_discount_label(discount: Mapping[str, Any]) -> str:
+    amount_type = str(discount.get("amount_type") or "").strip().lower()
+    amount = int(discount.get("amount") or 0)
+    if amount_type == "fixed":
+        return f"EUR {amount / 100:.2f}"
+    return f"{amount}%"
+
+
+def _admin_promo_code_payload(discount: Mapping[str, Any]) -> dict[str, Any]:
+    starts_at = str(discount.get("starts_at") or "").strip()
+    expires_at = str(discount.get("expires_at") or "").strip()
+    redemption_limit = int(discount.get("max_redemptions") or 0)
+    return {
+        "discount_id": str(discount.get("discount_id") or "").strip(),
+        "code": str(discount.get("code") or "").strip(),
+        "name": str(discount.get("name") or "").strip(),
+        "discount": _promo_discount_label(discount),
+        "starts_at": starts_at,
+        "expires_at": expires_at,
+        "status": str(discount.get("status_formatted") or discount.get("status") or "").strip(),
+        "redemption_limit": redemption_limit if redemption_limit > 0 else "Unlimited",
+        "scope": _configured_paid_plan_labels(),
+        "created_at": str(discount.get("created_at") or "").strip(),
+    }
+
+
+def _create_admin_promo_code(payload: Mapping[str, Any]) -> dict[str, Any]:
+    variant_ids = _configured_paid_plan_variant_ids()
+    if not variant_ids:
+        raise ValueError("LemonSqueezy paid-plan variants are not configured for promo codes.")
+    name = str(payload.get("name") or "").strip()
+    code = _normalize_promo_code(payload.get("code"))
+    if not name:
+        name = code
+    amount_type = str(payload.get("amount_type") or "").strip().lower()
+    amount = _parse_promo_discount_amount(amount_type, payload.get("amount") or payload.get("amount_value"))
+    starts_at = _parse_optional_iso_datetime(payload.get("starts_at"), field_name="starts_at")
+    expires_at = _parse_optional_iso_datetime(payload.get("expires_at"), field_name="expires_at")
+    if starts_at and expires_at:
+        starts_at_dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+        expires_at_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if starts_at_dt >= expires_at_dt:
+            raise ValueError("expires_at must be later than starts_at")
+    created_discount = create_lemonsqueezy_discount(
+        name=name,
+        code=code,
+        amount=amount,
+        amount_type=amount_type,
+        starts_at=starts_at,
+        expires_at=expires_at,
+        max_redemptions=_parse_promo_redemption_limit(payload.get("max_redemptions")),
+        duration="once",
+        variant_ids=variant_ids,
+    )
+    return _admin_promo_code_payload(created_discount)
+
+
+def _list_admin_promo_codes(*, limit: int, offset: int) -> dict[str, Any]:
+    page_size = max(1, int(limit))
+    page_number = max(1, (max(0, int(offset)) // page_size) + 1)
+    listing = list_lemonsqueezy_discounts(page_number=page_number, page_size=page_size)
+    discounts = [
+        _admin_promo_code_payload(item)
+        for item in listing.get("discounts") or []
+        if isinstance(item, dict)
+    ]
+    return {
+        "promo_codes": discounts,
+        "meta": {
+            "current_page": int((listing.get("meta") or {}).get("current_page") or page_number),
+            "per_page": int((listing.get("meta") or {}).get("per_page") or page_size),
+            "total": int((listing.get("meta") or {}).get("total") or len(discounts)),
+        },
     }
 
 
@@ -5849,11 +6182,52 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                         )
                     )
                     return
+                if segments == ["scrapeops", "usage"]:
+                    context = self._auth_context()
+                    occurred_from = str((query.get("occurred_from") or [""])[0]).strip()
+                    occurred_to = str((query.get("occurred_to") or [""])[0]).strip()
+                    self._send_json(
+                        application.get_scrapeops_user_usage_summary(
+                            user_id=context.user.user_id,
+                            plan_id=context.plan_id,
+                            quota_overrides=context.quota_overrides,
+                        )
+                        | {
+                            "usage": application.get_scrapeops_usage_summary(
+                                user_id=context.user.user_id,
+                                occurred_from=occurred_from,
+                                occurred_to=occurred_to,
+                            )
+                        }
+                    )
+                    return
                 if segments == ["analytics", "overview"]:
                     user, _ = self._require_identity()
                     if str(user.role or "").strip().lower() != ROLE_ADMIN:
                         raise PermissionError("Admin access required.")
                     self._send_json(application.get_analytics_overview())
+                    return
+                if segments == ["admin", "scrapeops", "usage"]:
+                    self._require_admin()
+                    occurred_from = str((query.get("occurred_from") or [""])[0]).strip()
+                    occurred_to = str((query.get("occurred_to") or [""])[0]).strip()
+                    workspace_id = str((query.get("workspace_id") or [""])[0]).strip()
+                    run_id = str((query.get("run_id") or [""])[0]).strip()
+                    user_id = str((query.get("user_id") or [""])[0]).strip()
+                    self._send_json(
+                        application.get_scrapeops_admin_dashboard(
+                            user_id=user_id,
+                            workspace_id=workspace_id,
+                            run_id=run_id,
+                            occurred_from=occurred_from,
+                            occurred_to=occurred_to,
+                            date=str((query.get("date") or [""])[0]).strip(),
+                        )
+                    )
+                    return
+                if segments == ["admin", "scrapeops", "policy"]:
+                    self._require_admin()
+                    self._send_json(application.get_scrapeops_admin_policy())
                     return
                 if segments == ["admin", "analytics", "snapshot"]:
                     self._require_admin()
@@ -5888,6 +6262,12 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                             },
                         }
                     )
+                    return
+                if segments == ["admin", "promo-codes"]:
+                    self._require_admin()
+                    limit = _parse_int_param(query, "limit", default=50, maximum=200)
+                    offset = _parse_int_param(query, "offset", default=0, maximum=100000)
+                    self._send_json(_list_admin_promo_codes(limit=limit, offset=offset))
                     return
                 if segments == ["admin", "users", "health"]:
                     self._require_admin()
@@ -6625,6 +7005,13 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
                 payload = self._read_json_body()
 
+                if segments == ["admin", "scrapeops", "reconciliation", "run"]:
+                    self._require_admin()
+                    self._send_json(
+                        application.run_scrapeops_reconciliation_cycle(force=True, source="admin"),
+                        status=HTTPStatus.OK,
+                    )
+                    return
                 if segments == ["analytics", "events"]:
                     context = self._auth_context()
                     event_name = str(payload.get("event_name") or "").strip()
@@ -6646,6 +7033,22 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     )
                     self._send_json({"status": "ok", "event_name": event_name}, status=HTTPStatus.ACCEPTED)
                     return
+                if segments == ["admin", "promo-codes"]:
+                    admin_user, _ = self._require_admin()
+                    promo_code_payload = _create_admin_promo_code(payload)
+                    application.emit_event(
+                        "promo_code_created",
+                        user_id=admin_user.user_id,
+                        route="/admin/promo-codes",
+                        source="api",
+                        payload={
+                            "discount_id": promo_code_payload["discount_id"],
+                            "discount": promo_code_payload["discount"],
+                            "expires_at": promo_code_payload["expires_at"],
+                        },
+                    )
+                    self._send_json({"promo_code": promo_code_payload}, status=HTTPStatus.CREATED)
+                    return
                 if segments == ["billing", "checkout"]:
                     context = self._auth_context()
                     target_plan_id = normalize_plan_id(payload.get("plan_id") or DEFAULT_PLAN_ID)
@@ -6656,11 +7059,15 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     if not variant_id:
                         raise ValueError(f"LemonSqueezy variant id is not configured for plan '{target_plan_id}'.")
                     source_page = str(payload.get("source_page") or payload.get("sourcePage") or "").strip()
+                    promo_code = str(payload.get("promo_code") or payload.get("promoCode") or "").strip().upper()
+                    if promo_code:
+                        promo_code = _normalize_promo_code(promo_code)
                     checkout_url = get_lemonsqueezy_checkout_url(
                         context.user.user_id,
                         variant_id,
                         context.user.email,
                         name=context.user.display_name,
+                        discount_code=promo_code,
                         custom_data={
                             "plan_id": target_plan_id,
                             "source_page": source_page,
@@ -6679,6 +7086,7 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                             "target_plan_id": target_plan_id,
                             "current_plan_id": context.plan_id,
                             "source_page": source_page,
+                            "promo_code_present": bool(promo_code),
                         },
                     )
                     self._send_json({"checkout_url": checkout_url}, status=HTTPStatus.OK)
@@ -7080,7 +7488,13 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
                 if segments == ["workspace-builder", "source-validation"]:
                     user, _ = self._require_scope(TOKEN_SCOPE_WORKSPACES_READ)
-                    validation = application.validate_workspace_builder_sources(payload)
+                    context = self._auth_context()
+                    validation = application.validate_workspace_builder_sources(
+                        payload,
+                        user_id=user.user_id,
+                        plan_id=context.plan_id,
+                        quota_overrides=context.quota_overrides,
+                    )
                     workspace_id = str((payload or {}).get("workspace_id") or "").strip()
                     application.emit_event(
                         (
@@ -7139,6 +7553,32 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                         payload,
                         workspace_settings=workspace.settings,
                     )
+                    if _builder_workspace_flow_id(workspace):
+                        validation = application.validate_workspace_builder_sources(
+                            {
+                                "workspace_id": workspace.id,
+                                "flow_id": _builder_workspace_flow_id(workspace),
+                                "source_ids": _builder_workspace_source_ids(workspace),
+                                "settings": dict(workspace.settings or {}),
+                            },
+                            user_id=user.user_id,
+                            plan_id=context.plan_id,
+                            quota_overrides=context.quota_overrides,
+                        )
+                        if not validation.get("valid"):
+                            raise BackendValidationError(
+                                "run_source_validation_failed",
+                                "Run blocked until the workspace source setup is fixed.",
+                                details={
+                                    "workspace_id": workspace.id,
+                                    "field_errors": list(validation.get("field_errors") or []),
+                                    "source_results": list(validation.get("source_results") or []),
+                                },
+                            )
+                        run_input_overrides = {
+                            **dict(validation.get("policy_run_overrides") or {}),
+                            **run_input_overrides,
+                        }
                     if execution_mode == "queued":
                         run = application.enqueue_run(
                             workspace_id,
@@ -7489,6 +7929,10 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 _, segments, _ = self._parse_request()
                 payload = self._read_json_body()
 
+                if segments == ["admin", "scrapeops", "policy"]:
+                    self._require_admin()
+                    self._send_json(application.save_scrapeops_admin_policy(payload), status=HTTPStatus.OK)
+                    return
                 if segments == ["settings"]:
                     user, _ = self._require_identity()
                     metadata = dict(user.metadata or {})
@@ -7886,6 +8330,18 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     application.delete_user(segments[1])
                     self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)
                     return
+                if segments[:2] == ["admin", "promo-codes"] and len(segments) == 3:
+                    admin_user, _ = self._require_admin()
+                    delete_lemonsqueezy_discount(segments[2])
+                    application.emit_event(
+                        "promo_code_deleted",
+                        user_id=admin_user.user_id,
+                        route="/admin/promo-codes",
+                        source="api",
+                        payload={"discount_id": segments[2]},
+                    )
+                    self._send_json({"deleted": segments[2]}, status=HTTPStatus.OK)
+                    return
                 if segments[:1] == ["referrals"] and len(segments) == 2:
                     user, _ = self._require_identity()
                     application.delete_referral_contact(user.user_id, segments[1])
@@ -8027,6 +8483,7 @@ def serve_api(
     data_dir: str = ".backend_data",
     storage_backend: str = "sqlite",
 ) -> None:
+    load_project_dotenv(override=True)
     application = create_backend(data_dir, storage_backend=storage_backend)
     allowed_origins, allow_all_origins = _parse_allowed_origins(os.getenv("BACKEND_ALLOWED_ORIGINS", ""))
     server = ThreadingHTTPServer(

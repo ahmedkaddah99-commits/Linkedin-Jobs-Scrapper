@@ -3,6 +3,10 @@ import json
 import logging
 from uuid import uuid4
 
+from backend.config import load_project_dotenv
+
+load_project_dotenv(override=True)
+
 from backend import create_backend
 from backend.api import serve_api
 from backend.tools.discover_company_careers import (
