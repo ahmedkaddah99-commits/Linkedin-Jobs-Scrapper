@@ -269,6 +269,64 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
         self.assertEqual(jobs[0]["apply_link"], job_url)
         self.assertEqual(jobs[0]["career_site_url"], root_url)
 
+    def test_company_site_scraper_reuses_cached_job_urls_without_hiding_them(self):
+        root_url = "https://example.com/careers"
+        cached_url = "https://example.com/job/old-product-owner"
+        new_url = "https://example.com/job/new-product-owner"
+        history_records = []
+
+        with (
+            patch(
+                "backend.connectors.company_career_sites._fetch_page_content",
+                return_value=PageFetchResult(
+                    requested_url=root_url,
+                    final_url=root_url,
+                    status_code=200,
+                    text=(
+                        f'<a href="{cached_url}">Old Product Owner</a>'
+                        f'<a href="{new_url}">New Product Owner</a>'
+                    ),
+                ),
+            ),
+            patch(
+                "backend.connectors.company_career_sites.fetch_and_normalize_manual_job",
+                return_value={
+                    "job_id": "job_new",
+                    "title": "New Product Owner",
+                    "company": "Example",
+                    "full_description": "Product owner role.",
+                    "apply_link": new_url,
+                    "source_url": new_url,
+                    "link": new_url,
+                },
+            ) as mock_normalize,
+        ):
+            jobs, failures = scrape_company_career_sites(
+                company_sites=[{"company_name": "Example", "url": root_url}],
+                keywords=["product owner"],
+                cached_job_lookup=lambda _site_url, _urls: {
+                    cached_url: {
+                        "job_id": "job_cached",
+                        "title": "Old Product Owner",
+                        "company": "Example",
+                        "full_description": "Product owner role from public job index.",
+                        "apply_link": cached_url,
+                        "source_url": cached_url,
+                        "link": cached_url,
+                    }
+                },
+                job_url_history_callback=lambda _site_url, attempts: history_records.extend(attempts),
+            )
+
+        self.assertEqual(failures, [])
+        self.assertEqual([job["apply_link"] for job in jobs], [cached_url, new_url])
+        self.assertEqual(mock_normalize.call_count, 1)
+        self.assertEqual(mock_normalize.call_args.args[0], new_url)
+        self.assertTrue(
+            any(item["job_url"] == cached_url and item["status"] == "cache_reused" for item in history_records)
+        )
+        self.assertTrue(any(item["job_url"] == new_url and item["status"] == "accepted" for item in history_records))
+
     def test_company_site_scope_prefers_local_market_and_skips_foreign_sites(self):
         scope = plan_company_site_scope(
             company_sites=[
@@ -331,12 +389,213 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
                 keywords=["role"],
                 request_timeout_seconds=15,
                 max_jobs_per_site=0,
-                emergency_max_job_links_per_site=20,
+                max_job_links_per_site=20,
                 target_country_codes=["DE"],
             )
 
         self.assertEqual(len(jobs), 12)
         self.assertFalse(any(item["error"] == "explicit_jobs_per_site_cap" for item in failures))
+
+    def test_company_site_scraper_reports_capped_sites_when_link_cap_is_reached(self):
+        root_url = "https://example.com/careers"
+        job_urls = [f"https://example.com/job/role-{index}" for index in range(3)]
+        progress = []
+
+        with (
+            patch(
+                "backend.connectors.company_career_sites._fetch_page_content",
+                return_value=PageFetchResult(
+                    requested_url=root_url,
+                    final_url=root_url,
+                    status_code=200,
+                    text="".join(f'<a href="{url}">Role</a>' for url in job_urls),
+                ),
+            ),
+            patch(
+                "backend.connectors.company_career_sites.fetch_and_normalize_manual_job",
+                side_effect=[
+                    {
+                        "job_id": f"job_{index}",
+                        "title": f"Role {index}",
+                        "company": "Acme",
+                        "full_description": "Role in Germany.",
+                        "apply_link": url,
+                        "source_url": url,
+                        "link": url,
+                    }
+                    for index, url in enumerate(job_urls)
+                ],
+            ),
+            self.assertLogs("backend.connectors.company_career_sites", level="INFO") as logs,
+        ):
+            jobs, failures = scrape_company_career_sites(
+                company_sites=[{"company_name": "Acme", "url": root_url}],
+                max_job_links_per_site=2,
+                progress_callback=progress.append,
+            )
+
+        self.assertEqual(len(jobs), 2)
+        self.assertTrue(any(item["error"] == "company_site_max_job_links_per_site" for item in failures))
+        self.assertIn("Job link cap reached for https://example.com/careers", "\n".join(logs.output))
+        self.assertEqual(
+            progress[-1]["counters"]["capped_sites"],
+            [{"url": root_url, "links_fetched": 2, "cap_value": 2}],
+        )
+
+    def test_company_site_scraper_filters_navigation_before_normalizing_jobs(self):
+        root_url = "https://careers.abb/dach/de"
+        listing_url = "https://careers.abb/dach/de/jobs"
+        job_url = "https://careers.abb/dach/de/job/berlin/product-owner-r123"
+        fetch_calls = []
+
+        def fake_fetch(url, **_kwargs):
+            fetch_calls.append(url)
+            if url == root_url:
+                return PageFetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text=(
+                        '<a href="https://careers.abb/dach/de/life-at-abb">Life at ABB</a>'
+                        '<a href="https://careers.abb/dach/de/how-to-apply">How to apply</a>'
+                        '<a href="https://careers.abb/dach/de/locations">Locations</a>'
+                        f'<a href="{listing_url}">Search jobs</a>'
+                    ),
+                )
+            if url == listing_url:
+                return PageFetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text=f'<a href="{job_url}">Product Owner Berlin</a>',
+                )
+            raise AssertionError(f"Unexpected fetch URL: {url}")
+
+        with (
+            patch("backend.connectors.company_career_sites._fetch_page_content", side_effect=fake_fetch),
+            patch(
+                "backend.connectors.company_career_sites.fetch_and_normalize_manual_job",
+                return_value={
+                    "job_id": "job_123",
+                    "title": "Product Owner",
+                    "company": "ABB",
+                    "full_description": "Product Owner role in Berlin.",
+                    "apply_link": job_url,
+                    "source_url": job_url,
+                    "link": job_url,
+                },
+            ) as mock_normalize,
+        ):
+            jobs, failures = scrape_company_career_sites(
+                company_sites=[{"company_name": "ABB", "url": root_url}],
+                keywords=["product owner"],
+                request_timeout_seconds=15,
+                target_country_codes=["DE"],
+            )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(fetch_calls, [root_url, listing_url])
+        self.assertEqual(mock_normalize.call_count, 1)
+        self.assertEqual(jobs[0]["apply_link"], job_url)
+
+    def test_company_site_posted_window_filters_known_old_jobs_and_keeps_unknown_dates(self):
+        root_url = "https://careers.example.com/jobs"
+        recent_url = "https://careers.example.com/job/recent-product-role"
+        old_url = "https://careers.example.com/job/old-product-role"
+        unknown_url = "https://careers.example.com/job/unknown-product-role"
+
+        def normalize_candidate(url, **_kwargs):
+            posted_age_by_url = {
+                recent_url: 48,
+                old_url: 240,
+                unknown_url: None,
+            }
+            return {
+                "job_id": url.split("/")[-1],
+                "title": url.split("/")[-1].replace("-", " ").title(),
+                "company": "Example",
+                "full_description": "Product role.",
+                "posted_age_hours": posted_age_by_url[url],
+                "apply_link": url,
+                "source_url": url,
+                "link": url,
+            }
+
+        with (
+            patch(
+                "backend.connectors.company_career_sites._fetch_page_content",
+                return_value=PageFetchResult(
+                    requested_url=root_url,
+                    final_url=root_url,
+                    status_code=200,
+                    text=(
+                        f'<a href="{recent_url}">Recent Product Role</a>'
+                        f'<a href="{old_url}">Old Product Role</a>'
+                        f'<a href="{unknown_url}">Unknown Product Role</a>'
+                    ),
+                ),
+            ),
+            patch(
+                "backend.connectors.company_career_sites.fetch_and_normalize_manual_job",
+                side_effect=normalize_candidate,
+            ),
+        ):
+            jobs, failures = scrape_company_career_sites(
+                company_sites=[{"company_name": "Example", "url": root_url}],
+                keywords=["product"],
+                request_timeout_seconds=15,
+                posted_within_days=7,
+            )
+
+        self.assertEqual(
+            {job["job_id"] for job in jobs},
+            {"recent-product-role", "unknown-product-role"},
+        )
+        self.assertEqual(failures, [])
+
+    def test_company_site_scraper_does_not_treat_tankstellenmuseum_as_stellen_job(self):
+        root_url = "https://avia-regenstauf.de/karriere"
+        museum_url = "https://avia-regenstauf.de/ueber-bauer/tankstellenmuseum"
+        job_url = "https://avia-regenstauf.de/karriere/job/product-owner-r123"
+
+        def fake_fetch(url, **_kwargs):
+            if url == root_url:
+                return PageFetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text=(
+                        f'<a href="{museum_url}">Tankstellenmuseum</a>'
+                        f'<a href="{job_url}">Product Owner</a>'
+                    ),
+                )
+            raise AssertionError(f"Unexpected fetch URL: {url}")
+
+        with (
+            patch("backend.connectors.company_career_sites._fetch_page_content", side_effect=fake_fetch),
+            patch(
+                "backend.connectors.company_career_sites.fetch_and_normalize_manual_job",
+                return_value={
+                    "job_id": "job_123",
+                    "title": "Product Owner",
+                    "company": "Avia",
+                    "full_description": "Product Owner role.",
+                    "apply_link": job_url,
+                    "source_url": job_url,
+                    "link": job_url,
+                },
+            ) as mock_normalize,
+        ):
+            jobs, failures = scrape_company_career_sites(
+                company_sites=[{"company_name": "Avia", "url": root_url}],
+                keywords=["product owner"],
+                request_timeout_seconds=15,
+            )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(mock_normalize.call_count, 1)
+        self.assertEqual(mock_normalize.call_args.args[0], job_url)
+        self.assertEqual(jobs[0]["apply_link"], job_url)
 
     def test_company_site_scraper_applies_domain_policy_modes_and_country(self):
         root_url = "https://acme.myworkdayjobs.com/de-DE/careers"

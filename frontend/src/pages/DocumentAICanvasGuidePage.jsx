@@ -88,7 +88,7 @@ export default function DocumentAICanvasGuidePage() {
       <header className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
         <Link
           className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primary-container"
-          to="/documents?view=canvas"
+          to="/documents?view=memory"
         >
           <span className="material-symbols-outlined text-[18px]">arrow_back</span>
           Back to Career Memory Builder
@@ -108,7 +108,7 @@ export default function DocumentAICanvasGuidePage() {
 
       <section className="grid gap-4 md:grid-cols-3">
         {[
-          ["Grounded personalization", "The canvas should be fed with real documents and factual notes, not guessed claims."],
+          ["Grounded personalization", "Career Memory should be fed with real documents and factual notes, not guessed claims."],
           ["Multiple CV directions", "Use it when one baseline CV is too narrow for the range of roles you want to target."],
           ["Workspace control", "Every workspace still decides whether to use only the baseline CV, selected assets, or the full profile."],
         ].map(([title, body]) => (
@@ -147,7 +147,7 @@ export default function DocumentAICanvasGuidePage() {
 
       <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <div className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6">
-          <h2 className="font-headline text-xl font-bold text-on-surface">What to add to the canvas</h2>
+          <h2 className="font-headline text-xl font-bold text-on-surface">What to add to Career Memory</h2>
           <div className="mt-4 space-y-4">
             {sourceTypes.map(([title, body]) => (
               <div className="rounded-2xl border border-outline-variant/10 bg-surface p-4" key={title}>
@@ -199,13 +199,13 @@ export default function DocumentAICanvasGuidePage() {
       <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6">
         <h2 className="font-headline text-xl font-bold text-on-surface">Important constraint</h2>
         <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
-          The canvas is most valuable when every claim can be traced back to a real document, a
+          Career Memory is most valuable when every claim can be traced back to a real document, a
           real bullet point, or a factual note you provided. It should expand what Runr can reuse,
           not encourage invented experience.
         </p>
         <Link
           className="mt-5 inline-flex items-center gap-2 rounded bg-primary px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
-          to="/documents?view=canvas"
+          to="/documents?view=memory"
         >
           Open Career Memory Builder
           <span className="material-symbols-outlined text-[16px]">dashboard_customize</span>

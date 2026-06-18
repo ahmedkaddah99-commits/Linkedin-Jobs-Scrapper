@@ -35,6 +35,7 @@ class Phase0ContractsTests(unittest.TestCase):
                 "geo_id": "101282230",
                 "cities": ["Berlin"],
                 "time_posted_seconds": 172800,
+                "posted_within_days": 7,
                 "experience_levels": [2, 3],
                 "manual_url_seed_list": "https://company.example/jobs/1\nhttps://company.example/jobs/1\nhttps://company.example/jobs/2",
                 "academic_career_sites": "University of Example | https://university.example/jobs",
@@ -84,6 +85,7 @@ class Phase0ContractsTests(unittest.TestCase):
             normalized["filter_preferences"]["forbidden_title_keywords"],
             ["senior", "director"],
         )
+        self.assertEqual(normalized["filter_preferences"]["posted_within_days"], 7)
         self.assertEqual(normalized["filter_preferences"]["job_filtering"]["mode"], "Strict Match")
         self.assertEqual(
             normalized["filter_preferences"]["job_filtering"]["target_phrases"],
@@ -150,6 +152,48 @@ class Phase0ContractsTests(unittest.TestCase):
         self.assertEqual(normalized["source"]["run_id"], "run_1")
         self.assertEqual(normalized["metadata"]["job_id"], "job_1")
         self.assertEqual(normalized["metadata"]["tags"], ["cv", "generated"])
+
+    def test_candidate_asset_descriptor_preserves_cv_section_decisions(self):
+        normalized = normalize_candidate_asset_descriptor(
+            {
+                "asset_id": "asset_cv",
+                "asset_kind": "workspace_cv",
+                "display_name": "resume.txt",
+                "metadata": {
+                    "cv_section_decisions": [
+                        {
+                            "section_id": "custom_publications_1",
+                            "heading": "Publications",
+                            "action": "map",
+                            "target_section": "projects",
+                        },
+                        {
+                            "section_id": "custom_awards_2",
+                            "heading": "Awards",
+                            "action": "hide",
+                        },
+                    ]
+                },
+            }
+        )
+
+        self.assertEqual(
+            normalized["metadata"]["cv_section_decisions"],
+            [
+                {
+                    "section_id": "custom_publications_1",
+                    "heading": "Publications",
+                    "action": "map",
+                    "target_section": "projects",
+                },
+                {
+                    "section_id": "custom_awards_2",
+                    "heading": "Awards",
+                    "action": "hide",
+                    "target_section": "",
+                },
+            ],
+        )
 
     def test_rejected_job_review_infers_reason_code(self):
         normalized = normalize_rejected_job_review(

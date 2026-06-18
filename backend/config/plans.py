@@ -19,8 +19,8 @@ PLANS: dict[str, dict[str, Any]] = {
             "workspaces": 1,
         },
         "limits": {
-            "company_sites_per_run": 25,
-            "runner_credits_per_run": 250,
+            "company_sites_per_run": 10,
+            "runner_credits_per_run": 150,
         },
     },
     "pro": {

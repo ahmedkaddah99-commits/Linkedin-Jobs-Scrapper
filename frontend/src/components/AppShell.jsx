@@ -6,7 +6,6 @@ import { useTheme } from "../context/ThemeContext";
 import { isAdminUser } from "../lib/auth";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
-const TOP_RIBBON_STORAGE_KEY = "runr.topRibbonCollapsed";
 
 const navItems = [
   {
@@ -52,6 +51,8 @@ const navItems = [
     matchers: [
       { path: "/documents", end: false },
       { path: "/artifacts", end: false },
+      { path: "/career-memory", end: false },
+      { path: "/cv-studio", end: false },
     ],
   },
   {
@@ -66,7 +67,6 @@ const navItems = [
     to: "/settings",
     matchers: [
       { path: "/settings", end: false },
-      { path: "/cv-studio", end: false },
     ],
   },
 ];
@@ -379,7 +379,7 @@ function SidebarContents({
   );
 }
 
-export default function AppShell({ children }) {
+export default function AppShell({ children, muteSidebar = false }) {
   const navigate = useNavigate();
   const location = useLocation();
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
@@ -395,12 +395,6 @@ export default function AppShell({ children }) {
     }
     return window.localStorage.getItem(DESKTOP_SIDEBAR_STORAGE_KEY) === "true";
   });
-  const [topRibbonCollapsed, setTopRibbonCollapsed] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem(TOP_RIBBON_STORAGE_KEY) === "true";
-  });
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -412,10 +406,6 @@ export default function AppShell({ children }) {
       desktopSidebarCollapsed ? "true" : "false",
     );
   }, [desktopSidebarCollapsed]);
-
-  useEffect(() => {
-    window.localStorage.setItem(TOP_RIBBON_STORAGE_KEY, topRibbonCollapsed ? "true" : "false");
-  }, [topRibbonCollapsed]);
 
   const normalizedPlanId = String(
     clerkUser?.publicMetadata?.plan_id || user?.plan_id || "free",
@@ -433,7 +423,10 @@ export default function AppShell({ children }) {
 
   return (
     <div
-      className="app-shell min-h-screen bg-background text-on-surface"
+      className={[
+        "app-shell min-h-screen bg-background text-on-surface",
+        muteSidebar ? "app-shell--sidebar-muted" : "",
+      ].join(" ")}
       data-sidebar-collapsed={desktopSidebarCollapsed ? "true" : "false"}
     >
       <div
@@ -468,139 +461,117 @@ export default function AppShell({ children }) {
 
       <div className="app-shell__main">
         <header
-          className={[
-            "sticky top-0 z-30 overflow-visible transition-all duration-200",
-            topRibbonCollapsed
-              ? "relative h-0 border-b-0 bg-transparent px-0 py-0"
-              : "top-ribbon top-ribbon--teal relative flex h-16 items-center justify-between border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] md:px-8",
-          ].join(" ")}
+          className="top-ribbon top-ribbon--teal sticky top-0 z-30 flex h-16 items-center justify-between overflow-visible border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] transition-all duration-200 md:px-8"
         >
-          {topRibbonCollapsed ? null : (
-            <>
-              <div className="flex min-w-0 items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              aria-label="Open navigation"
+              className="rounded-full p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary disabled:pointer-events-none disabled:opacity-40 md:hidden"
+              disabled={muteSidebar}
+              onClick={() => setMobileNavOpen(true)}
+              type="button"
+            >
+              <span className="material-symbols-outlined">menu</span>
+            </button>
+            {isRunDetail ? (
+              <>
                 <button
-                  aria-label="Open navigation"
-                  className="rounded-full p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary md:hidden"
-                  onClick={() => setMobileNavOpen(true)}
+                  className="rounded p-1 text-on-surface-variant transition-colors hover:text-primary"
+                  onClick={() => navigate(-1)}
                   type="button"
                 >
-                  <span className="material-symbols-outlined">menu</span>
+                  <span className="material-symbols-outlined">arrow_back</span>
                 </button>
-                {isRunDetail ? (
-                  <>
-                    <button
-                      className="rounded p-1 text-on-surface-variant transition-colors hover:text-primary"
-                      onClick={() => navigate(-1)}
-                      type="button"
-                    >
-                      <span className="material-symbols-outlined">arrow_back</span>
-                    </button>
-                    <div className="h-4 w-px bg-outline-variant/30" />
-                    <div className="min-w-0 text-base">
-                      <div className="flex items-baseline gap-3 truncate">
-                        <span className="text-on-surface-variant">Run Detail</span>
-                        <span className="text-on-surface-variant/40">/</span>
-                        <span className="truncate font-bold tracking-tight text-primary">
-                          {runMatch?.params?.runId}
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="md:hidden">
-                    <h1 className="font-headline text-lg font-extrabold tracking-tight text-on-surface">
-                      runr.
-                    </h1>
+                <div className="h-4 w-px bg-outline-variant/30" />
+                <div className="min-w-0 text-base">
+                  <div className="flex items-baseline gap-3 truncate">
+                    <span className="text-on-surface-variant">Run Detail</span>
+                    <span className="text-on-surface-variant/40">/</span>
+                    <span className="truncate font-bold tracking-tight text-primary">
+                      {runMatch?.params?.runId}
+                    </span>
                   </div>
-                )}
+                </div>
+              </>
+            ) : (
+              <div className="md:hidden">
+                <h1 className="font-headline text-lg font-extrabold tracking-tight text-on-surface">
+                  runr.
+                </h1>
               </div>
+            )}
+          </div>
 
-              <div className="flex items-center gap-2 md:gap-3">
-                <TopRibbonDisclosure items={topRibbonItems} />
-                {isRunDetail ? (
-                  <>
-                    <button
-                      className="rounded p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-                      type="button"
-                    >
-                      <span className="material-symbols-outlined text-xl">share</span>
-                    </button>
-                  </>
-                ) : null}
+          <div className="flex items-center gap-2 md:gap-3">
+            <TopRibbonDisclosure items={topRibbonItems} />
+            {isRunDetail ? (
+              <>
                 <button
-                  className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-                  onClick={toggleTheme}
-                  title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+                  className="rounded p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
                   type="button"
                 >
-                  <span className="material-symbols-outlined">
-                    {isDark ? "light_mode" : "dark_mode"}
-                  </span>
+                  <span className="material-symbols-outlined text-xl">share</span>
                 </button>
-                <button
-                  className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
-                  type="button"
-                >
-                  <span className="material-symbols-outlined">notifications</span>
-                </button>
-                <Show when="signed-out">
-                  <div className="hidden items-center gap-2 sm:flex">
-                    <SignInButton fallbackRedirectUrl="/" mode="modal">
-                      <button
-                        className="rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                        type="button"
-                      >
-                        Sign In
-                      </button>
-                    </SignInButton>
-                    <SignUpButton fallbackRedirectUrl="/" mode="modal">
-                      <button
-                        className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-                        type="button"
-                      >
-                        Create Account
-                      </button>
-                    </SignUpButton>
-                  </div>
-                </Show>
-                <Show when="signed-in">
-                  <>
-                    {status === "connected" ? (
-                      <button
-                        className="top-ribbon__action hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface lg:inline-flex"
-                        onClick={() => navigate("/pricing")}
-                        type="button"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">diamond</span>
-                        {planBadgeLabel}
-                      </button>
-                    ) : null}
-                    <div className="hidden min-w-0 text-right xl:block">
-                      <p className="truncate text-sm font-semibold text-on-surface">{shellUser.name}</p>
-                      <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
-                    </div>
-                    <div className="shrink-0">
-                      <UserButton />
-                    </div>
-                  </>
-                </Show>
+              </>
+            ) : null}
+            <button
+              className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+              onClick={toggleTheme}
+              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              type="button"
+            >
+              <span className="material-symbols-outlined">
+                {isDark ? "light_mode" : "dark_mode"}
+              </span>
+            </button>
+            <button
+              className="rounded-full p-1 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary"
+              type="button"
+            >
+              <span className="material-symbols-outlined">notifications</span>
+            </button>
+            <Show when="signed-out">
+              <div className="hidden items-center gap-2 sm:flex">
+                <SignInButton fallbackRedirectUrl="/" mode="modal">
+                  <button
+                    className="rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    type="button"
+                  >
+                    Sign In
+                  </button>
+                </SignInButton>
+                <SignUpButton fallbackRedirectUrl="/" mode="modal">
+                  <button
+                    className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                    type="button"
+                  >
+                    Create Account
+                  </button>
+                </SignUpButton>
               </div>
-            </>
-          )}
-          <button
-            aria-label={topRibbonCollapsed ? "Expand top ribbon" : "Collapse top ribbon"}
-            className={[
-              "top-ribbon__toggle absolute left-1/2 z-10 inline-flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-outline-variant/20 bg-background/95 text-on-surface-variant shadow-soft backdrop-blur-[20px] transition-colors hover:bg-surface-container-low hover:text-on-surface",
-              topRibbonCollapsed ? "top-3" : "top-full -translate-y-1/2",
-            ].join(" ")}
-            onClick={() => setTopRibbonCollapsed((currentValue) => !currentValue)}
-            title={topRibbonCollapsed ? "Expand top ribbon" : "Collapse top ribbon"}
-            type="button"
-          >
-            <span className="material-symbols-outlined text-[18px]">
-              {topRibbonCollapsed ? "keyboard_arrow_down" : "keyboard_arrow_up"}
-            </span>
-          </button>
+            </Show>
+            <Show when="signed-in">
+              <>
+                {status === "connected" ? (
+                  <button
+                    className="top-ribbon__action hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface lg:inline-flex"
+                    onClick={() => navigate("/pricing")}
+                    type="button"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">diamond</span>
+                    {planBadgeLabel}
+                  </button>
+                ) : null}
+                <div className="hidden min-w-0 text-right xl:block">
+                  <p className="truncate text-sm font-semibold text-on-surface">{shellUser.name}</p>
+                  <p className="truncate text-xs text-on-surface-variant">{shellUser.subtitle}</p>
+                </div>
+                <div className="shrink-0">
+                  <UserButton />
+                </div>
+              </>
+            </Show>
+          </div>
         </header>
 
         <main className="w-full px-4 pb-12 pt-6 md:px-8">{children}</main>

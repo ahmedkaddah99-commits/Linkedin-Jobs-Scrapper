@@ -181,7 +181,10 @@ html.dark .backdrop-blur-\[20px\] {
   left: 0;
   top: 0;
   width: var(--shell-sidebar-width);
-  transition: width 220ms ease;
+  transition:
+    width 220ms ease,
+    filter 180ms ease,
+    opacity 180ms ease;
 }
 
 .app-shell__main {
@@ -205,6 +208,14 @@ html.dark .backdrop-blur-\[20px\] {
   border-right: 1px solid var(--shell-sidebar-border);
   border-radius: 0 1.25rem 1.25rem 0;
   box-shadow: var(--shell-sidebar-shadow);
+}
+
+.app-shell--sidebar-muted .app-shell__desktop-sidebar,
+.app-shell--sidebar-muted .shell-sidebar--mobile {
+  filter: blur(4px);
+  opacity: 0.38;
+  pointer-events: none;
+  user-select: none;
 }
 
 .shell-sidebar__header {
@@ -560,16 +571,14 @@ html:not(.dark) .top-ribbon--teal .hover\:text-on-surface:hover {
   color: #ffffff !important;
 }
 
-html:not(.dark) .top-ribbon__action,
-html:not(.dark) .top-ribbon__toggle {
+html:not(.dark) .top-ribbon__action {
   background-color: #6ccfc4 !important;
   color: #ffffff !important;
   border-color: rgba(17, 122, 112, 0.34) !important;
   box-shadow: 0 10px 24px rgba(20, 184, 166, 0.2) !important;
 }
 
-html:not(.dark) .top-ribbon__action:hover,
-html:not(.dark) .top-ribbon__toggle:hover {
+html:not(.dark) .top-ribbon__action:hover {
   background-color: #84ddd3 !important;
   color: #ffffff !important;
 }

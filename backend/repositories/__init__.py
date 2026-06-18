@@ -1,5 +1,18 @@
-from .file_backed import (
+from .contracts import (
+    AnalyticsStoreProtocol,
+    ArtifactStoreProtocol,
+    AuthRepositoryProtocol,
     BackendRepositories,
+    ConfigStoreProtocol,
+    JobStoreProtocol,
+    ReviewStoreProtocol,
+    RunRepositoryProtocol,
+    SecretStoreProtocol,
+    SourcePolicyStoreProtocol,
+    WorkerStoreProtocol,
+    WorkspaceRepositoryProtocol,
+)
+from .file_backed import (
     FileAnalyticsStore,
     FileAuthRepository,
     FileArtifactStore,
@@ -20,12 +33,17 @@ from .sqlite_backed import (
     SqliteReviewStore,
     SqliteRunRepository,
     SqliteSecretStore,
+    SqliteSourcePolicyStore,
     SqliteWorkerStore,
     SqliteWorkspaceRepository,
 )
 
 __all__ = [
+    "AnalyticsStoreProtocol",
+    "ArtifactStoreProtocol",
+    "AuthRepositoryProtocol",
     "BackendRepositories",
+    "ConfigStoreProtocol",
     "FileAnalyticsStore",
     "FileAuthRepository",
     "FileArtifactStore",
@@ -36,6 +54,11 @@ __all__ = [
     "FileSecretStore",
     "FileWorkerStore",
     "FileWorkspaceRepository",
+    "JobStoreProtocol",
+    "ReviewStoreProtocol",
+    "RunRepositoryProtocol",
+    "SecretStoreProtocol",
+    "SourcePolicyStoreProtocol",
     "SqliteAnalyticsStore",
     "SqliteAuthRepository",
     "SqliteArtifactStore",
@@ -44,6 +67,9 @@ __all__ = [
     "SqliteReviewStore",
     "SqliteRunRepository",
     "SqliteSecretStore",
+    "SqliteSourcePolicyStore",
     "SqliteWorkerStore",
     "SqliteWorkspaceRepository",
+    "WorkerStoreProtocol",
+    "WorkspaceRepositoryProtocol",
 ]

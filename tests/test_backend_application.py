@@ -4,12 +4,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend import create_backend
-from backend.application.services import BackendValidationError
+from backend.application.services import BackendValidationError, _scrapeops_account_state
 from backend.capabilities.networking import build_empty_relevant_people_discovery
 from backend.domain.phase0_contracts import normalize_candidate_asset_descriptor
 from backend.domain.models import ArtifactRecord, JobRecord, StageDefinition
 from backend.profiles.cv_text import load_cv_text
 from backend.orchestration import BaseStage, StageOutcome
+from backend.storage import build_private_object_key
 
 
 class _SeedJobsStage(BaseStage):
@@ -73,7 +74,51 @@ class _DocumentGenerationStage(BaseStage):
         )
 
 
+class _SeedTestCandidatesStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        return True
+
+    def execute(self, context, definition) -> StageOutcome:
+        return StageOutcome(
+            job_sets={
+                definition.output_key: [
+                    JobRecord(job_id="rejected_job", title="Rejected Role", company="ACME"),
+                    JobRecord(job_id="accepted_job_1", title="Accepted Role One", company="ACME"),
+                    JobRecord(job_id="accepted_job_2", title="Accepted Role Two", company="ACME"),
+                ]
+            }
+        )
+
+
+class _AcceptTestCandidatesStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        return bool(definition.input_keys and context.get_job_set(definition.input_keys[0]))
+
+    def execute(self, context, definition) -> StageOutcome:
+        jobs = context.get_job_set(definition.input_keys[0])
+        return StageOutcome(job_sets={definition.output_key: jobs[1:]}, metrics={"approved": len(jobs[1:]), "rejected": 1})
+
+
 class BackendApplicationTests(unittest.TestCase):
+    def test_scrapeops_account_state_parses_nested_usage_payload(self):
+        with (
+            patch.dict("os.environ", {"SCRAPEOPS_API_KEY": "test_key"}, clear=False),
+            patch(
+                "backend.application.services.fetch_account_usage",
+                return_value={
+                    "results": {
+                        "plan_api_credits": "100000",
+                        "used_api_credits": "0",
+                    }
+                },
+            ),
+        ):
+            state = _scrapeops_account_state()
+
+        self.assertEqual(state["status"], "healthy")
+        self.assertEqual(state["usage"]["limit"], 100000)
+        self.assertEqual(state["usage"]["remaining"], 100000)
+
     def _workspace_tempdir(self, name: str) -> Path:
         path = Path.cwd() / ".backend_test_tmp" / name
         if path.exists():
@@ -124,7 +169,7 @@ class BackendApplicationTests(unittest.TestCase):
         )
         return app, temp_dir
 
-    def _workspace_cv_asset_descriptor(self, *, asset_id: str, cv_path: Path) -> dict:
+    def _workspace_cv_asset_descriptor(self, *, asset_id: str, cv_path: Path, object_key: str = "") -> dict:
         return normalize_candidate_asset_descriptor(
             {
                 "asset_id": asset_id,
@@ -132,6 +177,7 @@ class BackendApplicationTests(unittest.TestCase):
                 "display_name": cv_path.name,
                 "role": "workspace_cv",
                 "path": str(cv_path.resolve()),
+                "object_key": object_key,
                 "mime_type": "text/plain",
                 "extension": cv_path.suffix.lower().lstrip("."),
                 "tags": ["workspace_cv"],
@@ -147,6 +193,15 @@ class BackendApplicationTests(unittest.TestCase):
         workspace_name: str = "Builder Workspace",
         cv_generation_mode: str = "aggressive_customization",
     ):
+        asset_id = "asset_workspace_cv_primary"
+        object_key = build_private_object_key(
+            namespace="users",
+            owner_id="test_user",
+            category="workspace_cv",
+            object_id=asset_id,
+            filename=cv_path.name,
+        )
+        app.object_storage.put(object_key, cv_path.read_bytes(), content_type="text/plain")
         workspace = app.create_workspace_from_scratch(
             {
                 "name": workspace_name,
@@ -158,11 +213,12 @@ class BackendApplicationTests(unittest.TestCase):
                     "tailored_document_generation",
                 ],
                 "workspace_cv_asset": self._workspace_cv_asset_descriptor(
-                    asset_id="asset_workspace_cv_primary",
+                    asset_id=asset_id,
                     cv_path=cv_path,
+                    object_key=object_key,
                 ),
                 "settings": {
-                    "workspace_cv_asset_id": "asset_workspace_cv_primary",
+                    "workspace_cv_asset_id": asset_id,
                     "cv_generation_mode": cv_generation_mode,
                     "keywords": ["analyst"],
                     "geo_id": "101282230",
@@ -179,6 +235,7 @@ class BackendApplicationTests(unittest.TestCase):
             "workspace_cv_asset_display_name": cv_path.name,
             "workspace_cv_asset_extension": cv_path.suffix.lower().lstrip("."),
             "workspace_cv_asset_mime_type": "text/plain",
+            "workspace_cv_asset_object_key": object_key,
         }
         return app.upsert_workspace(workspace_payload)
 
@@ -388,6 +445,7 @@ class BackendApplicationTests(unittest.TestCase):
                 "settings": {
                     "academic_career_sites": ["Example University | https://university.example/jobs"],
                     "target_roles": ["PhD Researcher", "Postdoctoral Researcher"],
+                    "posted_within_days": 7,
                     "stage4_max_jobs": 12,
                 },
             }
@@ -400,6 +458,7 @@ class BackendApplicationTests(unittest.TestCase):
             [{"company_name": "Example University", "url": "https://university.example/jobs"}],
         )
         self.assertNotIn("company_career_sites", workspace.settings)
+        self.assertEqual(workspace.settings["posted_within_days"], 7)
 
         workflow_template = app.get_workflow_template(workspace.workflow_template_id)
         self.assertTrue(
@@ -423,7 +482,7 @@ class BackendApplicationTests(unittest.TestCase):
 
         captured_cv_texts: list[str] = []
 
-        def stage1_stub(stage_args):
+        def stage1_stub(stage_args, **_kwargs):
             captured_cv_texts.append(load_cv_text())
             return [
                 {
@@ -533,6 +592,7 @@ class BackendApplicationTests(unittest.TestCase):
             cv_text="Workspace CV Snapshot Text",
         )
         cv_path.unlink()
+        app.object_storage.delete(workspace.settings["workspace_cv_asset_object_key"])
 
         with patch("backend.adapters.stage_adapters.run_tailored_stage1_pipeline") as stage1_pipeline:
             with self.assertRaises(BackendValidationError) as error_context:
@@ -908,6 +968,8 @@ class BackendApplicationTests(unittest.TestCase):
                 "metadata": {"tracker_status": "applied"},
             },
         )
+        placed_in_tracker_at = original.metadata.get("placed_in_tracker_at")
+        self.assertTrue(placed_in_tracker_at)
         updated = app.upsert_review(
             run_id=run.id,
             payload={
@@ -915,6 +977,7 @@ class BackendApplicationTests(unittest.TestCase):
                 "decision": "approved",
                 "status": "approved",
                 "reviewer": "tester",
+                "metadata": {"placed_in_tracker_at": "1900-01-01T00:00:00+00:00"},
             },
         )
 
@@ -922,6 +985,7 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(updated.decision, "approved")
         self.assertEqual(updated.status, "approved")
         self.assertEqual(updated.metadata["tracker_status"], "applied")
+        self.assertEqual(updated.metadata["placed_in_tracker_at"], placed_in_tracker_at)
         self.assertEqual(len(app.list_reviews(run_id=run.id)), 1)
 
     def test_document_generation_runs_auto_approve_generated_jobs(self):
@@ -971,6 +1035,72 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(reviews[0].decision, "approved")
         self.assertEqual(reviews[0].reviewer, "system")
         self.assertTrue(reviews[0].metadata.get("auto_approved"))
+        self.assertTrue(reviews[0].metadata.get("placed_in_tracker_at"))
+
+    def test_test_run_selects_one_surviving_job_and_adds_it_to_tracker(self):
+        temp_dir = self._workspace_tempdir("test_run_single_survivor")
+        app = create_backend(temp_dir)
+        app.registries.stage_registry.register("test.seed_candidates", _SeedTestCandidatesStage())
+        app.registries.stage_registry.register("test.accept_candidates", _AcceptTestCandidatesStage())
+        app.registries.stage_registry.register("applications.generate.documents", _DocumentGenerationStage())
+        app.upsert_workflow_template(
+            {
+                "id": "test_run_template",
+                "name": "Test Run Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="source_jobs",
+                        stage_type="test.seed_candidates",
+                        name="Source Jobs",
+                        output_key="source_jobs",
+                    ).to_dict(),
+                    StageDefinition(
+                        stage_id="screen_jobs",
+                        stage_type="test.accept_candidates",
+                        name="Screen Jobs",
+                        input_keys=["source_jobs"],
+                        output_key="accepted_jobs",
+                    ).to_dict(),
+                    StageDefinition(
+                        stage_id="generate_documents",
+                        stage_type="applications.generate.documents",
+                        name="Generate Documents",
+                        input_keys=["accepted_jobs"],
+                        output_key="generated_jobs",
+                    ).to_dict(),
+                ],
+                "default_run_settings": {"automation_flow": "tailored_documents"},
+            }
+        )
+        app.upsert_workspace(
+            {
+                "id": "test_run_workspace",
+                "name": "Test Run Workspace",
+                "workflow_template_id": "test_run_template",
+                "settings": {"automation_flow": "tailored_documents"},
+                "sources": [],
+            }
+        )
+
+        run = app.start_run(
+            "test_run_workspace",
+            execute=True,
+            requested_by="test",
+            run_input_overrides={"run_mode": "test", "test_run_job_limit": 1},
+        )
+
+        self.assertTrue(run.is_test_run)
+        self.assertEqual([job.job_id for job in app.get_job_set(run.id, "accepted_jobs")], ["accepted_job_1"])
+        self.assertEqual([job.job_id for job in app.get_job_set(run.id, "generated_jobs")], ["accepted_job_1"])
+        reviews = app.list_reviews(run_id=run.id)
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0].job_id, "accepted_job_1")
+        self.assertEqual(reviews[0].job_set_key, "generated_jobs")
+        self.assertEqual(reviews[0].decision, "approved")
+        self.assertEqual(reviews[0].status, "approved")
+        self.assertTrue(reviews[0].metadata.get("auto_approved"))
+        self.assertTrue(reviews[0].metadata.get("placed_in_tracker_at"))
+        self.assertEqual(len(app.list_artifacts(run.id)), 1)
 
     def test_resume_and_cancel_lifecycle(self):
         app, _ = self._create_app_with_test_workflow("resume_cancel")

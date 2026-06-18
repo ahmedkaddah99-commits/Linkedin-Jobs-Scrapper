@@ -110,7 +110,7 @@ export const PEOPLE_CATEGORY_CONFIG = [
  * @property {string} jobId
  * @property {string} company
  * @property {string} jobTitle
- * @property {"not_started" | "running" | "completed" | "failed"} peopleDiscoveryStatus
+ * @property {"not_started" | "running" | "completed" | "failed" | "not_configured"} peopleDiscoveryStatus
  * @property {Object} contextExtraction
  * @property {SearchHypothesis[]} searchHypotheses
  * @property {PublicProfileCandidate[]} publicProfileCandidates
@@ -205,7 +205,7 @@ export async function startPeopleDiscovery(request, { runId, jobId, job }) {
     return normalizePeopleDiscoveryRun(payload, job);
   } catch (error) {
     if (error?.status === 404 || error?.code === "not_found") {
-      return buildMockPeopleDiscoveryRun({ runId, jobId, job });
+      return buildUnavailablePeopleDiscoveryRun({ runId, jobId, job });
     }
     throw error;
   }
@@ -263,88 +263,17 @@ export function countSelectedPeople(discoveryRun) {
   ).length;
 }
 
-function buildMockPeopleDiscoveryRun({ runId, jobId, job = {} }) {
+function buildUnavailablePeopleDiscoveryRun({ runId, jobId, job = {} }) {
   const company = String(job.company || "Target Company");
   const location = String(job.location || job.location_raw || "Berlin, Germany");
   const title = String(job.title || "Selected Role");
-  const categoryState = {
-    hiring_manager: [
-      {
-        id: "mock-hiring-manager-1",
-        category: "hiring_manager",
-        name: "Alex Schmidt",
-        title: "Director of Operations DACH",
-        company,
-        location,
-        profileUrl: "https://www.linkedin.com/in/mock-alex-schmidt",
-        source: "public_profile_search",
-        confidence: 76,
-        confidenceLabel: "Medium",
-        reasoningNote:
-          "Likely relevant because the public title and company match the role context, but the remit appears broader than one local team.",
-        evidenceSnippets: ["Director of Operations DACH", company, location],
-        caveats: ["Their remit may be broader than the exact team or country for this role."],
-        searchQueries: [`${company} Director Operations DACH LinkedIn`],
-        discoveredSearchQuery: `${company} Director Operations DACH LinkedIn`,
-        regionScopeCaveat: "Their remit may be broader than the exact team or country for this role.",
-        confidenceBreakdown: null,
-        status: "unreviewed",
-      },
-    ],
-    potential_colleague: [
-      {
-        id: "mock-colleague-1",
-        category: "potential_colleague",
-        name: "Mina Keller",
-        title,
-        company,
-        location,
-        profileUrl: "https://www.linkedin.com/in/mock-mina-keller",
-        source: "public_profile_search",
-        confidence: 68,
-        confidenceLabel: "Medium",
-        reasoningNote:
-          "Potential match because this person appears to work in the same function and location, but the exact reporting line is not confirmed.",
-        evidenceSnippets: [title, company, location],
-        caveats: ["Confidence is based on public profile signals rather than confirmed org-chart data."],
-        searchQueries: [`${company} ${title} LinkedIn`],
-        discoveredSearchQuery: `${company} ${title} LinkedIn`,
-        regionScopeCaveat: "",
-        confidenceBreakdown: null,
-        status: "unreviewed",
-      },
-    ],
-    executive: [
-      {
-        id: "mock-executive-1",
-        category: "executive",
-        name: "Lena Vogt",
-        title: "VP Operations Europe",
-        company,
-        location,
-        profileUrl: "https://www.linkedin.com/in/mock-lena-vogt",
-        source: "public_profile_search",
-        confidence: 61,
-        confidenceLabel: "Medium",
-        reasoningNote:
-          "Potential match because this leader appears connected to the same function, though the scope is likely regional rather than role-specific.",
-        evidenceSnippets: ["VP Operations Europe", company, "Regional scope"],
-        caveats: ["Their remit may be broader than the exact team or country for this role."],
-        searchQueries: [`${company} VP Operations Europe LinkedIn`],
-        discoveredSearchQuery: `${company} VP Operations Europe LinkedIn`,
-        regionScopeCaveat: "Their remit may be broader than the exact team or country for this role.",
-        confidenceBreakdown: null,
-        status: "unreviewed",
-      },
-    ],
-  };
   return normalizePeopleDiscoveryRun({
     runId,
     workspaceId: "",
     jobId,
     company,
     jobTitle: title,
-    peopleDiscoveryStatus: "completed",
+    peopleDiscoveryStatus: "failed",
     contextExtraction: {
       company,
       jobTitle: title,
@@ -359,12 +288,12 @@ function buildMockPeopleDiscoveryRun({ runId, jobId, job = {} }) {
     },
     searchHypotheses: [],
     publicProfileCandidates: [],
-    categories: categoryState,
+    categories: { hiring_manager: [], potential_colleague: [], executive: [] },
     passes: [],
-    provider: { search: "mock", query_planner: "mock", resolver: "mock" },
-    warnings: ["Using frontend mock data because the people-discovery endpoint is not available."],
+    provider: { search: "unavailable", query_planner: "unavailable", resolver: "unavailable" },
+    warnings: ["People discovery endpoint is not available."],
     selectedPeople: [],
-    error: "",
+    error: "People discovery endpoint is not available.",
     lastStartedAt: "",
     lastCompletedAt: "",
     lastUpdatedAt: new Date().toISOString(),

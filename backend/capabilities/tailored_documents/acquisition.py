@@ -228,9 +228,19 @@ def main() -> int:
     return 0
 
 
-def run_stage1_pipeline(args):
+def run_stage1_pipeline(args, *, usage_callback=None):
     scrapeops_api_key, deepseek_api_key, so_requests = build_clients()
     cv_summary = load_cv_text()
+    proxy_health_confirmed = False
+
+    def ensure_proxy_health() -> None:
+        nonlocal proxy_health_confirmed
+        if proxy_health_confirmed:
+            return
+        from backend.integrations.scrapeops import require_scrapeops_proxy_health
+
+        require_scrapeops_proxy_health(scrapeops_api_key, usage_callback=usage_callback)
+        proxy_health_confirmed = True
 
     print("[Stage1] starting pipeline")
     forbidden_title_words = [str(item).lower() for item in (args.forbidden_title_keywords or []) if str(item).strip()]
@@ -323,6 +333,8 @@ def run_stage1_pipeline(args):
             scrapeops_api_key=scrapeops_api_key,
             debug_enrich_blocks=args.debug_enrich_blocks,
             use_proxy_fallback=args.use_proxy_fallback,
+            usage_callback=usage_callback,
+            proxy_health_check=ensure_proxy_health,
         )
         job["easy_apply_status"] = enrich["easy_apply_status"]
         job["full_description"] = enrich["description"]

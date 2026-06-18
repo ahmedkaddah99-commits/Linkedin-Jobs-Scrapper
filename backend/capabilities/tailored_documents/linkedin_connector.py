@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import time
@@ -10,10 +11,20 @@ from scrapeops_python_requests.scrapeops_requests import ScrapeOpsRequests
 
 from backend.config.job_seeker import load_project_dotenv
 from backend.domain.pipeline_jobs import FILTER_STATUS_PENDING, SOURCE_TYPE_LINKEDIN_SEARCH
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_PROXY_ENDPOINT,
+    billed_status_code,
+    build_proxy_params,
+    build_proxy_usage_record,
+    estimate_mode_native_credits,
+    parse_proxy_response_envelope,
+    require_scrapeops_proxy_health,
+)
 
 from .common import compact_whitespace
 
 
+LOGGER = logging.getLogger(__name__)
 LINKEDIN_REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -155,7 +166,7 @@ def priority_sort_key(job, low_applicant_threshold: int):
     )
 
 
-def build_scrape_requests_client():
+def build_scrape_requests_client(*, proxy_health_check=None):
     load_project_dotenv()
     scrapeops_api_key = os.getenv("SCRAPEOPS_API_KEY")
     if not scrapeops_api_key:
@@ -283,6 +294,8 @@ def fetch_linkedin_job_posting_response(
     so_requests,
     scrapeops_api_key: str,
     use_proxy_fallback: bool,
+    usage_callback=None,
+    proxy_health_check=None,
 ):
     target_url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
     attempts = []
@@ -295,14 +308,47 @@ def fetch_linkedin_job_posting_response(
         attempts.append(("direct", resp.status_code))
 
     if resp.status_code != 200 and use_proxy_fallback:
-        proxy_url = "https://proxy.scrapeops.io/v1/"
-        params = {
-            "api_key": scrapeops_api_key,
-            "url": target_url,
-            "residential": "true",
-            "render_js": "true",
-        }
-        resp = std_requests.get(proxy_url, params=params, headers=LINKEDIN_REQUEST_HEADERS, timeout=45)
+        if callable(proxy_health_check):
+            proxy_health_check()
+        else:
+            require_scrapeops_proxy_health(scrapeops_api_key, usage_callback=usage_callback)
+        LOGGER.warning("LinkedIn proxy request - 70 credits/request, ensure budget allows.")
+        request_started = time.perf_counter()
+        params = build_proxy_params(
+            api_key=scrapeops_api_key,
+            url=target_url,
+            mode="render_js_residential",
+        )
+        resp = std_requests.get(SCRAPEOPS_PROXY_ENDPOINT, params=params, headers=LINKEDIN_REQUEST_HEADERS, timeout=45)
+        envelope = parse_proxy_response_envelope(resp)
+        resp.status_code = envelope.target_status_code
+        resp._content = envelope.body.encode(resp.encoding or "utf-8")
+        billed = billed_status_code(envelope.target_status_code)
+        estimated_credits = estimate_mode_native_credits("render_js_residential") if billed else 0
+        actual_credits = envelope.billed_credits_actual
+        accounted_credits = actual_credits if actual_credits is not None else estimated_credits
+        if callable(usage_callback):
+            usage_callback(
+                {
+                    **build_proxy_usage_record(
+                        source_id="linkedin",
+                        target_url=target_url,
+                        request_mode="render_js_residential",
+                        target_status_code=envelope.target_status_code,
+                        provider_status_code=envelope.provider_status_code,
+                        latency_ms=round((time.perf_counter() - request_started) * 1000),
+                        billed_credits_actual=actual_credits,
+                        billed_credits_estimated=estimated_credits,
+                        error_category="" if envelope.target_status_code < 400 else "target_http_error",
+                    ),
+                    "domain": "www.linkedin.com",
+                    "status_code": envelope.target_status_code,
+                    "billed": billed,
+                    "native_credits": accounted_credits,
+                    "runner_credits": accounted_credits,
+                }
+            )
+        LOGGER.info("LinkedIn proxy request billed credits: %s", actual_credits)
         attempts.append(("scrapeops_proxy", resp.status_code))
 
     return target_url, resp, attempts
@@ -472,6 +518,8 @@ def enrich_job(
     scrapeops_api_key: str,
     debug_enrich_blocks: bool,
     use_proxy_fallback: bool,
+    usage_callback=None,
+    proxy_health_check=None,
 ):
     try:
         target_url, resp, attempts = fetch_linkedin_job_posting_response(
@@ -479,6 +527,8 @@ def enrich_job(
             so_requests=so_requests,
             scrapeops_api_key=scrapeops_api_key,
             use_proxy_fallback=use_proxy_fallback,
+            usage_callback=usage_callback,
+            proxy_health_check=proxy_health_check,
         )
 
         if resp.status_code != 200:

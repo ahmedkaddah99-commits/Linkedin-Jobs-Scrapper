@@ -22,6 +22,12 @@ const REFERRAL_OUTREACH_STATUSES = [
 const LINKEDIN_SOURCE_KINDS = new Set(["linkedin_csv", "linkedin_csv_import"]);
 const REFERRAL_SECTION_OPTIONS = [
   {
+    id: "people",
+    label: "Relevant People Finder",
+    description: "Find likely hiring managers, team members, and senior leaders.",
+    icon: "person_search",
+  },
+  {
     id: "manual",
     label: "Personal Contacts",
     description: "People you add or maintain yourself.",
@@ -490,7 +496,51 @@ export default function ReferralsPage() {
         </p>
       </header>
 
-      <section className="rounded-2xl border border-primary/15 bg-[radial-gradient(circle_at_top_left,rgba(58,130,246,0.12),transparent_45%),linear-gradient(135deg,rgba(15,23,42,0.02),rgba(58,130,246,0.02))] p-6">
+      <section className="grid gap-3 lg:grid-cols-3">
+        {REFERRAL_SECTION_OPTIONS.map((section) => {
+          const isActive = activeSection === section.id;
+          const count =
+            section.id === "people"
+              ? peopleFinderTargets.length
+              : section.id === "linkedin"
+                ? stats.linkedin
+                : stats.manual;
+          return (
+            <button
+              key={section.id}
+              className={[
+                "rounded-2xl border p-5 text-left transition-all",
+                isActive
+                  ? "border-primary/30 bg-primary/10 shadow-sm"
+                  : "border-outline-variant/20 bg-surface-container-lowest hover:border-primary/20 hover:bg-surface-container-low",
+              ].join(" ")}
+              onClick={() => {
+                setActiveSection(section.id);
+                if (editingId && section.id !== (editingLinkedInContact ? "linkedin" : "manual")) {
+                  resetForm();
+                }
+              }}
+              type="button"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[20px] text-primary">{section.icon}</span>
+                    <div className="text-base font-semibold text-on-surface">{section.label}</div>
+                  </div>
+                  <div className="mt-2 text-sm text-on-surface-variant">{section.description}</div>
+                </div>
+                <span className="rounded-full bg-surface px-3 py-1 text-xs font-semibold text-on-surface-variant">
+                  {count}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </section>
+
+      {activeSection === "people" ? (
+        <section className="rounded-2xl border border-primary/15 bg-[radial-gradient(circle_at_top_left,rgba(58,130,246,0.12),transparent_45%),linear-gradient(135deg,rgba(15,23,42,0.02),rgba(58,130,246,0.02))] p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="text-xs font-semibold uppercase tracking-wider text-primary">
@@ -576,7 +626,8 @@ export default function ReferralsPage() {
             No application context is available here yet. Once a job reaches Tracker or has saved outreach history, the Relevant People Finder entry point appears in this section.
           </div>
         )}
-      </section>
+        </section>
+      ) : null}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
@@ -597,45 +648,8 @@ export default function ReferralsPage() {
         ))}
       </section>
 
-      <section className="grid gap-3 lg:grid-cols-2">
-        {REFERRAL_SECTION_OPTIONS.map((section) => {
-          const isActive = activeSection === section.id;
-          const count = section.id === "linkedin" ? stats.linkedin : stats.manual;
-          return (
-            <button
-              key={section.id}
-              className={[
-                "rounded-2xl border p-5 text-left transition-all",
-                isActive
-                  ? "border-primary/30 bg-primary/10 shadow-sm"
-                  : "border-outline-variant/20 bg-surface-container-lowest hover:border-primary/20 hover:bg-surface-container-low",
-              ].join(" ")}
-              onClick={() => {
-                setActiveSection(section.id);
-                if (editingId && section.id !== (editingLinkedInContact ? "linkedin" : "manual")) {
-                  resetForm();
-                }
-              }}
-              type="button"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[20px] text-primary">{section.icon}</span>
-                    <div className="text-base font-semibold text-on-surface">{section.label}</div>
-                  </div>
-                  <div className="mt-2 text-sm text-on-surface-variant">{section.description}</div>
-                </div>
-                <span className="rounded-full bg-surface px-3 py-1 text-xs font-semibold text-on-surface-variant">
-                  {count}
-                </span>
-              </div>
-            </button>
-          );
-        })}
-      </section>
-
-      <section className="grid gap-8 xl:grid-cols-[1.05fr_1.4fr]">
+      {activeSection !== "people" ? (
+        <section className="grid gap-8 xl:grid-cols-[1.05fr_1.4fr]">
         <div className="space-y-6">
           {!showingLinkedInImportPanel ? (
             <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
@@ -1077,7 +1091,8 @@ export default function ReferralsPage() {
             )}
           </div>
         </div>
-      </section>
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-export const CV_STUDIO_ROUTE = "/cv-studio";
+﻿export const CV_STUDIO_ROUTE = "/cv-studio";
 export const CV_STUDIO_SETTINGS_SEED_KEY = "runr.cvStudio.seed";
 export const CV_STUDIO_SESSION_KEY = "runr.cvStudio.session";
 
@@ -11,6 +11,15 @@ export const DEFAULT_WEB_CV_PALETTE = {
   border: "CBD5E1",
 };
 
+export const PLAIN_RESUME_DEFAULT_PALETTE = {
+  primary: "2A7B88",
+  accent: "39A5B7",
+  surface: "FFFFFF",
+  text: "262626",
+  muted: "4B5563",
+  border: "39A5B7",
+};
+
 export const WEB_CV_COLOR_FIELDS = [
   { id: "primary", label: "Primary", description: "Headers and dividers" },
   { id: "accent", label: "Accent", description: "Highlights and badges" },
@@ -21,6 +30,11 @@ export const WEB_CV_COLOR_FIELDS = [
 ];
 
 export const WEB_CV_COLOR_PRESETS = [
+  {
+    id: "resume_teal",
+    label: "Resume Teal",
+    palette: { ...PLAIN_RESUME_DEFAULT_PALETTE },
+  },
   {
     id: "navy_amber",
     label: "Navy and Amber",
@@ -126,14 +140,22 @@ export const WEB_CV_TEMPLATES = [
     description: "Asymmetric grid with compact detail blocks and dense experience flow.",
     mood: "Sharp, technical, dense",
   },
+  {
+    id: "plain",
+    label: "Plain",
+    shortLabel: "Plain",
+    description: "Photo-free classic resume with a configurable name rule and compact skills.",
+    mood: "Classic, polished, approachable",
+  },
 ];
 
 const DOCX_TO_WEB_TEMPLATE_MAP = {
+  teal_resume: "plain",
   classic: "ats_single_column",
   modern: "signal_header",
   compact: "mono_nav",
   europass: "europass_lite",
-  plain: "ats_single_column",
+  plain: "plain",
 };
 
 const DOCX_COLOR_SCHEME_TO_WEB_PALETTE = {
@@ -186,6 +208,62 @@ const DOCX_COLOR_SCHEME_TO_WEB_PALETTE = {
     border: "D1D5DB",
   },
 };
+
+const CV_EXPORT_LABELS = {
+  English: {
+    additional: "Additional",
+    availability: "Availability",
+    browserCvStudio: "Browser CV Studio",
+    contact: "Contact",
+    coreSkills: "Core Skills",
+    editableHtmlCv: "Editable HTML CV",
+    education: "Education",
+    europassInspired: "Europass-inspired",
+    experience: "Experience",
+    experienceItem: "Experience Item",
+    inBrowserEditableCv: "In-browser editable CV",
+    languages: "Languages",
+    optionalPhoto: "Optional photo",
+    profile: "Profile",
+    skills: "Skills",
+    summary: "Summary",
+    tailoredProfile: "Tailored profile",
+    tailoredRole: "Tailored role",
+  },
+  German: {
+    additional: "Weitere Informationen",
+    availability: "Verfuegbarkeit",
+    browserCvStudio: "Browser CV Studio",
+    contact: "Kontakt",
+    coreSkills: "Kernkompetenzen",
+    editableHtmlCv: "Editierbarer HTML-CV",
+    education: "Ausbildung",
+    europassInspired: "Europass-inspiriert",
+    experience: "Berufserfahrung",
+    experienceItem: "Berufserfahrung",
+    inBrowserEditableCv: "Editierbarer CV",
+    languages: "Sprachen",
+    optionalPhoto: "Optionales Foto",
+    profile: "Profil",
+    skills: "Kompetenzen",
+    summary: "Profil",
+    tailoredProfile: "Zielprofil",
+    tailoredRole: "Zielrolle",
+  },
+};
+
+function normalizeOutputLanguage(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized.startsWith("de") || normalized === "german") {
+    return "German";
+  }
+  return "English";
+}
+
+function labelFor(model, key) {
+  const language = normalizeOutputLanguage(model?.outputLanguage || "English");
+  return CV_EXPORT_LABELS[language]?.[key] || CV_EXPORT_LABELS.English[key] || key;
+}
 
 function emptyExperienceItem() {
   return {
@@ -240,8 +318,9 @@ export function normalizePalette(value) {
 }
 
 export function findCvTemplate(templateId) {
+  const normalizedTemplateId = templateId === "teal_resume" ? "plain" : templateId;
   return (
-    WEB_CV_TEMPLATES.find((template) => template.id === templateId) ||
+    WEB_CV_TEMPLATES.find((template) => template.id === normalizedTemplateId) ||
     WEB_CV_TEMPLATES[0]
   );
 }
@@ -332,6 +411,13 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
     headline: String(profile.role_title || ""),
     targetRole: "",
     targetCompany: "",
+    outputLanguage: normalizeOutputLanguage(
+      profile.cv_output_language ||
+        profile.output_language ||
+        normalizedDocuments.cv_output_language ||
+        normalizedDocuments.output_language ||
+        "English",
+    ),
     location: String(profile.location || ""),
     email: String(profile.email || ""),
     website: String(profile.website || ""),
@@ -375,6 +461,7 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
         ? normalizedSession.showPhoto
         : Boolean(baseState.showPhoto),
     palette: normalizePalette(normalizedSession.palette || baseState.palette),
+    outputLanguage: normalizeOutputLanguage(normalizedSession.outputLanguage || baseState.outputLanguage),
     experience: normalizeExperienceItems(normalizedSession.experience || baseState.experience),
   };
 }
@@ -420,38 +507,38 @@ export function buildWorkspacePreviewDocuments(sharedDocuments = {}, workspaceSe
   const baseDocuments = sharedDocuments && typeof sharedDocuments === "object" ? sharedDocuments : {};
   const normalizedSettings =
     workspaceSettings && typeof workspaceSettings === "object" ? workspaceSettings : {};
-  const cvTemplate = String(
+  const rawCvTemplate = String(
     normalizedSettings.cv_template || baseDocuments.cv_template || "classic",
   );
+  const cvTemplate = rawCvTemplate === "teal_resume" ? "plain" : rawCvTemplate;
   const cvColorScheme = String(
     normalizedSettings.cv_color_scheme || baseDocuments.cv_color_scheme || "classic_navy",
   );
   const cvFont = String(normalizedSettings.cv_font || baseDocuments.cv_font || "Calibri");
   const includePhoto = normalizedSettings.include_photo ?? baseDocuments.include_photo ?? true;
-  const webPalette =
-    cvTemplate === "plain"
-      ? normalizePalette({
-          primary: "111111",
-          accent: "111111",
-          surface: "FFFFFF",
-          text: "111111",
-          muted: "444444",
-          border: "111111",
-        })
-      : workspaceDocxColorSchemeToPalette(cvColorScheme);
+  const effectiveIncludePhoto = cvTemplate === "plain" ? false : Boolean(includePhoto);
+  const cvOutputLanguage = normalizeOutputLanguage(
+    normalizedSettings.cv_output_language ||
+      baseDocuments.cv_output_language ||
+      normalizedSettings.output_language ||
+      baseDocuments.output_language ||
+      "English",
+  );
+  const webPalette = workspaceDocxColorSchemeToPalette(cvColorScheme);
 
   return {
     ...baseDocuments,
     cv_template: cvTemplate,
     cv_color_scheme: cvColorScheme,
     cv_font: cvFont,
-    include_photo: Boolean(includePhoto),
+    cv_output_language: cvOutputLanguage,
+    include_photo: effectiveIncludePhoto,
     web_cv_template: workspaceDocxTemplateToWebTemplate(
       cvTemplate,
       baseDocuments.web_cv_template,
     ),
     web_cv_font: cvFont,
-    web_cv_show_photo: Boolean(includePhoto),
+    web_cv_show_photo: effectiveIncludePhoto,
     web_cv_palette: webPalette,
   };
 }
@@ -499,12 +586,15 @@ function normalizeModel(state) {
       .filter(Boolean),
   }));
 
+  const template = findCvTemplate(state.templateId);
+  const isPlainResume = template.id === "plain";
   return {
-    templateId: findCvTemplate(state.templateId).id,
-    template: findCvTemplate(state.templateId),
+    templateId: template.id,
+    template,
     palette: normalizePalette(state.palette || {}),
     fontFamily: String(state.fontFamily || "Aptos"),
-    showPhoto: Boolean(state.showPhoto),
+    showPhoto: isPlainResume ? false : Boolean(state.showPhoto),
+    outputLanguage: normalizeOutputLanguage(state.outputLanguage || "English"),
     name: String(state.name || "Candidate Name"),
     headline: String(state.headline || "Target Role"),
     targetRole: String(state.targetRole || ""),
@@ -554,7 +644,7 @@ function buildPhotoMarkup(model, photoClass = "cv-photo-shell") {
   if (model.photoDataUrl) {
     return `<div class="${photoClass}"><img class="cv-photo" src="${escapeHtml(model.photoDataUrl)}" alt="Candidate profile photo"></div>`;
   }
-  return `<div class="${photoClass} cv-photo-placeholder"><span>Optional photo</span></div>`;
+  return `<div class="${photoClass} cv-photo-placeholder"><span>${escapeHtml(labelFor(model, "optionalPhoto"))}</span></div>`;
 }
 
 function buildSection(title, content, subtitle = "") {
@@ -582,7 +672,7 @@ function buildLanguagesMarkup(model) {
   if (!model.languages.length) return "";
   return `
     <div class="meta-stack">
-      <div class="mini-label">Languages</div>
+      <div class="mini-label">${escapeHtml(labelFor(model, "languages"))}</div>
       <div class="pill-row">
         ${model.languages
           .map((language) => `<span class="pill subtle-pill">${escapeHtml(language)}</span>`)
@@ -614,7 +704,7 @@ function buildExperienceMarkup(model, className = "experience-stack") {
             <article class="experience-card">
               <div class="experience-head">
                 <div>
-                  <h3>${escapeHtml(heading || "Experience Item")}</h3>
+                  <h3>${escapeHtml(heading || labelFor(model, "experienceItem"))}</h3>
                   ${item.company && item.title ? "" : ""}
                 </div>
                 ${item.period ? `<span class="period">${escapeHtml(item.period)}</span>` : ""}
@@ -632,7 +722,7 @@ function buildTargetBanner(model) {
   if (!model.targetRole && !model.targetCompany) return "";
   return `
     <div class="target-banner">
-      <span>${escapeHtml(model.targetRole || "Tailored role")}</span>
+      <span>${escapeHtml(model.targetRole || labelFor(model, "tailoredRole"))}</span>
       ${
         model.targetCompany
           ? `<span class="target-company">${escapeHtml(model.targetCompany)}</span>`
@@ -653,7 +743,7 @@ function buildFooterMeta(model) {
   if (model.availability) {
     parts.push(`
       <div class="meta-stack">
-        <div class="mini-label">Availability</div>
+        <div class="mini-label">${escapeHtml(labelFor(model, "availability"))}</div>
         <p>${escapeHtml(model.availability)}</p>
       </div>
     `);
@@ -668,7 +758,7 @@ function templateAtsSingleColumn(model) {
     <main class="cv-sheet template-ats">
       <header class="hero-row">
         <div class="hero-copy">
-          <div class="eyebrow">Browser CV Studio</div>
+          <div class="eyebrow">${escapeHtml(labelFor(model, "browserCvStudio"))}</div>
           <h1>${escapeHtml(model.name)}</h1>
           <p class="headline">${escapeHtml(model.headline)}</p>
           ${buildTargetBanner(model)}
@@ -676,13 +766,67 @@ function templateAtsSingleColumn(model) {
         ${buildPhotoMarkup(model, "cv-photo-shell rounded-photo")}
       </header>
       ${buildContactLinks(model)}
-      ${buildSection("Professional Summary", buildSummaryMarkup(model))}
-      ${buildSection("Core Skills", buildSkillsMarkup(model))}
-      ${buildSection("Experience", buildExperienceMarkup(model))}
+      ${buildSection(labelFor(model, "profile"), buildSummaryMarkup(model))}
+      ${buildSection(labelFor(model, "coreSkills"), buildSkillsMarkup(model))}
+      ${buildSection(labelFor(model, "experience"), buildExperienceMarkup(model))}
       <div class="two-up">
-        ${buildSection("Education", buildEducationMarkup(model))}
-        ${buildSection("Additional", buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
+        ${buildSection(labelFor(model, "education"), buildEducationMarkup(model))}
+        ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
       </div>
+    </main>
+  `;
+}
+
+function templatePlainResume(model) {
+  const skillsHeading =
+    model.outputLanguage === "German"
+      ? labelFor(model, "skills")
+      : `${labelFor(model, "skills")} & Abilities`;
+  const skills = model.skills.length
+    ? `<p>${model.skills.map((skill) => escapeHtml(skill)).join(" | ")}</p>`
+    : `<p class="empty-note">Add skills or keywords in the editor.</p>`;
+  const experience = model.experience
+    .map((item) => {
+      const heading = [item.title, item.company, item.period].filter(Boolean).join(" | ");
+      const bullets = item.bullets.length
+        ? `<ul>${item.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join("")}</ul>`
+        : `<p class="empty-note">Add tailored achievement bullets for this role.</p>`;
+      return `
+        <article class="plain-resume-entry">
+          <h3>${escapeHtml(heading || labelFor(model, "experienceItem"))}</h3>
+          ${bullets}
+        </article>
+      `;
+    })
+    .join("");
+  const additional = buildLanguagesMarkup(model);
+  return `
+    <main class="cv-sheet template-plain-resume">
+      <header class="plain-resume-head">
+        <h1>${escapeHtml(model.name)}</h1>
+      </header>
+      ${buildContactLinks(model, "plain-resume-contact")}
+      <section class="plain-resume-section">
+        <h2>${escapeHtml(labelFor(model, "profile"))}</h2>
+        ${buildSummaryMarkup(model)}
+      </section>
+      <section class="plain-resume-section">
+        <h2>${escapeHtml(labelFor(model, "experience"))}</h2>
+        <div class="plain-resume-experience">${experience}</div>
+      </section>
+      <section class="plain-resume-section">
+        <h2>${escapeHtml(labelFor(model, "education"))}</h2>
+        <div class="plain-resume-education">${buildEducationMarkup(model)}</div>
+      </section>
+      <section class="plain-resume-section">
+        <h2>${escapeHtml(skillsHeading)}</h2>
+        <div class="plain-resume-skills">${skills}</div>
+      </section>
+      ${
+        additional
+          ? `<section class="plain-resume-section"><h2>${escapeHtml(labelFor(model, "additional"))}</h2>${additional}</section>`
+          : ""
+      }
     </main>
   `;
 }
@@ -692,18 +836,18 @@ function templateEditorialSidebar(model) {
     <main class="cv-sheet template-editorial">
       <aside class="editorial-rail">
         ${buildPhotoMarkup(model, "cv-photo-shell editorial-photo")}
-        <div class="eyebrow">Tailored profile</div>
+        <div class="eyebrow">${escapeHtml(labelFor(model, "tailoredProfile"))}</div>
         <h1>${escapeHtml(model.name)}</h1>
         <p class="headline">${escapeHtml(model.headline)}</p>
         ${buildTargetBanner(model)}
         ${buildContactLinks(model, "contact-list contact-list-column")}
-        ${buildSection("Skills", buildSkillsMarkup(model, "pill rail-pill"))}
-        ${buildSection("Additional", buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
+        ${buildSection(labelFor(model, "skills"), buildSkillsMarkup(model, "pill rail-pill"))}
+        ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
       </aside>
       <section class="editorial-main">
-        ${buildSection("Summary", buildSummaryMarkup(model))}
-        ${buildSection("Experience", buildExperienceMarkup(model))}
-        ${buildSection("Education", buildEducationMarkup(model))}
+        ${buildSection(labelFor(model, "summary"), buildSummaryMarkup(model))}
+        ${buildSection(labelFor(model, "experience"), buildExperienceMarkup(model))}
+        ${buildSection(labelFor(model, "education"), buildEducationMarkup(model))}
       </section>
     </main>
   `;
@@ -722,18 +866,18 @@ function templateMonoNav(model) {
       <section class="mono-main">
         <div class="mono-hero">
           <div>
-            <div class="eyebrow">In-browser editable CV</div>
+            <div class="eyebrow">${escapeHtml(labelFor(model, "inBrowserEditableCv"))}</div>
             <h1>${escapeHtml(model.name)}</h1>
             <p class="headline">${escapeHtml(model.headline)}</p>
           </div>
           ${buildTargetBanner(model)}
         </div>
-        ${buildSection("Summary", buildSummaryMarkup(model))}
+        ${buildSection(labelFor(model, "summary"), buildSummaryMarkup(model))}
         <div class="two-up mono-grid">
-          ${buildSection("Skills", buildSkillsMarkup(model))}
-          ${buildSection("Education", buildEducationMarkup(model))}
+          ${buildSection(labelFor(model, "skills"), buildSkillsMarkup(model))}
+          ${buildSection(labelFor(model, "education"), buildEducationMarkup(model))}
         </div>
-        ${buildSection("Experience", buildExperienceMarkup(model))}
+        ${buildSection(labelFor(model, "experience"), buildExperienceMarkup(model))}
         ${buildFooterMeta(model) ? `<div class="mono-footer-meta">${buildFooterMeta(model)}</div>` : ""}
       </section>
     </main>
@@ -745,7 +889,7 @@ function templateEuropassLite(model) {
     <main class="cv-sheet template-europass">
       <header class="europass-head">
         <div>
-          <div class="eyebrow">Europass-inspired</div>
+          <div class="eyebrow">${escapeHtml(labelFor(model, "europassInspired"))}</div>
           <h1>${escapeHtml(model.name)}</h1>
           <p class="headline">${escapeHtml(model.headline)}</p>
           ${buildTargetBanner(model)}
@@ -753,17 +897,17 @@ function templateEuropassLite(model) {
         ${buildPhotoMarkup(model, "cv-photo-shell europass-photo")}
       </header>
       <div class="europass-grid">
-        <div class="label-col">Contact</div>
+        <div class="label-col">${escapeHtml(labelFor(model, "contact"))}</div>
         <div>${buildContactLinks(model)}</div>
-        <div class="label-col">Profile</div>
+        <div class="label-col">${escapeHtml(labelFor(model, "profile"))}</div>
         <div>${buildSummaryMarkup(model)}</div>
-        <div class="label-col">Skills</div>
+        <div class="label-col">${escapeHtml(labelFor(model, "skills"))}</div>
         <div>${buildSkillsMarkup(model)}</div>
-        <div class="label-col">Experience</div>
+        <div class="label-col">${escapeHtml(labelFor(model, "experience"))}</div>
         <div>${buildExperienceMarkup(model)}</div>
-        <div class="label-col">Education</div>
+        <div class="label-col">${escapeHtml(labelFor(model, "education"))}</div>
         <div>${buildEducationMarkup(model)}</div>
-        <div class="label-col">Additional</div>
+        <div class="label-col">${escapeHtml(labelFor(model, "additional"))}</div>
         <div>${buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`}</div>
       </div>
     </main>
@@ -775,7 +919,7 @@ function templateSignalHeader(model) {
     <main class="cv-sheet template-signal">
       <header class="signal-band">
         <div class="signal-copy">
-          <div class="eyebrow light">Browser CV Studio</div>
+          <div class="eyebrow light">${escapeHtml(labelFor(model, "browserCvStudio"))}</div>
           <h1>${escapeHtml(model.name)}</h1>
           <p class="headline light">${escapeHtml(model.headline)}</p>
           ${buildTargetBanner(model)}
@@ -787,13 +931,13 @@ function templateSignalHeader(model) {
       </section>
       <div class="two-up signal-body">
         <div>
-          ${buildSection("Summary", buildSummaryMarkup(model))}
-          ${buildSection("Skills", buildSkillsMarkup(model))}
-          ${buildSection("Education", buildEducationMarkup(model))}
+          ${buildSection(labelFor(model, "summary"), buildSummaryMarkup(model))}
+          ${buildSection(labelFor(model, "skills"), buildSkillsMarkup(model))}
+          ${buildSection(labelFor(model, "education"), buildEducationMarkup(model))}
         </div>
         <div>
-          ${buildSection("Experience", buildExperienceMarkup(model))}
-          ${buildSection("Additional", buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
+          ${buildSection(labelFor(model, "experience"), buildExperienceMarkup(model))}
+          ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
         </div>
       </div>
     </main>
@@ -805,7 +949,7 @@ function templateLedgerSplit(model) {
     <main class="cv-sheet template-ledger">
       <header class="ledger-head">
         <div>
-          <div class="eyebrow">Editable HTML CV</div>
+          <div class="eyebrow">${escapeHtml(labelFor(model, "editableHtmlCv"))}</div>
           <h1>${escapeHtml(model.name)}</h1>
           <p class="headline">${escapeHtml(model.headline)}</p>
           ${buildTargetBanner(model)}
@@ -817,13 +961,13 @@ function templateLedgerSplit(model) {
       </header>
       <div class="ledger-grid">
         <div>
-          ${buildSection("Summary", buildSummaryMarkup(model))}
-          ${buildSection("Skills", buildSkillsMarkup(model))}
-          ${buildSection("Additional", buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
+          ${buildSection(labelFor(model, "summary"), buildSummaryMarkup(model))}
+          ${buildSection(labelFor(model, "skills"), buildSkillsMarkup(model))}
+          ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
         </div>
         <div>
-          ${buildSection("Experience", buildExperienceMarkup(model))}
-          ${buildSection("Education", buildEducationMarkup(model))}
+          ${buildSection(labelFor(model, "experience"), buildExperienceMarkup(model))}
+          ${buildSection(labelFor(model, "education"), buildEducationMarkup(model))}
         </div>
       </div>
     </main>
@@ -832,6 +976,8 @@ function templateLedgerSplit(model) {
 
 function renderTemplate(model) {
   switch (model.templateId) {
+    case "plain":
+      return templatePlainResume(model);
     case "editorial_sidebar":
       return templateEditorialSidebar(model);
     case "mono_nav":
@@ -851,6 +997,8 @@ function renderTemplate(model) {
 function buildBaseCss(model, { forIframe = false } = {}) {
   const palette = model.palette;
   const background = forIframe ? "#EEF3F8" : "#E8EEF5";
+  const printPageSize = model.templateId === "plain" ? "Letter" : "A4";
+  const printPageMargin = model.templateId === "plain" ? "0" : "10mm";
   return `
     :root {
       color-scheme: light;
@@ -1189,6 +1337,104 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       gap: 18px;
       margin-top: 6px;
     }
+    .template-plain-resume {
+      width: 215.9mm;
+      min-height: 279.4mm;
+      padding: 17.78mm 20.32mm 15.24mm;
+      color: var(--cv-text);
+      font-size: 10.5pt;
+      line-height: 1.2;
+    }
+    .plain-resume-head {
+      padding-bottom: 1.5mm;
+      border-bottom: 1.5pt solid var(--cv-accent);
+    }
+    .plain-resume-head h1 {
+      color: var(--cv-primary);
+      font-size: 28pt;
+      font-weight: 400;
+      line-height: 1;
+      letter-spacing: -0.02em;
+    }
+    .plain-resume-contact {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0;
+      margin-top: 6pt;
+      font-size: 10pt;
+      color: var(--cv-text);
+    }
+    .plain-resume-contact > * + *::before {
+      content: " | ";
+      white-space: pre;
+    }
+    .plain-resume-section {
+      margin-top: 16pt;
+    }
+    .plain-resume-section h2 {
+      margin-bottom: 5pt;
+      color: var(--cv-primary);
+      font-size: 14pt;
+      line-height: 1.1;
+    }
+    .plain-resume-section .summary-copy,
+    .plain-resume-section .education-line,
+    .plain-resume-section .meta-stack p {
+      font-size: 10.5pt;
+      line-height: 1.2;
+    }
+    .plain-resume-experience {
+      display: grid;
+      gap: 8pt;
+    }
+    .plain-resume-entry h3 {
+      margin-bottom: 2pt;
+      color: var(--cv-text);
+      font-size: 12pt;
+      line-height: 1.15;
+      text-transform: uppercase;
+    }
+    .plain-resume-entry ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .plain-resume-entry li {
+      font-size: 10.5pt;
+      line-height: 1.2;
+    }
+    .plain-resume-entry li + li {
+      margin-top: 2pt;
+    }
+    .plain-resume-education {
+      display: grid;
+      gap: 4pt;
+    }
+    .plain-resume-education .education-line {
+      font-size: 12pt;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .plain-resume-skills {
+      font-size: 10.5pt;
+      line-height: 1.35;
+    }
+    .plain-resume-skills p {
+      margin: 0;
+    }
+    .template-plain-resume .meta-stack + .meta-stack {
+      margin-top: 6pt;
+    }
+    .template-plain-resume .pill-row {
+      gap: 4pt 12pt;
+    }
+    .template-plain-resume .pill {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      font-size: 10.5pt;
+      font-weight: 400;
+    }
     @media (max-width: 1000px) {
       body {
         padding: 0;
@@ -1240,8 +1486,8 @@ function buildBaseCss(model, { forIframe = false } = {}) {
         box-shadow: none;
       }
       @page {
-        size: A4;
-        margin: 10mm;
+        size: ${printPageSize};
+        margin: ${printPageMargin};
       }
     }
   `;

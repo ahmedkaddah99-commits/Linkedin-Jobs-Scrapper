@@ -44,7 +44,7 @@ def run_linkedin_pipeline(config: dict, cli_args) -> list[dict[str, Any]]:
     return stage3_jobs
 
 
-def run_manual_pipeline(cli_args) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def run_manual_pipeline(cli_args, *, usage_callback=None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     inline_urls = list(getattr(cli_args, "manual_urls_inline", None) or [])
     if not inline_urls:
         inline_urls = list(getattr(cli_args, "manual_url_seed_list", None) or [])
@@ -58,6 +58,7 @@ def run_manual_pipeline(cli_args) -> tuple[list[dict[str, Any]], list[dict[str, 
             use_proxy_fallback=bool(cli_args.use_proxy_fallback),
             request_timeout_seconds=int(cli_args.manual_request_timeout_seconds),
             logger=LOGGER,
+            usage_callback=usage_callback,
         )
     else:
         manual_jobs, failures = fetch_manual_jobs_from_file(
@@ -66,6 +67,7 @@ def run_manual_pipeline(cli_args) -> tuple[list[dict[str, Any]], list[dict[str, 
             use_proxy_fallback=bool(cli_args.use_proxy_fallback),
             request_timeout_seconds=int(cli_args.manual_request_timeout_seconds),
             logger=LOGGER,
+            usage_callback=usage_callback,
         )
 
     normalized_jobs = [

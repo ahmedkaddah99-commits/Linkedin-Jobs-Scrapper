@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { CvExportPreview, PROFILE_PLACEHOLDER_URL } from "../components/CvExportPreview";
+import { PROFILE_PLACEHOLDER_URL } from "../components/CvExportPreview";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import {
@@ -10,6 +10,7 @@ import {
   WEB_CV_TEMPLATES,
   buildCvStudioHtml,
   buildCvStudioState,
+  buildWorkspacePreviewState,
   matchPresetByPalette,
   stashCvStudioSeed,
 } from "../lib/cvStudio";
@@ -118,7 +119,7 @@ function mergeUploadedProfile(currentProfile = {}, parsedProfile = {}) {
     }
   });
 
-  ["competencies", "languages", "recent_experience", "education"].forEach((field) => {
+  ["competencies", "languages", "recent_experience", "education", "projects", "custom_sections"].forEach((field) => {
     if (Array.isArray(parsedProfile?.[field]) && parsedProfile[field].length) {
       nextProfile[field] = parsedProfile[field];
     }
@@ -678,6 +679,14 @@ function DocumentsTab({ draft, updateSection }) {
     () => buildCvStudioHtml(browserStudioState, { forIframe: true }),
     [browserStudioState],
   );
+  const exportPreviewState = useMemo(
+    () => buildWorkspacePreviewState(draft.profile, documents, {}),
+    [draft.profile, documents],
+  );
+  const exportPreviewHtml = useMemo(
+    () => buildCvStudioHtml(exportPreviewState, { forIframe: true }),
+    [exportPreviewState],
+  );
   const selectedBrowserPreset = useMemo(
     () => matchPresetByPalette(documents.web_cv_palette || {}),
     [documents.web_cv_palette],
@@ -700,6 +709,8 @@ function DocumentsTab({ draft, updateSection }) {
 
   function openBrowserStudio() {
     stashCvStudioSeed({
+      returnTo: "/settings",
+      sourceLabel: "Profile and document defaults",
       profile: draft.profile,
       documents,
     });
@@ -714,7 +725,7 @@ function DocumentsTab({ draft, updateSection }) {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-primary/80">
-                  Browser CV Studio
+                  CV Studio
                 </div>
                 <h3 className="mt-2 text-lg font-bold text-on-surface">
                   Edit the HTML CV directly in the browser
@@ -730,7 +741,7 @@ function DocumentsTab({ draft, updateSection }) {
                   onClick={openBrowserStudio}
                   type="button"
                 >
-                  Open HTML CV Studio
+                  Open CV Studio
                 </button>
               </div>
             </div>
@@ -923,10 +934,16 @@ function DocumentsTab({ draft, updateSection }) {
 
               <div>
                 <div className="mb-3 text-sm font-semibold text-on-surface">Export Preview</div>
-                <CvExportPreview documents={documents} options={options} profile={draft.profile} />
+                <div className="rounded-2xl border border-outline-variant/10 bg-surface-container-low p-3">
+                  <iframe
+                    className="h-[840px] w-full rounded-xl bg-white"
+                    srcDoc={exportPreviewHtml}
+                    title="Generated PDF export preview"
+                  />
+                </div>
                 <p className="mt-3 text-xs leading-6 text-on-surface-variant">
-                  This preview is approximate. The generated DOCX uses the selected template, palette,
-                  font, and photo toggle.
+                  The generated PDF uses this browser HTML renderer. The generated DOCX uses the
+                  same structured content in a Word-editable layout.
                 </p>
               </div>
             </div>

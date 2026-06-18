@@ -1,4 +1,4 @@
-import { labelize } from "./formatters";
+import { labelize } from "./formatters.js";
 
 const STORAGE_KEYS = {
   baseUrl: "runr.api.baseUrl",
@@ -33,19 +33,17 @@ export function clearStoredConnection() {
 }
 
 export function resolveApiUrl(baseUrl, path) {
-  const normalizedBase = String(baseUrl || getDefaultApiBaseUrl()).replace(/\/$/, "");
+  const normalizedBase = String(baseUrl || getDefaultApiBaseUrl())
+    .trim()
+    .replace(/\/+$/, "");
   const normalizedPath = String(path || "").trim();
   if (/^https?:\/\//i.test(normalizedPath)) {
     return normalizedPath;
   }
-  if (normalizedPath.startsWith("/")) {
-    if (/^https?:\/\//i.test(normalizedBase)) {
-      const base = new URL(normalizedBase);
-      return `${base.origin}${normalizedPath}`;
-    }
-    return normalizedPath;
+  if (!normalizedPath) {
+    return normalizedBase;
   }
-  return `${normalizedBase}/${normalizedPath.replace(/^\//, "")}`;
+  return `${normalizedBase}/${normalizedPath.replace(/^\/+/, "")}`;
 }
 
 function parseJsonText(text) {

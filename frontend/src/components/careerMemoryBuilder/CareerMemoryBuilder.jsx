@@ -28,7 +28,7 @@ export default function CareerMemoryBuilder({
   cvLikeAssets = [],
   draft,
   formatDateTime,
-  guideTo = "/documents/ai-canvas-guide",
+  guideTo = "/career-memory/guide",
   manageDocumentsTo = "/documents",
   masterCareerProfileAsset = null,
   masterProfileUploadState,

@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTracker } from "../hooks/useTracker";
+import { CV_STUDIO_ROUTE, stashCvStudioSeed } from "../lib/cvStudio";
 
 const COLUMNS = [
   {
@@ -76,6 +78,12 @@ const EMPTY_DISCOVERY_FEEDBACK = {
   message: "",
   error: "",
 };
+const TRACKER_SOURCE_FILTERS = [
+  { value: "all", label: "All sources" },
+  { value: "standard_run", label: "Standard runs" },
+  { value: "test_run", label: "Test runs" },
+  { value: "external", label: "External applications" },
+];
 
 function formatDate(iso) {
   if (!iso) return "";
@@ -167,6 +175,39 @@ function StatusDropdown({ current, onSelect, disabled }) {
   );
 }
 
+function ApplicationWarnings({ warnings = [], compact = false }) {
+  const visibleWarnings = (warnings || []).filter((warning) => warning?.message || warning?.title);
+  if (!visibleWarnings.length) return null;
+  return (
+    <div className={compact ? "space-y-1.5" : "mt-3 space-y-2"}>
+      {visibleWarnings.slice(0, compact ? 2 : 3).map((warning, index) => {
+        const blocking = String(warning.severity || "") === "blocking";
+        return (
+          <div
+            className={[
+              "rounded-xl border px-3 py-2 text-xs leading-5",
+              blocking
+                ? "border-error/25 bg-error/5 text-error"
+                : "border-amber-500/25 bg-amber-500/5 text-amber-700",
+            ].join(" ")}
+            key={`${warning.code || "application-warning"}-${index}`}
+          >
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined mt-0.5 text-[15px]">
+                {blocking ? "priority_high" : "info"}
+              </span>
+              <div>
+                <div className="font-semibold">{warning.title || "Application requirement"}</div>
+                <div>{warning.message}</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function TrackerCard({ item, onUpdate, onDelete, updating }) {
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState(item.rejection_note || "");
@@ -244,6 +285,8 @@ function TrackerCard({ item, onUpdate, onDelete, updating }) {
           </span>
         )}
       </div>
+
+      <ApplicationWarnings warnings={item.application_warnings} />
 
       <div className="flex items-center justify-between gap-2">
         {/* Email confirmed toggle (REQ-10) */}
@@ -465,14 +508,128 @@ function summarizeTrackerAtsState(documents = []) {
   };
 }
 
+function trackerDocumentExtension(document = {}) {
+  const candidates = [
+    document.file_extension,
+    document.path,
+    document.file_name,
+    document.label,
+    document.download_url,
+    document.document_id,
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate || "").trim().toLowerCase();
+    if (!text) continue;
+    if (text === "pdf" || text.endsWith(".pdf")) return "pdf";
+    if (text === "docx" || text.endsWith(".docx")) return "docx";
+    if (text === "txt" || text.endsWith(".txt")) return "txt";
+  }
+  const contentType = String(document.content_type || "").trim().toLowerCase();
+  if (contentType === "application/pdf") return "pdf";
+  if (contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    return "docx";
+  }
+  if (contentType.startsWith("text/")) return "txt";
+  return "";
+}
+
+function isTrackerApplicationCv(document = {}) {
+  const assetKind = String(document.asset_kind || "").trim().toLowerCase();
+  const documentType = String(document.document_type || "").trim().toLowerCase();
+  return (
+    Boolean(String(document.run_id || "").trim()) &&
+    Boolean(String(document.job_id || "").trim()) &&
+    (assetKind === "generated_cv" ||
+      assetKind === "applied_cv" ||
+      documentType === "tailored cv" ||
+      documentType === "applied cv")
+  );
+}
+
+function trackerDocumentExportRank(document = {}) {
+  if (!isTrackerApplicationCv(document)) return 0;
+  const extension = trackerDocumentExtension(document);
+  if (extension === "pdf") return 0;
+  if (extension === "docx") return 1;
+  if (extension === "txt") return 2;
+  return 3;
+}
+
+function canExportTrackerDocument(document = {}) {
+  if (!String(document.document_id || "").trim()) return false;
+  if (!document.final_export_blocked) return true;
+  const gate = document.ats_export_gate && typeof document.ats_export_gate === "object"
+    ? document.ats_export_gate
+    : {};
+  return Boolean(gate.export_anyway_allowed);
+}
+
+function selectTrackerExportDocuments(documents = []) {
+  const candidates = (Array.isArray(documents) ? documents : []).filter(canExportTrackerDocument);
+  const preferredByKey = new Map();
+
+  candidates.forEach((document) => {
+    if (!isTrackerApplicationCv(document)) {
+      return;
+    }
+    const key = [
+      document.run_id || "",
+      document.job_id || "",
+      document.asset_kind || "",
+      document.document_type || "",
+    ].join("::");
+    const current = preferredByKey.get(key);
+    if (!current || trackerDocumentExportRank(document) < trackerDocumentExportRank(current)) {
+      preferredByKey.set(key, document);
+    }
+  });
+
+  const preferredIds = new Set(
+    Array.from(preferredByKey.values()).map((document) => String(document.document_id || "")),
+  );
+  const selected = [];
+  const emittedKeys = new Set();
+  candidates.forEach((document) => {
+    if (!isTrackerApplicationCv(document)) {
+      selected.push(document);
+      return;
+    }
+    const key = [
+      document.run_id || "",
+      document.job_id || "",
+      document.asset_kind || "",
+      document.document_type || "",
+    ].join("::");
+    if (emittedKeys.has(key)) return;
+    if (preferredIds.has(String(document.document_id || ""))) {
+      selected.push(document);
+      emittedKeys.add(key);
+    }
+  });
+  return selected;
+}
+
 function TrackerResourceCell({ item, request }) {
+  const navigate = useNavigate();
   const [exporting, setExporting] = useState(false);
+  const [descriptionFeedback, setDescriptionFeedback] = useState("");
   const [error, setError] = useState("");
   const atsSummary = summarizeTrackerAtsState(item.documents);
-  const exportableDocuments = (Array.isArray(item.documents) ? item.documents : []).filter(
-    (document) => Boolean(String(document.document_id || "").trim()) && !document.final_export_blocked,
-  );
+  const exportableDocuments = selectTrackerExportDocuments(item.documents);
   const documentLabels = exportableDocuments.map((document) => String(document.label || document.document_type || "Document").trim()).filter(Boolean);
+  const canEditGeneratedCv = Boolean(item.cv_studio_seed?.profile);
+  const description = String(item.full_description || item.tracker_table_row?.full_description || "").trim();
+  const descriptionUrl = `/tracker/job-descriptions/${encodeURIComponent(item.review_id)}`;
+
+  function openGeneratedCvEditor() {
+    if (!canEditGeneratedCv) return;
+    stashCvStudioSeed({
+      ...item.cv_studio_seed,
+      returnTo: "/tracker",
+      sourceLabel: [item.title, item.company].filter(Boolean).join(" at ") || "Generated application CV",
+    });
+    navigate(CV_STUDIO_ROUTE);
+  }
 
   async function downloadBundle() {
     if (!exportableDocuments.length) {
@@ -495,6 +652,18 @@ function TrackerResourceCell({ item, request }) {
       setError(exportError.message || "Unable to export application documents.");
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function copyDescription() {
+    if (!description) return;
+    setDescriptionFeedback("");
+    setError("");
+    try {
+      await navigator.clipboard.writeText(description);
+      setDescriptionFeedback("Description copied.");
+    } catch (copyError) {
+      setError(copyError.message || "Unable to copy the job description.");
     }
   }
 
@@ -523,7 +692,54 @@ function TrackerResourceCell({ item, request }) {
           </span>
           {exporting ? "Preparing..." : "Documents ZIP"}
         </button>
+        {canEditGeneratedCv ? (
+          <button
+            className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`}
+            onClick={openGeneratedCvEditor}
+            title="Edit generated CV in CV Studio"
+            type="button"
+          >
+            <span className="material-symbols-outlined text-[13px]">edit_document</span>
+            Edit CV
+          </button>
+        ) : null}
+        <button
+          className={[
+            TRACKER_RESOURCE_BUTTON_CLASS,
+            description
+              ? "bg-surface-container-low text-on-surface hover:bg-surface-container-high"
+              : "cursor-not-allowed bg-surface-container-low text-on-surface-variant/60",
+          ].join(" ")}
+          disabled={!description}
+          onClick={copyDescription}
+          title={description ? "Copy the full job description" : "No job description available"}
+          type="button"
+        >
+          <span className="material-symbols-outlined text-[13px]">content_copy</span>
+          Copy description
+        </button>
+        {description ? (
+          <a
+            className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`}
+            href={descriptionUrl}
+            rel="noreferrer"
+            target="_blank"
+            title="Open the full job description in a new Runr tab"
+          >
+            <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+            Open description
+          </a>
+        ) : (
+          <span
+            className={`${TRACKER_RESOURCE_BUTTON_CLASS} cursor-not-allowed bg-surface-container-low text-on-surface-variant/60`}
+            title="No job description available"
+          >
+            <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+            Open description
+          </span>
+        )}
       </div>
+      <ApplicationWarnings compact warnings={item.application_warnings} />
       {atsSummary ? (
         <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -544,6 +760,7 @@ function TrackerResourceCell({ item, request }) {
           </div>
         </div>
       ) : null}
+      {descriptionFeedback ? <div className="text-xs text-primary">{descriptionFeedback}</div> : null}
       {error ? <div className="text-xs text-error">{error}</div> : null}
     </div>
   );
@@ -617,6 +834,52 @@ function TrackerNotesCell({ item, onUpdate, updating }) {
 }
 
 function TrackerTable({ items, onUpdate, updating, request }) {
+  const [filters, setFilters] = useState({
+    query: "",
+    status: "all",
+    workspace: "all",
+    source: "all",
+  });
+  const workspaceOptions = useMemo(
+    () => [...new Set(items.map((item) => item.workspace_name).filter(Boolean))].sort(),
+    [items],
+  );
+  const filteredItems = useMemo(() => {
+    const query = filters.query.trim().toLocaleLowerCase();
+    return items.filter((item) => {
+      const row = item.tracker_table_row || {};
+      const sourceType = item.tracker_source_type
+        || (item.external_application ? "external" : item.is_test_run ? "test_run" : "standard_run");
+      const searchableText = [
+        item.title,
+        row.title,
+        item.company,
+        row.company,
+        item.location,
+        row.location_raw,
+        item.workspace_name,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase();
+      return (
+        (!query || searchableText.includes(query))
+        && (filters.status === "all" || statusKeyFromItem(item) === filters.status)
+        && (filters.workspace === "all" || item.workspace_name === filters.workspace)
+        && (filters.source === "all" || sourceType === filters.source)
+      );
+    });
+  }, [filters, items]);
+  const hasActiveFilters = Object.values(filters).some((value) => value && value !== "all");
+
+  function updateFilter(field, value) {
+    setFilters((current) => ({ ...current, [field]: value }));
+  }
+
+  function clearFilters() {
+    setFilters({ query: "", status: "all", workspace: "all", source: "all" });
+  }
+
   if (!items.length) {
     return (
       <div className="rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-8 text-center">
@@ -632,71 +895,152 @@ function TrackerTable({ items, onUpdate, updating, request }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-outline-variant/20 bg-surface-container-lowest shadow-sm">
       <div className="border-b border-outline-variant/10 bg-surface-container-low px-5 py-4">
-        <h2 className="text-lg font-bold text-on-surface">Tracker table</h2>
-        <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-          This follows the old Excel tracker shape, but uses clear app fields like Status instead of the old applied? wording.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-on-surface">Tracker table</h2>
+            <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+              Filter applications without adding more columns to the table.
+            </p>
+          </div>
+          <div className="text-xs font-semibold text-on-surface-variant">
+            Showing {filteredItems.length} of {items.length}
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,1.5fr)_repeat(3,minmax(150px,1fr))_auto]">
+          <label className="relative">
+            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-lg text-on-surface-variant">
+              search
+            </span>
+            <input
+              aria-label="Search tracker"
+              className="w-full rounded-xl border border-outline-variant/20 bg-surface px-10 py-2.5 text-sm text-on-surface"
+              onChange={(event) => updateFilter("query", event.target.value)}
+              placeholder="Search role, company, location..."
+              type="search"
+              value={filters.query}
+            />
+          </label>
+          <select
+            aria-label="Filter tracker by status"
+            className="w-full rounded-xl border border-outline-variant/20 bg-surface px-3 py-2.5 text-sm text-on-surface"
+            onChange={(event) => updateFilter("status", event.target.value)}
+            value={filters.status}
+          >
+            <option value="all">All statuses</option>
+            {COLUMNS.map((column) => (
+              <option key={column.key} value={column.key}>{column.label}</option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter tracker by workspace"
+            className="w-full rounded-xl border border-outline-variant/20 bg-surface px-3 py-2.5 text-sm text-on-surface"
+            onChange={(event) => updateFilter("workspace", event.target.value)}
+            value={filters.workspace}
+          >
+            <option value="all">All workspaces</option>
+            {workspaceOptions.map((workspace) => (
+              <option key={workspace} value={workspace}>{workspace}</option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter tracker by source"
+            className="w-full rounded-xl border border-outline-variant/20 bg-surface px-3 py-2.5 text-sm text-on-surface"
+            onChange={(event) => updateFilter("source", event.target.value)}
+            value={filters.source}
+          >
+            {TRACKER_SOURCE_FILTERS.map((source) => (
+              <option key={source.value} value={source.value}>{source.label}</option>
+            ))}
+          </select>
+          <button
+            className="rounded-xl border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm font-semibold text-on-surface-variant transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!hasActiveFilters}
+            onClick={clearFilters}
+            type="button"
+          >
+            Clear
+          </button>
+        </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="tracker-table min-w-[1060px] w-full table-fixed border-collapse text-left text-sm">
-          <thead className="bg-surface-container-low text-[11px] uppercase tracking-[0.14em] text-on-surface-variant">
-            <tr>
-              <th className="w-36 px-4 py-3">Status</th>
-              <th className="w-48 px-4 py-3">Company</th>
-              <th className="w-64 px-4 py-3">Role</th>
-              <th className="w-44 px-4 py-3">Location</th>
-              <th className="w-36 px-4 py-3">Applied</th>
-              <th className="w-56 px-4 py-3">Resource</th>
-              <th className="w-28 px-4 py-3">Priority</th>
-              <th className="w-64 px-4 py-3">Notes</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-outline-variant/10">
-            {items.map((item) => {
-              const row = item.tracker_table_row || {};
-              return (
-                <tr
-                  className="tracker-table__row align-top transition-colors hover:bg-surface-container-low/70"
-                  key={item.review_id}
-                >
-                  <td className="px-4 py-4">
-                    <StatusDropdown
-                      current={statusKeyFromItem(item)}
-                      disabled={updating === item.review_id}
-                      onSelect={(nextStatus) => onUpdate(item.review_id, { tracker_status: nextStatus })}
-                    />
-                  </td>
-                  <td className="max-w-56 px-4 py-4">
-                    <div className="font-semibold text-on-surface">{item.company || row.company || "Unknown company"}</div>
-                    <div className="mt-1 text-xs text-on-surface-variant">{item.workspace_name || "Tracker"}</div>
-                  </td>
-                  <td className="max-w-72 px-4 py-4">
-                    <div className="font-medium text-on-surface">{item.title || row.title || "Untitled role"}</div>
-                    {row.keyword ? (
-                      <div className="mt-1 text-xs text-on-surface-variant">Keyword: {row.keyword}</div>
-                    ) : null}
-                  </td>
-                  <td className="max-w-52 px-4 py-4 text-on-surface-variant">
-                    {item.location || row.location_raw || "Not set"}
-                  </td>
-                  <td className="px-4 py-4 text-on-surface-variant">
-                    {formatDate(item.application_date || row.application_date || item.run_finished_at) || "Not set"}
-                  </td>
-                  <td className="px-4 py-4">
-                    <TrackerResourceCell item={item} request={request} />
-                  </td>
-                  <td className="px-4 py-4 text-on-surface-variant">
-                    {item.priority_rank || row.priority_rank || row.priority_tier || "Not set"}
-                  </td>
-                  <td className="px-4 py-4">
-                    <TrackerNotesCell item={item} onUpdate={onUpdate} updating={updating} />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {filteredItems.length ? (
+        <div className="overflow-x-auto">
+          <table className="tracker-table min-w-[1060px] w-full table-fixed border-collapse text-left text-sm">
+            <thead className="bg-surface-container-low text-[11px] uppercase tracking-[0.14em] text-on-surface-variant">
+              <tr>
+                <th className="w-36 px-4 py-3">Status</th>
+                <th className="w-48 px-4 py-3">Company</th>
+                <th className="w-64 px-4 py-3">Role</th>
+                <th className="w-44 px-4 py-3">Location</th>
+                <th className="w-36 px-4 py-3">Applied</th>
+                <th className="w-56 px-4 py-3">Resource</th>
+                <th className="w-28 px-4 py-3">Priority</th>
+                <th className="w-64 px-4 py-3">Notes</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant/10">
+              {filteredItems.map((item) => {
+                const row = item.tracker_table_row || {};
+                return (
+                  <tr
+                    className="tracker-table__row align-top transition-colors hover:bg-surface-container-low/70"
+                    key={item.review_id}
+                  >
+                    <td className="px-4 py-4">
+                      <StatusDropdown
+                        current={statusKeyFromItem(item)}
+                        disabled={updating === item.review_id}
+                        onSelect={(nextStatus) => onUpdate(item.review_id, { tracker_status: nextStatus })}
+                      />
+                    </td>
+                    <td className="max-w-56 px-4 py-4">
+                      <div className="font-semibold text-on-surface">{item.company || row.company || "Unknown company"}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-on-surface-variant">
+                        <span>{item.workspace_name || "Tracker"}</span>
+                        {item.is_test_run ? (
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 font-semibold text-primary">Test run</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="max-w-72 px-4 py-4">
+                      <div className="font-medium text-on-surface">{item.title || row.title || "Untitled role"}</div>
+                      {row.keyword ? (
+                        <div className="mt-1 text-xs text-on-surface-variant">Keyword: {row.keyword}</div>
+                      ) : null}
+                    </td>
+                    <td className="max-w-52 px-4 py-4 text-on-surface-variant">
+                      {item.location || row.location_raw || "Not set"}
+                    </td>
+                    <td className="px-4 py-4 text-on-surface-variant">
+                      {formatDate(item.application_date || row.application_date || item.run_finished_at) || "Not set"}
+                    </td>
+                    <td className="px-4 py-4">
+                      <TrackerResourceCell item={item} request={request} />
+                    </td>
+                    <td className="px-4 py-4 text-on-surface-variant">
+                      {item.priority_rank || row.priority_rank || row.priority_tier || "Not set"}
+                    </td>
+                    <td className="px-4 py-4">
+                      <TrackerNotesCell item={item} onUpdate={onUpdate} updating={updating} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="p-8 text-center">
+          <span className="material-symbols-outlined text-3xl text-on-surface-variant">filter_alt_off</span>
+          <p className="mt-3 text-sm font-semibold text-on-surface">No tracker rows match these filters.</p>
+          <button
+            className="mt-3 rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
+            onClick={clearFilters}
+            type="button"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -931,7 +1275,7 @@ function EmailIntegrationPanel({
           </h2>
           <p className="mt-2 text-sm leading-7 text-on-surface-variant">
             Connect Gmail with Google authorization so the tracker can pull confirmations,
-            interview invites, and rejections into the board automatically without asking for your password.
+            interview invites, and rejections into the board when the tracker opens without asking for your password.
           </p>
           <p className="mt-3 rounded-2xl bg-surface-container px-4 py-3 text-xs leading-6 text-on-surface-variant">
             <span className="font-semibold text-on-surface">Secure access:</span>
@@ -1115,7 +1459,7 @@ function EmailIntegrationPanel({
                   <span className="text-on-surface-variant">- {match.title || "Untitled role"}</span>
                 </div>
                 <div className="text-on-surface-variant">
-                  {match.from_status || "applied"} → {match.to_status}
+                  {match.from_status || "not_applied"} → {match.to_status}
                 </div>
               </div>
             ))}

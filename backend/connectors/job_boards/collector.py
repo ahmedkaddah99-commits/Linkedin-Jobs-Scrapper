@@ -62,7 +62,9 @@ def collect_jobs_from_portals(
     timeout_seconds: int,
     max_jobs_total: int = 0,
     arbeitsagentur_detail_fetch_limit: int = 20,
+    usage_callback=None,
 ) -> Tuple[List[Dict], Dict]:
+    strategies.reset_scrapeops_proxy_health_gate(usage_callback=usage_callback)
     all_jobs: List[Dict] = []
     source_log = {
         "started_at_utc": strategies.now_utc_iso(),
@@ -77,6 +79,7 @@ def collect_jobs_from_portals(
             break
 
         portal = str(portal_name or "").strip().lower()
+        strategies.set_scrapeops_proxy_source(portal)
         portal_count = 0
         portal_errors: List[str] = []
         portal_hard_blocked = False

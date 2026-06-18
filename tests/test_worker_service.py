@@ -1,3 +1,5 @@
+import json
+import logging
 import shutil
 import unittest
 from pathlib import Path
@@ -5,7 +7,7 @@ from pathlib import Path
 from backend import create_backend
 from backend.domain.models import JobRecord, StageDefinition
 from backend.orchestration import BaseStage, StageOutcome
-from backend.worker import WorkerService
+from backend.worker import WorkerService, configure_worker_logging
 
 
 class _WorkerSeedStage(BaseStage):
@@ -130,6 +132,50 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(schedule["last_run_id"], runs[0].id)
         self.assertTrue(schedule["last_enqueued_at"])
         self.assertTrue(schedule["next_run_at"])
+
+    def test_worker_service_writes_structured_lifecycle_logs(self):
+        app = self._create_app("worker_service_structured_logging_app")
+        run = app.enqueue_run("worker_workspace", requested_by="test-worker-logs")
+        log_root = self._workspace_tempdir("worker_service_structured_logging_logs")
+        logger = configure_worker_logging(log_dir=log_root / "logs", force=True)
+
+        def _cleanup_worker_logger() -> None:
+            for handler in list(logger.handlers):
+                if getattr(handler, "_runr_worker_handler", False):
+                    logger.removeHandler(handler)
+                    handler.close()
+
+        self.addCleanup(_cleanup_worker_logger)
+
+        worker = WorkerService(
+            application=app,
+            worker_id="worker_service_logs_a",
+            lease_seconds=6,
+            poll_interval_seconds=0.1,
+            logger=logging.getLogger("backend.worker.test"),
+        )
+        processed = worker.run_loop(max_runs=1, auto_retry_failed=True)
+
+        self.assertEqual(processed, 1)
+        log_path = log_root / "logs" / "worker.log"
+        self.assertTrue(log_path.exists())
+        entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        messages = {entry["message"] for entry in entries}
+        self.assertIn("worker_task_start", messages)
+        self.assertIn("worker_task_complete", messages)
+        self.assertIn("worker_run_summary", messages)
+        self.assertIn("worker_loop_stop", messages)
+
+        task_start = next(entry for entry in entries if entry["message"] == "worker_task_start")
+        self.assertEqual(task_start["run_id"], run.id)
+        self.assertEqual(task_start["workspace_id"], "worker_workspace")
+        self.assertEqual(task_start["worker_id"], "worker_service_logs_a")
+        self.assertEqual(task_start["task_name"], "execute_run")
+        self.assertIn("timestamp", task_start)
+
+        task_complete = next(entry for entry in entries if entry["message"] == "worker_task_complete")
+        self.assertEqual(task_complete["status"], "completed")
+        self.assertIsInstance(task_complete["duration_ms"], int)
 
 
 if __name__ == "__main__":

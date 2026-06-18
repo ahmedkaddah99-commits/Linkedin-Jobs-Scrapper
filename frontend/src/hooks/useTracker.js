@@ -24,13 +24,30 @@ export function useTracker() {
   const [integrationBusy, setIntegrationBusy] = useState("");
   const [lastSyncResult, setLastSyncResult] = useState(null);
 
-  const loader = useCallback(
-    () =>
-      Promise.all([request("/tracker"), request("/tracker/email-integration")]).then(
-        ([tracker, integration]) => ({ tracker, integration }),
-      ),
-    [request],
-  );
+  const loader = useCallback(async () => {
+    const [tracker, integration] = await Promise.all([
+      request("/tracker"),
+      request("/tracker/email-integration"),
+    ]);
+    if (!integration?.config?.connected) {
+      return { tracker, integration };
+    }
+    try {
+      const sync = await request("/tracker/email-integration/sync", {
+        method: "POST",
+        body: {},
+      });
+      const refreshedTracker = await request("/tracker");
+      setLastSyncResult(sync.result || null);
+      return {
+        tracker: refreshedTracker,
+        integration: sync.integration || integration,
+      };
+    } catch {
+      const refreshedIntegration = await request("/tracker/email-integration").catch(() => integration);
+      return { tracker, integration: refreshedIntegration };
+    }
+  }, [request]);
 
   const { data, loading, error, refresh, setData } = useApiResource(loader, [loader]);
 

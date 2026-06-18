@@ -8,13 +8,25 @@ from unittest.mock import patch
 from backend.adapters.stage_adapters import (
     CompanyCareerSiteAcquisitionStage,
     LinkedInAcquireStage,
+    TailoredPrioritizationStage,
+    TailoredScreeningStage,
     _prepare_company_site_source_settings,
+    _resolve_company_site_stage_limits,
     _tailored_document_artifacts,
 )
 from backend.domain.models import StageDefinition
 
 
 class StageAdapterTests(unittest.TestCase):
+    def test_deprecated_company_site_link_cap_setting_is_still_honored(self):
+        with self.assertLogs("backend.adapters.stage_adapters", level="WARNING") as logs:
+            limits = _resolve_company_site_stage_limits(
+                SimpleNamespace(company_site_emergency_max_job_links_per_site=12),
+            )
+
+        self.assertEqual(limits["max_job_links_per_site"], 12)
+        self.assertIn("deprecated", "\n".join(logs.output).lower())
+
     def test_linkedin_acquire_stage_persists_stage1_exclusions_as_run_data(self):
         with TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "stage1_output.json"
@@ -131,6 +143,81 @@ class StageAdapterTests(unittest.TestCase):
         self.assertEqual(applied_cv_artifact.metadata["cv_generation_mode"], "standard_cv")
         self.assertEqual(applied_cv_artifact.metadata["document_asset_kind"], "applied_cv")
 
+    def test_tailored_screening_stage_translates_root_args_to_stage2_args(self):
+        captured_args = []
+        context = SimpleNamespace(
+            run=SimpleNamespace(id="run_stage2"),
+            get_job_dicts=lambda _key: [{"job_id": "job_1", "title": "Analyst", "company": "ACME"}],
+        )
+        definition = StageDefinition(
+            stage_id="screen_jobs",
+            stage_type="jobs.screen.filter",
+            name="Screen Jobs",
+            input_keys=["source_jobs"],
+            output_key="screened_jobs",
+        )
+        cli_args = SimpleNamespace(
+            stage1_output="stage1.json",
+            stage2_output="stage2.json",
+            stage2_rejected_output="stage2_rejected.json",
+            german_special_char_threshold=9999,
+            french_special_char_threshold=0,
+            spanish_special_char_threshold=0,
+            max_german_level="B2",
+        )
+
+        def fake_stage2(jobs, stage_args):
+            captured_args.append(stage_args)
+            return list(jobs), []
+
+        with (
+            patch("backend.adapters.stage_adapters._build_root_cli_args", return_value=({}, cli_args)),
+            patch("backend.adapters.stage_adapters.run_tailored_stage2_pipeline", side_effect=fake_stage2),
+        ):
+            outcome = TailoredScreeningStage().execute(context, definition)
+
+        self.assertEqual(outcome.metrics["approved"], 1)
+        self.assertEqual(captured_args[0].output, "stage2.json")
+        self.assertEqual(captured_args[0].rejected, "stage2_rejected.json")
+
+    def test_tailored_prioritization_stage_translates_root_args_to_stage3_args(self):
+        captured_args = []
+        context = SimpleNamespace(
+            run=SimpleNamespace(id="run_stage3"),
+            get_job_dicts=lambda _key: [{"job_id": "job_1", "title": "Analyst", "company": "ACME"}],
+        )
+        definition = StageDefinition(
+            stage_id="rank_jobs",
+            stage_type="jobs.prioritize",
+            name="Rank Jobs",
+            input_keys=["screened_jobs"],
+            output_key="ranked_jobs",
+        )
+        cli_args = SimpleNamespace(
+            stage2_output="stage2.json",
+            stage3_output="stage3.json",
+            stage3_rejected_output="stage3_rejected.json",
+            low_applicant_threshold=80,
+            stage3_german_special_char_threshold=9999,
+            stage3_french_special_char_threshold=0,
+            stage3_spanish_special_char_threshold=0,
+            stage3_max_german_level="B2",
+        )
+
+        def fake_stage3(jobs, stage_args):
+            captured_args.append(stage_args)
+            return list(jobs), []
+
+        with (
+            patch("backend.adapters.stage_adapters._build_root_cli_args", return_value=({}, cli_args)),
+            patch("backend.adapters.stage_adapters.run_tailored_stage3_pipeline", side_effect=fake_stage3),
+        ):
+            outcome = TailoredPrioritizationStage().execute(context, definition)
+
+        self.assertEqual(outcome.metrics["approved"], 1)
+        self.assertEqual(captured_args[0].output, "stage3.json")
+        self.assertEqual(captured_args[0].rejected, "stage3_rejected.json")
+
     def test_prepare_company_site_source_settings_merges_pasted_and_discovered_sites(self):
         definition = StageDefinition(
             stage_id="source_company_career_sites",
@@ -167,6 +254,7 @@ class StageAdapterTests(unittest.TestCase):
         context = SimpleNamespace(
             run=SimpleNamespace(id="run_1"),
             logger=None,
+            data={},
             registries=SimpleNamespace(connector_registry=SimpleNamespace(get=lambda _connector_id: None)),
         )
         definition = StageDefinition(
@@ -181,6 +269,7 @@ class StageAdapterTests(unittest.TestCase):
             keywords=["product owner"],
             company_site_request_timeout_seconds=30,
             company_site_max_jobs_per_site=10,
+            posted_within_days=7,
             use_proxy_fallback=True,
         )
 
@@ -192,6 +281,59 @@ class StageAdapterTests(unittest.TestCase):
 
         self.assertEqual(outcome.metrics["jobs_found"], 0)
         self.assertTrue(mock_scrape.call_args.kwargs["use_proxy_fallback"])
+        self.assertEqual(mock_scrape.call_args.kwargs["posted_within_days"], 7)
+        self.assertEqual(mock_scrape.call_args.kwargs["max_sites_per_run"], 10)
+        self.assertEqual(mock_scrape.call_args.kwargs["run_credit_budget"], 150)
+        self.assertEqual(mock_scrape.call_args.kwargs["max_job_links_per_site"], 25)
+
+    def test_company_career_site_stage_persists_capped_sites_from_run_result(self):
+        context = SimpleNamespace(
+            run=SimpleNamespace(id="run_cap"),
+            logger=None,
+            data={},
+            registries=SimpleNamespace(connector_registry=SimpleNamespace(get=lambda _connector_id: None)),
+            update_run_progress=lambda **_kwargs: None,
+        )
+        definition = StageDefinition(
+            stage_id="source_company_career_sites",
+            stage_type="jobs.acquire.company_sites",
+            name="Acquire Company Career Site Jobs",
+            output_key="source_company_career_jobs",
+            config={"connector_id": "company_career_sites"},
+        )
+        cli_args = SimpleNamespace(
+            company_career_sites=[{"company_name": "Acme", "url": "https://careers.acme.example"}],
+            keywords=[],
+            company_site_request_timeout_seconds=30,
+            company_site_max_jobs_per_site=0,
+            company_site_max_job_links_per_site=2,
+            posted_within_days=0,
+            use_proxy_fallback=False,
+        )
+
+        def fake_scrape(**kwargs):
+            kwargs["progress_callback"](
+                {
+                    "message": "capped",
+                    "counters": {
+                        "capped_sites": [
+                            {"url": "https://careers.acme.example", "links_fetched": 2, "cap_value": 2}
+                        ]
+                    },
+                }
+            )
+            return [], []
+
+        with (
+            patch("backend.adapters.stage_adapters._build_root_cli_args", return_value=({}, cli_args)),
+            patch("backend.adapters.stage_adapters.scrape_company_career_sites", side_effect=fake_scrape),
+        ):
+            outcome = CompanyCareerSiteAcquisitionStage().execute(context, definition)
+
+        self.assertEqual(
+            outcome.data["capped_sites"],
+            [{"url": "https://careers.acme.example", "links_fetched": 2, "cap_value": 2}],
+        )
 
 
 if __name__ == "__main__":

@@ -31,9 +31,10 @@ export default function CareerMemoryBuilderPage({
   assetDocuments = [],
   assetKindLabel,
   cvLikeAssets = [],
+  cvStudioTo = "/cv-studio",
   draft,
   formatDateTime,
-  guideTo = "/documents/ai-canvas-guide",
+  guideTo = "/career-memory/guide",
   manageDocumentsTo = "/documents",
   masterCareerProfileAsset = null,
   masterProfileUploadState,
@@ -323,6 +324,7 @@ export default function CareerMemoryBuilderPage({
   return (
     <div className="space-y-6">
       <MemoryBuilderHeader
+        cvStudioTo={cvStudioTo}
         manageDocumentsTo={manageDocumentsTo}
         onContinueInterview={handleContinueInterview}
         saveState={saveState}

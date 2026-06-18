@@ -13,6 +13,16 @@ from xml.etree import ElementTree
 import requests
 from bs4 import BeautifulSoup
 
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_PROXY_ENDPOINT,
+    billed_status_code,
+    build_proxy_params,
+    build_proxy_usage_record,
+    estimate_mode_native_credits,
+    parse_proxy_response_envelope,
+    require_scrapeops_proxy_health,
+)
+
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -259,7 +269,8 @@ def requests_fetcher(timeout_seconds: int = 20) -> Fetcher:
     return fetch
 
 
-def scrapeops_rendered_fetcher(api_key: str, timeout_seconds: int = 45) -> Fetcher:
+def scrapeops_rendered_fetcher(api_key: str, timeout_seconds: int = 45, usage_callback=None) -> Fetcher:
+    require_scrapeops_proxy_health(api_key, usage_callback=usage_callback)
     session = requests.Session()
 
     def fetch(url: str) -> FetchResult:
@@ -267,23 +278,35 @@ def scrapeops_rendered_fetcher(api_key: str, timeout_seconds: int = 45) -> Fetch
         if not requested_url:
             return FetchResult(url, "", 0, error="invalid_url")
         try:
+            request_started = time.perf_counter()
             response = session.get(
-                "https://proxy.scrapeops.io/v1/",
-                params={
-                    "api_key": api_key,
-                    "url": requested_url,
-                    "render_js": "true",
-                    "residential": "true",
-                },
+                SCRAPEOPS_PROXY_ENDPOINT,
+                params=build_proxy_params(api_key=api_key, url=requested_url, mode="render_js_residential"),
                 headers=DEFAULT_HEADERS,
                 timeout=max(10, int(timeout_seconds)),
             )
-            text = response.text[:MAX_HTML_BYTES] if response.text else ""
+            envelope = parse_proxy_response_envelope(response)
+            billed = billed_status_code(envelope.target_status_code)
+            if callable(usage_callback):
+                usage_callback(
+                    build_proxy_usage_record(
+                        source_id=domain_from_url(requested_url),
+                        target_url=requested_url,
+                        request_mode="render_js_residential",
+                        target_status_code=envelope.target_status_code,
+                        provider_status_code=envelope.provider_status_code,
+                        latency_ms=round((time.perf_counter() - request_started) * 1000),
+                        billed_credits_actual=envelope.billed_credits_actual,
+                        billed_credits_estimated=estimate_mode_native_credits("render_js_residential") if billed else 0,
+                        error_category="" if envelope.target_status_code < 400 else "target_http_error",
+                    )
+                )
+            text = envelope.body[:MAX_HTML_BYTES] if envelope.body else ""
             return FetchResult(
                 requested_url=requested_url,
                 final_url=requested_url,
-                status_code=int(response.status_code),
-                content_type=response.headers.get("content-type", ""),
+                status_code=envelope.target_status_code,
+                content_type=str(envelope.payload.get("content_type") or response.headers.get("content-type", "")),
                 text=text,
             )
         except Exception as exc:
@@ -565,6 +588,7 @@ def discover_career_url(
     shallow_crawl_pages: int = 8,
     use_rendered_fallback: bool = False,
     allow_domain_guessing: bool = False,
+    usage_callback=None,
 ) -> CareerDiscoveryResult:
     direct_fetch = fetch or requests_fetcher(request_timeout_seconds)
     homepage = normalize_url(homepage_url or company_domain)
@@ -621,7 +645,11 @@ def discover_career_url(
     if not all_candidates and use_rendered_fallback:
         api_key = os.getenv("SCRAPEOPS_API_KEY", "")
         if api_key:
-            rendered_fetch = scrapeops_rendered_fetcher(api_key, request_timeout_seconds)
+            rendered_fetch = scrapeops_rendered_fetcher(
+                api_key,
+                request_timeout_seconds,
+                usage_callback=usage_callback,
+            )
             rendered_homepage = rendered_fetch(effective_homepage)
             all_candidates.extend(
                 extract_career_links_from_html(
@@ -672,6 +700,7 @@ def discover_many(
     use_rendered_fallback: bool = False,
     allow_domain_guessing: bool = False,
     sleep_seconds: float = 0.0,
+    usage_callback=None,
 ) -> list[CareerDiscoveryResult]:
     results: list[CareerDiscoveryResult] = []
     for target in targets:
@@ -683,6 +712,7 @@ def discover_many(
             shallow_crawl_pages=shallow_crawl_pages,
             use_rendered_fallback=use_rendered_fallback,
             allow_domain_guessing=allow_domain_guessing,
+            usage_callback=usage_callback,
         )
         results.append(result)
         if sleep_seconds > 0:

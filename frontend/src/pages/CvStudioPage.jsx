@@ -171,18 +171,141 @@ function ExperienceEditor({ items, onChange }) {
   );
 }
 
+function ProjectEditor({ items, onChange }) {
+  function updateItem(index, field, value) {
+    onChange(
+      (items || []).map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [field]: value } : item,
+      ),
+    );
+  }
+
+  function addItem() {
+    onChange([...(items || []), { title: "", period: "", bulletsText: "" }]);
+  }
+
+  function removeItem(index) {
+    onChange((items || []).filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  return (
+    <div className="space-y-4">
+      {(items || []).map((item, index) => (
+        <div
+          className="rounded-xl border border-outline-variant/15 bg-surface p-4"
+          key={`studio-project-${index}`}
+        >
+          <div className="grid gap-4 md:grid-cols-[1fr_180px_auto]">
+            <Input
+              onChange={(event) => updateItem(index, "title", event.target.value)}
+              placeholder="Project or initiative"
+              value={item.title || ""}
+            />
+            <Input
+              onChange={(event) => updateItem(index, "period", event.target.value)}
+              placeholder="2024"
+              value={item.period || ""}
+            />
+            <button
+              className="rounded-lg border border-outline-variant/20 px-4 py-3 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
+              onClick={() => removeItem(index)}
+              type="button"
+            >
+              Remove
+            </button>
+          </div>
+          <div className="mt-4">
+            <TextArea
+              onChange={(event) => updateItem(index, "bulletsText", event.target.value)}
+              placeholder="One project result per line"
+              value={item.bulletsText || ""}
+            />
+          </div>
+        </div>
+      ))}
+      <button
+        className="rounded-lg bg-surface-container-low px-4 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
+        onClick={addItem}
+        type="button"
+      >
+        Add Project
+      </button>
+    </div>
+  );
+}
+
+function CustomSectionEditor({ items, onChange }) {
+  function updateItem(index, field, value) {
+    onChange(
+      (items || []).map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [field]: value } : item,
+      ),
+    );
+  }
+
+  function addItem() {
+    onChange([...(items || []), { heading: "Additional Information", linesText: "" }]);
+  }
+
+  function removeItem(index) {
+    onChange((items || []).filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  return (
+    <div className="space-y-4">
+      {(items || []).map((item, index) => (
+        <div
+          className="rounded-xl border border-outline-variant/15 bg-surface p-4"
+          key={`studio-custom-${item.id || index}`}
+        >
+          <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+            <Input
+              onChange={(event) => updateItem(index, "heading", event.target.value)}
+              placeholder="Section heading"
+              value={item.heading || ""}
+            />
+            <button
+              className="rounded-lg border border-outline-variant/20 px-4 py-3 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
+              onClick={() => removeItem(index)}
+              type="button"
+            >
+              Remove
+            </button>
+          </div>
+          <div className="mt-4">
+            <TextArea
+              onChange={(event) => updateItem(index, "linesText", event.target.value)}
+              placeholder="One line per item"
+              value={item.linesText || ""}
+            />
+          </div>
+        </div>
+      ))}
+      <button
+        className="rounded-lg bg-surface-container-low px-4 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
+        onClick={addItem}
+        type="button"
+      >
+        Add Custom Section
+      </button>
+    </div>
+  );
+}
+
 export default function CvStudioPage() {
   const { request } = useSession();
   const [consumedSeed] = useState(() => consumeCvStudioSeed());
   const [studioState, setStudioState] = useState(null);
   const [savedSource, setSavedSource] = useState(null);
   const [saveState, setSaveState] = useState({ message: "", error: "", saving: false });
+  const returnTo = String(consumedSeed?.returnTo || "/settings");
+  const sourceLabel = String(consumedSeed?.sourceLabel || "Profile and document defaults");
 
   const { data, loading, error, refresh } = useApiResource(() => request("/settings"), [request]);
 
   useEffect(() => {
     if (!data || studioState) return;
-    const sessionDraft = loadCvStudioSession() || {};
+    const sessionDraft = consumedSeed ? consumedSeed.sessionDraft || {} : loadCvStudioSession() || {};
     const sourceProfile = consumedSeed?.profile || data.profile || {};
     const sourceDocuments = consumedSeed?.documents || data.documents || {};
     setSavedSource({
@@ -246,7 +369,7 @@ export default function CvStudioPage() {
         documents: payload.documents || {},
       });
       setSaveState({
-        message: "Browser CV Studio defaults saved.",
+        message: "CV Studio design defaults saved.",
         error: "",
         saving: false,
       });
@@ -263,7 +386,7 @@ export default function CvStudioPage() {
   if (loading && !studioState) {
     return (
       <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 text-on-surface-variant">
-        Loading browser CV studio...
+        Loading CV Studio...
       </div>
     );
   }
@@ -293,19 +416,22 @@ export default function CvStudioPage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h1 className="font-headline text-[2rem] font-extrabold leading-tight tracking-tight text-on-surface">
-              Browser CV Studio
+              CV Studio
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-on-surface-variant">
-              Edit the CV directly in the browser, preview the exact HTML output, and print or save
-              to PDF without moving through Word.
+              Edit the current CV draft, preview the exact HTML output, and print or save to PDF.
+              Career Memory remains separate and supplies reusable facts for future tailoring.
             </p>
+            <div className="mt-3 inline-flex rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              Editing: {sourceLabel}
+            </div>
           </div>
           <div className="flex flex-wrap gap-3">
             <Link
               className="rounded-lg border border-outline-variant/20 px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low"
-              to="/settings"
+              to={returnTo}
             >
-              Back To Settings
+              Back
             </Link>
             <button
               className="rounded-lg border border-outline-variant/20 px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low"
@@ -341,6 +467,10 @@ export default function CvStudioPage() {
             {saveState.error}
           </p>
         ) : null}
+        <p className="mt-4 rounded-lg bg-surface-container-low px-3 py-2 text-xs leading-5 text-on-surface-variant">
+          Draft edits autosave in this browser. Print / Save PDF exports the current draft. Save
+          Design Defaults updates reusable template settings, not the original generated artifact.
+        </p>
       </section>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(360px,430px)_minmax(0,1fr)]">
@@ -592,6 +722,22 @@ export default function CvStudioPage() {
                 <ExperienceEditor
                   items={studioState.experience || []}
                   onChange={(experience) => updateState({ experience })}
+                />
+              </div>
+
+              <div>
+                <div className="mb-3 text-sm font-semibold text-on-surface">Projects</div>
+                <ProjectEditor
+                  items={studioState.projects || []}
+                  onChange={(projects) => updateState({ projects })}
+                />
+              </div>
+
+              <div>
+                <div className="mb-3 text-sm font-semibold text-on-surface">Custom Sections</div>
+                <CustomSectionEditor
+                  items={studioState.customSections || []}
+                  onChange={(customSections) => updateState({ customSections })}
                 />
               </div>
 

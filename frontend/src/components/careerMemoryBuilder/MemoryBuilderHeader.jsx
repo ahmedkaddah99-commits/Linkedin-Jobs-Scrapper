@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 
 export default function MemoryBuilderHeader({
+  cvStudioTo,
   manageDocumentsTo,
   onContinueInterview,
   saveState,
@@ -16,6 +17,10 @@ export default function MemoryBuilderHeader({
             Your CV shows the basics. Add the missing achievements, stories, metrics, projects,
             and motivation details Runr needs to tailor stronger applications.
           </p>
+          <p className="mt-2 max-w-3xl text-sm font-medium leading-6 text-primary">
+            Career Memory stores reusable facts. To edit the wording or layout of a specific CV,
+            open CV Studio instead.
+          </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
@@ -23,9 +28,16 @@ export default function MemoryBuilderHeader({
             onClick={onContinueInterview}
             type="button"
           >
-            Continueguided interview
+            Continue guided interview
             <span className="material-symbols-outlined text-[18px]">forum</span>
           </button>
+          <Link
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-surface-container-low px-5 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+            to={cvStudioTo}
+          >
+            Edit a CV
+            <span className="material-symbols-outlined text-[18px]">edit_document</span>
+          </Link>
           <Link
             className="inline-flex items-center justify-center gap-2 rounded-2xl bg-surface-container-low px-5 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
             to={manageDocumentsTo}
@@ -35,9 +47,20 @@ export default function MemoryBuilderHeader({
           </Link>
         </div>
       </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        {[
+          ["1. Answer one prompt", "Use rough notes. Exact CV wording is not required."],
+          ["2. Review the memory", "Check the generated story, metric, and suggested CV angle."],
+          ["3. Save for reuse", "Runr can reuse approved memories across future applications."],
+        ].map(([title, description]) => (
+          <div className="rounded-2xl bg-surface-container-low px-4 py-3" key={title}>
+            <div className="text-sm font-semibold text-on-surface">{title}</div>
+            <div className="mt-1 text-xs leading-5 text-on-surface-variant">{description}</div>
+          </div>
+        ))}
+      </div>
       {saveState.message ? <p className="mt-4 text-sm text-primary">{saveState.message}</p> : null}
       {saveState.error ? <p className="mt-4 text-sm text-error">{saveState.error}</p> : null}
     </section>
   );
 }
-

@@ -53,15 +53,34 @@ DOCUMENT_GENERATION_STAGE_TYPES = {
     "applications.generate.documents",
     "legacy.white_collar.docs",
 }
+TEST_RUN_OUTPUT_STAGE_TYPES = {
+    *DOCUMENT_GENERATION_STAGE_TYPES,
+    "profiles.generate.reusable",
+    "applications.package.export",
+    "legacy.blue_collar.stage4",
+    "legacy.blue_collar.stage5",
+}
+TEST_RUN_MODE = "test"
+TEST_RUN_JOB_LIMIT = 1
 
 
 class StageEngine:
-    def __init__(self, *, stage_registry, run_repository, job_store, artifact_store, event_emitter=None):
+    def __init__(
+        self,
+        *,
+        stage_registry,
+        run_repository,
+        job_store,
+        artifact_store,
+        event_emitter=None,
+        artifact_publisher=None,
+    ):
         self.stage_registry = stage_registry
         self.run_repository = run_repository
         self.job_store = job_store
         self.artifact_store = artifact_store
         self.event_emitter = event_emitter
+        self.artifact_publisher = artifact_publisher
 
     def build_run_plan(
         self,
@@ -140,7 +159,9 @@ class StageEngine:
                         metrics={"reason": "can_run_returned_false"},
                     )
                     continue
+                self._limit_test_run_generation_inputs(context, definition)
                 outcome = stage.execute(context, definition)
+                self._limit_test_run_output(context, definition, outcome)
             except Exception as exc:
                 self._append_stage_result(
                     context=context,
@@ -191,40 +212,92 @@ class StageEngine:
                 )
                 raise
 
-            output_keys: list[str] = []
-            for key, jobs in outcome.job_sets.items():
-                context.set_job_set(key, jobs)
-                self.job_store.save_job_set(run.id, key, context.get_job_set(key))
-                output_keys.append(key)
-
-            if outcome.data:
-                context.data.update(outcome.data)
-                for key, value in outcome.data.items():
-                    self.job_store.save_blob(run.id, key, value)
+            try:
+                output_keys: list[str] = []
+                for key, jobs in outcome.job_sets.items():
+                    context.set_job_set(key, jobs)
+                    self.job_store.save_job_set(run.id, key, context.get_job_set(key))
                     output_keys.append(key)
 
-            if outcome.artifacts:
-                context.artifacts.extend(outcome.artifacts)
-                self.artifact_store.save_artifacts(run.id, context.artifacts)
+                if outcome.data:
+                    context.data.update(outcome.data)
+                    for key, value in outcome.data.items():
+                        self.job_store.save_blob(run.id, key, value)
+                        output_keys.append(key)
 
-            if definition.stage_type in DOCUMENT_GENERATION_STAGE_TYPES:
-                self._emit_document_generation_events(
-                    run=run,
+                if outcome.artifacts:
+                    if callable(self.artifact_publisher):
+                        outcome.artifacts = list(self.artifact_publisher(run.id, outcome.artifacts))
+                    context.artifacts.extend(outcome.artifacts)
+                    self.artifact_store.save_artifacts(run.id, context.artifacts)
+
+                if definition.stage_type in DOCUMENT_GENERATION_STAGE_TYPES:
+                    self._emit_document_generation_events(
+                        run=run,
+                        definition=definition,
+                        outcome=outcome,
+                    )
+
+                self._append_stage_result(
+                    context=context,
                     definition=definition,
-                    outcome=outcome,
+                    status=STAGE_STATUS_COMPLETED,
+                    started_at=started_at,
+                    finished_at=utc_now_iso(),
+                    metrics=outcome.metrics,
+                    output_keys=output_keys,
+                    artifact_ids=[artifact.artifact_id for artifact in outcome.artifacts],
                 )
-
-            self._append_stage_result(
-                context=context,
-                definition=definition,
-                status=STAGE_STATUS_COMPLETED,
-                started_at=started_at,
-                finished_at=utc_now_iso(),
-                metrics=outcome.metrics,
-                output_keys=output_keys,
-                artifact_ids=[artifact.artifact_id for artifact in outcome.artifacts],
-            )
-            completed_stage_ids.add(definition.stage_id)
+                completed_stage_ids.add(definition.stage_id)
+            except Exception as exc:
+                self._append_stage_result(
+                    context=context,
+                    definition=definition,
+                    status=STAGE_STATUS_FAILED,
+                    started_at=started_at,
+                    finished_at=utc_now_iso(),
+                    error=str(exc),
+                )
+                run.status = RUN_STATUS_FAILED
+                run.finished_at = utc_now_iso()
+                run.current_stage_id = definition.stage_id
+                run.last_error = str(exc)
+                run.updated_at = utc_now_iso()
+                context.update_run_progress(
+                    stage_id=definition.stage_id,
+                    stage_type=definition.stage_type,
+                    stage_name=definition.name,
+                    message=f"{definition.name or definition.stage_id} failed",
+                    counters={},
+                    recent_failures=[{"stage": definition.stage_id, "error": str(exc)}],
+                    status="failed",
+                    extra={"stage_description": str(definition.description or "")},
+                    save=False,
+                )
+                self.run_repository.save(run)
+                self._emit_event(
+                    "automation_step_failed",
+                    user_id=run.normalized_user_id,
+                    workspace_id=run.workspace_id,
+                    run_id=run.id,
+                    job_id="",
+                    source="runtime",
+                    stage_type=definition.stage_type,
+                    error=str(exc),
+                    attempt_count=run.attempt_count,
+                )
+                self._emit_event(
+                    "run_failed",
+                    user_id=run.normalized_user_id,
+                    workspace_id=run.workspace_id,
+                    run_id=run.id,
+                    source="runtime",
+                    status=run.status,
+                    duration_seconds=self._duration_seconds(run.started_at, run.finished_at),
+                    stage_count=len(run.stage_results),
+                    last_error=run.last_error,
+                )
+                raise
 
         run.status = RUN_STATUS_COMPLETED
         run.final_job_set_keys = sorted(context.job_sets.keys())
@@ -246,6 +319,40 @@ class StageEngine:
             last_error=run.last_error,
         )
         return run
+
+    def _limit_test_run_generation_inputs(self, context: StageContext, definition: StageDefinition) -> None:
+        if not self._is_test_run(context) or definition.stage_type not in TEST_RUN_OUTPUT_STAGE_TYPES:
+            return
+        for key in definition.input_keys:
+            jobs = context.get_job_set(key)
+            if len(jobs) <= TEST_RUN_JOB_LIMIT:
+                continue
+            selected_jobs = jobs[:TEST_RUN_JOB_LIMIT]
+            context.set_job_set(key, selected_jobs)
+            self.job_store.save_job_set(context.run.id, key, selected_jobs)
+
+    def _limit_test_run_output(
+        self,
+        context: StageContext,
+        definition: StageDefinition,
+        outcome: StageOutcome,
+    ) -> None:
+        if not self._is_test_run(context) or definition.stage_type not in TEST_RUN_OUTPUT_STAGE_TYPES:
+            return
+        limited_job_sets: dict[str, list[JobRecord | Mapping[str, Any]]] = {}
+        for key, jobs in outcome.job_sets.items():
+            limited_job_sets[key] = list(jobs)[:TEST_RUN_JOB_LIMIT]
+        outcome.job_sets = limited_job_sets
+        outcome.metrics = {
+            **dict(outcome.metrics),
+            "test_run": True,
+            "test_run_job_limit": TEST_RUN_JOB_LIMIT,
+        }
+
+    @staticmethod
+    def _is_test_run(context: StageContext) -> bool:
+        settings = dict(context.data.get("resolved_run_settings") or {})
+        return str(settings.get("run_mode") or "").strip().lower() == TEST_RUN_MODE
 
     def _mark_run_running(self, run) -> None:
         if run.status != RUN_STATUS_RUNNING:

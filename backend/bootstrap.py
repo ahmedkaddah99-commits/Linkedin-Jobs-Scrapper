@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from backend.adapters import register_stage_adapters
 from backend.application import BackendApplication
 from backend.connectors.job_boards import list_portal_strategy_ids
+from backend.database import initialize_database
 from backend.orchestration import BackendRegistries, ComponentDescriptor, Registry, StageEngine
 from backend.repositories import (
     BackendRepositories,
@@ -26,9 +28,11 @@ from backend.repositories import (
     SqliteReviewStore,
     SqliteRunRepository,
     SqliteSecretStore,
+    SqliteSourcePolicyStore,
     SqliteWorkerStore,
     SqliteWorkspaceRepository,
 )
+from backend.storage import create_object_storage, publish_file_artifacts
 
 
 def _build_registries() -> BackendRegistries:
@@ -263,6 +267,7 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
         )
     if storage_backend == "sqlite":
         db_path = _resolve_sqlite_path(base_path)
+        initialize_database(db_path)
         return BackendRepositories(
             workspace_repository=SqliteWorkspaceRepository(db_path),
             run_repository=SqliteRunRepository(db_path),
@@ -274,6 +279,7 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             worker_store=SqliteWorkerStore(db_path),
             analytics_store=SqliteAnalyticsStore(db_path),
             config_store=SqliteConfigStore(db_path),
+            source_policy_store=SqliteSourcePolicyStore(db_path),
         )
     raise ValueError(f"Unsupported storage backend: {storage_backend}")
 
@@ -285,6 +291,16 @@ def create_backend(
 ) -> BackendApplication:
     base_path = Path(base_dir)
     repositories = _build_repositories(base_path, storage_backend=storage_backend)
+    storage_environment = dict(os.environ)
+    object_storage_backend = str(storage_environment.get("OBJECT_STORAGE_BACKEND") or "local").strip().lower()
+    if object_storage_backend == "local":
+        local_root_was_managed = str(os.environ.get("RUNR_INTERNAL_OBJECT_STORAGE_LOCAL_ROOT") or "") == "1"
+        if local_root_was_managed or not str(storage_environment.get("OBJECT_STORAGE_LOCAL_ROOT") or "").strip():
+            storage_environment["OBJECT_STORAGE_LOCAL_ROOT"] = str(base_path / "objects")
+            os.environ["RUNR_INTERNAL_OBJECT_STORAGE_LOCAL_ROOT"] = "1"
+        os.environ["OBJECT_STORAGE_BACKEND"] = "local"
+        os.environ["OBJECT_STORAGE_LOCAL_ROOT"] = str(storage_environment["OBJECT_STORAGE_LOCAL_ROOT"])
+    object_storage = create_object_storage(storage_environment)
     registries = _build_registries()
     stage_engine = StageEngine(
         stage_registry=registries.stage_registry,
@@ -292,11 +308,17 @@ def create_backend(
         job_store=repositories.job_store,
         artifact_store=repositories.artifact_store,
         event_emitter=None,
+        artifact_publisher=lambda run_id, artifacts: publish_file_artifacts(
+            object_storage,
+            run_id=run_id,
+            artifacts=artifacts,
+        ),
     )
     application = BackendApplication(
         repositories=repositories,
         registries=registries,
         stage_engine=stage_engine,
+        object_storage=object_storage,
     )
     stage_engine.event_emitter = application.emit_event
     return application

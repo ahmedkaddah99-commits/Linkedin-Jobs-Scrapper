@@ -23,6 +23,11 @@ from backend.domain.phase0_contracts import (
     normalize_gmail_scan_window,
 )
 from backend.domain.models import utc_now_iso, utc_plus_seconds
+from backend.domain.tracker import (
+    ensure_review_placed_in_tracker_at,
+    review_is_actionable_tracker_item,
+    review_placed_in_tracker_at,
+)
 
 TRACKER_EMAIL_INTEGRATION_METADATA_KEY = "tracker_email_integration"
 
@@ -402,7 +407,6 @@ def sync_tracker_email(
     config: Mapping[str, Any],
     password: str,
 ) -> dict[str, Any]:
-    del user
     normalized = normalize_tracker_email_config(config)
     preset = TRACKER_EMAIL_PROVIDER_PRESETS[normalized["provider_id"]]
     if not preset.supported:
@@ -425,6 +429,7 @@ def sync_tracker_email(
     )
     return _process_tracker_messages(
         application=application,
+        user=user,
         tracker_items=tracker_items,
         messages=messages,
         normalized=normalized,
@@ -439,7 +444,6 @@ def sync_tracker_gmail(
     config: Mapping[str, Any],
     access_token: str,
 ) -> dict[str, Any]:
-    del user
     normalized = normalize_tracker_email_config(config)
     if normalized["auth_strategy"] != "google_oauth":
         raise ValueError("This inbox is not configured for Google OAuth.")
@@ -452,6 +456,7 @@ def sync_tracker_gmail(
     )
     result = _process_tracker_messages(
         application=application,
+        user=user,
         tracker_items=tracker_items,
         messages=messages,
         normalized=normalized,
@@ -672,6 +677,7 @@ class GmailMailboxClient:
 def _process_tracker_messages(
     *,
     application,
+    user,
     tracker_items: list[dict[str, Any]],
     messages: list[TrackerMailboxMessage],
     normalized: dict[str, Any],
@@ -759,18 +765,30 @@ def _process_tracker_messages(
             )
             continue
         review = application.get_review(str(matched_item["review_id"] or ""))
+        previously_actionable = review_is_actionable_tracker_item(review)
+        existing_placed_in_tracker_at = review_placed_in_tracker_at(
+            review,
+            include_legacy_fallback=False,
+        )
         review_meta = dict(review.metadata or {})
-        current_status = str(review_meta.get("tracker_status") or "applied")
+        current_status = str(review_meta.get("tracker_status") or "not_applied")
+        current_application_status = normalize_application_status(
+            review_meta.get("application_status") or current_status,
+            default="Not applied",
+        )
         changed = False
 
         if new_status == "email_confirmed":
             if not review_meta.get("email_confirmed"):
                 review_meta["email_confirmed"] = True
                 changed = True
-            if current_status in {"", "applied"}:
+            if current_status in {"", "not_applied", "applied"}:
                 review_meta["tracker_status"] = "email_confirmed"
                 review_meta["application_status"] = normalize_application_status("email_confirmed")
                 changed = changed or current_status != "email_confirmed"
+            if not review_meta.get("application_date") and not review_meta.get("applied_at"):
+                review_meta["application_date"] = message.sent_at or utc_now_iso()
+                changed = True
         elif new_status == "interview_invited":
             if current_status != "rejected":
                 review_meta["tracker_status"] = "interview_invited"
@@ -800,7 +818,28 @@ def _process_tracker_messages(
             "provider_id": normalized["provider_id"],
         }
         review.metadata = review_meta
-        application.repositories.review_store.upsert_review(review)
+        ensure_review_placed_in_tracker_at(
+            review,
+            previously_actionable=previously_actionable,
+            existing_placed_in_tracker_at=existing_placed_in_tracker_at,
+        )
+        next_application_status = normalize_application_status(
+            review_meta.get("application_status") or review_meta.get("tracker_status"),
+            default=current_application_status,
+        )
+        history_entry = None
+        if current_application_status != next_application_status:
+            history_entry = {
+                "review_id": review.review_id,
+                "user_id": str(getattr(user, "user_id", "") or ""),
+                "from_status": current_application_status,
+                "to_status": next_application_status,
+                "source": "gmail_sync",
+            }
+        application.repositories.review_store.upsert_review(
+            review,
+            application_status_history=history_entry,
+        )
         refreshed_review = application.get_review(review.review_id)
         matched_updates.append(
             {

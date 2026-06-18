@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Mapping
 
 from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
@@ -24,10 +24,16 @@ from backend.domain.models import (
     WorkspaceDefinition,
     utc_now_iso,
 )
+from backend.domain.job_identity import canonicalize_url
 from backend.orchestration.seeded_workspaces import DEFAULT_WORKFLOW_TEMPLATES, DEFAULT_WORKSPACES
+from backend.repositories.sqlite_core import _SqliteStore
+from backend.repositories.sqlite_migrations import (
+    _insert_application_status_history_row,
+    _normalize_application_status_history_entry,
+)
 from backend.security.auth import API_TOKEN_PREFIX_LENGTH
 
-_APPLICATION_STATUS_HISTORY_SOURCES = {"manual", "gmail_sync", "auto_default"}
+_SITE_STATES = {"hot", "selected", "low_yield", "paused", "pending"}
 
 
 def _serialize(payload: Any) -> str:
@@ -41,455 +47,6 @@ def _deserialize(payload: str | bytes | None, default: Any):
         return json.loads(payload)
     except Exception:
         return default
-
-
-def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
-    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return {str(row["name"]) for row in rows}
-
-
-def _ensure_run_column(connection: sqlite3.Connection, column_name: str, column_sql: str) -> None:
-    if column_name not in _table_columns(connection, "runs"):
-        connection.execute(f"ALTER TABLE runs ADD COLUMN {column_name} {column_sql}")
-
-
-def _ensure_user_column(connection: sqlite3.Connection, column_name: str, column_sql: str) -> None:
-    if column_name not in _table_columns(connection, "users"):
-        connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_sql}")
-
-
-def _apply_runtime_migration(connection: sqlite3.Connection) -> None:
-    _ensure_run_column(connection, "requested_by", "TEXT NOT NULL DEFAULT ''")
-    _ensure_run_column(connection, "queued_at", "TEXT NOT NULL DEFAULT ''")
-    _ensure_run_column(connection, "started_at", "TEXT NOT NULL DEFAULT ''")
-    _ensure_run_column(connection, "finished_at", "TEXT NOT NULL DEFAULT ''")
-    _ensure_run_column(connection, "current_stage_id", "TEXT NOT NULL DEFAULT ''")
-    _ensure_run_column(connection, "last_error", "TEXT NOT NULL DEFAULT ''")
-    _ensure_run_column(connection, "attempt_count", "INTEGER NOT NULL DEFAULT 0")
-    _ensure_run_column(connection, "max_attempts", "INTEGER NOT NULL DEFAULT 1")
-    _ensure_run_column(connection, "run_input_overrides_json", "TEXT NOT NULL DEFAULT '{}'")
-    _ensure_run_column(connection, "run_plan_json", "TEXT NOT NULL DEFAULT '{}'")
-    _ensure_run_column(connection, "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
-
-    connection.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS run_stage_results (
-            run_id TEXT NOT NULL,
-            sequence_no INTEGER NOT NULL,
-            stage_id TEXT NOT NULL,
-            stage_type TEXT NOT NULL,
-            status TEXT NOT NULL,
-            started_at TEXT NOT NULL,
-            finished_at TEXT NOT NULL,
-            error TEXT NOT NULL DEFAULT '',
-            metrics_json TEXT NOT NULL DEFAULT '{}',
-            output_keys_json TEXT NOT NULL DEFAULT '[]',
-            artifact_ids_json TEXT NOT NULL DEFAULT '[]',
-            PRIMARY KEY (run_id, sequence_no)
-        );
-        CREATE TABLE IF NOT EXISTS run_jobs (
-            run_id TEXT NOT NULL,
-            set_key TEXT NOT NULL,
-            ordinal INTEGER NOT NULL,
-            job_id TEXT NOT NULL,
-            title TEXT NOT NULL DEFAULT '',
-            company TEXT NOT NULL DEFAULT '',
-            source_type TEXT NOT NULL DEFAULT '',
-            filter_status TEXT NOT NULL DEFAULT '',
-            location_raw TEXT NOT NULL DEFAULT '',
-            link TEXT NOT NULL DEFAULT '',
-            source_url TEXT NOT NULL DEFAULT '',
-            apply_link TEXT NOT NULL DEFAULT '',
-            portal TEXT NOT NULL DEFAULT '',
-            description_text TEXT NOT NULL DEFAULT '',
-            manual_approved INTEGER NOT NULL DEFAULT 0,
-            role_category_id TEXT NOT NULL DEFAULT '',
-            role_category_name TEXT NOT NULL DEFAULT '',
-            priority_rank INTEGER,
-            payload_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (run_id, set_key, ordinal)
-        );
-        CREATE TABLE IF NOT EXISTS workers (
-            worker_id TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            host_name TEXT NOT NULL DEFAULT '',
-            process_id INTEGER NOT NULL DEFAULT 0,
-            current_run_id TEXT NOT NULL DEFAULT '',
-            started_at TEXT NOT NULL,
-            last_heartbeat_at TEXT NOT NULL,
-            lease_expires_at TEXT NOT NULL DEFAULT '',
-            metadata_json TEXT NOT NULL DEFAULT '{}',
-            payload_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_run_stage_results_run_sequence ON run_stage_results(run_id, sequence_no);
-        CREATE INDEX IF NOT EXISTS idx_run_jobs_run_key_ordinal ON run_jobs(run_id, set_key, ordinal);
-        CREATE INDEX IF NOT EXISTS idx_run_jobs_run_job_id ON run_jobs(run_id, job_id);
-        CREATE INDEX IF NOT EXISTS idx_workers_status_lease ON workers(status, lease_expires_at);
-        """
-    )
-
-
-def _apply_run_user_id_migration(connection: sqlite3.Connection) -> None:
-    _ensure_run_column(connection, "user_id", "TEXT NOT NULL DEFAULT ''")
-    normalized_user_id_sql = (
-        "CASE "
-        "WHEN COALESCE(requested_by, '') LIKE 'api:%' THEN TRIM(SUBSTR(COALESCE(requested_by, ''), 5)) "
-        "ELSE '' "
-        "END"
-    )
-    connection.execute(
-        (
-            "UPDATE runs "
-            f"SET user_id = {normalized_user_id_sql} "
-            f"WHERE COALESCE(user_id, '') != {normalized_user_id_sql}"
-        )
-    )
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_user_id_created_at ON runs(user_id, created_at DESC)")
-
-
-def _apply_billing_migration(connection: sqlite3.Connection) -> None:
-    _ensure_user_column(connection, "clerk_user_id", "TEXT NOT NULL DEFAULT ''")
-    connection.executescript(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_clerk_user_id_unique
-            ON users(clerk_user_id)
-            WHERE clerk_user_id != '';
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            subscription_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            plan_id TEXT NOT NULL DEFAULT 'free',
-            status TEXT NOT NULL DEFAULT 'active',
-            lemonsqueezy_subscription_id TEXT,
-            lemonsqueezy_customer_id TEXT,
-            lemonsqueezy_order_id TEXT,
-            current_period_start TEXT,
-            current_period_end TEXT,
-            cancelled_at TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS subscription_events (
-            event_id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            plan_id TEXT,
-            previous_plan_id TEXT,
-            lemonsqueezy_event_name TEXT,
-            occurred_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE TABLE IF NOT EXISTS quota_usage (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            quota_type TEXT NOT NULL,
-            period TEXT NOT NULL,
-            count INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL,
-            UNIQUE(user_id, quota_type, period)
-        );
-        CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
-        CREATE INDEX IF NOT EXISTS idx_subscription_events_user_id
-            ON subscription_events(user_id, occurred_at);
-        CREATE INDEX IF NOT EXISTS idx_quota_usage_user_period
-            ON quota_usage(user_id, period, quota_type);
-        """
-    )
-
-
-def _apply_analytics_events_migration(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS analytics_events (
-            event_id TEXT PRIMARY KEY,
-            event_name TEXT NOT NULL,
-            occurred_at TEXT NOT NULL,
-            user_id TEXT,
-            workspace_id TEXT,
-            run_id TEXT,
-            job_id TEXT,
-            review_id TEXT,
-            session_id TEXT,
-            route TEXT,
-            source TEXT,
-            payload_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_analytics_events_name_occurred_at
-            ON analytics_events(event_name, occurred_at);
-        CREATE INDEX IF NOT EXISTS idx_analytics_events_user_occurred_at
-            ON analytics_events(user_id, occurred_at);
-        CREATE INDEX IF NOT EXISTS idx_analytics_events_run_occurred_at
-            ON analytics_events(run_id, occurred_at);
-        """
-    )
-
-
-def _apply_app_config_migration(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS app_config (
-            config_key TEXT PRIMARY KEY,
-            updated_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_app_config_updated_at
-            ON app_config(updated_at);
-        """
-    )
-
-
-def _apply_application_status_history_migration(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS application_status_history (
-            review_id TEXT,
-            user_id TEXT,
-            from_status TEXT,
-            to_status TEXT,
-            changed_at TEXT,
-            source TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_application_status_history_review_changed_at
-            ON application_status_history(review_id, changed_at);
-        CREATE INDEX IF NOT EXISTS idx_application_status_history_user_changed_at
-            ON application_status_history(user_id, changed_at);
-        """
-    )
-
-
-def _normalize_application_status_history_entry(
-    *,
-    review_id: Any,
-    user_id: Any,
-    from_status: Any,
-    to_status: Any,
-    changed_at: Any = "",
-    source: Any = "manual",
-) -> dict[str, str]:
-    normalized_review_id = str(review_id or "").strip()
-    if not normalized_review_id:
-        raise ValueError("review_id is required for application status history.")
-    normalized_user_id = str(user_id or "").strip()
-    if not normalized_user_id:
-        raise ValueError("user_id is required for application status history.")
-    normalized_source = str(source or "manual").strip() or "manual"
-    if normalized_source not in _APPLICATION_STATUS_HISTORY_SOURCES:
-        raise ValueError(
-            f"source must be one of: {sorted(_APPLICATION_STATUS_HISTORY_SOURCES)}"
-        )
-    return {
-        "review_id": normalized_review_id,
-        "user_id": normalized_user_id,
-        "from_status": str(from_status or "").strip(),
-        "to_status": str(to_status or "").strip(),
-        "changed_at": str(changed_at or utc_now_iso()).strip(),
-        "source": normalized_source,
-    }
-
-
-def _insert_application_status_history_row(
-    connection: sqlite3.Connection,
-    entry: dict[str, str],
-) -> None:
-    connection.execute(
-        (
-            "INSERT INTO application_status_history "
-            "(review_id, user_id, from_status, to_status, changed_at, source) "
-            "VALUES (?, ?, ?, ?, ?, ?)"
-        ),
-        (
-            entry["review_id"],
-            entry["user_id"],
-            entry["from_status"],
-            entry["to_status"],
-            entry["changed_at"],
-            entry["source"],
-        ),
-    )
-
-
-class _SqliteStore:
-    def __init__(self, db_path: Path):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
-
-    @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        try:
-            yield connection
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-    def _initialize(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    migration_id TEXT PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS workflow_templates (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL DEFAULT '',
-                    payload_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS workspaces (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    workflow_template_id TEXT NOT NULL,
-                    workspace_type TEXT NOT NULL DEFAULT '',
-                    payload_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY(workflow_template_id) REFERENCES workflow_templates(id)
-                );
-                CREATE TABLE IF NOT EXISTS runs (
-                    id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    workflow_template_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    requested_by TEXT NOT NULL DEFAULT '',
-                    user_id TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    queued_at TEXT NOT NULL DEFAULT '',
-                    started_at TEXT NOT NULL DEFAULT '',
-                    finished_at TEXT NOT NULL DEFAULT '',
-                    current_stage_id TEXT NOT NULL DEFAULT '',
-                    last_error TEXT NOT NULL DEFAULT '',
-                    attempt_count INTEGER NOT NULL DEFAULT 0,
-                    max_attempts INTEGER NOT NULL DEFAULT 1,
-                    run_input_overrides_json TEXT NOT NULL DEFAULT '{}',
-                    run_plan_json TEXT NOT NULL DEFAULT '{}',
-                    metadata_json TEXT NOT NULL DEFAULT '{}',
-                    payload_json TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS run_job_sets (
-                    run_id TEXT NOT NULL,
-                    set_key TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (run_id, set_key)
-                );
-                CREATE TABLE IF NOT EXISTS run_blobs (
-                    run_id TEXT NOT NULL,
-                    blob_key TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (run_id, blob_key)
-                );
-                CREATE TABLE IF NOT EXISTS artifacts (
-                    run_id TEXT NOT NULL,
-                    artifact_id TEXT NOT NULL,
-                    artifact_type TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    metadata_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (run_id, artifact_id)
-                );
-                CREATE TABLE IF NOT EXISTS reviews (
-                    review_id TEXT PRIMARY KEY,
-                    run_id TEXT NOT NULL,
-                    job_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    payload_json TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS application_status_history (
-                    review_id TEXT,
-                    user_id TEXT,
-                    from_status TEXT,
-                    to_status TEXT,
-                    changed_at TEXT,
-                    source TEXT
-                );
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id TEXT PRIMARY KEY,
-                    email TEXT NOT NULL UNIQUE,
-                    role TEXT NOT NULL,
-                    is_active INTEGER NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    payload_json TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS api_tokens (
-                    token_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    token_prefix TEXT NOT NULL,
-                    is_active INTEGER NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    payload_json TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS secrets (
-                    secret_id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    provider TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    payload_json TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_runs_updated_at ON runs(updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_runs_status_updated_at ON runs(status, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_runs_workspace_updated_at ON runs(workspace_id, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_workspaces_template_id ON workspaces(workflow_template_id);
-                CREATE INDEX IF NOT EXISTS idx_reviews_run_updated_at ON reviews(run_id, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_application_status_history_review_changed_at
-                    ON application_status_history(review_id, changed_at);
-                CREATE INDEX IF NOT EXISTS idx_application_status_history_user_changed_at
-                    ON application_status_history(user_id, changed_at);
-                CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-                CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix_active ON api_tokens(token_prefix, is_active, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_secrets_workspace_id ON secrets(workspace_id, updated_at DESC);
-                """
-            )
-            applied = {
-                str(row["migration_id"])
-                for row in connection.execute("SELECT migration_id FROM schema_migrations").fetchall()
-            }
-            if "001_runtime_normalization" not in applied:
-                _apply_runtime_migration(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-                    ("001_runtime_normalization", utc_now_iso()),
-                )
-            if "002_analytics_events" not in applied:
-                _apply_analytics_events_migration(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-                    ("002_analytics_events", utc_now_iso()),
-                )
-            if "003_application_status_history" not in applied:
-                _apply_application_status_history_migration(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-                    ("003_application_status_history", utc_now_iso()),
-                )
-            if "004_runs_user_id" not in applied:
-                _apply_run_user_id_migration(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-                    ("004_runs_user_id", utc_now_iso()),
-                )
-            if "005_billing" not in applied:
-                _apply_billing_migration(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-                    ("005_billing", utc_now_iso()),
-                )
-            if "006_app_config" not in applied:
-                _apply_app_config_migration(connection)
-                connection.execute(
-                    "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
-                    ("006_app_config", utc_now_iso()),
-                )
 
 
 class SqliteWorkspaceRepository(_SqliteStore):
@@ -1668,6 +1225,61 @@ class SqliteWorkerStore(_SqliteStore):
 
 
 class SqliteAnalyticsStore(_SqliteStore):
+    def record_scrapeops_usage(
+        self,
+        *,
+        ledger_id: str,
+        payload: dict[str, Any],
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        route: str = "",
+        source: str = "",
+    ) -> None:
+        record = dict(payload or {})
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO scrapeops_usage_ledger ("
+                    "ledger_id, source_id, target_url, method, request_mode, target_status_code, "
+                    "provider_status_code, latency_ms, billed_credits_actual, billed_credits_estimated, "
+                    "usable_job_count, error_category, recorded_at, user_id, workspace_id, run_id, route, source"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    str(ledger_id or "").strip(),
+                    str(record.get("source_id") or "").strip(),
+                    str(record.get("target_url") or "").strip(),
+                    str(record.get("method") or "scrapeops_proxy").strip() or "scrapeops_proxy",
+                    str(record.get("request_mode") or "basic").strip() or "basic",
+                    int(record.get("target_status_code") or 0),
+                    int(record.get("provider_status_code") or 0),
+                    max(0, int(record.get("latency_ms") or 0)),
+                    None if record.get("billed_credits_actual") is None else int(record["billed_credits_actual"]),
+                    max(0, int(record.get("billed_credits_estimated") or 0)),
+                    max(0, int(record.get("usable_job_count") or 0)),
+                    str(record.get("error_category") or "").strip(),
+                    str(record.get("recorded_at") or utc_now_iso()).strip(),
+                    str(user_id or "").strip(),
+                    str(workspace_id or "").strip(),
+                    str(run_id or "").strip(),
+                    str(route or "").strip(),
+                    str(source or "").strip(),
+                ),
+            )
+
+    def get_spend_by_source(self, since: datetime | str) -> dict[str, int]:
+        since_value = since.isoformat() if isinstance(since, datetime) else str(since or "").strip()
+        with self._connect() as connection:
+            rows = connection.execute(
+                (
+                    "SELECT source_id, COALESCE(SUM(billed_credits_actual), 0) AS billed_credits_actual "
+                    "FROM scrapeops_usage_ledger WHERE recorded_at >= ? GROUP BY source_id"
+                ),
+                (since_value,),
+            ).fetchall()
+        return {str(row["source_id"] or ""): int(row["billed_credits_actual"] or 0) for row in rows}
+
     def emit_event(
         self,
         *,
@@ -1809,6 +1421,309 @@ class SqliteAnalyticsStore(_SqliteStore):
             row = connection.execute(query, tuple(params)).fetchone()
 
         return int(row["total"] if row else 0)
+
+
+class SqliteSourcePolicyStore(_SqliteStore):
+    def ensure_sites(self, sites: Iterable[dict[str, Any]], *, site_type: str) -> None:
+        rows = [
+            (str(item.get("url") or "").strip(), str(site_type or "company").strip() or "company", utc_now_iso())
+            for item in sites
+            if str(item.get("url") or "").strip()
+        ]
+        if not rows:
+            return
+        with self._connect() as connection:
+            connection.executemany(
+                (
+                    "INSERT INTO site_source_policy (site_url, site_type, site_state, updated_at) "
+                    "VALUES (?, ?, 'pending', ?) ON CONFLICT(site_url) DO NOTHING"
+                ),
+                rows,
+            )
+
+    def set_site_state(self, site_url: str, site_state: str, *, site_type: str = "company") -> None:
+        normalized_state = str(site_state or "").strip()
+        if normalized_state not in _SITE_STATES:
+            raise ValueError(f"site_state must be one of: {sorted(_SITE_STATES)}")
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO site_source_policy (site_url, site_type, site_state, updated_at) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(site_url) DO UPDATE SET site_type=excluded.site_type, "
+                    "site_state=excluded.site_state, updated_at=excluded.updated_at"
+                ),
+                (str(site_url or "").strip(), str(site_type or "company").strip(), normalized_state, utc_now_iso()),
+            )
+
+    def mark_workspace_selected(self, site_urls: Iterable[str], *, site_type: str) -> dict[str, str]:
+        transitions: dict[str, str] = {}
+        for site_url in {str(item or "").strip() for item in site_urls if str(item or "").strip()}:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT site_state FROM site_source_policy WHERE site_url = ?",
+                    (site_url,),
+                ).fetchone()
+                previous_state = str(row["site_state"] or "") if row else "pending"
+                if previous_state not in {"pending", "paused"}:
+                    continue
+                connection.execute(
+                    (
+                        "INSERT INTO site_source_policy (site_url, site_type, site_state, updated_at) "
+                        "VALUES (?, ?, 'selected', ?) ON CONFLICT(site_url) DO UPDATE SET "
+                        "site_state='selected', updated_at=excluded.updated_at"
+                    ),
+                    (site_url, str(site_type or "company").strip(), utc_now_iso()),
+                )
+            transitions[site_url] = f"{previous_state}->selected"
+        return transitions
+
+    def filter_crawlable_sites(
+        self,
+        sites: Iterable[dict[str, Any]],
+        *,
+        explicitly_triggered_urls: Iterable[str] = (),
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        explicit_urls = {str(item or "").strip() for item in explicitly_triggered_urls if str(item or "").strip()}
+        eligible: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        with self._connect() as connection:
+            for site in sites:
+                item = dict(site or {})
+                site_url = str(item.get("url") or "").strip()
+                row = connection.execute(
+                    "SELECT site_state, consecutive_zero_yield_runs FROM site_source_policy WHERE site_url = ?",
+                    (site_url,),
+                ).fetchone()
+                site_state = str(row["site_state"] or "pending") if row else "pending"
+                item["site_state"] = site_state
+                item["consecutive_zero_yield_runs"] = int(row["consecutive_zero_yield_runs"] or 0) if row else 0
+                if site_state in {"hot", "selected"} or site_url in explicit_urls:
+                    eligible.append(item)
+                else:
+                    skipped.append(item)
+        return eligible, skipped
+
+    def record_site_yield(self, site_url: str, *, jobs_found: int) -> dict[str, Any]:
+        normalized_url = str(site_url or "").strip()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT site_state, consecutive_zero_yield_runs FROM site_source_policy WHERE site_url = ?",
+                (normalized_url,),
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    "INSERT INTO site_source_policy (site_url, site_state, updated_at) VALUES (?, 'pending', ?)",
+                    (normalized_url, utc_now_iso()),
+                )
+                previous_state = "pending"
+                zeros = 0
+            else:
+                previous_state = str(row["site_state"] or "pending")
+                zeros = int(row["consecutive_zero_yield_runs"] or 0)
+            normalized_jobs_found = max(0, int(jobs_found or 0))
+            if normalized_jobs_found > 0:
+                next_state = "selected" if previous_state == "low_yield" else previous_state
+                zeros = 0
+            else:
+                zeros += 1
+                next_state = "low_yield" if zeros >= 3 and previous_state not in {"paused", "pending"} else previous_state
+            connection.execute(
+                (
+                    "UPDATE site_source_policy SET site_state = ?, consecutive_zero_yield_runs = ?, "
+                    "last_jobs_found = ?, last_crawled_at = ?, updated_at = ? WHERE site_url = ?"
+                ),
+                (next_state, zeros, normalized_jobs_found, utc_now_iso(), utc_now_iso(), normalized_url),
+            )
+        return {
+            "site_url": normalized_url,
+            "previous_state": previous_state,
+            "site_state": next_state,
+            "consecutive_zero_yield_runs": zeros,
+            "jobs_found": normalized_jobs_found,
+        }
+
+    def get_site_policy(self, site_url: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                (
+                    "SELECT site_url, site_type, site_state, consecutive_zero_yield_runs, "
+                    "last_jobs_found, last_crawled_at, updated_at FROM site_source_policy WHERE site_url = ?"
+                ),
+                (str(site_url or "").strip(),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_seen_job_urls(self, job_urls: Iterable[str], *, workspace_id: str = "") -> set[str]:
+        normalized_urls = {
+            canonicalize_url(str(item or "").strip()) or str(item or "").strip()
+            for item in job_urls
+            if str(item or "").strip()
+        }
+        normalized_urls = {item for item in normalized_urls if item}
+        if not normalized_urls:
+            return set()
+        seen: set[str] = set()
+        with self._connect() as connection:
+            values = list(normalized_urls)
+            for offset in range(0, len(values), 500):
+                chunk = values[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                params = list(chunk)
+                query = f"SELECT job_url FROM site_job_url_history WHERE job_url IN ({placeholders})"
+                rows = connection.execute(query, tuple(params)).fetchall()
+                seen.update(str(row["job_url"] or "") for row in rows)
+        return seen
+
+    def get_cached_job_postings(self, job_urls: Iterable[str]) -> dict[str, dict[str, Any]]:
+        normalized_urls = {
+            canonicalize_url(str(item or "").strip()) or str(item or "").strip()
+            for item in job_urls
+            if str(item or "").strip()
+        }
+        normalized_urls = {item for item in normalized_urls if item}
+        if not normalized_urls:
+            return {}
+        postings: dict[str, dict[str, Any]] = {}
+        with self._connect() as connection:
+            values = list(normalized_urls)
+            for offset in range(0, len(values), 500):
+                chunk = values[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    (
+                        "SELECT job_url, site_url, source_group_url, job_id, title, company, location_raw, "
+                        "last_status, active_status, last_seen_at, last_verified_at, payload_json "
+                        f"FROM site_job_url_history WHERE job_url IN ({placeholders})"
+                    ),
+                    tuple(chunk),
+                ).fetchall()
+                for row in rows:
+                    if str(row["active_status"] or "").strip() == "inactive":
+                        continue
+                    job_url = str(row["job_url"] or "").strip()
+                    if not job_url:
+                        continue
+                    payload = _deserialize(row["payload_json"], {})
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    posting = {
+                        **payload,
+                        "job_url": job_url,
+                        "apply_link": str(payload.get("apply_link") or job_url),
+                        "source_url": str(payload.get("source_url") or job_url),
+                        "link": str(payload.get("link") or job_url),
+                        "career_site_url": str(payload.get("career_site_url") or row["site_url"] or ""),
+                        "job_id": str(payload.get("job_id") or row["job_id"] or ""),
+                        "title": str(payload.get("title") or row["title"] or ""),
+                        "company": str(payload.get("company") or row["company"] or ""),
+                        "location_raw": str(payload.get("location_raw") or row["location_raw"] or ""),
+                        "source_type": str(payload.get("source_type") or "company_career_site"),
+                        "portal": str(payload.get("portal") or "company_career_site"),
+                        "public_job_index_reused": True,
+                        "public_job_index_last_seen_at": str(row["last_seen_at"] or ""),
+                        "public_job_index_last_verified_at": str(row["last_verified_at"] or ""),
+                        "public_job_index_last_status": str(row["last_status"] or ""),
+                    }
+                    postings[job_url] = posting
+        return postings
+
+    @staticmethod
+    def _job_url_attempt_active_status(status: str) -> str:
+        normalized_status = str(status or "").strip()
+        if normalized_status in {"accepted", "cache_reused", "keyword_filtered", "old_posting"}:
+            return "active"
+        if normalized_status == "inactive":
+            return "inactive"
+        return "unknown"
+
+    def record_job_url_attempts(
+        self,
+        records: Iterable[dict[str, Any]],
+        *,
+        run_id: str = "",
+        workspace_id: str = "",
+    ) -> None:
+        now = utc_now_iso()
+        rows = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            job_url = canonicalize_url(str(record.get("job_url") or "").strip()) or str(record.get("job_url") or "").strip()
+            if not job_url:
+                continue
+            status = str(record.get("status") or record.get("last_status") or "").strip()
+            payload = record.get("payload")
+            if not isinstance(payload, dict):
+                payload = {
+                    key: value
+                    for key, value in dict(record).items()
+                    if key
+                    not in {
+                        "status",
+                        "last_status",
+                        "site_url",
+                        "source_group_url",
+                        "workspace_id",
+                        "run_id",
+                        "payload",
+                    }
+                }
+            normalized_payload = {
+                **dict(payload or {}),
+                "job_url": job_url,
+                "apply_link": str(dict(payload or {}).get("apply_link") or job_url),
+                "source_url": str(dict(payload or {}).get("source_url") or job_url),
+                "link": str(dict(payload or {}).get("link") or job_url),
+            }
+            active_status = self._job_url_attempt_active_status(status)
+            last_verified_at = now if active_status == "active" else ""
+            rows.append(
+                (
+                    job_url,
+                    str(record.get("site_url") or "").strip(),
+                    str(record.get("source_group_url") or record.get("site_url") or "").strip(),
+                    str(workspace_id or record.get("workspace_id") or "").strip(),
+                    str(run_id or record.get("run_id") or "").strip(),
+                    str(normalized_payload.get("job_id") or record.get("job_id") or "").strip(),
+                    str(normalized_payload.get("title") or record.get("title") or "").strip(),
+                    str(normalized_payload.get("company") or record.get("company") or "").strip(),
+                    str(normalized_payload.get("location_raw") or record.get("location_raw") or "").strip(),
+                    status,
+                    active_status,
+                    now,
+                    now,
+                    last_verified_at,
+                    _serialize(normalized_payload),
+                )
+            )
+        if not rows:
+            return
+        with self._connect() as connection:
+            connection.executemany(
+                (
+                    "INSERT INTO site_job_url_history ("
+                    "job_url, site_url, source_group_url, workspace_id, run_id, job_id, title, company, "
+                    "location_raw, last_status, active_status, first_seen_at, last_seen_at, last_verified_at, payload_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(job_url) DO UPDATE SET "
+                    "site_url=excluded.site_url, "
+                    "source_group_url=excluded.source_group_url, "
+                    "workspace_id=excluded.workspace_id, "
+                    "run_id=excluded.run_id, "
+                    "job_id=excluded.job_id, "
+                    "title=excluded.title, "
+                    "company=excluded.company, "
+                    "location_raw=excluded.location_raw, "
+                    "last_status=excluded.last_status, "
+                    "active_status=excluded.active_status, "
+                    "last_seen_at=excluded.last_seen_at, "
+                    "last_verified_at=CASE "
+                    "WHEN excluded.last_verified_at != '' THEN excluded.last_verified_at "
+                    "ELSE site_job_url_history.last_verified_at END, "
+                    "payload_json=excluded.payload_json"
+                ),
+                rows,
+            )
 
 
 class SqliteConfigStore(_SqliteStore):

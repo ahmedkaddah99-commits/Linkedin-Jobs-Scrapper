@@ -15,6 +15,9 @@ fi
 
 cd "$PROJECT_DIR"
 
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-deu
+
 if [ ! -d "$INSTALL_DIR/.venv" ]; then
   python3 -m venv "$INSTALL_DIR/.venv"
 fi

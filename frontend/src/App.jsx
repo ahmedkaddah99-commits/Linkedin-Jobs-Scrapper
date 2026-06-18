@@ -1,5 +1,5 @@
 import { RedirectToSignIn, Show } from "@clerk/react";
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Component, Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import AppShell from "./components/AppShell";
 import ConnectionPanel from "./components/ConnectionPanel";
@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
 const DocumentsPage = lazy(() => import("./pages/ArtifactsPage"));
 const DocumentAICanvasGuidePage = lazy(() => import("./pages/DocumentAICanvasGuidePage"));
+const JobDescriptionPage = lazy(() => import("./pages/JobDescriptionPage"));
 const JobWorkspacePage = lazy(() => import("./pages/JobWorkspacePage"));
 const PricingPage = lazy(() => import("./pages/PricingPage"));
 const ReferralsPage = lazy(() => import("./pages/ReferralsPage"));
@@ -38,6 +39,44 @@ function RouteLoadingFallback() {
       </div>
     </div>
   );
+}
+
+class RouteErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("Route render failed", error, info);
+  }
+
+  render() {
+    if (!this.state.error) {
+      return this.props.children;
+    }
+    return (
+      <section className="rounded-2xl border border-error/20 bg-surface-container-lowest p-8 shadow-soft">
+        <h1 className="font-headline text-2xl font-bold text-on-surface">
+          This page could not be displayed
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-on-surface-variant">
+          Runr hit an unexpected page error. Reload the page to retry without losing saved data.
+        </p>
+        <button
+          className="mt-5 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+          onClick={() => window.location.reload()}
+          type="button"
+        >
+          Reload page
+        </button>
+      </section>
+    );
+  }
 }
 
 function RequireAdminRoute({ children }) {
@@ -96,54 +135,59 @@ function AuthenticatedApp() {
   }, [isConnected, location.hash, location.pathname, location.search, userId]);
 
   return (
-    <AppShell>
+    <AppShell muteSidebar={!isConnected}>
       <UpgradeModalHost />
-      <Suspense fallback={<RouteLoadingFallback />}>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/dashboard" element={<Navigate replace to="/" />} />
-          <Route path="/workspaces" element={<WorkspacesPage />} />
-          <Route path="/quick-apply" element={<QuickApplyPage />} />
-          <Route path="/runs" element={<RunsPage />} />
-          <Route path="/runs/:runId" element={<RunDetailPage />} />
-          <Route path="/job-workspaces/:runId/:jobId" element={<JobWorkspacePage />} />
-          <Route path="/review-queue" element={<Navigate replace to="/tracker" />} />
-          <Route path="/tracker" element={<TrackerPage />} />
-          <Route path="/documents" element={<DocumentsPage />} />
-          <Route path="/documents/ai-canvas-guide" element={<DocumentAICanvasGuidePage />} />
-          <Route path="/cv-studio" element={<CvStudioPage />} />
-          <Route path="/artifacts" element={<Navigate replace to="/documents" />} />
-          <Route path="/referrals" element={<ReferralsPage />} />
-          <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/pricing" element={<PricingPage />} />
-          <Route
-            path="/admin"
-            element={(
-              <RequireAdminRoute>
-                <AdminPage />
-              </RequireAdminRoute>
-            )}
-          />
-          <Route
-            path="/admin/events"
-            element={(
-              <RequireAdminRoute>
-                <AdminEventsPage />
-              </RequireAdminRoute>
-            )}
-          />
-          <Route
-            path="/admin/scrapeops"
-            element={(
-              <RequireAdminRoute>
-                <AdminScrapeOpsPage />
-              </RequireAdminRoute>
-            )}
-          />
-          <Route path="*" element={<Navigate replace to="/" />} />
-        </Routes>
-      </Suspense>
+      <RouteErrorBoundary key={`${location.pathname}${location.search}`}>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/dashboard" element={<Navigate replace to="/" />} />
+            <Route path="/workspaces" element={<WorkspacesPage />} />
+            <Route path="/quick-apply" element={<QuickApplyPage />} />
+            <Route path="/runs" element={<RunsPage />} />
+            <Route path="/runs/:runId" element={<RunDetailPage />} />
+            <Route path="/job-workspaces/:runId/:jobId" element={<JobWorkspacePage />} />
+            <Route path="/review-queue" element={<Navigate replace to="/tracker" />} />
+            <Route path="/tracker" element={<TrackerPage />} />
+            <Route path="/tracker/job-descriptions/:reviewId" element={<JobDescriptionPage />} />
+            <Route path="/documents" element={<DocumentsPage />} />
+            <Route path="/career-memory" element={<Navigate replace to="/documents?view=memory" />} />
+            <Route path="/career-memory/guide" element={<DocumentAICanvasGuidePage />} />
+            <Route path="/documents/ai-canvas-guide" element={<Navigate replace to="/career-memory/guide" />} />
+            <Route path="/cv-studio" element={<CvStudioPage />} />
+            <Route path="/artifacts" element={<Navigate replace to="/documents" />} />
+            <Route path="/referrals" element={<ReferralsPage />} />
+            <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/pricing" element={<PricingPage />} />
+            <Route
+              path="/admin"
+              element={(
+                <RequireAdminRoute>
+                  <AdminPage />
+                </RequireAdminRoute>
+              )}
+            />
+            <Route
+              path="/admin/events"
+              element={(
+                <RequireAdminRoute>
+                  <AdminEventsPage />
+                </RequireAdminRoute>
+              )}
+            />
+            <Route
+              path="/admin/scrapeops"
+              element={(
+                <RequireAdminRoute>
+                  <AdminScrapeOpsPage />
+                </RequireAdminRoute>
+              )}
+            />
+            <Route path="*" element={<Navigate replace to="/" />} />
+          </Routes>
+        </Suspense>
+      </RouteErrorBoundary>
     </AppShell>
   );
 }
@@ -159,7 +203,7 @@ function ProtectedAppRoute() {
 function PublicAuthRoute({ mode }) {
   return (
     <Show fallback={<Navigate replace to="/" />} when="signed-out">
-      <AppShell>
+      <AppShell muteSidebar>
         <ConnectionPanel mode={mode} />
       </AppShell>
     </Show>

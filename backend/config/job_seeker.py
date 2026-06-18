@@ -13,6 +13,7 @@ DEFAULT_CONFIG_PATH = Path(DEFAULT_USER_CONFIG_DIR) / DEFAULT_CONFIG_FILE_NAME
 LEGACY_CONFIG_PATH = Path(DEFAULT_CONFIG_FILE_NAME)
 DEFAULT_ENV_PATH = Path(DEFAULT_USER_CONFIG_DIR) / ".env"
 LEGACY_ENV_PATH = Path(".env")
+DEV_ENV_PATH = Path("dev.env")
 
 
 DEFAULT_JOB_SEEKER_CONFIG = {
@@ -260,14 +261,20 @@ def load_job_seeker_config(path_override: str = "") -> dict:
 
 def load_project_dotenv(*, override: bool = False) -> None:
     try:
-        from dotenv import load_dotenv
+        from dotenv import dotenv_values
     except Exception:
         return
 
-    if DEFAULT_ENV_PATH.exists() and DEFAULT_ENV_PATH.is_file():
-        load_dotenv(dotenv_path=DEFAULT_ENV_PATH, override=override)
-    if LEGACY_ENV_PATH.exists() and LEGACY_ENV_PATH.is_file():
-        load_dotenv(dotenv_path=LEGACY_ENV_PATH, override=override)
+    injected_names = set(os.environ)
+    dotenv_paths = (LEGACY_ENV_PATH, DEV_ENV_PATH, DEFAULT_ENV_PATH)
+    for dotenv_path in dotenv_paths:
+        if not dotenv_path.exists() or not dotenv_path.is_file():
+            continue
+        for name, value in dotenv_values(dotenv_path=dotenv_path).items():
+            if value is None:
+                continue
+            if override or name not in injected_names:
+                os.environ[name] = value
 
 
 def cfg_get(config: dict, path: Iterable[str], default=None):

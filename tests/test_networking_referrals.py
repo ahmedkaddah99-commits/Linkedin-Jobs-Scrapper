@@ -1,4 +1,7 @@
+import json
+import os
 import unittest
+from unittest.mock import patch
 
 from backend.capabilities.networking import (
     build_relevant_people_discovery,
@@ -7,6 +10,7 @@ from backend.capabilities.networking import (
     merge_referral_contacts,
     parse_referral_contacts_csv,
 )
+from backend.capabilities.networking import discovery as discovery_module
 from backend.capabilities.networking.outreach import company_names_safely_match
 from backend.domain.models import JobRecord, ReferralContactRecord
 
@@ -549,6 +553,293 @@ class ReferralNetworkingTests(unittest.TestCase):
             "https://www.linkedin.com/in/jane-hiringmanager",
         )
         self.assertIn("Jane Hiringmanager ACME GmbH Analytics Manager Berlin", hiring_manager["searchQueries"])
+
+    def test_relevant_people_discovery_reports_not_configured_when_live_discovery_is_disabled(self):
+        with patch.dict(os.environ, {"RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": ""}, clear=False):
+            payload = build_relevant_people_discovery(
+                profile={"summary": "Product owner focused on CRM and Microsoft Dynamics."},
+                job=JobRecord(
+                    job_id="job_live_disabled",
+                    title="Product Owner Microsoft Dynamics (w/m/d)",
+                    company="Smarketer Group",
+                    location_raw="Berlin",
+                    description_text="Product Owner Microsoft Dynamics role in Berlin.",
+                ),
+                run_id="run_live_disabled",
+                workspace_id="workspace_live_disabled",
+            )
+
+        self.assertEqual(payload["peopleDiscoveryStatus"], "not_configured")
+        self.assertIn("Live networking discovery is disabled", payload["error"])
+        self.assertEqual(payload["provider"]["search"], "offline_fallback")
+        self.assertEqual(payload["publicProfileCandidates"], [])
+        self.assertEqual(
+            {category: len(people) for category, people in payload["categories"].items()},
+            {"hiring_manager": 0, "potential_colleague": 0, "executive": 0},
+        )
+
+    def test_relevant_people_discovery_reports_failed_when_public_search_is_blocked(self):
+        def blocked_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):
+            raise RuntimeError("DuckDuckGo returned an anti-bot challenge instead of search results.")
+
+        def fake_ai_provider(task, prompt, system_prompt):
+            if task in {"pass_one_queries", "pass_two_queries"}:
+                return {
+                    "query_plans": [
+                        {
+                            "query": 'site:linkedin.com/in "Sunday Natural" product manager',
+                            "lane": "direct_hiring_chain",
+                            "objective": "Find likely product leadership.",
+                        }
+                    ]
+                }
+            return {"candidates": []}
+
+        payload = build_relevant_people_discovery(
+            profile={"summary": "Product manager focused on experimentation."},
+            job=JobRecord(
+                job_id="job_search_blocked",
+                title="CRO & A/B Testing Product Manager (all genders)",
+                company="Sunday Natural",
+                location_raw="Berlin",
+                description_text="CRO and A/B testing product role in Berlin.",
+            ),
+            run_id="run_search_blocked",
+            workspace_id="workspace_search_blocked",
+            search_provider=blocked_search_provider,
+            ai_provider=fake_ai_provider,
+        )
+
+        self.assertEqual(payload["peopleDiscoveryStatus"], "failed")
+        self.assertIn("Public profile search failed", payload["error"])
+        self.assertEqual(payload["lastCompletedAt"], "")
+        self.assertTrue(
+            any(str(warning).startswith("search_failed_pass_") for warning in payload["warnings"])
+        )
+
+    def test_duckduckgo_search_raises_when_anomaly_challenge_is_returned(self):
+        class FakeResponse:
+            status_code = 202
+            text = (
+                "<html><body>"
+                '<form class="anomaly-modal">'
+                '<img src="../assets/anomaly/images/challenge/example.jpg">'
+                "</form>"
+                "</body></html>"
+            )
+
+            def raise_for_status(self):
+                return None
+
+        class FakeSession:
+            trust_env = True
+
+            def get(self, *args, **kwargs):
+                return FakeResponse()
+
+        with patch.object(discovery_module.requests, "Session", return_value=FakeSession()):
+            with self.assertRaisesRegex(RuntimeError, "anti-bot challenge"):
+                discovery_module._search_duckduckgo_html("Sunday Natural product manager")
+
+    def test_live_target_contact_discovery_uses_scrapeops_search_when_configured(self):
+        html = (
+            '<html><body><div class="result">'
+            '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fde.linkedin.com%2Fin%2Fstefania-quagliuolo-7100761a6">'
+            "Stefania Quagliuolo - Product Manager in Product Development @ Sunday Natural"
+            "</a>"
+            '<a class="result__snippet">Product Manager in Product Development at Sunday Natural in Berlin.</a>'
+            "</div></body></html>"
+        )
+
+        class FakeResponse:
+            status_code = 200
+            text = json.dumps(
+                {
+                    "status_code": 200,
+                    "content_type": "text/html",
+                    "body": html,
+                    "sops_api_credits": 1,
+                }
+            )
+
+            def raise_for_status(self):
+                return None
+
+        def fake_ai_provider(task, prompt, system_prompt):
+            if task in {"pass_one_queries", "pass_two_queries"}:
+                return {
+                    "query_plans": [
+                        {
+                            "query": 'site:linkedin.com/in "Sunday Natural" product manager',
+                            "lane": "direct_hiring_chain",
+                            "objective": "Find likely product leadership.",
+                        }
+                    ]
+                }
+            return {"candidates": []}
+
+        with patch.dict(
+            os.environ,
+            {
+                "RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": "1",
+                "SCRAPEOPS_API_KEY": "test-scrapeops-key",
+            },
+            clear=False,
+        ), patch.object(discovery_module.requests, "get", return_value=FakeResponse()) as request_mock:
+            payload = build_target_contact_discovery(
+                profile={"summary": "Product manager focused on experimentation."},
+                job=JobRecord(
+                    job_id="job_scrapeops_search",
+                    title="CRO & A/B Testing Product Manager",
+                    company="Sunday Natural",
+                    location_raw="Berlin",
+                ),
+                ai_provider=fake_ai_provider,
+            )
+
+        self.assertEqual(payload["provider"]["search"], "scrapeops_duckduckgo_html")
+        self.assertGreaterEqual(payload["passes"][0]["result_count"], 1)
+        self.assertEqual(
+            payload["passes"][0]["results_preview"][0]["url"],
+            "https://de.linkedin.com/in/stefania-quagliuolo-7100761a6",
+        )
+        request_params = request_mock.call_args.kwargs["params"]
+        self.assertEqual(request_params["api_key"], "test-scrapeops-key")
+        self.assertIn("html.duckduckgo.com", request_params["url"])
+
+    def test_live_target_contact_discovery_does_not_call_deepseek_without_ai_opt_in(self):
+        def fake_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):
+            return [
+                {
+                    "title": "Jane Product - Product Manager - ACME GmbH | LinkedIn",
+                    "url": "https://www.linkedin.com/in/jane-product",
+                    "snippet": "Product Manager at ACME GmbH in Berlin.",
+                }
+            ][:max_results]
+
+        with patch.dict(
+            os.environ,
+            {
+                "RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": "1",
+                "RUNR_ENABLE_NETWORKING_DISCOVERY_AI": "",
+                "DEEPSEEK_API_KEY": "test-deepseek-key",
+            },
+            clear=False,
+        ), patch.object(discovery_module, "_call_live_deepseek_json") as deepseek_mock:
+            payload = build_target_contact_discovery(
+                profile={"summary": "Product manager focused on experimentation."},
+                job=JobRecord(
+                    job_id="job_no_ai_opt_in",
+                    title="Product Manager",
+                    company="ACME GmbH",
+                    location_raw="Berlin",
+                ),
+                search_provider=fake_search_provider,
+            )
+
+        deepseek_mock.assert_not_called()
+        self.assertEqual(payload["provider"]["query_planner"], "heuristic_fallback")
+        self.assertEqual(payload["provider"]["resolver"], "heuristic_fallback")
+        self.assertGreaterEqual(payload["passes"][0]["result_count"], 1)
+
+    def test_relevant_people_discovery_does_not_promote_job_pages_as_people(self):
+        def fake_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):
+            return [
+                {
+                    "title": "Testing Manager - Quality & Regulatory Compliance - LinkedIn",
+                    "url": "https://www.linkedin.com/jobs/view/testing-manager-at-sunday-natural-4332567182",
+                    "snippet": "Sunday Natural is hiring a Testing Manager in Berlin.",
+                },
+                {
+                    "title": "Testing Manager - Quality & Regulatory Compliance - Berlin",
+                    "url": "https://de.jobrapido.com/jobpreview/6872416935284310016",
+                    "snippet": "Job page for Sunday Natural in Berlin.",
+                },
+            ][:max_results]
+
+        def fake_ai_provider(task, prompt, system_prompt):
+            if task in {"pass_one_queries", "pass_two_queries"}:
+                return {
+                    "query_plans": [
+                        {
+                            "query": '"Sunday Natural" "Testing Manager" Berlin',
+                            "lane": "direct_hiring_chain",
+                            "objective": "Find relevant product leadership.",
+                        }
+                    ]
+                }
+            return {
+                "candidates": [
+                    {
+                        "person_name": "Testing Manager",
+                        "lane": "direct_hiring_chain",
+                        "resolved_title": "Quality & Regulatory Compliance",
+                        "resolved_company": "Sunday Natural",
+                        "source_urls": ["https://de.jobrapido.com/jobpreview/6872416935284310016"],
+                        "source_titles": ["Testing Manager - Quality & Regulatory Compliance - Berlin"],
+                        "evidence": ["Job posting, not a public person profile."],
+                    }
+                ]
+            }
+
+        payload = build_relevant_people_discovery(
+            profile={"summary": "Product manager focused on experimentation."},
+            job=JobRecord(
+                job_id="job_pages_only",
+                title="CRO & A/B Testing Product Manager",
+                company="Sunday Natural",
+                location_raw="Berlin",
+            ),
+            search_provider=fake_search_provider,
+            ai_provider=fake_ai_provider,
+        )
+
+        self.assertEqual(payload["peopleDiscoveryStatus"], "completed")
+        self.assertEqual(
+            {category: len(people) for category, people in payload["categories"].items()},
+            {"hiring_manager": 0, "potential_colleague": 0, "executive": 0},
+        )
+
+    def test_ai_query_plans_are_augmented_with_broad_company_profile_search(self):
+        def fake_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):
+            if query == 'site:linkedin.com/in "ACME GmbH" "Berlin"':
+                return [
+                    {
+                        "title": "Jane Product - Product Manager - ACME GmbH | LinkedIn",
+                        "url": "https://www.linkedin.com/in/jane-product",
+                        "snippet": "Product Manager at ACME GmbH in Berlin.",
+                    }
+                ]
+            return []
+
+        def narrow_ai_provider(task, prompt, system_prompt):
+            if task in {"pass_one_queries", "pass_two_queries"}:
+                return {
+                    "query_plans": [
+                        {
+                            "query": '"ACME GmbH" "impossible exact phrase"',
+                            "lane": "direct_hiring_chain",
+                            "objective": "Overly narrow generated search.",
+                        }
+                    ]
+                }
+            return {"candidates": []}
+
+        payload = build_target_contact_discovery(
+            profile={"summary": "Product manager focused on experimentation."},
+            job=JobRecord(
+                job_id="job_augmented_query",
+                title="Product Manager",
+                company="ACME GmbH",
+                location_raw="Berlin",
+            ),
+            search_provider=fake_search_provider,
+            ai_provider=narrow_ai_provider,
+        )
+
+        pass_one_queries = [item["query"] for item in payload["passes"][0]["queries"]]
+        self.assertIn('site:linkedin.com/in "ACME GmbH" "Berlin"', pass_one_queries)
+        self.assertEqual(payload["passes"][0]["result_count"], 1)
 
     def test_target_contact_discovery_runs_two_pass_fallback_without_ai(self):
         def fake_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):

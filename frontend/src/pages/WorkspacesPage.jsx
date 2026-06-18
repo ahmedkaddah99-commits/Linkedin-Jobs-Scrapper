@@ -1,17 +1,25 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { CvExportPreview } from "../components/CvExportPreview";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { FocusedWorkspaceDocumentsPanel } from "../components/workspaces/FocusedWorkspaceDocumentsPanel";
+import { WorkspaceCvBindingSection, buildNextSectionDecisions } from "../components/workspaces/WorkspaceCvBindingSection";
+import { WorkspaceDocumentPreviewSection } from "../components/workspaces/WorkspaceDocumentPreviewSection";
+import {
+  WorkspaceScheduleBadges,
+  WorkspaceScheduleEditor,
+  WorkspaceSchedulePanel,
+  useWorkspaceScheduleEditor,
+} from "../components/workspaces/WorkspaceSchedule";
+import { workspaceRunSchedule } from "../components/workspaces/workspaceFormatters";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
+import { useWorkspaceCityOptions } from "../hooks/useWorkspaceCityOptions";
+import { deriveFocusedWorkspaceCvDocuments, useWorkspaceCvAssets } from "../hooks/useWorkspaceCvAssets";
+import { useWorkspaceRunActions } from "../hooks/useWorkspaceRunActions";
 import { getApiErrorDetails, getApiErrorMessage } from "../lib/api";
-import { buildWorkspacePreviewDocuments } from "../lib/cvStudio";
 import { labelize } from "../lib/formatters";
 import {
   deriveDefaultCities,
   getAllCountryOptions,
-  getCountryByCode,
-  hasCityDataset,
-  loadCityOptions,
 } from "../lib/locationOptions";
 
 const DEFAULT_FLOW_ID = "tailored_documents";
@@ -140,14 +148,6 @@ const EMPTY_ACTION_STATE = {
   error: "",
   details: [],
 };
-const EMPTY_SCHEDULE_EDITOR_STATE = {
-  workspaceId: "",
-  enabled: false,
-  intervalDays: "7",
-  saving: false,
-  error: "",
-};
-
 const EMPTY_BUILDER_FORM = {
   name: "",
   description: "",
@@ -333,15 +333,6 @@ function parseLineList(text) {
   return parseDelimitedList(text);
 }
 
-function buildSourceValidationPayload({ flowId, sourceIds, settings, workspaceId = "" }) {
-  return {
-    flow_id: flowId,
-    source_ids: [...(sourceIds || [])],
-    settings: { ...(settings || {}) },
-    ...(workspaceId ? { workspace_id: workspaceId } : {}),
-  };
-}
-
 function formatCompanySiteEntries(entries) {
   if (!Array.isArray(entries)) return "Not set";
   const lines = entries
@@ -356,43 +347,6 @@ function formatCompanySiteEntries(entries) {
     })
     .filter(Boolean);
   return lines.length ? lines.join("\n") : "Not set";
-}
-
-function formatDateTime(value) {
-  if (!value) {
-    return "Unknown";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return String(value);
-  }
-  return parsed.toLocaleString([], {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-function workspaceRunSchedule(workspace) {
-  const rawSchedule =
-    workspace?.schedule && typeof workspace.schedule === "object"
-      ? workspace.schedule
-      : workspace?.metadata?.run_schedule || {};
-  const parsedInterval = Number.parseInt(rawSchedule.interval_days, 10);
-  const intervalDays = Number.isInteger(parsedInterval) && parsedInterval > 0 ? parsedInterval : 0;
-  const enabled = Boolean(rawSchedule.enabled) && intervalDays > 0;
-  return {
-    enabled,
-    intervalDays: enabled ? intervalDays : 0,
-    nextRunAt: String(rawSchedule.next_run_at || ""),
-    lastEnqueuedAt: String(rawSchedule.last_enqueued_at || ""),
-    lastRunId: String(rawSchedule.last_run_id || ""),
-    lastError: String(rawSchedule.last_error || ""),
-    lastErrorAt: String(rawSchedule.last_error_at || ""),
-  };
-}
-
-function scheduleIntervalLabel(intervalDays) {
-  return `Every ${intervalDays} day${intervalDays === 1 ? "" : "s"}`;
 }
 
 function portalOptionsForSelection(field, countryCodes, selectedValues) {
@@ -447,7 +401,7 @@ function TogglePill({ checked, label, onClick }) {
   );
 }
 
-function InfoHint({ content }) {
+function InfoHint({ content, placement = "auto" }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
   const popupRef = useRef(null);
@@ -482,8 +436,11 @@ function InfoHint({ content }) {
       }
       left = Math.max(viewportPadding, left);
 
-      let top = triggerRect.bottom + gap;
-      if (top + popupRect.height > window.innerHeight - viewportPadding) {
+      let top =
+        placement === "top"
+          ? triggerRect.top - popupRect.height - gap
+          : triggerRect.bottom + gap;
+      if (placement !== "top" && top + popupRect.height > window.innerHeight - viewportPadding) {
         top = triggerRect.top - popupRect.height - gap;
       }
       top = Math.max(viewportPadding, top);
@@ -503,7 +460,7 @@ function InfoHint({ content }) {
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [content, open]);
+  }, [content, open, placement]);
 
   return (
     <span
@@ -1304,10 +1261,10 @@ function FieldRenderer({ field, value, onChange, dynamicOptions = {}, formState 
 
 export default function WorkspacesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const focusedSectionId = searchParams.get("focus") || "";
   const { request, resolvePath } = useSession();
   const [actionState, setActionState] = useState(EMPTY_ACTION_STATE);
-  const [scheduleEditorState, setScheduleEditorState] = useState(EMPTY_SCHEDULE_EDITOR_STATE);
   const [builderState, setBuilderState] = useState({
     open: false,
     mode: "create",
@@ -1324,14 +1281,11 @@ export default function WorkspacesPage() {
     message: "",
     error: "",
   });
-  const [cityOptionsState, setCityOptionsState] = useState({
-    loading: false,
-    options: [],
-    selectedCountryCode: "",
-    missingDataset: false,
+  const [sectionDecisionState, setSectionDecisionState] = useState({
+    savingKey: "",
+    message: "",
+    error: "",
   });
-  const cityRequestRef = useRef(0);
-  const cityScopeRef = useRef("");
   const languageSyncSourceRef = useRef("");
 
   const {
@@ -1340,6 +1294,13 @@ export default function WorkspacesPage() {
     error,
     refresh,
   } = useApiResource(() => request("/workspaces?limit=100"), [request]);
+  const {
+    scheduleEditorState,
+    setScheduleEditorState,
+    openScheduleEditor,
+    closeScheduleEditor,
+    saveWorkspaceSchedule,
+  } = useWorkspaceScheduleEditor({ request, refresh, setActionState });
   const {
     data: builderCatalog,
     loading: builderLoading,
@@ -1438,54 +1399,35 @@ export default function WorkspacesPage() {
       }, {}),
     [availableConfigurationFields],
   );
-  const workspaceCvAssets = useMemo(
-    () =>
-      (cvAssetsPayload?.documents || [])
-        .filter((item) => item.asset_kind === "workspace_cv")
-        .map((item) => ({
-          value: item.asset_id,
-          label: item.display_name,
-          assetId: item.asset_id,
-          createdAt: item.created_at,
-          downloadUrl: item.download_url,
-          sourceOrigin: item.source_origin,
-          status: item.display_status || item.status || "ready",
-          previewProfile: item.preview_profile || null,
-        })),
-    [cvAssetsPayload?.documents],
-  );
-  const workspaceCvAssetIds = useMemo(
-    () => new Set(workspaceCvAssets.map((item) => item.value)),
-    [workspaceCvAssets],
-  );
+  const {
+    effectiveBrowserPreviewHtml,
+    effectiveDocumentPreviewDocuments,
+    effectiveLanguageLines,
+    mergedPreviewProfile,
+    selectedCvCustomSections,
+    selectedWorkspaceCvAsset,
+    selectedWorkspaceCvMissing,
+    workspaceCvAssetIds,
+    workspaceCvAssets,
+    workspaceCvAssetsLoaded,
+  } = useWorkspaceCvAssets({
+    cvAssetsPayload,
+    formSettings: form.settings,
+    settingsPayload,
+  });
   const selectedCountryCodes = useMemo(
     () => normalizeCountryCodeList(form.settings.country_codes, 1),
     [form.settings.country_codes],
   );
   const selectedCountryCodeForCity = selectedCountryCodes[0] || "";
-  const selectedCountryForCity = useMemo(
-    () => (selectedCountryCodeForCity ? getCountryByCode(selectedCountryCodeForCity) : null),
-    [selectedCountryCodeForCity],
-  );
-  const cityHelperText = useMemo(() => {
-    if (!selectedCountryCodes.length) {
-      return "Select a target country first to enable city suggestions.";
-    }
-    const fallbackCityLabel = selectedCountryForCity?.capital || "the selected country capital";
-    if (cityOptionsState.missingDataset) {
-      return `No packaged city list is available for ${selectedCountryForCity?.label || "this country"} yet. Leave this blank and Runr will use ${fallbackCityLabel}.`;
-    }
-    if (!cityOptionsState.loading && !cityOptionsState.options.length) {
-      return `No city suggestions loaded for ${selectedCountryForCity?.label || "this country"}. Leave this blank and Runr will use ${fallbackCityLabel}.`;
-    }
-    return "";
-  }, [
-    cityOptionsState.loading,
-    cityOptionsState.missingDataset,
-    cityOptionsState.options.length,
-    selectedCountryCodes.length,
-    selectedCountryForCity,
-  ]);
+  const updateCitiesSetting = useCallback((nextValue) => updateSetting("cities", nextValue), []);
+  const { cityHelperText, cityOptionsState, resetCityOptions } = useWorkspaceCityOptions({
+    builderOpen: builderState.open,
+    currentCities: form.settings.cities,
+    onCitiesChange: updateCitiesSetting,
+    selectedCountryCode: selectedCountryCodeForCity,
+    selectedCountryCodes,
+  });
   const dynamicFieldOptions = useMemo(
     () => ({
       all_country_options: allCountryOptions,
@@ -1508,7 +1450,6 @@ export default function WorkspacesPage() {
       workspaceCvAssets,
     ],
   );
-  const workspaceCvAssetsLoaded = cvAssetsPayload !== undefined;
   const resolvedModuleIds = useMemo(
     () =>
       form.moduleIds.length
@@ -1586,42 +1527,20 @@ export default function WorkspacesPage() {
     const baseName = source.name || labelize(source.id);
     return source.legacy && includeLegacyBadge ? `${baseName} (Legacy)` : baseName;
   };
-  const selectedWorkspaceCvAsset = useMemo(() => {
-    const selectedAssetId = String(form.settings.workspace_cv_asset_id || "").trim();
-    if (!selectedAssetId) {
-      return null;
-    }
-    return workspaceCvAssets.find((item) => item.value === selectedAssetId) || null;
-  }, [form.settings.workspace_cv_asset_id, workspaceCvAssets]);
-  const sharedDocumentDefaults = settingsPayload?.documents || {};
-  const mergedPreviewProfile = useMemo(() => {
-    if (!selectedWorkspaceCvAsset) {
-      return null;
-    }
-    const sharedProfile = settingsPayload?.profile || {};
-    const previewProfile = selectedWorkspaceCvAsset.previewProfile || {};
-    return {
-      ...sharedProfile,
-      ...previewProfile,
-      photo_data_url:
-        previewProfile.photo_data_url ||
-        sharedProfile.photo_data_url ||
-        sharedProfile.avatar_url ||
-        "",
-      avatar_url:
-        previewProfile.avatar_url ||
-        sharedProfile.avatar_url ||
-        sharedProfile.photo_data_url ||
-        "",
-    };
-  }, [selectedWorkspaceCvAsset, settingsPayload?.profile]);
-  const effectiveLanguageLines = useMemo(() => {
-    const previewLanguageLines = normalizeStringList(selectedWorkspaceCvAsset?.previewProfile?.languages);
-    if (previewLanguageLines.length) {
-      return previewLanguageLines;
-    }
-    return normalizeStringList(settingsPayload?.profile?.languages);
-  }, [selectedWorkspaceCvAsset, settingsPayload?.profile?.languages]);
+  const { triggerRun, triggerTestRun } = useWorkspaceRunActions({
+    builderCatalog,
+    navigate,
+    refresh,
+    request,
+    resolveSourceName,
+    setActionState,
+    settingsWithDerivedLocationDefaults,
+    workspaceAutomationFlow,
+    workspaceCvAssetIds,
+    workspaceCvAssetsLoaded,
+    workspaceSourceIds,
+    workspaces,
+  });
   const supportedLanguageState = useMemo(
     () => deriveSupportedLanguageState(effectiveLanguageLines),
     [effectiveLanguageLines],
@@ -1634,34 +1553,10 @@ export default function WorkspacesPage() {
       }),
     [effectiveLanguageLines, form.settings.workspace_cv_asset_id],
   );
-  const effectiveDocumentPreviewDocuments = useMemo(
-    () => buildWorkspacePreviewDocuments(sharedDocumentDefaults, form.settings),
-    [form.settings, sharedDocumentDefaults],
+  const focusedWorkspaceCvDocuments = useMemo(
+    () => deriveFocusedWorkspaceCvDocuments(focusedWorkspace, focusedWorkspaceDocumentsPayload),
+    [focusedWorkspace, focusedWorkspaceDocumentsPayload],
   );
-  const selectedWorkspaceCvMissing = Boolean(
-    workspaceCvAssetsLoaded &&
-      form.settings.workspace_cv_asset_id &&
-      !workspaceCvAssetIds.has(form.settings.workspace_cv_asset_id),
-  );
-  const focusedWorkspaceCvDocuments = useMemo(() => {
-    if (!focusedWorkspace) {
-      return [];
-    }
-    const selectedAssetId = String(focusedWorkspace.settings?.workspace_cv_asset_id || "").trim();
-    return (focusedWorkspaceDocumentsPayload?.documents || [])
-      .filter((document) => {
-        const assetKind = String(document.asset_kind || "").trim();
-        if (assetKind === "generated_cv") {
-          return String(document.workspace_id || "").trim() === focusedWorkspace.id;
-        }
-        if (assetKind === "workspace_cv") {
-          return selectedAssetId && String(document.asset_id || "").trim() === selectedAssetId;
-        }
-        return false;
-      })
-      .sort((left, right) => String(right.created_at || "").localeCompare(String(left.created_at || "")))
-      .slice(0, 6);
-  }, [focusedWorkspace, focusedWorkspaceDocumentsPayload?.documents]);
   const saveBlockedReason = useMemo(() => {
     if (!form.name.trim()) {
       return "Enter a workspace name.";
@@ -1731,10 +1626,10 @@ export default function WorkspacesPage() {
     }
     languageSyncSourceRef.current = "";
     const defaultFlowId = flows[0]?.id || DEFAULT_FLOW_ID;
-    cityScopeRef.current = "";
-    setCityOptionsState({ loading: false, options: [], selectedCountryCode: "", missingDataset: false });
+    resetCityOptions();
     setForm(buildBuilderForm(builderCatalog, defaultFlowId));
     setCvUploadState({ uploading: false, message: "", error: "" });
+    setSectionDecisionState({ savingKey: "", message: "", error: "" });
     resetBuilderState({ open: true });
     if (searchParams.get("create")) {
       const next = new URLSearchParams(searchParams);
@@ -1748,10 +1643,10 @@ export default function WorkspacesPage() {
       return;
     }
     languageSyncSourceRef.current = "";
-    cityScopeRef.current = "";
-    setCityOptionsState({ loading: false, options: [], selectedCountryCode: "", missingDataset: false });
+    resetCityOptions();
     setForm(hydrateFormFromWorkspace(workspace, builderCatalog));
     setCvUploadState({ uploading: false, message: "", error: "" });
+    setSectionDecisionState({ savingKey: "", message: "", error: "" });
     resetBuilderState({
       open: true,
       mode: "edit",
@@ -1764,8 +1659,8 @@ export default function WorkspacesPage() {
     resetBuilderState();
     setForm(EMPTY_BUILDER_FORM);
     setCvUploadState({ uploading: false, message: "", error: "" });
-    cityScopeRef.current = "";
-    setCityOptionsState({ loading: false, options: [], selectedCountryCode: "", missingDataset: false });
+    setSectionDecisionState({ savingKey: "", message: "", error: "" });
+    resetCityOptions();
     clearBuilderSearchParams();
   }
 
@@ -1942,77 +1837,33 @@ export default function WorkspacesPage() {
     }
   }
 
-  useEffect(() => {
-    if (!builderState.open) {
+  async function updateCvSectionDecision(section, value) {
+    const assetId = String(selectedWorkspaceCvAsset?.assetId || selectedWorkspaceCvAsset?.value || "").trim();
+    if (!assetId) {
       return;
     }
-    const nextScopeKey = selectedCountryCodes.join(",");
-    if (!cityScopeRef.current) {
-      cityScopeRef.current = nextScopeKey;
-      return;
-    }
-    if (cityScopeRef.current === nextScopeKey) {
-      return;
-    }
-    cityScopeRef.current = nextScopeKey;
-    if (parseDelimitedList(form.settings.cities).length) {
-      updateSetting("cities", []);
-    }
-  }, [builderState.open, form.settings.cities, selectedCountryCodes]);
-
-  useEffect(() => {
-    if (!builderState.open || !selectedCountryCodeForCity) {
-      setCityOptionsState({
-        loading: false,
-        options: [],
-        selectedCountryCode: selectedCountryCodeForCity,
-        missingDataset: false,
+    const sectionId = String(section.section_id || section.id || section.heading || "").trim();
+    const sectionDecisions = buildNextSectionDecisions(selectedCvCustomSections, section, value);
+    setSectionDecisionState({ savingKey: sectionId, message: "", error: "" });
+    try {
+      await request(`/documents/assets/${encodeURIComponent(assetId)}/sections`, {
+        method: "PUT",
+        body: { section_decisions: sectionDecisions },
       });
-      return;
-    }
-    if (!hasCityDataset(selectedCountryCodeForCity)) {
-      setCityOptionsState({
-        loading: false,
-        options: [],
-        selectedCountryCode: selectedCountryCodeForCity,
-        missingDataset: true,
+      await refreshCvAssets().catch(() => undefined);
+      setSectionDecisionState({
+        savingKey: "",
+        message: "Section mapping saved.",
+        error: "",
       });
-      return;
-    }
-
-    const requestId = cityRequestRef.current + 1;
-    cityRequestRef.current = requestId;
-    setCityOptionsState({
-      loading: true,
-      options: [],
-      selectedCountryCode: selectedCountryCodeForCity,
-      missingDataset: false,
-    });
-
-    loadCityOptions(selectedCountryCodeForCity)
-      .then((options) => {
-        if (cityRequestRef.current !== requestId) {
-          return;
-        }
-        setCityOptionsState({
-          loading: false,
-          options,
-          selectedCountryCode: selectedCountryCodeForCity,
-          missingDataset: false,
-        });
-      })
-      .catch(() => {
-        if (cityRequestRef.current !== requestId) {
-          return;
-        }
-        setCityOptionsState({
-          loading: false,
-          options: [],
-          selectedCountryCode: selectedCountryCodeForCity,
-          missingDataset: true,
-        });
+    } catch (updateError) {
+      setSectionDecisionState({
+        savingKey: "",
+        message: "",
+        error: updateError.message || "Unable to save section mapping.",
       });
-  }, [builderState.open, selectedCountryCodeForCity]);
+    }
+  }
 
   useEffect(() => {
     if (!builderCatalog || builderState.open) {
@@ -2044,132 +1895,22 @@ export default function WorkspacesPage() {
   }, [builderCatalog, builderCatalogReady, builderState.open, flows, searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (!builderState.open || !focusedSectionId) {
+    if (!builderState.open) {
       return;
     }
-    const targetId = `workspace-builder-${focusedSectionId}`;
+    const targetId = focusedSectionId
+      ? `workspace-builder-${focusedSectionId}`
+      : builderState.mode === "edit"
+        ? "workspace-builder-top"
+        : "";
+    if (!targetId) {
+      return;
+    }
     const timer = window.setTimeout(() => {
       document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [builderState.open, focusedSectionId]);
-
-  function buildWorkspaceValidationPayload(workspace) {
-    const flowId = workspaceAutomationFlow(workspace);
-    const sourceIds = workspaceSourceIds(workspace, builderCatalog, flowId);
-    return buildSourceValidationPayload({
-      flowId,
-      sourceIds,
-      settings: settingsWithDerivedLocationDefaults(workspace.settings || {}, sourceIds),
-      workspaceId: workspace.id,
-    });
-  }
-
-  async function triggerRun(workspaceId, runInputOverrides = {}) {
-    const workspace = workspaces.find((item) => item.id === workspaceId);
-    if (!workspace) {
-      setActionState({
-        ...EMPTY_ACTION_STATE,
-        workspaceId,
-        error: "The selected workspace is no longer available.",
-      });
-      return;
-    }
-    if (
-      workspaceCvAssetsLoaded &&
-      workspace.settings?.workspace_cv_asset_id &&
-      !workspaceCvAssetIds.has(String(workspace.settings.workspace_cv_asset_id))
-    ) {
-      setActionState({
-        ...EMPTY_ACTION_STATE,
-        workspaceId,
-        error: "Run blocked because the selected workspace CV is no longer available.",
-        details: ["Open this workspace and choose or upload a new baseline CV before starting another run."],
-      });
-      return;
-    }
-    setActionState({
-      ...EMPTY_ACTION_STATE,
-      workspaceId,
-      loading: true,
-      message: "Checking workspace setup before starting the run...",
-    });
-    try {
-      const validationPayload = buildWorkspaceValidationPayload(workspace);
-      const validation = await request("/workspace-builder/source-validation", {
-        method: "POST",
-        body: validationPayload,
-      });
-      if (!validation.valid) {
-        setActionState({
-          ...EMPTY_ACTION_STATE,
-          workspaceId,
-          error: "Run blocked until the workspace source setup is fixed.",
-          details: (validation.source_results || [])
-            .filter((result) => result.status !== "valid")
-            .flatMap((result) => {
-              const prefix = resolveSourceName(result.source_id);
-              if (result.details?.length) {
-                return result.details.map((detail) => `${prefix}: ${detail}`);
-              }
-              return [`${prefix}: ${result.summary}`];
-            }),
-        });
-        return;
-      }
-      const preRunDetails = (validation.source_results || [])
-        .filter((result) => result.runner_credit_estimate)
-        .map((result) => {
-          const estimate = result.runner_credit_estimate || {};
-          const prefix = resolveSourceName(result.source_id);
-          return (
-            `${prefix}: estimated ${estimate.min_runner_credits ?? 0}-` +
-            `${estimate.max_runner_credits ?? 0} runner credits ` +
-            `(likely ${estimate.likely_runner_credits ?? 0}).`
-          );
-        });
-      const companyPolicy = validation.company_site_policy || {};
-      if (companyPolicy.company_sites_per_run) {
-        preRunDetails.push(
-          `Company-site plan limit: ${
-            Number(companyPolicy.company_sites_per_run) === -1
-              ? "Unlimited sites per run"
-              : `${companyPolicy.company_sites_per_run} site(s) per run`
-          }.`,
-        );
-      }
-      setActionState({
-        ...EMPTY_ACTION_STATE,
-        workspaceId,
-        loading: true,
-        message: "Pre-run company-site estimate calculated. Starting the run...",
-        details: preRunDetails,
-      });
-      const run = await request("/runs", {
-        method: "POST",
-        body: {
-          workspace_id: workspaceId,
-          execution_mode: "queued",
-          max_attempts: 1,
-          run_input_overrides: runInputOverrides,
-        },
-      });
-      setActionState({
-        ...EMPTY_ACTION_STATE,
-        workspaceId,
-        message: `Run ${run.id} added to the queue and will start automatically.`,
-        details: preRunDetails,
-      });
-      await refresh();
-    } catch (runError) {
-      setActionState({
-        ...EMPTY_ACTION_STATE,
-        workspaceId,
-        error: getApiErrorMessage(runError, "Unable to start run."),
-        details: getApiErrorDetails(runError),
-      });
-    }
-  }
+  }, [builderState.editingWorkspaceId, builderState.mode, builderState.open, focusedSectionId]);
 
   async function deleteWorkspace(workspaceId) {
     const confirmed = window.confirm(
@@ -2202,254 +1943,6 @@ export default function WorkspacesPage() {
       });
       setBuilderState((current) => ({ ...current, deleting: "", message: "", error: "" }));
     }
-  }
-
-  function openScheduleEditor(workspace) {
-    const schedule = workspaceRunSchedule(workspace);
-    setScheduleEditorState({
-      workspaceId: workspace.id,
-      enabled: schedule.enabled,
-      intervalDays: schedule.intervalDays ? String(schedule.intervalDays) : "7",
-      saving: false,
-      error: "",
-    });
-  }
-
-  function closeScheduleEditor() {
-    setScheduleEditorState(EMPTY_SCHEDULE_EDITOR_STATE);
-  }
-
-  async function saveWorkspaceSchedule(workspace) {
-    const enabled = Boolean(scheduleEditorState.enabled);
-    const parsedIntervalDays = Number.parseInt(scheduleEditorState.intervalDays, 10);
-    if (enabled && (!Number.isInteger(parsedIntervalDays) || parsedIntervalDays < 1)) {
-      setScheduleEditorState((current) => ({
-        ...current,
-        error: "Enter a whole number of days greater than 0.",
-      }));
-      return;
-    }
-
-    setScheduleEditorState((current) => ({
-      ...current,
-      saving: true,
-      error: "",
-    }));
-
-    try {
-      const updatedWorkspace = await request(`/workspaces/${workspace.id}/schedule`, {
-        method: "PUT",
-        body: {
-          enabled,
-          interval_days: enabled ? parsedIntervalDays : 0,
-        },
-      });
-      const schedule = workspaceRunSchedule(updatedWorkspace);
-      setActionState({
-        ...EMPTY_ACTION_STATE,
-        workspaceId: workspace.id,
-        message: schedule.enabled
-          ? `Recurring schedule saved. Next queued run: ${schedule.nextRunAt ? formatDateTime(schedule.nextRunAt) : "Pending"}`
-          : "Recurring schedule turned off.",
-      });
-      setScheduleEditorState(EMPTY_SCHEDULE_EDITOR_STATE);
-      await refresh();
-    } catch (scheduleError) {
-      setScheduleEditorState((current) => ({
-        ...current,
-        saving: false,
-        error: getApiErrorMessage(scheduleError, "Unable to save recurring schedule."),
-      }));
-    }
-  }
-
-  function renderScheduleBadges(workspace) {
-    const schedule = workspaceRunSchedule(workspace);
-    return (
-      <div className="mt-3 flex flex-wrap gap-2 text-xs">
-        <span
-          className={[
-            "rounded-full px-3 py-1 font-medium",
-            schedule.enabled
-              ? "bg-primary/10 text-primary"
-              : "bg-surface-container-low text-on-surface-variant",
-          ].join(" ")}
-        >
-          {schedule.enabled ? scheduleIntervalLabel(schedule.intervalDays) : "Manual only"}
-        </span>
-        {schedule.enabled && schedule.nextRunAt ? (
-          <span className="rounded-full bg-surface-container-low px-3 py-1 text-on-surface-variant">
-            Next run {formatDateTime(schedule.nextRunAt)}
-          </span>
-        ) : null}
-        {schedule.lastError ? (
-          <span className="rounded-full bg-error/10 px-3 py-1 text-error">
-            Scheduler issue saved on {formatDateTime(schedule.lastErrorAt)}
-          </span>
-        ) : null}
-      </div>
-    );
-  }
-
-  function renderScheduleEditor(workspace) {
-    if (scheduleEditorState.workspaceId !== workspace.id) {
-      return null;
-    }
-
-    return (
-      <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
-        <div className="grid gap-4 xl:grid-cols-[minmax(180px,0.55fr)_minmax(220px,0.75fr)_auto] xl:items-end">
-          <label className="space-y-2">
-            <span className="block text-sm font-semibold text-on-surface">Run mode</span>
-            <select
-              className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-              disabled={scheduleEditorState.saving}
-              onChange={(event) =>
-                setScheduleEditorState((current) => ({
-                  ...current,
-                  enabled: event.target.value === "scheduled",
-                  error: "",
-                }))
-              }
-              value={scheduleEditorState.enabled ? "scheduled" : "manual"}
-            >
-              <option value="manual">Manual only</option>
-              <option value="scheduled">Every N days</option>
-            </select>
-          </label>
-
-          <label className="space-y-2">
-            <span className="block text-sm font-semibold text-on-surface">Interval</span>
-            <div className="flex items-center gap-3">
-              <input
-                className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface disabled:cursor-not-allowed disabled:text-on-surface-variant"
-                disabled={!scheduleEditorState.enabled || scheduleEditorState.saving}
-                min="1"
-                onChange={(event) =>
-                  setScheduleEditorState((current) => ({
-                    ...current,
-                    intervalDays: event.target.value,
-                    error: "",
-                  }))
-                }
-                step="1"
-                type="number"
-                value={scheduleEditorState.intervalDays}
-              />
-              <span className="text-sm text-on-surface-variant">days</span>
-            </div>
-            <span className="block text-xs leading-6 text-on-surface-variant">
-              Runr adds a queued run automatically when the interval elapses and a worker is polling.
-            </span>
-          </label>
-
-          <div className="flex flex-wrap gap-2 xl:justify-end">
-            <button
-              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-              disabled={scheduleEditorState.saving}
-              onClick={closeScheduleEditor}
-              type="button"
-            >
-              Cancel
-            </button>
-            <button
-              className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={scheduleEditorState.saving}
-              onClick={() => saveWorkspaceSchedule(workspace)}
-              type="button"
-            >
-              {scheduleEditorState.saving ? "Saving..." : "Save schedule"}
-            </button>
-          </div>
-        </div>
-
-        {scheduleEditorState.error ? (
-          <p className="mt-3 text-sm text-error">{scheduleEditorState.error}</p>
-        ) : null}
-      </div>
-    );
-  }
-
-  function renderSchedulePanel(workspace) {
-    const schedule = workspaceRunSchedule(workspace);
-    const scheduleEditorOpen = scheduleEditorState.workspaceId === workspace.id;
-
-    return (
-      <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-on-surface">Recurring Run Schedule</h3>
-            <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-              {schedule.enabled
-                ? `This workspace will be added to the queue every ${schedule.intervalDays} day${schedule.intervalDays === 1 ? "" : "s"}.`
-                : "This workspace only runs when you start it manually."}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <span
-              className={[
-                "rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide",
-                schedule.enabled
-                  ? "bg-primary/10 text-primary"
-                  : "bg-surface-container-low text-on-surface-variant",
-              ].join(" ")}
-            >
-              {schedule.enabled ? scheduleIntervalLabel(schedule.intervalDays) : "Manual only"}
-            </span>
-            <button
-              className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-              onClick={() =>
-                scheduleEditorOpen ? closeScheduleEditor() : openScheduleEditor(workspace)
-              }
-              type="button"
-            >
-              {scheduleEditorOpen ? "Close" : schedule.enabled ? "Edit schedule" : "Set schedule"}
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <div className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
-              Next queued run
-            </div>
-            <div className="mt-1 text-sm text-on-surface">
-              {schedule.enabled && schedule.nextRunAt ? formatDateTime(schedule.nextRunAt) : "Not scheduled"}
-            </div>
-          </div>
-          <div className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
-              Last queued
-            </div>
-            <div className="mt-1 text-sm text-on-surface">
-              {schedule.lastEnqueuedAt ? formatDateTime(schedule.lastEnqueuedAt) : "Not queued yet"}
-            </div>
-          </div>
-          <div className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
-              Last scheduled run
-            </div>
-            <div className="mt-1 text-sm text-on-surface">
-              {schedule.lastRunId ? (
-                <Link className="text-primary hover:underline" to={`/runs/${schedule.lastRunId}`}>
-                  Open run
-                </Link>
-              ) : (
-                "No scheduled runs yet"
-              )}
-            </div>
-          </div>
-        </div>
-
-        {schedule.lastError ? (
-          <div className="mt-4 rounded-lg border border-error/20 bg-error/5 px-4 py-3 text-sm text-error">
-            Last scheduler issue: {schedule.lastError}
-          </div>
-        ) : null}
-
-        {scheduleEditorOpen ? <div className="mt-4">{renderScheduleEditor(workspace)}</div> : null}
-      </div>
-    );
   }
 
   function workspacePresentation(workspace) {
@@ -2519,7 +2012,7 @@ export default function WorkspacesPage() {
                   <p className="mt-2 max-w-2xl line-clamp-2 text-sm leading-6 text-on-surface-variant break-words">
                     {workspace.description || "No description provided."}
                   </p>
-                  {renderScheduleBadges(workspace)}
+                  <WorkspaceScheduleBadges workspace={workspace} />
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -2537,6 +2030,14 @@ export default function WorkspacesPage() {
                     type="button"
                     >
                     Run
+                  </button>
+                  <button
+                    className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-primary/25 bg-primary/5 px-4 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={workspaceActionPending}
+                    onClick={() => triggerTestRun(workspace.id)}
+                    type="button"
+                  >
+                    Test Run
                   </button>
                   <button
                     className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
@@ -2558,7 +2059,15 @@ export default function WorkspacesPage() {
 
                 <div className="space-y-3 md:col-span-2">
                   {renderActionFeedback(workspace)}
-                  {workspaceScheduleEditorOpen ? renderScheduleEditor(workspace) : null}
+                  {workspaceScheduleEditorOpen ? (
+                    <WorkspaceScheduleEditor
+                      closeScheduleEditor={closeScheduleEditor}
+                      saveWorkspaceSchedule={saveWorkspaceSchedule}
+                      scheduleEditorState={scheduleEditorState}
+                      setScheduleEditorState={setScheduleEditorState}
+                      workspace={workspace}
+                    />
+                  ) : null}
                 </div>
               </article>
             );
@@ -2612,6 +2121,14 @@ export default function WorkspacesPage() {
                 type="button"
               >
                 Run
+              </button>
+              <button
+                className="rounded border border-primary/25 bg-primary/5 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={workspaceActionPending}
+                onClick={() => triggerTestRun(workspace.id)}
+                type="button"
+              >
+                Test Run
               </button>
               <Link
                 className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
@@ -2671,75 +2188,21 @@ export default function WorkspacesPage() {
             </div>
           </div>
 
-          {renderSchedulePanel(workspace)}
+          <WorkspaceSchedulePanel
+            closeScheduleEditor={closeScheduleEditor}
+            openScheduleEditor={openScheduleEditor}
+            saveWorkspaceSchedule={saveWorkspaceSchedule}
+            scheduleEditorState={scheduleEditorState}
+            setScheduleEditorState={setScheduleEditorState}
+            workspace={workspace}
+          />
 
-          <div className="rounded-xl border border-outline-variant/10 bg-surface p-4">
-            <div>
-              <h3 className="text-sm font-semibold text-on-surface">Workspace CVs</h3>
-              <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                The baseline CV for this workspace and the tailored CVs generated from it stay
-                visible here, so you do not have to jump into another section to review them.
-              </p>
-            </div>
-            {focusedWorkspaceDocumentsLoading ? (
-              <div className="mt-4 rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4 text-sm text-on-surface-variant">
-                Loading workspace CVs...
-              </div>
-            ) : focusedWorkspaceDocumentsError ? (
-              <div className="mt-4 rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4 text-sm text-error">
-                {focusedWorkspaceDocumentsError}
-              </div>
-            ) : focusedWorkspaceCvDocuments.length ? (
-              <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                {focusedWorkspaceCvDocuments.map((document) => (
-                  <article
-                    className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4"
-                    key={document.document_id}
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-sm font-semibold text-on-surface">
-                        {document.display_name}
-                      </div>
-                      <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                        {document.document_type}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm text-on-surface-variant">
-                      {[document.job_title, document.company].filter(Boolean).join(" at ") ||
-                        "Baseline workspace CV"}
-                    </p>
-                    <div className="mt-3 grid gap-2 text-xs leading-6 text-on-surface-variant md:grid-cols-2">
-                      <div>
-                        <span className="font-semibold text-on-surface">Status:</span>{" "}
-                        {labelize(document.display_status || document.status || "ready")}
-                      </div>
-                      <div>
-                        <span className="font-semibold text-on-surface">Created:</span>{" "}
-                        {formatDateTime(document.created_at)}
-                      </div>
-                    </div>
-                    {document.download_url ? (
-                      <div className="mt-4">
-                        <a
-                          className="inline-flex items-center rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                          href={resolvePath(document.preview_url || document.download_url)}
-                          rel="noreferrer"
-                          target="_blank"
-                        >
-                          Open Document
-                        </a>
-                      </div>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <div className="mt-4 rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-4 text-sm text-on-surface-variant">
-                No workspace CVs are visible yet. Upload a baseline CV while editing this workspace,
-                or run the workspace to generate tailored CVs here.
-              </div>
-            )}
-          </div>
+          <FocusedWorkspaceDocumentsPanel
+            documents={focusedWorkspaceCvDocuments}
+            error={focusedWorkspaceDocumentsError}
+            loading={focusedWorkspaceDocumentsLoading}
+            resolvePath={resolvePath}
+          />
 
           {renderActionFeedback(workspace)}
 
@@ -2845,7 +2308,7 @@ export default function WorkspacesPage() {
       ) : null}
 
       {builderState.open ? (
-        <div className="space-y-6">
+        <div className="scroll-mt-20 space-y-6" id="workspace-builder-top">
           {focusedSectionId ? (
             <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
               {focusedSection ? (
@@ -3134,7 +2597,15 @@ export default function WorkspacesPage() {
                         .filter((field) => !LANGUAGE_FILTER_FIELD_IDS.has(field.id))
                         .map((field) => (
                           <label className="space-y-2" key={field.id}>
-                            <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                            <span className="flex items-center gap-2 text-sm font-semibold text-on-surface">
+                              <span>{field.label}</span>
+                              {field.id === "posted_within_days" ? (
+                                <InfoHint
+                                  content="This filter only applies when the job site publicly provides when the job was posted. Jobs with no public posting date are kept rather than guessed."
+                                  placement="top"
+                                />
+                              ) : null}
+                            </span>
                             <FieldRenderer
                               dynamicOptions={dynamicFieldOptions}
                               field={field}
@@ -3149,177 +2620,33 @@ export default function WorkspacesPage() {
                         ))}
                     </div>
                   ) : section.id === "documents" ? (
-                    <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(320px,1.1fr)]">
-                      <div className="space-y-4">
-                        <div className="rounded-lg border border-outline-variant/10 bg-surface p-4">
-                          <p className="text-sm font-semibold text-on-surface">Workspace personalization and style</p>
-                          <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                            Personalization scope decides whether this workspace can use only the
-                            baseline CV, selected Career Assets, or the full master career profile.
-                            Blank style values still inherit your shared document defaults.
-                          </p>
-                        </div>
-
-                        <div className="grid gap-4 md:grid-cols-2">
-                          {fields.map((field) => (
-                            <label className="space-y-2" key={field.id}>
-                              <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
-                              <FieldRenderer
-                                dynamicOptions={dynamicFieldOptions}
-                                field={field}
-                                formState={form}
-                                onChange={(nextValue) => updateSetting(field.id, nextValue)}
-                                value={form.settings[field.id]}
-                              />
-                              <span className="block text-xs leading-6 text-on-surface-variant">
-                                {field.description}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-
-                        <div className="rounded-lg border border-outline-variant/10 bg-surface px-4 py-3 text-xs leading-6 text-on-surface-variant">
-                          Active export mapping: {labelize(effectiveDocumentPreviewDocuments.cv_template)},
-                          {" "}
-                          {labelize(effectiveDocumentPreviewDocuments.cv_color_scheme)},{" "}
-                          {effectiveDocumentPreviewDocuments.cv_font || "Calibri"},{" "}
-                          with {effectiveDocumentPreviewDocuments.include_photo ? "photo enabled" : "no photo"}.
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                          <div>
-                            <div className="text-sm font-semibold text-on-surface">Live Export Preview</div>
-                            <p className="text-xs leading-6 text-on-surface-variant">
-                              Uses the selected workspace baseline CV content with the active DOCX
-                              template, palette, font, and photo settings.
-                            </p>
-                          </div>
-                          {selectedWorkspaceCvAsset ? (
-                            <span className="rounded-full bg-surface-container-low px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant">
-                              {selectedWorkspaceCvAsset.label}
-                            </span>
-                          ) : null}
-                        </div>
-
-                        {!form.settings.workspace_cv_asset_id ? (
-                          <div className="rounded-xl border border-dashed border-outline-variant/20 bg-surface p-6 text-sm text-on-surface-variant">
-                            Choose a baseline CV in the Baseline CV section to load the workspace preview.
-                          </div>
-                        ) : selectedWorkspaceCvMissing ? (
-                          <div className="rounded-xl border border-error/30 bg-error/5 p-6 text-sm text-error">
-                            The selected baseline CV is no longer available. Choose another workspace
-                            CV to restore the preview.
-                          </div>
-                        ) : mergedPreviewProfile ? (
-                          <div className="rounded-2xl border border-outline-variant/15 bg-surface p-3">
-                            <CvExportPreview
-                              className="min-h-[760px]"
-                              documents={effectiveDocumentPreviewDocuments}
-                              options={settingsPayload?.options || {}}
-                              profile={mergedPreviewProfile}
-                            />
-                          </div>
-                        ) : (
-                          <div className="rounded-xl border border-outline-variant/10 bg-surface p-6 text-sm text-on-surface-variant">
-                            Loading preview...
-                          </div>
-                        )}
-
-                        <p className="text-xs leading-6 text-on-surface-variant">
-                          This preview follows the export-template styling rather than the browser CV
-                          studio. Generated DOCX and PDF artifacts use the same workspace template,
-                          color scheme, font, and photo selection.
-                        </p>
-                      </div>
-                    </div>
+                    <WorkspaceDocumentPreviewSection
+                      FieldRenderer={FieldRenderer}
+                      dynamicOptions={dynamicFieldOptions}
+                      effectiveBrowserPreviewHtml={effectiveBrowserPreviewHtml}
+                      effectiveDocumentPreviewDocuments={effectiveDocumentPreviewDocuments}
+                      fields={fields}
+                      form={form}
+                      mergedPreviewProfile={mergedPreviewProfile}
+                      selectedWorkspaceCvAsset={selectedWorkspaceCvAsset}
+                      selectedWorkspaceCvMissing={selectedWorkspaceCvMissing}
+                      updateSetting={updateSetting}
+                    />
                   ) : section.id === "cv_binding" ? (
-                    <div className="space-y-4">
-                      <div className="grid gap-4 md:grid-cols-2">
-                        {fields.map((field) => (
-                          <label className="space-y-2" key={field.id}>
-                            <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
-                            <FieldRenderer
-                              dynamicOptions={dynamicFieldOptions}
-                              field={field}
-                              formState={form}
-                              onChange={(nextValue) => updateSetting(field.id, nextValue)}
-                              value={form.settings[field.id]}
-                            />
-                            <span className="block text-xs leading-6 text-on-surface-variant">
-                              {field.description}
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="rounded-lg border border-dashed border-outline-variant/20 bg-surface p-4">
-                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                          <div>
-                            <p className="text-sm font-semibold text-on-surface">Upload a new workspace CV</p>
-                            <p className="text-xs leading-6 text-on-surface-variant">
-                              Uploading here also adds the CV to the shared Career Assets library.
-                            </p>
-                          </div>
-                          <label className="inline-flex cursor-pointer items-center rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high">
-                            <input
-                              className="hidden"
-                              onChange={(event) => {
-                                const file = event.target.files?.[0];
-                                if (file) {
-                                  uploadWorkspaceCv(file);
-                                  event.target.value = "";
-                                }
-                              }}
-                              type="file"
-                            />
-                            {cvUploadState.uploading ? "Uploading..." : "Upload CV"}
-                          </label>
-                        </div>
-                        {cvUploadState.message ? (
-                          <p className="mt-3 text-sm text-primary">{cvUploadState.message}</p>
-                        ) : null}
-                        {cvUploadState.error ? (
-                          <p className="mt-3 text-sm text-error">{cvUploadState.error}</p>
-                        ) : null}
-                      </div>
-                      {selectedWorkspaceCvAsset ? (
-                        <div className="rounded-lg border border-outline-variant/10 bg-surface p-4">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <div>
-                              <p className="text-sm font-semibold text-on-surface">Selected workspace CV</p>
-                              <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-                                {selectedWorkspaceCvAsset.label}
-                              </p>
-                            </div>
-                            {selectedWorkspaceCvAsset.downloadUrl ? (
-                              <a
-                                className="inline-flex items-center rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                                href={resolvePath(selectedWorkspaceCvAsset.downloadUrl)}
-                                rel="noreferrer"
-                                target="_blank"
-                              >
-                                Open CV
-                              </a>
-                            ) : null}
-                          </div>
-                          <div className="mt-4 grid gap-3 text-sm text-on-surface-variant md:grid-cols-3">
-                            <div>
-                              <span className="font-semibold text-on-surface">Status:</span>{" "}
-                              {labelize(selectedWorkspaceCvAsset.status)}
-                            </div>
-                            <div>
-                              <span className="font-semibold text-on-surface">Created:</span>{" "}
-                              {formatDateTime(selectedWorkspaceCvAsset.createdAt)}
-                            </div>
-                            <div>
-                              <span className="font-semibold text-on-surface">Origin:</span>{" "}
-                              {labelize(selectedWorkspaceCvAsset.sourceOrigin || "upload")}
-                            </div>
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
+                    <WorkspaceCvBindingSection
+                      FieldRenderer={FieldRenderer}
+                      cvUploadState={cvUploadState}
+                      dynamicOptions={dynamicFieldOptions}
+                      fields={fields}
+                      form={form}
+                      resolvePath={resolvePath}
+                      sectionDecisionState={sectionDecisionState}
+                      selectedCvCustomSections={selectedCvCustomSections}
+                      selectedWorkspaceCvAsset={selectedWorkspaceCvAsset}
+                      updateCvSectionDecision={updateCvSectionDecision}
+                      updateSetting={updateSetting}
+                      uploadWorkspaceCv={uploadWorkspaceCv}
+                    />
                   ) : (
                     <div className="grid gap-4 md:grid-cols-2">
                       {fields.map((field) => (

@@ -15,8 +15,8 @@ SCRAPEOPS_LOCALITY_MODES = {
     SCRAPEOPS_LOCALITY_MODE_LOCAL_PREFERRED,
     SCRAPEOPS_LOCALITY_MODE_STRICT_LOCAL_ONLY,
 }
-DEFAULT_SITE_REQUEST_MODES = ["basic", "render_js_cheap", "render_js_residential"]
-DEFAULT_JOB_DETAIL_REQUEST_MODES = ["basic", "render_js_cheap", "render_js", "render_js_residential"]
+DEFAULT_SITE_REQUEST_MODES = ["basic", "render_js_cheap"]
+DEFAULT_JOB_DETAIL_REQUEST_MODES = ["basic"]
 
 
 def _normalize_limit(value: Any, *, default: int) -> int:

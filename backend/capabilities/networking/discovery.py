@@ -5,13 +5,18 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlencode, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 from backend.config.job_seeker import load_project_dotenv
 from backend.domain.models import JobRecord
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_PROXY_ENDPOINT,
+    build_proxy_params,
+    parse_proxy_response_envelope,
+)
 
 from .outreach import (
     TargetContactCandidate,
@@ -125,6 +130,9 @@ _LANE_TO_TITLE_KEY = {
 }
 
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
+_MAX_PASS_ONE_QUERY_PLANS = 4
+_MAX_PASS_TWO_QUERY_PLANS = 3
+_MAX_RESULTS_PER_PASS = 12
 _BLUEPRINT_BY_LANE = {
     str(item["lane"]): item
     for item in _TARGET_CONTACT_BLUEPRINTS
@@ -193,15 +201,22 @@ def build_target_contact_discovery(
     ai_provider: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     live_discovery_enabled = _live_target_contact_discovery_enabled()
+    live_search_provider, live_search_provider_name = (
+        _live_search_provider_from_environment() if live_discovery_enabled else (_offline_search_provider, "offline_fallback")
+    )
     effective_search_provider = (
         search_provider
         if search_provider is not None
-        else (None if live_discovery_enabled else _offline_search_provider)
+        else live_search_provider
     )
     effective_ai_provider = (
         ai_provider
         if ai_provider is not None
-        else (None if live_discovery_enabled else _disabled_ai_provider)
+        else (
+            None
+            if live_discovery_enabled and _live_networking_ai_discovery_enabled()
+            else _heuristic_only_ai_provider
+        )
     )
     discipline_key = _infer_target_contact_discipline(job)
     discipline = _TARGET_DISCIPLINE_LIBRARY.get(discipline_key, _TARGET_DISCIPLINE_LIBRARY["general"])
@@ -214,7 +229,7 @@ def build_target_contact_discovery(
         "search": (
             "custom"
             if search_provider is not None
-            else ("duckduckgo_html" if live_discovery_enabled else "offline_fallback")
+            else live_search_provider_name
         ),
         "query_planner": "heuristic_fallback",
         "resolver": "heuristic_fallback",
@@ -323,6 +338,11 @@ def _build_pass_one_query_plans(
     warnings: list[str],
     provider: dict[str, str],
 ) -> list[DiscoveryQueryPlan]:
+    broad_profile_plans = _broad_company_profile_query_plans(
+        job=job,
+        discipline=discipline,
+        location_hint=location_hint,
+    )
     prompt = _pass_one_prompt(
         job=job,
         discipline_key=discipline_key,
@@ -340,15 +360,24 @@ def _build_pass_one_query_plans(
         plans = _coerce_query_plans(payload, pass_index=1, discipline=discipline)
         if plans:
             provider["query_planner"] = "ai"
-            return plans
+            return _dedupe_query_plans(
+                [*broad_profile_plans, *plans],
+                max_items=_MAX_PASS_ONE_QUERY_PLANS,
+            )
         warnings.append("pass1_ai_empty_query_plan")
     except Exception as exc:
         warnings.append(f"pass1_query_planner_failed:{_compact_whitespace(str(exc))}")
-    return _heuristic_pass_one_queries(
-        job=job,
-        discipline=discipline,
-        location_hint=location_hint,
-        hiring_manager=hiring_manager,
+    return _dedupe_query_plans(
+        [
+            *broad_profile_plans,
+            *_heuristic_pass_one_queries(
+                job=job,
+                discipline=discipline,
+                location_hint=location_hint,
+                hiring_manager=hiring_manager,
+            ),
+        ],
+        max_items=_MAX_PASS_ONE_QUERY_PLANS,
     )
 
 
@@ -384,17 +413,20 @@ def _build_pass_two_query_plans(
         plans = _coerce_query_plans(payload, pass_index=2, discipline=discipline)
         if plans:
             provider["query_planner"] = "ai"
-            return plans
+            return _dedupe_query_plans(plans, max_items=_MAX_PASS_TWO_QUERY_PLANS)
         warnings.append("pass2_ai_empty_query_plan")
     except Exception as exc:
         warnings.append(f"pass2_query_planner_failed:{_compact_whitespace(str(exc))}")
-    return _heuristic_pass_two_queries(
-        job=job,
-        discipline=discipline,
-        location_hint=location_hint,
-        pass_one_queries=pass_one_queries,
-        pass_one_hits=pass_one_hits,
-        hiring_manager=hiring_manager,
+    return _dedupe_query_plans(
+        _heuristic_pass_two_queries(
+            job=job,
+            discipline=discipline,
+            location_hint=location_hint,
+            pass_one_queries=pass_one_queries,
+            pass_one_hits=pass_one_hits,
+            hiring_manager=hiring_manager,
+        ),
+        max_items=_MAX_PASS_TWO_QUERY_PLANS,
     )
 
 
@@ -506,12 +538,31 @@ def _live_target_contact_discovery_enabled() -> bool:
     return str(os.getenv("RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY") or "").strip().lower() in _TRUTHY_VALUES
 
 
+def _live_networking_ai_discovery_enabled() -> bool:
+    load_project_dotenv()
+    return str(os.getenv("RUNR_ENABLE_NETWORKING_DISCOVERY_AI") or "").strip().lower() in _TRUTHY_VALUES
+
+
 def _disabled_ai_provider(*_args, **_kwargs) -> dict[str, Any]:
     raise RuntimeError("live networking discovery is disabled")
 
 
+def _heuristic_only_ai_provider(*_args, **_kwargs) -> dict[str, Any]:
+    raise RuntimeError("networking discovery AI is disabled")
+
+
 def _offline_search_provider(*_args, **_kwargs) -> list[dict[str, Any]]:
     return []
+
+
+def _live_search_provider_from_environment() -> tuple[
+    Callable[..., list[dict[str, Any]] | list[DiscoverySearchHit]] | None,
+    str,
+]:
+    load_project_dotenv()
+    if str(os.getenv("SCRAPEOPS_API_KEY") or "").strip():
+        return _scrapeops_duckduckgo_search_provider, "scrapeops_duckduckgo_html"
+    return None, "duckduckgo_html"
 
 
 def _call_live_deepseek_json(
@@ -566,11 +617,14 @@ def _search_for_pass_queries(
     *,
     search_provider: Callable[..., list[dict[str, Any]] | list[DiscoverySearchHit]] | None,
     warnings: list[str],
-    max_results_per_query: int = 5,
+    max_results_per_query: int = 3,
+    max_total_results: int = _MAX_RESULTS_PER_PASS,
 ) -> list[DiscoverySearchHit]:
     results: list[DiscoverySearchHit] = []
     seen_urls: set[str] = set()
     for plan in query_plans:
+        if len(results) >= max_total_results:
+            break
         try:
             raw_hits = _call_search_provider(
                 plan=plan,
@@ -589,6 +643,8 @@ def _search_for_pass_queries(
             if canonical_url:
                 seen_urls.add(canonical_url)
             results.append(hit)
+            if len(results) >= max_total_results:
+                break
     return results
 
 
@@ -660,7 +716,48 @@ def _search_duckduckgo_html(query: str, *, max_results: int = 5) -> list[dict[st
         timeout=30,
     )
     response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
+    return _parse_duckduckgo_html_results(response.text, max_results=max_results)
+
+
+def _scrapeops_duckduckgo_search_provider(
+    query: str,
+    *,
+    max_results: int = 5,
+    pass_index: int = 1,
+    lane: str = "",
+    objective: str = "",
+) -> list[dict[str, Any]]:
+    load_project_dotenv()
+    api_key = str(os.getenv("SCRAPEOPS_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("SCRAPEOPS_API_KEY is missing.")
+    target_url = "https://html.duckduckgo.com/html/?" + urlencode({"q": str(query or "")})
+    mode = str(os.getenv("RUNR_NETWORKING_DISCOVERY_SEARCH_MODE") or "basic").strip() or "basic"
+    country_code = str(os.getenv("RUNR_NETWORKING_DISCOVERY_SEARCH_COUNTRY") or "").strip()
+    response = requests.get(
+        SCRAPEOPS_PROXY_ENDPOINT,
+        params=build_proxy_params(
+            api_key=api_key,
+            url=target_url,
+            mode=mode,
+            country_code=country_code,
+        ),
+        headers=_DISCOVERY_SEARCH_HEADERS,
+        timeout=60,
+    )
+    response.raise_for_status()
+    envelope = parse_proxy_response_envelope(response)
+    if int(envelope.target_status_code or 0) >= 400:
+        raise RuntimeError(
+            f"ScrapeOps DuckDuckGo search returned target status {envelope.target_status_code}."
+        )
+    return _parse_duckduckgo_html_results(envelope.body, max_results=max_results)
+
+
+def _parse_duckduckgo_html_results(html: str, *, max_results: int = 5) -> list[dict[str, Any]]:
+    if _duckduckgo_response_is_challenge(html):
+        raise RuntimeError("DuckDuckGo returned an anti-bot challenge instead of search results.")
+    soup = BeautifulSoup(html, "html.parser")
     nodes = soup.select(".result")
     hits: list[dict[str, Any]] = []
     for node in nodes:
@@ -686,6 +783,16 @@ def _search_duckduckgo_html(query: str, *, max_results: int = 5) -> list[dict[st
         if len(hits) >= max_results:
             break
     return hits
+
+
+def _duckduckgo_response_is_challenge(html: str) -> bool:
+    normalized = str(html or "").lower()
+    return bool(
+        "anomaly-modal" in normalized
+        or "/assets/anomaly/" in normalized
+        or "assets/anomaly/images/challenge" in normalized
+        or "data-testid=\"anomaly" in normalized
+    )
 
 
 def _unwrap_search_url(value: str) -> str:
@@ -946,6 +1053,56 @@ def _heuristic_pass_one_queries(
             )
         )
     return _dedupe_query_plans(plans)
+
+
+def _broad_company_profile_query_plans(
+    *,
+    job: JobRecord,
+    discipline: dict[str, Any],
+    location_hint: str,
+) -> list[DiscoveryQueryPlan]:
+    company = str(job.company or "").strip()
+    if not company:
+        return []
+    location = str(location_hint or "").strip()
+    discipline_label = _compact_whitespace(str(discipline.get("label") or ""))
+    manager_titles = _title_variants_for_lane(discipline=discipline, lane="direct_hiring_chain")
+    primary_manager_title = manager_titles[0] if manager_titles else ""
+    plans: list[DiscoveryQueryPlan] = []
+    if location:
+        plans.append(
+            DiscoveryQueryPlan(
+                pass_index=1,
+                query=f'site:linkedin.com/in "{company}" "{location}"',
+                objective="Find current public LinkedIn profiles at the company in the target location.",
+                lane="peer_context",
+                rationale="Broad company/location profile search anchors discovery in real people before narrower title matching.",
+                title_variants=_title_variants_for_lane(discipline=discipline, lane="peer_context"),
+            )
+        )
+    if discipline_label:
+        plans.append(
+            DiscoveryQueryPlan(
+                pass_index=1,
+                query=f'site:linkedin.com/in "{company}" "{discipline_label}"',
+                objective="Find people at the company with public profile evidence in the target function.",
+                lane="peer_context",
+                rationale="Broad company/function profile search keeps discovery resilient when AI-generated title queries are too narrow.",
+                title_variants=_title_variants_for_lane(discipline=discipline, lane="peer_context"),
+            )
+        )
+    if primary_manager_title:
+        plans.append(
+            DiscoveryQueryPlan(
+                pass_index=1,
+                query=f'site:linkedin.com/in "{company}" "{primary_manager_title}"',
+                objective="Find likely managers or owners in the target function.",
+                lane="direct_hiring_chain",
+                rationale="Broad company/title profile search gives the resolver person-profile evidence early.",
+                title_variants=manager_titles,
+            )
+        )
+    return _dedupe_query_plans(plans, max_items=3)
 
 
 def _heuristic_pass_two_queries(
@@ -1407,16 +1564,21 @@ def _dedupe_hits(hits: list[DiscoverySearchHit]) -> list[DiscoverySearchHit]:
     return deduped
 
 
-def _dedupe_query_plans(plans: list[DiscoveryQueryPlan]) -> list[DiscoveryQueryPlan]:
+def _dedupe_query_plans(
+    plans: list[DiscoveryQueryPlan],
+    *,
+    max_items: int = 6,
+) -> list[DiscoveryQueryPlan]:
     deduped: list[DiscoveryQueryPlan] = []
     seen_queries: set[str] = set()
+    limit = max(1, int(max_items or 6))
     for plan in plans:
         query_key = str(plan.query or "").strip().casefold()
         if not query_key or query_key in seen_queries:
             continue
         seen_queries.add(query_key)
         deduped.append(plan)
-        if len(deduped) >= 6:
+        if len(deduped) >= limit:
             break
     return deduped
 

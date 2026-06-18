@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -36,6 +37,7 @@ from backend.capabilities.tailored_documents.runtime import (
 )
 from backend.capabilities.tailored_documents.screening import run_stage2_pipeline as run_tailored_stage2_pipeline
 from backend.capabilities.tailored_documents.workflow import run_manual_pipeline
+from backend.config.plans import get_limit, normalize_plan_id
 from backend.connectors.company_career_sites import (
     ACADEMIC_CAREER_SITE_FILES,
     REGULAR_COMPANY_SITE_FILES,
@@ -49,6 +51,7 @@ from backend.domain.models import ArtifactRecord, JobRecord, StageContext, Stage
 from backend.orchestration.engine import BaseStage, StageOutcome
 from backend.orchestration.workspace_builder import derive_runtime_defaults_from_settings
 from backend.profiles.cv_text import runtime_cv_override
+from backend.storage import create_object_storage, materialize_object
 
 TARGET_ROLE_KEYWORD_MAP = {
     "Product Manager": ["product manager", "product owner", "go-to-market"],
@@ -59,6 +62,51 @@ TARGET_ROLE_KEYWORD_MAP = {
     "Frontend Engineer": ["frontend engineer", "react", "javascript", "typescript"],
     "Data Analyst": ["data analyst", "sql", "dashboarding", "insights"],
 }
+SAFE_COMPANY_SITE_FALLBACK_MAX_SITES_PER_RUN = 10
+SAFE_COMPANY_SITE_FALLBACK_RUN_CREDITS = 150
+DEFAULT_COMPANY_SITE_MAX_JOB_LINKS_PER_SITE = 25
+LOGGER = logging.getLogger(__name__)
+
+
+def _positive_int(value: Any, *, default: int = 0) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    return normalized if normalized > 0 else int(default)
+
+
+def _safe_plan_limit(plan_id: str, limit_type: str, fallback: int) -> int:
+    try:
+        plan_limit = int(get_limit(normalize_plan_id(plan_id or "free"), limit_type))
+    except Exception:
+        return int(fallback)
+    if plan_limit <= 0:
+        return int(fallback)
+    return min(plan_limit, int(fallback))
+
+
+def _resolve_company_site_stage_limits(cli_args: Any, *, logger=None) -> dict[str, int]:
+    plan_id = str(getattr(cli_args, "run_user_plan_id", "") or "free")
+    explicit_site_limit = _positive_int(getattr(cli_args, "company_site_max_sites_per_run", 0), default=0)
+    explicit_credit_budget = _positive_int(getattr(cli_args, "company_site_runner_credit_budget", 0), default=0)
+    explicit_link_limit = _positive_int(getattr(cli_args, "company_site_max_job_links_per_site", 0), default=0)
+    deprecated_link_limit = _positive_int(
+        getattr(cli_args, "company_site_emergency_max_job_links_per_site", 0), default=0
+    )
+    if not explicit_link_limit and deprecated_link_limit:
+        (logger or LOGGER).warning(
+            "Setting company_site_emergency_max_job_links_per_site is deprecated; "
+            "use company_site_max_job_links_per_site instead."
+        )
+        explicit_link_limit = deprecated_link_limit
+    return {
+        "max_sites_per_run": explicit_site_limit
+        or _safe_plan_limit(plan_id, "company_sites_per_run", SAFE_COMPANY_SITE_FALLBACK_MAX_SITES_PER_RUN),
+        "runner_credit_budget": explicit_credit_budget
+        or _safe_plan_limit(plan_id, "runner_credits_per_run", SAFE_COMPANY_SITE_FALLBACK_RUN_CREDITS),
+        "max_job_links_per_site": explicit_link_limit or DEFAULT_COMPANY_SITE_MAX_JOB_LINKS_PER_SITE,
+    }
 
 
 def _to_job_records(records: list[dict[str, Any]]) -> list[JobRecord]:
@@ -71,6 +119,45 @@ def _json_artifact(run_id: str, stage_id: str, artifact_type: str, path: str) ->
         artifact_type=artifact_type,
         path=path,
     )
+
+
+def _build_scrapeops_usage_callback(context: StageContext, definition: StageDefinition):
+    def _record_usage_event(event: dict[str, Any]) -> None:
+        analytics_store = getattr(context.repositories, "analytics_store", None)
+        if analytics_store is None or not hasattr(analytics_store, "emit_event"):
+            return
+        event_id = f"evt_{uuid4().hex[:16]}"
+        user_id = str(getattr(context.run, "normalized_user_id", "") or getattr(context.run, "user_id", "") or "")
+        workspace_id = str(getattr(context.workspace, "id", "") or "")
+        run_id = str(getattr(context.run, "id", "") or "")
+        route = f"/runs/{run_id}"
+        if hasattr(analytics_store, "record_scrapeops_usage") and event.get("method") == "scrapeops_proxy":
+            analytics_store.record_scrapeops_usage(
+                ledger_id=event_id,
+                payload=event,
+                user_id=user_id,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                route=route,
+                source="worker",
+            )
+        analytics_store.emit_event(
+            event_id=event_id,
+            event_name="scrapeops_request",
+            occurred_at=utc_now_iso(),
+            user_id=user_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            route=route,
+            source="worker",
+            payload={
+                "stage_id": definition.stage_id,
+                "stage_type": definition.stage_type,
+                **dict(event or {}),
+            },
+        )
+
+    return _record_usage_event
 
 
 def _read_json_list_if_exists(path: str) -> list[dict[str, Any]]:
@@ -152,16 +239,6 @@ def _tailored_document_artifacts(
                     metadata=metadata,
                 )
             )
-        cv_docx_path = str(record.get("cv_docx") or "")
-        if cv_docx_path:
-            artifacts.append(
-                ArtifactRecord(
-                    artifact_id=f"{run_id}_{stage_id}_{job_id}_cv_docx",
-                    artifact_type="cv_docx",
-                    path=cv_docx_path,
-                    metadata=metadata,
-                )
-            )
         cv_pdf_path = str(record.get("cv_pdf") or "")
         if cv_pdf_path:
             artifacts.append(
@@ -172,6 +249,16 @@ def _tailored_document_artifacts(
                     metadata=metadata,
                 )
             )
+        cv_docx_path = str(record.get("cv_docx") or "")
+        if cv_docx_path:
+            artifacts.append(
+                ArtifactRecord(
+                    artifact_id=f"{run_id}_{stage_id}_{job_id}_cv_docx",
+                    artifact_type="cv_docx",
+                    path=cv_docx_path,
+                    metadata=metadata,
+                )
+            )
     return artifacts
 
 
@@ -179,6 +266,43 @@ def _namespace_from_defaults(defaults: dict[str, Any], overrides: dict[str, Any]
     merged = dict(defaults)
     merged.update({key: value for key, value in overrides.items() if value is not None})
     return SimpleNamespace(**merged)
+
+
+def _build_tailored_stage2_args(cli_args: Any) -> SimpleNamespace:
+    return SimpleNamespace(
+        input=str(getattr(cli_args, "stage1_output", "") or "highly_curated_jobs.json"),
+        output=str(getattr(cli_args, "stage2_output", "") or "stage2_filtered_local.json"),
+        rejected=str(getattr(cli_args, "stage2_rejected_output", "") or "stage2_rejected_local.json"),
+        german_special_char_threshold=int(getattr(cli_args, "german_special_char_threshold", 9999) or 0),
+        french_special_char_threshold=int(getattr(cli_args, "french_special_char_threshold", 0) or 0),
+        spanish_special_char_threshold=int(getattr(cli_args, "spanish_special_char_threshold", 0) or 0),
+        max_german_level=str(getattr(cli_args, "max_german_level", "") or "B2"),
+        languages=list(getattr(cli_args, "languages", []) or []),
+    )
+
+
+def _build_tailored_stage3_args(cli_args: Any) -> SimpleNamespace:
+    return SimpleNamespace(
+        input=str(getattr(cli_args, "stage2_output", "") or "stage2_filtered_local.json"),
+        output=str(getattr(cli_args, "stage3_output", "") or "stage3_filtered_ai.json"),
+        rejected=str(getattr(cli_args, "stage3_rejected_output", "") or "stage3_rejected_local.json"),
+        checkpoint=str(getattr(cli_args, "stage3_checkpoint", "") or "stage3_checkpoint.json"),
+        force_reprocess=bool(getattr(cli_args, "force_reprocess", False)),
+        low_applicant_threshold=int(getattr(cli_args, "low_applicant_threshold", 80) or 0),
+        stage3_german_special_char_threshold=int(
+            getattr(cli_args, "stage3_german_special_char_threshold", 9999) or 0
+        ),
+        stage3_french_special_char_threshold=int(
+            getattr(cli_args, "stage3_french_special_char_threshold", 0) or 0
+        ),
+        stage3_spanish_special_char_threshold=int(
+            getattr(cli_args, "stage3_spanish_special_char_threshold", 0) or 0
+        ),
+        stage3_max_german_level=str(getattr(cli_args, "stage3_max_german_level", "") or "B2"),
+        stage3_extra_prompt=str(getattr(cli_args, "stage3_extra_prompt", "") or ""),
+        stage3_prompt_override=str(getattr(cli_args, "stage3_prompt_override", "") or ""),
+        languages=list(getattr(cli_args, "languages", []) or []),
+    )
 
 
 def _resolved_settings(context: StageContext, definition: StageDefinition) -> dict[str, Any]:
@@ -195,12 +319,37 @@ def _workspace_cv_snapshot_from_settings(settings: dict[str, Any]) -> dict[str, 
         "asset_id": str(settings.get("workspace_cv_asset_id") or "").strip(),
         "display_name": str(settings.get("workspace_cv_asset_display_name") or "").strip(),
         "path": str(settings.get("workspace_cv_asset_path") or "").strip(),
+        "docx_path": str(settings.get("workspace_cv_asset_docx_path") or "").strip(),
         "text": str(settings.get("workspace_cv_text") or "").strip(),
         "required": bool(
             str(settings.get("builder_mode") or "").strip() == "scratch"
             and str(settings.get("automation_flow") or "").strip() == "tailored_documents"
         ),
     }
+
+
+def _materialize_workspace_cv_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    resolved = dict(settings)
+    source_path = Path(str(resolved.get("workspace_cv_asset_path") or ""))
+    object_key = str(resolved.get("workspace_cv_asset_object_key") or "").strip()
+    if object_key and not source_path.is_file():
+        source_path = materialize_object(
+            create_object_storage(),
+            object_key,
+            filename=str(resolved.get("workspace_cv_asset_display_name") or ""),
+        )
+        resolved["workspace_cv_asset_path"] = str(source_path)
+
+    companion_path = Path(str(resolved.get("workspace_cv_asset_docx_path") or ""))
+    companion_key = str(resolved.get("workspace_cv_asset_docx_object_key") or "").strip()
+    if companion_key and not companion_path.is_file():
+        companion_path = materialize_object(
+            create_object_storage(),
+            companion_key,
+            filename=f"{source_path.stem or 'workspace-cv'}.docx",
+        )
+        resolved["workspace_cv_asset_docx_path"] = str(companion_path)
+    return resolved
 
 
 def _assert_workspace_cv_binding(settings: dict[str, Any]) -> None:
@@ -318,10 +467,24 @@ def _prepare_company_site_source_settings(settings: dict[str, Any], definition: 
             discovered_site_paths = [str(path) for path in REGULAR_COMPANY_SITE_FILES]
 
     configured_sites = normalized.get(site_settings_key)
+    configured_site_entries = _merge_company_site_entries(configured_sites)
     discovered_company_sites = load_discovered_company_site_entries(discovered_site_paths)
     merged_company_sites = _merge_company_site_entries(configured_sites, discovered_company_sites)
     if merged_company_sites:
         normalized["company_career_sites"] = merged_company_sites
+    normalized["company_site_selected_scope_urls"] = [
+        str(item.get("url") or "") for item in configured_site_entries if str(item.get("url") or "")
+    ]
+    normalized["company_site_source_type"] = "academic" if site_settings_key == "academic_career_sites" else "company"
+    if (
+        "company_site_emergency_max_job_links_per_site" in normalized
+        and "company_site_max_job_links_per_site" not in normalized
+    ):
+        LOGGER.warning(
+            "Setting company_site_emergency_max_job_links_per_site is deprecated; "
+            "use company_site_max_job_links_per_site instead."
+        )
+        normalized["company_site_max_job_links_per_site"] = normalized["company_site_emergency_max_job_links_per_site"]
     if timeout_setting_key in normalized and "company_site_request_timeout_seconds" not in normalized:
         normalized["company_site_request_timeout_seconds"] = normalized[timeout_setting_key]
     if max_jobs_setting_key in normalized and "company_site_max_jobs_per_site" not in normalized:
@@ -341,6 +504,7 @@ def _build_root_cli_args(
     config = load_job_seeker_config()
     defaults = build_main_defaults(config)
     resolved_settings = _resolved_settings(context, definition)
+    resolved_settings = _materialize_workspace_cv_settings(resolved_settings)
     _assert_workspace_cv_binding(resolved_settings)
     resolved_settings = _harmonize_tailored_runtime_settings(resolved_settings)
     resolved_settings["job_filtering_mode"] = normalize_job_filtering_mode(
@@ -366,7 +530,10 @@ class LinkedInAcquireStage(BaseStage):
         config, cli_args = _build_root_cli_args(context, definition)
         stage_args = build_tailored_stage1_args(config, cli_args)
         with runtime_cv_override(_workspace_cv_snapshot_from_settings(vars(cli_args))):
-            jobs = run_tailored_stage1_pipeline(stage_args)
+            jobs = run_tailored_stage1_pipeline(
+                stage_args,
+                usage_callback=_build_scrapeops_usage_callback(context, definition),
+            )
         excluded_jobs = _read_json_list_if_exists(str(stage_args.excluded_output))
         artifacts = [_json_artifact(context.run.id, definition.stage_id, "stage1_output", str(stage_args.output))]
         if str(stage_args.excluded_output).strip():
@@ -391,7 +558,10 @@ class ManualUrlIngestionStage(BaseStage):
             context.registries.connector_registry.get(connector_id)
 
         _, cli_args = _build_root_cli_args(context, definition)
-        jobs, failures = run_manual_pipeline(cli_args)
+        jobs, failures = run_manual_pipeline(
+            cli_args,
+            usage_callback=_build_scrapeops_usage_callback(context, definition),
+        )
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(jobs)},
             data={"manual_url_failures": failures},
@@ -436,8 +606,48 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
         ).strip()
         plan_id = str(getattr(cli_args, "run_user_plan_id", "") or "").strip()
         quota_overrides = dict(getattr(cli_args, "run_user_quota_overrides", {}) or {})
-        run_credit_budget = int(getattr(cli_args, "company_site_runner_credit_budget", 0) or 0)
+        company_site_limits = _resolve_company_site_stage_limits(cli_args, logger=context.logger)
+        run_credit_budget = int(company_site_limits["runner_credit_budget"])
         run_credit_consumed = 0
+        capped_sites: list[dict[str, Any]] = []
+        last_company_site_counters: dict[str, Any] = {}
+        all_company_sites = list(getattr(cli_args, "company_career_sites", []) or [])
+        selected_scope_urls = getattr(cli_args, "company_site_selected_scope_urls", None)
+        if selected_scope_urls is None:
+            selected_scope_urls = [str(item.get("url") or "") for item in all_company_sites]
+        site_type = str(getattr(cli_args, "company_site_source_type", "company") or "company")
+        source_policy_store = getattr(getattr(context, "repositories", None), "source_policy_store", None)
+        crawlable_company_sites = all_company_sites
+        skipped_by_site_state: list[dict[str, Any]] = []
+        if source_policy_store is not None:
+            source_policy_store.ensure_sites(all_company_sites, site_type=site_type)
+            transitions = source_policy_store.mark_workspace_selected(selected_scope_urls, site_type=site_type)
+            crawlable_company_sites, skipped_by_site_state = source_policy_store.filter_crawlable_sites(
+                all_company_sites,
+                explicitly_triggered_urls=selected_scope_urls,
+            )
+            if getattr(context, "logger", None) is not None:
+                for site_url, transition in transitions.items():
+                    context.logger.info("Site state transition for %s: %s", site_url, transition)
+                for site in skipped_by_site_state:
+                    context.logger.info(
+                        "Skipping site %s because site_state=%s.",
+                        site.get("url", ""),
+                        site.get("site_state", "pending"),
+                    )
+
+        def _record_site_yield(site_url: str, jobs_found: int) -> None:
+            if source_policy_store is None:
+                return
+            transition = source_policy_store.record_site_yield(site_url, jobs_found=jobs_found)
+            if getattr(context, "logger", None) is not None:
+                context.logger.info(
+                    "Site yield state for %s: jobs_found=%s state=%s zero_yield_runs=%s.",
+                    site_url,
+                    transition["jobs_found"],
+                    transition["site_state"],
+                    transition["consecutive_zero_yield_runs"],
+                )
 
         def _record_usage_event(event: dict[str, Any]) -> None:
             nonlocal run_credit_consumed
@@ -458,8 +668,19 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
                     )
             analytics_store = getattr(context.repositories, "analytics_store", None)
             if analytics_store is not None and hasattr(analytics_store, "emit_event"):
+                event_id = f"evt_{uuid4().hex[:16]}"
+                if hasattr(analytics_store, "record_scrapeops_usage") and event.get("method") == "scrapeops_proxy":
+                    analytics_store.record_scrapeops_usage(
+                        ledger_id=event_id,
+                        payload=event,
+                        user_id=user_id,
+                        workspace_id=context.workspace.id,
+                        run_id=context.run.id,
+                        route=f"/runs/{context.run.id}",
+                        source="worker",
+                    )
                 analytics_store.emit_event(
-                    event_id=f"evt_{uuid4().hex[:16]}",
+                    event_id=event_id,
                     event_name="scrapeops_request",
                     occurred_at=utc_now_iso(),
                     user_id=user_id,
@@ -476,6 +697,9 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
                 )
 
         def _progress_callback(payload: dict[str, Any]) -> None:
+            nonlocal capped_sites, last_company_site_counters
+            last_company_site_counters = dict(payload.get("counters") or {})
+            capped_sites = list(last_company_site_counters.get("capped_sites") or capped_sites)
             context.update_run_progress(
                 stage_id=definition.stage_id,
                 stage_type=definition.stage_type,
@@ -495,38 +719,82 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
                 return False
             return str(latest.status or "") in {"cancel_requested", "cancelled"}
 
+        def _seen_job_url_lookup(site_url: str, job_urls: list[str]) -> set[str]:
+            if source_policy_store is None or not hasattr(source_policy_store, "get_seen_job_urls"):
+                return set()
+            try:
+                return set(source_policy_store.get_seen_job_urls(job_urls))
+            except TypeError:
+                return set(source_policy_store.get_seen_job_urls(job_urls))
+
+        def _cached_job_lookup(site_url: str, job_urls: list[str]) -> dict[str, dict[str, Any]]:
+            if source_policy_store is None or not hasattr(source_policy_store, "get_cached_job_postings"):
+                return {}
+            return dict(source_policy_store.get_cached_job_postings(job_urls))
+
+        def _record_job_url_history(site_url: str, attempts: list[dict[str, Any]]) -> None:
+            if source_policy_store is None or not hasattr(source_policy_store, "record_job_url_attempts"):
+                return
+            source_policy_store.record_job_url_attempts(
+                [
+                    {
+                        **dict(attempt or {}),
+                        "site_url": str(dict(attempt or {}).get("site_url") or site_url),
+                    }
+                    for attempt in attempts
+                    if isinstance(attempt, dict)
+                ],
+                run_id=context.run.id,
+                workspace_id=str(getattr(getattr(context, "workspace", None), "id", "") or ""),
+            )
+
         jobs, failures = scrape_company_career_sites(
-            company_sites=getattr(cli_args, "company_career_sites", []),
+            company_sites=crawlable_company_sites,
             keywords=getattr(cli_args, "keywords", []),
             request_timeout_seconds=int(getattr(cli_args, "company_site_request_timeout_seconds", 30)),
             max_jobs_per_site=int(getattr(cli_args, "company_site_max_jobs_per_site", 0)),
             use_proxy_fallback=bool(getattr(cli_args, "use_proxy_fallback", False)),
             target_country_codes=getattr(cli_args, "country_codes", []),
             target_cities=getattr(cli_args, "cities", []),
+            posted_within_days=int(getattr(cli_args, "posted_within_days", 0) or 0),
             locality_mode=str(getattr(cli_args, "company_site_locality_mode", "local_preferred") or "local_preferred"),
-            max_sites_per_run=int(getattr(cli_args, "company_site_max_sites_per_run", 0) or 0),
+            max_sites_per_run=int(company_site_limits["max_sites_per_run"]),
             run_credit_budget=run_credit_budget,
-            emergency_max_job_links_per_site=int(
-                getattr(cli_args, "company_site_emergency_max_job_links_per_site", 75) or 75
-            ),
+            max_job_links_per_site=int(company_site_limits["max_job_links_per_site"]),
             domain_policies=getattr(cli_args, "scrapeops_domain_policies", []),
             usage_callback=_record_usage_event,
             logger=context.logger,
             progress_callback=_progress_callback,
             should_cancel=_should_cancel,
+            yield_callback=_record_site_yield,
+            seen_job_url_lookup=_seen_job_url_lookup,
+            cached_job_lookup=_cached_job_lookup,
+            job_url_history_callback=_record_job_url_history,
         )
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(jobs)},
             data={
                 "company_site_failures": failures,
+                "company_site_state_skips": skipped_by_site_state,
+                "capped_sites": [*list(getattr(context, "data", {}).get("capped_sites") or []), *capped_sites],
                 "company_site_policy": {
                     "policy_version": str(getattr(cli_args, "company_site_policy_version", "") or ""),
                     "locality_mode": str(getattr(cli_args, "company_site_locality_mode", "local_preferred") or "local_preferred"),
-                    "max_sites_per_run": int(getattr(cli_args, "company_site_max_sites_per_run", 0) or 0),
+                    "max_sites_per_run": int(company_site_limits["max_sites_per_run"]),
                     "runner_credit_budget": run_credit_budget,
+                    "company_site_max_job_links_per_site": int(company_site_limits["max_job_links_per_site"]),
                 },
             },
-            metrics={"jobs_found": len(jobs), "failures": len(failures)},
+            metrics={
+                "jobs_found": len(jobs),
+                "failures": len(failures),
+                "incremental_skipped_job_urls": int(last_company_site_counters.get("incremental_skipped_job_urls") or 0),
+                "public_index_reused_job_urls": int(last_company_site_counters.get("public_index_reused_job_urls") or 0),
+                "candidate_jobs_discovered": int(last_company_site_counters.get("candidate_jobs_discovered") or 0),
+                "candidate_jobs_followed": int(last_company_site_counters.get("candidate_jobs_followed") or 0),
+                "candidate_jobs_skipped": int(last_company_site_counters.get("candidate_jobs_skipped") or 0),
+                "link_cap_hits": int(last_company_site_counters.get("link_cap_hits") or 0),
+            },
         )
 
 
@@ -536,15 +804,16 @@ class TailoredScreeningStage(BaseStage):
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
         _, cli_args = _build_root_cli_args(context, definition)
+        stage_args = _build_tailored_stage2_args(cli_args)
         input_jobs = context.get_job_dicts(definition.input_keys[0])
-        approved, rejected = run_tailored_stage2_pipeline(input_jobs, cli_args)
+        approved, rejected = run_tailored_stage2_pipeline(input_jobs, stage_args)
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(approved)},
             data={f"{definition.stage_id}_rejected": rejected},
             metrics={"approved": len(approved), "rejected": len(rejected)},
             artifacts=[
-                _json_artifact(context.run.id, definition.stage_id, "approved", str(cli_args.stage2_output)),
-                _json_artifact(context.run.id, definition.stage_id, "rejected", str(cli_args.stage2_rejected_output)),
+                _json_artifact(context.run.id, definition.stage_id, "approved", str(stage_args.output)),
+                _json_artifact(context.run.id, definition.stage_id, "rejected", str(stage_args.rejected)),
             ],
         )
 
@@ -555,15 +824,16 @@ class TailoredPrioritizationStage(BaseStage):
 
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
         _, cli_args = _build_root_cli_args(context, definition)
+        stage_args = _build_tailored_stage3_args(cli_args)
         input_jobs = context.get_job_dicts(definition.input_keys[0])
-        approved, rejected = run_tailored_stage3_pipeline(input_jobs, cli_args)
+        approved, rejected = run_tailored_stage3_pipeline(input_jobs, stage_args)
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(approved)},
             data={f"{definition.stage_id}_rejected": rejected},
             metrics={"approved": len(approved), "rejected": len(rejected)},
             artifacts=[
-                _json_artifact(context.run.id, definition.stage_id, "approved", str(cli_args.stage3_output)),
-                _json_artifact(context.run.id, definition.stage_id, "rejected", str(cli_args.stage3_rejected_output)),
+                _json_artifact(context.run.id, definition.stage_id, "approved", str(stage_args.output)),
+                _json_artifact(context.run.id, definition.stage_id, "rejected", str(stage_args.rejected)),
             ],
         )
 
@@ -666,7 +936,11 @@ class JobBoardAcquisitionStage(BaseStage):
     def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
         config = load_reusable_packages_config()
         args = build_reusable_stage1_args(config, overrides=_resolved_settings(context, definition))
-        result = run_reusable_stage1_pipeline(args, config=config)
+        result = run_reusable_stage1_pipeline(
+            args,
+            config=config,
+            usage_callback=_build_scrapeops_usage_callback(context, definition),
+        )
         jobs = result["jobs"]
         output_path = result["output_path"]
         source_log_path = result["source_log_path"]

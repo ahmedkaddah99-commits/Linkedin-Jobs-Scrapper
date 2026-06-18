@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -8,29 +8,95 @@ import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
 
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
+const CHECKLIST_STAGE_LABELS = {
+  source_search: "Searching jobs",
+  source_linkedin_search: "Searching job listings",
+  source_company_career_sites: "Searching company career sites",
+  source_academic_career_sites: "Searching academic career sites",
+  source_job_boards: "Searching job boards",
+  source_curated_urls: "Reading saved job postings",
+  source_exact_job_links: "Reading job postings",
+  merge_jobs: "Removing duplicate jobs",
+  merge_source_jobs: "Removing duplicate jobs",
+  merge_exact_job_links: "Removing duplicate links",
+  screen_jobs: "Filtering jobs",
+  prioritize_jobs: "Ranking matches",
+  generate_documents: "Generating documents",
+  generate_application_documents: "Generating documents",
+  generate_quick_apply_documents: "Generating documents",
+  classify_roles: "Grouping matching roles",
+  build_reusable_profiles: "Preparing role-based documents",
+  package_applications: "Saving application packages",
+};
+const CHECKLIST_STAGE_TYPE_LABELS = {
+  "jobs.acquire.search_listings": "Searching jobs",
+  "jobs.acquire.company_sites": "Searching company career sites",
+  "jobs.acquire.job_boards": "Searching job boards",
+  "jobs.ingest.curated_urls": "Reading job postings",
+  "jobs.merge.dedupe": "Removing duplicates",
+  "jobs.screen.filter": "Filtering jobs",
+  "jobs.prioritize.rank": "Ranking matches",
+  "jobs.classify.roles": "Grouping matching roles",
+  "profiles.generate.reusable": "Preparing role-based documents",
+  "applications.generate.documents": "Generating documents",
+  "applications.package.export": "Saving application packages",
+};
+const CHECKLIST_STATUS_PRESENTATION = {
+  pending: {
+    icon: "check_box_outline_blank",
+    label: "Pending",
+    iconClassName: "text-on-surface-variant",
+    rowClassName: "text-on-surface-variant",
+  },
+  running: {
+    icon: "progress_activity",
+    label: "Running",
+    iconClassName: "text-primary motion-safe:animate-spin",
+    rowClassName: "bg-surface-container-low text-on-surface",
+  },
+  done: {
+    icon: "check_circle",
+    label: "Done",
+    iconClassName: "text-primary",
+    rowClassName: "text-on-surface",
+  },
+  failed: {
+    icon: "error",
+    label: "Failed",
+    iconClassName: "text-error",
+    rowClassName: "bg-error/5 text-error",
+  },
+  stopped: {
+    icon: "cancel",
+    label: "Stopped",
+    iconClassName: "text-error",
+    rowClassName: "bg-error/5 text-error",
+  },
+};
 
-function formatDuration(seconds) {
-  const total = Math.max(0, Number.parseInt(seconds || 0, 10) || 0);
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const remainingSeconds = total % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
-  return `${remainingSeconds}s`;
+function checklistStageLabel(stage) {
+  return (
+    CHECKLIST_STAGE_LABELS[String(stage.stage_id || "")]
+    || CHECKLIST_STAGE_TYPE_LABELS[String(stage.stage_type || "")]
+    || "Processing jobs"
+  );
 }
 
-function progressTone(health) {
-  if (health === "stale") return "warning";
-  if (health === "slow") return "primary";
-  return "success";
-}
-
-function formatAccessMethod(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "scrapeops_proxy") return "ScrapeOps Proxy";
-  if (normalized === "direct_only") return "Direct Request";
-  if (normalized === "proxy_fallback_enabled") return "Direct With Proxy Fallback";
-  return labelize(value || "");
+function checklistStageStatus(stage) {
+  const recordedStatus = String(stage.status || "").trim().toLowerCase();
+  if (recordedStatus === "completed") {
+    return "done";
+  }
+  if (recordedStatus === "failed") {
+    return "failed";
+  }
+  if (recordedStatus === "cancelled") {
+    return "stopped";
+  }
+  if (stage.is_current) {
+    return "running";
+  }
+  return "pending";
 }
 
 function ReviewSection({ children, count, defaultOpen = true, title, tone = "primary" }) {
@@ -63,6 +129,39 @@ function ReviewSection({ children, count, defaultOpen = true, title, tone = "pri
   );
 }
 
+function ApplicationWarnings({ warnings = [] }) {
+  const visibleWarnings = (warnings || []).filter((warning) => warning?.message || warning?.title);
+  if (!visibleWarnings.length) return null;
+  return (
+    <div className="mt-3 space-y-2">
+      {visibleWarnings.slice(0, 3).map((warning, index) => {
+        const blocking = String(warning.severity || "") === "blocking";
+        return (
+          <div
+            className={[
+              "rounded-xl border px-3 py-2 text-xs leading-5",
+              blocking
+                ? "border-error/25 bg-error/5 text-error"
+                : "border-amber-500/25 bg-amber-500/5 text-amber-700",
+            ].join(" ")}
+            key={`${warning.code || "warning"}-${index}`}
+          >
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined mt-0.5 text-[15px]">
+                {blocking ? "priority_high" : "info"}
+              </span>
+              <div>
+                <div className="font-semibold">{warning.title || "Application requirement"}</div>
+                <div>{warning.message}</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function IncludedJobRow({ job, runId }) {
   const jobWorkspaceUrl =
     job.job_workspace_url || buildJobWorkspaceRoute({ runId, jobId: job.job_id });
@@ -89,6 +188,7 @@ function IncludedJobRow({ job, runId }) {
           <p className="text-sm text-on-surface-variant">
             {[job.company, job.location].filter(Boolean).join(" | ") || "No company details saved yet."}
           </p>
+          <ApplicationWarnings warnings={job.application_warnings} />
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-on-surface-variant">
           {job.source_label ? (
@@ -234,129 +334,98 @@ function ExcludedJobRow({ job, runId }) {
   );
 }
 
-function RunProgressPanel({ progress, usage }) {
-  if (!progress || !progress.stage_id) {
+function RunChecklist({ stages }) {
+  const checklistStages = (stages || []).filter(
+    (stage) => stage.stage_type !== "synthetic_review_stage" && stage.status !== "skipped",
+  );
+  if (!checklistStages.length) {
     return null;
   }
-  const counters = progress.counters || {};
-  const currentItem = progress.current_item || {};
-  const accessMethod = currentItem.access_method || currentItem.transport || "";
-  const recentFailures = progress.recent_failures || [];
-  const usageTotals = usage?.totals || {};
-  const stagePosition =
-    counters.stage_index && counters.total_stages
-      ? `Stage ${counters.stage_index} of ${counters.total_stages}`
-      : "Active stage";
 
   return (
     <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <ol aria-label="Run progress" className="space-y-2">
+        {checklistStages.map((stage) => {
+          const status = checklistStageStatus(stage);
+          const presentation = CHECKLIST_STATUS_PRESENTATION[status];
+          return (
+            <li
+              aria-current={status === "running" ? "step" : undefined}
+              className={[
+                "flex items-center gap-3 rounded-xl px-3 py-2.5",
+                presentation.rowClassName,
+              ].join(" ")}
+              key={stage.stage_id}
+            >
+              <span
+                aria-hidden="true"
+                className={[
+                  "material-symbols-outlined shrink-0 text-[22px]",
+                  presentation.iconClassName,
+                ].join(" ")}
+              >
+                {presentation.icon}
+              </span>
+              <span className="text-sm font-medium">
+                <span className="sr-only">{presentation.label}: </span>
+                {checklistStageLabel(stage)}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
+function SourceCoverageNotice({ run, stages = [] }) {
+  const stageMetrics = (stages || [])
+    .filter((stage) => String(stage.stage_type || "") === "jobs.acquire.company_sites")
+    .reduce(
+      (accumulator, stage) => ({
+        link_cap_hits: accumulator.link_cap_hits + Number(stage.metrics?.link_cap_hits || 0),
+      }),
+      { link_cap_hits: 0 },
+    );
+  const counters = run?.progress?.counters || {};
+  const cappedSites = run?.capped_sites || [];
+  const linkCapHits = Number(counters.link_cap_hits || stageMetrics.link_cap_hits || cappedSites.length || 0);
+  if (!linkCapHits) return null;
+
+  const cappedLabels = cappedSites
+    .map((site) => String(site.url || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+
+  return (
+    <section className="rounded-2xl border border-primary/15 bg-primary/5 px-5 py-4 text-sm text-on-surface">
+      <div className="flex items-start gap-3">
+        <span className="material-symbols-outlined mt-0.5 text-[20px] text-primary">travel_explore</span>
         <div>
-          <div className="flex flex-wrap items-center gap-3">
-            <StatusBadge tone={progressTone(progress.health)}>{progress.health_label || "Running"}</StatusBadge>
-            <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
-              {stagePosition}
-            </span>
+          <div className="font-semibold text-on-surface">Company-site coverage</div>
+          <div className="mt-1 leading-6 text-on-surface-variant">
+            {`${linkCapHits} career site${linkCapHits === 1 ? "" : "s"} hit the configured job-link cap.`}
           </div>
-          <h2 className="mt-3 font-headline text-2xl font-bold text-on-surface">
-            {progress.stage_name || labelize(progress.stage_id)}
-          </h2>
-          <p className="mt-1 text-sm leading-7 text-on-surface-variant">
-            {progress.message || "Run progress is being updated while this stage executes."}
-          </p>
-        </div>
-        <div className="grid gap-2 text-sm text-on-surface-variant">
-          <div>
-            <span className="font-semibold text-on-surface">Elapsed:</span> {formatDuration(progress.elapsed_seconds)}
-          </div>
-          <div>
-            <span className="font-semibold text-on-surface">Last movement:</span> {formatDuration(progress.idle_seconds)} ago
-          </div>
-          {progress.last_progress_at ? (
-            <div>
-              <span className="font-semibold text-on-surface">Updated:</span> {formatDateTime(progress.last_progress_at)}
+          {cappedLabels.length ? (
+            <div className="mt-2 text-xs text-on-surface-variant">
+              Capped: {cappedLabels.join(" | ")}
+              {cappedSites.length > cappedLabels.length ? ` +${cappedSites.length - cappedLabels.length} more` : ""}
             </div>
           ) : null}
         </div>
       </div>
-
-      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Jobs Found</div>
-          <div className="mt-2 text-2xl font-bold text-on-surface">{counters.jobs_found ?? 0}</div>
-        </div>
-        <div className="rounded-2xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Sites Processed</div>
-          <div className="mt-2 text-2xl font-bold text-on-surface">
-            {counters.processed_sites ?? counters.completed_stages ?? 0}
-            {counters.total_sites ? ` / ${counters.total_sites}` : ""}
-          </div>
-        </div>
-        <div className="rounded-2xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Failed Sites</div>
-          <div className="mt-2 text-2xl font-bold text-on-surface">{counters.failed_sites ?? 0}</div>
-        </div>
-        <div className="rounded-2xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Timeout</div>
-          <div className="mt-2 text-2xl font-bold text-on-surface">
-            {counters.request_timeout_seconds ? `${counters.request_timeout_seconds}s` : "N/A"}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Runner Credits</div>
-          <div className="mt-2 text-2xl font-bold text-on-surface">{usageTotals.runner_credits ?? 0}</div>
-        </div>
-        <div className="rounded-2xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Candidates Followed</div>
-          <div className="mt-2 text-2xl font-bold text-on-surface">{counters.candidate_jobs_followed ?? 0}</div>
-        </div>
-        <div className="rounded-2xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Candidates Skipped</div>
-          <div className="mt-2 text-2xl font-bold text-on-surface">{counters.candidate_jobs_skipped ?? 0}</div>
-        </div>
-        <div className="rounded-2xl bg-surface p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">Locality Mode</div>
-          <div className="mt-2 text-lg font-bold capitalize text-on-surface">
-            {String(counters.locality_mode || currentItem.locality_mode || "").replaceAll("_", " ") || "N/A"}
-          </div>
-        </div>
-      </div>
-
-      {currentItem.company_name || currentItem.site_url ? (
-        <div className="mt-5 rounded-2xl bg-surface p-4 text-sm text-on-surface-variant">
-          <div className="font-semibold text-on-surface">Current item</div>
-          <div className="mt-2">{currentItem.company_name || currentItem.site_url}</div>
-          {currentItem.site_url ? <div className="mt-1 break-all">{currentItem.site_url}</div> : null}
-          {accessMethod ? <div className="mt-1">Access Method: {formatAccessMethod(accessMethod)}</div> : null}
-        </div>
-      ) : null}
-
-      {recentFailures.length ? (
-        <div className="mt-5 rounded-2xl border border-error/20 bg-error/5 p-4 text-sm text-error">
-          <div className="font-semibold">Recent issues</div>
-          <div className="mt-2 space-y-1">
-            {recentFailures.map((item, index) => (
-              <div key={`${item.url || item.error || index}`}>
-                {item.company_name || item.stage || "Issue"}: {item.error || "Unknown error"}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
     </section>
   );
 }
 
 export default function RunDetailPage() {
   const { runId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const { request } = useSession();
   const [actionState, setActionState] = useState({
     deletingRun: false,
-    message: "",
+    message: String(location.state?.runStartedMessage || ""),
     error: "",
   });
 
@@ -368,7 +437,7 @@ export default function RunDetailPage() {
   const run = data?.run || null;
   const tracker = data?.tracker || {};
   const review = data?.review || { included_jobs: [], excluded_jobs: [] };
-  const progress = run?.progress || null;
+  const stages = data?.stages || [];
   const hasActiveRun = ACTIVE_RUN_STATUSES.includes(String(run?.status || "").trim());
   const hasActiveChildRuns = (review.excluded_jobs || []).some((job) =>
     ACTIVE_RUN_STATUSES.includes(String(job.create_documents_run_status || "").trim()),
@@ -426,14 +495,20 @@ export default function RunDetailPage() {
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-3">
                 <StatusBadge tone={statusTone(run?.status)}>{labelize(run?.status || "pending")}</StatusBadge>
+                {run?.is_test_run ? (
+                  <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
+                    Test Run
+                  </span>
+                ) : null}
               </div>
               <div>
                 <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
                   {run?.workspace_name || "Run Review"}
                 </h1>
                 <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
-                  Review the included and excluded jobs for this run. You can create documents for
-                  excluded jobs when needed, and completed document jobs move to Tracker automatically.
+                  {run?.is_test_run
+                    ? "Review the single selected job and every document produced by this workspace. The selected job is added to Tracker automatically."
+                    : "Review the included and excluded jobs for this run. You can create documents for excluded jobs when needed, and completed document jobs move to Tracker automatically."}
                 </p>
               </div>
             </div>
@@ -492,7 +567,8 @@ export default function RunDetailPage() {
         </section>
       ) : null}
 
-      <RunProgressPanel progress={progress} usage={run?.scrapeops_usage || null} />
+      <RunChecklist stages={stages} />
+      <SourceCoverageNotice run={run} stages={stages} />
 
       {loading ? (
         <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest px-6 py-5 text-on-surface-variant shadow-soft">
@@ -508,8 +584,9 @@ export default function RunDetailPage() {
             <div>
               <h2 className="font-headline text-2xl font-bold text-on-surface">Run Review</h2>
               <p className="mt-1 max-w-3xl text-sm leading-7 text-on-surface-variant">
-                Use this view to decide which roles stay out and which excluded roles should still get
-                documents. Once documents are ready, those jobs appear in Tracker.
+                {run?.is_test_run
+                  ? "This test run keeps one job that reached document generation so you can inspect the workspace output. The selected job and its documents are available in Tracker."
+                  : "Use this view to decide which roles stay out and which excluded roles should still get documents. Once documents are ready, those jobs appear in Tracker."}
               </p>
             </div>
             <Link

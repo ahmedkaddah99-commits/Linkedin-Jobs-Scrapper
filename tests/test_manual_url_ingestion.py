@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from backend.capabilities.tailored_documents.manual_urls import (
+    extract_public_posted_age,
     extract_linkedin_job_id,
     is_valid_job_url,
     load_manual_urls,
@@ -11,6 +12,13 @@ from backend.capabilities.tailored_documents.manual_urls import (
 
 
 class ManualUrlIngestionTests(unittest.TestCase):
+    def test_extract_public_posted_age_parses_json_ld_date(self):
+        posted_text, age_hours, posted_datetime = extract_public_posted_age("2026-05-25")
+
+        self.assertEqual(posted_text, "2026-05-25")
+        self.assertIsNotNone(age_hours)
+        self.assertTrue(posted_datetime.startswith("2026-05-25T00:00:00"))
+
     def test_extract_linkedin_job_id(self):
         self.assertEqual(
             extract_linkedin_job_id("https://www.linkedin.com/jobs/view/1234567890/?trackingId=abc"),

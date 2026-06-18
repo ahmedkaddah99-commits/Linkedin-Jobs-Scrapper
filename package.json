@@ -1,6 +1,11 @@
 {
   "private": true,
   "scripts": {
+    "check": "npm run check:backend && npm run check:frontend",
+    "check:backend": "node scripts/run-python.cjs -m ruff check backend tests workspace_runner.py && node scripts/run-python.cjs -m pytest -q tests/test_backend_application.py tests/test_sqlite_repositories.py tests/test_worker_service.py tests/test_phase0_contracts.py tests/test_job_dedupe.py",
+    "check:backend:api": "node scripts/run-python.cjs -m pytest -q tests/test_backend_api.py",
+    "check:backend:full": "node scripts/run-python.cjs -m pytest",
+    "check:frontend": "npm --prefix frontend run check",
     "dev": "concurrently --names \"API,WORKER,UI\" --prefix-colors \"cyan,yellow,magenta\" \"node scripts/run-python.cjs workspace_runner.py serve-api\" \"node scripts/run-python.cjs workspace_runner.py run-worker --worker-id local_worker\" \"npm --prefix frontend run dev\"",
     "dev:api": "node scripts/run-python.cjs workspace_runner.py serve-api",
     "dev:worker": "node scripts/run-python.cjs workspace_runner.py run-worker --worker-id local_worker",

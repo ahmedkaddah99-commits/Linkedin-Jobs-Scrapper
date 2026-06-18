@@ -1,0 +1,529 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from backend.database.migrations import Migration
+from backend.domain.models import utc_now_iso
+
+if TYPE_CHECKING:
+    from backend.database.connection import DatabaseConnection
+
+_APPLICATION_STATUS_HISTORY_SOURCES = {"manual", "gmail_sync", "auto_default"}
+
+
+def _table_columns(connection: DatabaseConnection, table_name: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def _ensure_run_column(connection: DatabaseConnection, column_name: str, column_sql: str) -> None:
+    if column_name not in _table_columns(connection, "runs"):
+        connection.execute(f"ALTER TABLE runs ADD COLUMN {column_name} {column_sql}")
+
+
+def _ensure_user_column(connection: DatabaseConnection, column_name: str, column_sql: str) -> None:
+    if column_name not in _table_columns(connection, "users"):
+        connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_sql}")
+
+
+def _apply_runtime_migration(connection: DatabaseConnection) -> None:
+    _ensure_run_column(connection, "requested_by", "TEXT NOT NULL DEFAULT ''")
+    _ensure_run_column(connection, "queued_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_run_column(connection, "started_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_run_column(connection, "finished_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_run_column(connection, "current_stage_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_run_column(connection, "last_error", "TEXT NOT NULL DEFAULT ''")
+    _ensure_run_column(connection, "attempt_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_run_column(connection, "max_attempts", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_run_column(connection, "run_input_overrides_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_run_column(connection, "run_plan_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_run_column(connection, "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS run_stage_results (
+            run_id TEXT NOT NULL,
+            sequence_no INTEGER NOT NULL,
+            stage_id TEXT NOT NULL,
+            stage_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            output_keys_json TEXT NOT NULL DEFAULT '[]',
+            artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+            PRIMARY KEY (run_id, sequence_no)
+        );
+        CREATE TABLE IF NOT EXISTS run_jobs (
+            run_id TEXT NOT NULL,
+            set_key TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            job_id TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            company TEXT NOT NULL DEFAULT '',
+            source_type TEXT NOT NULL DEFAULT '',
+            filter_status TEXT NOT NULL DEFAULT '',
+            location_raw TEXT NOT NULL DEFAULT '',
+            link TEXT NOT NULL DEFAULT '',
+            source_url TEXT NOT NULL DEFAULT '',
+            apply_link TEXT NOT NULL DEFAULT '',
+            portal TEXT NOT NULL DEFAULT '',
+            description_text TEXT NOT NULL DEFAULT '',
+            manual_approved INTEGER NOT NULL DEFAULT 0,
+            role_category_id TEXT NOT NULL DEFAULT '',
+            role_category_name TEXT NOT NULL DEFAULT '',
+            priority_rank INTEGER,
+            payload_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, set_key, ordinal)
+        );
+        CREATE TABLE IF NOT EXISTS workers (
+            worker_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            host_name TEXT NOT NULL DEFAULT '',
+            process_id INTEGER NOT NULL DEFAULT 0,
+            current_run_id TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            last_heartbeat_at TEXT NOT NULL,
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_run_stage_results_run_sequence ON run_stage_results(run_id, sequence_no);
+        CREATE INDEX IF NOT EXISTS idx_run_jobs_run_key_ordinal ON run_jobs(run_id, set_key, ordinal);
+        CREATE INDEX IF NOT EXISTS idx_run_jobs_run_job_id ON run_jobs(run_id, job_id);
+        CREATE INDEX IF NOT EXISTS idx_workers_status_lease ON workers(status, lease_expires_at);
+        """
+    )
+
+
+def _apply_run_user_id_migration(connection: DatabaseConnection) -> None:
+    _ensure_run_column(connection, "user_id", "TEXT NOT NULL DEFAULT ''")
+    normalized_user_id_sql = (
+        "CASE "
+        "WHEN COALESCE(requested_by, '') LIKE 'api:%' THEN TRIM(SUBSTR(COALESCE(requested_by, ''), 5)) "
+        "ELSE '' "
+        "END"
+    )
+    connection.execute(
+        (
+            "UPDATE runs "
+            f"SET user_id = {normalized_user_id_sql} "
+            f"WHERE COALESCE(user_id, '') != {normalized_user_id_sql}"
+        )
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_runs_user_id_created_at ON runs(user_id, created_at DESC)")
+
+
+def _apply_billing_migration(connection: DatabaseConnection) -> None:
+    _ensure_user_column(connection, "clerk_user_id", "TEXT NOT NULL DEFAULT ''")
+    connection.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_clerk_user_id_unique
+            ON users(clerk_user_id)
+            WHERE clerk_user_id != '';
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            subscription_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            plan_id TEXT NOT NULL DEFAULT 'free',
+            status TEXT NOT NULL DEFAULT 'active',
+            lemonsqueezy_subscription_id TEXT,
+            lemonsqueezy_customer_id TEXT,
+            lemonsqueezy_order_id TEXT,
+            current_period_start TEXT,
+            current_period_end TEXT,
+            cancelled_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS subscription_events (
+            event_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            plan_id TEXT,
+            previous_plan_id TEXT,
+            lemonsqueezy_event_name TEXT,
+            occurred_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS quota_usage (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            quota_type TEXT NOT NULL,
+            period TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, quota_type, period)
+        );
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_subscription_events_user_id
+            ON subscription_events(user_id, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_quota_usage_user_period
+            ON quota_usage(user_id, period, quota_type);
+        """
+    )
+
+
+def _apply_analytics_events_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS analytics_events (
+            event_id TEXT PRIMARY KEY,
+            event_name TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            user_id TEXT,
+            workspace_id TEXT,
+            run_id TEXT,
+            job_id TEXT,
+            review_id TEXT,
+            session_id TEXT,
+            route TEXT,
+            source TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_name_occurred_at
+            ON analytics_events(event_name, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_user_occurred_at
+            ON analytics_events(user_id, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_analytics_events_run_occurred_at
+            ON analytics_events(run_id, occurred_at);
+        """
+    )
+
+
+def _apply_app_config_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS app_config (
+            config_key TEXT PRIMARY KEY,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_app_config_updated_at
+            ON app_config(updated_at);
+        """
+    )
+
+
+def _apply_scrapeops_usage_ledger_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS scrapeops_usage_ledger (
+            ledger_id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL DEFAULT '',
+            target_url TEXT NOT NULL DEFAULT '',
+            method TEXT NOT NULL DEFAULT 'scrapeops_proxy',
+            request_mode TEXT NOT NULL DEFAULT 'basic',
+            target_status_code INTEGER NOT NULL DEFAULT 0,
+            provider_status_code INTEGER NOT NULL DEFAULT 0,
+            latency_ms INTEGER NOT NULL DEFAULT 0,
+            billed_credits_actual INTEGER,
+            billed_credits_estimated INTEGER NOT NULL DEFAULT 0,
+            usable_job_count INTEGER NOT NULL DEFAULT 0,
+            error_category TEXT NOT NULL DEFAULT '',
+            recorded_at TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT '',
+            workspace_id TEXT NOT NULL DEFAULT '',
+            run_id TEXT NOT NULL DEFAULT '',
+            route TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_scrapeops_usage_source_recorded_at
+            ON scrapeops_usage_ledger(source_id, recorded_at);
+        CREATE INDEX IF NOT EXISTS idx_scrapeops_usage_run_recorded_at
+            ON scrapeops_usage_ledger(run_id, recorded_at);
+        """
+    )
+
+
+def _apply_site_source_policy_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS site_source_policy (
+            site_url TEXT PRIMARY KEY,
+            site_type TEXT NOT NULL DEFAULT 'company',
+            site_state TEXT NOT NULL DEFAULT 'pending'
+                CHECK (site_state IN ('hot', 'selected', 'low_yield', 'paused', 'pending')),
+            consecutive_zero_yield_runs INTEGER NOT NULL DEFAULT 0,
+            last_jobs_found INTEGER NOT NULL DEFAULT 0,
+            last_crawled_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_site_source_policy_type_state
+            ON site_source_policy(site_type, site_state);
+        """
+    )
+
+
+def _apply_site_job_url_history_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS site_job_url_history (
+            job_url TEXT PRIMARY KEY,
+            site_url TEXT NOT NULL DEFAULT '',
+            source_group_url TEXT NOT NULL DEFAULT '',
+            workspace_id TEXT NOT NULL DEFAULT '',
+            run_id TEXT NOT NULL DEFAULT '',
+            job_id TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            company TEXT NOT NULL DEFAULT '',
+            location_raw TEXT NOT NULL DEFAULT '',
+            last_status TEXT NOT NULL DEFAULT '',
+            active_status TEXT NOT NULL DEFAULT 'unknown',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            last_verified_at TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_site_job_url_history_site_seen
+            ON site_job_url_history(site_url, last_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_site_job_url_history_run_seen
+            ON site_job_url_history(run_id, last_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_site_job_url_history_active_seen
+            ON site_job_url_history(active_status, last_seen_at);
+        """
+    )
+
+
+def _apply_site_job_url_history_workspace_scope_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_job_url_history_site_seen
+            ON site_job_url_history(site_url, last_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_site_job_url_history_run_seen
+            ON site_job_url_history(run_id, last_seen_at);
+        """
+    )
+
+
+def _apply_site_job_url_history_public_index_migration(connection: DatabaseConnection) -> None:
+    columns = connection.execute("PRAGMA table_info(site_job_url_history)").fetchall()
+    if not columns:
+        _apply_site_job_url_history_migration(connection)
+        return
+    column_names = {str(row[1]) for row in columns}
+    pk_columns = [
+        str(row[1])
+        for row in sorted((row for row in columns if int(row[5] or 0)), key=lambda row: int(row[5] or 0))
+    ]
+    if (
+        pk_columns == ["job_url"]
+        and {"payload_json", "active_status", "last_verified_at", "location_raw", "source_group_url"}.issubset(column_names)
+    ):
+        connection.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_job_url_history_site_seen
+                ON site_job_url_history(site_url, last_seen_at);
+            CREATE INDEX IF NOT EXISTS idx_site_job_url_history_run_seen
+                ON site_job_url_history(run_id, last_seen_at);
+            CREATE INDEX IF NOT EXISTS idx_site_job_url_history_active_seen
+                ON site_job_url_history(active_status, last_seen_at);
+            """
+        )
+        return
+
+    connection.executescript(
+        """
+        ALTER TABLE site_job_url_history RENAME TO site_job_url_history_legacy_public_index;
+        CREATE TABLE site_job_url_history (
+            job_url TEXT PRIMARY KEY,
+            site_url TEXT NOT NULL DEFAULT '',
+            source_group_url TEXT NOT NULL DEFAULT '',
+            workspace_id TEXT NOT NULL DEFAULT '',
+            run_id TEXT NOT NULL DEFAULT '',
+            job_id TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            company TEXT NOT NULL DEFAULT '',
+            location_raw TEXT NOT NULL DEFAULT '',
+            last_status TEXT NOT NULL DEFAULT '',
+            active_status TEXT NOT NULL DEFAULT 'unknown',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            last_verified_at TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        INSERT OR REPLACE INTO site_job_url_history (
+            job_url,
+            site_url,
+            source_group_url,
+            workspace_id,
+            run_id,
+            job_id,
+            title,
+            company,
+            location_raw,
+            last_status,
+            active_status,
+            first_seen_at,
+            last_seen_at,
+            last_verified_at,
+            payload_json
+        )
+        SELECT
+            job_url,
+            site_url,
+            '',
+            workspace_id,
+            run_id,
+            job_id,
+            title,
+            company,
+            '',
+            last_status,
+            CASE
+                WHEN last_status IN ('accepted', 'cache_reused', 'keyword_filtered', 'old_posting') THEN 'active'
+                WHEN last_status = 'inactive' THEN 'inactive'
+                ELSE 'unknown'
+            END,
+            first_seen_at,
+            last_seen_at,
+            CASE
+                WHEN last_status IN ('accepted', 'cache_reused') THEN last_seen_at
+                ELSE ''
+            END,
+            '{}'
+        FROM site_job_url_history_legacy_public_index
+        ORDER BY last_seen_at ASC;
+        DROP TABLE site_job_url_history_legacy_public_index;
+        CREATE INDEX IF NOT EXISTS idx_site_job_url_history_site_seen
+            ON site_job_url_history(site_url, last_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_site_job_url_history_run_seen
+            ON site_job_url_history(run_id, last_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_site_job_url_history_active_seen
+            ON site_job_url_history(active_status, last_seen_at);
+        """
+    )
+
+
+def _apply_application_status_history_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS application_status_history (
+            review_id TEXT,
+            user_id TEXT,
+            from_status TEXT,
+            to_status TEXT,
+            changed_at TEXT,
+            source TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_application_status_history_review_changed_at
+            ON application_status_history(review_id, changed_at);
+        CREATE INDEX IF NOT EXISTS idx_application_status_history_user_changed_at
+            ON application_status_history(user_id, changed_at);
+        """
+    )
+
+
+def _normalize_application_status_history_entry(
+    *,
+    review_id: Any,
+    user_id: Any,
+    from_status: Any,
+    to_status: Any,
+    changed_at: Any = "",
+    source: Any = "manual",
+) -> dict[str, str]:
+    normalized_review_id = str(review_id or "").strip()
+    if not normalized_review_id:
+        raise ValueError("review_id is required for application status history.")
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise ValueError("user_id is required for application status history.")
+    normalized_source = str(source or "manual").strip() or "manual"
+    if normalized_source not in _APPLICATION_STATUS_HISTORY_SOURCES:
+        raise ValueError(
+            f"source must be one of: {sorted(_APPLICATION_STATUS_HISTORY_SOURCES)}"
+        )
+    return {
+        "review_id": normalized_review_id,
+        "user_id": normalized_user_id,
+        "from_status": str(from_status or "").strip(),
+        "to_status": str(to_status or "").strip(),
+        "changed_at": str(changed_at or utc_now_iso()).strip(),
+        "source": normalized_source,
+    }
+
+
+def _insert_application_status_history_row(
+    connection: DatabaseConnection,
+    entry: dict[str, str],
+) -> None:
+    connection.execute(
+        (
+            "INSERT INTO application_status_history "
+            "(review_id, user_id, from_status, to_status, changed_at, source) "
+            "VALUES (?, ?, ?, ?, ?, ?)"
+        ),
+        (
+            entry["review_id"],
+            entry["user_id"],
+            entry["from_status"],
+            entry["to_status"],
+            entry["changed_at"],
+            entry["source"],
+        ),
+    )
+
+
+MIGRATIONS = (
+    Migration.from_callable(
+        "001_runtime_normalization",
+        "Normalize run runtime fields and create runtime tables.",
+        _apply_runtime_migration,
+        dependencies=(_table_columns, _ensure_run_column),
+    ),
+    Migration.from_callable(
+        "002_analytics_events",
+        "Create analytics event storage and indexes.",
+        _apply_analytics_events_migration,
+    ),
+    Migration.from_callable(
+        "003_application_status_history",
+        "Create application status history storage and indexes.",
+        _apply_application_status_history_migration,
+    ),
+    Migration.from_callable(
+        "004_runs_user_id",
+        "Add and backfill the normalized run user ID.",
+        _apply_run_user_id_migration,
+        dependencies=(_table_columns, _ensure_run_column),
+    ),
+    Migration.from_callable(
+        "005_billing",
+        "Create billing, subscription, and quota storage.",
+        _apply_billing_migration,
+        dependencies=(_table_columns, _ensure_user_column),
+    ),
+    Migration.from_callable(
+        "006_app_config",
+        "Create application configuration storage.",
+        _apply_app_config_migration,
+    ),
+    Migration.from_callable(
+        "007_scrapeops_usage_ledger",
+        "Create the ScrapeOps usage ledger.",
+        _apply_scrapeops_usage_ledger_migration,
+    ),
+    Migration.from_callable(
+        "008_site_source_policy",
+        "Create site source policy storage.",
+        _apply_site_source_policy_migration,
+    ),
+    Migration.from_callable(
+        "009_site_job_url_history",
+        "Create public job URL history storage.",
+        _apply_site_job_url_history_migration,
+    ),
+    Migration.from_callable(
+        "010_site_job_url_history_workspace_scope",
+        "Preserve site job URL history lookup indexes.",
+        _apply_site_job_url_history_workspace_scope_migration,
+    ),
+    Migration.from_callable(
+        "011_site_job_url_history_public_index",
+        "Normalize site job URL history to a public URL index.",
+        _apply_site_job_url_history_public_index_migration,
+        dependencies=(_apply_site_job_url_history_migration,),
+    ),
+)

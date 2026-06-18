@@ -22,8 +22,9 @@ from backend.config.job_seeker import (
 from backend.profiles.cv_text import load_cv_text
 
 from .common import load_json_file, save_json_file
+from .application_requirements import detect_application_requirements
 from .cv_structuring import ensure_structured_cv_fields
-from .generation import generate_docs_for_job
+from .generation import generate_docs_for_job, normalize_output_language
 from .modes import (
     APPLIED_CV_ASSET_KIND,
     CV_GENERATION_MODE_STANDARD,
@@ -34,8 +35,8 @@ from .modes import (
 from .rendering import (
     CV_FONT_OPTIONS,
     DEFAULT_LANGUAGES,
-    convert_docx_to_pdf,
     create_cv_document,
+    create_cv_pdf_document,
     resolve_assets_profile_png,
     resolve_optional_image_path,
     resolve_profile_image_path,
@@ -48,6 +49,7 @@ DEFAULT_CANDIDATE_EMAIL = "ahmed.kaddah@tutamail.com"
 DEFAULT_CV_FONT = "Calibri"
 GENERATED_CV_ASSET_KIND = "generated_cv"
 GENERATED_CV_DISPLAY_NAME = "Tailored CV"
+CV_RENDERER_VERSION = "2026-05-31-cv-output-language"
 
 
 def _record_has_ats_export_gate(record: Dict) -> bool:
@@ -66,14 +68,89 @@ def _stage4_generation_fingerprint(
     extra_prompt: str,
     prompt_override: str,
     cv_text: str,
+    job: Dict,
+    candidate_name: str,
+    candidate_email: str,
+    cv_font_name: str,
+    cv_template_id: str,
+    cv_color_scheme: str,
+    include_photo: bool,
+    languages: List[str],
+    profile_image_path: str,
+    cv_output_language: str = "English",
 ) -> str:
+    job_payload = {
+        "job_id": str(job.get("job_id") or "").strip(),
+        "title": str(job.get("title") or "").strip(),
+        "company": str(job.get("company") or "").strip(),
+        "location_raw": str(job.get("location_raw") or "").strip(),
+        "description": str(
+            job.get("full_description")
+            or job.get("description_text")
+            or job.get("description")
+            or job.get("snippet")
+            or ""
+        ).strip(),
+    }
     payload = {
         "cv_generation_mode": str(cv_generation_mode or "").strip(),
         "extra_prompt": str(extra_prompt or "").strip(),
         "prompt_override": str(prompt_override or "").strip(),
         "cv_text_sha256": hashlib.sha256(str(cv_text or "").encode("utf-8")).hexdigest(),
+        "job": job_payload,
+        "candidate_name": str(candidate_name or "").strip(),
+        "candidate_email": str(candidate_email or "").strip(),
+        "cv_font_name": str(cv_font_name or "").strip(),
+        "cv_template_id": str(cv_template_id or "").strip(),
+        "cv_color_scheme": str(cv_color_scheme or "").strip(),
+        "include_photo": bool(include_photo),
+        "languages": [str(item).strip() for item in languages or [] if str(item).strip()],
+        "profile_image_path": str(profile_image_path or "").strip(),
+        "cv_output_language": normalize_output_language(cv_output_language),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _cv_renderer_fingerprint(
+    record: Dict,
+    *,
+    candidate_name: str,
+    candidate_email: str,
+    cv_font_name: str,
+    cv_template_id: str,
+    cv_color_scheme: str,
+    include_photo: bool,
+    languages: List[str],
+    profile_image_path: str,
+    profile_links: List[Dict[str, str]],
+) -> str:
+    payload = {
+        "renderer_version": CV_RENDERER_VERSION,
+        "candidate_name": str(candidate_name or "").strip(),
+        "candidate_email": str(candidate_email or "").strip(),
+        "cv_font_name": str(cv_font_name or "").strip(),
+        "cv_template_id": str(cv_template_id or "").strip(),
+        "cv_color_scheme": str(cv_color_scheme or "").strip(),
+        "include_photo": bool(include_photo),
+        "languages": [str(item).strip() for item in languages or [] if str(item).strip()],
+        "profile_image_path": str(profile_image_path or "").strip(),
+        "profile_links": [
+            {
+                "text": str(item.get("text") or "").strip(),
+                "url": str(item.get("url") or "").strip(),
+                "logo_path": str(item.get("logo_path") or "").strip(),
+            }
+            for item in profile_links or []
+            if isinstance(item, dict)
+        ],
+        "cv_output_language": normalize_output_language(record.get("cv_output_language") or "English"),
+        "summary": str(record.get("cv_professional_summary") or "").strip(),
+        "experience": record.get("cv_professional_experience") or [],
+        "initiatives": record.get("cv_strategic_initiatives") or [],
+        "skills": record.get("cv_skills") or [],
+        "education": record.get("cv_education") or [],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
 def _standard_cv_snapshot(args) -> dict[str, str]:
@@ -88,7 +165,32 @@ def _standard_cv_snapshot(args) -> dict[str, str]:
         "display_name": str(getattr(args, "workspace_cv_asset_display_name", "") or asset_path.name or "").strip()
         or asset_path.name,
         "path": str(asset_path.resolve()),
+        "docx_path": str(getattr(args, "workspace_cv_asset_docx_path", "") or "").strip(),
     }
+
+
+def _application_requirements_for_job(
+    job: Dict,
+    *,
+    include_photo: bool,
+    cv_text: str = "",
+    cv_can_translate: bool = False,
+) -> dict:
+    return detect_application_requirements(
+        job,
+        cv_includes_photo=include_photo,
+        cv_text=cv_text,
+        cv_can_translate=cv_can_translate,
+    )
+
+
+def _cv_output_language_from_requirements(requirements: dict, *, prefer_target: bool = True) -> str:
+    language = dict(dict(requirements.get("cv_requirements") or {}).get("language") or {})
+    source_language = str(language.get("source_language") or "").strip()
+    target_language = str(language.get("target_language") or "").strip()
+    if prefer_target and target_language:
+        return normalize_output_language(target_language)
+    return normalize_output_language(source_language or target_language or "English")
 
 
 def run_standard_cv_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None) -> List[Dict]:
@@ -116,14 +218,23 @@ def run_standard_cv_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = 
 
     records: list[dict] = []
     for job in jobs:
+        application_requirements = _application_requirements_for_job(
+            job,
+            include_photo=bool(getattr(args, "include_photo", True)),
+            cv_text=cv_text,
+            cv_can_translate=False,
+        )
         record = {
             **dict(job),
             "cv_generation_mode": CV_GENERATION_MODE_STANDARD,
             "applied_cv": baseline_cv["path"],
+            "applied_cv_docx": baseline_cv["docx_path"],
             "applied_cv_asset_id": baseline_cv["asset_id"],
             "applied_cv_display_name": baseline_cv["display_name"],
             "document_asset_kind": APPLIED_CV_ASSET_KIND,
             "document_display_name": "Applied Workspace CV",
+            "cv_output_language": _cv_output_language_from_requirements(application_requirements, prefer_target=False),
+            "application_requirements": application_requirements,
             "run_date": run_date,
             "run_timestamp": run_timestamp,
         }
@@ -352,12 +463,19 @@ def main() -> int:
     return 0
 
 
+def _resolve_profile_link_url(args, config: dict, link_name: str) -> str:
+    return str(
+        getattr(args, f"{link_name}_url", "")
+        or cfg_str(config, ("candidate", "profile_links", link_name, "url"), "")
+    ).strip()
+
+
 def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None) -> List[Dict]:
     load_project_dotenv()
     if config is None:
         config = load_job_seeker_config()
 
-    default_linkedin_profile_url = cfg_str(config, ("candidate", "profile_links", "linkedin", "url"), "")
+    default_linkedin_profile_url = _resolve_profile_link_url(args, config, "linkedin")
     default_linkedin_profile_text = cfg_str(config, ("candidate", "profile_links", "linkedin", "text"), "LinkedIn")
     default_linkedin_profile_icon = cfg_str(config, ("candidate", "profile_links", "linkedin", "icon"), "in")
     default_linkedin_logo_path = (
@@ -365,7 +483,7 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
         or cfg_str(config, ("candidate", "profile_links", "linkedin", "icon_path"), "")
         or cfg_str(config, ("candidate", "profile_links", "linkedin", "image_path"), "")
     )
-    default_github_profile_url = cfg_str(config, ("candidate", "profile_links", "github", "url"), "")
+    default_github_profile_url = _resolve_profile_link_url(args, config, "github")
     default_github_profile_text = cfg_str(config, ("candidate", "profile_links", "github", "text"), "GitHub")
     default_github_profile_icon = cfg_str(config, ("candidate", "profile_links", "github", "icon"), "GH")
     default_github_logo_path = (
@@ -447,15 +565,18 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
         selected_cv_generation_mode,
         args,
     )
-    generation_fingerprint = _stage4_generation_fingerprint(
-        cv_generation_mode=selected_cv_generation_mode,
-        extra_prompt=selected_stage4_extra_prompt,
-        prompt_override=selected_stage4_prompt_override,
-        cv_text=cv_text,
-    )
 
-    def _clamp_generated_payload(payload: Dict) -> Dict:
+    def _clamp_generated_payload(
+        payload: Dict,
+        *,
+        cv_output_language: str = "",
+        application_requirements: dict | None = None,
+    ) -> Dict:
         normalized_payload = dict(payload or {})
+        if cv_output_language:
+            normalized_payload["cv_output_language"] = cv_output_language
+        if application_requirements is not None:
+            normalized_payload["application_requirements"] = application_requirements
         ensure_structured_cv_fields(
             normalized_payload,
             candidate_name=candidate_name,
@@ -482,6 +603,41 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
 
     for index, job in enumerate(jobs, start=1):
         job_id = str(job.get("job_id"))
+        job_application_requirements = _application_requirements_for_job(
+            job,
+            include_photo=include_photo,
+            cv_text=cv_text,
+            cv_can_translate=True,
+        )
+        job_requires_cv_without_photo = bool(
+            dict(job_application_requirements.get("cv_requirements") or {}).get("requires_no_photo")
+        )
+        job_include_photo = bool(include_photo and not job_requires_cv_without_photo)
+        job_profile_image_path = profile_image_path if job_include_photo else None
+        if job_requires_cv_without_photo and include_photo:
+            job_application_requirements = _application_requirements_for_job(
+                job,
+                include_photo=job_include_photo,
+                cv_text=cv_text,
+                cv_can_translate=True,
+            )
+        job_cv_output_language = _cv_output_language_from_requirements(job_application_requirements)
+        generation_fingerprint = _stage4_generation_fingerprint(
+            cv_generation_mode=selected_cv_generation_mode,
+            extra_prompt=selected_stage4_extra_prompt,
+            prompt_override=selected_stage4_prompt_override,
+            cv_text=cv_text,
+            job=job,
+            candidate_name=candidate_name,
+            candidate_email=candidate_email,
+            cv_font_name=cv_font_name,
+            cv_template_id=cv_template_id,
+            cv_color_scheme=cv_color_scheme,
+            include_photo=job_include_photo,
+            languages=languages,
+            profile_image_path=str(job_profile_image_path or ""),
+            cv_output_language=job_cv_output_language,
+        )
         if job_id in generated_by_id and not args.force_regenerate:
             existing_record = generated_by_id[job_id]
             if existing_record.get("generation_fingerprint") == generation_fingerprint and _record_has_ats_export_gate(existing_record):
@@ -517,10 +673,17 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                 existing_record["cv_template"] = cv_template_id
                 existing_record["cv_color_scheme"] = cv_color_scheme
                 existing_record["cv_font"] = cv_font_name
-                existing_record["cv_include_photo"] = include_photo
+                existing_record["cv_include_photo"] = job_include_photo
+                existing_record["cv_output_language"] = job_cv_output_language
                 existing_record["cv_generation_mode"] = selected_cv_generation_mode
                 existing_record["document_asset_kind"] = GENERATED_CV_ASSET_KIND
                 existing_record["document_display_name"] = GENERATED_CV_DISPLAY_NAME
+                existing_record["application_requirements"] = _application_requirements_for_job(
+                    {**job, **existing_record},
+                    include_photo=job_include_photo,
+                    cv_text=cv_text,
+                    cv_can_translate=True,
+                )
                 existing_record["generation_fingerprint"] = generation_fingerprint
 
                 ensure_structured_cv_fields(
@@ -530,11 +693,27 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                     cv_generation_mode=selected_cv_generation_mode,
                 )
 
+                expected_renderer_fingerprint = _cv_renderer_fingerprint(
+                    existing_record,
+                    candidate_name=candidate_name,
+                    candidate_email=candidate_email,
+                    cv_font_name=cv_font_name,
+                    cv_template_id=cv_template_id,
+                    cv_color_scheme=cv_color_scheme,
+                    include_photo=job_include_photo,
+                    languages=languages,
+                    profile_image_path=str(job_profile_image_path or ""),
+                    profile_links=profile_links,
+                )
                 missing_cv_doc = not existing_record.get("cv_docx")
+                if not missing_cv_doc and existing_record.get("cv_docx") and not Path(existing_record["cv_docx"]).exists():
+                    missing_cv_doc = True
+                renderer_outdated = existing_record.get("cv_renderer_fingerprint") != expected_renderer_fingerprint
                 has_text_content = bool(existing_record.get("cv_professional_summary")) and bool(
                     existing_record.get("cv_professional_experience")
                 )
-                if missing_cv_doc and has_text_content:
+                cv_doc_rendered = False
+                if has_text_content and (missing_cv_doc or renderer_outdated):
                     try:
                         cv_doc_path = create_cv_document(
                             existing_record,
@@ -546,13 +725,15 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                             cv_template_id=cv_template_id,
                             cv_color_scheme=cv_color_scheme,
                             languages=languages,
-                            profile_image_path=profile_image_path,
-                            include_profile_image=include_photo,
+                            profile_image_path=job_profile_image_path,
+                            include_profile_image=job_include_photo,
                             profile_links=profile_links,
                         )
                         existing_record["cv_docx"] = cv_doc_path
                         existing_record["tailored_cv_docx"] = cv_doc_path
+                        existing_record["cv_renderer_fingerprint"] = expected_renderer_fingerprint
                         existing_record["doc_generation_error"] = None
+                        cv_doc_rendered = True
                         checkpoint_changed = True
                     except Exception as exc:
                         existing_record["doc_generation_error"] = str(exc)
@@ -561,13 +742,26 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                     existing_record["cv_docx"] = existing_record.get("tailored_cv_docx")
                     checkpoint_changed = True
 
-                missing_pdf = not existing_record.get("cv_pdf")
+                missing_pdf = cv_doc_rendered or not existing_record.get("cv_pdf")
                 if not missing_pdf and existing_record.get("cv_pdf") and not Path(existing_record["cv_pdf"]).exists():
                     missing_pdf = True
                 if existing_record.get("cv_docx") and missing_pdf:
                     try:
-                        existing_record["cv_pdf"] = convert_docx_to_pdf(existing_record["cv_docx"])
+                        existing_record["cv_pdf"] = create_cv_pdf_document(
+                            existing_record,
+                            output_path=Path(existing_record["cv_docx"]).with_suffix(".pdf"),
+                            candidate_name=candidate_name,
+                            candidate_email=candidate_email,
+                            cv_font_name=cv_font_name,
+                            cv_template_id=cv_template_id,
+                            cv_color_scheme=cv_color_scheme,
+                            languages=languages,
+                            profile_image_path=job_profile_image_path,
+                            include_profile_image=job_include_photo,
+                            profile_links=profile_links,
+                        )
                         existing_record["pdf_generation_error"] = None
+                        existing_record["cv_pdf_renderer"] = "html_playwright"
                         checkpoint_changed = True
                     except Exception as exc:
                         existing_record["cv_pdf"] = ""
@@ -597,7 +791,12 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                 prompt_override=selected_stage4_prompt_override,
                 retries=max(1, args.retries),
                 retry_sleep=max(0.0, args.retry_sleep),
-                payload_postprocessor=_clamp_generated_payload,
+                payload_postprocessor=lambda payload: _clamp_generated_payload(
+                    payload,
+                    cv_output_language=job_cv_output_language,
+                    application_requirements=job_application_requirements,
+                ),
+                output_language=job_cv_output_language,
             )
 
             temp_record = {
@@ -612,7 +811,9 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                 "cv_template": cv_template_id,
                 "cv_color_scheme": cv_color_scheme,
                 "cv_font": cv_font_name,
-                "cv_include_photo": include_photo,
+                "cv_include_photo": job_include_photo,
+                "cv_output_language": job_cv_output_language,
+                "application_requirements": job_application_requirements,
             }
             ensure_structured_cv_fields(
                 temp_record,
@@ -630,12 +831,36 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                 cv_template_id=cv_template_id,
                 cv_color_scheme=cv_color_scheme,
                 languages=languages,
-                profile_image_path=profile_image_path,
-                include_profile_image=include_photo,
+                profile_image_path=job_profile_image_path,
+                include_profile_image=job_include_photo,
+                profile_links=profile_links,
+            )
+            cv_renderer_fingerprint = _cv_renderer_fingerprint(
+                temp_record,
+                candidate_name=candidate_name,
+                candidate_email=candidate_email,
+                cv_font_name=cv_font_name,
+                cv_template_id=cv_template_id,
+                cv_color_scheme=cv_color_scheme,
+                include_photo=job_include_photo,
+                languages=languages,
+                profile_image_path=str(job_profile_image_path or ""),
                 profile_links=profile_links,
             )
             try:
-                cv_pdf_path = convert_docx_to_pdf(cv_doc_path)
+                cv_pdf_path = create_cv_pdf_document(
+                    temp_record,
+                    output_path=Path(cv_doc_path).with_suffix(".pdf"),
+                    candidate_name=candidate_name,
+                    candidate_email=candidate_email,
+                    cv_font_name=cv_font_name,
+                    cv_template_id=cv_template_id,
+                    cv_color_scheme=cv_color_scheme,
+                    languages=languages,
+                    profile_image_path=job_profile_image_path,
+                    include_profile_image=job_include_photo,
+                    profile_links=profile_links,
+                )
                 pdf_generation_error = None
             except Exception as exc:
                 cv_pdf_path = ""
@@ -646,6 +871,8 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                 "cv_docx": cv_doc_path,
                 "cv_pdf": cv_pdf_path,
                 "tailored_cv_docx": cv_doc_path,
+                "cv_renderer_fingerprint": cv_renderer_fingerprint,
+                "cv_pdf_renderer": "html_playwright" if cv_pdf_path else "",
                 "pdf_generation_error": pdf_generation_error,
                 "doc_generation_error": None,
             }
@@ -664,7 +891,9 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                 "cv_template": cv_template_id,
                 "cv_color_scheme": cv_color_scheme,
                 "cv_font": cv_font_name,
-                "cv_include_photo": include_photo,
+                "cv_include_photo": job_include_photo,
+                "cv_output_language": job_cv_output_language,
+                "application_requirements": job_application_requirements,
                 "tailored_cv": "",
                 "cv_docx": "",
                 "cv_pdf": "",
@@ -716,7 +945,7 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
     print(f"Candidate name: {candidate_name}")
     print(f"Profile image: {profile_image_path if profile_image_path else 'not provided'}")
     print(f"Generation errors: {failed_count}")
-    print(f"PDF conversion errors: {pdf_failed_count}")
+    print(f"PDF export errors: {pdf_failed_count}")
     print(f"Checkpoint saved: {checkpoint_path}")
     return final_records
 

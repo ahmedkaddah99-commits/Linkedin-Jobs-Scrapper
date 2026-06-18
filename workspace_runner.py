@@ -3,9 +3,9 @@ import json
 import logging
 from uuid import uuid4
 
-from backend.config import load_project_dotenv
+from backend.config import load_project_dotenv, validate_environment
 
-load_project_dotenv(override=True)
+load_project_dotenv()
 
 from backend import create_backend
 from backend.api import serve_api
@@ -13,7 +13,7 @@ from backend.tools.discover_company_careers import (
     add_discover_company_careers_arguments,
     run_from_args as run_career_discovery_from_args,
 )
-from backend.worker import WorkerService
+from backend.worker import WorkerService, configure_worker_logging
 
 
 def parse_key_value(items: list[str]) -> dict[str, str]:
@@ -139,6 +139,7 @@ def main() -> int:
     serve_parser.add_argument("--port", type=int, default=8000)
 
     args = parser.parse_args()
+    validate_environment()
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -310,12 +311,15 @@ def main() -> int:
         return 0
 
     if args.command == "process-next":
+        configure_worker_logging(level=args.log_level)
         worker_id = str(args.worker_id or f"cli_worker_{uuid4().hex[:8]}")
-        run = application.process_next_queued_run(
-            auto_retry_failed=not args.no_auto_retry,
+        worker = WorkerService(
+            application=application,
             worker_id=worker_id,
             lease_seconds=args.lease_seconds,
+            logger=logging.getLogger("backend.worker.cli"),
         )
+        run = worker.process_next(auto_retry_failed=not args.no_auto_retry)
         if run is None:
             print("No queued runs.")
             return 0
@@ -323,6 +327,7 @@ def main() -> int:
         return 0
 
     if args.command == "run-worker":
+        configure_worker_logging(level=args.log_level)
         worker = WorkerService(
             application=application,
             worker_id=str(args.worker_id or f"cli_worker_{uuid4().hex[:8]}"),

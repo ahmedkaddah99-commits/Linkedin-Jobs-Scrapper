@@ -17,6 +17,18 @@ from .language_rules import (
 )
 
 
+def _config_language_lines(config: dict) -> list[str]:
+    candidate = config.get("candidate") if isinstance(config, dict) else {}
+    if not isinstance(candidate, dict):
+        return []
+    raw_languages = candidate.get("languages")
+    if isinstance(raw_languages, str):
+        return [item.strip() for item in raw_languages.replace(",", "\n").splitlines() if item.strip()]
+    if isinstance(raw_languages, (list, tuple, set)):
+        return [str(item).strip() for item in raw_languages if str(item).strip()]
+    return []
+
+
 def build_stage2_args(
     config: dict | None = None,
     overrides: dict[str, Any] | None = None,
@@ -42,6 +54,7 @@ def build_stage2_args(
             DEFAULT_SPANISH_SPECIAL_CHAR_THRESHOLD,
         ),
         "max_german_level": cfg_str(config, ("runtime", "stage2", "max_german_level"), "B2"),
+        "languages": _config_language_lines(config),
     }
     if overrides:
         payload.update({key: value for key, value in overrides.items() if value is not None})
@@ -75,6 +88,7 @@ def run_stage2_pipeline(
             max(0, int(active_args.french_special_char_threshold)),
             max(0, int(active_args.spanish_special_char_threshold)),
             active_args.max_german_level,
+            getattr(active_args, "languages", []),
         )
         if reasons:
             rejected.append(

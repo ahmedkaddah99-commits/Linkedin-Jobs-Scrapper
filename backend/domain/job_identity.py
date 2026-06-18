@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
 LOGGER = logging.getLogger(__name__)
+POSTING_URL_FIELDS = ("apply_link", "job_url", "url", "linkedin_link", "link", "source_url")
 
 
 def compact_whitespace(value: str) -> str:
@@ -68,11 +69,24 @@ def canonicalize_url(raw_url: str) -> str:
     return urlunparse((scheme, netloc, path, "", query, ""))
 
 
-def job_identity_keys(record: Mapping[str, Any]) -> list[str]:
+def canonical_posting_url(record: Mapping[str, Any]) -> str:
+    for field_name in POSTING_URL_FIELDS:
+        canonical_url = canonicalize_url(str(record.get(field_name) or ""))
+        if canonical_url:
+            return canonical_url
+    return ""
+
+
+def posting_url_identity_key(record: Mapping[str, Any]) -> str:
+    canonical_url = canonical_posting_url(record)
+    return f"url:{canonical_url}" if canonical_url else ""
+
+
+def job_identity_keys(record: Mapping[str, Any], *, include_title_company: bool = False) -> list[str]:
     keys: list[str] = []
     seen = set()
 
-    for field_name in ("apply_link", "linkedin_link", "link", "source_url"):
+    for field_name in POSTING_URL_FIELDS:
         canonical_url = canonicalize_url(str(record.get(field_name) or ""))
         if canonical_url:
             identity = f"url:{canonical_url}"
@@ -87,12 +101,13 @@ def job_identity_keys(record: Mapping[str, Any]) -> list[str]:
             keys.append(identity)
             seen.add(identity)
 
-    signature = title_company_signature(record.get("title"), record.get("company"))
-    if signature:
-        identity = f"title_company:{signature}"
-        if identity not in seen:
-            keys.append(identity)
-            seen.add(identity)
+    if include_title_company:
+        signature = title_company_signature(record.get("title"), record.get("company"))
+        if signature:
+            identity = f"title_company:{signature}"
+            if identity not in seen:
+                keys.append(identity)
+                seen.add(identity)
 
     return keys
 
@@ -102,6 +117,7 @@ def dedupe_job_records(
     *,
     existing_keys: set[str] | None = None,
     logger: logging.Logger | None = None,
+    include_title_company: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     active_logger = logger or LOGGER
     seen_keys = set(existing_keys or set())
@@ -110,7 +126,7 @@ def dedupe_job_records(
 
     for record in records:
         record_dict = dict(record)
-        identity_keys = job_identity_keys(record_dict)
+        identity_keys = job_identity_keys(record_dict, include_title_company=include_title_company)
         duplicate_key = next((key for key in identity_keys if key in seen_keys), None)
         if duplicate_key:
             dropped_record = {
@@ -166,10 +182,12 @@ def load_existing_tracker_identity_keys(excel_path: str | Path) -> set[str]:
 
 __all__ = [
     "canonicalize_url",
+    "canonical_posting_url",
     "compact_whitespace",
     "dedupe_job_records",
     "job_identity_keys",
     "load_existing_tracker_identity_keys",
     "normalize_title_company_part",
+    "posting_url_identity_key",
     "title_company_signature",
 ]

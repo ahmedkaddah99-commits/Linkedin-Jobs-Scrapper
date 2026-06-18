@@ -2,6 +2,7 @@ import shutil
 import sqlite3
 import unittest
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.domain.models import (
@@ -23,6 +24,7 @@ from backend.repositories.sqlite_backed import (
     SqliteReviewStore,
     SqliteRunRepository,
     SqliteSecretStore,
+    SqliteSourcePolicyStore,
     SqliteWorkerStore,
     SqliteWorkspaceRepository,
 )
@@ -218,6 +220,162 @@ class SqliteRepositoryTests(unittest.TestCase):
                 (review.review_id,),
             ).fetchone()[0]
             self.assertEqual(history_rows, 1)
+
+    def test_scrapeops_usage_ledger_records_actual_credits_and_aggregates_by_source(self):
+        db_path = self._db_path("sqlite_scrapeops_usage_ledger")
+        analytics_store = SqliteAnalyticsStore(db_path)
+        analytics_store.record_scrapeops_usage(
+            ledger_id="usage_stepstone_1",
+            payload={
+                "source_id": "stepstone",
+                "target_url": "https://www.stepstone.de/jobs",
+                "method": "scrapeops_proxy",
+                "request_mode": "residential",
+                "target_status_code": 200,
+                "provider_status_code": 200,
+                "latency_ms": 125,
+                "billed_credits_actual": 10,
+                "billed_credits_estimated": 10,
+                "usable_job_count": 2,
+                "error_category": "",
+                "recorded_at": "2026-05-27T12:00:00+00:00",
+            },
+        )
+        analytics_store.record_scrapeops_usage(
+            ledger_id="usage_stepstone_2",
+            payload={
+                "source_id": "stepstone",
+                "target_url": "https://www.stepstone.de/jobs?page=2",
+                "method": "scrapeops_proxy",
+                "request_mode": "residential",
+                "target_status_code": 200,
+                "provider_status_code": 200,
+                "latency_ms": 150,
+                "billed_credits_actual": 7,
+                "billed_credits_estimated": 10,
+                "usable_job_count": 0,
+                "error_category": "",
+                "recorded_at": "2026-05-27T12:01:00+00:00",
+            },
+        )
+
+        row = analytics_store.query_rows(
+            "SELECT billed_credits_actual, billed_credits_estimated FROM scrapeops_usage_ledger "
+            "WHERE ledger_id = ?",
+            ("usage_stepstone_1",),
+        )[0]
+        spend = analytics_store.get_spend_by_source(datetime(2026, 5, 27, tzinfo=timezone.utc))
+
+        self.assertEqual(row, {"billed_credits_actual": 10, "billed_credits_estimated": 10})
+        self.assertEqual(spend, {"stepstone": 17})
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            migrations = {
+                value[0] for value in connection.execute("SELECT migration_id FROM schema_migrations").fetchall()
+            }
+        self.assertIn("007_scrapeops_usage_ledger", migrations)
+
+    def test_site_source_policy_transitions_selected_low_yield_and_recovers(self):
+        db_path = self._db_path("sqlite_site_source_policy")
+        store = SqliteSourcePolicyStore(db_path)
+        site_url = "https://careers.example.com/jobs"
+        store.ensure_sites([{"url": site_url}], site_type="company")
+
+        self.assertEqual(store.get_site_policy(site_url)["site_state"], "pending")
+        transitions = store.mark_workspace_selected([site_url], site_type="company")
+        self.assertEqual(transitions[site_url], "pending->selected")
+        self.assertEqual(store.get_site_policy(site_url)["site_state"], "selected")
+
+        for _ in range(3):
+            store.record_site_yield(site_url, jobs_found=0)
+        low_yield_policy = store.get_site_policy(site_url)
+        self.assertEqual(low_yield_policy["site_state"], "low_yield")
+        self.assertEqual(low_yield_policy["consecutive_zero_yield_runs"], 3)
+
+        store.record_site_yield(site_url, jobs_found=2)
+        recovered_policy = store.get_site_policy(site_url)
+        self.assertEqual(recovered_policy["site_state"], "selected")
+        self.assertEqual(recovered_policy["consecutive_zero_yield_runs"], 0)
+
+        store.set_site_state(site_url, "paused")
+        eligible, skipped = store.filter_crawlable_sites([{"url": site_url}])
+        self.assertEqual(eligible, [])
+        self.assertEqual(skipped[0]["site_state"], "paused")
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            migrations = {
+                value[0] for value in connection.execute("SELECT migration_id FROM schema_migrations").fetchall()
+            }
+        self.assertIn("008_site_source_policy", migrations)
+        self.assertIn("009_site_job_url_history", migrations)
+
+    def test_site_job_url_history_records_seen_urls(self):
+        db_path = self._db_path("sqlite_site_job_url_history")
+        store = SqliteSourcePolicyStore(db_path)
+        store.record_job_url_attempts(
+            [
+                {
+                    "site_url": "https://careers.example.com",
+                    "job_url": "https://careers.example.com/jobs/123?utm_source=test",
+                    "job_id": "job_123",
+                    "title": "Product Analyst",
+                    "company": "Example",
+                    "status": "accepted",
+                }
+            ],
+            run_id="run_1",
+            workspace_id="workspace_1",
+        )
+
+        self.assertEqual(
+            store.get_seen_job_urls(["https://careers.example.com/jobs/123"]),
+            {"https://careers.example.com/jobs/123"},
+        )
+        self.assertEqual(
+            store.get_seen_job_urls(["https://careers.example.com/jobs/123"], workspace_id="workspace_1"),
+            {"https://careers.example.com/jobs/123"},
+        )
+        self.assertEqual(
+            store.get_seen_job_urls(["https://careers.example.com/jobs/123"], workspace_id="workspace_2"),
+            {"https://careers.example.com/jobs/123"},
+        )
+        cached = store.get_cached_job_postings(["https://careers.example.com/jobs/123"])
+        self.assertEqual(cached["https://careers.example.com/jobs/123"]["title"], "Product Analyst")
+        store.record_job_url_attempts(
+            [
+                {
+                    "site_url": "https://careers.example.com",
+                    "job_url": "https://careers.example.com/jobs/123",
+                    "job_id": "job_123_copy",
+                    "title": "Product Analyst Copy",
+                    "company": "Example",
+                    "status": "accepted",
+                }
+            ],
+            run_id="run_2",
+            workspace_id="workspace_2",
+        )
+        self.assertEqual(
+            store.get_seen_job_urls(["https://careers.example.com/jobs/123"], workspace_id="workspace_1"),
+            {"https://careers.example.com/jobs/123"},
+        )
+        self.assertEqual(
+            store.get_seen_job_urls(["https://careers.example.com/jobs/123"], workspace_id="workspace_2"),
+            {"https://careers.example.com/jobs/123"},
+        )
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            row = connection.execute(
+                "SELECT run_id, workspace_id, last_status FROM site_job_url_history WHERE job_url = ?",
+                ("https://careers.example.com/jobs/123",),
+            ).fetchone()
+            migrations = {
+                value[0] for value in connection.execute("SELECT migration_id FROM schema_migrations").fetchall()
+            }
+        self.assertEqual(row, ("run_2", "workspace_2", "accepted"))
+        self.assertIn("009_site_job_url_history", migrations)
+        self.assertIn("010_site_job_url_history_workspace_scope", migrations)
+        self.assertIn("011_site_job_url_history_public_index", migrations)
 
     def test_run_user_id_migration_backfills_existing_rows(self):
         db_path = self._db_path("sqlite_run_user_id_migration")

@@ -76,7 +76,7 @@ def build_stage1_args(
     return SimpleNamespace(**payload)
 
 
-def run_stage1_pipeline(args, *, config: dict | None = None) -> dict[str, Any]:
+def run_stage1_pipeline(args, *, config: dict | None = None, usage_callback=None) -> dict[str, Any]:
     _ = config
     keywords = [compact_whitespace(item) for item in args.keywords if compact_whitespace(item)]
     cities = [compact_whitespace(item) for item in args.cities if compact_whitespace(item)]
@@ -121,6 +121,7 @@ def run_stage1_pipeline(args, *, config: dict | None = None) -> dict[str, Any]:
             timeout_seconds=max(5, int(args.timeout_seconds)),
             max_jobs_total=max(1, int(args.max_jobs_total)),
             arbeitsagentur_detail_fetch_limit=max(0, int(args.arbeitsagentur_detail_fetch_limit)),
+            usage_callback=usage_callback,
         )
         save_json_file(snapshot_path, raw_jobs)
         print(f"[Stage1] saved scrape snapshot: {snapshot_path}")

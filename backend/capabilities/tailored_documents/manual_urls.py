@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -23,10 +25,12 @@ from backend.integrations.scrapeops import (
     ScrapeOpsRequestError,
     billed_status_code,
     build_proxy_params,
+    build_proxy_usage_record,
     estimate_mode_native_credits,
-    estimate_mode_runner_credits,
+    parse_proxy_response_envelope,
     raise_for_failure,
     request_mode_label,
+    require_scrapeops_proxy_health,
     sanitize_scrapeops_text,
     sanitize_url_for_logs,
 )
@@ -255,6 +259,21 @@ def extract_generic_location(jsonld_payload: dict[str, Any]) -> str:
     return ", ".join(location_values)
 
 
+def extract_public_posted_age(date_posted: Any) -> tuple[str, float | None, str | None]:
+    posted_text = compact_whitespace(str(date_posted or ""))
+    if not posted_text:
+        return "", None, None
+    try:
+        parsed = datetime.fromisoformat(posted_text.replace("Z", "+00:00"))
+    except ValueError:
+        return posted_text, None, None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    posted_utc = parsed.astimezone(timezone.utc)
+    age_hours = max(0.0, (datetime.now(timezone.utc) - posted_utc).total_seconds() / 3600)
+    return posted_text, round(age_hours, 2), posted_utc.isoformat()
+
+
 def fetch_generic_manual_job(
     url: str,
     *,
@@ -266,12 +285,22 @@ def fetch_generic_manual_job(
     usage_callback=None,
     usage_stage: str = "normalize_company_job",
     usage_company_name: str = "",
+    proxy_health_check=None,
 ) -> dict[str, Any]:
     if force_scrapeops:
         resolved_api_key = str(scrapeops_api_key or "").strip()
+        proxy_health_confirmed = False
         if not resolved_api_key:
-            resolved_api_key, _ = build_scrape_requests_client()
+            resolved_api_key, _ = build_scrape_requests_client(proxy_health_check=proxy_health_check)
+            proxy_health_confirmed = True
+        if not proxy_health_confirmed:
+            if callable(proxy_health_check):
+                proxy_health_check()
+            else:
+                require_scrapeops_proxy_health(resolved_api_key, usage_callback=usage_callback)
         response = None
+        request_started = time.perf_counter()
+        target_domain = (urlparse(url).netloc or "").lower()
         try:
             response = requests.get(
                 SCRAPEOPS_PROXY_ENDPOINT,
@@ -289,8 +318,19 @@ def fetch_generic_manual_job(
             if callable(usage_callback):
                 usage_callback(
                     {
+                        **build_proxy_usage_record(
+                            source_id=usage_company_name or target_domain,
+                            target_url=url,
+                            request_mode=scrapeops_mode,
+                            target_status_code=0,
+                            provider_status_code=0,
+                            latency_ms=round((time.perf_counter() - request_started) * 1000),
+                            billed_credits_actual=0,
+                            billed_credits_estimated=0,
+                            error_category="network_error",
+                        ),
                         "target_url": sanitize_url_for_logs(url),
-                        "domain": (urlparse(url).netloc or "").lower(),
+                        "domain": target_domain,
                         "status_code": 0,
                         "billed": False,
                         "request_mode": scrapeops_mode,
@@ -302,9 +342,15 @@ def fetch_generic_manual_job(
                         "error_category": "network_error",
                         "error_message": safe_message,
                     }
-                )
+            )
             raise RuntimeError(f"scrapeops: {safe_message}") from exc
-        billed = billed_status_code(int(response.status_code or 0))
+        envelope = parse_proxy_response_envelope(response)
+        response.status_code = envelope.target_status_code
+        response._content = envelope.body.encode(response.encoding or "utf-8")
+        billed = billed_status_code(envelope.target_status_code)
+        estimated_credits = estimate_mode_native_credits(scrapeops_mode) if billed else 0
+        actual_credits = envelope.billed_credits_actual if billed else 0
+        accounted_credits = actual_credits if actual_credits is not None else estimated_credits
         failure: ScrapeOpsRequestError | None = None
         if response.status_code >= 400:
             try:
@@ -314,14 +360,25 @@ def fetch_generic_manual_job(
         if callable(usage_callback):
             usage_callback(
                 {
+                    **build_proxy_usage_record(
+                        source_id=usage_company_name or target_domain,
+                        target_url=url,
+                        request_mode=scrapeops_mode,
+                        target_status_code=envelope.target_status_code,
+                        provider_status_code=envelope.provider_status_code,
+                        latency_ms=round((time.perf_counter() - request_started) * 1000),
+                        billed_credits_actual=actual_credits,
+                        billed_credits_estimated=estimated_credits,
+                        error_category=failure.failure.category if failure else "",
+                    ),
                     "target_url": sanitize_url_for_logs(url),
-                    "domain": (urlparse(url).netloc or "").lower(),
-                    "status_code": int(response.status_code or 0),
+                    "domain": target_domain,
+                    "status_code": envelope.target_status_code,
                     "billed": billed,
                     "request_mode": scrapeops_mode,
                     "request_mode_label": request_mode_label(scrapeops_mode),
-                    "native_credits": estimate_mode_native_credits(scrapeops_mode) if billed else 0,
-                    "runner_credits": estimate_mode_runner_credits(scrapeops_mode) if billed else 0,
+                    "native_credits": accounted_credits,
+                    "runner_credits": accounted_credits,
                     "request_stage": usage_stage,
                     "company_name": usage_company_name,
                     "error_category": failure.failure.category if failure else "",
@@ -354,6 +411,9 @@ def fetch_generic_manual_job(
     company = extract_generic_company(soup, jsonld_payload, title)
     location_raw = extract_generic_location(jsonld_payload)
     description = extract_generic_description(soup, jsonld_payload)
+    posted_time_text, posted_age_hours, posted_datetime_utc = extract_public_posted_age(
+        jsonld_payload.get("datePosted")
+    )
 
     job_record = PipelineJob(
         job_id=stable_manual_job_id(canonical_url),
@@ -369,6 +429,9 @@ def fetch_generic_manual_job(
         apply_link_source="manual_url",
         full_description=description,
         easy_apply_status="unknown",
+        posted_time_text=posted_time_text,
+        posted_age_hours=posted_age_hours,
+        posted_datetime_estimated_utc=posted_datetime_utc,
         enrich_error=None if description else "Description container not found",
         enrich_status_code=response.status_code,
         manual_approved=True,
@@ -384,6 +447,8 @@ def fetch_manual_linkedin_job(
     debug_enrich_blocks: bool,
     use_proxy_fallback: bool,
     request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    usage_callback=None,
+    proxy_health_check=None,
 ) -> dict[str, Any]:
     job_id = extract_linkedin_job_id(url)
     if not job_id:
@@ -395,6 +460,8 @@ def fetch_manual_linkedin_job(
         scrapeops_api_key=scrapeops_api_key,
         debug_enrich_blocks=debug_enrich_blocks,
         use_proxy_fallback=use_proxy_fallback,
+        usage_callback=usage_callback,
+        proxy_health_check=proxy_health_check,
     )
 
     fallback_payload: dict[str, Any] = {}
@@ -450,10 +517,11 @@ def fetch_and_normalize_manual_job(
     usage_callback=None,
     usage_stage: str = "",
     usage_company_name: str = "",
+    proxy_health_check=None,
 ) -> dict[str, Any]:
     if extract_linkedin_job_id(url):
         if so_requests is None or not scrapeops_api_key:
-            scrapeops_api_key, so_requests = build_scrape_requests_client()
+            scrapeops_api_key, so_requests = build_scrape_requests_client(proxy_health_check=proxy_health_check)
         return fetch_manual_linkedin_job(
             url,
             so_requests=so_requests,
@@ -461,6 +529,8 @@ def fetch_and_normalize_manual_job(
             debug_enrich_blocks=debug_enrich_blocks,
             use_proxy_fallback=use_proxy_fallback,
             request_timeout_seconds=request_timeout_seconds,
+            usage_callback=usage_callback,
+            proxy_health_check=proxy_health_check,
         )
 
     return fetch_generic_manual_job(
@@ -473,6 +543,7 @@ def fetch_and_normalize_manual_job(
         usage_callback=usage_callback,
         usage_stage=usage_stage or "manual_url_fetch",
         usage_company_name=usage_company_name,
+        proxy_health_check=proxy_health_check,
     )
 
 
@@ -483,6 +554,7 @@ def fetch_manual_jobs_from_file(
     use_proxy_fallback: bool = False,
     request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     logger: logging.Logger | None = None,
+    usage_callback=None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     active_logger = logger or LOGGER
     urls, invalid_entries = load_manual_urls(file_path)
@@ -493,6 +565,7 @@ def fetch_manual_jobs_from_file(
         use_proxy_fallback=use_proxy_fallback,
         request_timeout_seconds=request_timeout_seconds,
         logger=active_logger,
+        usage_callback=usage_callback,
     )
 
 
@@ -504,6 +577,7 @@ def fetch_manual_jobs_from_urls(
     use_proxy_fallback: bool = False,
     request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     logger: logging.Logger | None = None,
+    usage_callback=None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     active_logger = logger or LOGGER
     failures: list[dict[str, Any]] = list(invalid_entries or [])
@@ -511,6 +585,15 @@ def fetch_manual_jobs_from_urls(
 
     scrapeops_api_key = ""
     so_requests = None
+    proxy_health_confirmed = False
+
+    def ensure_proxy_health() -> None:
+        nonlocal proxy_health_confirmed
+        if proxy_health_confirmed:
+            return
+        require_scrapeops_proxy_health(scrapeops_api_key, usage_callback=usage_callback)
+        proxy_health_confirmed = True
+
     if any(extract_linkedin_job_id(url) for url in urls):
         scrapeops_api_key, so_requests = build_scrape_requests_client()
 
@@ -524,6 +607,8 @@ def fetch_manual_jobs_from_urls(
                 debug_enrich_blocks=debug_enrich_blocks,
                 use_proxy_fallback=use_proxy_fallback,
                 request_timeout_seconds=request_timeout_seconds,
+                usage_callback=usage_callback,
+                proxy_health_check=ensure_proxy_health,
             )
             jobs.append(job)
         except Exception as exc:
@@ -558,6 +643,7 @@ __all__ = [
     "extract_generic_description",
     "extract_generic_location",
     "extract_jobposting_jsonld",
+    "extract_public_posted_age",
     "extract_linkedin_job_id",
     "extract_text_from_selectors",
     "fetch_and_normalize_manual_job",

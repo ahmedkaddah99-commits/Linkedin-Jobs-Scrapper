@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -21,6 +20,7 @@ from backend.domain.models import (
     utc_now_iso,
 )
 from backend.orchestration.seeded_workspaces import DEFAULT_WORKFLOW_TEMPLATES, DEFAULT_WORKSPACES
+from backend.repositories.contracts import BackendRepositories
 from backend.security.auth import API_TOKEN_PREFIX_LENGTH
 
 _APPLICATION_STATUS_HISTORY_SOURCES = {"manual", "gmail_sync", "auto_default"}
@@ -720,16 +720,3 @@ class FileConfigStore:
             if str(key).startswith(normalized_prefix)
         }
 
-
-@dataclass(slots=True)
-class BackendRepositories:
-    workspace_repository: Any
-    run_repository: Any
-    job_store: Any
-    artifact_store: Any
-    review_store: Any
-    auth_repository: Any
-    secret_store: Any
-    worker_store: Any
-    analytics_store: Any
-    config_store: Any

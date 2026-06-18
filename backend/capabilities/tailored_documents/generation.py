@@ -16,6 +16,21 @@ DEFAULT_SYSTEM_PROMPT = "You are an expert career writing assistant."
 ATS_TARGET_SCORE = 90
 ATS_MAX_ATTEMPTS = 3
 
+_TAILORED_CV_TEXT_LABELS = {
+    "English": {
+        "professional_summary": "Professional Summary",
+        "professional_experience": "Professional Experience",
+        "skills": "Skills",
+        "education": "Education",
+    },
+    "German": {
+        "professional_summary": "Profil",
+        "professional_experience": "Berufserfahrung",
+        "skills": "Kompetenzen",
+        "education": "Ausbildung",
+    },
+}
+
 
 def split_bullets(text: str) -> list[str]:
     lines = []
@@ -26,6 +41,16 @@ def split_bullets(text: str) -> list[str]:
         line = re.sub(r"^[\-\*\u2022]+\s*", "", line)
         lines.append(line)
     return lines
+
+
+def normalize_output_language(output_language: str) -> str:
+    language = compact_whitespace(str(output_language or ""))
+    return language or "English"
+
+
+def _tailored_cv_text_labels(output_language: str) -> dict[str, str]:
+    language = normalize_output_language(output_language)
+    return _TAILORED_CV_TEXT_LABELS.get(language, _TAILORED_CV_TEXT_LABELS["English"])
 
 
 def extract_city_from_job(job: Dict) -> str:
@@ -90,6 +115,7 @@ def build_docs_prompt(
     cv_generation_mode: str,
     extra_instructions: str = "",
     prompt_override: str = "",
+    output_language: str = "English",
 ) -> str:
     description_excerpt = str(job.get("full_description") or "")[:6000]
     job_id = str(job.get("job_id", ""))
@@ -97,6 +123,14 @@ def build_docs_prompt(
     company = str(job.get("company", ""))
     job_city = extract_city_from_job(job)
     normalized_mode = normalize_cv_generation_mode(cv_generation_mode)
+    selected_output_language = normalize_output_language(output_language)
+    language_requirement = (
+        f"Write all user-visible tailored CV content in {selected_output_language}. "
+        "Keep JSON keys exactly as specified in English. Preserve company names, role titles, "
+        "degree names, technologies, product names, and proper nouns unless the source CV already translates them. "
+        "If the source CV is in another language, translate existing user-visible CV text into the selected language "
+        "while preserving facts, ordering, dates, and evidence."
+    )
 
     if prompt_override.strip():
         prompt = (
@@ -108,7 +142,9 @@ def build_docs_prompt(
             .replace("{{JOB_CITY}}", job_city)
             .replace("{{JOB_DESCRIPTION}}", description_excerpt)
             .replace("{{CANDIDATE_NAME}}", candidate_name)
+            .replace("{{CV_OUTPUT_LANGUAGE}}", selected_output_language)
         )
+        prompt = f"{prompt}\n\nMandatory output language requirement:\n{language_requirement}"
     else:
         base_prompt = f"""
 You are an expert career writing assistant.
@@ -123,12 +159,13 @@ Job:
 - city: {job_city}
 - description: {description_excerpt}
 
-Write tailored CV content in English.
+Write tailored CV content in {selected_output_language}.
 
 Output requirements:
 - Return only raw JSON (no markdown)
 - Keep schema exactly:
 {_structured_cv_json_schema()}
+- {language_requirement}
 """.strip()
         if normalized_mode == CV_GENERATION_MODE_LIGHT:
             prompt = f"""{base_prompt}
@@ -219,9 +256,11 @@ def build_ats_improvement_prompt(
     structured_cv: Dict[str, Any],
     score_payload: Dict[str, Any],
     cv_generation_mode: str,
+    output_language: str = "English",
 ) -> str:
     description_excerpt = str(job.get("full_description") or "")[:6000]
     normalized_mode = normalize_cv_generation_mode(cv_generation_mode)
+    selected_output_language = normalize_output_language(output_language)
     base_prompt = f"""
 You are improving a tailored CV for ATS matching while staying strictly truthful to the source CV.
 
@@ -240,10 +279,16 @@ Current tailored CV draft:
 Current ATS assessment:
 {json.dumps(score_payload, indent=2, ensure_ascii=False)}
 
-Rewrite the tailored CV to address the missing requirements where the source CV supports them.
+Rewrite the tailored CV in {selected_output_language} to address the missing requirements where the source CV supports them.
 
 Return only raw JSON (no markdown) using exactly this schema:
 {_structured_cv_json_schema()}
+
+Language requirements:
+- Keep JSON keys exactly as specified in English.
+- Write all user-visible CV text fields in {selected_output_language}.
+- Preserve company names, role titles, degree names, technologies, product names, and proper nouns unless the source CV already translates them.
+- If the source CV is in another language, translate existing user-visible CV text into {selected_output_language} while preserving facts, ordering, dates, and evidence.
 """.strip()
 
     if normalized_mode == CV_GENERATION_MODE_LIGHT:
@@ -408,8 +453,13 @@ def _normalize_education(education_raw: Any) -> list[dict[str, Any]]:
     return education_entries
 
 
-def _render_tailored_cv_text(payload: Dict[str, Any]) -> str:
-    tailored_cv_lines = [f"Professional Summary: {payload['cv_professional_summary']}", "", "Professional Experience:"]
+def _render_tailored_cv_text(payload: Dict[str, Any], *, output_language: str = "English") -> str:
+    labels = _tailored_cv_text_labels(output_language)
+    tailored_cv_lines = [
+        f"{labels['professional_summary']}: {payload['cv_professional_summary']}",
+        "",
+        f"{labels['professional_experience']}:",
+    ]
     for exp in payload["cv_professional_experience"]:
         header_parts = [exp.get("role_title", ""), exp.get("company", ""), exp.get("period", "")]
         line = " | ".join([part for part in header_parts if part])
@@ -418,11 +468,11 @@ def _render_tailored_cv_text(payload: Dict[str, Any]) -> str:
         for bullet in exp.get("bullets", []):
             tailored_cv_lines.append(f"- {bullet}")
     tailored_cv_lines.append("")
-    tailored_cv_lines.append("Skills:")
+    tailored_cv_lines.append(f"{labels['skills']}:")
     tailored_cv_lines.extend([f"- {skill}" for skill in payload["cv_skills"]])
     if payload["cv_education"]:
         tailored_cv_lines.append("")
-        tailored_cv_lines.append("Education:")
+        tailored_cv_lines.append(f"{labels['education']}:")
         for edu in payload["cv_education"]:
             if edu.get("degree_title"):
                 tailored_cv_lines.append(str(edu["degree_title"]))
@@ -433,7 +483,7 @@ def _render_tailored_cv_text(payload: Dict[str, Any]) -> str:
     return "\n".join(line for line in tailored_cv_lines if line is not None).strip()
 
 
-def _parse_structured_cv_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_structured_cv_payload(parsed: Dict[str, Any], *, output_language: str = "English") -> Dict[str, Any]:
     professional_summary = str(parsed.get("professional_summary", "")).strip()
     skills = _normalize_skills(parsed.get("skills", []))
     experiences = _normalize_experiences(parsed.get("professional_experience", []))
@@ -448,7 +498,7 @@ def _parse_structured_cv_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
         "cv_education": education_entries,
         "cv_skills": skills,
     }
-    payload["tailored_cv"] = _render_tailored_cv_text(payload)
+    payload["tailored_cv"] = _render_tailored_cv_text(payload, output_language=output_language)
     return payload
 
 
@@ -488,6 +538,7 @@ def _generate_structured_cv_once(
     cv_generation_mode: str,
     extra_instructions: str,
     prompt_override: str,
+    output_language: str = "English",
 ) -> Dict[str, Any]:
     prompt = build_docs_prompt(
         cv_text=cv_text,
@@ -496,6 +547,7 @@ def _generate_structured_cv_once(
         cv_generation_mode=cv_generation_mode,
         extra_instructions=extra_instructions,
         prompt_override=prompt_override,
+        output_language=output_language,
     )
     parsed = call_ai_json(
         deepseek_api_key,
@@ -504,7 +556,7 @@ def _generate_structured_cv_once(
         gemini_model,
         prompt,
     )
-    return _parse_structured_cv_payload(parsed)
+    return _parse_structured_cv_payload(parsed, output_language=output_language)
 
 
 def _score_structured_cv_once(
@@ -538,6 +590,7 @@ def _improve_structured_cv_once(
     structured_cv: Dict[str, Any],
     score_payload: Dict[str, Any],
     cv_generation_mode: str,
+    output_language: str = "English",
 ) -> Dict[str, Any]:
     prompt = build_ats_improvement_prompt(
         cv_text=cv_text,
@@ -545,6 +598,7 @@ def _improve_structured_cv_once(
         structured_cv=_structured_cv_for_prompt(structured_cv),
         score_payload=score_payload,
         cv_generation_mode=cv_generation_mode,
+        output_language=output_language,
     )
     parsed = call_ai_json(
         deepseek_api_key,
@@ -553,7 +607,7 @@ def _improve_structured_cv_once(
         gemini_model,
         prompt,
     )
-    return _parse_structured_cv_payload(parsed)
+    return _parse_structured_cv_payload(parsed, output_language=output_language)
 
 
 def _attempt_history_entry(attempt_number: int, score_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -621,7 +675,9 @@ def _generate_docs_for_job_once(
     extra_instructions: str,
     prompt_override: str,
     payload_postprocessor: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
+    output_language: str = "English",
 ) -> Dict[str, Any]:
+    selected_output_language = normalize_output_language(output_language)
     current_payload = _generate_structured_cv_once(
         deepseek_api_key,
         deepseek_model,
@@ -633,6 +689,7 @@ def _generate_docs_for_job_once(
         cv_generation_mode,
         extra_instructions,
         prompt_override,
+        selected_output_language,
     )
     if callable(payload_postprocessor):
         current_payload = payload_postprocessor(current_payload)
@@ -684,6 +741,7 @@ def _generate_docs_for_job_once(
             current_payload,
             score_payload,
             cv_generation_mode,
+            selected_output_language,
         )
         if callable(payload_postprocessor):
             current_payload = payload_postprocessor(current_payload)
@@ -713,6 +771,7 @@ def generate_docs_for_job(
     retries: int,
     retry_sleep: float,
     payload_postprocessor: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
+    output_language: str = "English",
 ) -> Dict[str, Any]:
     last_error = None
 
@@ -730,6 +789,7 @@ def generate_docs_for_job(
                 extra_instructions=extra_instructions,
                 prompt_override=prompt_override,
                 payload_postprocessor=payload_postprocessor,
+                output_language=output_language,
             )
         except Exception as exc:
             last_error = exc

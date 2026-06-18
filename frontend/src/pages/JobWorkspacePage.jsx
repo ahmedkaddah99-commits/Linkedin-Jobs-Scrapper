@@ -21,7 +21,13 @@ const DISCOVERY_STATUS_NOT_STARTED = "not_started";
 const DISCOVERY_STATUS_RUNNING = "running";
 const DISCOVERY_STATUS_COMPLETED = "completed";
 const DISCOVERY_STATUS_FAILED = "failed";
+const DISCOVERY_STATUS_NOT_CONFIGURED = "not_configured";
 const DISCOVERY_STATUS_POLL_INTERVAL_MS = 2000;
+const DISCOVERY_TERMINAL_STATUSES = new Set([
+  DISCOVERY_STATUS_COMPLETED,
+  DISCOVERY_STATUS_FAILED,
+  DISCOVERY_STATUS_NOT_CONFIGURED,
+]);
 
 function StepProgress({ activeIndex, completed, running }) {
   return (
@@ -245,6 +251,20 @@ function buildGenerationNote(discoveryRun) {
   return `Triggered from the job workspace. Saved relevant people context: ${contextLines.join(" ; ")}`;
 }
 
+function countDiscoveredPeople(discoveryRun) {
+  return PEOPLE_CATEGORY_CONFIG.reduce(
+    (count, category) => count + (discoveryRun?.categories?.[category.id]?.length || 0),
+    0,
+  );
+}
+
+function discoveryNotConfiguredMessage(discoveryRun) {
+  return (
+    discoveryRun?.error
+    || "Live relevant people discovery is not configured. Set RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY=1 and restart the backend before running this search."
+  );
+}
+
 export default function JobWorkspacePage() {
   const { runId, jobId } = useParams();
   const [searchParams] = useSearchParams();
@@ -283,14 +303,7 @@ export default function JobWorkspacePage() {
   const showDiscoveryProgress =
     actionState.discoveryRunning || discoveryStatus === DISCOVERY_STATUS_RUNNING;
   const selectedCount = useMemo(() => countSelectedPeople(discoveryRun), [discoveryRun]);
-  const totalPeopleCount = useMemo(
-    () =>
-      PEOPLE_CATEGORY_CONFIG.reduce(
-        (count, category) => count + (discoveryRun.categories?.[category.id]?.length || 0),
-        0,
-      ),
-    [discoveryRun],
-  );
+  const totalPeopleCount = useMemo(() => countDiscoveredPeople(discoveryRun), [discoveryRun]);
 
   useEffect(() => {
     if (!showDiscoveryProgress) {
@@ -319,10 +332,7 @@ export default function JobWorkspacePage() {
           const nextStatus = String(
             statusPayload?.peopleDiscoveryStatus || DISCOVERY_STATUS_NOT_STARTED,
           );
-          if (
-            nextStatus !== DISCOVERY_STATUS_COMPLETED
-            && nextStatus !== DISCOVERY_STATUS_FAILED
-          ) {
+          if (!DISCOVERY_TERMINAL_STATUSES.has(nextStatus)) {
             return;
           }
           return getPeopleDiscoveryResults(request, { runId, jobId, job }).then((payload) => {
@@ -359,12 +369,24 @@ export default function JobWorkspacePage() {
         relevant_people_discovery: payload,
       }));
       if (payload.peopleDiscoveryStatus === DISCOVERY_STATUS_COMPLETED) {
+        const discoveredCount = countDiscoveredPeople(payload);
         setActiveStepIndex(PEOPLE_DISCOVERY_STEPS.length - 1);
         setActionState((currentValue) => ({
           ...currentValue,
           discoveryRunning: false,
-          message: "Relevant people discovery completed. Review the likely matches below.",
+          message: discoveredCount
+            ? "Relevant people discovery completed. Review the likely matches below."
+            : "Relevant people discovery completed, but no strong matches were found.",
           error: "",
+        }));
+        return;
+      }
+      if (payload.peopleDiscoveryStatus === DISCOVERY_STATUS_NOT_CONFIGURED) {
+        setActionState((currentValue) => ({
+          ...currentValue,
+          discoveryRunning: false,
+          message: "",
+          error: discoveryNotConfiguredMessage(payload),
         }));
         return;
       }
@@ -601,9 +623,14 @@ export default function JobWorkspacePage() {
             >
               {actionState.discoveryRunning
                 ? "Finding relevant people..."
-                : totalPeopleCount
-                  ? "Run broader search"
-                  : "Find relevant people"}
+                : (
+                    discoveryStatus === DISCOVERY_STATUS_NOT_CONFIGURED
+                    || discoveryStatus === DISCOVERY_STATUS_FAILED
+                  )
+                  ? "Try again"
+                  : totalPeopleCount
+                    ? "Run broader search"
+                    : "Find relevant people"}
             </button>
             <button
               className="rounded-full bg-surface-container-low px-5 py-3 text-sm font-semibold text-on-surface transition-colors hover:bg-surface-container-high"
@@ -633,6 +660,14 @@ export default function JobWorkspacePage() {
             {!showDiscoveryProgress && discoveryStatus === DISCOVERY_STATUS_FAILED ? (
               <div className="rounded-3xl border border-error/20 bg-error/5 p-6 text-sm text-error">
                 {discoveryRun.error || "People discovery failed. Try running it again."}
+              </div>
+            ) : null}
+
+            {!showDiscoveryProgress &&
+            discoveryStatus === DISCOVERY_STATUS_NOT_CONFIGURED &&
+            !actionState.error ? (
+              <div className="rounded-3xl border border-amber-500/20 bg-amber-500/5 p-6 text-sm text-amber-800">
+                {discoveryNotConfiguredMessage(discoveryRun)}
               </div>
             ) : null}
 

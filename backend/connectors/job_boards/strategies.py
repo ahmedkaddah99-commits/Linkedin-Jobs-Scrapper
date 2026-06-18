@@ -1,9 +1,12 @@
 import hashlib
 import json
+import logging
 import os
 import re
+import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 import requests
@@ -12,6 +15,7 @@ from bs4 import BeautifulSoup
 from backend.config.job_seeker import load_project_dotenv
 
 
+LOGGER = logging.getLogger(__name__)
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -25,6 +29,12 @@ DEFAULT_HEADERS = {
 # project-level dotenv paths first instead of relying on a repo-root .env only.
 load_project_dotenv()
 SCRAPEOPS_API_KEY = (os.getenv("SCRAPEOPS_API_KEY") or "").strip()
+_SCRAPEOPS_PROXY_HEALTH_CONFIRMED: ContextVar[bool] = ContextVar(
+    "job_board_scrapeops_proxy_health_confirmed",
+    default=False,
+)
+_SCRAPEOPS_USAGE_CALLBACK: ContextVar[Any] = ContextVar("job_board_scrapeops_usage_callback", default=None)
+_SCRAPEOPS_SOURCE_ID: ContextVar[str] = ContextVar("job_board_scrapeops_source_id", default="job_board")
 
 
 def compact_whitespace(text: str) -> str:
@@ -80,27 +90,103 @@ def _new_session(timeout_seconds: int = 25) -> requests.Session:
     return session
 
 
+def reset_scrapeops_proxy_health_gate(*, usage_callback=None) -> None:
+    _SCRAPEOPS_PROXY_HEALTH_CONFIRMED.set(False)
+    _SCRAPEOPS_USAGE_CALLBACK.set(usage_callback)
+
+
+def set_scrapeops_proxy_source(source_id: str) -> None:
+    _SCRAPEOPS_SOURCE_ID.set(str(source_id or "job_board").strip() or "job_board")
+
+
 def _proxy_get(url: str, params: Dict, timeout_seconds: int) -> requests.Response | None:
     if not SCRAPEOPS_API_KEY:
         return None
+    if not _SCRAPEOPS_PROXY_HEALTH_CONFIRMED.get():
+        from backend.integrations.scrapeops import require_scrapeops_proxy_health
+
+        require_scrapeops_proxy_health(SCRAPEOPS_API_KEY, usage_callback=_SCRAPEOPS_USAGE_CALLBACK.get())
+        _SCRAPEOPS_PROXY_HEALTH_CONFIRMED.set(True)
     try:
+        from backend.integrations.scrapeops import (
+            SCRAPEOPS_PROXY_ENDPOINT,
+            billed_status_code,
+            build_proxy_params,
+            build_proxy_usage_record,
+            estimate_mode_native_credits,
+            parse_proxy_response_envelope,
+        )
+
         prepared_url = requests.Request("GET", url, params=params).prepare().url
-        proxy_params = {
-            "api_key": SCRAPEOPS_API_KEY,
-            "url": prepared_url,
-            "residential": "true",
-            "country": "de",
-        }
+        proxy_params = build_proxy_params(
+            api_key=SCRAPEOPS_API_KEY,
+            url=str(prepared_url or url),
+            mode="residential",
+            country_code="de",
+        )
         session = requests.Session()
         session.trust_env = False
+        request_started = time.perf_counter()
         response = session.get(
-            "https://proxy.scrapeops.io/v1/",
+            SCRAPEOPS_PROXY_ENDPOINT,
             params=proxy_params,
             headers=DEFAULT_HEADERS,
             timeout=max(5, int(timeout_seconds)),
         )
+        envelope = parse_proxy_response_envelope(response)
+        response.status_code = envelope.target_status_code
+        response._content = envelope.body.encode(response.encoding or "utf-8")
+        billed = billed_status_code(envelope.target_status_code)
+        estimated_credits = estimate_mode_native_credits("residential") if billed else 0
+        actual_credits = envelope.billed_credits_actual
+        accounted_credits = actual_credits if actual_credits is not None else estimated_credits
+        callback = _SCRAPEOPS_USAGE_CALLBACK.get()
+        if callable(callback):
+            callback(
+                {
+                    **build_proxy_usage_record(
+                        source_id=_SCRAPEOPS_SOURCE_ID.get(),
+                        target_url=str(prepared_url or url),
+                        request_mode="residential",
+                        target_status_code=envelope.target_status_code,
+                        provider_status_code=envelope.provider_status_code,
+                        latency_ms=round((time.perf_counter() - request_started) * 1000),
+                        billed_credits_actual=actual_credits,
+                        billed_credits_estimated=estimated_credits,
+                        error_category="" if envelope.target_status_code < 400 else "target_http_error",
+                    ),
+                    "domain": (urlparse(str(prepared_url or url)).netloc or "").lower(),
+                    "status_code": envelope.target_status_code,
+                    "billed": billed,
+                    "native_credits": accounted_credits,
+                    "runner_credits": accounted_credits,
+                }
+            )
         return response
-    except Exception:
+    except Exception as exc:
+        callback = _SCRAPEOPS_USAGE_CALLBACK.get()
+        if callable(callback) and "request_started" in locals() and "build_proxy_usage_record" in locals():
+            callback(
+                {
+                    **build_proxy_usage_record(
+                        source_id=_SCRAPEOPS_SOURCE_ID.get(),
+                        target_url=str(locals().get("prepared_url") or url),
+                        request_mode="residential",
+                        target_status_code=0,
+                        provider_status_code=0,
+                        latency_ms=round((time.perf_counter() - request_started) * 1000),
+                        billed_credits_actual=0,
+                        billed_credits_estimated=0,
+                        error_category="network_error",
+                    ),
+                    "domain": (urlparse(str(locals().get("prepared_url") or url)).netloc or "").lower(),
+                    "status_code": 0,
+                    "billed": False,
+                    "native_credits": 0,
+                    "runner_credits": 0,
+                }
+            )
+        LOGGER.warning("Job board ScrapeOps fallback failed for %s: %s", url, exc)
         return None
 
 

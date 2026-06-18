@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 import requests
 
+from backend.capabilities.tailored_documents.language_rules import LANGUAGE_ALIASES, normalize_cefr_level
 from backend.capabilities.tailored_documents.common import compact_whitespace, strip_json_fences
 
 
@@ -16,7 +17,8 @@ _SUMMARY_HEADER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SKILLS_HEADER_PATTERN = re.compile(
-    r"^(skills|core\s+competencies|competencies|technical\s+skills|key\s+skills)$",
+    r"^(skills|core\s+competencies|competencies|technical\s+skills|key\s+skills|"
+    r"tools|technologies|technology\s+stack|tech\s+stack)$",
     re.IGNORECASE,
 )
 _EXPERIENCE_HEADER_PATTERN = re.compile(
@@ -24,19 +26,41 @@ _EXPERIENCE_HEADER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _EDUCATION_HEADER_PATTERN = re.compile(
-    r"^(education|education\s+and\s+training|certifications?|training)$",
+    r"^(education|education\s+and\s+training|certifications?|certificates?|licenses?|licences?|"
+    r"training|courses?|professional\s+development)$",
     re.IGNORECASE,
 )
+_LANGUAGE_HEADER_LABEL_PATTERN = (
+    r"languages|language\s+skills|spoken\s+languages|language\s+proficiency|"
+    r"sprachen|sprachkenntnisse|fremdsprachen|sprachkompetenzen|"
+    r"langues|comp(?:e|\u00e9)tences\s+linguistiques|"
+    r"idiomas|conocimientos\s+de\s+idiomas|"
+    r"lingue|competenze\s+linguistiche"
+)
 _LANGUAGES_HEADER_PATTERN = re.compile(
-    r"^(languages|language\s+skills)$",
+    rf"^(?:{_LANGUAGE_HEADER_LABEL_PATTERN})(?:\s*[:\-]\s*.*)?$",
+    re.IGNORECASE,
+)
+_LANGUAGES_INLINE_HEADER_PATTERN = re.compile(
+    rf"^(?:{_LANGUAGE_HEADER_LABEL_PATTERN})\s*[:\-]\s*(?P<values>.+)$",
+    re.IGNORECASE,
+)
+_PROJECTS_HEADER_PATTERN = re.compile(
+    r"^(projects?|key\s+projects|selected\s+projects|professional\s+projects|portfolio|"
+    r"case\s+studies|selected\s+work)$",
     re.IGNORECASE,
 )
 _SECTION_HEADER_PATTERN = re.compile(
     r"^(professional\s+summary|summary|profile|about\s+me|objective|"
     r"skills|core\s+competencies|competencies|technical\s+skills|key\s+skills|"
+    r"tools|technologies|technology\s+stack|tech\s+stack|"
     r"experience|work\s+experience|professional\s+experience|employment|"
-    r"education|education\s+and\s+training|certifications?|training|"
-    r"languages|language\s+skills|projects?|publications?)$",
+    r"education|education\s+and\s+training|certifications?|certificates?|licenses?|licences?|"
+    r"training|courses?|professional\s+development|"
+    rf"{_LANGUAGE_HEADER_LABEL_PATTERN}|projects?|key\s+projects|selected\s+projects|"
+    r"professional\s+projects|portfolio|case\s+studies|selected\s+work|"
+    r"publications?|awards?|honou?rs|volunteer(?:ing)?|volunteer\s+experience|"
+    r"memberships?|patents?|conferences?|interests?|references?)$",
     re.IGNORECASE,
 )
 _EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
@@ -63,10 +87,21 @@ _INSTITUTION_HINT_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_LANGUAGE_ALIAS_PATTERN = re.compile(
+    r"(?<![A-Za-z])(?:"
+    + "|".join(re.escape(alias) for aliases in LANGUAGE_ALIASES.values() for alias in aliases)
+    + r")(?![A-Za-z])",
+    re.IGNORECASE,
+)
 
 
 def _nonempty_lines(cv_text: str) -> list[str]:
     return [compact_whitespace(line) for line in str(cv_text or "").splitlines() if compact_whitespace(line)]
+
+
+def _custom_section_id(heading: str, index: int) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", compact_whitespace(heading).casefold()).strip("_")
+    return f"custom_{slug or 'section'}_{index + 1}"
 
 
 def _classify_section_header(line: str) -> str | None:
@@ -80,19 +115,86 @@ def _classify_section_header(line: str) -> str | None:
         return "education"
     if _LANGUAGES_HEADER_PATTERN.match(line):
         return "languages"
+    if _PROJECTS_HEADER_PATTERN.match(line):
+        return "projects"
     return None
 
 
-def _collect_sections(cv_text: str) -> dict[str, list[str]]:
-    sections: dict[str, list[str]] = {"_preamble": []}
+def _language_header_inline_values(line: str) -> list[str]:
+    match = _LANGUAGES_INLINE_HEADER_PATTERN.match(compact_whitespace(line))
+    if not match:
+        return []
+    return _split_inline_values(match.group("values"))
+
+
+def _looks_like_custom_section_header(line: str, next_line: str = "") -> bool:
+    text = compact_whitespace(line)
+    if not text or _classify_section_header(text):
+        return False
+    if _looks_like_language_entry_line(text):
+        return False
+    if _SECTION_HEADER_PATTERN.match(text):
+        return True
+    if text.startswith(("-", "*", "\u2022")) or len(text) > 72:
+        return False
+    if any(marker in text for marker in ("|", "@", "://", ",", ";")):
+        return False
+    if text.endswith((".", ",", ";", ":")):
+        return False
+    if _looks_like_date_line(text) or _looks_like_contact_line(text):
+        return False
+    if next_line and _looks_like_date_line(next_line) and not text.isupper():
+        return False
+    alpha_count = sum(1 for char in text if char.isalpha())
+    if alpha_count < 3:
+        return False
+    words = [word for word in re.split(r"\s+", text) if word]
+    if not words or len(words) > 7:
+        return False
+    if text.isupper():
+        return True
+    small_words = {"and", "or", "of", "the", "for", "in", "und", "de", "der", "die", "das"}
+    return all(
+        not any(char.isalpha() for char in word)
+        or word.casefold() in small_words
+        or word[:1].isupper()
+        for word in words
+    )
+
+
+def _collect_sections(cv_text: str) -> dict[str, Any]:
+    lines = _nonempty_lines(cv_text)
+    sections: dict[str, Any] = {"_preamble": [], "_custom_sections": []}
     current_section = "_preamble"
-    for line in _nonempty_lines(cv_text):
+    current_custom: dict[str, Any] | None = None
+    seen_section_header = False
+    for index, line in enumerate(lines):
+        next_line = lines[index + 1] if index + 1 < len(lines) else ""
         detected_section = _classify_section_header(line)
         if detected_section:
             current_section = detected_section
+            current_custom = None
+            seen_section_header = True
             sections.setdefault(current_section, [])
+            if detected_section == "languages":
+                sections[current_section].extend(_language_header_inline_values(line))
+            continue
+        if current_section == "languages" and _looks_like_language_entry_line(line, allow_plain_language=True):
+            sections.setdefault(current_section, []).append(line)
+            continue
+        if seen_section_header and _looks_like_custom_section_header(line, next_line):
+            current_section = f"_custom_{len(sections['_custom_sections'])}"
+            current_custom = {
+                "section_id": _custom_section_id(line, len(sections["_custom_sections"])),
+                "heading": compact_whitespace(line),
+                "lines": [],
+            }
+            sections["_custom_sections"].append(current_custom)
+            sections[current_section] = current_custom["lines"]
             continue
         sections.setdefault(current_section, []).append(line)
+        if current_custom is not None and current_section.startswith("_custom_"):
+            current_custom["lines"] = sections[current_section]
     return sections
 
 
@@ -119,11 +221,30 @@ def _strip_bullet_prefix(line: str) -> str:
     return re.sub(r"^\s*(?:[-*]|[•])+\s*", "", str(line or "")).strip()
 
 
+def _looks_like_language_entry_line(line: str, *, allow_plain_language: bool = False) -> bool:
+    text = compact_whitespace(_strip_bullet_prefix(line))
+    if not text or len(text) > 72:
+        return False
+    if _looks_like_contact_line(text) or _looks_like_section_header(text):
+        return False
+    if not _LANGUAGE_ALIAS_PATTERN.search(text):
+        return False
+    if normalize_cefr_level(text):
+        return True
+    words = [word for word in re.split(r"\s+", text) if word]
+    if allow_plain_language and len(words) <= 3:
+        return True
+    return bool(re.search(r"[-:/()]", text) and len(words) <= 5)
+
+
 def _split_inline_values(value: str) -> list[str]:
     text = compact_whitespace(value)
     if not text:
         return []
-    if ":" in text and text.lower().split(":", 1)[0] in {"languages", "language skills", "skills", "competencies"}:
+    language_header_match = _LANGUAGES_INLINE_HEADER_PATTERN.match(text)
+    if language_header_match:
+        text = language_header_match.group("values").strip()
+    elif ":" in text and text.lower().split(":", 1)[0] in {"skills", "competencies"}:
         text = text.split(":", 1)[1].strip()
     pieces = [item.strip(" .-") for item in re.split(r"[,;|]|(?:\s+[•]\s+)", text) if item.strip(" .-")]
     if len(pieces) <= 1:
@@ -425,6 +546,99 @@ def _extract_education(lines: list[str]) -> list[dict[str, Any]]:
     return items[:6]
 
 
+def _parse_project_heading(line: str) -> tuple[str, str]:
+    text = compact_whitespace(_strip_bullet_prefix(line))
+    if not text:
+        return "", ""
+
+    pipe_parts = [part.strip() for part in text.split("|") if part.strip()]
+    if len(pipe_parts) >= 2 and _looks_like_date_line(pipe_parts[-1]):
+        return " | ".join(pipe_parts[:-1]), pipe_parts[-1]
+    if len(pipe_parts) >= 2:
+        return pipe_parts[0], ""
+
+    dash_parts = [part.strip() for part in re.split(r"\s[-\u2013\u2014]\s", text) if part.strip()]
+    if len(dash_parts) >= 2 and _looks_like_date_line(dash_parts[-1]):
+        return " - ".join(dash_parts[:-1]), dash_parts[-1]
+
+    return text, ""
+
+
+def _looks_like_project_heading(line: str, next_line: str = "") -> bool:
+    text = compact_whitespace(line)
+    if not text or _looks_like_section_header(text):
+        return False
+    if text.startswith(("-", "*", "\u2022")) or len(text) > 130:
+        return False
+    if "|" in text:
+        return True
+    return bool(next_line and len(next_line) <= 40 and _looks_like_date_line(next_line))
+
+
+def _extract_projects(lines: list[str]) -> list[dict[str, Any]]:
+    projects: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+
+    def flush_current() -> None:
+        nonlocal current
+        if current is None:
+            return
+        title = compact_whitespace(str(current.get("title") or ""))
+        period = compact_whitespace(str(current.get("period") or ""))
+        bullets = _dedupe_text_list(
+            [compact_whitespace(item) for item in current.get("bullets") or []],
+            limit=6,
+        )
+        if title or period or bullets:
+            projects.append(
+                {
+                    "title": title,
+                    "period": period,
+                    "bullets": bullets,
+                    "bulletsText": "\n".join(bullets),
+                }
+            )
+        current = None
+
+    for index, raw_line in enumerate(lines[:80]):
+        line = compact_whitespace(raw_line)
+        if not line:
+            continue
+        next_line = compact_whitespace(lines[index + 1]) if index + 1 < len(lines) else ""
+        normalized_bullet = _strip_bullet_prefix(line)
+
+        if current is None:
+            if line.startswith(("-", "*", "\u2022")):
+                continue
+            title, period = _parse_project_heading(line)
+            current = {
+                "title": title,
+                "period": period,
+                "bullets": [],
+            }
+            continue
+
+        if _looks_like_project_heading(line, next_line):
+            flush_current()
+            title, period = _parse_project_heading(line)
+            current = {
+                "title": title,
+                "period": period,
+                "bullets": [],
+            }
+            continue
+
+        if not current.get("period") and _looks_like_date_line(line) and len(line) <= 40:
+            current["period"] = line
+            continue
+
+        if normalized_bullet:
+            current.setdefault("bullets", []).append(normalized_bullet)
+
+    flush_current()
+    return projects[:6]
+
+
 def _normalize_string_list(raw_value: Any, *, limit: int) -> list[str]:
     values: list[str] = []
     if isinstance(raw_value, list):
@@ -527,6 +741,85 @@ def _normalize_education_list(raw_value: Any) -> list[dict[str, Any]]:
     return items[:6]
 
 
+def _normalize_project_list(raw_value: Any) -> list[dict[str, Any]]:
+    projects: list[dict[str, Any]] = []
+    if not isinstance(raw_value, list):
+        return projects
+    for item in raw_value:
+        if isinstance(item, str):
+            title = compact_whitespace(item)
+            if title:
+                projects.append(
+                    {
+                        "title": title,
+                        "period": "",
+                        "bullets": [],
+                        "bulletsText": "",
+                    }
+                )
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        title = compact_whitespace(str(item.get("title") or item.get("name") or item.get("project") or ""))
+        period = compact_whitespace(str(item.get("period") or item.get("date") or item.get("year") or ""))
+        bullets = _normalize_multiline_notes(item.get("bullets"), limit=6)
+        if not bullets:
+            bullets = _normalize_multiline_notes(item.get("details"), limit=6)
+        if not bullets:
+            bullets = _normalize_multiline_notes(item.get("description"), limit=6)
+        if not bullets:
+            bullets = _normalize_multiline_notes(item.get("bulletsText") or item.get("detailsText") or "", limit=6)
+        if title or period or bullets:
+            projects.append(
+                {
+                    "title": title,
+                    "period": period,
+                    "bullets": bullets,
+                    "bulletsText": "\n".join(bullets),
+                }
+            )
+    return projects[:6]
+
+
+def _normalize_custom_section_list(raw_value: Any) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    if not isinstance(raw_value, list):
+        return sections
+    for index, item in enumerate(raw_value):
+        if isinstance(item, str):
+            heading = compact_whitespace(item)
+            lines: list[str] = []
+            section_id = _custom_section_id(heading, index)
+        elif isinstance(item, Mapping):
+            heading = compact_whitespace(str(item.get("heading") or item.get("title") or item.get("label") or ""))
+            section_id = compact_whitespace(str(item.get("section_id") or item.get("id") or ""))
+            raw_lines = item.get("lines")
+            if raw_lines is None:
+                raw_lines = item.get("items")
+            if raw_lines is None:
+                raw_lines = item.get("bullets")
+            if raw_lines is None:
+                raw_lines = item.get("content") or item.get("text") or ""
+            lines = _normalize_multiline_notes(raw_lines, limit=24)
+        else:
+            continue
+        if not heading and not lines:
+            continue
+        heading = heading or "Additional Information"
+        section_id = section_id or _custom_section_id(heading, index)
+        sections.append(
+            {
+                "section_id": section_id,
+                "heading": heading,
+                "lines": lines,
+                "content": "\n".join(lines),
+            }
+        )
+        if len(sections) >= 12:
+            break
+    return sections
+
+
 def normalize_profile_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = dict(payload or {})
     return {
@@ -543,6 +836,20 @@ def normalize_profile_payload(payload: Mapping[str, Any] | None) -> dict[str, An
         "languages": _normalize_string_list(raw.get("languages") or [], limit=15),
         "recent_experience": _normalize_experience_list(raw.get("recent_experience") or raw.get("experience") or []),
         "education": _normalize_education_list(raw.get("education") or []),
+        "projects": _normalize_project_list(
+            raw.get("projects")
+            or raw.get("project")
+            or raw.get("selected_projects")
+            or raw.get("key_projects")
+            or raw.get("portfolio")
+            or []
+        ),
+        "custom_sections": _normalize_custom_section_list(
+            raw.get("custom_sections")
+            or raw.get("additional_sections")
+            or raw.get("unknown_sections")
+            or []
+        ),
     }
 
 
@@ -569,6 +876,8 @@ def extract_cv_profile_fallback(cv_text: str) -> dict[str, Any]:
         "languages": _normalize_string_list(sections.get("languages") or [], limit=15),
         "recent_experience": _extract_recent_experience(sections.get("experience") or []),
         "education": _extract_education(sections.get("education") or []),
+        "projects": _extract_projects(sections.get("projects") or []),
+        "custom_sections": _normalize_custom_section_list(sections.get("_custom_sections") or []),
     }
     return normalize_profile_payload(profile)
 
@@ -601,6 +910,20 @@ def _profile_extraction_schema() -> dict[str, Any]:
                 "details": ["text"],
             }
         ],
+        "projects": [
+            {
+                "title": "text",
+                "period": "text",
+                "bullets": ["text"],
+            }
+        ],
+        "custom_sections": [
+            {
+                "section_id": "text",
+                "heading": "text",
+                "lines": ["text"],
+            }
+        ],
     }
 
 
@@ -618,7 +941,8 @@ Return only a valid JSON object.
 Do not wrap the response in markdown.
 Do not invent facts not present in the CV.
 If a field is unknown, return an empty string or an empty array.
-Keep experience and education ordering as they appear in the CV.
+Keep experience, project, and education ordering as they appear in the CV.
+Put any CV sections that do not fit the named fields into custom_sections.
 Keep language proficiency values exactly when they are present.
 Keep bullets factual and concise.
 

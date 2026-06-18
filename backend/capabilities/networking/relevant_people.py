@@ -18,6 +18,17 @@ PEOPLE_DISCOVERY_STATUS_NOT_STARTED = "not_started"
 PEOPLE_DISCOVERY_STATUS_RUNNING = "running"
 PEOPLE_DISCOVERY_STATUS_COMPLETED = "completed"
 PEOPLE_DISCOVERY_STATUS_FAILED = "failed"
+PEOPLE_DISCOVERY_STATUS_NOT_CONFIGURED = "not_configured"
+
+LIVE_DISCOVERY_NOT_CONFIGURED_ERROR = (
+    "Live networking discovery is disabled. Set RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY=1 "
+    "and restart the backend to search public profiles."
+)
+LIVE_DISCOVERY_SEARCH_FAILED_ERROR = (
+    "Public profile search failed before any usable results were returned. "
+    "DuckDuckGo may have returned an anti-bot challenge. Try again later or configure "
+    "a more reliable search provider."
+)
 
 PEOPLE_CATEGORY_HIRING_MANAGER = "hiring_manager"
 PEOPLE_CATEGORY_POTENTIAL_COLLEAGUE = "potential_colleague"
@@ -369,24 +380,79 @@ def build_relevant_people_discovery(
         context=context,
         public_profile_candidates=public_profile_candidates,
     )
+    discovery_status, discovery_error = _status_for_discovery_payload(discovery_payload)
+    completed_at = utc_now_iso() if discovery_status == PEOPLE_DISCOVERY_STATUS_COMPLETED else ""
+    warnings = [str(item) for item in discovery_payload.get("warnings") or [] if str(item).strip()]
     return PeopleDiscoveryRun(
         run_id=run_id,
         workspace_id=workspace_id,
         job_id=str(job.job_id or ""),
         company=str(job.company or ""),
         job_title=str(job.title or ""),
-        people_discovery_status=PEOPLE_DISCOVERY_STATUS_COMPLETED,
+        people_discovery_status=discovery_status,
         context_extraction=context,
         search_hypotheses=hypotheses,
         public_profile_candidates=public_profile_candidates,
         categories=categories,
         passes=list(discovery_payload.get("passes") or []),
         provider=dict(discovery_payload.get("provider") or {}),
-        warnings=[str(item) for item in discovery_payload.get("warnings") or [] if str(item).strip()],
+        warnings=_user_visible_discovery_warnings(warnings),
+        error=discovery_error,
         last_started_at=last_started_at,
-        last_completed_at=utc_now_iso(),
+        last_completed_at=completed_at,
         last_updated_at=utc_now_iso(),
     ).to_dict()
+
+
+def _status_for_discovery_payload(discovery_payload: dict[str, Any]) -> tuple[str, str]:
+    provider = dict(discovery_payload.get("provider") or {})
+    warnings = [
+        str(item).strip()
+        for item in discovery_payload.get("warnings") or []
+        if str(item).strip()
+    ]
+    if str(provider.get("search") or "") == "offline_fallback" or any(
+        "live networking discovery is disabled" in warning for warning in warnings
+    ):
+        return PEOPLE_DISCOVERY_STATUS_NOT_CONFIGURED, LIVE_DISCOVERY_NOT_CONFIGURED_ERROR
+    if _public_profile_search_failed_before_results(
+        discovery_payload=discovery_payload,
+        warnings=warnings,
+    ):
+        return PEOPLE_DISCOVERY_STATUS_FAILED, LIVE_DISCOVERY_SEARCH_FAILED_ERROR
+    return PEOPLE_DISCOVERY_STATUS_COMPLETED, ""
+
+
+def _public_profile_search_failed_before_results(
+    *,
+    discovery_payload: dict[str, Any],
+    warnings: list[str],
+) -> bool:
+    if not any(warning.startswith("search_failed_pass_") for warning in warnings):
+        return False
+    provider = dict(discovery_payload.get("provider") or {})
+    if str(provider.get("search") or "") == "offline_fallback":
+        return False
+    result_count = 0
+    for raw_pass in discovery_payload.get("passes") or []:
+        if not isinstance(raw_pass, dict):
+            continue
+        try:
+            result_count += int(raw_pass.get("result_count") or 0)
+        except (TypeError, ValueError):
+            continue
+    return result_count == 0
+
+
+def _user_visible_discovery_warnings(warnings: list[str]) -> list[str]:
+    visible: list[str] = []
+    for warning in warnings:
+        normalized = str(warning or "").strip()
+        if not normalized:
+            continue
+        if normalized.startswith("search_failed_pass_"):
+            visible.append(normalized)
+    return visible
 
 
 def update_relevant_people_status(
@@ -540,11 +606,16 @@ def _build_public_profile_candidates(
     for pass_payload in discovery_payload.get("passes") or []:
         pass_index = int(pass_payload.get("pass_index") or 0)
         for result_index, result in enumerate(pass_payload.get("results_preview") or [], start=1):
+            profile_url = str(result.get("url") or "").strip()
+            if not _is_public_person_profile_url(profile_url):
+                continue
             lane = str(result.get("lane") or "").strip()
             category = _FINAL_CATEGORY_BY_LANE.get(lane)
             if not category:
                 continue
             parsed_name, parsed_title, parsed_company = _parse_profile_result_title(str(result.get("title") or ""))
+            if not parsed_name:
+                continue
             candidates.append(
                 PublicProfileCandidate(
                     candidate_id=f"public_profile_{pass_index}_{result_index}_{category}",
@@ -554,7 +625,7 @@ def _build_public_profile_candidates(
                     title=parsed_title,
                     company=parsed_company,
                     location=_extract_location_from_text(str(result.get("snippet") or "")),
-                    profile_url=str(result.get("url") or "").strip(),
+                    profile_url=profile_url,
                     source=str(result.get("source_domain") or "public_profile_search").strip(),
                     search_query=query_by_pass_and_lane.get((pass_index, lane), ""),
                     evidence_snippets=[
@@ -642,7 +713,7 @@ def _build_relevant_person_from_discovery_candidate(
     category: str,
 ) -> RelevantPerson | None:
     name = str(raw_candidate.get("resolved_name") or raw_candidate.get("guessed_name") or "").strip()
-    profile_url = _first_non_empty(raw_candidate.get("source_urls") or [])
+    profile_url = _first_person_profile_url(raw_candidate.get("source_urls") or [])
     if not name or not profile_url or not _looks_like_person_name(name):
         return None
     title = str(raw_candidate.get("current_title") or raw_candidate.get("resolved_title") or "").strip()
@@ -705,7 +776,12 @@ def _build_relevant_person_from_profile_candidate(
     raw_candidate: PublicProfileCandidate,
     category: str,
 ) -> RelevantPerson | None:
-    if not raw_candidate.name or not raw_candidate.profile_url or not _looks_like_person_name(raw_candidate.name):
+    if (
+        not raw_candidate.name
+        or not raw_candidate.profile_url
+        or not _is_public_person_profile_url(raw_candidate.profile_url)
+        or not _looks_like_person_name(raw_candidate.name)
+    ):
         return None
     evidence = [str(item).strip() for item in raw_candidate.evidence_snippets if str(item).strip()]
     breakdown = _build_confidence_breakdown(
@@ -1001,10 +1077,15 @@ def _parse_profile_result_title(title: str) -> tuple[str, str, str]:
 
 
 def _extract_location_from_text(text: str) -> str:
-    parts = [part.strip() for part in re.split(r"[|,;]", str(text or "")) if part.strip()]
+    parts = [part.strip() for part in re.split("[|,;\u00b7]", str(text or "")) if part.strip()]
     for part in parts:
-        if any(token in part.casefold() for token in ("germany", "berlin", "munich", "hamburg", "remote", "europe")):
-            return part
+        lowered = part.casefold()
+        if any(token in lowered for token in ("ausbildung", "education", "university", "school")):
+            continue
+        if any(token in lowered for token in ("ort:", "location:", "located in", "standort")):
+            return _compact_text(part, limit=90)
+        if any(token in lowered for token in ("berlin", "munich", "hamburg", "remote")) and len(part.split()) <= 6:
+            return _compact_text(part, limit=90)
     return ""
 
 
@@ -1101,6 +1182,19 @@ def _first_non_empty(values: list[Any]) -> str:
         if text:
             return text
     return ""
+
+
+def _first_person_profile_url(values: list[Any]) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if _is_public_person_profile_url(text):
+            return text
+    return ""
+
+
+def _is_public_person_profile_url(value: str) -> bool:
+    lowered = str(value or "").strip().casefold()
+    return "linkedin.com/in/" in lowered or "xing.com/profile/" in lowered
 
 
 def _slug(value: str) -> str:

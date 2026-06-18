@@ -17,6 +17,18 @@ from .language_rules import (
 )
 
 
+def _config_language_lines(config: dict) -> list[str]:
+    candidate = config.get("candidate") if isinstance(config, dict) else {}
+    if not isinstance(candidate, dict):
+        return []
+    raw_languages = candidate.get("languages")
+    if isinstance(raw_languages, str):
+        return [item.strip() for item in raw_languages.replace(",", "\n").splitlines() if item.strip()]
+    if isinstance(raw_languages, (list, tuple, set)):
+        return [str(item).strip() for item in raw_languages if str(item).strip()]
+    return []
+
+
 def build_stage3_args(
     config: dict | None = None,
     overrides: dict[str, Any] | None = None,
@@ -63,6 +75,7 @@ def build_stage3_args(
         ),
         "stage3_extra_prompt": "",
         "stage3_prompt_override": "",
+        "languages": _config_language_lines(config),
     }
     if overrides:
         payload.update({key: value for key, value in overrides.items() if value is not None})
@@ -75,6 +88,7 @@ def split_python_prefilter_language_chars(
     french_special_char_threshold: int,
     spanish_special_char_threshold: int,
     max_german_level: str,
+    profile_languages: Any = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     approved_jobs: list[dict[str, Any]] = []
     rejected_jobs: list[dict[str, Any]] = []
@@ -86,6 +100,7 @@ def split_python_prefilter_language_chars(
             french_special_char_threshold,
             spanish_special_char_threshold,
             max_german_level,
+            profile_languages,
         )
         if reasons:
             rejected_jobs.append(
@@ -195,6 +210,7 @@ def run_stage3_pipeline(
         max(0, int(active_args.stage3_french_special_char_threshold)),
         max(0, int(active_args.stage3_spanish_special_char_threshold)),
         active_args.stage3_max_german_level,
+        getattr(active_args, "languages", []),
     )
     approved = sort_and_rank_jobs(approved, max(0, int(active_args.low_applicant_threshold)))
     save_json_file(Path(active_args.output), approved)

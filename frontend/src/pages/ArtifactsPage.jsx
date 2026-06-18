@@ -8,10 +8,12 @@ import {
   buildCareerMemoryDraft,
   buildCareerMemoryPayload,
 } from "../lib/careerMemoryWorkspace";
-import { labelize, statusTone } from "../lib/formatters";
+import { CV_STUDIO_ROUTE } from "../lib/cvStudio";
+import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
 const VIEW_LIBRARY = "library";
-const VIEW_CANVAS = "canvas";
+const VIEW_MEMORY = "memory";
+const LEGACY_VIEW_CANVAS = "canvas";
 const DEFAULT_UPLOAD_KIND = "uploaded_document";
 const MASTER_CAREER_PROFILE_KIND = "master_career_profile";
 const CAREER_ASSET_KINDS = new Set([
@@ -22,12 +24,12 @@ const CAREER_ASSET_KINDS = new Set([
   "recommendation_letter",
   "motivation_letter",
 ]);
-const CANVAS_DEFAULTS = buildCareerMemoryDraft({});
+const MEMORY_DEFAULTS = buildCareerMemoryDraft({});
 
 function normalizeViewParam(value) {
   const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === VIEW_CANVAS) {
-    return normalized;
+  if (normalized === VIEW_MEMORY || normalized === LEGACY_VIEW_CANVAS) {
+    return VIEW_MEMORY;
   }
   return VIEW_LIBRARY;
 }
@@ -139,8 +141,8 @@ export default function DocumentsPage() {
     gate: null,
   });
   const [requirementsReviewOpen, setRequirementsReviewOpen] = useState(false);
-  const [canvasDraft, setCanvasDraft] = useState(CANVAS_DEFAULTS);
-  const [canvasSaveState, setCanvasSaveState] = useState({
+  const [memoryDraft, setMemoryDraft] = useState(MEMORY_DEFAULTS);
+  const [memorySaveState, setMemorySaveState] = useState({
     saving: false,
     message: "",
     error: "",
@@ -171,13 +173,19 @@ export default function DocumentsPage() {
     if (!settingsPayload?.documents) {
       return;
     }
-    setCanvasDraft(buildCareerMemoryDraft(settingsPayload.documents));
+    setMemoryDraft(buildCareerMemoryDraft(settingsPayload.documents));
   }, [settingsPayload?.documents]);
 
   useEffect(() => {
-    const requestedView = normalizeViewParam(searchParams.get("view"));
+    const rawView = String(searchParams.get("view") || "").trim().toLowerCase();
+    const requestedView = normalizeViewParam(rawView);
     setActiveView((current) => (current === requestedView ? current : requestedView));
-  }, [searchParams]);
+    if (rawView === LEGACY_VIEW_CANVAS) {
+      const next = new URLSearchParams(searchParams);
+      next.set("view", VIEW_MEMORY);
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const workspaceOptions = useMemo(
     () =>
@@ -269,9 +277,9 @@ export default function DocumentsPage() {
   const masterCareerProfileAsset = useMemo(
     () =>
       assetDocuments.find(
-        (item) => String(item.asset_id || "") === String(canvasDraft.masterProfileAssetId || ""),
+        (item) => String(item.asset_id || "") === String(memoryDraft.masterProfileAssetId || ""),
       ) || null,
-    [assetDocuments, canvasDraft.masterProfileAssetId],
+    [assetDocuments, memoryDraft.masterProfileAssetId],
   );
   const visibleDocumentSections = useMemo(() => {
     const groupMetaById = new Map(
@@ -393,28 +401,28 @@ export default function DocumentsPage() {
     }
   }
 
-  function updateCanvasField(field, value) {
-    setCanvasDraft((current) => ({ ...current, [field]: value }));
-    setCanvasSaveState((current) => ({ ...current, message: "", error: "" }));
+  function updateMemoryField(field, value) {
+    setMemoryDraft((current) => ({ ...current, [field]: value }));
+    setMemorySaveState((current) => ({ ...current, message: "", error: "" }));
   }
 
-  async function saveCanvas() {
-    setCanvasSaveState({ saving: true, message: "", error: "" });
+  async function saveCareerMemory() {
+    setMemorySaveState({ saving: true, message: "", error: "" });
     try {
       await request("/settings", {
         method: "PUT",
         body: {
-          documents: buildCareerMemoryPayload(canvasDraft),
+          documents: buildCareerMemoryPayload(memoryDraft),
         },
       });
       await refreshSettings().catch(() => undefined);
-      setCanvasSaveState({
+      setMemorySaveState({
         saving: false,
         message: "Career Memory Builder saved.",
         error: "",
       });
     } catch (saveError) {
-      setCanvasSaveState({
+      setMemorySaveState({
         saving: false,
         message: "",
         error: saveError.message || "Unable to save the Career Memory Builder.",
@@ -440,7 +448,7 @@ export default function DocumentsPage() {
       const uploadedAsset = response?.asset || null;
       await refreshDocuments().catch(() => undefined);
       if (uploadedAsset?.asset_id) {
-        setCanvasDraft((current) => ({
+        setMemoryDraft((current) => ({
           ...current,
           masterProfileAssetId: String(uploadedAsset.asset_id || ""),
           importedCareerContext:
@@ -452,7 +460,7 @@ export default function DocumentsPage() {
         message: `Uploaded ${file.name}. Review the imported text, then save the Career Memory Builder.`,
         error: "",
       });
-      setCanvasSaveState((current) => ({ ...current, message: "", error: "" }));
+      setMemorySaveState((current) => ({ ...current, message: "", error: "" }));
     } catch (uploadError) {
       setMasterProfileUploadState({
         uploading: false,
@@ -521,15 +529,26 @@ export default function DocumentsPage() {
         </div>
       </header>
 
-      <section className="flex flex-wrap gap-2 rounded-xl bg-surface-container-low p-2">
+      <section
+        aria-label="Career asset tools"
+        className="grid gap-2 rounded-xl bg-surface-container-low p-2 lg:grid-cols-3"
+      >
         {[
-          { id: VIEW_LIBRARY, label: "Asset Library" },
-          { id: VIEW_CANVAS, label: "Career Memory Builder" },
+          {
+            description: "Upload and manage the source files Runr can use.",
+            id: VIEW_LIBRARY,
+            label: "Asset Library",
+          },
+          {
+            description: "Capture reusable stories, metrics, and career context.",
+            id: VIEW_MEMORY,
+            label: "Career Memory",
+          },
         ].map((view) => (
           <button
             key={view.id}
             className={[
-              "rounded-lg px-4 py-2.5 text-sm font-medium transition-colors",
+              "rounded-lg px-4 py-3 text-left transition-colors",
               activeView === view.id
                 ? "bg-surface-container-lowest text-on-surface shadow-soft"
                 : "text-on-surface-variant hover:bg-surface-container-high",
@@ -537,9 +556,21 @@ export default function DocumentsPage() {
             onClick={() => handleViewChange(view.id)}
             type="button"
           >
-            {view.label}
+            <span className="block text-sm font-semibold">{view.label}</span>
+            <span className="mt-1 block text-xs leading-5 text-on-surface-variant">
+              {view.description}
+            </span>
           </button>
         ))}
+        <Link
+          className="rounded-lg px-4 py-3 text-left text-on-surface-variant transition-colors hover:bg-surface-container-high"
+          to={CV_STUDIO_ROUTE}
+        >
+          <span className="block text-sm font-semibold text-on-surface">CV Studio</span>
+          <span className="mt-1 block text-xs leading-5 text-on-surface-variant">
+            Edit the latest browser draft. Use Tracker's Edit CV action for a generated job CV.
+          </span>
+        </Link>
       </section>
 
       {activeView === VIEW_LIBRARY ? (
@@ -939,20 +970,20 @@ export default function DocumentsPage() {
             )}
           </section>
         </div>
-      ) : activeView === VIEW_CANVAS ? (
+      ) : activeView === VIEW_MEMORY ? (
         <CareerMemoryBuilderPage
           assetDocuments={assetDocuments}
           assetKindLabel={assetKindLabel}
           cvLikeAssets={cvLikeAssets}
-          draft={canvasDraft}
+          draft={memoryDraft}
           formatDateTime={formatDateTime}
           manageDocumentsTo="/documents?view=library"
           masterCareerProfileAsset={masterCareerProfileAsset}
           masterProfileUploadState={masterProfileUploadState}
-          onChangeField={updateCanvasField}
-          onSave={saveCanvas}
+          onChangeField={updateMemoryField}
+          onSave={saveCareerMemory}
           onUploadMasterProfile={uploadMasterCareerProfile}
-          saveState={canvasSaveState}
+          saveState={memorySaveState}
         />
       ) : null}
 

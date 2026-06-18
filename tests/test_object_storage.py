@@ -1,0 +1,248 @@
+import io
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
+
+from backend.storage import (
+    InvalidObjectKeyError,
+    LocalObjectStorage,
+    ObjectNotFoundError,
+    S3ObjectStorage,
+    build_private_object_key,
+    create_object_storage,
+    materialize_object,
+    normalize_object_key,
+    publish_file_artifacts,
+)
+from backend.domain.models import ArtifactRecord
+
+
+class _MissingObjectError(Exception):
+    response = {"Error": {"Code": "NoSuchKey"}}
+
+
+class _FakeS3Client:
+    def __init__(self):
+        self.objects: dict[tuple[str, str], bytes] = {}
+        self.calls: list[tuple[str, dict]] = []
+
+    def put_object(self, **kwargs):
+        self.calls.append(("put_object", kwargs))
+        self.objects[(kwargs["Bucket"], kwargs["Key"])] = bytes(kwargs["Body"])
+        return {"ETag": '"fake-etag"'}
+
+    def get_object(self, **kwargs):
+        self.calls.append(("get_object", kwargs))
+        try:
+            body = self.objects[(kwargs["Bucket"], kwargs["Key"])]
+        except KeyError as exc:
+            raise _MissingObjectError from exc
+        return {"Body": io.BytesIO(body)}
+
+    def delete_object(self, **kwargs):
+        self.calls.append(("delete_object", kwargs))
+        self.objects.pop((kwargs["Bucket"], kwargs["Key"]), None)
+        return {}
+
+    def head_object(self, **kwargs):
+        self.calls.append(("head_object", kwargs))
+        if (kwargs["Bucket"], kwargs["Key"]) not in self.objects:
+            raise _MissingObjectError
+        return {}
+
+    def generate_presigned_url(self, operation, **kwargs):
+        self.calls.append(("generate_presigned_url", {"operation": operation, **kwargs}))
+        return f"https://signed.example/{kwargs['Params']['Key']}?expires={kwargs['ExpiresIn']}"
+
+
+class ObjectKeyTests(unittest.TestCase):
+    def test_private_object_keys_are_deterministic_and_path_safe(self):
+        arguments = {
+            "namespace": "users",
+            "owner_id": "user/123",
+            "category": "candidate-assets",
+            "object_id": "asset:456",
+            "filename": "../Ahmed CV.pdf",
+        }
+
+        first = build_private_object_key(**arguments)
+        second = build_private_object_key(**arguments)
+
+        self.assertEqual(first, second)
+        self.assertTrue(first.startswith("private/users/"))
+        self.assertNotIn("..", first.split("/"))
+        self.assertNotIn(" ", first)
+
+    def test_normalize_object_key_rejects_traversal_and_absolute_paths(self):
+        for key in ("../secret.txt", "/absolute.txt", "private//file.txt", r"private\..\file.txt"):
+            with self.subTest(key=key):
+                with self.assertRaises(InvalidObjectKeyError):
+                    normalize_object_key(key)
+
+
+class LocalObjectStorageTests(unittest.TestCase):
+    def test_local_storage_supports_full_object_lifecycle(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = LocalObjectStorage(temporary_directory)
+            key = "private/users/user_1/documents/document_1/cv.pdf"
+
+            stored = storage.put(
+                key,
+                b"pdf-content",
+                content_type="application/pdf",
+                metadata={"owner": "user_1"},
+            )
+
+            self.assertEqual(stored.key, key)
+            self.assertEqual(stored.size, 11)
+            self.assertEqual(stored.content_type, "application/pdf")
+            self.assertTrue(stored.etag)
+            self.assertTrue(storage.exists(key))
+            self.assertEqual(storage.get(key), b"pdf-content")
+
+            storage.delete(key)
+            self.assertFalse(storage.exists(key))
+            storage.delete(key)
+            with self.assertRaises(ObjectNotFoundError):
+                storage.get(key)
+
+    def test_local_signed_download_url_is_scoped_and_expiring(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = LocalObjectStorage(
+                temporary_directory,
+                download_base_url="http://localhost:8000/v1/storage/objects",
+                signing_secret="test-signing-secret",
+                clock=lambda: 1_000,
+            )
+            key = "private/users/user_1/documents/document_1/cv.pdf"
+            storage.put(key, b"content")
+
+            url = storage.signed_download_url(
+                key,
+                expires_in_seconds=300,
+                download_filename="Candidate CV.pdf",
+            )
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query)
+
+            self.assertEqual(parsed.path, f"/v1/storage/objects/{key}")
+            self.assertEqual(query["expires"], ["1300"])
+            self.assertEqual(query["download"], ["Candidate CV.pdf"])
+            self.assertEqual(len(query["signature"][0]), 64)
+
+    def test_local_factory_uses_environment_contract(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = create_object_storage(
+                {
+                    "OBJECT_STORAGE_BACKEND": "local",
+                    "OBJECT_STORAGE_LOCAL_ROOT": temporary_directory,
+                    "LOCAL_OBJECT_STORAGE_SIGNING_SECRET": "test-secret",
+                }
+            )
+
+            storage.put("private/users/user_1/files/file_1/value.txt", b"value")
+            self.assertEqual(storage.get("private/users/user_1/files/file_1/value.txt"), b"value")
+            self.assertEqual(Path(temporary_directory).resolve(), storage.root)
+
+    def test_materialization_and_artifact_publication_survive_source_deletion(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            storage = LocalObjectStorage(root / "objects")
+            source = root / "generated" / "cv.pdf"
+            source.parent.mkdir()
+            source.write_bytes(b"generated-pdf")
+            artifact = ArtifactRecord(
+                artifact_id="artifact_cv",
+                artifact_type="cv_pdf",
+                path=str(source),
+            )
+
+            published = publish_file_artifacts(
+                storage,
+                run_id="run_1",
+                artifacts=[artifact],
+            )[0]
+            object_key = published.metadata["object_key"]
+            source.unlink()
+
+            with patch.dict(
+                os.environ,
+                {"OBJECT_STORAGE_CACHE_ROOT": str(root / "cache")},
+            ):
+                materialized = materialize_object(
+                    storage,
+                    object_key,
+                    filename="cv.pdf",
+                )
+
+            self.assertEqual(materialized.read_bytes(), b"generated-pdf")
+            self.assertTrue(storage.exists(object_key))
+
+
+class S3ObjectStorageTests(unittest.TestCase):
+    def _storage(self, client):
+        return S3ObjectStorage(
+            bucket="runr-test",
+            endpoint_url="https://example-account.r2.cloudflarestorage.com",
+            access_key_id="test-access-key",
+            secret_access_key="test-secret-key",
+            client=client,
+        )
+
+    def test_s3_storage_uses_injected_client_without_network_calls(self):
+        client = _FakeS3Client()
+        storage = self._storage(client)
+        key = "private/users/user_1/documents/document_1/cv.pdf"
+
+        stored = storage.put(
+            key,
+            b"pdf-content",
+            content_type="application/pdf",
+            metadata={"owner": "user_1"},
+        )
+
+        self.assertEqual(stored.etag, "fake-etag")
+        self.assertTrue(storage.exists(key))
+        self.assertEqual(storage.get(key), b"pdf-content")
+
+        url = storage.signed_download_url(
+            key,
+            expires_in_seconds=120,
+            download_filename="Candidate CV.pdf",
+        )
+        self.assertEqual(url, f"https://signed.example/{key}?expires=120")
+        signing_call = client.calls[-1][1]
+        self.assertEqual(signing_call["operation"], "get_object")
+        self.assertEqual(signing_call["ExpiresIn"], 120)
+        self.assertEqual(
+            signing_call["Params"]["ResponseContentDisposition"],
+            'attachment; filename="Candidate CV.pdf"',
+        )
+
+        storage.delete(key)
+        self.assertFalse(storage.exists(key))
+        with self.assertRaises(ObjectNotFoundError):
+            storage.get(key)
+
+    def test_s3_factory_accepts_r2_configuration_and_injected_client(self):
+        client = _FakeS3Client()
+        storage = create_object_storage(
+            {
+                "OBJECT_STORAGE_BACKEND": "r2",
+                "S3_ENDPOINT_URL": "https://example-account.r2.cloudflarestorage.com",
+                "S3_ACCESS_KEY_ID": "test-access-key",
+                "S3_SECRET_ACCESS_KEY": "test-secret-key",
+                "S3_BUCKET": "runr-test",
+            },
+            s3_client=client,
+        )
+
+        storage.put("private/users/user_1/files/file_1/value.txt", b"value")
+        self.assertEqual(storage.get("private/users/user_1/files/file_1/value.txt"), b"value")
+
+
+if __name__ == "__main__":
+    unittest.main()

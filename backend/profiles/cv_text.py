@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from backend.config.job_seeker import cfg_str, load_job_seeker_config, normalize_windows_env_path
+from backend.profiles.document_text import extract_document_text
 
 
 DEFAULT_CV_PATH = "user_config/cv_master.txt"
@@ -60,12 +61,10 @@ def extract_cv_text_from_path(path: str | Path) -> str:
     file_path = Path(path)
     if not file_path.exists() or not file_path.is_file():
         return ""
-    suffix = file_path.suffix.lower()
-    if suffix == ".docx":
-        return _load_docx_text(file_path)
-    if suffix == ".pdf":
-        return _load_pdf_text(file_path)
-    return _load_plain_text(file_path)
+    try:
+        return str(extract_document_text(file_path.name, file_path.read_bytes()).get("text") or "")
+    except Exception:
+        return ""
 
 
 def get_runtime_cv_override() -> dict[str, Any]:
@@ -83,7 +82,13 @@ def runtime_cv_override(snapshot: Mapping[str, Any] | None) -> Iterator[None]:
 
 def resolve_runtime_cv_docx_path() -> Path | None:
     snapshot = get_runtime_cv_override()
-    raw_path = str(snapshot.get("path") or snapshot.get("workspace_cv_asset_path") or "").strip()
+    raw_path = str(
+        snapshot.get("docx_path")
+        or snapshot.get("workspace_cv_asset_docx_path")
+        or snapshot.get("path")
+        or snapshot.get("workspace_cv_asset_path")
+        or ""
+    ).strip()
     if not raw_path:
         return None
     file_path = Path(raw_path)

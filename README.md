@@ -27,6 +27,12 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+For local verification and cleanup work, install the dev tools too:
+
+```powershell
+pip install -r requirements-dev.txt
+```
+
 Frontend:
 
 ```powershell
@@ -162,4 +168,16 @@ Example:
 
 ## Architecture
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md).
+Start with [docs/architecture/current_system.md](./docs/architecture/current_system.md) for current agent context, then use [ARCHITECTURE.md](./ARCHITECTURE.md) for the longer historical architecture narrative.
+
+## Verification
+
+Fast checks from the repo root:
+
+```powershell
+npm run check
+npm run check:backend
+npm run check:frontend
+```
+
+`check:backend` runs Ruff plus a documented fast pytest subset. Use `npm run check:backend:api` for the slower API sweep and `npm run check:backend:full` before larger merges. `check:frontend` currently uses the Vite production build as the frontend check.

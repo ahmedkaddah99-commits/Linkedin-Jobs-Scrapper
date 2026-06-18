@@ -36,6 +36,29 @@ class JobDedupeTests(unittest.TestCase):
         self.assertEqual(len(dropped), 1)
         self.assertIn("duplicate_identity:url:https://example.com/jobs/1", dropped[0]["dedupe_reason"])
 
+    def test_dedupe_job_records_keeps_same_title_company_when_posting_url_differs(self):
+        kept, dropped = dedupe_job_records(
+            [
+                {
+                    "job_id": "berlin_1",
+                    "title": "Product Owner",
+                    "company": "ACME",
+                    "location_raw": "Berlin",
+                    "apply_link": "https://example.com/jobs/product-owner-berlin",
+                },
+                {
+                    "job_id": "cairo_1",
+                    "title": "Product Owner",
+                    "company": "ACME",
+                    "location_raw": "Cairo",
+                    "apply_link": "https://example.com/jobs/product-owner-cairo",
+                },
+            ]
+        )
+
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(dropped, [])
+
 
 if __name__ == "__main__":
     unittest.main()

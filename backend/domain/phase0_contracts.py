@@ -61,6 +61,7 @@ WORKSPACE_USER_FACING_FIELD_IDS = [
     "target_roles",
     "job_filtering_mode",
     "time_posted_seconds",
+    "posted_within_days",
     "experience_levels",
     "manual_url_seed_list",
     "academic_career_sites",
@@ -306,6 +307,43 @@ def _clean_tag_list(value: Any, *, limit: int = 50, lower: bool = False) -> list
         if len(cleaned) >= limit:
             break
     return cleaned
+
+
+def _clean_cv_section_decisions(value: Any, *, limit: int = 30) -> list[dict[str, str]]:
+    allowed_targets = {"summary", "skills", "experience", "projects", "education", "languages"}
+    decisions: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in _clean_list(value):
+        if not isinstance(item, Mapping):
+            continue
+        section_id = _clean_text(item.get("section_id") or item.get("id"))
+        heading = _clean_text(item.get("heading"))
+        if not section_id and not heading:
+            continue
+        action = _clean_text(item.get("action") or "keep").casefold()
+        target_section = _clean_text(item.get("target_section") or item.get("target")).casefold()
+        if action not in {"keep", "hide", "map"}:
+            action = "keep"
+        if action != "map":
+            target_section = ""
+        elif target_section not in allowed_targets:
+            action = "keep"
+            target_section = ""
+        key = (section_id.casefold(), heading.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        decisions.append(
+            {
+                "section_id": section_id,
+                "heading": heading,
+                "action": action,
+                "target_section": target_section,
+            }
+        )
+        if len(decisions) >= limit:
+            break
+    return decisions
 
 
 def _normalize_company_site_entries(value: Any) -> list[dict[str, str]]:
@@ -575,6 +613,7 @@ def default_workspace_configuration_v2() -> dict[str, Any]:
             },
         },
         "filter_preferences": {
+            "posted_within_days": 14,
             "job_filtering": {
                 "mode": JOB_FILTERING_MODE_BROADER,
                 "target_phrases": [],
@@ -678,6 +717,14 @@ def normalize_workspace_configuration_v2(payload: Mapping[str, Any] | None) -> d
         limit=50,
         lower=True,
     )
+    if "posted_within_days" in settings:
+        try:
+            contract["filter_preferences"]["posted_within_days"] = max(
+                0,
+                int(settings.get("posted_within_days") or 0),
+            )
+        except (TypeError, ValueError):
+            pass
     contract["filter_preferences"]["job_filtering"]["mode"] = normalize_job_filtering_mode(
         settings.get("job_filtering_mode")
     )
@@ -755,6 +802,7 @@ def default_candidate_asset_descriptor() -> dict[str, Any]:
         },
         "file": {
             "path": "",
+            "object_key": "",
             "download_url": "",
             "mime_type": "",
             "extension": "",
@@ -763,7 +811,17 @@ def default_candidate_asset_descriptor() -> dict[str, Any]:
             "job_id": "",
             "created_at": "",
             "tags": [],
+            "source_text": "",
+            "source_char_count": 0,
+            "text_extraction": {
+                "method": "",
+                "warnings": [],
+            },
+            "word_companion_path": "",
+            "word_companion_object_key": "",
+            "word_companion_mime_type": "",
             "parsed_profile": {},
+            "cv_section_decisions": [],
             "profile_extraction": {
                 "provider": "",
                 "model": "",
@@ -790,6 +848,7 @@ def normalize_candidate_asset_descriptor(payload: Mapping[str, Any] | None) -> d
     contract["source"]["run_id"] = _clean_text(raw.get("run_id"))
     contract["source"]["artifact_id"] = _clean_text(raw.get("artifact_id"))
     contract["file"]["path"] = _clean_text(raw.get("path"))
+    contract["file"]["object_key"] = _clean_text(raw.get("object_key"))
     contract["file"]["download_url"] = _clean_text(raw.get("download_url"))
     contract["file"]["mime_type"] = _clean_text(raw.get("mime_type") or raw.get("content_type"))
     contract["file"]["extension"] = _clean_text(raw.get("extension") or raw.get("file_extension"))
@@ -797,8 +856,27 @@ def normalize_candidate_asset_descriptor(payload: Mapping[str, Any] | None) -> d
     contract["metadata"]["job_id"] = _clean_text(raw.get("job_id") or metadata.get("job_id"))
     contract["metadata"]["created_at"] = _clean_text(raw.get("created_at") or metadata.get("created_at"))
     contract["metadata"]["tags"] = _clean_tag_list(raw.get("tags") or metadata.get("tags"), limit=20)
+    contract["metadata"]["source_text"] = str(metadata.get("source_text") or "")
+    try:
+        contract["metadata"]["source_char_count"] = max(0, int(metadata.get("source_char_count") or 0))
+    except (TypeError, ValueError):
+        contract["metadata"]["source_char_count"] = len(contract["metadata"]["source_text"])
+    text_extraction = metadata.get("text_extraction")
+    text_extraction_dict = dict(text_extraction) if isinstance(text_extraction, Mapping) else {}
+    contract["metadata"]["text_extraction"] = {
+        "method": _clean_text(text_extraction_dict.get("method")),
+        "warnings": _clean_tag_list(text_extraction_dict.get("warnings"), limit=20),
+    }
+    contract["metadata"]["word_companion_path"] = _clean_text(metadata.get("word_companion_path"))
+    contract["metadata"]["word_companion_object_key"] = _clean_text(
+        metadata.get("word_companion_object_key")
+    )
+    contract["metadata"]["word_companion_mime_type"] = _clean_text(metadata.get("word_companion_mime_type"))
     parsed_profile = metadata.get("parsed_profile")
     contract["metadata"]["parsed_profile"] = dict(parsed_profile) if isinstance(parsed_profile, Mapping) else {}
+    contract["metadata"]["cv_section_decisions"] = _clean_cv_section_decisions(
+        metadata.get("cv_section_decisions") or raw.get("cv_section_decisions")
+    )
     extraction = metadata.get("profile_extraction")
     extraction_dict = dict(extraction) if isinstance(extraction, Mapping) else {}
     contract["metadata"]["profile_extraction"] = {

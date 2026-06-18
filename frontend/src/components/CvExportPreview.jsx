@@ -6,16 +6,15 @@ const DEFAULT_TEMPLATE = {
   label: "Classic",
 };
 
+const PLAIN_TEMPLATE = {
+  id: "plain",
+  label: "Plain",
+};
+
 const DEFAULT_SCHEME = {
   primary: "1F3A5F",
   accent: "2EC4B6",
   surface: "EAF3FF",
-};
-
-const PLAIN_SCHEME = {
-  primary: "111111",
-  accent: "111111",
-  surface: "FFFFFF",
 };
 
 function hexToRgb(value) {
@@ -37,17 +36,17 @@ function withAlpha(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function previewPalette(template, rawScheme) {
-  const scheme = template.id === "plain" ? PLAIN_SCHEME : { ...DEFAULT_SCHEME, ...(rawScheme || {}) };
+function previewPalette(rawScheme) {
+  const scheme = { ...DEFAULT_SCHEME, ...(rawScheme || {}) };
   return {
     primary: `#${scheme.primary}`,
     accent: `#${scheme.accent}`,
     surface: `#${scheme.surface}`,
-    text: template.id === "plain" ? "#111111" : "#111827",
-    muted: template.id === "plain" ? "#444444" : "#475569",
-    border: template.id === "plain" ? "#111111" : withAlpha(scheme.primary, 0.18),
-    softBorder: template.id === "plain" ? "#D4D4D4" : withAlpha(scheme.primary, 0.1),
-    tint: template.id === "plain" ? "#F7F7F7" : withAlpha(scheme.primary, 0.05),
+    text: "#111827",
+    muted: "#475569",
+    border: withAlpha(scheme.primary, 0.18),
+    softBorder: withAlpha(scheme.primary, 0.1),
+    tint: withAlpha(scheme.primary, 0.05),
   };
 }
 
@@ -64,15 +63,20 @@ function normalizeBullets(item) {
   if (Array.isArray(item?.bullets) && item.bullets.length) {
     return item.bullets.map((entry) => String(entry || "").trim()).filter(Boolean);
   }
-  return String(item?.bulletsText || "")
+  if (Array.isArray(item?.details) && item.details.length) {
+    return item.details.map((entry) => String(entry || "").trim()).filter(Boolean);
+  }
+  return String(item?.bulletsText || item?.detailsText || item?.description || item?.content || item?.text || "")
     .split(/\r?\n/)
     .map((entry) => entry.replace(/^\s*[-*]\s*/, "").trim())
     .filter(Boolean);
 }
 
 function buildPreviewModel(profile = {}, documents = {}, options = {}) {
+  const templateId = documents.cv_template === "teal_resume" ? "plain" : documents.cv_template;
   const template =
-    (options.cv_templates || []).find((item) => item.id === documents.cv_template) || DEFAULT_TEMPLATE;
+    (options.cv_templates || []).find((item) => item.id === templateId) ||
+    (templateId === "plain" ? PLAIN_TEMPLATE : DEFAULT_TEMPLATE);
   const scheme =
     (options.cv_color_schemes || []).find((item) => item.id === documents.cv_color_scheme) ||
     DEFAULT_SCHEME;
@@ -83,6 +87,20 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
       period: firstNonEmpty(item?.period, "2023 - Present"),
       bullets: normalizeBullets(item),
     }));
+  const projects = (Array.isArray(profile.projects) ? profile.projects : [])
+    .map((item) => ({
+      title: firstNonEmpty(item?.title, item?.name, item?.project, "Project"),
+      period: firstNonEmpty(item?.period, item?.date, item?.year),
+      bullets: normalizeBullets(item),
+    }))
+    .filter((item) => item.title || item.period || item.bullets.length);
+  const customSections = (Array.isArray(profile.custom_sections) ? profile.custom_sections : [])
+    .map((item, index) => ({
+      id: firstNonEmpty(item?.section_id, item?.id, `custom-section-${index}`),
+      heading: firstNonEmpty(item?.heading, item?.title, item?.label, "Additional Information"),
+      bullets: normalizeBullets(item),
+    }))
+    .filter((item) => item.heading || item.bullets.length);
   const skills = (Array.isArray(profile.competencies) ? profile.competencies : [])
     .map((item) => String(item || "").trim())
     .filter(Boolean);
@@ -94,6 +112,7 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
     profile.email,
     profile.website,
     profile.linkedin_url,
+    profile.github_url,
   ]
     .map((item) => String(item || "").trim())
     .filter(Boolean);
@@ -121,9 +140,9 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
 
   return {
     template,
-    palette: previewPalette(template, scheme),
+    palette: previewPalette(scheme),
     fontFamily: documents.cv_font || "Calibri",
-    showPhoto: Boolean(documents.include_photo),
+    showPhoto: template.id === "plain" ? false : Boolean(documents.include_photo),
     name: firstNonEmpty(profile.name, "Candidate Name"),
     headline: firstNonEmpty(profile.role_title, template.label),
     summary: firstNonEmpty(
@@ -144,6 +163,8 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
               ],
             },
           ],
+    projects,
+    customSections,
     skills:
       skills.length > 0
         ? skills
@@ -489,7 +510,7 @@ function AtsExportFlow({ model, documents }) {
 
 function SectionHeading({ label, templateId, palette }) {
   const text =
-    templateId === "classic" || templateId === "compact" || templateId === "plain"
+    templateId === "classic" || templateId === "compact"
       ? label.toUpperCase()
       : label;
   return (
@@ -502,7 +523,7 @@ function SectionHeading({ label, templateId, palette }) {
       </div>
       <div
         className="mt-1 h-px w-full"
-        style={{ backgroundColor: templateId === "plain" ? "#111111" : palette.primary }}
+        style={{ backgroundColor: palette.primary }}
       />
     </div>
   );
@@ -555,6 +576,63 @@ function ExperienceList({ model, compact = false }) {
   );
 }
 
+function ProjectList({ model, compact = false }) {
+  if (!model.projects.length) {
+    return null;
+  }
+  return (
+    <div className={compact ? "space-y-3" : "space-y-4"}>
+      {model.projects.map((item, index) => (
+        <div key={`${item.title}-${index}`}>
+          <div
+            className={compact ? "text-xs font-semibold" : "text-sm font-semibold"}
+            style={{ color: model.palette.text }}
+          >
+            {item.title}
+          </div>
+          {item.period ? (
+            <div className="text-[11px]" style={{ color: model.palette.muted }}>
+              {item.period}
+            </div>
+          ) : null}
+          {item.bullets.length ? (
+            <div className="mt-1 space-y-1.5">
+              {item.bullets.map((bullet, bulletIndex) => (
+                <div
+                  className={compact ? "text-[11px] leading-5" : "text-xs leading-5"}
+                  key={`${item.title}-${bulletIndex}`}
+                  style={{ color: model.palette.text }}
+                >
+                  - {bullet}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CustomSectionList({ section, model, compact = false }) {
+  if (!section?.bullets?.length) {
+    return null;
+  }
+  return (
+    <div className={compact ? "space-y-1" : "space-y-1.5"}>
+      {section.bullets.map((line, index) => (
+        <div
+          className={compact ? "text-[11px] leading-5" : "text-xs leading-5"}
+          key={`${section.id}-${index}`}
+          style={{ color: model.palette.text }}
+        >
+          - {line}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ClassicPreview({ model }) {
   return (
     <div className="space-y-4" style={{ fontFamily: model.fontFamily }}>
@@ -589,6 +667,18 @@ function ClassicPreview({ model }) {
           <SectionHeading label="Experience" palette={model.palette} templateId={model.template.id} />
           <ExperienceList model={model} />
         </div>
+        {model.projects.length ? (
+          <div>
+            <SectionHeading label="Projects" palette={model.palette} templateId={model.template.id} />
+            <ProjectList model={model} />
+          </div>
+        ) : null}
+        {model.customSections.map((section) => (
+          <div key={section.id}>
+            <SectionHeading label={section.heading} palette={model.palette} templateId={model.template.id} />
+            <CustomSectionList model={model} section={section} />
+          </div>
+        ))}
         <div>
           <SectionHeading label="Skills" palette={model.palette} templateId={model.template.id} />
           <div className="text-xs leading-6" style={{ color: model.palette.text }}>
@@ -665,6 +755,33 @@ function ModernPreview({ model }) {
             <ExperienceList model={model} />
           </div>
         </div>
+        {model.projects.length ? (
+          <div
+            className="rounded-xl border p-4"
+            style={{ borderColor: model.palette.softBorder, backgroundColor: "#FFFFFF" }}
+          >
+            <div className="text-sm font-semibold" style={{ color: model.palette.primary }}>
+              Projects
+            </div>
+            <div className="mt-3">
+              <ProjectList model={model} />
+            </div>
+          </div>
+        ) : null}
+        {model.customSections.map((section) => (
+          <div
+            className="rounded-xl border p-4"
+            key={section.id}
+            style={{ borderColor: model.palette.softBorder, backgroundColor: "#FFFFFF" }}
+          >
+            <div className="text-sm font-semibold" style={{ color: model.palette.primary }}>
+              {section.heading}
+            </div>
+            <div className="mt-3">
+              <CustomSectionList model={model} section={section} />
+            </div>
+          </div>
+        ))}
         <div className="grid gap-3" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)" }}>
           <div
             className="rounded-xl border p-4"
@@ -752,6 +869,18 @@ function CompactPreview({ model }) {
           <SectionHeading label="Experience" palette={model.palette} templateId={model.template.id} />
           <ExperienceList compact model={model} />
         </div>
+        {model.projects.length ? (
+          <div>
+            <SectionHeading label="Projects" palette={model.palette} templateId={model.template.id} />
+            <ProjectList compact model={model} />
+          </div>
+        ) : null}
+        {model.customSections.map((section) => (
+          <div key={section.id}>
+            <SectionHeading label={section.heading} palette={model.palette} templateId={model.template.id} />
+            <CustomSectionList compact model={model} section={section} />
+          </div>
+        ))}
         <div>
           <SectionHeading label="Education" palette={model.palette} templateId={model.template.id} />
           <div className="space-y-1 text-xs leading-6" style={{ color: model.palette.text }}>
@@ -772,6 +901,18 @@ function EuropassPreview({ model }) {
       label: "Experience",
       content: <ExperienceList compact model={model} />,
     },
+    ...(model.projects.length
+      ? [
+          {
+            label: "Projects",
+            content: <ProjectList compact model={model} />,
+          },
+        ]
+      : []),
+    ...model.customSections.map((section) => ({
+      label: section.heading,
+      content: <CustomSectionList compact model={model} section={section} />,
+    })),
     {
       label: "Skills",
       content: <div className="text-xs leading-6">{model.skills.join(", ")}</div>,
@@ -834,39 +975,62 @@ function EuropassPreview({ model }) {
 function PlainPreview({ model }) {
   return (
     <div className="space-y-4" style={{ fontFamily: model.fontFamily }}>
-      <div className="flex items-start justify-between gap-4 border-b pb-3" style={{ borderColor: "#111111" }}>
-        <div>
-          <div className="text-xl font-bold tracking-[0.08em]" style={{ color: "#111111" }}>
-            {model.name}
-          </div>
-          <div className="mt-1 text-sm" style={{ color: "#111111" }}>
-            {model.headline}
-          </div>
-          {model.contacts.length ? (
-            <div className="mt-2 text-xs leading-5" style={{ color: "#444444" }}>
-              {model.contacts.join(" | ")}
-            </div>
-          ) : null}
+      <div className="border-b-[3px] pb-2" style={{ borderColor: model.palette.accent }}>
+        <div className="text-[28px] font-normal leading-none" style={{ color: model.palette.primary }}>
+          {model.name}
         </div>
-        <PreviewPhoto model={model} roundedClass="rounded-none" sizeClass="h-16 w-16" />
       </div>
+      {model.contacts.length ? (
+        <div className="text-[11px] leading-5" style={{ color: model.palette.text }}>
+          {model.contacts.join(" | ")}
+        </div>
+      ) : null}
 
-      <div className="space-y-4">
-        <div>
-          <SectionHeading label="Professional Summary" palette={model.palette} templateId={model.template.id} />
-          <div className="text-xs leading-6" style={{ color: "#111111" }}>
-            {model.summary}
-          </div>
+      <div>
+        <div className="mb-2 text-base font-bold" style={{ color: model.palette.primary }}>
+          Profile
         </div>
-        <div>
-          <SectionHeading label="Experience" palette={model.palette} templateId={model.template.id} />
-          <ExperienceList model={model} />
+        <div className="text-xs leading-5" style={{ color: model.palette.text }}>
+          {model.summary}
         </div>
-        <div>
-          <SectionHeading label="Skills" palette={model.palette} templateId={model.template.id} />
-          <div className="text-xs leading-6" style={{ color: "#111111" }}>
-            {model.skills.join(" | ")}
-          </div>
+      </div>
+      <div>
+        <div className="mb-2 text-base font-bold" style={{ color: model.palette.primary }}>
+          Experience
+        </div>
+        <div className="space-y-3">
+          {model.experience.map((item, index) => (
+            <div key={`${item.title}-${index}`}>
+              <div className="text-xs font-bold uppercase" style={{ color: model.palette.text }}>
+                {[item.title, item.company, item.period].filter(Boolean).join(" | ")}
+              </div>
+              <div className="mt-1 space-y-1">
+                {(item.bullets.length ? item.bullets : ["Role-specific accomplishment preview"]).map((bullet) => (
+                  <div className="text-[11px] leading-5" key={bullet} style={{ color: model.palette.text }}>
+                    - {bullet}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-base font-bold" style={{ color: model.palette.primary }}>
+          Education
+        </div>
+        <div className="space-y-1 text-xs font-semibold uppercase leading-5" style={{ color: model.palette.text }}>
+          {model.education.map((item) => (
+            <div key={item}>{item}</div>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-base font-bold" style={{ color: model.palette.primary }}>
+          Skills &amp; Abilities
+        </div>
+        <div className="text-xs leading-5" style={{ color: model.palette.text }}>
+          {model.skills.join(" | ")}
         </div>
       </div>
     </div>
@@ -893,7 +1057,7 @@ export function CvExportPreview({ documents = {}, profile = {}, options = {}, cl
         "overflow-hidden rounded-xl border bg-white p-5 shadow-sm",
         className,
       ].join(" ")}
-      style={{ borderColor: model.template.id === "plain" ? "#111111" : model.palette.softBorder }}
+      style={{ borderColor: model.palette.softBorder }}
     >
       <AtsExportFlow documents={documents} model={model} />
       {content}

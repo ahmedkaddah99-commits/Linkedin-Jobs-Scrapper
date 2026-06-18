@@ -203,6 +203,11 @@ export default function RunsPage() {
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-3">
                     <StatusBadge tone={statusTone(run.status)}>{labelize(run.status)}</StatusBadge>
+                    {run.is_test_run ? (
+                      <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-primary">
+                        Test Run
+                      </span>
+                    ) : null}
                     <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
                       {run.workspace_name || run.workspace_id}
                     </span>

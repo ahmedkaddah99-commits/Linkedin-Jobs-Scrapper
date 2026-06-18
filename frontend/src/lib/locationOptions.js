@@ -6,9 +6,10 @@ const COUNTRY_LABEL_OVERRIDES = {
 
 const collator = new Intl.Collator("en", { sensitivity: "base" });
 
-const cityFileLoaders = import.meta.glob(
+const cityFileUrlLoaders = import.meta.glob(
   "../../node_modules/@tansuasici/country-state-city/data/cities/*.json",
   {
+    query: "?url",
     import: "default",
   },
 );
@@ -34,7 +35,7 @@ const countryOptions = (Array.isArray(rawCountries) ? rawCountries : [])
 const countryByCode = new Map(countryOptions.map((country) => [country.value, country]));
 
 const cityLoaderByCountryCode = new Map(
-  Object.entries(cityFileLoaders)
+  Object.entries(cityFileUrlLoaders)
     .map(([path, loader]) => {
       const match = path.match(/\/([a-z]{2})\.json$/i);
       if (!match) {
@@ -101,7 +102,12 @@ export async function loadCityOptions(countryCode) {
     return [];
   }
 
-  const rawCities = await loader();
+  const cityFileUrl = await loader();
+  const response = await fetch(cityFileUrl);
+  if (!response.ok) {
+    return [];
+  }
+  const rawCities = await response.json();
   const seen = new Set();
   const options = [];
 

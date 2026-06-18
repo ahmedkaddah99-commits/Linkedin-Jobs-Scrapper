@@ -887,6 +887,14 @@ class RunRecord:
     def normalized_user_id(self) -> str:
         return resolve_run_user_id(self.requested_by, self.user_id)
 
+    @property
+    def is_test_run(self) -> bool:
+        if str(self.metadata.get("run_mode") or "").strip().lower() == "test":
+            return True
+        if self.run_plan is None:
+            return False
+        return str(self.run_plan.resolved_run_settings.get("run_mode") or "").strip().lower() == "test"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -909,6 +917,8 @@ class RunRecord:
             "stage_results": [result.to_dict() for result in self.stage_results],
             "final_job_set_keys": list(self.final_job_set_keys),
             "metadata": dict(self.metadata),
+            "is_test_run": self.is_test_run,
+            "run_mode": "test" if self.is_test_run else "normal",
         }
 
     @classmethod

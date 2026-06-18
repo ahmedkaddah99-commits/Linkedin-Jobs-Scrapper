@@ -1,3 +1,4 @@
+import { useId } from "react";
 import MemoryTriggerChips from "./MemoryTriggerChips";
 
 export default function InterviewQuestionStep({
@@ -12,6 +13,9 @@ export default function InterviewQuestionStep({
   totalSteps,
   triggers = [],
 }) {
+  const answerId = useId();
+  const answerHintId = useId();
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
@@ -27,7 +31,9 @@ export default function InterviewQuestionStep({
       </div>
 
       <div className="rounded-3xl border border-outline-variant/15 bg-surface p-5">
-        <div className="text-base font-semibold leading-7 text-on-surface">{question}</div>
+        <label className="block text-base font-semibold leading-7 text-on-surface" htmlFor={answerId}>
+          {question}
+        </label>
         <div className="mt-4">
           <MemoryTriggerChips
             activeTrigger={activeTrigger}
@@ -36,14 +42,16 @@ export default function InterviewQuestionStep({
           />
         </div>
         <textarea
+          aria-describedby={answerHintId}
           className="mt-4 min-h-40 w-full rounded-2xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm text-on-surface"
+          id={answerId}
           onChange={(event) => onAnswerChange(event.target.value)}
-          placeholder="Write the rough version. Runr will turn it into a reusable career memory."
+          placeholder="Write rough notes: what happened, what you did, who benefited, and what changed."
           value={answer}
         />
         <div className="mt-4 flex items-center justify-between gap-3">
-          <div className="text-sm text-on-surface-variant">
-            One concrete example is enough to move forward.
+          <div className="text-sm text-on-surface-variant" id={answerHintId}>
+            One concrete example is enough. Estimates are useful when exact numbers are unavailable.
           </div>
           <button
             className="rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-white transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
@@ -77,4 +85,3 @@ export default function InterviewQuestionStep({
     </div>
   );
 }
-
