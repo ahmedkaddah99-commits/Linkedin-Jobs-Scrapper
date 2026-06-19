@@ -37,7 +37,7 @@ from backend.capabilities.tailored_documents.runtime import (
 )
 from backend.capabilities.tailored_documents.screening import run_stage2_pipeline as run_tailored_stage2_pipeline
 from backend.capabilities.tailored_documents.workflow import run_manual_pipeline
-from backend.config.plans import get_limit, normalize_plan_id
+from backend.config.plans import DEFAULT_PLAN_ID, get_limit, normalize_plan_id
 from backend.connectors.company_career_sites import (
     ACADEMIC_CAREER_SITE_FILES,
     REGULAR_COMPANY_SITE_FILES,
@@ -78,7 +78,7 @@ def _positive_int(value: Any, *, default: int = 0) -> int:
 
 def _safe_plan_limit(plan_id: str, limit_type: str, fallback: int) -> int:
     try:
-        plan_limit = int(get_limit(normalize_plan_id(plan_id or "free"), limit_type))
+        plan_limit = int(get_limit(normalize_plan_id(plan_id or DEFAULT_PLAN_ID), limit_type))
     except Exception:
         return int(fallback)
     if plan_limit <= 0:
@@ -87,7 +87,7 @@ def _safe_plan_limit(plan_id: str, limit_type: str, fallback: int) -> int:
 
 
 def _resolve_company_site_stage_limits(cli_args: Any, *, logger=None) -> dict[str, int]:
-    plan_id = str(getattr(cli_args, "run_user_plan_id", "") or "free")
+    plan_id = str(getattr(cli_args, "run_user_plan_id", "") or DEFAULT_PLAN_ID)
     explicit_site_limit = _positive_int(getattr(cli_args, "company_site_max_sites_per_run", 0), default=0)
     explicit_credit_budget = _positive_int(getattr(cli_args, "company_site_runner_credit_budget", 0), default=0)
     explicit_link_limit = _positive_int(getattr(cli_args, "company_site_max_job_links_per_site", 0), default=0)

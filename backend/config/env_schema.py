@@ -126,15 +126,20 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Optional Creem API base URL override. Test keys otherwise use https://test-api.creem.io/v1 automatically.",
     },
-    "CREEM_PRO_PRODUCT_ID": {
+    "CREEM_LAUNCH_PRODUCT_ID": {
         "required": False,
         "scope": "backend",
-        "description": "Creem product id for the Pro plan.",
+        "description": "Creem product id for the Launch plan.",
     },
-    "CREEM_BUSINESS_PRODUCT_ID": {
+    "CREEM_MOMENTUM_PRODUCT_ID": {
         "required": False,
         "scope": "backend",
-        "description": "Creem product id for the Business plan.",
+        "description": "Creem product id for the Momentum plan.",
+    },
+    "CREEM_SCALE_PRODUCT_ID": {
+        "required": False,
+        "scope": "backend",
+        "description": "Creem product id for the Scale plan.",
     },
     "VITE_CLERK_PUBLISHABLE_KEY": {
         "required": True,

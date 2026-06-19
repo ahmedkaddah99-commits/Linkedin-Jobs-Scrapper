@@ -297,8 +297,9 @@ CLERK_SECRET_KEY=<if used>
 CLERK_WEBHOOK_SECRET=<if used>
 CREEM_API_KEY=<creem_live_or_test_key_for_this_environment>
 CREEM_WEBHOOK_SECRET=<creem_webhook_secret_for_this_environment>
-CREEM_PRO_PRODUCT_ID=<creem_product_id_for_pro>
-CREEM_BUSINESS_PRODUCT_ID=<creem_product_id_for_business>
+CREEM_LAUNCH_PRODUCT_ID=<creem_product_id_for_launch>
+CREEM_MOMENTUM_PRODUCT_ID=<creem_product_id_for_momentum>
+CREEM_SCALE_PRODUCT_ID=<creem_product_id_for_scale>
 RUNR_SECRET_KEY=<generate strong random value>
 LOCAL_OBJECT_STORAGE_SIGNING_SECRET=<not used for r2, but safe to set anyway>
 ```

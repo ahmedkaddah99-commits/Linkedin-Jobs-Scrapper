@@ -24,8 +24,8 @@ function mergeSessionUser(backendUser, clerkUser) {
     ...(clerkUser?.publicMetadata || {}),
   };
   const normalizedPlanId = String(
-    publicMetadata.plan_id || normalizedBackendUser.plan_id || "free",
-  ).trim() || "free";
+    publicMetadata.plan_id || normalizedBackendUser.plan_id || "none",
+  ).trim() || "none";
   const normalizedRole = String(
     publicMetadata.role || normalizedBackendUser.role || "user",
   ).trim() || "user";

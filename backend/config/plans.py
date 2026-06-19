@@ -4,29 +4,46 @@ import os
 from copy import deepcopy
 from typing import Any
 
-DEFAULT_PLAN_ID = "free"
-PLAN_ORDER = ("free", "pro", "business")
+DEFAULT_PLAN_ID = "none"
+PLAN_ORDER = ("launch", "momentum", "scale")
 
 PLANS: dict[str, dict[str, Any]] = {
-    "free": {
-        "display_name": "Free",
+    "none": {
+        "display_name": "No subscription",
         "price_eur": 0,
         "quotas": {
-            "runs_per_month": 5,
-            "applications_per_month": 10,
-            "cv_exports_per_month": 3,
-            "referral_drafts_per_month": 5,
-            "runner_credits_per_month": 1000,
+            "runs_per_month": 0,
+            "applications_per_month": 0,
+            "cv_exports_per_month": 0,
+            "referral_drafts_per_month": 0,
+            "runner_credits_per_month": 0,
+            "workspaces": 0,
+        },
+        "limits": {
+            "company_sites_per_run": 0,
+            "runner_credits_per_run": 0,
+        },
+    },
+    "launch": {
+        "display_name": "Launch",
+        "price_eur": 15,
+        "creem_product_id": "",
+        "quotas": {
+            "runs_per_month": 25,
+            "applications_per_month": 50,
+            "cv_exports_per_month": 10,
+            "referral_drafts_per_month": 25,
+            "runner_credits_per_month": 5000,
             "workspaces": 1,
         },
         "limits": {
-            "company_sites_per_run": 10,
-            "runner_credits_per_run": 150,
+            "company_sites_per_run": 50,
+            "runner_credits_per_run": 1000,
         },
     },
-    "pro": {
-        "display_name": "Pro",
-        "price_eur": 29,
+    "momentum": {
+        "display_name": "Momentum",
+        "price_eur": 25,
         "creem_product_id": "",
         "quotas": {
             "runs_per_month": 100,
@@ -41,8 +58,8 @@ PLANS: dict[str, dict[str, Any]] = {
             "runner_credits_per_run": 5000,
         },
     },
-    "business": {
-        "display_name": "Business",
+    "scale": {
+        "display_name": "Scale",
         "price_eur": 79,
         "creem_product_id": "",
         "quotas": {
@@ -61,8 +78,15 @@ PLANS: dict[str, dict[str, Any]] = {
 }
 
 PLAN_CREEM_PRODUCT_ENV_VARS = {
-    "pro": "CREEM_PRO_PRODUCT_ID",
-    "business": "CREEM_BUSINESS_PRODUCT_ID",
+    "launch": "CREEM_LAUNCH_PRODUCT_ID",
+    "momentum": "CREEM_MOMENTUM_PRODUCT_ID",
+    "scale": "CREEM_SCALE_PRODUCT_ID",
+}
+
+LEGACY_PLAN_ALIASES = {
+    "free": "none",
+    "pro": "momentum",
+    "business": "scale",
 }
 
 
@@ -76,6 +100,7 @@ def _with_runtime_plan_values(plan_id: str, plan: dict[str, Any]) -> dict[str, A
 
 def normalize_plan_id(plan_id: str | None) -> str:
     normalized = str(plan_id or "").strip().lower()
+    normalized = LEGACY_PLAN_ALIASES.get(normalized, normalized)
     return normalized if normalized in PLANS else DEFAULT_PLAN_ID
 
 

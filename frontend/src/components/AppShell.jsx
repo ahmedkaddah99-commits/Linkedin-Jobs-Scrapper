@@ -408,13 +408,15 @@ export default function AppShell({ children, muteSidebar = false }) {
   }, [desktopSidebarCollapsed]);
 
   const normalizedPlanId = String(
-    clerkUser?.publicMetadata?.plan_id || user?.plan_id || "free",
-  ).trim().toLowerCase() || "free";
-  const planBadgeLabel = normalizedPlanId === "business"
-    ? "Business"
-    : normalizedPlanId === "pro"
-      ? "Pro"
-      : "Free";
+    clerkUser?.publicMetadata?.plan_id || user?.plan_id || "none",
+  ).trim().toLowerCase() || "none";
+  const planBadgeLabel = normalizedPlanId === "scale"
+    ? "Scale"
+    : normalizedPlanId === "momentum"
+      ? "Momentum"
+      : normalizedPlanId === "launch"
+        ? "Launch"
+        : "Choose plan";
   const shellUser = {
     name: user?.display_name || user?.email || "Disconnected",
     subtitle: user?.email || (status === "connected" ? "" : "Backend not connected"),

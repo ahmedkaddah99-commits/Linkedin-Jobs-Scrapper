@@ -5,10 +5,13 @@ Delete this file once every item below is complete and verified.
 ## 1. Create Creem Test Products
 
 - Open Creem in developer/test mode.
-- Create a recurring SaaS product for `Pro`.
-  - Price: `EUR 29/month`
+- Create a recurring SaaS product for `Launch`.
+  - Price: `EUR 15/month`
   - Copy the test product ID.
-- Create a recurring SaaS product for `Business`.
+- Create a recurring SaaS product for `Momentum`.
+  - Price: `EUR 25/month`
+  - Copy the test product ID.
+- Create a recurring SaaS product for `Scale`.
   - Price: `EUR 79/month`
   - Copy the test product ID.
 
@@ -19,8 +22,9 @@ Add the test values to `user_config/.env` or your active local env file:
 ```env
 CREEM_API_KEY=creem_test_...
 CREEM_WEBHOOK_SECRET=...
-CREEM_PRO_PRODUCT_ID=prod_...
-CREEM_BUSINESS_PRODUCT_ID=prod_...
+CREEM_LAUNCH_PRODUCT_ID=prod_...
+CREEM_MOMENTUM_PRODUCT_ID=prod_...
+CREEM_SCALE_PRODUCT_ID=prod_...
 ```
 
 Do not use live Creem values until the full test checkout and webhook loop works.
@@ -77,7 +81,7 @@ Copy the webhook signing secret into `CREEM_WEBHOOK_SECRET`.
 
 - Start the app/API normally.
 - Sign in as a test user.
-- Start checkout for `Pro`.
+- Start checkout for `Launch`, `Momentum`, or `Scale`.
 - Use Creem test card:
 
 ```text
@@ -89,7 +93,7 @@ After payment, verify:
 - The user is redirected back to the app.
 - The pricing page shows a payment-success message with the subscribed plan.
 - `/billing/subscription` shows `billing_provider=creem`.
-- `plan_id` is `pro` or `business`.
+- `plan_id` is `launch`, `momentum`, or `scale`.
 - `creem_customer_id` is present.
 - Clerk user metadata reflects the paid plan.
 
@@ -99,7 +103,7 @@ After payment, verify:
 - Confirm Settings shows the subscribed plan and a `Manage billing` button.
 - Confirm the portal loads for the Creem customer.
 - Cancel the test subscription.
-- Confirm webhook handling downgrades the user back to `free`.
+- Confirm webhook handling removes paid access and returns the user to `No subscription`.
 - Confirm local subscription status updates.
 
 ## 8. Run Verification Commands
@@ -118,14 +122,15 @@ npm --prefix frontend run check
 
 Only do this after all test-mode checks pass.
 
-- Create or confirm live Creem `Pro` and `Business` products.
+- Create or confirm live Creem `Launch`, `Momentum`, and `Scale` products.
 - Set live Render env vars:
 
 ```env
 CREEM_API_KEY=creem_...
 CREEM_WEBHOOK_SECRET=...
-CREEM_PRO_PRODUCT_ID=prod_...
-CREEM_BUSINESS_PRODUCT_ID=prod_...
+CREEM_LAUNCH_PRODUCT_ID=prod_...
+CREEM_MOMENTUM_PRODUCT_ID=prod_...
+CREEM_SCALE_PRODUCT_ID=prod_...
 ```
 
 - Register the production webhook:

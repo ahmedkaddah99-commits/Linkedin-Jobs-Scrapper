@@ -6135,7 +6135,9 @@ def _subscription_response_payload(
         "plan": get_plan(normalized_plan_id),
         "subscription": {
             "subscription_id": str(subscription_record.get("subscription_id") or ""),
-            "status": str(subscription_record.get("status") or ("active" if normalized_plan_id != DEFAULT_PLAN_ID else "free")),
+            "status": str(
+                subscription_record.get("status") or ("active" if normalized_plan_id != DEFAULT_PLAN_ID else "inactive")
+            ),
             "billing_provider": str(subscription_record.get("billing_provider") or "creem"),
             "creem_subscription_id": str(subscription_record.get("creem_subscription_id") or ""),
             "creem_customer_id": str(subscription_record.get("creem_customer_id") or ""),

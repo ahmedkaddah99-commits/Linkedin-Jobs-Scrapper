@@ -64,9 +64,11 @@ services:
         sync: false
       - key: CREEM_WEBHOOK_SECRET
         sync: false
-      - key: CREEM_PRO_PRODUCT_ID
+      - key: CREEM_LAUNCH_PRODUCT_ID
         sync: false
-      - key: CREEM_BUSINESS_PRODUCT_ID
+      - key: CREEM_MOMENTUM_PRODUCT_ID
+        sync: false
+      - key: CREEM_SCALE_PRODUCT_ID
         sync: false
       - key: SCRAPEOPS_API_KEY
         sync: false

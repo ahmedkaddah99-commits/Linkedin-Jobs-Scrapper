@@ -1182,10 +1182,10 @@ export default function SettingsPage() {
   const account = draft?.account || {};
   const hasProfilePhoto = Boolean(String(profile.photo_data_url || profile.avatar_url || "").trim());
   const usageQuotas = subscriptionData?.usage?.quotas || {};
-  const currentPlanId = String(subscriptionData?.plan_id || "free").trim() || "free";
-  const currentPlanName = String(subscriptionData?.plan?.display_name || "Free").trim() || "Free";
+  const currentPlanId = String(subscriptionData?.plan_id || "none").trim() || "none";
+  const currentPlanName = String(subscriptionData?.plan?.display_name || "No subscription").trim() || "No subscription";
   const hasBillingPortalAccess =
-    currentPlanId !== "free" || Boolean(String(subscriptionData?.subscription?.creem_customer_id || "").trim());
+    currentPlanId !== "none" || Boolean(String(subscriptionData?.subscription?.creem_customer_id || "").trim());
   const scrapeopsPolicy = subscriptionData?.scrapeops_usage?.policy || {};
 
   return (
@@ -1450,13 +1450,13 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              {currentPlanId === "free" ? (
+              {currentPlanId === "none" ? (
                 <Link
                   className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-primary transition-colors hover:text-primary"
                   to="/pricing"
                 >
                   <span className="material-symbols-outlined text-[18px]">trending_up</span>
-                  Upgrade for higher limits
+                  Choose a plan
                 </Link>
               ) : null}
             </section>

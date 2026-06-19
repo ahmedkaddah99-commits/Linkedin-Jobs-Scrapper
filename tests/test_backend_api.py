@@ -1707,7 +1707,7 @@ class BackendApiTests(unittest.TestCase):
     def test_admin_scrapeops_policy_can_be_saved_and_loaded(self):
         policy_payload = {
             "plan_policies": {
-                "free": {
+                "none": {
                     "runner_credits_per_month": 150,
                     "company_sites_per_run": 3,
                     "runner_credits_per_run": 40,
@@ -1716,7 +1716,7 @@ class BackendApiTests(unittest.TestCase):
             "user_overrides": [
                 {
                     "user_id": self.user.user_id,
-                    "plan_id": "business",
+                    "plan_id": "scale",
                     "runner_credits_per_month": -1,
                     "company_sites_per_run": -1,
                     "runner_credits_per_run": -1,
@@ -1745,7 +1745,7 @@ class BackendApiTests(unittest.TestCase):
 
         status, saved = self._request("PUT", "/admin/scrapeops/policy", policy_payload)
         self.assertEqual(status, 200)
-        self.assertEqual(saved["plan_policies"]["free"]["company_sites_per_run"], 3)
+        self.assertEqual(saved["plan_policies"]["none"]["company_sites_per_run"], 3)
         self.assertEqual(saved["user_overrides"][0]["user_id"], self.user.user_id)
         self.assertEqual(saved["domain_policies"][0]["policy_id"], "workday_basic_first")
         self.assertEqual(saved["alert_policy"]["cadence_hours"], 4)
@@ -2937,8 +2937,8 @@ class BackendApiTests(unittest.TestCase):
         _, viewer_token = self.app.issue_api_token(user_id=viewer.user_id, name="viewer-test")
 
         with (
-            patch("backend.api.server._configured_paid_plan_product_ids", return_value=["prod_101", "prod_202"]),
-            patch("backend.api.server._configured_paid_plan_labels", return_value="Pro, Business"),
+            patch("backend.api.server._configured_paid_plan_product_ids", return_value=["prod_101", "prod_202", "prod_303"]),
+            patch("backend.api.server._configured_paid_plan_labels", return_value="Launch, Momentum, Scale"),
             patch("backend.api.server.list_creem_discounts", return_value=list_response),
             patch("backend.api.server.create_creem_discount", return_value=created_discount) as create_mock,
             patch("backend.api.server.delete_creem_discount") as delete_mock,
@@ -2948,7 +2948,7 @@ class BackendApiTests(unittest.TestCase):
             self.assertEqual(list_payload["meta"]["total"], 1)
             self.assertEqual(list_payload["promo_codes"][0]["code"], "SPRING25")
             self.assertEqual(list_payload["promo_codes"][0]["discount"], "25%")
-            self.assertEqual(list_payload["promo_codes"][0]["scope"], "Pro, Business")
+            self.assertEqual(list_payload["promo_codes"][0]["scope"], "Launch, Momentum, Scale")
 
             status, create_payload = self._request(
                 "POST",
@@ -2973,7 +2973,7 @@ class BackendApiTests(unittest.TestCase):
                 expires_at="2026-06-30T22:00:00+00:00",
                 max_redemptions=0,
                 duration="once",
-                product_ids=["prod_101", "prod_202"],
+                product_ids=["prod_101", "prod_202", "prod_303"],
             )
 
             status, delete_payload = self._request("DELETE", "/admin/promo-codes/disc_2")
@@ -2994,8 +2994,8 @@ class BackendApiTests(unittest.TestCase):
             patch(
                 "backend.api.server.get_plan",
                 return_value={
-                    "display_name": "Pro",
-                    "price_eur": 29,
+                    "display_name": "Momentum",
+                    "price_eur": 25,
                     "creem_product_id": "prod_123",
                     "quotas": {},
                 },
@@ -3009,7 +3009,7 @@ class BackendApiTests(unittest.TestCase):
                 "POST",
                 "/billing/checkout",
                 {
-                    "plan_id": "pro",
+                    "plan_id": "momentum",
                     "promo_code": "summer10",
                     "source_page": "/pricing",
                 },
@@ -3020,7 +3020,7 @@ class BackendApiTests(unittest.TestCase):
             self.assertEqual(checkout_mock.call_args.kwargs["discount_code"], "SUMMER10")
             self.assertNotIn("promo_code", checkout_mock.call_args.kwargs["custom_data"])
             self.assertTrue(
-                checkout_mock.call_args.kwargs["redirect_url"].endswith("/pricing?checkout=success&plan_id=pro")
+                checkout_mock.call_args.kwargs["redirect_url"].endswith("/pricing?checkout=success&plan_id=momentum")
             )
 
         event_rows = self.app.repositories.analytics_store.query_rows(
@@ -3029,7 +3029,7 @@ class BackendApiTests(unittest.TestCase):
         matching_payloads = [
             item
             for item in (json.loads(row["payload_json"]) for row in event_rows)
-            if item.get("target_plan_id") == "pro"
+            if item.get("target_plan_id") == "momentum"
         ]
         self.assertTrue(matching_payloads)
         event_payload = matching_payloads[-1]
@@ -3040,17 +3040,17 @@ class BackendApiTests(unittest.TestCase):
         with patch(
             "backend.api.server.get_plan",
             return_value={
-                "display_name": "Pro",
-                    "price_eur": 29,
-                    "creem_product_id": "prod_123",
-                    "quotas": {},
-                },
-            ):
+                "display_name": "Momentum",
+                "price_eur": 25,
+                "creem_product_id": "prod_123",
+                "quotas": {},
+            },
+        ):
             status, payload = self._request(
                 "POST",
                 "/billing/checkout",
                 {
-                    "plan_id": "pro",
+                    "plan_id": "momentum",
                     "promo_code": "bad-code!",
                     "source_page": "/pricing",
                 },
@@ -3067,7 +3067,7 @@ class BackendApiTests(unittest.TestCase):
             "object": {
                 "id": "sub_creem_123",
                 "object": "subscription",
-                "product": {"id": "prod_pro", "name": "Pro"},
+                "product": {"id": "prod_momentum", "name": "Momentum"},
                 "customer": {
                     "id": "cust_creem_123",
                     "email": self.user.email,
@@ -3079,7 +3079,7 @@ class BackendApiTests(unittest.TestCase):
                 "updated_at": "2026-06-19T12:00:00.000Z",
                 "metadata": {
                     "user_id": self.user.user_id,
-                    "plan_id": "pro",
+                    "plan_id": "momentum",
                 },
             },
         }
@@ -3101,7 +3101,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(subscription["billing_provider"], "creem")
         self.assertEqual(subscription["creem_subscription_id"], "sub_creem_123")
         self.assertEqual(subscription["creem_customer_id"], "cust_creem_123")
-        self.assertEqual(subscription["plan_id"], "pro")
+        self.assertEqual(subscription["plan_id"], "momentum")
 
         event_rows = self.app.repositories.analytics_store.query_rows(
             "SELECT event_name, payload_json FROM analytics_events WHERE event_name = 'subscription_started'"

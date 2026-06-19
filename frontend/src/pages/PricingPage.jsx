@@ -46,7 +46,7 @@ export default function PricingPage() {
   } = useApiResource(() => request("/billing/subscription"), [request]);
 
   const plans = Array.isArray(plansPayload?.plans) ? plansPayload.plans : [];
-  const currentPlanId = String(subscriptionPayload?.plan_id || user?.plan_id || "free").trim() || "free";
+  const currentPlanId = String(subscriptionPayload?.plan_id || user?.plan_id || "none").trim() || "none";
   const checkoutState = String(searchParams.get("checkout") || "").trim();
   const checkoutPlanId = String(searchParams.get("plan_id") || "").trim();
   const checkoutPlan = plans.find((plan) => String(plan.plan_id || "").trim() === checkoutPlanId);
@@ -257,16 +257,6 @@ export default function PricingPage() {
                       >
                         {actionState.loadingPlanId === planId ? "Preparing checkout..." : `Upgrade to ${plan.display_name}`}
                       </button>
-                    ) : null}
-                    {isCurrentPlan && !isPaidPlan ? (
-                      <p className="rounded-2xl bg-primary/10 px-4 py-3 text-sm text-primary">
-                        You&apos;re on the free plan. Upgrade to unlock higher monthly limits.
-                      </p>
-                    ) : null}
-                    {!isCurrentPlan && !isPaidPlan ? (
-                      <p className="rounded-2xl border border-outline-variant/20 bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
-                        Free remains available as your baseline workspace.
-                      </p>
                     ) : null}
                   </div>
                 </div>

@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any, Mapping
 from uuid import uuid4
 
-from backend.config.plans import PLANS, normalize_plan_id
+from backend.config.plans import DEFAULT_PLAN_ID, PLANS, normalize_plan_id
 from backend.domain.models import utc_now_iso
 from backend.integrations.scrapeops import SCRAPEOPS_POLICY_VERSION, SCRAPEOPS_REQUEST_MODES
 
@@ -117,7 +117,7 @@ def _normalize_user_override(item: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "override_id": _normalize_text(item.get("override_id")) or f"user_override_{uuid4().hex[:10]}",
         "user_id": user_id,
-        "plan_id": normalize_plan_id(item.get("plan_id") or "free"),
+        "plan_id": normalize_plan_id(item.get("plan_id") or DEFAULT_PLAN_ID),
         "runner_credits_per_month": _normalize_limit(item.get("runner_credits_per_month"), default=0),
         "company_sites_per_run": _normalize_limit(item.get("company_sites_per_run"), default=0),
         "runner_credits_per_run": _normalize_limit(item.get("runner_credits_per_run"), default=0),
