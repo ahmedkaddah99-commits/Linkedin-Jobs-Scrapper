@@ -48,7 +48,7 @@ pip install -r requirements-dev.txt
 - `backend/connectors/` owns external source and ATS connectors.
 - `backend/repositories/` owns repository protocols plus SQLite and file-backed persistence. SQLite schema/bootstrap and migrations are split from concrete store classes.
 - `backend/security/` owns auth and secret helpers.
-- `backend/integrations/` owns third-party service wrappers such as Clerk, LemonSqueezy, and ScrapeOps.
+- `backend/integrations/` owns third-party service wrappers such as Clerk, Creem, and ScrapeOps.
 
 ## Frontend Shape
 

@@ -16,7 +16,7 @@ Date: 2026-06-18
 
 ## Explicitly Not Performed
 
-- Creating Turso, Render, Cloudflare, Clerk, or LemonSqueezy resources.
+- Creating Turso, Render, Cloudflare, Clerk, or Creem resources.
 - Importing the live SQLite database into Turso.
 - Uploading current local assets into R2.
 - Changing DNS.

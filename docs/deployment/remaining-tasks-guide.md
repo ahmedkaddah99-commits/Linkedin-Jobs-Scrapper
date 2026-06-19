@@ -86,21 +86,51 @@ Blocking output you need before continuing:
 
 Goal: create separate production and development databases.
 
-Use Turso CLI from WSL or a Unix-like shell if possible.
+Use Turso CLI from WSL or a Unix-like shell if possible. On Windows PowerShell, `turso` will not be available unless you installed a Windows binary yourself. The official Windows path is WSL.
 
-1. Install/login:
+1. Enter WSL from PowerShell:
+
+   ```powershell
+   wsl
+   ```
+
+2. Install Turso CLI inside WSL if `turso` is not found:
+
+   ```bash
+   curl -sSfL https://get.tur.so/install.sh | bash
+   source ~/.bashrc
+   turso
+   ```
+
+3. Authenticate.
+
+   Browser login:
 
    ```bash
    turso auth login
    ```
 
-2. Create production database:
+   Headless/manual token login:
+
+   ```bash
+   turso config set token "<PASTE_NEW_TURSO_ACCESS_TOKEN_HERE>"
+   ```
+
+   Do not paste real Turso tokens into Git, docs, chat, screenshots, or issue trackers. If a token is exposed, revoke it and create a new one before continuing.
+
+4. Verify authentication:
+
+   ```bash
+   turso db list
+   ```
+
+5. Create production database:
 
    ```bash
    turso db create runr-prod --wait
    ```
 
-3. Create development database from production:
+6. Create development database from production:
 
    ```bash
    turso db create runr-dev --from-db runr-prod --wait
@@ -112,14 +142,14 @@ Use Turso CLI from WSL or a Unix-like shell if possible.
    turso db create runr-dev --wait
    ```
 
-4. Get URLs:
+7. Get URLs:
 
    ```bash
    turso db show --url runr-prod
    turso db show --url runr-dev
    ```
 
-5. Create DB tokens:
+8. Create DB tokens:
 
    ```bash
    turso db tokens create runr-prod
@@ -265,6 +295,10 @@ DEEPSEEK_API_KEY=<if used>
 SCRAPEOPS_API_KEY=<if used>
 CLERK_SECRET_KEY=<if used>
 CLERK_WEBHOOK_SECRET=<if used>
+CREEM_API_KEY=<creem_live_or_test_key_for_this_environment>
+CREEM_WEBHOOK_SECRET=<creem_webhook_secret_for_this_environment>
+CREEM_PRO_PRODUCT_ID=<creem_product_id_for_pro>
+CREEM_BUSINESS_PRODUCT_ID=<creem_product_id_for_business>
 RUNR_SECRET_KEY=<generate strong random value>
 LOCAL_OBJECT_STORAGE_SIGNING_SECRET=<not used for r2, but safe to set anyway>
 ```
@@ -518,4 +552,3 @@ Deployment is ready for first customers when:
 - You have log/error review process.
 - You have clear secret rotation procedure.
 - You have tested upgrade path by changing only Render plan, not code.
-

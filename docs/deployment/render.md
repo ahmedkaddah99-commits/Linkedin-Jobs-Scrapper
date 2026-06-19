@@ -53,7 +53,7 @@ CLERK_PUBLISHABLE_KEY=pk_live_...
 CLERK_WEBHOOK_SECRET=whsec_...
 ```
 
-Populate LemonSqueezy, ScrapeOps, DeepSeek, Gemini, and Google OAuth values when those features are enabled. Use production credentials, not local development keys.
+Populate Creem, ScrapeOps, DeepSeek, Gemini, and Google OAuth values when those features are enabled. Use production credentials, not local development keys.
 
 The cron service needs the same Turso and workload-provider credentials as the API. Render services do not implicitly share environment variables, so verify both services after any credential rotation.
 
@@ -89,7 +89,7 @@ After DNS works:
 1. Set frontend `VITE_API_BASE_URL` to `https://api.example.com/v1` and redeploy the static site.
 2. Set API `BACKEND_ALLOWED_ORIGINS` to `https://app.example.com`.
 3. Add the frontend domain to Clerk's allowed origins and redirect URLs.
-4. Configure Clerk and LemonSqueezy webhook URLs against `https://api.example.com/v1/...`.
+4. Configure Clerk and Creem webhook URLs against `https://api.example.com/v1/...`.
 5. Set `TRACKER_GOOGLE_OAUTH_REDIRECT_URI` to the production callback URL if Google integration is enabled.
 
 ## Scaling path

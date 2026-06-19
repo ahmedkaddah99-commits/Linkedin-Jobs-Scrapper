@@ -60,11 +60,13 @@ services:
         sync: false
       - key: CLERK_WEBHOOK_SECRET
         sync: false
-      - key: LEMONSQUEEZY_API_KEY
+      - key: CREEM_API_KEY
         sync: false
-      - key: LEMONSQUEEZY_WEBHOOK_SECRET
+      - key: CREEM_WEBHOOK_SECRET
         sync: false
-      - key: LEMONSQUEEZY_STORE_ID
+      - key: CREEM_PRO_PRODUCT_ID
+        sync: false
+      - key: CREEM_BUSINESS_PRODUCT_ID
         sync: false
       - key: SCRAPEOPS_API_KEY
         sync: false

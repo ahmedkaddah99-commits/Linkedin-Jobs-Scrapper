@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from typing import Any
 
@@ -26,7 +27,7 @@ PLANS: dict[str, dict[str, Any]] = {
     "pro": {
         "display_name": "Pro",
         "price_eur": 29,
-        "lemonsqueezy_variant_id": "",
+        "creem_product_id": "",
         "quotas": {
             "runs_per_month": 100,
             "applications_per_month": 200,
@@ -43,7 +44,7 @@ PLANS: dict[str, dict[str, Any]] = {
     "business": {
         "display_name": "Business",
         "price_eur": 79,
-        "lemonsqueezy_variant_id": "",
+        "creem_product_id": "",
         "quotas": {
             "runs_per_month": -1,
             "applications_per_month": -1,
@@ -59,6 +60,19 @@ PLANS: dict[str, dict[str, Any]] = {
     },
 }
 
+PLAN_CREEM_PRODUCT_ENV_VARS = {
+    "pro": "CREEM_PRO_PRODUCT_ID",
+    "business": "CREEM_BUSINESS_PRODUCT_ID",
+}
+
+
+def _with_runtime_plan_values(plan_id: str, plan: dict[str, Any]) -> dict[str, Any]:
+    item = deepcopy(plan)
+    product_env_var = PLAN_CREEM_PRODUCT_ENV_VARS.get(plan_id)
+    if product_env_var:
+        item["creem_product_id"] = str(os.getenv(product_env_var) or item.get("creem_product_id") or "").strip()
+    return item
+
 
 def normalize_plan_id(plan_id: str | None) -> str:
     normalized = str(plan_id or "").strip().lower()
@@ -66,7 +80,8 @@ def normalize_plan_id(plan_id: str | None) -> str:
 
 
 def get_plan(plan_id: str | None) -> dict[str, Any]:
-    return deepcopy(PLANS[normalize_plan_id(plan_id)])
+    normalized_plan_id = normalize_plan_id(plan_id)
+    return _with_runtime_plan_values(normalized_plan_id, PLANS[normalized_plan_id])
 
 
 def get_quota(plan_id: str, quota_type: str) -> int:
@@ -79,12 +94,13 @@ def get_limit(plan_id: str, limit_type: str) -> int:
     return int(plan.get("limits", {}).get(str(limit_type or "").strip(), 0))
 
 
-def get_plan_for_variant_id(variant_id: str | int | None) -> str:
-    normalized_variant_id = str(variant_id or "").strip()
-    if not normalized_variant_id:
+def get_plan_for_product_id(product_id: str | int | None) -> str:
+    normalized_product_id = str(product_id or "").strip()
+    if not normalized_product_id:
         return DEFAULT_PLAN_ID
-    for plan_id, plan in PLANS.items():
-        if str(plan.get("lemonsqueezy_variant_id") or "").strip() == normalized_variant_id:
+    for plan_id in PLANS:
+        plan = get_plan(plan_id)
+        if str(plan.get("creem_product_id") or "").strip() == normalized_product_id:
             return plan_id
     return DEFAULT_PLAN_ID
 

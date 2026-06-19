@@ -80,7 +80,7 @@ from backend.config.plans import (
     PLANS,
     compare_plan_tiers,
     get_plan,
-    get_plan_for_variant_id,
+    get_plan_for_product_id,
     get_quota,
     list_plans,
     normalize_plan_id,
@@ -144,14 +144,14 @@ from backend.integrations.clerk import (
     verify_session_token,
     verify_webhook as verify_clerk_webhook,
 )
-from backend.integrations.lemonsqueezy import (
-    create_discount as create_lemonsqueezy_discount,
-    delete_discount as delete_lemonsqueezy_discount,
-    get_checkout_url as get_lemonsqueezy_checkout_url,
-    get_customer_portal_url as get_lemonsqueezy_customer_portal_url,
-    list_discounts as list_lemonsqueezy_discounts,
+from backend.integrations.creem import (
+    create_discount as create_creem_discount,
+    delete_discount as delete_creem_discount,
+    get_checkout_url as get_creem_checkout_url,
+    get_customer_portal_url as get_creem_customer_portal_url,
+    list_discounts as list_creem_discounts,
     update_user_plan_in_clerk,
-    verify_webhook_signature as verify_lemonsqueezy_webhook_signature,
+    verify_webhook_signature as verify_creem_webhook_signature,
 )
 from backend.worker import WorkerService, configure_worker_logging
 
@@ -6136,8 +6136,9 @@ def _subscription_response_payload(
         "subscription": {
             "subscription_id": str(subscription_record.get("subscription_id") or ""),
             "status": str(subscription_record.get("status") or ("active" if normalized_plan_id != DEFAULT_PLAN_ID else "free")),
-            "lemonsqueezy_subscription_id": str(subscription_record.get("lemonsqueezy_subscription_id") or ""),
-            "lemonsqueezy_customer_id": str(subscription_record.get("lemonsqueezy_customer_id") or ""),
+            "billing_provider": str(subscription_record.get("billing_provider") or "creem"),
+            "creem_subscription_id": str(subscription_record.get("creem_subscription_id") or ""),
+            "creem_customer_id": str(subscription_record.get("creem_customer_id") or ""),
             "current_period_start": str(subscription_record.get("current_period_start") or ""),
             "current_period_end": str(subscription_record.get("current_period_end") or ""),
             "cancelled_at": str(subscription_record.get("cancelled_at") or ""),
@@ -6156,15 +6157,16 @@ def _subscription_response_payload(
     }
 
 
-def _configured_paid_plan_variant_ids() -> list[str]:
-    variant_ids: list[str] = []
-    for plan in PLANS.values():
+def _configured_paid_plan_product_ids() -> list[str]:
+    product_ids: list[str] = []
+    for plan_id in PLANS:
+        plan = get_plan(plan_id)
         if int(plan.get("price_eur") or 0) <= 0:
             continue
-        variant_id = str(plan.get("lemonsqueezy_variant_id") or "").strip()
-        if variant_id and variant_id not in variant_ids:
-            variant_ids.append(variant_id)
-    return variant_ids
+        product_id = str(plan.get("creem_product_id") or "").strip()
+        if product_id and product_id not in product_ids:
+            product_ids.append(product_id)
+    return product_ids
 
 
 def _configured_paid_plan_labels() -> str:
@@ -6266,9 +6268,9 @@ def _admin_promo_code_payload(discount: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _create_admin_promo_code(payload: Mapping[str, Any]) -> dict[str, Any]:
-    variant_ids = _configured_paid_plan_variant_ids()
-    if not variant_ids:
-        raise ValueError("LemonSqueezy paid-plan variants are not configured for promo codes.")
+    product_ids = _configured_paid_plan_product_ids()
+    if not product_ids:
+        raise ValueError("Creem paid-plan products are not configured for promo codes.")
     name = str(payload.get("name") or "").strip()
     code = _normalize_promo_code(payload.get("code"))
     if not name:
@@ -6282,7 +6284,7 @@ def _create_admin_promo_code(payload: Mapping[str, Any]) -> dict[str, Any]:
         expires_at_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
         if starts_at_dt >= expires_at_dt:
             raise ValueError("expires_at must be later than starts_at")
-    created_discount = create_lemonsqueezy_discount(
+    created_discount = create_creem_discount(
         name=name,
         code=code,
         amount=amount,
@@ -6291,7 +6293,7 @@ def _create_admin_promo_code(payload: Mapping[str, Any]) -> dict[str, Any]:
         expires_at=expires_at,
         max_redemptions=_parse_promo_redemption_limit(payload.get("max_redemptions")),
         duration="once",
-        variant_ids=variant_ids,
+        product_ids=product_ids,
     )
     return _admin_promo_code_payload(created_discount)
 
@@ -6299,7 +6301,7 @@ def _create_admin_promo_code(payload: Mapping[str, Any]) -> dict[str, Any]:
 def _list_admin_promo_codes(*, limit: int, offset: int) -> dict[str, Any]:
     page_size = max(1, int(limit))
     page_number = max(1, (max(0, int(offset)) // page_size) + 1)
-    listing = list_lemonsqueezy_discounts(page_number=page_number, page_size=page_size)
+    listing = list_creem_discounts(page_number=page_number, page_size=page_size)
     discounts = [
         _admin_promo_code_payload(item)
         for item in listing.get("discounts") or []
@@ -6440,113 +6442,281 @@ def _handle_clerk_webhook_event(application, event_payload: dict[str, object]) -
     return {"status": "ignored", "event_type": event_type}
 
 
-def _handle_lemonsqueezy_webhook_event(
+def _creem_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _creem_text(payload: Mapping[str, Any], *names: str) -> str:
+    for name in names:
+        value = payload.get(name)
+        if value is not None:
+            return str(value or "").strip()
+    return ""
+
+
+def _creem_object_id(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return _creem_text(value, "id", "customer_id", "product_id")
+    return str(value or "").strip()
+
+
+def _creem_event_time(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000
+        return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+    normalized = str(value or "").strip()
+    return normalized or utc_plus_seconds(0)
+
+
+def _creem_nested_mapping(container: Mapping[str, Any], key: str) -> dict[str, Any]:
+    value = container.get(key)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _creem_subscription_object(event_object: Mapping[str, Any]) -> dict[str, Any]:
+    if _creem_text(event_object, "object") == "subscription":
+        return dict(event_object)
+    nested = _creem_nested_mapping(event_object, "subscription")
+    if nested:
+        return nested
+    return {}
+
+
+def _creem_checkout_object(event_object: Mapping[str, Any]) -> dict[str, Any]:
+    if _creem_text(event_object, "object") == "checkout":
+        return dict(event_object)
+    nested = _creem_nested_mapping(event_object, "checkout")
+    if nested:
+        return nested
+    return {}
+
+
+def _creem_metadata(*payloads: Mapping[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for payload in payloads:
+        item = payload.get("metadata")
+        if isinstance(item, Mapping):
+            metadata.update(dict(item))
+    return metadata
+
+
+def _creem_product_id(
+    metadata: Mapping[str, Any],
+    subscription: Mapping[str, Any],
+    checkout: Mapping[str, Any],
+    order: Mapping[str, Any],
+) -> str:
+    from_metadata = _creem_text(metadata, "product_id", "productId", "creem_product_id")
+    if from_metadata:
+        return from_metadata
+    for source in (subscription, checkout, order):
+        product = source.get("product")
+        product_id = _creem_object_id(product)
+        if product_id:
+            return product_id
+    for item in subscription.get("items") or []:
+        if isinstance(item, Mapping):
+            product_id = _creem_text(item, "product_id", "productId")
+            if product_id:
+                return product_id
+    return ""
+
+
+def _creem_customer_details(
+    subscription: Mapping[str, Any],
+    checkout: Mapping[str, Any],
+    order: Mapping[str, Any],
+    event_object: Mapping[str, Any],
+) -> tuple[str, str]:
+    for source in (subscription, checkout, event_object, order):
+        customer = source.get("customer")
+        if isinstance(customer, Mapping):
+            return _creem_text(customer, "id", "customer_id"), _creem_text(customer, "email")
+        customer_id = str(customer or "").strip()
+        if customer_id:
+            return customer_id, ""
+    return "", ""
+
+
+def _insert_creem_subscription_event(
+    repository,
+    *,
+    event_id: str,
+    user_id: str,
+    event_type: str,
+    plan_id: str,
+    previous_plan_id: str,
+    provider_event_name: str,
+    occurred_at: str,
+    payload: dict[str, object],
+) -> None:
+    repository.insert_subscription_event(
+        {
+            "event_id": event_id or f"subevt_{uuid4().hex[:16]}",
+            "user_id": user_id,
+            "event_type": event_type,
+            "plan_id": plan_id,
+            "previous_plan_id": previous_plan_id,
+            "billing_provider": "creem",
+            "provider_event_name": provider_event_name,
+            "occurred_at": occurred_at,
+            "payload": payload,
+        }
+    )
+
+
+def _handle_creem_webhook_event(
     application,
     *,
     event_name: str,
     payload: dict[str, object],
 ) -> dict[str, object]:
     repository = _auth_repository(application)
-    data = dict(payload.get("data") or {})
-    attributes = dict(data.get("attributes") or {})
-    meta = dict(payload.get("meta") or {})
-    custom_data = dict(meta.get("custom_data") or {})
-    occurred_at = str(attributes.get("updated_at") or attributes.get("created_at") or utc_plus_seconds(0)).strip()
-    user_id = str(custom_data.get("user_id") or "").strip()
+    event_object = _creem_mapping(payload.get("object")) or _creem_mapping(payload.get("data"))
+    subscription = _creem_subscription_object(event_object)
+    checkout = _creem_checkout_object(event_object)
+    order = _creem_nested_mapping(event_object, "order")
+    metadata = _creem_metadata(checkout, subscription, event_object)
+    occurred_at = _creem_event_time(
+        subscription.get("updated_at")
+        or event_object.get("updated_at")
+        or payload.get("created_at")
+        or subscription.get("created_at")
+        or event_object.get("created_at")
+    )
+    user_id = _creem_text(metadata, "user_id", "userId", "reference_id", "referenceId")
+    customer_id, customer_email = _creem_customer_details(subscription, checkout, order, event_object)
     if not user_id:
-        lookup_email = str(attributes.get("user_email") or "").strip()
-        if lookup_email:
+        if customer_email:
             try:
-                user_id = _lookup_user_by_email(application, lookup_email).user_id
+                user_id = _lookup_user_by_email(application, customer_email).user_id
             except Exception:
                 user_id = ""
     if not user_id:
-        raise ValueError("Unable to resolve a local user for the LemonSqueezy webhook payload.")
+        raise ValueError("Unable to resolve a local user for the Creem webhook payload.")
 
     current_subscription = _lookup_subscription_record(application, user_id) or {}
-    variant_id = str(attributes.get("variant_id") or custom_data.get("variant_id") or "").strip()
-    plan_id = normalize_plan_id(get_plan_for_variant_id(variant_id))
-    subscription_id = str(data.get("id") or attributes.get("subscription_id") or "").strip()
-    lemonsqueezy_subscription_id = str(attributes.get("subscription_id") or subscription_id or "").strip()
+    product_id = _creem_product_id(metadata, subscription, checkout, order)
+    plan_id = normalize_plan_id(
+        _creem_text(metadata, "plan_id", "planId")
+        or get_plan_for_product_id(product_id)
+        or current_subscription.get("plan_id")
+        or DEFAULT_PLAN_ID
+    )
+    subscription_id = _creem_text(subscription, "id", "subscription_id") or _creem_text(
+        event_object,
+        "subscription_id",
+        "subscription",
+    )
+    order_id = _creem_object_id(order) or _creem_text(event_object, "order_id", "order")
+    status = _creem_text(subscription, "status") or {
+        "checkout.completed": "active",
+        "subscription.active": "active",
+        "subscription.paid": "active",
+        "subscription.trialing": "trialing",
+        "subscription.update": "active",
+        "subscription.scheduled_cancel": "scheduled_cancel",
+        "subscription.past_due": "past_due",
+        "subscription.paused": "paused",
+        "subscription.expired": "expired",
+        "subscription.canceled": "canceled",
+    }.get(event_name, "active")
     subscription_record = {
-        "subscription_id": subscription_id or lemonsqueezy_subscription_id,
+        "subscription_id": subscription_id,
         "user_id": user_id,
         "plan_id": plan_id,
-        "status": str(attributes.get("status") or "active").strip() or "active",
-        "lemonsqueezy_subscription_id": lemonsqueezy_subscription_id,
-        "lemonsqueezy_customer_id": str(attributes.get("customer_id") or "").strip(),
-        "lemonsqueezy_order_id": str(attributes.get("order_id") or "").strip(),
-        "current_period_start": str(attributes.get("created_at") or current_subscription.get("current_period_start") or ""),
+        "status": status,
+        "billing_provider": "creem",
+        "creem_subscription_id": subscription_id,
+        "creem_customer_id": customer_id,
+        "creem_order_id": order_id,
+        "current_period_start": str(
+            subscription.get("current_period_start_date")
+            or subscription.get("current_period_start")
+            or subscription.get("created_at")
+            or current_subscription.get("current_period_start")
+            or ""
+        ),
         "current_period_end": str(
-            attributes.get("renews_at")
-            or attributes.get("ends_at")
+            subscription.get("current_period_end_date")
+            or subscription.get("current_period_end")
+            or subscription.get("next_transaction_date")
+            or subscription.get("canceled_at")
             or current_subscription.get("current_period_end")
             or ""
         ),
-        "cancelled_at": str(attributes.get("ends_at") or current_subscription.get("cancelled_at") or ""),
-        "created_at": str(current_subscription.get("created_at") or attributes.get("created_at") or utc_plus_seconds(0)),
-        "updated_at": str(attributes.get("updated_at") or utc_plus_seconds(0)),
+        "cancelled_at": str(subscription.get("canceled_at") or current_subscription.get("cancelled_at") or ""),
+        "created_at": str(current_subscription.get("created_at") or subscription.get("created_at") or occurred_at),
+        "updated_at": str(subscription.get("updated_at") or occurred_at),
     }
 
     user = application.get_user(user_id)
     clerk_user_id = _resolve_user_clerk_user_id(application, user)
     previous_plan_id = normalize_plan_id(current_subscription.get("plan_id") or DEFAULT_PLAN_ID)
+    provider_event_id = str(payload.get("id") or f"creem_{uuid4().hex[:16]}").strip()
+    event_type = {
+        "checkout.completed": "checkout_completed",
+        "subscription.active": "subscription_started",
+        "subscription.trialing": "subscription_started",
+        "subscription.paid": "subscription_paid",
+        "subscription.update": "subscription_changed",
+        "subscription.scheduled_cancel": "subscription_scheduled_cancel",
+        "subscription.past_due": "subscription_past_due",
+        "subscription.paused": "subscription_paused",
+        "subscription.expired": "subscription_cancelled",
+        "subscription.canceled": "subscription_cancelled",
+    }.get(event_name)
 
-    if event_name == "subscription_created":
+    if not event_type:
+        return {"status": "ignored", "event_type": event_name}
+
+    if subscription_id:
         repository.upsert_subscription(subscription_record)
+
+    _insert_creem_subscription_event(
+        repository,
+        event_id=provider_event_id,
+        user_id=user_id,
+        event_type=event_type,
+        plan_id=plan_id,
+        previous_plan_id=previous_plan_id,
+        provider_event_name=event_name,
+        occurred_at=occurred_at,
+        payload=payload,
+    )
+
+    grant_access_events = {"checkout.completed", "subscription.active", "subscription.trialing", "subscription.paid"}
+    revoke_access_events = {"subscription.canceled", "subscription.expired", "subscription.paused"}
+    if event_name in grant_access_events:
         if clerk_user_id:
-            update_user_plan_in_clerk(clerk_user_id, plan_id)
-        repository.insert_subscription_event(
-            {
-                "event_id": f"subevt_{uuid4().hex[:16]}",
-                "user_id": user_id,
-                "event_type": "subscription_started",
-                "plan_id": plan_id,
-                "previous_plan_id": previous_plan_id,
-                "lemonsqueezy_event_name": event_name,
-                "occurred_at": occurred_at,
-                "payload": payload,
-            }
-        )
-        application.emit_event(
-            "subscription_started",
-            user_id=user_id,
-            source="lemonsqueezy",
-            payload={
-                "user_id": user_id,
-                "plan_id": plan_id,
-                "price_eur": int(get_plan(plan_id).get("price_eur") or 0),
-                "lemonsqueezy_subscription_id": lemonsqueezy_subscription_id,
-            },
-        )
-        return {"status": "ok", "event_type": event_name, "user_id": user_id}
-
-    if event_name == "subscription_updated":
-        repository.upsert_subscription(subscription_record)
-        if clerk_user_id and previous_plan_id != plan_id:
             update_user_plan_in_clerk(clerk_user_id, plan_id)
         if compare_plan_tiers(previous_plan_id, plan_id) < 0:
             reset_quota_usage = getattr(repository, "reset_quota_usage", None)
             if callable(reset_quota_usage):
                 reset_quota_usage(user_id, _current_period_key())
+        if event_name in {"subscription.active", "subscription.trialing", "checkout.completed"}:
+            application.emit_event(
+                "subscription_started",
+                user_id=user_id,
+                source="creem",
+                payload={
+                    "user_id": user_id,
+                    "plan_id": plan_id,
+                    "price_eur": int(get_plan(plan_id).get("price_eur") or 0),
+                    "creem_subscription_id": subscription_id,
+                },
+            )
+    elif event_name in {"subscription.update", "subscription.scheduled_cancel", "subscription.past_due"}:
+        if clerk_user_id and previous_plan_id != plan_id:
+            update_user_plan_in_clerk(clerk_user_id, plan_id)
         if previous_plan_id != plan_id:
             direction = "upgrade" if compare_plan_tiers(previous_plan_id, plan_id) < 0 else "downgrade"
-            repository.insert_subscription_event(
-                {
-                    "event_id": f"subevt_{uuid4().hex[:16]}",
-                    "user_id": user_id,
-                    "event_type": "subscription_changed",
-                    "plan_id": plan_id,
-                    "previous_plan_id": previous_plan_id,
-                    "lemonsqueezy_event_name": event_name,
-                    "occurred_at": occurred_at,
-                    "payload": payload,
-                }
-            )
             application.emit_event(
                 "subscription_changed",
                 user_id=user_id,
-                source="lemonsqueezy",
+                source="creem",
                 payload={
                     "user_id": user_id,
                     "previous_plan_id": previous_plan_id,
@@ -6554,58 +6724,26 @@ def _handle_lemonsqueezy_webhook_event(
                     "direction": direction,
                 },
             )
-        return {"status": "ok", "event_type": event_name, "user_id": user_id}
-
-    if event_name == "subscription_cancelled":
-        subscription_record["status"] = "cancelled"
-        subscription_record["cancelled_at"] = str(attributes.get("updated_at") or utc_plus_seconds(0))
-        repository.upsert_subscription(subscription_record)
+    elif event_name in revoke_access_events:
         if clerk_user_id:
             update_user_plan_in_clerk(clerk_user_id, DEFAULT_PLAN_ID)
-        repository.insert_subscription_event(
-            {
-                "event_id": f"subevt_{uuid4().hex[:16]}",
-                "user_id": user_id,
-                "event_type": "subscription_cancelled",
-                "plan_id": plan_id,
-                "previous_plan_id": previous_plan_id,
-                "lemonsqueezy_event_name": event_name,
-                "occurred_at": occurred_at,
-                "payload": payload,
-            }
-        )
-        application.emit_event(
-            "subscription_cancelled",
-            user_id=user_id,
-            source="lemonsqueezy",
-            payload={
-                "user_id": user_id,
-                "plan_id": plan_id,
-                "months_active": _months_between(
-                    str(current_subscription.get("created_at") or attributes.get("created_at") or ""),
-                    str(attributes.get("updated_at") or utc_plus_seconds(0)),
-                ),
-                "cancellation_reason": str(attributes.get("status_formatted") or ""),
-            },
-        )
-        return {"status": "ok", "event_type": event_name, "user_id": user_id}
+        if event_name in {"subscription.canceled", "subscription.expired"}:
+            application.emit_event(
+                "subscription_cancelled",
+                user_id=user_id,
+                source="creem",
+                payload={
+                    "user_id": user_id,
+                    "plan_id": plan_id,
+                    "months_active": _months_between(
+                        str(current_subscription.get("created_at") or subscription.get("created_at") or ""),
+                        str(subscription.get("updated_at") or occurred_at),
+                    ),
+                    "cancellation_reason": status,
+                },
+            )
 
-    if event_name == "order_created":
-        repository.insert_subscription_event(
-            {
-                "event_id": f"subevt_{uuid4().hex[:16]}",
-                "user_id": user_id,
-                "event_type": "order_created",
-                "plan_id": plan_id,
-                "previous_plan_id": previous_plan_id,
-                "lemonsqueezy_event_name": event_name,
-                "occurred_at": occurred_at,
-                "payload": payload,
-            }
-        )
-        return {"status": "ok", "event_type": event_name, "user_id": user_id}
-
-    return {"status": "ignored", "event_type": event_name}
+    return {"status": "ok", "event_type": event_name, "user_id": user_id}
 
 
 def _review_application_status_sql(payload_column: str) -> str:
@@ -7475,7 +7613,7 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
         def do_POST(self):  # noqa: N802
             try:
                 _, segments, query = self._parse_request()
-                is_webhook_route = segments in (["webhooks", "clerk"], ["webhooks", "lemonsqueezy"])
+                is_webhook_route = segments in (["webhooks", "clerk"], ["webhooks", "creem"])
                 if not is_webhook_route:
                     self._enforce_origin_policy()
 

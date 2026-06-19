@@ -14,7 +14,7 @@ from .clerk import (
     verify_session_token,
     verify_webhook,
 )
-from .lemonsqueezy import (
+from .creem import (
     create_discount,
     delete_discount,
     get_checkout_url,

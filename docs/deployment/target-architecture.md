@@ -43,7 +43,7 @@ Render Cron Job (initial) / Background Worker (customer stage)
 - Database: Turso Free initially; upgrade independently when usage or recovery
   requirements justify it.
 - Object storage: private Cloudflare R2 bucket using the S3-compatible API.
-- Authentication and billing: existing Clerk and LemonSqueezy integrations.
+- Authentication and billing: existing Clerk and Creem integrations.
 
 The expected initial infrastructure cost is approximately USD 8 per month,
 excluding third-party AI, scraping, email, and billing-provider usage.

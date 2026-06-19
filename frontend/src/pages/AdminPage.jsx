@@ -214,7 +214,7 @@ export default function AdminPage() {
             <div>
               <h2 className="font-headline text-xl font-bold text-on-surface">Promo Code Issuance</h2>
               <p className="mt-1 text-sm text-on-surface-variant">
-                Codes are created in LemonSqueezy and limited to the paid Runr plans.
+                Codes are created in Creem and limited to the paid Runr plans.
               </p>
             </div>
             <button

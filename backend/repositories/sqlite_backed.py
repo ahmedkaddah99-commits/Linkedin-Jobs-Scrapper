@@ -914,14 +914,15 @@ class SqliteAuthRepository(_SqliteStore):
             raise KeyError(f"Subscription '{subscription_id}' not found.")
         return {key: row[key] for key in row.keys()}
 
-    def get_subscription_by_lemonsqueezy_id(self, lemonsqueezy_subscription_id: str) -> dict[str, Any]:
+    def get_subscription_by_creem_id(self, creem_subscription_id: str) -> dict[str, Any]:
+        normalized_subscription_id = str(creem_subscription_id or "").strip()
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM subscriptions WHERE lemonsqueezy_subscription_id = ?",
-                (str(lemonsqueezy_subscription_id or "").strip(),),
+                "SELECT * FROM subscriptions WHERE creem_subscription_id = ? OR subscription_id = ?",
+                (normalized_subscription_id, normalized_subscription_id),
             ).fetchone()
         if row is None:
-            raise KeyError(f"LemonSqueezy subscription '{lemonsqueezy_subscription_id}' not found.")
+            raise KeyError(f"Creem subscription '{creem_subscription_id}' not found.")
         return {key: row[key] for key in row.keys()}
 
     def get_current_subscription_by_user_id(self, user_id: str) -> dict[str, Any]:
@@ -948,15 +949,16 @@ class SqliteAuthRepository(_SqliteStore):
             connection.execute(
                 (
                     "INSERT INTO subscriptions ("
-                    "subscription_id, user_id, plan_id, status, lemonsqueezy_subscription_id, "
-                    "lemonsqueezy_customer_id, lemonsqueezy_order_id, current_period_start, current_period_end, "
+                    "subscription_id, user_id, plan_id, status, billing_provider, creem_subscription_id, "
+                    "creem_customer_id, creem_order_id, current_period_start, current_period_end, "
                     "cancelled_at, created_at, updated_at"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(subscription_id) DO UPDATE SET "
                     "user_id=excluded.user_id, plan_id=excluded.plan_id, status=excluded.status, "
-                    "lemonsqueezy_subscription_id=excluded.lemonsqueezy_subscription_id, "
-                    "lemonsqueezy_customer_id=excluded.lemonsqueezy_customer_id, "
-                    "lemonsqueezy_order_id=excluded.lemonsqueezy_order_id, "
+                    "billing_provider=excluded.billing_provider, "
+                    "creem_subscription_id=excluded.creem_subscription_id, "
+                    "creem_customer_id=excluded.creem_customer_id, "
+                    "creem_order_id=excluded.creem_order_id, "
                     "current_period_start=excluded.current_period_start, "
                     "current_period_end=excluded.current_period_end, "
                     "cancelled_at=excluded.cancelled_at, "
@@ -967,9 +969,10 @@ class SqliteAuthRepository(_SqliteStore):
                     str(payload.get("user_id") or "").strip(),
                     str(payload.get("plan_id") or "free").strip() or "free",
                     str(payload.get("status") or "active").strip() or "active",
-                    str(payload.get("lemonsqueezy_subscription_id") or "").strip(),
-                    str(payload.get("lemonsqueezy_customer_id") or "").strip(),
-                    str(payload.get("lemonsqueezy_order_id") or "").strip(),
+                    str(payload.get("billing_provider") or "creem").strip() or "creem",
+                    str(payload.get("creem_subscription_id") or "").strip(),
+                    str(payload.get("creem_customer_id") or "").strip(),
+                    str(payload.get("creem_order_id") or "").strip(),
                     str(payload.get("current_period_start") or "").strip(),
                     str(payload.get("current_period_end") or "").strip(),
                     str(payload.get("cancelled_at") or "").strip(),
@@ -1003,8 +1006,9 @@ class SqliteAuthRepository(_SqliteStore):
             connection.execute(
                 (
                     "INSERT OR REPLACE INTO subscription_events ("
-                    "event_id, user_id, event_type, plan_id, previous_plan_id, lemonsqueezy_event_name, occurred_at, payload_json"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                    "event_id, user_id, event_type, plan_id, previous_plan_id, billing_provider, "
+                    "provider_event_name, occurred_at, payload_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 ),
                 (
                     event_id,
@@ -1012,7 +1016,8 @@ class SqliteAuthRepository(_SqliteStore):
                     str(payload.get("event_type") or "").strip(),
                     str(payload.get("plan_id") or "").strip(),
                     str(payload.get("previous_plan_id") or "").strip(),
-                    str(payload.get("lemonsqueezy_event_name") or "").strip(),
+                    str(payload.get("billing_provider") or "creem").strip() or "creem",
+                    str(payload.get("provider_event_name") or "").strip(),
                     str(payload.get("occurred_at") or utc_now_iso()).strip(),
                     _serialize(dict(payload.get("payload_json") or payload.get("payload") or {})),
                 ),

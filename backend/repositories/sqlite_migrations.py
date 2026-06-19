@@ -26,6 +26,16 @@ def _ensure_user_column(connection: DatabaseConnection, column_name: str, column
         connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_sql}")
 
 
+def _ensure_table_column(
+    connection: DatabaseConnection,
+    table_name: str,
+    column_name: str,
+    column_sql: str,
+) -> None:
+    if column_name not in _table_columns(connection, table_name):
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+
 def _apply_runtime_migration(connection: DatabaseConnection) -> None:
     _ensure_run_column(connection, "requested_by", "TEXT NOT NULL DEFAULT ''")
     _ensure_run_column(connection, "queued_at", "TEXT NOT NULL DEFAULT ''")
@@ -161,6 +171,22 @@ def _apply_billing_migration(connection: DatabaseConnection) -> None:
             ON subscription_events(user_id, occurred_at);
         CREATE INDEX IF NOT EXISTS idx_quota_usage_user_period
             ON quota_usage(user_id, period, quota_type);
+        """
+    )
+
+
+def _apply_creem_billing_migration(connection: DatabaseConnection) -> None:
+    _ensure_table_column(connection, "subscriptions", "billing_provider", "TEXT NOT NULL DEFAULT 'creem'")
+    _ensure_table_column(connection, "subscriptions", "creem_subscription_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "subscriptions", "creem_customer_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "subscriptions", "creem_order_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "subscription_events", "billing_provider", "TEXT NOT NULL DEFAULT 'creem'")
+    _ensure_table_column(connection, "subscription_events", "provider_event_name", "TEXT NOT NULL DEFAULT ''")
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_creem_subscription_id
+            ON subscriptions(creem_subscription_id)
+            WHERE creem_subscription_id != '';
         """
     )
 
@@ -525,5 +551,11 @@ MIGRATIONS = (
         "Normalize site job URL history to a public URL index.",
         _apply_site_job_url_history_public_index_migration,
         dependencies=(_apply_site_job_url_history_migration,),
+    ),
+    Migration.from_callable(
+        "012_creem_billing",
+        "Add Creem billing provider identifiers.",
+        _apply_creem_billing_migration,
+        dependencies=(_table_columns, _ensure_table_column),
     ),
 )

@@ -37,7 +37,7 @@ These steps require account access and production credentials.
 2. Add `api.example.com` to the API service.
 3. Configure DNS using the values Render provides.
 4. Add the frontend origin and redirect URLs to Clerk.
-5. Configure Clerk and LemonSqueezy webhooks against the API domain.
+5. Configure Clerk and Creem webhooks against the API domain.
 6. Configure Google OAuth redirect URLs if Gmail integration is enabled.
 7. Verify HTTPS, CORS, authentication, webhook signatures, and downloads.
 

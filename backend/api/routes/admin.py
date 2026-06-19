@@ -33,7 +33,7 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.exact('GET', ('tokens',), _handle_get, auth_required=True, name='admin.tokens')
     registry.prefix('GET', ('secrets',), _handle_get, auth_required=True, name='admin.secrets')
     registry.exact('POST', ('webhooks', 'clerk'), _handle_post, auth_required=False, name='admin.webhooks.clerk')
-    registry.exact('POST', ('webhooks', 'lemonsqueezy'), _handle_post, auth_required=False, name='admin.webhooks.lemonsqueezy')
+    registry.exact('POST', ('webhooks', 'creem'), _handle_post, auth_required=False, name='admin.webhooks.creem')
     registry.prefix('POST', ('admin',), _handle_post, auth_required=True, name='admin.admin.post')
     registry.prefix('POST', ('analytics',), _handle_post, auth_required=True, name='admin.analytics.post')
     registry.prefix('POST', ('billing',), _handle_post, auth_required=True, name='admin.billing.post')
@@ -332,17 +332,17 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         self._send_json(_handle_clerk_webhook_event(application, event_payload), status=HTTPStatus.OK)
                         return
 
-    if segments == ["webhooks", "lemonsqueezy"]:
+    if segments == ["webhooks", "creem"]:
                         raw_body = self._read_raw_body()
-                        verify_lemonsqueezy_webhook_signature(raw_body, self.headers.get("X-Signature", ""))
+                        verify_creem_webhook_signature(raw_body, self.headers.get("creem-signature", ""))
                         webhook_payload = json.loads(raw_body.decode("utf-8") or "{}")
                         if not isinstance(webhook_payload, dict):
-                            raise ValueError("LemonSqueezy webhook body must be a JSON object.")
-                        event_name = str((webhook_payload.get("meta") or {}).get("event_name") or "").strip()
+                            raise ValueError("Creem webhook body must be a JSON object.")
+                        event_name = str(webhook_payload.get("eventType") or webhook_payload.get("event_type") or "").strip()
                         if not event_name:
-                            raise ValueError("LemonSqueezy webhook payload is missing meta.event_name.")
+                            raise ValueError("Creem webhook payload is missing eventType.")
                         self._send_json(
-                            _handle_lemonsqueezy_webhook_event(
+                            _handle_creem_webhook_event(
                                 application,
                                 event_name=event_name,
                                 payload=webhook_payload,
@@ -406,16 +406,16 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         if target_plan_id == DEFAULT_PLAN_ID:
                             raise ValueError("Checkout is only available for paid plans.")
                         plan = get_plan(target_plan_id)
-                        variant_id = str(plan.get("lemonsqueezy_variant_id") or "").strip()
-                        if not variant_id:
-                            raise ValueError(f"LemonSqueezy variant id is not configured for plan '{target_plan_id}'.")
+                        product_id = str(plan.get("creem_product_id") or "").strip()
+                        if not product_id:
+                            raise ValueError(f"Creem product id is not configured for plan '{target_plan_id}'.")
                         source_page = str(payload.get("source_page") or payload.get("sourcePage") or "").strip()
                         promo_code = str(payload.get("promo_code") or payload.get("promoCode") or "").strip().upper()
                         if promo_code:
                             promo_code = _normalize_promo_code(promo_code)
-                        checkout_url = get_lemonsqueezy_checkout_url(
+                        checkout_url = get_creem_checkout_url(
                             context.user.user_id,
-                            variant_id,
+                            product_id,
                             context.user.email,
                             name=context.user.display_name,
                             discount_code=promo_code,
@@ -446,9 +446,9 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
     if segments == ["billing", "portal"]:
                         context = self._auth_context()
                         subscription_record = _lookup_subscription_record(application, context.user.user_id) or {}
-                        portal_url = get_lemonsqueezy_customer_portal_url(
-                            subscription_id=str(subscription_record.get("lemonsqueezy_subscription_id") or "").strip(),
-                            customer_id=str(subscription_record.get("lemonsqueezy_customer_id") or "").strip(),
+                        portal_url = get_creem_customer_portal_url(
+                            subscription_id=str(subscription_record.get("creem_subscription_id") or "").strip(),
+                            customer_id=str(subscription_record.get("creem_customer_id") or "").strip(),
                         )
                         self._send_json({"portal_url": portal_url}, status=HTTPStatus.OK)
                         return
@@ -574,7 +574,7 @@ def _handle_delete(context: ApiRouteContext) -> bool | None:
 
     if segments[:2] == ["admin", "promo-codes"] and len(segments) == 3:
                         admin_user, _ = self._require_admin()
-                        delete_lemonsqueezy_discount(segments[2])
+                        delete_creem_discount(segments[2])
                         application.emit_event(
                             "promo_code_deleted",
                             user_id=admin_user.user_id,

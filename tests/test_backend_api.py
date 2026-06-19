@@ -2895,7 +2895,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(unauthorized_payload["error"]["code"], "forbidden")
 
-    def test_admin_promo_code_endpoints_proxy_to_lemonsqueezy(self):
+    def test_admin_promo_code_endpoints_proxy_to_creem(self):
         list_response = {
             "discounts": [
                 {
@@ -2937,11 +2937,11 @@ class BackendApiTests(unittest.TestCase):
         _, viewer_token = self.app.issue_api_token(user_id=viewer.user_id, name="viewer-test")
 
         with (
-            patch("backend.api.server._configured_paid_plan_variant_ids", return_value=["101", "202"]),
+            patch("backend.api.server._configured_paid_plan_product_ids", return_value=["prod_101", "prod_202"]),
             patch("backend.api.server._configured_paid_plan_labels", return_value="Pro, Business"),
-            patch("backend.api.server.list_lemonsqueezy_discounts", return_value=list_response),
-            patch("backend.api.server.create_lemonsqueezy_discount", return_value=created_discount) as create_mock,
-            patch("backend.api.server.delete_lemonsqueezy_discount") as delete_mock,
+            patch("backend.api.server.list_creem_discounts", return_value=list_response),
+            patch("backend.api.server.create_creem_discount", return_value=created_discount) as create_mock,
+            patch("backend.api.server.delete_creem_discount") as delete_mock,
         ):
             status, list_payload = self._request("GET", "/admin/promo-codes?limit=10&offset=0")
             self.assertEqual(status, 200)
@@ -2973,7 +2973,7 @@ class BackendApiTests(unittest.TestCase):
                 expires_at="2026-06-30T22:00:00+00:00",
                 max_redemptions=0,
                 duration="once",
-                variant_ids=["101", "202"],
+                product_ids=["prod_101", "prod_202"],
             )
 
             status, delete_payload = self._request("DELETE", "/admin/promo-codes/disc_2")
@@ -2996,12 +2996,12 @@ class BackendApiTests(unittest.TestCase):
                 return_value={
                     "display_name": "Pro",
                     "price_eur": 29,
-                    "lemonsqueezy_variant_id": "variant_123",
+                    "creem_product_id": "prod_123",
                     "quotas": {},
                 },
             ),
             patch(
-                "backend.api.server.get_lemonsqueezy_checkout_url",
+                "backend.api.server.get_creem_checkout_url",
                 return_value="https://checkout.example/session_123",
             ) as checkout_mock,
         ):
@@ -3023,8 +3023,13 @@ class BackendApiTests(unittest.TestCase):
         event_rows = self.app.repositories.analytics_store.query_rows(
             "SELECT payload_json FROM analytics_events WHERE event_name = 'checkout_started'"
         )
-        self.assertEqual(len(event_rows), 1)
-        event_payload = json.loads(event_rows[0]["payload_json"])
+        matching_payloads = [
+            item
+            for item in (json.loads(row["payload_json"]) for row in event_rows)
+            if item.get("target_plan_id") == "pro"
+        ]
+        self.assertTrue(matching_payloads)
+        event_payload = matching_payloads[-1]
         self.assertTrue(event_payload["promo_code_present"])
         self.assertNotIn("promo_code", event_payload)
 
@@ -3033,11 +3038,11 @@ class BackendApiTests(unittest.TestCase):
             "backend.api.server.get_plan",
             return_value={
                 "display_name": "Pro",
-                "price_eur": 29,
-                "lemonsqueezy_variant_id": "variant_123",
-                "quotas": {},
-            },
-        ):
+                    "price_eur": 29,
+                    "creem_product_id": "prod_123",
+                    "quotas": {},
+                },
+            ):
             status, payload = self._request(
                 "POST",
                 "/billing/checkout",
@@ -3050,6 +3055,62 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["code"], "bad_request")
         self.assertIn("uppercase letters and numbers", payload["error"]["message"])
+
+    def test_creem_webhook_active_subscription_updates_local_subscription(self):
+        event_payload = {
+            "id": "evt_creem_active_1",
+            "eventType": "subscription.active",
+            "created_at": 1781870400000,
+            "object": {
+                "id": "sub_creem_123",
+                "object": "subscription",
+                "product": {"id": "prod_pro", "name": "Pro"},
+                "customer": {
+                    "id": "cust_creem_123",
+                    "email": self.user.email,
+                },
+                "status": "active",
+                "current_period_start_date": "2026-06-19T12:00:00.000Z",
+                "current_period_end_date": "2026-07-19T12:00:00.000Z",
+                "created_at": "2026-06-19T12:00:00.000Z",
+                "updated_at": "2026-06-19T12:00:00.000Z",
+                "metadata": {
+                    "user_id": self.user.user_id,
+                    "plan_id": "pro",
+                },
+            },
+        }
+
+        with patch("backend.api.server.verify_creem_webhook_signature") as verify_mock:
+            status, _, payload = self._request_with_headers(
+                "POST",
+                "/webhooks/creem",
+                headers={"creem-signature": "test-signature"},
+                payload=event_payload,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["event_type"], "subscription.active")
+        verify_mock.assert_called_once()
+
+        subscription = self.app.repositories.auth_repository.get_current_subscription_by_user_id(self.user.user_id)
+        self.assertEqual(subscription["billing_provider"], "creem")
+        self.assertEqual(subscription["creem_subscription_id"], "sub_creem_123")
+        self.assertEqual(subscription["creem_customer_id"], "cust_creem_123")
+        self.assertEqual(subscription["plan_id"], "pro")
+
+        event_rows = self.app.repositories.analytics_store.query_rows(
+            "SELECT event_name, payload_json FROM analytics_events WHERE event_name = 'subscription_started'"
+        )
+        matching_payloads = [
+            item
+            for item in (json.loads(row["payload_json"]) for row in event_rows)
+            if item.get("creem_subscription_id") == "sub_creem_123"
+        ]
+        self.assertTrue(matching_payloads)
+        event_payload = matching_payloads[-1]
+        self.assertEqual(event_payload["creem_subscription_id"], "sub_creem_123")
 
     def test_referrals_import_endpoint_merges_companies(self):
         status, import_payload = self._request(

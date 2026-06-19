@@ -111,20 +111,30 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Clerk Svix webhook signing secret.",
     },
-    "LEMONSQUEEZY_API_KEY": {
+    "CREEM_API_KEY": {
         "required": True,
         "scope": "backend",
-        "description": "LemonSqueezy API key used for checkout and portal calls.",
+        "description": "Creem API key used for checkout, portal, and discount calls.",
     },
-    "LEMONSQUEEZY_WEBHOOK_SECRET": {
+    "CREEM_WEBHOOK_SECRET": {
         "required": True,
         "scope": "backend",
-        "description": "LemonSqueezy webhook signing secret.",
+        "description": "Creem webhook signing secret.",
     },
-    "LEMONSQUEEZY_STORE_ID": {
-        "required": True,
+    "CREEM_API_BASE_URL": {
+        "required": False,
         "scope": "backend",
-        "description": "LemonSqueezy store identifier for checkout creation.",
+        "description": "Optional Creem API base URL override. Test keys otherwise use https://test-api.creem.io/v1 automatically.",
+    },
+    "CREEM_PRO_PRODUCT_ID": {
+        "required": False,
+        "scope": "backend",
+        "description": "Creem product id for the Pro plan.",
+    },
+    "CREEM_BUSINESS_PRODUCT_ID": {
+        "required": False,
+        "scope": "backend",
+        "description": "Creem product id for the Business plan.",
     },
     "VITE_CLERK_PUBLISHABLE_KEY": {
         "required": True,
