@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { getApiErrorMessage } from "../lib/api";
@@ -28,6 +28,8 @@ function buildFeatureRows(plans) {
 
 export default function PricingPage() {
   const { request, user } = useSession();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const checkoutRefreshStartedRef = useRef(false);
   const [actionState, setActionState] = useState({ loadingPlanId: "", managing: false, error: "" });
   const [promoCode, setPromoCode] = useState("");
   const {
@@ -45,7 +47,26 @@ export default function PricingPage() {
 
   const plans = Array.isArray(plansPayload?.plans) ? plansPayload.plans : [];
   const currentPlanId = String(subscriptionPayload?.plan_id || user?.plan_id || "free").trim() || "free";
+  const checkoutState = String(searchParams.get("checkout") || "").trim();
+  const checkoutPlanId = String(searchParams.get("plan_id") || "").trim();
+  const checkoutPlan = plans.find((plan) => String(plan.plan_id || "").trim() === checkoutPlanId);
+  const currentPlan = plans.find((plan) => String(plan.plan_id || "").trim() === currentPlanId);
+  const currentPlanName = String(currentPlan?.display_name || subscriptionPayload?.plan?.display_name || currentPlanId).trim();
+  const checkoutPlanName = String(checkoutPlan?.display_name || checkoutPlanId || currentPlanName).trim();
+  const showCheckoutSuccess = checkoutState === "success";
   const featureRows = buildFeatureRows(plans);
+
+  useEffect(() => {
+    if (checkoutState !== "success") {
+      checkoutRefreshStartedRef.current = false;
+      return;
+    }
+    if (checkoutRefreshStartedRef.current) {
+      return;
+    }
+    checkoutRefreshStartedRef.current = true;
+    refreshSubscription().catch(() => undefined);
+  }, [checkoutState, refreshSubscription]);
 
   async function handleUpgrade(planId) {
     setActionState({ loadingPlanId: planId, managing: false, error: "" });
@@ -112,6 +133,32 @@ export default function PricingPage() {
         <div className="rounded-2xl border border-error/20 bg-error-container px-5 py-4 text-sm text-on-error-container">
           {combinedError}
         </div>
+      ) : null}
+
+      {showCheckoutSuccess ? (
+        <section className="rounded-[1.5rem] border border-primary/20 bg-primary/10 p-5 text-primary">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="flex gap-3">
+              <span className="material-symbols-outlined text-[24px]">check_circle</span>
+              <div>
+                <h2 className="font-headline text-xl font-bold tracking-tight">Payment successful</h2>
+                <p className="mt-1 text-sm leading-6">
+                  {subscriptionLoading
+                    ? `Confirming your ${checkoutPlanName} subscription...`
+                    : `You are subscribed to ${currentPlanName}.`}
+                </p>
+              </div>
+            </div>
+            <button
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-primary/20 bg-surface-container-lowest px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-surface-container-low"
+              onClick={() => setSearchParams({})}
+              type="button"
+            >
+              <span className="material-symbols-outlined text-[18px]">close</span>
+              Dismiss
+            </button>
+          </div>
+        </section>
       ) : null}
 
       <section className="rounded-[1.5rem] border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">

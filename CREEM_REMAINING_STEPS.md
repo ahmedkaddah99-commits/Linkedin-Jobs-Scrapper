@@ -87,6 +87,7 @@ Copy the webhook signing secret into `CREEM_WEBHOOK_SECRET`.
 After payment, verify:
 
 - The user is redirected back to the app.
+- The pricing page shows a payment-success message with the subscribed plan.
 - `/billing/subscription` shows `billing_provider=creem`.
 - `plan_id` is `pro` or `business`.
 - `creem_customer_id` is present.
@@ -95,6 +96,7 @@ After payment, verify:
 ## 7. Test Portal And Cancellation
 
 - Open the customer billing portal from the app.
+- Confirm Settings shows the subscribed plan and a `Manage billing` button.
 - Confirm the portal loads for the Creem customer.
 - Cancel the test subscription.
 - Confirm webhook handling downgrades the user back to `free`.

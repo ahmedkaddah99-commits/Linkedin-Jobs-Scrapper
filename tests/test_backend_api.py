@@ -3019,6 +3019,9 @@ class BackendApiTests(unittest.TestCase):
             checkout_mock.assert_called_once()
             self.assertEqual(checkout_mock.call_args.kwargs["discount_code"], "SUMMER10")
             self.assertNotIn("promo_code", checkout_mock.call_args.kwargs["custom_data"])
+            self.assertTrue(
+                checkout_mock.call_args.kwargs["redirect_url"].endswith("/pricing?checkout=success&plan_id=pro")
+            )
 
         event_rows = self.app.repositories.analytics_store.query_rows(
             "SELECT payload_json FROM analytics_events WHERE event_name = 'checkout_started'"

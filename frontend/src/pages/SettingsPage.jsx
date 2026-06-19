@@ -999,6 +999,7 @@ export default function SettingsPage() {
   const [saveState, setSaveState] = useState({ message: "", error: "" });
   const [cvUploadState, setCvUploadState] = useState({ uploading: false, message: "", error: "" });
   const [photoUploadState, setPhotoUploadState] = useState({ uploading: false, message: "", error: "" });
+  const [billingPortalState, setBillingPortalState] = useState({ loading: false, error: "" });
   const cvFileInputRef = useRef(null);
   const photoFileInputRef = useRef(null);
 
@@ -1161,12 +1162,30 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleManageBilling() {
+    setBillingPortalState({ loading: true, error: "" });
+    try {
+      const payload = await request("/billing/portal", {
+        method: "POST",
+        body: {},
+      });
+      window.location.assign(payload.portal_url);
+    } catch (requestError) {
+      setBillingPortalState({
+        loading: false,
+        error: requestError.message || "Unable to open billing portal.",
+      });
+    }
+  }
+
   const profile = draft?.profile || {};
   const account = draft?.account || {};
   const hasProfilePhoto = Boolean(String(profile.photo_data_url || profile.avatar_url || "").trim());
   const usageQuotas = subscriptionData?.usage?.quotas || {};
   const currentPlanId = String(subscriptionData?.plan_id || "free").trim() || "free";
   const currentPlanName = String(subscriptionData?.plan?.display_name || "Free").trim() || "Free";
+  const hasBillingPortalAccess =
+    currentPlanId !== "free" || Boolean(String(subscriptionData?.subscription?.creem_customer_id || "").trim());
   const scrapeopsPolicy = subscriptionData?.scrapeops_usage?.policy || {};
 
   return (
@@ -1363,6 +1382,35 @@ export default function SettingsPage() {
                   Refresh
                 </button>
               </div>
+
+              {hasBillingPortalAccess ? (
+                <div className="mt-4 rounded-lg border border-primary/10 bg-primary/10 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-primary">
+                        You are subscribed to {currentPlanName}.
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                        Use the billing portal to manage payment details, invoices, and cancellation.
+                      </p>
+                    </div>
+                    <button
+                      className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={billingPortalState.loading}
+                      onClick={handleManageBilling}
+                      type="button"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">credit_card</span>
+                      {billingPortalState.loading ? "Opening..." : "Manage billing"}
+                    </button>
+                  </div>
+                  {billingPortalState.error ? (
+                    <p className="mt-3 rounded-lg bg-error-container px-3 py-2 text-xs leading-5 text-on-error-container">
+                      {billingPortalState.error}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="mt-5 space-y-4">
                 {usageLoading && !Object.keys(usageQuotas).length ? (

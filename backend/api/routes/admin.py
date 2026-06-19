@@ -424,7 +424,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                                 "source_page": source_page,
                                 "clerk_user_id": context.clerk_user_id,
                             },
-                            redirect_url=f"{self._request_origin()}/pricing",
+                            redirect_url=f"{self._request_origin()}/pricing?checkout=success&plan_id={target_plan_id}",
                         )
                         application.emit_event(
                             "checkout_started",
