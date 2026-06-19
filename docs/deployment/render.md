@@ -45,7 +45,7 @@ VITE_CLERK_PUBLISHABLE_KEY=pk_live_...
 API:
 
 ```dotenv
-BACKEND_ALLOWED_ORIGINS=https://app.example.com
+BACKEND_ALLOWED_ORIGINS=https://runr-frontend.onrender.com,https://app.example.com
 TURSO_DATABASE_URL=libsql://...
 TURSO_AUTH_TOKEN=...
 CLERK_SECRET_KEY=sk_live_...
@@ -87,7 +87,7 @@ For each hostname:
 After DNS works:
 
 1. Set frontend `VITE_API_BASE_URL` to `https://api.example.com/v1` and redeploy the static site.
-2. Set API `BACKEND_ALLOWED_ORIGINS` to `https://app.example.com`.
+2. Set API `BACKEND_ALLOWED_ORIGINS` to include both the Render frontend URL and `https://app.example.com`.
 3. Add the frontend domain to Clerk's allowed origins and redirect URLs.
 4. Configure Clerk and Creem webhook URLs against `https://api.example.com/v1/...`.
 5. Set `TRACKER_GOOGLE_OAUTH_REDIRECT_URI` to the production callback URL if Google integration is enabled.

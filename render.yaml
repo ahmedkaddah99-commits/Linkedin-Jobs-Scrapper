@@ -37,7 +37,7 @@ services:
       - key: RUNR_DATA_DIR
         value: .backend_data
       - key: BACKEND_ALLOWED_ORIGINS
-        sync: false
+        value: https://runr-frontend.onrender.com,https://app.userunr.com
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
