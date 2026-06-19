@@ -265,9 +265,6 @@ def get_checkout_url(
     normalized_email = str(email or "").strip()
     if normalized_email:
         customer["email"] = normalized_email
-    normalized_name = str(name or "").strip()
-    if normalized_name:
-        customer["name"] = normalized_name
     if customer:
         payload["customer"] = customer
     normalized_discount_code = str(discount_code or "").strip()
