@@ -141,6 +141,11 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Creem product id for the Scale plan.",
     },
+    "APP_FRONTEND_ORIGIN": {
+        "required": False,
+        "scope": "backend",
+        "description": "Public frontend origin used for external checkout success redirects, for example https://app.userunr.com.",
+    },
     "VITE_CLERK_PUBLISHABLE_KEY": {
         "required": True,
         "scope": "frontend",

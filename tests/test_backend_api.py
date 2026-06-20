@@ -3059,6 +3059,7 @@ class BackendApiTests(unittest.TestCase):
                 "backend.api.server.get_creem_checkout_url",
                 return_value="https://checkout.example/session_123",
             ) as checkout_mock,
+            patch.dict(os.environ, {"APP_FRONTEND_ORIGIN": "https://app.userunr.com"}),
         ):
             status, payload = self._request(
                 "POST",
@@ -3074,8 +3075,9 @@ class BackendApiTests(unittest.TestCase):
             checkout_mock.assert_called_once()
             self.assertEqual(checkout_mock.call_args.kwargs["discount_code"], "SUMMER10")
             self.assertNotIn("promo_code", checkout_mock.call_args.kwargs["custom_data"])
-            self.assertTrue(
-                checkout_mock.call_args.kwargs["redirect_url"].endswith("/pricing?checkout=success&plan_id=momentum")
+            self.assertEqual(
+                checkout_mock.call_args.kwargs["redirect_url"],
+                "https://app.userunr.com/pricing?checkout=success&plan_id=momentum",
             )
 
         event_rows = self.app.repositories.analytics_store.query_rows(

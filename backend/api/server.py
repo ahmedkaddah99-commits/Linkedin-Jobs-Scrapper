@@ -7715,6 +7715,12 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 host = f"{self.server.server_name}:{self.server.server_port}"
             return f"{proto}://{host}"
 
+        def _frontend_origin(self) -> str:
+            configured_origin = str(os.getenv("APP_FRONTEND_ORIGIN") or os.getenv("FRONTEND_ORIGIN") or "").strip()
+            if configured_origin:
+                return configured_origin.rstrip("/")
+            return self._request_origin()
+
         def _request_api_prefix(self) -> str:
             parsed = urlparse(self.path)
             path = parsed.path or "/"
