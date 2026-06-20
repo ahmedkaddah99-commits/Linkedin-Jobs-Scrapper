@@ -410,7 +410,9 @@ export default function AppShell({ children, muteSidebar = false }) {
   const normalizedPlanId = String(
     clerkUser?.publicMetadata?.plan_id || user?.plan_id || "none",
   ).trim().toLowerCase() || "none";
-  const planBadgeLabel = normalizedPlanId === "scale"
+  const planBadgeLabel = normalizedPlanId === "free"
+    ? "Free"
+    : normalizedPlanId === "scale"
     ? "Scale"
     : normalizedPlanId === "momentum"
       ? "Momentum"
@@ -556,12 +558,14 @@ export default function AppShell({ children, muteSidebar = false }) {
               <>
                 {status === "connected" ? (
                   <button
-                    className="top-ribbon__action hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-bold uppercase tracking-[0.18em] text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface lg:inline-flex"
+                    aria-label={`${planBadgeLabel} plan - view pricing`}
+                    className="top-ribbon__action inline-flex items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low p-2 text-xs font-bold uppercase tracking-[0.18em] text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface sm:px-3 sm:py-1.5"
                     onClick={() => navigate("/pricing")}
+                    title={`${planBadgeLabel} plan - view pricing`}
                     type="button"
                   >
                     <span className="material-symbols-outlined text-[16px]">diamond</span>
-                    {planBadgeLabel}
+                    <span className="hidden sm:inline">{planBadgeLabel}</span>
                   </button>
                 ) : null}
                 <div className="hidden min-w-0 text-right xl:block">
