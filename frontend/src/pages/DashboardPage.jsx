@@ -17,6 +17,7 @@ const REFERRAL_FUNNEL_STAGES = [
   { label: "Replied", color: "#14b8a6" },
   { label: "Referral offered", color: "#22c55e" },
 ];
+const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 
 const EMPTY_OUTCOMES = {
   total: 0,
@@ -865,16 +866,23 @@ function SourceEffectivenessPanel({ sources }) {
 export default function DashboardPage() {
   const { error: sessionError, isConnected, request, status } = useSession();
   const { data, loading, error, refresh } = useApiResource(() => loadDashboardPayload(request), [request]);
+  const hasActiveDashboardWork = Boolean(
+    (data?.recent_runs || []).some((run) => ACTIVE_RUN_STATUSES.includes(String(run.status || "").trim()))
+    || (data?.cards || []).some((card) =>
+      ["Queued Runs", "Running Workers"].includes(String(card?.label || "").trim())
+      && Number(card?.value || 0) > 0
+    ),
+  );
 
   useEffect(() => {
-    if (!isConnected) {
+    if (!isConnected || !hasActiveDashboardWork) {
       return undefined;
     }
     const intervalId = window.setInterval(() => {
       refresh().catch(() => undefined);
     }, 30000);
     return () => window.clearInterval(intervalId);
-  }, [isConnected, refresh]);
+  }, [hasActiveDashboardWork, isConnected, refresh]);
 
   if (!isConnected && !loading) {
     const guidance = status === "error"

@@ -114,6 +114,20 @@ class BackendApiTests(unittest.TestCase):
         )
         self.deepseek_env_patch.start()
         self.addCleanup(self.deepseek_env_patch.stop)
+        self.storage_env_patch = patch.dict(
+            os.environ,
+            {
+                "RUNR_ENV": "development",
+                "DATABASE_BACKEND": "sqlite",
+                "TURSO_DATABASE_URL": "",
+                "TURSO_AUTH_TOKEN": "",
+                "OBJECT_STORAGE_BACKEND": "local",
+                "OBJECT_STORAGE_LOCAL_ROOT": "",
+            },
+            clear=False,
+        )
+        self.storage_env_patch.start()
+        self.addCleanup(self.storage_env_patch.stop)
         self.quota_env_patch = patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": ""}, clear=False)
         self.quota_env_patch.start()
         self.addCleanup(self.quota_env_patch.stop)
@@ -2886,7 +2900,9 @@ class BackendApiTests(unittest.TestCase):
 
         status, payload = self._request("GET", "/health/ready")
         self.assertEqual(status, 200)
-        self.assertEqual(payload, {"status": "ready"})
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["database"]["target_backend"], "sqlite")
+        self.assertEqual(payload["object_storage"]["backend"], "local")
 
     def test_admin_events_endpoint_supports_filters_pagination_and_admin_role(self):
         analytics_store = self.app.repositories.analytics_store

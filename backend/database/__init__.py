@@ -5,6 +5,7 @@ from .connection import (
     DatabaseRow,
     connect_database,
     database_session,
+    database_target_info,
 )
 from .initialization import initialize_database
 from .migrations import (
@@ -25,6 +26,7 @@ __all__ = [
     "MigrationStatus",
     "connect_database",
     "database_session",
+    "database_target_info",
     "get_migration_status",
     "initialize_database",
     "run_migrations",

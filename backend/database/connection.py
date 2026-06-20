@@ -185,22 +185,56 @@ def _remote_database_url() -> str:
     return os.getenv("TURSO_DATABASE_URL", "").strip()
 
 
+def _database_backend() -> str:
+    return os.getenv("DATABASE_BACKEND", "sqlite").strip().lower() or "sqlite"
+
+
+def _runtime_environment() -> str:
+    return os.getenv("RUNR_ENV", "development").strip().lower() or "development"
+
+
+def _remote_database_required() -> bool:
+    return _database_backend() == "turso" or _runtime_environment() in {"prod", "production"}
+
+
 def database_target_key(local_path: str | Path) -> str:
     remote_url = _remote_database_url()
-    if remote_url:
+    if remote_url or _remote_database_required():
         return f"libsql:{remote_url}"
     return f"sqlite:{Path(local_path).expanduser().resolve()}"
+
+
+def database_target_info(local_path: str | Path) -> dict[str, str | bool]:
+    remote_url = _remote_database_url()
+    required_remote = _remote_database_required()
+    target_backend = "libsql" if remote_url or required_remote else "sqlite"
+    payload: dict[str, str | bool] = {
+        "database_backend": _database_backend(),
+        "runtime_environment": _runtime_environment(),
+        "target_backend": target_backend,
+        "remote_required": required_remote,
+        "remote_configured": bool(remote_url),
+    }
+    if target_backend == "sqlite":
+        payload["local_path"] = str(Path(local_path).expanduser().resolve())
+    elif remote_url:
+        payload["remote_url_prefix"] = remote_url.split("://", 1)[0] if "://" in remote_url else "libsql"
+    return payload
 
 
 def connect_database(local_path: str | Path) -> DatabaseConnection:
     """Connect to Turso when configured, otherwise preserve local sqlite3 behavior."""
 
     remote_url = _remote_database_url()
-    if remote_url:
+    if remote_url or _remote_database_required():
+        if not remote_url:
+            raise DatabaseConfigurationError(
+                "TURSO_DATABASE_URL is required when DATABASE_BACKEND=turso or RUNR_ENV=production."
+            )
         auth_token = os.getenv("TURSO_AUTH_TOKEN", "").strip()
         if not auth_token:
             raise DatabaseConfigurationError(
-                "TURSO_AUTH_TOKEN is required when TURSO_DATABASE_URL is configured."
+                "TURSO_AUTH_TOKEN is required when DATABASE_BACKEND=turso or TURSO_DATABASE_URL is configured."
             )
         try:
             libsql = importlib.import_module("libsql")

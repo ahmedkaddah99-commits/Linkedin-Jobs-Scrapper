@@ -11,6 +11,7 @@ from backend.database.connection import (
     DatabaseConfigurationError,
     connect_database,
     database_session,
+    database_target_info,
 )
 
 
@@ -27,7 +28,7 @@ class DatabaseConnectionTests(unittest.TestCase):
         db_path = self._db_path("database_connection_local")
         with patch.dict(
             os.environ,
-            {"TURSO_DATABASE_URL": "", "TURSO_AUTH_TOKEN": ""},
+            {"RUNR_ENV": "development", "DATABASE_BACKEND": "sqlite", "TURSO_DATABASE_URL": "", "TURSO_AUTH_TOKEN": ""},
         ):
             with database_session(db_path) as connection:
                 connection.executescript(
@@ -65,7 +66,7 @@ class DatabaseConnectionTests(unittest.TestCase):
         db_path = self._db_path("database_connection_rollback")
         with patch.dict(
             os.environ,
-            {"TURSO_DATABASE_URL": "", "TURSO_AUTH_TOKEN": ""},
+            {"RUNR_ENV": "development", "DATABASE_BACKEND": "sqlite", "TURSO_DATABASE_URL": "", "TURSO_AUTH_TOKEN": ""},
         ):
             with database_session(db_path) as connection:
                 connection.execute("CREATE TABLE records (record_id INTEGER PRIMARY KEY)")
@@ -92,6 +93,8 @@ class DatabaseConnectionTests(unittest.TestCase):
             patch.dict(
                 os.environ,
                 {
+                    "DATABASE_BACKEND": "turso",
+                    "RUNR_ENV": "development",
                     "TURSO_DATABASE_URL": "libsql://example-database.turso.io",
                     "TURSO_AUTH_TOKEN": "test-token",
                 },
@@ -121,6 +124,7 @@ class DatabaseConnectionTests(unittest.TestCase):
             os.environ,
             {
                 "TURSO_DATABASE_URL": "libsql://example-database.turso.io",
+                "RUNR_ENV": "development",
                 "TURSO_AUTH_TOKEN": "",
             },
         ):
@@ -135,6 +139,7 @@ class DatabaseConnectionTests(unittest.TestCase):
             os.environ,
             {
                 "TURSO_DATABASE_URL": ":memory:",
+                "RUNR_ENV": "development",
                 "TURSO_AUTH_TOKEN": "test-token",
             },
         ):
@@ -158,6 +163,26 @@ class DatabaseConnectionTests(unittest.TestCase):
 
         self.assertEqual(connection.backend, "libsql")
         self.assertEqual(dict(row), {"record_id": 1, "name": "actual-driver"})
+
+    def test_database_backend_turso_requires_remote_url(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DATABASE_BACKEND": "turso",
+                "RUNR_ENV": "development",
+                "TURSO_DATABASE_URL": "",
+                "TURSO_AUTH_TOKEN": "test-token",
+            },
+        ):
+            self.assertEqual(
+                database_target_info(Path("unused.sqlite3"))["target_backend"],
+                "libsql",
+            )
+            with self.assertRaisesRegex(
+                DatabaseConfigurationError,
+                "TURSO_DATABASE_URL",
+            ):
+                connect_database(Path("unused.sqlite3"))
 
 
 if __name__ == "__main__":

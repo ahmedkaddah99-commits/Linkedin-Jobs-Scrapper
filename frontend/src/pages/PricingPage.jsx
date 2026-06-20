@@ -48,6 +48,7 @@ export default function PricingPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [actionState, setActionState] = useState({ loadingPlanId: "", managing: false, error: "" });
   const [checkoutConfirmationState, setCheckoutConfirmationState] = useState("idle");
+  const [checkoutConfirmationError, setCheckoutConfirmationError] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const {
     data: plansPayload,
@@ -67,14 +68,21 @@ export default function PricingPage() {
   const checkoutState = String(searchParams.get("checkout") || "").trim();
   const checkoutPlanId = String(searchParams.get("plan_id") || "").trim();
   const checkoutQueryString = searchParams.toString();
+  const hasSignedCheckoutReturn = checkoutQueryString.includes("signature=");
   const checkoutPlan = plans.find((plan) => String(plan.plan_id || "").trim() === checkoutPlanId);
   const currentPlan = plans.find((plan) => String(plan.plan_id || "").trim() === currentPlanId);
   const currentPlanName = String(currentPlan?.display_name || subscriptionPayload?.plan?.display_name || currentPlanId).trim();
   const checkoutPlanName = String(checkoutPlan?.display_name || checkoutPlanId || currentPlanName).trim();
   const showCheckoutSuccess = checkoutState === "success";
   const checkoutConfirmed = showCheckoutSuccess && checkoutPlanId && currentPlanId === checkoutPlanId;
+  const checkoutSynced = checkoutConfirmed || checkoutConfirmationState === "confirmed";
   const subscriptionDetails = subscriptionPayload?.subscription || {};
   const subscriptionStatus = String(subscriptionDetails.status || (currentPlanId === "none" ? "inactive" : "active")).trim();
+  const displayedSubscriptionStatus = checkoutSynced
+    ? subscriptionStatus
+    : hasSignedCheckoutReturn
+      ? "confirming"
+      : "sync pending";
   const usageQuotas = subscriptionPayload?.usage?.quotas || {};
   const usageSummaryRows = [
     "runner_credits_per_month",
@@ -91,6 +99,7 @@ export default function PricingPage() {
   useEffect(() => {
     if (!showCheckoutSuccess) {
       setCheckoutConfirmationState("idle");
+      setCheckoutConfirmationError("");
       return;
     }
     let cancelled = false;
@@ -99,14 +108,24 @@ export default function PricingPage() {
     });
 
     async function confirmCheckout() {
-      setCheckoutConfirmationState("confirming");
-      if (checkoutQueryString.includes("signature=")) {
-        await request("/billing/checkout/confirm", {
-          method: "POST",
-          body: { query_string: checkoutQueryString },
-        }).catch(() => undefined);
+      setCheckoutConfirmationError("");
+      setCheckoutConfirmationState(hasSignedCheckoutReturn ? "confirming" : "awaiting_webhook");
+      if (hasSignedCheckoutReturn) {
+        try {
+          await request("/billing/checkout/confirm", {
+            method: "POST",
+            body: { query_string: checkoutQueryString },
+          });
+        } catch (requestError) {
+          if (!cancelled) {
+            setCheckoutConfirmationError(
+              getApiErrorMessage(requestError, "Runr could not confirm the checkout return yet."),
+            );
+            setCheckoutConfirmationState("awaiting_webhook");
+          }
+        }
       }
-      for (let attempt = 0; attempt < 12; attempt += 1) {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
         const payload = await refreshSubscription().catch(() => null);
         const nextPlanId = String(payload?.plan_id || "").trim();
         if (checkoutPlanId && nextPlanId === checkoutPlanId) {
@@ -116,7 +135,7 @@ export default function PricingPage() {
           }
           return;
         }
-        await wait(2500);
+        await wait(2000);
       }
       if (!cancelled) {
         setCheckoutConfirmationState("awaiting_webhook");
@@ -130,6 +149,7 @@ export default function PricingPage() {
   }, [
     checkoutPlanId,
     checkoutQueryString,
+    hasSignedCheckoutReturn,
     refreshSession,
     refreshSubscription,
     request,
@@ -174,6 +194,13 @@ export default function PricingPage() {
     }
   }
 
+  async function handleRefreshBilling() {
+    await Promise.all([
+      refreshSubscription().catch(() => undefined),
+      refreshSession().catch(() => undefined),
+    ]);
+  }
+
   const isLoading = plansLoading || subscriptionLoading;
   const combinedError = actionState.error || plansError || subscriptionError;
 
@@ -214,38 +241,55 @@ export default function PricingPage() {
                   {checkoutConfirmed || checkoutConfirmationState === "confirmed"
                     ? `You are subscribed to ${checkoutPlanName}.`
                     : checkoutConfirmationState === "awaiting_webhook"
-                      ? `Payment received. Waiting for Creem to sync your ${checkoutPlanName} subscription.`
+                      ? `Payment received. Waiting for billing sync for ${checkoutPlanName}.`
                       : subscriptionLoading
                     ? `Confirming your ${checkoutPlanName} subscription...`
                     : `Payment received. Confirming your ${checkoutPlanName} subscription...`}
                 </p>
+                {checkoutConfirmationError ? (
+                  <p className="mt-1 text-xs leading-5 text-primary/80">{checkoutConfirmationError}</p>
+                ) : null}
               </div>
             </div>
-            <button
-              className="inline-flex items-center justify-center gap-2 rounded-full border border-primary/20 bg-surface-container-lowest px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-surface-container-low"
-              onClick={() => setSearchParams({})}
-              type="button"
-            >
-              <span className="material-symbols-outlined text-[18px]">close</span>
-              Dismiss
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-primary/20 bg-surface-container-lowest px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-surface-container-low"
+                onClick={handleRefreshBilling}
+                type="button"
+              >
+                <span className="material-symbols-outlined text-[18px]">refresh</span>
+                Refresh
+              </button>
+              <button
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-primary/20 bg-surface-container-lowest px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-surface-container-low"
+                onClick={() => setSearchParams({})}
+                type="button"
+              >
+                <span className="material-symbols-outlined text-[18px]">close</span>
+                Dismiss
+              </button>
+            </div>
           </div>
           <div className="mt-5 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Plan</p>
-              <p className="mt-2 font-headline text-lg font-bold text-on-surface">{checkoutConfirmed ? currentPlanName : checkoutPlanName}</p>
+              <p className="mt-2 font-headline text-lg font-bold text-on-surface">{checkoutSynced ? currentPlanName : checkoutPlanName}</p>
             </div>
             <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Status</p>
-              <p className="mt-2 font-semibold capitalize text-on-surface">{subscriptionStatus.replace("_", " ")}</p>
+              <p className="mt-2 font-semibold capitalize text-on-surface">{displayedSubscriptionStatus.replace("_", " ")}</p>
             </div>
             <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Period start</p>
-              <p className="mt-2 font-semibold text-on-surface">{formatDateTime(subscriptionDetails.current_period_start)}</p>
+              <p className="mt-2 font-semibold text-on-surface">
+                {checkoutSynced ? formatDateTime(subscriptionDetails.current_period_start) : "Sync pending"}
+              </p>
             </div>
             <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Renews / ends</p>
-              <p className="mt-2 font-semibold text-on-surface">{formatDateTime(subscriptionDetails.current_period_end)}</p>
+              <p className="mt-2 font-semibold text-on-surface">
+                {checkoutSynced ? formatDateTime(subscriptionDetails.current_period_end) : "Sync pending"}
+              </p>
             </div>
           </div>
           <div className="mt-3 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
@@ -253,7 +297,7 @@ export default function PricingPage() {
               <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4" key={quotaType}>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">{label}</p>
                 <p className="mt-2 font-semibold text-on-surface">
-                  {Number(quota.used || 0)} / {formatUsageLimit(quota.limit)}
+                  {checkoutSynced ? `${Number(quota.used || 0)} / ${formatUsageLimit(quota.limit)}` : "Sync pending"}
                 </p>
               </div>
             ))}

@@ -3,12 +3,26 @@ import { useSession } from "../context/SessionContext";
 
 export function useApiResource(loader, deps = [], { immediate = true } = {}) {
   const { isConnected } = useSession();
-  const [data, setData] = useState(null);
+  const [data, setDataState] = useState(null);
   const [loading, setLoading] = useState(Boolean(immediate));
   const [error, setError] = useState("");
+  const dataRef = useRef(null);
+  const loaderRef = useRef(loader);
   const requestCounterRef = useRef(0);
 
-  const refresh = useCallback(async () => {
+  useEffect(() => {
+    loaderRef.current = loader;
+  }, [loader]);
+
+  const setData = useCallback((nextData) => {
+    setDataState((currentData) => {
+      const resolvedData = typeof nextData === "function" ? nextData(currentData) : nextData;
+      dataRef.current = resolvedData;
+      return resolvedData;
+    });
+  }, []);
+
+  const refresh = useCallback(async ({ showLoading } = {}) => {
     const requestId = requestCounterRef.current + 1;
     requestCounterRef.current = requestId;
 
@@ -17,10 +31,13 @@ export function useApiResource(loader, deps = [], { immediate = true } = {}) {
       return null;
     }
 
-    setLoading(true);
+    const shouldShowLoading = showLoading ?? dataRef.current === null;
+    if (shouldShowLoading) {
+      setLoading(true);
+    }
     setError("");
     try {
-      const payload = await loader();
+      const payload = await loaderRef.current();
       if (requestCounterRef.current === requestId) {
         setData(payload);
       }
@@ -35,14 +52,14 @@ export function useApiResource(loader, deps = [], { immediate = true } = {}) {
         setLoading(false);
       }
     }
-  }, [isConnected, loader]);
+  }, [isConnected, setData]);
 
   useEffect(() => {
     if (!immediate || !isConnected) {
       setLoading(false);
       return;
     }
-    refresh().catch(() => undefined);
+    refresh({ showLoading: true }).catch(() => undefined);
     // Intentionally use the caller-provided deps instead of `refresh` directly.
     // `loader` is often an inline callback, and depending on it here would
     // create a request loop that keeps pages stuck in loading state.
