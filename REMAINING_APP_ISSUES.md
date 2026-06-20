@@ -12,13 +12,13 @@ Use this file as the main source of truth for Runr app issues, including open is
 - [Resolved Issues](#resolved-issues)
   - [Resolved Issue: Reset Error / Tool Keeps Refreshing](#resolved-issue-reset-error--tool-keeps-refreshing)
   - [Resolved Issue: Dashboard Takes 25-30 Seconds to Load](#resolved-issue-dashboard-takes-25-30-seconds-to-load)
-  - [Resolved Issue: Application Tracker Takes Too Long to Load](#resolved-issue-application-tracker-takes-too-long-to-load)
-  - [Resolved Issue: ATS QA Testing Is Unclear and May Not Guarantee ATS Passing](#resolved-issue-ats-qa-testing-is-unclear-and-may-not-guarantee-ats-passing)
-  - [Resolved Issue: Missing Workspace QA Checklist](#resolved-issue-missing-workspace-qa-checklist)
-  - [Resolved Issue: Runs QA Checklist Needed for Filtering Quality](#resolved-issue-runs-qa-checklist-needed-for-filtering-quality)
   - [Resolved Issue: Quick Apply Requires a Configured Workspace](#resolved-issue-quick-apply-requires-a-configured-workspace)
   - [Resolved Issue: System-Created Workspaces Should Not Appear as User Workspaces](#resolved-issue-system-created-workspaces-should-not-appear-as-user-workspaces)
   - [Resolved Issue: Missing Workspace Delete Button](#resolved-issue-missing-workspace-delete-button)
+  - [Resolved Issue: Missing Workspace QA Checklist](#resolved-issue-missing-workspace-qa-checklist)
+  - [Resolved Issue: Runs QA Checklist Needed for Filtering Quality](#resolved-issue-runs-qa-checklist-needed-for-filtering-quality)
+  - [Resolved Issue: ATS QA Testing Is Unclear and May Not Guarantee ATS Passing](#resolved-issue-ats-qa-testing-is-unclear-and-may-not-guarantee-ats-passing)
+  - [Resolved Issue: Application Tracker Takes Too Long to Load](#resolved-issue-application-tracker-takes-too-long-to-load)
 - [Issues Not Yet Resolved](#issues-not-yet-resolved)
 
 ## Templates
@@ -28,6 +28,8 @@ Use this file as the main source of truth for Runr app issues, including open is
 Copy the rendered block below when adding a new issue or moving an issue to resolved.
 
 Standard rule for all new issues: add a `[Go up](#table-of-contents)` link directly below every new section heading and issue heading.
+
+Standard sorting rule: keep issues ordered from smallest to largest by original issue number within each issue section.
 
 ---
 
@@ -215,172 +217,6 @@ Deploy to Render and measure real production `/dashboard` response time separate
 
 ---
 
-#### Resolved Issue: Application Tracker Takes Too Long to Load
-
-[Go up](#table-of-contents)
-
-**Original issue:** Issue #9
-
-**Status:** Resolved
-
-**Priority at time of fix:** High
-
-**Area:** Frontend / Tracker / Gmail Sync
-
-**Environment fixed in:** Local frontend build; ready for Render deployment
-
-**Resolved date:** 2026-06-20
-
-**Resolved by:** Codex local changes
-
-**What was broken:**
-
-Opening the tracker automatically called `/tracker/email-integration/sync` whenever Gmail was connected. That slow inbox sync blocked the initial tracker loader, so the route could look stuck for up to about a minute.
-
-**How it was resolved:**
-
-The tracker initial load now fetches only `/tracker` and `/tracker/email-integration`. Gmail sync remains available through the explicit `Sync Inbox` button, and the inbox copy was updated to match that behavior.
-
-**Verification:**
-
-1. Ran `node --test frontend/src/hooks/useTracker.test.js`; verified the tracker shell loader does not call `/tracker/email-integration/sync`.
-2. Ran `npm --prefix frontend run check`; ESLint and production Vite build passed.
-3. Reviewed `frontend/src/hooks/useTracker.js` and `frontend/src/lib/trackerLoading.js` to confirm route entry loads tracker shell data only.
-
-**Screenshots / evidence:**
-
-No screenshot captured locally.
-
-**Remaining follow-up:**
-
-Deploy to Render and measure the production `/tracker` load separately from explicit inbox sync duration.
-
----
-
-#### Resolved Issue: ATS QA Testing Is Unclear and May Not Guarantee ATS Passing
-
-[Go up](#table-of-contents)
-
-**Original issue:** Issue #8
-
-**Status:** Resolved
-
-**Priority at time of fix:** High
-
-**Area:** Career Assets / ATS / QA
-
-**Environment fixed in:** Local backend and frontend checks; ready for deployment
-
-**Resolved date:** 2026-06-20
-
-**Resolved by:** Codex local changes
-
-**What was broken:**
-
-The ATS generation loop already blocked final CV export when the best score stayed below the 90% target, but the tracker only showed a high-level badge, score, and pass count. Users could see that 3 passes ran without understanding whether ATS passed or failed, why the score stayed below target, or what changed between passes.
-
-**How it was resolved:**
-
-ATS attempt history now records a section-level change summary for each scored pass, including the initial draft and later summary, skills, experience, or education changes. The tracker ATS card now shows pass/fail state, best score versus target, pass count, stop reason, missing requirements, warning text, and an expandable pass audit. The wording now states that 3 ATS passes are a capped optimization effort, not a guarantee of passing.
-
-**Verification:**
-
-1. Ran `python -m unittest tests.test_tailored_document_generation.TailoredDocumentGenerationTests.test_generate_docs_for_job_stops_when_score_stalls_and_keeps_best_attempt tests.test_tailored_document_generation.TailoredDocumentGenerationTests.test_generate_docs_for_job_blocks_after_third_scored_attempt`; both ATS audit metadata checks passed.
-2. Ran `npm run check --prefix frontend`; ESLint and production Vite build passed.
-3. Reviewed `frontend/src/pages/TrackerPage.jsx` to confirm tracker ATS results now explain pass/fail, score reached, pass audit details, and why 3 passes can still fail.
-
-**Screenshots / evidence:**
-
-No screenshot captured locally.
-
-**Remaining follow-up:**
-
-Deploy and verify the tracker card against a real generated CV whose best ATS score remains below 90%.
-
----
-
-#### Resolved Issue: Missing Workspace QA Checklist
-
-[Go up](#table-of-contents)
-
-**Original issue:** Issue #6
-
-**Status:** Resolved
-
-**Priority at time of fix:** Medium
-
-**Area:** Frontend / QA / Product Validation
-
-**Environment fixed in:** Local frontend build; ready for Render deployment
-
-**Resolved date:** 2026-06-20
-
-**Resolved by:** Codex local changes
-
-**What was broken:**
-
-The workspace detail screen had settings, actions, schedule controls, and documents, but no explicit QA checklist for validating whether a workspace produces good results.
-
-**How it was resolved:**
-
-The focused workspace view now shows a small `Workspace QA Checklist` panel. It covers targeting effectiveness, job source scraping effectiveness, automation option accuracy, and automation effectiveness, using saved workspace settings and existing Test Run flow as the evidence path.
-
-**Verification:**
-
-1. Ran `npm --prefix frontend run check`; ESLint and production Vite build passed.
-2. Reviewed `frontend/src/pages/WorkspacesPage.jsx` to confirm the checklist is visible on the focused workspace screen.
-3. Confirmed the checklist uses existing workspace data and Test Run review flow rather than adding a broad QA system.
-
-**Screenshots / evidence:**
-
-No screenshot captured locally.
-
-**Remaining follow-up:**
-
-Deploy to Render and have QA validate a real workspace by opening Workspaces, selecting a workspace, running Test Run, and comparing the run review against the checklist.
-
----
-
-#### Resolved Issue: Runs QA Checklist Needed for Filtering Quality
-
-[Go up](#table-of-contents)
-
-**Original issue:** Issue #7
-
-**Status:** Resolved
-
-**Priority at time of fix:** High
-
-**Area:** Frontend / Backend / Runs / QA / Data Quality
-
-**Environment fixed in:** Local frontend build and backend unit checks; ready for Render deployment
-
-**Resolved date:** 2026-06-20
-
-**Resolved by:** Codex local changes
-
-**What was broken:**
-
-The run review page showed included and excluded jobs, but did not provide an explicit QA checklist for confirming that suitable jobs were kept, unsuitable jobs were rejected, and rejection reasons matched the real blocker. Customer-facing language reason extraction could also pick the wrong language when a note mentioned both German and French.
-
-**How it was resolved:**
-
-The run detail page now shows a `Filtering QA Checklist` above included/excluded jobs, including suitable-job review, unsuitable-job review, rejection reason coverage, and a dedicated language rejection audit. Backend customer language extraction now chooses the earliest actual language mention in the reason text, preventing a German requirement from being mislabeled as French when both words appear in a note.
-
-**Verification:**
-
-1. Ran `npm --prefix frontend run check`; ESLint and production Vite build passed.
-2. Ran `node scripts/run-python.cjs -m pytest -q tests/test_backend_api.py::BackendApiTests::test_run_customer_view_uses_first_language_mention_in_rejection_reason`; passed.
-3. Ran `node scripts/run-python.cjs -m pytest -q tests/test_tailored_document_generation.py -k language_rules`; passed.
-
-**Screenshots / evidence:**
-
-No screenshot captured locally.
-
-**Remaining follow-up:**
-
-Deploy to Render and have QA inspect a completed run with language rejections to compare the job posting text against the displayed German/French rejection reason.
-
 #### Resolved Issue: Quick Apply Requires a Configured Workspace
 
 [Go up](#table-of-contents)
@@ -500,6 +336,174 @@ Not captured.
 **Remaining follow-up:**
 
 Verify the button placement visually in deployed UI after release.
+
+---
+
+#### Resolved Issue: Missing Workspace QA Checklist
+
+[Go up](#table-of-contents)
+
+**Original issue:** Issue #6
+
+**Status:** Resolved
+
+**Priority at time of fix:** Medium
+
+**Area:** Frontend / QA / Product Validation
+
+**Environment fixed in:** Local frontend build; ready for Render deployment
+
+**Resolved date:** 2026-06-20
+
+**Resolved by:** Codex local changes
+
+**What was broken:**
+
+The workspace detail screen had settings, actions, schedule controls, and documents, but no explicit QA checklist for validating whether a workspace produces good results.
+
+**How it was resolved:**
+
+The focused workspace view now shows a small `Workspace QA Checklist` panel. It covers targeting effectiveness, job source scraping effectiveness, automation option accuracy, and automation effectiveness, using saved workspace settings and existing Test Run flow as the evidence path.
+
+**Verification:**
+
+1. Ran `npm --prefix frontend run check`; ESLint and production Vite build passed.
+2. Reviewed `frontend/src/pages/WorkspacesPage.jsx` to confirm the checklist is visible on the focused workspace screen.
+3. Confirmed the checklist uses existing workspace data and Test Run review flow rather than adding a broad QA system.
+
+**Screenshots / evidence:**
+
+No screenshot captured locally.
+
+**Remaining follow-up:**
+
+Deploy to Render and have QA validate a real workspace by opening Workspaces, selecting a workspace, running Test Run, and comparing the run review against the checklist.
+
+---
+
+#### Resolved Issue: Runs QA Checklist Needed for Filtering Quality
+
+[Go up](#table-of-contents)
+
+**Original issue:** Issue #7
+
+**Status:** Resolved
+
+**Priority at time of fix:** High
+
+**Area:** Frontend / Backend / Runs / QA / Data Quality
+
+**Environment fixed in:** Local frontend build and backend unit checks; ready for Render deployment
+
+**Resolved date:** 2026-06-20
+
+**Resolved by:** Codex local changes
+
+**What was broken:**
+
+The run review page showed included and excluded jobs, but did not provide an explicit QA checklist for confirming that suitable jobs were kept, unsuitable jobs were rejected, and rejection reasons matched the real blocker. Customer-facing language reason extraction could also pick the wrong language when a note mentioned both German and French.
+
+**How it was resolved:**
+
+The run detail page now shows a `Filtering QA Checklist` above included/excluded jobs, including suitable-job review, unsuitable-job review, rejection reason coverage, and a dedicated language rejection audit. Backend customer language extraction now chooses the earliest actual language mention in the reason text, preventing a German requirement from being mislabeled as French when both words appear in a note.
+
+**Verification:**
+
+1. Ran `npm --prefix frontend run check`; ESLint and production Vite build passed.
+2. Ran `node scripts/run-python.cjs -m pytest -q tests/test_backend_api.py::BackendApiTests::test_run_customer_view_uses_first_language_mention_in_rejection_reason`; passed.
+3. Ran `node scripts/run-python.cjs -m pytest -q tests/test_tailored_document_generation.py -k language_rules`; passed.
+
+**Screenshots / evidence:**
+
+No screenshot captured locally.
+
+**Remaining follow-up:**
+
+Deploy to Render and have QA inspect a completed run with language rejections to compare the job posting text against the displayed German/French rejection reason.
+
+---
+
+#### Resolved Issue: ATS QA Testing Is Unclear and May Not Guarantee ATS Passing
+
+[Go up](#table-of-contents)
+
+**Original issue:** Issue #8
+
+**Status:** Resolved
+
+**Priority at time of fix:** High
+
+**Area:** Career Assets / ATS / QA
+
+**Environment fixed in:** Local backend and frontend checks; ready for deployment
+
+**Resolved date:** 2026-06-20
+
+**Resolved by:** Codex local changes
+
+**What was broken:**
+
+The ATS generation loop already blocked final CV export when the best score stayed below the 90% target, but the tracker only showed a high-level badge, score, and pass count. Users could see that 3 passes ran without understanding whether ATS passed or failed, why the score stayed below target, or what changed between passes.
+
+**How it was resolved:**
+
+ATS attempt history now records a section-level change summary for each scored pass, including the initial draft and later summary, skills, experience, or education changes. The tracker ATS card now shows pass/fail state, best score versus target, pass count, stop reason, missing requirements, warning text, and an expandable pass audit. The wording now states that 3 ATS passes are a capped optimization effort, not a guarantee of passing.
+
+**Verification:**
+
+1. Ran `python -m unittest tests.test_tailored_document_generation.TailoredDocumentGenerationTests.test_generate_docs_for_job_stops_when_score_stalls_and_keeps_best_attempt tests.test_tailored_document_generation.TailoredDocumentGenerationTests.test_generate_docs_for_job_blocks_after_third_scored_attempt`; both ATS audit metadata checks passed.
+2. Ran `npm run check --prefix frontend`; ESLint and production Vite build passed.
+3. Reviewed `frontend/src/pages/TrackerPage.jsx` to confirm tracker ATS results now explain pass/fail, score reached, pass audit details, and why 3 passes can still fail.
+
+**Screenshots / evidence:**
+
+No screenshot captured locally.
+
+**Remaining follow-up:**
+
+Deploy and verify the tracker card against a real generated CV whose best ATS score remains below 90%.
+
+---
+
+#### Resolved Issue: Application Tracker Takes Too Long to Load
+
+[Go up](#table-of-contents)
+
+**Original issue:** Issue #9
+
+**Status:** Resolved
+
+**Priority at time of fix:** High
+
+**Area:** Frontend / Tracker / Gmail Sync
+
+**Environment fixed in:** Local frontend build; ready for Render deployment
+
+**Resolved date:** 2026-06-20
+
+**Resolved by:** Codex local changes
+
+**What was broken:**
+
+Opening the tracker automatically called `/tracker/email-integration/sync` whenever Gmail was connected. That slow inbox sync blocked the initial tracker loader, so the route could look stuck for up to about a minute.
+
+**How it was resolved:**
+
+The tracker initial load now fetches only `/tracker` and `/tracker/email-integration`. Gmail sync remains available through the explicit `Sync Inbox` button, and the inbox copy was updated to match that behavior.
+
+**Verification:**
+
+1. Ran `node --test frontend/src/hooks/useTracker.test.js`; verified the tracker shell loader does not call `/tracker/email-integration/sync`.
+2. Ran `npm --prefix frontend run check`; ESLint and production Vite build passed.
+3. Reviewed `frontend/src/hooks/useTracker.js` and `frontend/src/lib/trackerLoading.js` to confirm route entry loads tracker shell data only.
+
+**Screenshots / evidence:**
+
+No screenshot captured locally.
+
+**Remaining follow-up:**
+
+Deploy to Render and measure the production `/tracker` load separately from explicit inbox sync duration.
 
 ---
 
