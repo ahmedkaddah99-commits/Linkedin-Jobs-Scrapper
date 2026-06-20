@@ -69,9 +69,21 @@ const navItems = [
       { path: "/settings", end: false },
     ],
   },
+  {
+    label: "Pricing",
+    icon: "diamond",
+    to: "/pricing",
+    matchers: [{ path: "/pricing", end: false }],
+  },
 ];
 
 const secondaryTopRibbonItems = [
+  {
+    label: "Pricing",
+    icon: "diamond",
+    to: "/pricing",
+    matchers: [{ path: "/pricing", end: false }],
+  },
   { label: "Support", icon: "contact_support" },
   { label: "Documentation", icon: "menu_book" },
   {
