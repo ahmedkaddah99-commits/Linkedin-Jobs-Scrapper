@@ -1,16 +1,5 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
-import {
-  Bar,
-  BarChart,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 
@@ -89,10 +78,6 @@ function formatPercent(ratio, digits = 0) {
     maximumFractionDigits: digits,
     minimumFractionDigits: digits,
   }).format(Number.isFinite(ratio) ? ratio : 0);
-}
-
-function formatChartTooltipValue(value) {
-  return formatNumber(value);
 }
 
 function findValueByLabel(items, label) {
@@ -199,27 +184,42 @@ function actionAccentClass(priority) {
   return "text-primary";
 }
 
+function hasWeeklyActivity(weeklySummary) {
+  const keys = ["applications", "responses", "interviews", "offers", "referralUpdates"];
+  const current = weeklySummary?.current || {};
+  const previous = weeklySummary?.previous || {};
+  return keys.some((key) => getNumericValue(current[key]) > 0 || getNumericValue(previous[key]) > 0);
+}
+
+function hasDataQualityIssues(dataQuality) {
+  return getNumericValue(dataQuality?.issueCount) > 0;
+}
+
+function hasActionableAging(stages) {
+  return Array.isArray(stages)
+    && stages.some((stage) => getNumericValue(stage?.count) > 0 || getNumericValue(stage?.staleCount) > 0);
+}
+
+function meaningfulSources(sources) {
+  return Array.isArray(sources)
+    ? sources.filter((source) => (
+      getNumericValue(source?.applied)
+      + getNumericValue(source?.responses)
+      + getNumericValue(source?.interviews)
+      + getNumericValue(source?.offers)
+    ) > 0)
+    : [];
+}
+
 function buildUserDashboardModel(payload) {
   const outcomes = normalizeOutcomes(payload?.analytics?.outcomes || EMPTY_OUTCOMES);
   const referrals = normalizeReferrals(payload?.analytics?.referrals || EMPTY_REFERRALS);
   const insights = normalizeCandidateInsights(payload?.analytics?.candidateInsights);
 
-  const applied = findValueByLabel(outcomes.segments, "Applied");
   const interviewing = findValueByLabel(outcomes.segments, "Interviewing");
-  const offers = findValueByLabel(outcomes.segments, "Offer");
-  const rejected = findValueByLabel(outcomes.segments, "Rejected");
-  const withdrawn = findValueByLabel(outcomes.segments, "Withdrawn");
   const waitingReviewCount = findValueByLabel(payload?.cards, "Jobs Waiting Review");
 
   const notContacted = findValueByLabel(referrals.outreachFunnel, "Not contacted");
-  const contacted = findValueByLabel(referrals.outreachFunnel, "Contacted");
-  const replied = findValueByLabel(referrals.outreachFunnel, "Replied");
-  const referralOffered = findValueByLabel(referrals.outreachFunnel, "Referral offered");
-
-  const knownApplications = outcomes.total;
-  const activeApplications = applied + interviewing + offers;
-  const heardBackCount = interviewing + offers + rejected;
-  const heardBackRate = knownApplications ? heardBackCount / knownApplications : 0;
 
   const fallbackFocusItems = [
     {
@@ -278,25 +278,6 @@ function buildUserDashboardModel(payload) {
   return {
     focusItems,
     insights,
-    outcomes,
-    referrals,
-    summary: {
-      waitingReviewCount,
-      trackedApplications: outcomes.trackerTotal || outcomes.total + outcomes.unknown,
-      submittedApplications: outcomes.submittedTotal || outcomes.total,
-      activeApplications,
-      interviewing,
-      offers,
-      rejected,
-      withdrawn,
-      unknownApplications: outcomes.unknown,
-      heardBackCount,
-      heardBackRate,
-      notContacted,
-      contacted,
-      replied,
-      referralOffered,
-    },
   };
 }
 
@@ -326,16 +307,6 @@ function PanelHeader({ eyebrow, title, description, action }) {
   );
 }
 
-function MetricTile({ label, value, detail, accentClass = "text-on-surface" }) {
-  return (
-    <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{label}</p>
-      <p className={["mt-3 text-3xl font-black tracking-tight", accentClass].join(" ")}>{value}</p>
-      <p className="mt-2 text-sm text-on-surface-variant">{detail}</p>
-    </div>
-  );
-}
-
 function EmptyChartState({ message }) {
   return (
     <div className="flex h-full min-h-48 items-center justify-center rounded-[1.35rem] border border-dashed border-outline-variant/20 bg-surface text-sm text-on-surface-variant">
@@ -355,12 +326,6 @@ function DashboardSkeleton() {
         <SkeletonBlock className="h-5 w-40 bg-white/10" />
         <SkeletonBlock className="mt-4 h-12 w-72 bg-white/10" />
         <SkeletonBlock className="mt-4 h-5 w-full max-w-2xl bg-white/10" />
-        <div className="mt-8 grid gap-4 md:grid-cols-4">
-          <SkeletonBlock className="h-28 bg-white/10" />
-          <SkeletonBlock className="h-28 bg-white/10" />
-          <SkeletonBlock className="h-28 bg-white/10" />
-          <SkeletonBlock className="h-28 bg-white/10" />
-        </div>
       </section>
 
       <DashboardPanel>
@@ -387,15 +352,6 @@ function DashboardSkeleton() {
         </DashboardPanel>
         <DashboardPanel>
           <SkeletonBlock className="h-96" />
-        </DashboardPanel>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-2">
-        <DashboardPanel>
-          <SkeletonBlock className="h-80" />
-        </DashboardPanel>
-        <DashboardPanel>
-          <SkeletonBlock className="h-80" />
         </DashboardPanel>
       </div>
     </div>
@@ -427,7 +383,7 @@ function DashboardError({ error, onRetry }) {
   );
 }
 
-function DashboardHeader({ model, onRefresh, refreshing }) {
+function DashboardHeader({ onRefresh, refreshing }) {
   return (
     <section className="relative overflow-hidden rounded-[2rem] bg-slate-950 px-6 py-8 text-white shadow-[0_28px_80px_rgba(15,23,42,0.28)] sm:px-8">
       <div
@@ -456,8 +412,8 @@ function DashboardHeader({ model, onRefresh, refreshing }) {
               Dashboard
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-white/72 sm:text-lg">
-              See what needs attention across applications, pending reviews, and referral outreach
-              without the internal run telemetry.
+              See what needs attention today, what is stuck, and which sources are actually moving
+              the search forward.
             </p>
           </div>
 
@@ -479,47 +435,6 @@ function DashboardHeader({ model, onRefresh, refreshing }) {
           </div>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Submitted Applications</p>
-            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-              {formatNumber(model.summary.submittedApplications)}
-            </p>
-            <p className="mt-2 text-sm text-white/68">
-              {formatNumber(model.summary.trackedApplications)} total tracker items
-            </p>
-          </div>
-
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Jobs To Review</p>
-            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-              {formatNumber(model.summary.waitingReviewCount)}
-            </p>
-            <p className="mt-2 text-sm text-white/68">
-              Waiting in runs for your decision
-            </p>
-          </div>
-
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Interviews</p>
-            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-              {formatNumber(model.summary.interviewing)}
-            </p>
-            <p className="mt-2 text-sm text-white/68">
-              {formatNumber(model.summary.heardBackCount)} employer responses tracked
-            </p>
-          </div>
-
-          <div className="rounded-[1.5rem] border border-white/10 bg-white/8 p-5 backdrop-blur-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/60">People To Contact</p>
-            <p className="mt-3 text-4xl font-black tracking-[-0.05em] text-white">
-              {formatNumber(model.summary.notContacted)}
-            </p>
-            <p className="mt-2 text-sm text-white/68">
-              {formatNumber(model.summary.referralOffered)} referral offers so far
-            </p>
-          </div>
-        </div>
       </div>
     </section>
   );
@@ -641,7 +556,7 @@ function weeklyDelta(current, previous) {
   return { label: "No change vs prior week", className: "text-on-surface-variant" };
 }
 
-function WeeklySummaryPanel({ weeklySummary, dataQuality }) {
+function WeeklySummaryPanel({ weeklySummary }) {
   const current = weeklySummary?.current || {};
   const previous = weeklySummary?.previous || {};
   const metrics = [
@@ -649,7 +564,9 @@ function WeeklySummaryPanel({ weeklySummary, dataQuality }) {
     { key: "responses", label: "Responses", icon: "mark_email_read" },
     { key: "interviews", label: "Interviews", icon: "calendar_month" },
     { key: "referralUpdates", label: "Referral Updates", icon: "group" },
-  ];
+  ].filter((metric) => (
+    getNumericValue(current[metric.key]) > 0 || getNumericValue(previous[metric.key]) > 0
+  ));
 
   return (
     <DashboardPanel>
@@ -659,32 +576,44 @@ function WeeklySummaryPanel({ weeklySummary, dataQuality }) {
         description={`Meaningful activity from the last ${formatNumber(weeklySummary?.windowDays || 7)} days compared with the prior week.`}
       />
 
-      <div className="mt-8 grid gap-4 sm:grid-cols-2">
-        {metrics.map((metric) => {
-          const delta = weeklyDelta(current[metric.key], previous[metric.key]);
-          return (
-            <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4" key={metric.key}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{metric.label}</p>
-                  <p className="mt-3 text-3xl font-black tracking-tight text-on-surface">
-                    {formatNumber(current[metric.key])}
-                  </p>
+      {metrics.length ? (
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          {metrics.map((metric) => {
+            const delta = weeklyDelta(current[metric.key], previous[metric.key]);
+            return (
+              <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4" key={metric.key}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">{metric.label}</p>
+                    <p className="mt-3 text-3xl font-black tracking-tight text-on-surface">
+                      {formatNumber(current[metric.key])}
+                    </p>
+                  </div>
+                  <span className="material-symbols-outlined text-xl text-primary">{metric.icon}</span>
                 </div>
-                <span className="material-symbols-outlined text-xl text-primary">{metric.icon}</span>
+                <p className={["mt-2 text-sm font-medium", delta.className].join(" ")}>{delta.label}</p>
               </div>
-              <p className={["mt-2 text-sm font-medium", delta.className].join(" ")}>{delta.label}</p>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-8">
+          <EmptyChartState message="No meaningful application, response, interview, or referral activity in the last two weeks." />
+        </div>
+      )}
+    </DashboardPanel>
+  );
+}
 
-      <div className="mt-6 rounded-[1.35rem] border border-outline-variant/15 bg-surface p-5">
+function DataQualityPanel({ dataQuality }) {
+  return (
+    <DashboardPanel>
+      <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Dashboard Confidence</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Data To Fix</p>
             <p className="mt-2 text-3xl font-black tracking-tight text-on-surface">
-              {formatNumber(dataQuality?.confidence)}%
+              {formatNumber(dataQuality?.issueCount)}
             </p>
           </div>
           <Link
@@ -695,20 +624,25 @@ function WeeklySummaryPanel({ weeklySummary, dataQuality }) {
           </Link>
         </div>
         <p className="mt-3 text-sm leading-7 text-on-surface-variant">
-          {dataQuality?.issueCount
-            ? `${formatNumber(dataQuality.issueCount)} missing or unclear tracker fields currently reduce reporting confidence.`
-            : "Tracker statuses, dates, and source attribution are complete."}
+          Missing or unclear tracker fields currently reduce reporting confidence to{" "}
+          <strong className="text-on-surface">{formatNumber(dataQuality?.confidence)}%</strong>.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-xl bg-surface-container-low p-3 text-sm text-on-surface-variant">
-            <strong className="text-on-surface">{formatNumber(dataQuality?.unknownStatuses)}</strong> unknown statuses
-          </div>
-          <div className="rounded-xl bg-surface-container-low p-3 text-sm text-on-surface-variant">
-            <strong className="text-on-surface">{formatNumber(dataQuality?.missingApplicationDates)}</strong> missing dates
-          </div>
-          <div className="rounded-xl bg-surface-container-low p-3 text-sm text-on-surface-variant">
-            <strong className="text-on-surface">{formatNumber(dataQuality?.missingSources)}</strong> missing sources
-          </div>
+          {getNumericValue(dataQuality?.unknownStatuses) ? (
+            <div className="rounded-xl bg-surface-container-low p-3 text-sm text-on-surface-variant">
+              <strong className="text-on-surface">{formatNumber(dataQuality?.unknownStatuses)}</strong> unknown statuses
+            </div>
+          ) : null}
+          {getNumericValue(dataQuality?.missingApplicationDates) ? (
+            <div className="rounded-xl bg-surface-container-low p-3 text-sm text-on-surface-variant">
+              <strong className="text-on-surface">{formatNumber(dataQuality?.missingApplicationDates)}</strong> missing dates
+            </div>
+          ) : null}
+          {getNumericValue(dataQuality?.missingSources) ? (
+            <div className="rounded-xl bg-surface-container-low p-3 text-sm text-on-surface-variant">
+              <strong className="text-on-surface">{formatNumber(dataQuality?.missingSources)}</strong> missing sources
+            </div>
+          ) : null}
         </div>
       </div>
     </DashboardPanel>
@@ -716,6 +650,10 @@ function WeeklySummaryPanel({ weeklySummary, dataQuality }) {
 }
 
 function PipelineAgingPanel({ stages }) {
+  const visibleStages = Array.isArray(stages)
+    ? stages.filter((stage) => getNumericValue(stage?.count) > 0 || getNumericValue(stage?.staleCount) > 0)
+    : [];
+
   return (
     <DashboardPanel>
       <PanelHeader
@@ -733,7 +671,7 @@ function PipelineAgingPanel({ stages }) {
       />
 
       <div className="mt-8 space-y-4">
-        {(stages || []).map((stage) => (
+        {visibleStages.map((stage) => (
           <article className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-5" key={stage.label}>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
@@ -761,6 +699,8 @@ function PipelineAgingPanel({ stages }) {
 }
 
 function SourceEffectivenessPanel({ sources }) {
+  const visibleSources = meaningfulSources(sources);
+
   return (
     <DashboardPanel>
       <PanelHeader
@@ -769,7 +709,7 @@ function SourceEffectivenessPanel({ sources }) {
         description="Compare sources by submitted applications and employer responses, not only by the number of jobs found."
       />
 
-      {sources?.length ? (
+      {visibleSources.length ? (
         <div className="mt-8 overflow-x-auto">
           <div className="min-w-[42rem] space-y-3">
             <div className="grid grid-cols-[minmax(11rem,1fr)_repeat(4,5.5rem)] gap-3 px-4 text-xs font-semibold uppercase tracking-[0.15em] text-on-surface-variant">
@@ -779,7 +719,7 @@ function SourceEffectivenessPanel({ sources }) {
               <span className="text-right">Interviews</span>
               <span className="text-right">Response rate</span>
             </div>
-            {sources.map((source) => (
+            {visibleSources.map((source) => (
               <div
                 className="grid grid-cols-[minmax(11rem,1fr)_repeat(4,5.5rem)] items-center gap-3 rounded-[1.2rem] border border-outline-variant/15 bg-surface px-4 py-4"
                 key={source.label}
@@ -798,237 +738,9 @@ function SourceEffectivenessPanel({ sources }) {
         </div>
       ) : (
         <div className="mt-8">
-          <EmptyChartState message="Source performance will appear after applications are tracked with source attribution." />
+          <EmptyChartState message="Source performance will appear after a source produces submitted applications or responses." />
         </div>
       )}
-    </DashboardPanel>
-  );
-}
-
-function ApplicationProgressPanel({ outcomes, summary }) {
-  const visibleSegments = outcomes.segments.filter((segment) => segment.value > 0);
-
-  return (
-    <DashboardPanel>
-      <PanelHeader
-        action={(
-          <Link
-            className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
-            to="/tracker"
-          >
-            Open tracker
-          </Link>
-        )}
-        eyebrow="Applications"
-        title="Application Progress"
-        description="Everything already in your tracker, including imported email confirmations and manual status updates."
-      />
-
-      <div className="mt-8 grid gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
-        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-          {outcomes.total ? (
-            <div className="h-80">
-              <ResponsiveContainer height="100%" width="100%">
-                <PieChart>
-                  <Pie
-                    cx="50%"
-                    cy="50%"
-                    data={visibleSegments}
-                    dataKey="value"
-                    innerRadius={74}
-                    outerRadius={112}
-                    paddingAngle={2}
-                  >
-                    {visibleSegments.map((segment) => (
-                      <Cell fill={segment.color} key={segment.label} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
-                    formatter={(value) => [formatChartTooltipValue(value), "Applications"]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyChartState message="Tracked applications will appear here once they move into the tracker." />
-          )}
-        </div>
-
-        <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <MetricTile
-              detail="Applied, interviewing, and offer stages combined."
-              label="Active"
-              value={formatNumber(summary.activeApplications)}
-            />
-            <MetricTile
-              detail={`${formatPercent(summary.heardBackRate)} of known statuses heard back`}
-              label="Heard Back"
-              value={formatNumber(summary.heardBackCount)}
-            />
-            <MetricTile
-              accentClass="text-emerald-600"
-              detail="Offers currently saved in the tracker."
-              label="Offers"
-              value={formatNumber(summary.offers)}
-            />
-            <MetricTile
-              accentClass={summary.unknownApplications ? "text-amber-600" : "text-on-surface"}
-              detail="Rows that still need a clearer application status."
-              label="Unknown"
-              value={formatNumber(summary.unknownApplications)}
-            />
-          </div>
-
-          <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-            <div className="space-y-4">
-              {outcomes.segments.map((segment) => (
-                <div className="flex items-center justify-between gap-4" key={segment.label}>
-                  <div className="flex items-center gap-3">
-                    <span aria-hidden="true" className="h-3 w-3 rounded-full" style={{ backgroundColor: segment.color }} />
-                    <span className="text-sm text-on-surface">{segment.label}</span>
-                  </div>
-                  <span className="text-sm font-semibold text-on-surface">{formatNumber(segment.value)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </DashboardPanel>
-  );
-}
-
-function ReferralOutreachPanel({ referrals, summary }) {
-  const sourceScaleMax = Math.max(
-    1,
-    ...referrals.contactSources.map((source) => getNumericValue(source?.value)),
-  );
-
-  return (
-    <DashboardPanel>
-      <PanelHeader
-        action={(
-          <Link
-            className="rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-primary transition-colors hover:bg-primary/20"
-            to="/referrals"
-          >
-            Open referrals
-          </Link>
-        )}
-        eyebrow="Referrals"
-        title="Referral Follow-Up"
-        description="Keep warm contacts moving forward and spot where you still need to send a first message."
-      />
-
-      <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricTile
-          detail="All referral contacts currently saved."
-          label="Contacts"
-          value={formatNumber(referrals.totalContacts)}
-        />
-        <MetricTile
-          accentClass={summary.notContacted ? "text-sky-600" : "text-on-surface"}
-          detail="Saved contacts still waiting for outreach."
-          label="Not Contacted"
-          value={formatNumber(summary.notContacted)}
-        />
-        <MetricTile
-          accentClass={summary.replied ? "text-teal-600" : "text-on-surface"}
-          detail="Contacts who already replied."
-          label="Replied"
-          value={formatNumber(summary.replied)}
-        />
-        <MetricTile
-          accentClass={summary.referralOffered ? "text-emerald-600" : "text-on-surface"}
-          detail={`${formatNumber(referrals.noReferralCount)} ended with no referral`}
-          label="Referral Offered"
-          value={formatNumber(summary.referralOffered)}
-        />
-      </div>
-
-      <div className="mt-8 grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-          <div className="mb-4 flex items-center justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Outreach Funnel</p>
-              <p className="mt-1 text-sm text-on-surface-variant">Counts from saved outreach statuses.</p>
-            </div>
-            <span className="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-on-surface-variant">
-              {formatNumber(referrals.trackedOutreachItems)} updates
-            </span>
-          </div>
-
-          {referrals.totalContacts ? (
-            <div className="h-72">
-              <ResponsiveContainer height="100%" width="100%">
-                <BarChart data={referrals.outreachFunnel} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                  <XAxis dataKey="label" stroke="#94a3b8" tickLine={false} />
-                  <YAxis allowDecimals={false} stroke="#94a3b8" tickLine={false} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: "1rem", borderColor: "rgba(148,163,184,0.2)" }}
-                    cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
-                    formatter={(value) => [formatChartTooltipValue(value), "Contacts"]}
-                  />
-                  <Bar dataKey="value" radius={[14, 14, 0, 0]}>
-                    {referrals.outreachFunnel.map((stage) => (
-                      <Cell fill={stage.color} key={stage.label} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyChartState message="Add or import contacts to start tracking referral outreach." />
-          )}
-        </div>
-
-        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-4">
-          <div className="mb-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Contact Sources</p>
-            <p className="mt-1 text-sm text-on-surface-variant">
-              A quick look at where your referral pool currently comes from.
-            </p>
-          </div>
-
-          {referrals.contactSources.length ? (
-            <div className="space-y-4">
-              {referrals.contactSources.map((source) => {
-                const sourceValue = getNumericValue(source?.value);
-                return (
-                  <div key={source.label}>
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <span
-                          aria-hidden="true"
-                          className="h-3 w-3 rounded-full"
-                          style={{ backgroundColor: String(source.color || "#38bdf8") }}
-                        />
-                        <span className="text-sm text-on-surface">{source.label}</span>
-                      </div>
-                      <span className="text-sm font-semibold text-on-surface">{formatNumber(sourceValue)}</span>
-                    </div>
-                    <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-surface-container-low">
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${Math.max(6, (sourceValue / sourceScaleMax) * 100)}%`,
-                          backgroundColor: String(source.color || "#38bdf8"),
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-[1.15rem] border border-dashed border-outline-variant/20 bg-surface-container-low p-6 text-sm text-on-surface-variant">
-              No referral contacts are saved yet.
-            </div>
-          )}
-        </div>
-      </div>
     </DashboardPanel>
   );
 }
@@ -1067,10 +779,14 @@ export default function DashboardPage() {
   }
 
   const model = buildUserDashboardModel(data || {});
+  const showWeeklySummary = hasWeeklyActivity(model.insights.weeklySummary);
+  const showDataQuality = hasDataQualityIssues(model.insights.dataQuality);
+  const showPipelineAging = hasActionableAging(model.insights.pipelineAging);
+  const showSourceEffectiveness = meaningfulSources(model.insights.sourceEffectiveness).length > 0;
 
   return (
     <div className="space-y-8">
-      <DashboardHeader model={model} onRefresh={refresh} refreshing={loading} />
+      <DashboardHeader onRefresh={refresh} refreshing={loading} />
 
       {error ? (
         <section className="rounded-2xl border border-error/20 bg-error/5 px-5 py-4 text-sm text-error">
@@ -1080,23 +796,35 @@ export default function DashboardPage() {
 
       <FocusPanel items={model.focusItems} />
 
-      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <SearchFunnelPanel funnel={model.insights.funnel} />
-        <WeeklySummaryPanel
-          dataQuality={model.insights.dataQuality}
-          weeklySummary={model.insights.weeklySummary}
-        />
-      </div>
+      <SearchFunnelPanel funnel={model.insights.funnel} />
 
-      <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-        <PipelineAgingPanel stages={model.insights.pipelineAging} />
-        <SourceEffectivenessPanel sources={model.insights.sourceEffectiveness} />
-      </div>
+      {showWeeklySummary || showDataQuality ? (
+        <div className={[
+          "grid gap-6",
+          showWeeklySummary && showDataQuality ? "xl:grid-cols-[1.05fr_0.95fr]" : "",
+        ].join(" ")}>
+          {showWeeklySummary ? (
+            <WeeklySummaryPanel weeklySummary={model.insights.weeklySummary} />
+          ) : null}
+          {showDataQuality ? (
+            <DataQualityPanel dataQuality={model.insights.dataQuality} />
+          ) : null}
+        </div>
+      ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <ApplicationProgressPanel outcomes={model.outcomes} summary={model.summary} />
-        <ReferralOutreachPanel referrals={model.referrals} summary={model.summary} />
-      </div>
+      {showPipelineAging || showSourceEffectiveness ? (
+        <div className={[
+          "grid gap-6",
+          showPipelineAging && showSourceEffectiveness ? "xl:grid-cols-[0.85fr_1.15fr]" : "",
+        ].join(" ")}>
+          {showPipelineAging ? (
+            <PipelineAgingPanel stages={model.insights.pipelineAging} />
+          ) : null}
+          {showSourceEffectiveness ? (
+            <SourceEffectivenessPanel sources={model.insights.sourceEffectiveness} />
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
