@@ -14,7 +14,7 @@ from urllib.parse import quote
 from unittest.mock import patch
 
 from backend import create_backend
-from backend.api.server import _build_workspace_cv_preview_profile, build_handler
+from backend.api.server import _build_workspace_cv_preview_profile, _customer_excluded_reason, build_handler
 from backend.capabilities.networking import build_empty_relevant_people_discovery
 from backend.capabilities.tracker.email_integration import TrackerMailboxMessage
 from backend.domain.models import ArtifactRecord, JobRecord, StageDefinition
@@ -480,6 +480,18 @@ class BackendApiTests(unittest.TestCase):
         source_labels = [source["label"] for source in insights["sourceEffectiveness"]]
         self.assertIn("Gmail", source_labels)
         self.assertIn("Unknown source", source_labels)
+        role_strategy = insights["roleStrategy"]
+        self.assertEqual(role_strategy["totalApplications"], 2)
+        self.assertIn("Data Analyst", role_strategy["summary"])
+        roles_by_label = {role["label"]: role for role in role_strategy["roles"]}
+        self.assertEqual(roles_by_label["Data Analyst"]["applications"], 1)
+        self.assertEqual(roles_by_label["Data Analyst"]["responses"], 1)
+        self.assertEqual(roles_by_label["Data Analyst"]["interviews"], 1)
+        self.assertEqual(roles_by_label["Data Analyst"]["applicationShare"], 0.5)
+        self.assertEqual(roles_by_label["Data Analyst"]["responseRate"], 1)
+        self.assertEqual(roles_by_label["Data Analyst"]["recommendation"], "Test more")
+        self.assertEqual(roles_by_label["Engineer"]["applications"], 1)
+        self.assertEqual(roles_by_label["Engineer"]["responses"], 0)
         self.assertEqual(insights["weeklySummary"]["current"]["applications"], 1)
         self.assertEqual(insights["weeklySummary"]["current"]["responses"], 1)
         self.assertEqual(insights["weeklySummary"]["current"]["interviews"], 1)
@@ -846,6 +858,31 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(
             excluded_jobs["rejected_api_job_language_3"]["reason_summary"],
             "This listing appears to be written in French, and this workspace is configured to skip that listing language.",
+        )
+
+    def test_run_customer_view_uses_first_language_mention_in_rejection_reason(self):
+        profile = dict(self.user.metadata or {})
+        profile["profile"] = {
+            **dict(profile.get("profile") or {}),
+            "languages": ["English - C1", "German - B2"],
+        }
+        self.user.metadata = profile
+
+        reason = _customer_excluded_reason(
+            {
+                "reason_code": "language_mismatch",
+                "reason_summary": (
+                    "Rejected because the role requires German C1. "
+                    "QA note: do not classify this as French."
+                ),
+            },
+            self.user,
+        )
+
+        self.assertEqual(reason["reason_label"], "Language level not yet reached")
+        self.assertEqual(
+            reason["reason_summary"],
+            "This role requires German at C1 level, which is above your saved level.",
         )
 
     def test_user_cannot_track_same_posting_url_twice_across_workspaces(self):
@@ -1442,6 +1479,24 @@ class BackendApiTests(unittest.TestCase):
         status, jobs_payload = self._request("GET", f"/runs/{payload['run']['id']}/jobs")
         self.assertEqual(status, 200)
         self.assertIn("generated_jobs", jobs_payload["job_sets"])
+
+    def test_quick_apply_creates_internal_workspace_when_workspace_id_is_omitted(self):
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, payload = self._request(
+                "POST",
+                "/quick-apply/runs",
+                {
+                    "execution_mode": "sync",
+                    "manual_urls": ["https://company.example/jobs/no-workspace"],
+                },
+            )
+        self.assertEqual(status, 201)
+        self.assertEqual(payload["accepted_url_count"], 1)
+        self.assertEqual(payload["run"]["metadata"]["run_kind"], "quick_apply")
+
+        workspace = self.app.get_workspace(payload["run"]["workspace_id"])
+        self.assertEqual(workspace.workspace_type, "internal")
+        self.assertTrue(workspace.metadata["internal"])
 
     def test_quick_apply_accepts_cv_generation_and_preview_settings(self):
         workspace_cv_asset = self._upload_workspace_cv(

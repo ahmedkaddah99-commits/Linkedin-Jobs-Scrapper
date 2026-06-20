@@ -440,12 +440,9 @@ export default function QuickApplyPage() {
     builderLoading ||
     settingsLoading ||
     cvAssetsLoading ||
-    (eligibleWorkspaces.length > 0 && !initializedSettingsRef.current);
+    !initializedSettingsRef.current;
   const resourceError = error || builderError || settingsError || cvAssetsError;
   const submitBlockedReason = useMemo(() => {
-    if (!selectedWorkspaceId) {
-      return "Quick Apply is still loading.";
-    }
     if (!quickApplySettings.workspace_cv_asset_id) {
       return "Choose a baseline CV.";
     }
@@ -460,7 +457,6 @@ export default function QuickApplyPage() {
     manualUrls.length,
     quickApplySettings.workspace_cv_asset_id,
     selectedWorkspaceCvMissing,
-    selectedWorkspaceId,
   ]);
 
   useEffect(() => {
@@ -479,7 +475,6 @@ export default function QuickApplyPage() {
     if (
       initializedSettingsRef.current ||
       !builderCatalog ||
-      !selectedWorkspaceId ||
       !settingsPayload ||
       !cvAssetsPayload
     ) {
@@ -498,7 +493,6 @@ export default function QuickApplyPage() {
     builderCatalog,
     cvAssetsPayload,
     selectedWorkspace,
-    selectedWorkspaceId,
     settingsPayload,
     workspaceCvAssets,
   ]);
@@ -609,7 +603,7 @@ export default function QuickApplyPage() {
       const payload = await request("/quick-apply/runs", {
         method: "POST",
         body: {
-          workspace_id: selectedWorkspaceId,
+          ...(selectedWorkspaceId ? { workspace_id: selectedWorkspaceId } : {}),
           execution_mode: "queued",
           manual_urls: manualUrls,
           settings: buildQuickApplyRunSettings(quickApplySettings),
@@ -652,23 +646,6 @@ export default function QuickApplyPage() {
     return (
       <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
         <p className="text-error">{resourceError}</p>
-      </div>
-    );
-  }
-
-  if (!eligibleWorkspaces.length) {
-    return (
-      <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
-        <h1 className="font-headline text-2xl font-bold text-on-surface">Quick Apply</h1>
-        <p className="mt-3 max-w-2xl text-sm leading-7 text-on-surface-variant">
-          Quick Apply needs one tailored-documents workspace first so the app can queue document generation runs.
-        </p>
-        <Link
-          className="mt-5 inline-flex rounded bg-gradient-to-br from-primary to-primary-container px-5 py-3 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90"
-          to="/workspaces"
-        >
-          Create a Workspace
-        </Link>
       </div>
     );
   }

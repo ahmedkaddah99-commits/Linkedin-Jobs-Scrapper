@@ -9,6 +9,10 @@ import {
   resolveApiUrl,
 } from "../lib/api";
 import { identify, logEvent } from "../lib/analytics";
+import {
+  getSessionRefreshErrorState,
+  getSessionRefreshStartStatus,
+} from "../lib/sessionState";
 
 const SessionContext = createContext(null);
 
@@ -51,11 +55,36 @@ export function SessionProvider({ children }) {
   const storedConnection = useMemo(() => loadStoredConnection(), []);
   const { getToken, isLoaded, isSignedIn, sessionId, signOut } = useAuth();
   const { user: clerkUser } = useUser();
+  const clerkUserProfile = useMemo(
+    () => ({
+      id: String(clerkUser?.id || "").trim(),
+      primaryEmailAddress: {
+        emailAddress: String(clerkUser?.primaryEmailAddress?.emailAddress || "").trim(),
+      },
+      publicMetadata: {
+        plan_id: clerkUser?.publicMetadata?.plan_id,
+        role: clerkUser?.publicMetadata?.role,
+      },
+      fullName: String(clerkUser?.fullName || "").trim(),
+      username: String(clerkUser?.username || "").trim(),
+      imageUrl: String(clerkUser?.imageUrl || "").trim(),
+    }),
+    [
+      clerkUser?.fullName,
+      clerkUser?.id,
+      clerkUser?.imageUrl,
+      clerkUser?.primaryEmailAddress?.emailAddress,
+      clerkUser?.publicMetadata?.plan_id,
+      clerkUser?.publicMetadata?.role,
+      clerkUser?.username,
+    ],
+  );
   const [apiBaseUrl, setApiBaseUrl] = useState(storedConnection.baseUrl || getDefaultApiBaseUrl());
   const [status, setStatus] = useState("connecting");
   const [user, setUser] = useState(null);
   const [tokenInfo, setTokenInfo] = useState(null);
   const [error, setError] = useState("");
+  const authenticatedSessionRef = useRef({ tokenInfo: null, user: null });
   const trackedSessionKeyRef = useRef("");
 
   const getAccessToken = useCallback(async () => {
@@ -96,31 +125,44 @@ export function SessionProvider({ children }) {
       setUser(null);
       setTokenInfo(null);
       setError("");
+      authenticatedSessionRef.current = { tokenInfo: null, user: null };
       trackedSessionKeyRef.current = "";
       identify(null);
       return null;
     }
-    setStatus("connecting");
+    setStatus((currentStatus) => getSessionRefreshStartStatus(
+      currentStatus,
+      authenticatedSessionRef.current.user,
+    ));
     try {
       const payload = await apiRequest(apiBaseUrl, getAccessToken, "/auth/me");
-      const nextUser = mergeSessionUser(payload.user, clerkUser);
+      const nextUser = mergeSessionUser(payload.user, clerkUserProfile);
       setUser(nextUser);
       setTokenInfo(payload.token);
+      authenticatedSessionRef.current = { tokenInfo: payload.token, user: nextUser };
       setStatus("connected");
       setError("");
       identify(resolveAnalyticsUserId(nextUser) || null);
       trackSessionStart(apiBaseUrl, nextUser, sessionId);
       return payload;
     } catch (sessionError) {
-      setUser(null);
-      setTokenInfo(null);
-      setStatus("error");
-      setError(sessionError.message || "Unable to authenticate with the backend API.");
-      trackedSessionKeyRef.current = "";
-      identify(null);
+      const nextState = getSessionRefreshErrorState({
+        errorMessage: sessionError.message || "Unable to authenticate with the backend API.",
+        previousTokenInfo: authenticatedSessionRef.current.tokenInfo,
+        previousUser: authenticatedSessionRef.current.user,
+      });
+      setUser(nextState.user);
+      setTokenInfo(nextState.tokenInfo);
+      setStatus(nextState.status);
+      setError(nextState.error);
+      if (!nextState.user) {
+        authenticatedSessionRef.current = { tokenInfo: null, user: null };
+        trackedSessionKeyRef.current = "";
+        identify(null);
+      }
       throw sessionError;
     }
-  }, [apiBaseUrl, clerkUser, getAccessToken, isLoaded, isSignedIn, sessionId, trackSessionStart]);
+  }, [apiBaseUrl, clerkUserProfile, getAccessToken, isLoaded, isSignedIn, sessionId, trackSessionStart]);
 
   useEffect(() => {
     if (!isLoaded) {
@@ -136,9 +178,10 @@ export function SessionProvider({ children }) {
       persistConnection({ baseUrl: normalizedBaseUrl });
       setApiBaseUrl(normalizedBaseUrl);
       return apiRequest(normalizedBaseUrl, getAccessToken, "/auth/me").then((payload) => {
-        const nextUser = mergeSessionUser(payload.user, clerkUser);
+        const nextUser = mergeSessionUser(payload.user, clerkUserProfile);
         setUser(nextUser);
         setTokenInfo(payload.token);
+        authenticatedSessionRef.current = { tokenInfo: payload.token, user: nextUser };
         setStatus("connected");
         setError("");
         identify(resolveAnalyticsUserId(nextUser) || null);
@@ -149,12 +192,13 @@ export function SessionProvider({ children }) {
         setUser(null);
         setTokenInfo(null);
         setError(sessionError.message || "Unable to authenticate with the backend API.");
+        authenticatedSessionRef.current = { tokenInfo: null, user: null };
         trackedSessionKeyRef.current = "";
         identify(null);
         throw sessionError;
       });
     },
-    [clerkUser, getAccessToken, sessionId, trackSessionStart],
+    [clerkUserProfile, getAccessToken, sessionId, trackSessionStart],
   );
 
   const disconnect = useCallback(async () => {
@@ -162,6 +206,7 @@ export function SessionProvider({ children }) {
     setTokenInfo(null);
     setStatus("disconnected");
     setError("");
+    authenticatedSessionRef.current = { tokenInfo: null, user: null };
     trackedSessionKeyRef.current = "";
     identify(null);
     await signOut({ redirectUrl: "/sign-in" });

@@ -384,11 +384,13 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
                         context = self._auth_context()
                         workspace_id = str(payload.get("workspace_id") or "").strip()
-                        if not workspace_id:
-                            raise ValueError("workspace_id is required")
-                        if not application.user_can_access_workspace(user, workspace_id):
-                            raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
-                        workspace = application.get_workspace(workspace_id)
+                        if workspace_id:
+                            if not application.user_can_access_workspace(user, workspace_id):
+                                raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
+                            workspace = application.get_workspace(workspace_id)
+                        else:
+                            workspace = _ensure_quick_apply_workspace(application, user)
+                            workspace_id = workspace.id
                         run_input_overrides = _build_quick_apply_run_input_overrides(
                             application,
                             user,

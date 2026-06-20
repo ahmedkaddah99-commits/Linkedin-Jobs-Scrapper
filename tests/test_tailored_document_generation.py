@@ -277,6 +277,8 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         self.assertEqual(result["ats_export_gate"]["metadata"]["stop_reason"], "score_stalled")
         self.assertIn("Best score reached: 84%", result["ats_last_warning"])
         self.assertEqual(len(result["ats_attempt_history"]), 2)
+        self.assertEqual(result["ats_attempt_history"][0]["changed_sections"], ["initial_draft"])
+        self.assertEqual(result["ats_attempt_history"][1]["changed_sections"], ["summary", "experience", "skills"])
         self.assertEqual(improve_mock.call_count, 1)
 
     @patch("backend.capabilities.tailored_documents.generation._improve_structured_cv_once")
@@ -337,6 +339,14 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         self.assertTrue(result["ats_export_anyway_allowed"])
         self.assertEqual(result["ats_export_gate"]["best_score"], 88)
         self.assertIn("Best score reached: 88%", result["ats_export_gate"]["last_warning"])
+        self.assertEqual(
+            [entry["change_summary"] for entry in result["ats_attempt_history"]],
+            [
+                "Initial tailored CV draft scored.",
+                "Updated summary, skills since the previous scored pass.",
+                "Updated summary, skills since the previous scored pass.",
+            ],
+        )
         self.assertEqual(improve_mock.call_count, 2)
 
     def test_resolve_cv_generation_prompt_settings_uses_mode_specific_fields(self):

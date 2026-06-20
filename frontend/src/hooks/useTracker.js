@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "./useApiResource";
+import { loadTrackerShell } from "../lib/trackerLoading";
 
 const COLUMN_ORDER = ["not_applied", "applied", "interview_invited", "rejected", "offer", "withdrawn", "unknown"];
 
@@ -24,30 +25,7 @@ export function useTracker() {
   const [integrationBusy, setIntegrationBusy] = useState("");
   const [lastSyncResult, setLastSyncResult] = useState(null);
 
-  const loader = useCallback(async () => {
-    const [tracker, integration] = await Promise.all([
-      request("/tracker"),
-      request("/tracker/email-integration"),
-    ]);
-    if (!integration?.config?.connected) {
-      return { tracker, integration };
-    }
-    try {
-      const sync = await request("/tracker/email-integration/sync", {
-        method: "POST",
-        body: {},
-      });
-      const refreshedTracker = await request("/tracker");
-      setLastSyncResult(sync.result || null);
-      return {
-        tracker: refreshedTracker,
-        integration: sync.integration || integration,
-      };
-    } catch {
-      const refreshedIntegration = await request("/tracker/email-integration").catch(() => integration);
-      return { tracker, integration: refreshedIntegration };
-    }
-  }, [request]);
+  const loader = useCallback(() => loadTrackerShell(request), [request]);
 
   const { data, loading, error, refresh, setData } = useApiResource(loader, [loader]);
 

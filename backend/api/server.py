@@ -103,6 +103,8 @@ from backend.domain.phase0_contracts import (
 from backend.domain.ats_export_gate import evaluate_ats_export_gate
 from backend.tools.discover_company_careers import run_discovery as run_career_url_discovery
 from backend.domain.models import (
+    JobSource,
+    ProfileRef,
     ROLE_ADMIN,
     TOKEN_SCOPE_ADMIN,
     TOKEN_SCOPE_ARTIFACTS_READ,
@@ -121,6 +123,7 @@ from backend.domain.models import (
     TOKEN_SCOPE_WORKSPACES_READ,
     TOKEN_SCOPE_WORKSPACES_WRITE,
     UserRecord,
+    WorkspaceDefinition,
     utc_plus_seconds,
 )
 from backend.domain.job_identity import canonical_posting_url
@@ -129,7 +132,7 @@ from backend.domain.tracker import (
     review_is_actionable_tracker_item,
     review_placed_in_tracker_at,
 )
-from backend.orchestration.workspace_builder import _slugify
+from backend.orchestration.workspace_builder import _slugify, build_quick_apply_workflow_template
 from backend.profiles.cv_profile_extraction import extract_cv_profile, normalize_profile_payload
 from backend.profiles.cv_text import extract_cv_text_from_path
 from backend.storage import build_private_object_key, materialize_object
@@ -1528,11 +1531,18 @@ _CUSTOMER_LANGUAGE_LEVEL_HINTS = (
 
 
 def _customer_extract_language_name(text: str) -> str:
-    searchable = str(text or "").casefold()
+    searchable = str(text or "")
+    earliest_hit: tuple[int, str] | None = None
     for canonical_name, aliases in _CUSTOMER_LANGUAGE_ALIASES.items():
-        if any(alias.casefold() in searchable for alias in aliases):
-            return canonical_name
-    return ""
+        for alias in aliases:
+            match = re.search(
+                rf"(?<![A-Za-z]){re.escape(alias)}(?![A-Za-z])",
+                searchable,
+                flags=re.IGNORECASE,
+            )
+            if match and (earliest_hit is None or match.start() < earliest_hit[0]):
+                earliest_hit = (match.start(), canonical_name)
+    return earliest_hit[1] if earliest_hit else ""
 
 
 def _customer_extract_language_level(text: str) -> str:
@@ -2383,6 +2393,51 @@ def _build_quick_apply_run_input_overrides(application, user, workspace, payload
         runtime_settings, _workspace_cv_asset = _resolve_workspace_cv_binding(application, user, asset_id)
         overrides.update(runtime_settings)
     return overrides
+
+
+def _quick_apply_workspace_id(user) -> str:
+    user_id = _slugify(str(getattr(user, "user_id", "") or "user")) or "user"
+    return f"quick_apply_{user_id}"
+
+
+def _ensure_quick_apply_workspace(application, user):
+    workspace_id = _quick_apply_workspace_id(user)
+    try:
+        return application.get_workspace(workspace_id)
+    except KeyError:
+        pass
+
+    workflow = build_quick_apply_workflow_template()
+    application.upsert_workflow_template(workflow)
+    return application.upsert_workspace(
+        WorkspaceDefinition(
+            id=workspace_id,
+            name="Quick Apply Workspace",
+            workflow_template_id=workflow.id,
+            description="Internal workspace used for quick applications.",
+            workspace_type="internal",
+            settings={
+                "automation_flow": "tailored_documents",
+                "config_loader": "tailored_documents",
+                "manual_sources_are_preapproved": True,
+            },
+            feature_flags={"enable_manual_urls": True, "tailored_document_generation": True},
+            profiles=[
+                ProfileRef(
+                    id=f"{workspace_id}_profile",
+                    label="Primary Job Seeker Profile",
+                    settings={"automation_flow": "tailored_documents"},
+                )
+            ],
+            sources=[JobSource(id="source_exact_job_links", connector_id="curated_job_urls")],
+            metadata={
+                "automation_flow": "tailored_documents",
+                "builder_mode": "quick_apply",
+                "internal": True,
+                "created_by": "system",
+            },
+        )
+    )
 
 
 def _build_settings_payload(application, user) -> dict:
@@ -5164,6 +5219,17 @@ def _dashboard_job_source_label(job) -> str:
     return hostname or "Unknown source"
 
 
+def _dashboard_job_role_label(job) -> str:
+    if job is None:
+        return "Unknown role"
+    role_label = str(
+        getattr(job, "role_category_name", "")
+        or getattr(job, "title", "")
+        or ""
+    ).strip()
+    return _dashboard_labelize(role_label) if role_label else "Unknown role"
+
+
 def _dashboard_tracker_items(application, user, runs: list[object]) -> tuple[list[dict], int]:
     history_rows = application.repositories.review_store.list_application_status_history(
         user_id=user.user_id,
@@ -5205,6 +5271,7 @@ def _dashboard_tracker_items(application, user, runs: list[object]) -> tuple[lis
                     "createdAt": str(review.created_at or ""),
                     "updatedAt": str(review.updated_at or ""),
                     "sourceLabel": _dashboard_job_source_label(job),
+                    "roleLabel": _dashboard_job_role_label(job),
                     "statusHistory": history_by_review.get(review.review_id, []),
                 }
             )
@@ -5217,6 +5284,12 @@ def _dashboard_tracker_items(application, user, runs: list[object]) -> tuple[lis
             default="Unknown",
         )
         source_label = str(external.get("source_label") or external.get("source") or "Gmail").strip()
+        role_label = str(
+            external.get("role_category_name")
+            or external.get("role")
+            or external.get("title")
+            or ""
+        ).strip()
         tracker_items.append(
             {
                 "id": application_id,
@@ -5225,6 +5298,7 @@ def _dashboard_tracker_items(application, user, runs: list[object]) -> tuple[lis
                 "createdAt": str(external.get("created_at") or ""),
                 "updatedAt": str(external.get("updated_at") or external.get("created_at") or ""),
                 "sourceLabel": _dashboard_labelize(source_label) if source_label else "Unknown source",
+                "roleLabel": _dashboard_labelize(role_label) if role_label else "Unknown role",
                 "statusHistory": history_by_review.get(application_id, []),
             }
         )
@@ -5311,6 +5385,166 @@ def _dashboard_period_summary(
         "referralUpdates": sum(
             1 for record in outreach_records if _dashboard_in_period(record.get("updated_at"), start=start, end=end)
         ),
+    }
+
+
+def _dashboard_role_recommendation(
+    *,
+    label: str,
+    applications: int,
+    responses: int,
+    application_share: float,
+    response_rate: float,
+    average_response_rate: float,
+) -> str:
+    if label == "Unknown role":
+        return "Needs cleaner data"
+    if applications <= 1:
+        return "Test more"
+    if application_share >= 0.30 and responses == 0:
+        return "Reduce effort"
+    if applications >= 3 and response_rate < (average_response_rate * 0.5):
+        return "Reduce effort"
+    if responses > 0 and response_rate >= average_response_rate + 0.10:
+        return "Increase focus"
+    return "Keep applying"
+
+
+def _dashboard_role_strategy_summary(roles: list[dict], *, total_applications: int, average_response_rate: float) -> str:
+    if not roles or total_applications <= 0:
+        return "Role strategy will appear after applications have role labels and outcomes."
+
+    known_roles = [role for role in roles if role["label"] != "Unknown role"]
+    comparable_roles = known_roles or roles
+    top_volume = max(comparable_roles, key=lambda role: (role["applications"], role["responses"], role["label"]))
+    response_roles = [role for role in comparable_roles if role["responses"] > 0]
+    best_response = (
+        max(response_roles, key=lambda role: (role["responseRate"], role["responses"], role["applications"], role["label"]))
+        if response_roles
+        else None
+    )
+    reduce_candidates = [
+        role
+        for role in comparable_roles
+        if role["label"] != "Unknown role"
+        and role["applications"] >= 2
+        and role["responses"] == 0
+        and role["applicationShare"] >= 0.20
+    ]
+    reduce_role = max(reduce_candidates, key=lambda role: (role["applicationShare"], role["applications"], role["label"])) if reduce_candidates else None
+
+    if len(comparable_roles) == 1:
+        only_role = comparable_roles[0]
+        if only_role["responses"]:
+            return (
+                f"{only_role['label']} is the only submitted role target and is producing a "
+                f"{round(only_role['responseRate'] * 100)}% response rate. Keep it as the baseline, "
+                "then test adjacent roles in small batches."
+            )
+        return (
+            f"{only_role['label']} is the only submitted role target so far and has no employer responses yet. "
+            "Keep applications tightly matched and add another role only as a controlled test."
+        )
+
+    if best_response and reduce_role and best_response["label"] != reduce_role["label"]:
+        return (
+            f"{best_response['label']} is producing the strongest response rate at "
+            f"{round(best_response['responseRate'] * 100)}%, while {reduce_role['label']} has "
+            f"{round(reduce_role['applicationShare'] * 100)}% of applications with no responses. "
+            f"Focus the next batch on {best_response['label']} or similar roles and reduce "
+            f"{reduce_role['label']} unless the fit is unusually strong."
+        )
+
+    if best_response:
+        return (
+            f"{best_response['label']} is the strongest role target at "
+            f"{round(best_response['responseRate'] * 100)}% response rate. "
+            f"{top_volume['label']} has the largest application share at "
+            f"{round(top_volume['applicationShare'] * 100)}%. Prioritize roles with response rates above "
+            f"the overall {round(average_response_rate * 100)}% baseline."
+        )
+
+    return (
+        f"Applications are spread across {len(comparable_roles)} role targets, but none has employer responses yet. "
+        f"{top_volume['label']} has the largest share at {round(top_volume['applicationShare'] * 100)}%; "
+        "keep the next batch focused on the strongest-fit role and watch for first responses before expanding."
+    )
+
+
+def _dashboard_role_strategy(tracker_items: list[dict]) -> dict:
+    role_map: dict[str, dict] = {}
+    for item in tracker_items:
+        status = item.get("applicationStatus")
+        if status not in _DASHBOARD_SUBMITTED_APPLICATION_STATUSES:
+            continue
+        label = str(item.get("roleLabel") or "Unknown role").strip() or "Unknown role"
+        summary = role_map.setdefault(
+            label,
+            {
+                "label": label,
+                "applications": 0,
+                "responses": 0,
+                "interviews": 0,
+                "offers": 0,
+                "rejected": 0,
+                "withdrawn": 0,
+            },
+        )
+        summary["applications"] += 1
+        if status in _DASHBOARD_RESPONSE_APPLICATION_STATUSES:
+            summary["responses"] += 1
+        if status in _DASHBOARD_INTERVIEW_APPLICATION_STATUSES:
+            summary["interviews"] += 1
+        if status == "Offer":
+            summary["offers"] += 1
+        if status == "Rejected":
+            summary["rejected"] += 1
+        if status == "Withdrawn":
+            summary["withdrawn"] += 1
+
+    total_applications = sum(role["applications"] for role in role_map.values())
+    total_responses = sum(role["responses"] for role in role_map.values())
+    average_response_rate = total_responses / total_applications if total_applications else 0
+    roles = []
+    for summary in role_map.values():
+        applications = int(summary["applications"])
+        responses = int(summary["responses"])
+        application_share = applications / total_applications if total_applications else 0
+        response_rate = responses / applications if applications else 0
+        roles.append(
+            {
+                **summary,
+                "applicationShare": application_share,
+                "responseRate": response_rate,
+                "interviewRate": summary["interviews"] / applications if applications else 0,
+                "recommendation": _dashboard_role_recommendation(
+                    label=summary["label"],
+                    applications=applications,
+                    responses=responses,
+                    application_share=application_share,
+                    response_rate=response_rate,
+                    average_response_rate=average_response_rate,
+                ),
+            }
+        )
+    roles.sort(
+        key=lambda role: (
+            -role["offers"],
+            -role["interviews"],
+            -role["responses"],
+            -role["applications"],
+            role["label"].casefold(),
+        )
+    )
+    return {
+        "summary": _dashboard_role_strategy_summary(
+            roles,
+            total_applications=total_applications,
+            average_response_rate=average_response_rate,
+        ),
+        "totalApplications": total_applications,
+        "averageResponseRate": average_response_rate,
+        "roles": roles[:8],
     }
 
 
@@ -5430,6 +5664,7 @@ def _dashboard_candidate_insights(
             item["label"].casefold(),
         )
     )
+    role_strategy = _dashboard_role_strategy(tracker_items)
 
     no_source_count = sum(1 for item in tracker_items if item.get("sourceLabel") == "Unknown source")
     missing_application_dates = sum(
@@ -5557,6 +5792,7 @@ def _dashboard_candidate_insights(
         "actionPlan": action_plan,
         "funnel": {"stages": funnel},
         "pipelineAging": pipeline_aging,
+        "roleStrategy": role_strategy,
         "sourceEffectiveness": source_effectiveness[:6],
         "weeklySummary": {
             "windowDays": 7,

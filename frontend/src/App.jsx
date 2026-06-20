@@ -8,6 +8,7 @@ import { SessionProvider, useSession } from "./context/SessionContext";
 import { QUOTA_EXCEEDED_EVENT, getDefaultApiBaseUrl } from "./lib/api";
 import { logEvent } from "./lib/analytics";
 import { isAdminUser } from "./lib/auth";
+import { hasAuthenticatedSession } from "./lib/sessionState";
 
 const AdminPage = lazy(() => import("./pages/AdminPage"));
 const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
@@ -192,12 +193,13 @@ function BackendConnectionPanel() {
 
 function AuthenticatedApp() {
   const location = useLocation();
-  const { isConnected, user } = useSession();
+  const { status, user } = useSession();
+  const hasSession = hasAuthenticatedSession(status, user);
   const lastTrackedPageRef = useRef("");
   const userId = String(user?.user_id || user?.email || "").trim();
 
   useEffect(() => {
-    if (!isConnected) {
+    if (!hasSession) {
       lastTrackedPageRef.current = "";
       return;
     }
@@ -210,12 +212,12 @@ function AuthenticatedApp() {
       page,
       user_id: userId,
     });
-  }, [isConnected, location.hash, location.pathname, location.search, userId]);
+  }, [hasSession, location.hash, location.pathname, location.search, userId]);
 
   return (
-    <AppShell muteSidebar={!isConnected}>
+    <AppShell muteSidebar={!hasSession}>
       <UpgradeModalHost />
-      {isConnected ? (
+      {hasSession ? (
         <RouteErrorBoundary key={`${location.pathname}${location.search}`}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>

@@ -610,10 +610,43 @@ def _improve_structured_cv_once(
     return _parse_structured_cv_payload(parsed, output_language=output_language)
 
 
-def _attempt_history_entry(attempt_number: int, score_payload: Dict[str, Any]) -> Dict[str, Any]:
+def _ats_changed_sections(previous_payload: Dict[str, Any] | None, current_payload: Dict[str, Any]) -> list[str]:
+    if previous_payload is None:
+        return ["initial_draft"]
+    section_fields = (
+        ("summary", "cv_professional_summary"),
+        ("experience", "cv_professional_experience"),
+        ("education", "cv_education"),
+        ("skills", "cv_skills"),
+    )
+    changed_sections = []
+    for section_label, field_name in section_fields:
+        if previous_payload.get(field_name) != current_payload.get(field_name):
+            changed_sections.append(section_label)
+    return changed_sections or ["no_section_change"]
+
+
+def _ats_change_summary(changed_sections: list[str]) -> str:
+    if changed_sections == ["initial_draft"]:
+        return "Initial tailored CV draft scored."
+    if changed_sections == ["no_section_change"]:
+        return "No CV sections changed since the previous scored pass."
+    return f"Updated {', '.join(changed_sections)} since the previous scored pass."
+
+
+def _attempt_history_entry(
+    attempt_number: int,
+    score_payload: Dict[str, Any],
+    *,
+    previous_payload: Dict[str, Any] | None,
+    current_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    changed_sections = _ats_changed_sections(previous_payload, current_payload)
     return {
         "attempt": attempt_number,
         "score": int(score_payload.get("score") or 0),
+        "changed_sections": changed_sections,
+        "change_summary": _ats_change_summary(changed_sections),
         "missing_requirements": list(score_payload.get("missing_requirements") or []),
         "improvement_actions": list(score_payload.get("improvement_actions") or []),
         "rationale": str(score_payload.get("rationale") or ""),
@@ -699,6 +732,7 @@ def _generate_docs_for_job_once(
     best_attempt_index = 0
     attempt_history: list[Dict[str, Any]] = []
     previous_score: Optional[int] = None
+    previous_scored_payload: Optional[Dict[str, Any]] = None
     stop_reason = "max_attempts_reached"
 
     for attempt_number in range(1, ATS_MAX_ATTEMPTS + 1):
@@ -711,8 +745,16 @@ def _generate_docs_for_job_once(
             job,
             current_payload,
         )
-        attempt_history.append(_attempt_history_entry(attempt_number, score_payload))
+        attempt_history.append(
+            _attempt_history_entry(
+                attempt_number,
+                score_payload,
+                previous_payload=previous_scored_payload,
+                current_payload=current_payload,
+            )
+        )
         current_score = int(score_payload["score"])
+        previous_scored_payload = current_payload
 
         if current_score > best_score:
             best_score = current_score

@@ -187,10 +187,36 @@ const SUPPORTED_LANGUAGE_FILTERS = [
   { key: "spanish", label: "Spanish", aliases: ["spanish", "espanol", "español", "castilian"] },
 ];
 
+const INTERNAL_WORKSPACE_TYPES = new Set(["internal", "system"]);
+const LEGACY_INTERNAL_WORKSPACE_NAMES = new Set([
+  "api custom workspace",
+  "api workspace",
+  "builder workspace",
+  "quick apply workspace",
+]);
+
 function normalizeStringList(value) {
   return (Array.isArray(value) ? value : [])
     .map((item) => String(item || "").trim())
     .filter(Boolean);
+}
+
+function isUserWorkspace(workspace) {
+  const metadata = workspace?.metadata || {};
+  const workspaceType = String(workspace?.workspace_type || "").trim().toLowerCase();
+  const workspaceName = String(workspace?.name || "").trim().toLowerCase();
+  const builderMode = String(metadata.builder_mode || "").trim().toLowerCase();
+  const createdBy = String(metadata.created_by || metadata.source || "").trim().toLowerCase();
+  return !(
+    INTERNAL_WORKSPACE_TYPES.has(workspaceType) ||
+    metadata.internal ||
+    metadata.is_internal ||
+    metadata.system ||
+    metadata.is_system_workspace ||
+    createdBy === "system" ||
+    builderMode === "quick_apply" ||
+    LEGACY_INTERNAL_WORKSPACE_NAMES.has(workspaceName)
+  );
 }
 
 function normalizeLanguageSearchText(value) {
@@ -1037,6 +1063,91 @@ function compactListLabel(items, fallback = "N/A") {
   return `${labels.slice(0, 2).join(", ")} +${labels.length - 2}`;
 }
 
+function qaEvidenceLabel(value, fallback = "Review after test run") {
+  if (Array.isArray(value)) {
+    const normalized = value.map((item) => String(item || "").trim()).filter(Boolean);
+    return normalized.length ? normalized.join(", ") : fallback;
+  }
+  const normalized = String(value || "").trim();
+  return normalized || fallback;
+}
+
+function workspaceQaChecklistItems(workspace) {
+  const settings = workspace.settings || {};
+  const sourceLabels = (workspace.sources || [])
+    .map((source) => source.name || source.label || source.connector_id || source.id)
+    .filter(Boolean);
+  const modules = workspace.metadata?.modules || [];
+  const targets = [
+    ...(Array.isArray(settings.target_roles) ? settings.target_roles : []),
+    ...(Array.isArray(settings.keywords) ? settings.keywords : []),
+  ];
+  const locations = [
+    ...(Array.isArray(settings.country_codes) ? settings.country_codes : []),
+    ...(Array.isArray(settings.cities) ? settings.cities : []),
+  ];
+  const automationOptions = [
+    settings.job_filtering_mode ? `Filtering: ${settings.job_filtering_mode}` : "",
+    settings.cv_generation_mode ? `CV: ${labelize(settings.cv_generation_mode)}` : "",
+    modules.includes(OPTIONAL_PRIORITY_MODULE_ID) ? "Priority ranking enabled" : "",
+  ].filter(Boolean);
+
+  return [
+    {
+      title: "Targeting effectiveness",
+      status: targets.length || locations.length ? "Ready to audit" : "Needs setup",
+      description: "Confirm test-run jobs match the saved roles, keywords, country, and city scope.",
+      evidence: qaEvidenceLabel([...targets, ...locations], "No targeting values saved"),
+    },
+    {
+      title: "Job source scraping effectiveness",
+      status: sourceLabels.length ? "Ready to audit" : "Needs source",
+      description: "Run a test and confirm the selected source returns usable, current job postings.",
+      evidence: qaEvidenceLabel(sourceLabels, "No job source selected"),
+    },
+    {
+      title: "Automation option accuracy",
+      status: automationOptions.length ? "Configured" : "Review options",
+      description: "Confirm filtering, ranking, and CV generation settings match the workspace intent.",
+      evidence: qaEvidenceLabel(automationOptions),
+    },
+    {
+      title: "Automation effectiveness",
+      status: "Verify with Test Run",
+      description: "Use Test Run, then inspect included jobs, excluded jobs, and generated documents.",
+      evidence: "Evidence appears in the run review after a test run completes.",
+    },
+  ];
+}
+
+function WorkspaceQaChecklist({ workspace }) {
+  const items = workspaceQaChecklistItems(workspace);
+  return (
+    <section className="rounded-xl border border-outline-variant/10 bg-surface p-4">
+      <div className="flex flex-col gap-1">
+        <h3 className="text-sm font-semibold text-on-surface">Workspace QA Checklist</h3>
+        <p className="text-xs leading-6 text-on-surface-variant">
+          Use this after creating or editing the workspace, then run a test to validate output quality.
+        </p>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {items.map((item) => (
+          <div className="rounded-lg border border-outline-variant/10 bg-surface-container-lowest p-3" key={item.title}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="text-sm font-semibold text-on-surface">{item.title}</div>
+              <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                {item.status}
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-6 text-on-surface-variant">{item.description}</p>
+            <div className="mt-2 text-xs font-medium text-on-surface">{item.evidence}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function FieldRenderer({ field, value, onChange, dynamicOptions = {}, formState = null }) {
   if (field.type === "asset_select") {
     const options = dynamicOptions[field.dynamic_source] || [];
@@ -1314,7 +1425,10 @@ export default function WorkspacesPage() {
   } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request]);
 
   const allCountryOptions = useMemo(() => getAllCountryOptions(), []);
-  const workspaces = workspacesData?.workspaces || [];
+  const workspaces = useMemo(
+    () => (workspacesData?.workspaces || []).filter((workspace) => isUserWorkspace(workspace)),
+    [workspacesData?.workspaces],
+  );
   const builderCatalogReady = Boolean(builderCatalog && !builderLoading);
   const focusedWorkspaceId = searchParams.get("workspace_id") || "";
   const focusedWorkspace = useMemo(
@@ -2055,6 +2169,14 @@ export default function WorkspacesPage() {
                         ? "Schedule"
                         : "Set Schedule"}
                   </button>
+                  <button
+                    className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-error-container hover:text-on-error-container disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={builderState.deleting === workspace.id}
+                    onClick={() => deleteWorkspace(workspace.id)}
+                    type="button"
+                  >
+                    {builderState.deleting === workspace.id ? "Deleting..." : "Delete"}
+                  </button>
                 </div>
 
                 <div className="space-y-3 md:col-span-2">
@@ -2187,6 +2309,8 @@ export default function WorkspacesPage() {
               </Link>
             </div>
           </div>
+
+          <WorkspaceQaChecklist workspace={workspace} />
 
           <WorkspaceSchedulePanel
             closeScheduleEditor={closeScheduleEditor}

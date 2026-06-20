@@ -334,6 +334,93 @@ function ExcludedJobRow({ job, runId }) {
   );
 }
 
+function runFilteringQaChecklistItems(review) {
+  const includedJobs = review.included_jobs || [];
+  const excludedJobs = review.excluded_jobs || [];
+  const excludedWithReasons = excludedJobs.filter((job) => job.reason_label && job.reason_summary);
+  const languageRejectedJobs = excludedJobs.filter((job) => {
+    const searchable = [
+      job.reason_code,
+      job.reason_label,
+      job.reason_summary,
+      ...(job.details || []),
+    ].join(" ").toLowerCase();
+    return ["language", "german", "deutsch", "french", "francais"].some((term) =>
+      searchable.includes(term),
+    );
+  });
+
+  return [
+    {
+      title: "Suitable jobs kept",
+      status: includedJobs.length ? `${includedJobs.length} included` : "No included jobs",
+      description: "Sample included jobs and confirm they fit the workspace target roles and location.",
+      evidence: includedJobs.length
+        ? includedJobs.slice(0, 3).map((job) => job.title || job.job_id).join(" | ")
+        : "Review workspace targeting or source coverage if the run should have kept jobs.",
+    },
+    {
+      title: "Unsuitable jobs rejected",
+      status: excludedJobs.length ? `${excludedJobs.length} rejected` : "No rejected jobs",
+      description: "Sample rejected jobs and confirm unsuitable roles stay out of document generation.",
+      evidence: excludedJobs.length
+        ? excludedJobs.slice(0, 3).map((job) => job.title || job.job_id).join(" | ")
+        : "No excluded jobs were saved for this run.",
+    },
+    {
+      title: "Accurate rejection reasons",
+      status: excludedWithReasons.length === excludedJobs.length ? "Reasons present" : "Needs reason",
+      description: "Each rejected job should explain the actual filter that removed it.",
+      evidence: excludedJobs.length
+        ? `${excludedWithReasons.length}/${excludedJobs.length} rejected jobs include a label and summary.`
+        : "No rejected jobs to audit.",
+    },
+    {
+      title: "Language rejection audit",
+      status: languageRejectedJobs.length ? `${languageRejectedJobs.length} language reason` : "No language rejects",
+      description: "Check language reasons against the posting text, especially French versus German.",
+      evidence: languageRejectedJobs.length
+        ? languageRejectedJobs
+          .slice(0, 3)
+          .map((job) => `${job.title || job.job_id}: ${job.reason_summary}`)
+          .join(" | ")
+        : "No language-specific rejection reason appears in this run.",
+    },
+  ];
+}
+
+function RunFilteringQaChecklist({ review }) {
+  const items = runFilteringQaChecklistItems(review);
+  return (
+    <section className="mt-6 rounded-2xl border border-outline-variant/15 bg-surface p-4">
+      <div>
+        <h3 className="text-sm font-semibold text-on-surface">Filtering QA Checklist</h3>
+        <p className="mt-1 text-xs leading-6 text-on-surface-variant">
+          Use this before trusting a run: confirm kept jobs are suitable, rejected jobs are unsuitable,
+          and rejection reasons name the real blocker.
+        </p>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {items.map((item) => (
+          <div
+            className="rounded-xl border border-outline-variant/10 bg-surface-container-lowest p-3"
+            key={item.title}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="text-sm font-semibold text-on-surface">{item.title}</div>
+              <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                {item.status}
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-6 text-on-surface-variant">{item.description}</p>
+            <div className="mt-2 text-xs font-medium leading-5 text-on-surface">{item.evidence}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function RunChecklist({ stages }) {
   const checklistStages = (stages || []).filter(
     (stage) => stage.stage_type !== "synthetic_review_stage" && stage.status !== "skipped",
@@ -596,6 +683,8 @@ export default function RunDetailPage() {
               Open Tracker
             </Link>
           </div>
+
+          <RunFilteringQaChecklist review={review} />
 
           <div className="mt-6 space-y-4">
             <ReviewSection count={review.included_jobs?.length || 0} title="Included Jobs">

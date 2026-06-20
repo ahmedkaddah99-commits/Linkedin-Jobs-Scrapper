@@ -38,6 +38,12 @@ const EMPTY_CANDIDATE_INSIGHTS = {
   actionPlan: [],
   funnel: { stages: [] },
   pipelineAging: [],
+  roleStrategy: {
+    summary: "",
+    totalApplications: 0,
+    averageResponseRate: 0,
+    roles: [],
+  },
   sourceEffectiveness: [],
   weeklySummary: {
     windowDays: 7,
@@ -148,6 +154,25 @@ function normalizeCandidateInsights(rawInsights) {
         staleAfterDays: getNumericValue(stage?.staleAfterDays),
       }))
       : [],
+    roleStrategy: {
+      summary: String(insights.roleStrategy?.summary || ""),
+      totalApplications: getNumericValue(insights.roleStrategy?.totalApplications),
+      averageResponseRate: getNumericValue(insights.roleStrategy?.averageResponseRate),
+      roles: Array.isArray(insights.roleStrategy?.roles)
+        ? insights.roleStrategy.roles.map((role) => ({
+          ...role,
+          applications: getNumericValue(role?.applications),
+          applicationShare: getNumericValue(role?.applicationShare),
+          responses: getNumericValue(role?.responses),
+          interviews: getNumericValue(role?.interviews),
+          offers: getNumericValue(role?.offers),
+          rejected: getNumericValue(role?.rejected),
+          withdrawn: getNumericValue(role?.withdrawn),
+          responseRate: getNumericValue(role?.responseRate),
+          interviewRate: getNumericValue(role?.interviewRate),
+        }))
+        : [],
+    },
     sourceEffectiveness: Array.isArray(insights.sourceEffectiveness)
       ? insights.sourceEffectiveness.map((source) => ({
         ...source,
@@ -198,6 +223,11 @@ function hasDataQualityIssues(dataQuality) {
 function hasActionableAging(stages) {
   return Array.isArray(stages)
     && stages.some((stage) => getNumericValue(stage?.count) > 0 || getNumericValue(stage?.staleCount) > 0);
+}
+
+function hasRoleStrategy(roleStrategy) {
+  return Array.isArray(roleStrategy?.roles)
+    && roleStrategy.roles.some((role) => getNumericValue(role?.applications) > 0);
 }
 
 function meaningfulSources(sources) {
@@ -311,49 +341,6 @@ function EmptyChartState({ message }) {
   return (
     <div className="flex h-full min-h-48 items-center justify-center rounded-[1.35rem] border border-dashed border-outline-variant/20 bg-surface text-sm text-on-surface-variant">
       {message}
-    </div>
-  );
-}
-
-function SkeletonBlock({ className = "" }) {
-  return <div className={["animate-pulse rounded-2xl bg-surface-container", className].join(" ")} />;
-}
-
-function DashboardSkeleton() {
-  return (
-    <div className="space-y-8">
-      <section className="rounded-[2rem] bg-slate-950 px-6 py-8 sm:px-8">
-        <SkeletonBlock className="h-5 w-40 bg-white/10" />
-        <SkeletonBlock className="mt-4 h-12 w-72 bg-white/10" />
-        <SkeletonBlock className="mt-4 h-5 w-full max-w-2xl bg-white/10" />
-      </section>
-
-      <DashboardPanel>
-        <div className="grid gap-4 md:grid-cols-2">
-          <SkeletonBlock className="h-40" />
-          <SkeletonBlock className="h-40" />
-          <SkeletonBlock className="h-40" />
-          <SkeletonBlock className="h-40" />
-        </div>
-      </DashboardPanel>
-
-      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <DashboardPanel>
-          <SkeletonBlock className="h-96" />
-        </DashboardPanel>
-        <DashboardPanel>
-          <SkeletonBlock className="h-96" />
-        </DashboardPanel>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
-        <DashboardPanel>
-          <SkeletonBlock className="h-96" />
-        </DashboardPanel>
-        <DashboardPanel>
-          <SkeletonBlock className="h-96" />
-        </DashboardPanel>
-      </div>
     </div>
   );
 }
@@ -541,6 +528,136 @@ function SearchFunnelPanel({ funnel }) {
           <EmptyChartState message="Run discovery and update your tracker to build the search funnel." />
         </div>
       )}
+    </DashboardPanel>
+  );
+}
+
+function DashboardLoadingNotice() {
+  return (
+    <section className="flex items-center gap-3 rounded-2xl border border-outline-variant/20 bg-surface-container-lowest px-5 py-4 text-sm text-on-surface-variant">
+      <span className="material-symbols-outlined animate-spin text-primary">progress_activity</span>
+      Loading dashboard data...
+    </section>
+  );
+}
+
+function roleRecommendationClass(recommendation) {
+  if (recommendation === "Increase focus") {
+    return "bg-emerald-500/10 text-emerald-600";
+  }
+  if (recommendation === "Reduce effort") {
+    return "bg-amber-500/10 text-amber-600";
+  }
+  if (recommendation === "Needs cleaner data") {
+    return "bg-rose-500/10 text-rose-600";
+  }
+  if (recommendation === "Test more") {
+    return "bg-sky-500/10 text-sky-600";
+  }
+  return "bg-primary/10 text-primary";
+}
+
+function RoleStrategyPanel({ roleStrategy }) {
+  const roles = Array.isArray(roleStrategy?.roles) ? roleStrategy.roles : [];
+  const topRole = roles[0];
+  const strongestRole = roles
+    .filter((role) => getNumericValue(role?.responses) > 0)
+    .sort((first, second) => (
+      getNumericValue(second.responseRate) - getNumericValue(first.responseRate)
+      || getNumericValue(second.responses) - getNumericValue(first.responses)
+      || getNumericValue(second.applications) - getNumericValue(first.applications)
+    ))[0];
+  const attentionRole = roles.find((role) => role.recommendation === "Reduce effort" || role.recommendation === "Needs cleaner data");
+
+  return (
+    <DashboardPanel>
+      <PanelHeader
+        eyebrow="Strategy"
+        title="Role Strategy"
+        description="Compare application concentration and outcomes by role target so your next batch goes where the search is working."
+      />
+
+      <div className="mt-8 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="rounded-[1.35rem] border border-outline-variant/15 bg-surface p-5">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">Executive Summary</p>
+          <p className="mt-3 text-sm leading-7 text-on-surface-variant">
+            {roleStrategy?.summary || "Role strategy will appear after applications have role labels and outcomes."}
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+          <div className="rounded-[1.15rem] bg-surface p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-on-surface-variant">Top Volume</p>
+            <p className="mt-2 text-sm font-semibold text-on-surface">{topRole?.label || "No role yet"}</p>
+            <p className="mt-1 text-xs text-on-surface-variant">{formatPercent(topRole?.applicationShare || 0)} of applications</p>
+          </div>
+          <div className="rounded-[1.15rem] bg-surface p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-on-surface-variant">Best Response</p>
+            <p className="mt-2 text-sm font-semibold text-on-surface">{strongestRole?.label || "No responses yet"}</p>
+            <p className="mt-1 text-xs text-on-surface-variant">{formatPercent(strongestRole?.responseRate || 0)} response rate</p>
+          </div>
+          <div className="rounded-[1.15rem] bg-surface p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-on-surface-variant">Watch</p>
+            <p className="mt-2 text-sm font-semibold text-on-surface">{attentionRole?.label || "No role flagged"}</p>
+            <p className="mt-1 text-xs text-on-surface-variant">{attentionRole?.recommendation || "Keep current focus"}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-8 hidden overflow-x-auto md:block">
+        <div className="min-w-[52rem] space-y-3">
+          <div className="grid grid-cols-[minmax(12rem,1fr)_5rem_repeat(4,5.5rem)_8rem] gap-3 px-4 text-xs font-semibold uppercase tracking-[0.15em] text-on-surface-variant">
+            <span>Role Target</span>
+            <span className="text-right">Share</span>
+            <span className="text-right">Apps</span>
+            <span className="text-right">Responses</span>
+            <span className="text-right">Interviews</span>
+            <span className="text-right">Offers</span>
+            <span>Recommendation</span>
+          </div>
+          {roles.map((role) => (
+            <div
+              className="grid grid-cols-[minmax(12rem,1fr)_5rem_repeat(4,5.5rem)_8rem] items-center gap-3 rounded-[1.2rem] border border-outline-variant/15 bg-surface px-4 py-4"
+              key={role.label}
+            >
+              <div>
+                <p className="font-semibold text-on-surface">{role.label}</p>
+                <p className="mt-1 text-xs text-on-surface-variant">{formatPercent(role.responseRate)} response rate</p>
+              </div>
+              <span className="text-right font-semibold text-on-surface">{formatPercent(role.applicationShare)}</span>
+              <span className="text-right font-semibold text-on-surface">{formatNumber(role.applications)}</span>
+              <span className="text-right font-semibold text-on-surface">{formatNumber(role.responses)}</span>
+              <span className="text-right font-semibold text-on-surface">{formatNumber(role.interviews)}</span>
+              <span className="text-right font-semibold text-on-surface">{formatNumber(role.offers)}</span>
+              <span className={["w-fit rounded-full px-3 py-1 text-xs font-semibold", roleRecommendationClass(role.recommendation)].join(" ")}>
+                {role.recommendation}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-8 grid gap-4 md:hidden">
+        {roles.map((role) => (
+          <article className="rounded-[1.2rem] border border-outline-variant/15 bg-surface p-4" key={role.label}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="font-semibold text-on-surface">{role.label}</p>
+                <p className="mt-1 text-xs text-on-surface-variant">{formatPercent(role.applicationShare)} of applications</p>
+              </div>
+              <span className={["rounded-full px-3 py-1 text-xs font-semibold", roleRecommendationClass(role.recommendation)].join(" ")}>
+                {role.recommendation}
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-on-surface-variant">
+              <span><strong className="text-on-surface">{formatNumber(role.applications)}</strong> applications</span>
+              <span><strong className="text-on-surface">{formatNumber(role.responses)}</strong> responses</span>
+              <span><strong className="text-on-surface">{formatNumber(role.interviews)}</strong> interviews</span>
+              <span><strong className="text-on-surface">{formatNumber(role.offers)}</strong> offers</span>
+            </div>
+          </article>
+        ))}
+      </div>
     </DashboardPanel>
   );
 }
@@ -770,10 +887,6 @@ export default function DashboardPage() {
     );
   }
 
-  if (loading && !data) {
-    return <DashboardSkeleton />;
-  }
-
   if (error && !data) {
     return <DashboardError error={error} onRetry={refresh} />;
   }
@@ -782,11 +895,14 @@ export default function DashboardPage() {
   const showWeeklySummary = hasWeeklyActivity(model.insights.weeklySummary);
   const showDataQuality = hasDataQualityIssues(model.insights.dataQuality);
   const showPipelineAging = hasActionableAging(model.insights.pipelineAging);
+  const showRoleStrategy = hasRoleStrategy(model.insights.roleStrategy);
   const showSourceEffectiveness = meaningfulSources(model.insights.sourceEffectiveness).length > 0;
 
   return (
     <div className="space-y-8">
       <DashboardHeader onRefresh={refresh} refreshing={loading} />
+
+      {loading && !data ? <DashboardLoadingNotice /> : null}
 
       {error ? (
         <section className="rounded-2xl border border-error/20 bg-error/5 px-5 py-4 text-sm text-error">
@@ -797,6 +913,10 @@ export default function DashboardPage() {
       <FocusPanel items={model.focusItems} />
 
       <SearchFunnelPanel funnel={model.insights.funnel} />
+
+      {showRoleStrategy ? (
+        <RoleStrategyPanel roleStrategy={model.insights.roleStrategy} />
+      ) : null}
 
       {showWeeklySummary || showDataQuality ? (
         <div className={[

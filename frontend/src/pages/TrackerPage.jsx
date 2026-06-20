@@ -432,6 +432,35 @@ function parseTrackerNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function trackerAtsStopReasonLabel(stopReason) {
+  const normalized = String(stopReason || "").trim().toLowerCase();
+  if (normalized === "target_reached") return "Target reached";
+  if (normalized === "max_attempts_reached") return "Pass limit reached";
+  if (normalized === "score_stalled") return "Score stalled";
+  return normalized ? normalized.replace(/_/g, " ") : "";
+}
+
+function normalizeTrackerAtsAttemptHistory(gate = {}) {
+  const metadata = gate.metadata && typeof gate.metadata === "object" ? gate.metadata : {};
+  return Array.isArray(metadata.attempt_history)
+    ? metadata.attempt_history.map((attempt, index) => ({
+        attempt: parseTrackerNumber(attempt?.attempt) ?? index + 1,
+        score: parseTrackerNumber(attempt?.score),
+        changedSections: Array.isArray(attempt?.changed_sections)
+          ? attempt.changed_sections.map((section) => String(section || "").trim()).filter(Boolean)
+          : [],
+        changeSummary: String(attempt?.change_summary || "").trim(),
+        missingRequirements: Array.isArray(attempt?.missing_requirements)
+          ? attempt.missing_requirements.map((requirement) => String(requirement || "").trim()).filter(Boolean)
+          : [],
+        improvementActions: Array.isArray(attempt?.improvement_actions)
+          ? attempt.improvement_actions.map((action) => String(action || "").trim()).filter(Boolean)
+          : [],
+        rationale: String(attempt?.rationale || "").trim(),
+      }))
+    : [];
+}
+
 function summarizeTrackerAtsState(documents = []) {
   const atsDocuments = (Array.isArray(documents) ? documents : []).filter((document) => {
     const gate = document?.ats_export_gate;
@@ -469,6 +498,13 @@ function summarizeTrackerAtsState(documents = []) {
   const targetScore = parseTrackerNumber(gate.target_score ?? pickDocument?.ats_target_score);
   const attemptCount = parseTrackerNumber(gate.attempt_count ?? pickDocument?.ats_attempt_count);
   const maxAttempts = parseTrackerNumber(gate.max_attempts ?? pickDocument?.ats_max_attempts);
+  const metadata = gate.metadata && typeof gate.metadata === "object" ? gate.metadata : {};
+  const stopReason = String(metadata.stop_reason || pickDocument?.ats_stop_reason || "").trim();
+  const missingRequirements = Array.isArray(gate.missing_requirements)
+    ? gate.missing_requirements.map((requirement) => String(requirement || "").trim()).filter(Boolean)
+    : [];
+  const attemptHistory = normalizeTrackerAtsAttemptHistory(gate);
+  const belowTarget = bestScore !== null && targetScore !== null && bestScore < targetScore;
 
   const summary =
     pickDocument?.final_export_blocked || gateState === "blocked"
@@ -476,20 +512,20 @@ function summarizeTrackerAtsState(documents = []) {
           badgeClass: "bg-error/10 text-error",
           label: "ATS gate active",
           message:
-            "The tailored CV is still blocked by ATS review, so the application bundle omits it until the target is met.",
+            "ATS failed: the best scored CV is still below the target, so final CV export stays blocked unless the warning is overridden.",
         }
       : gateState === "passed"
         ? {
             badgeClass: "bg-teal-500/10 text-teal-600",
             label: "ATS cleared",
-            message: "The tailored CV cleared ATS review before export and is ready to hand to the applicant.",
+            message: "ATS passed: the tailored CV reached the target score before export.",
           }
         : gateState === "exported_anyway"
           ? {
               badgeClass: "bg-amber-500/10 text-amber-600",
               label: "ATS override",
               message:
-                "The tailored CV was released with an acknowledged ATS warning instead of a clean pass.",
+                "ATS warning acknowledged: the CV was exported even though it did not record a clean pass.",
             }
           : {
               badgeClass: "bg-primary/10 text-primary",
@@ -499,12 +535,20 @@ function summarizeTrackerAtsState(documents = []) {
 
   const metrics = [
     bestScore !== null && targetScore !== null ? `${bestScore}% / ${targetScore}% target` : "",
-    attemptCount !== null && maxAttempts !== null ? `Attempt ${attemptCount}/${maxAttempts}` : "",
+    attemptCount !== null && maxAttempts !== null ? `Pass ${attemptCount}/${maxAttempts}` : "",
   ].filter(Boolean);
 
   return {
     ...summary,
+    attemptHistory,
+    belowTarget,
+    lastWarning: String(gate.last_warning || pickDocument?.ats_last_warning || "").trim(),
     metrics,
+    missingRequirements,
+    stopReasonLabel: trackerAtsStopReasonLabel(stopReason),
+    targetScore,
+    bestScore,
+    maxAttempts,
   };
 }
 
@@ -758,6 +802,65 @@ function TrackerResourceCell({ item, request }) {
           <div className="mt-2 text-[11px] leading-5 text-on-surface-variant">
             {atsSummary.message}
           </div>
+          {atsSummary.stopReasonLabel ? (
+            <div className="mt-2 text-[11px] font-medium text-on-surface">
+              Result: {atsSummary.stopReasonLabel}
+            </div>
+          ) : null}
+          {atsSummary.belowTarget && atsSummary.maxAttempts ? (
+            <div className="mt-2 text-[11px] leading-5 text-on-surface-variant">
+              {atsSummary.maxAttempts} ATS passes are a capped optimization effort, not a guarantee. A CV can still fail when the
+              source CV lacks evidence for required job criteria or when later passes stop improving the score.
+            </div>
+          ) : null}
+          {atsSummary.missingRequirements.length ? (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {atsSummary.missingRequirements.slice(0, 4).map((requirement) => (
+                <span
+                  className="rounded-full bg-surface-container-lowest px-2 py-0.5 text-[10px] font-medium text-on-surface"
+                  key={requirement}
+                >
+                  {requirement}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {atsSummary.attemptHistory.length ? (
+            <details className="mt-3">
+              <summary className="cursor-pointer text-[11px] font-semibold text-primary">
+                ATS pass audit
+              </summary>
+              <div className="mt-2 space-y-2">
+                {atsSummary.attemptHistory.map((attempt) => (
+                  <div
+                    className="rounded-xl border border-outline-variant/15 bg-surface-container-lowest p-2 text-[11px] leading-5"
+                    key={`ats-pass-${attempt.attempt}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2 font-semibold text-on-surface">
+                      <span>Pass {attempt.attempt}</span>
+                      {attempt.score !== null ? <span>{attempt.score}%</span> : null}
+                    </div>
+                    {attempt.changeSummary ? (
+                      <div className="mt-1 text-on-surface-variant">{attempt.changeSummary}</div>
+                    ) : null}
+                    {attempt.improvementActions.length ? (
+                      <div className="mt-1 text-on-surface-variant">
+                        Next action: {attempt.improvementActions[0]}
+                      </div>
+                    ) : null}
+                    {attempt.rationale ? (
+                      <div className="mt-1 text-on-surface-variant">{attempt.rationale}</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : null}
+          {atsSummary.lastWarning ? (
+            <div className="mt-2 text-[11px] leading-5 text-on-surface-variant">
+              {atsSummary.lastWarning}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {descriptionFeedback ? <div className="text-xs text-primary">{descriptionFeedback}</div> : null}
@@ -1275,7 +1378,7 @@ function EmailIntegrationPanel({
           </h2>
           <p className="mt-2 text-sm leading-7 text-on-surface-variant">
             Connect Gmail with Google authorization so the tracker can pull confirmations,
-            interview invites, and rejections into the board when the tracker opens without asking for your password.
+            interview invites, and rejections into the board when you run inbox sync.
           </p>
           <p className="mt-3 rounded-2xl bg-surface-container px-4 py-3 text-xs leading-6 text-on-surface-variant">
             <span className="font-semibold text-on-surface">Secure access:</span>
@@ -1683,7 +1786,7 @@ export default function TrackerPage() {
       {loading && (
         <div className="flex items-center gap-3 rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-6 py-4 text-sm text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin">progress_activity</span>
-          Loading tracker…
+          Loading tracker...
         </div>
       )}
       {error && !loading && (
