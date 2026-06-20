@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -9,11 +9,28 @@ const quotaLabels = {
   applications_per_month: "Applications / month",
   cv_exports_per_month: "CV exports / month",
   referral_drafts_per_month: "Referral drafts / month",
+  runner_credits_per_month: "Runner credits / month",
   workspaces: "Workspaces",
 };
 
 function formatQuotaValue(value) {
   return Number(value) === -1 ? "Unlimited" : String(value ?? "0");
+}
+
+function formatUsageLimit(limit) {
+  return Number(limit) === -1 ? "Unlimited" : String(limit ?? 0);
+}
+
+function formatDateTime(value) {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) return "Not available";
+  const parsed = new Date(normalizedValue);
+  if (Number.isNaN(parsed.getTime())) return normalizedValue;
+  return parsed.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function buildFeatureRows(plans) {
@@ -27,10 +44,10 @@ function buildFeatureRows(plans) {
 }
 
 export default function PricingPage() {
-  const { request, user } = useSession();
+  const { request, refreshSession, user } = useSession();
   const [searchParams, setSearchParams] = useSearchParams();
-  const checkoutRefreshStartedRef = useRef(false);
   const [actionState, setActionState] = useState({ loadingPlanId: "", managing: false, error: "" });
+  const [checkoutConfirmationState, setCheckoutConfirmationState] = useState("idle");
   const [promoCode, setPromoCode] = useState("");
   const {
     data: plansPayload,
@@ -49,24 +66,75 @@ export default function PricingPage() {
   const currentPlanId = String(subscriptionPayload?.plan_id || user?.plan_id || "none").trim() || "none";
   const checkoutState = String(searchParams.get("checkout") || "").trim();
   const checkoutPlanId = String(searchParams.get("plan_id") || "").trim();
+  const checkoutQueryString = searchParams.toString();
   const checkoutPlan = plans.find((plan) => String(plan.plan_id || "").trim() === checkoutPlanId);
   const currentPlan = plans.find((plan) => String(plan.plan_id || "").trim() === currentPlanId);
   const currentPlanName = String(currentPlan?.display_name || subscriptionPayload?.plan?.display_name || currentPlanId).trim();
   const checkoutPlanName = String(checkoutPlan?.display_name || checkoutPlanId || currentPlanName).trim();
   const showCheckoutSuccess = checkoutState === "success";
+  const checkoutConfirmed = showCheckoutSuccess && checkoutPlanId && currentPlanId === checkoutPlanId;
+  const subscriptionDetails = subscriptionPayload?.subscription || {};
+  const subscriptionStatus = String(subscriptionDetails.status || (currentPlanId === "none" ? "inactive" : "active")).trim();
+  const usageQuotas = subscriptionPayload?.usage?.quotas || {};
+  const usageSummaryRows = [
+    "runner_credits_per_month",
+    "runs_per_month",
+    "applications_per_month",
+    "workspaces",
+  ].map((quotaType) => ({
+    quotaType,
+    label: quotaLabels[quotaType] || quotaType,
+    quota: usageQuotas[quotaType] || { used: 0, limit: 0 },
+  }));
   const featureRows = buildFeatureRows(plans);
 
   useEffect(() => {
-    if (checkoutState !== "success") {
-      checkoutRefreshStartedRef.current = false;
+    if (!showCheckoutSuccess) {
+      setCheckoutConfirmationState("idle");
       return;
     }
-    if (checkoutRefreshStartedRef.current) {
-      return;
+    let cancelled = false;
+    const wait = (milliseconds) => new Promise((resolve) => {
+      window.setTimeout(resolve, milliseconds);
+    });
+
+    async function confirmCheckout() {
+      setCheckoutConfirmationState("confirming");
+      if (checkoutQueryString.includes("signature=")) {
+        await request("/billing/checkout/confirm", {
+          method: "POST",
+          body: { query_string: checkoutQueryString },
+        }).catch(() => undefined);
+      }
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const payload = await refreshSubscription().catch(() => null);
+        const nextPlanId = String(payload?.plan_id || "").trim();
+        if (checkoutPlanId && nextPlanId === checkoutPlanId) {
+          await refreshSession().catch(() => undefined);
+          if (!cancelled) {
+            setCheckoutConfirmationState("confirmed");
+          }
+          return;
+        }
+        await wait(2500);
+      }
+      if (!cancelled) {
+        setCheckoutConfirmationState("awaiting_webhook");
+      }
     }
-    checkoutRefreshStartedRef.current = true;
-    refreshSubscription().catch(() => undefined);
-  }, [checkoutState, refreshSubscription]);
+
+    confirmCheckout();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    checkoutPlanId,
+    checkoutQueryString,
+    refreshSession,
+    refreshSubscription,
+    request,
+    showCheckoutSuccess,
+  ]);
 
   async function handleUpgrade(planId) {
     setActionState({ loadingPlanId: planId, managing: false, error: "" });
@@ -143,9 +211,13 @@ export default function PricingPage() {
               <div>
                 <h2 className="font-headline text-xl font-bold tracking-tight">Payment successful</h2>
                 <p className="mt-1 text-sm leading-6">
-                  {subscriptionLoading
+                  {checkoutConfirmed || checkoutConfirmationState === "confirmed"
+                    ? `You are subscribed to ${checkoutPlanName}.`
+                    : checkoutConfirmationState === "awaiting_webhook"
+                      ? `Payment received. Waiting for Creem to sync your ${checkoutPlanName} subscription.`
+                      : subscriptionLoading
                     ? `Confirming your ${checkoutPlanName} subscription...`
-                    : `You are subscribed to ${currentPlanName}.`}
+                    : `Payment received. Confirming your ${checkoutPlanName} subscription...`}
                 </p>
               </div>
             </div>
@@ -157,6 +229,34 @@ export default function PricingPage() {
               <span className="material-symbols-outlined text-[18px]">close</span>
               Dismiss
             </button>
+          </div>
+          <div className="mt-5 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Plan</p>
+              <p className="mt-2 font-headline text-lg font-bold text-on-surface">{checkoutConfirmed ? currentPlanName : checkoutPlanName}</p>
+            </div>
+            <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Status</p>
+              <p className="mt-2 font-semibold capitalize text-on-surface">{subscriptionStatus.replace("_", " ")}</p>
+            </div>
+            <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Period start</p>
+              <p className="mt-2 font-semibold text-on-surface">{formatDateTime(subscriptionDetails.current_period_start)}</p>
+            </div>
+            <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">Renews / ends</p>
+              <p className="mt-2 font-semibold text-on-surface">{formatDateTime(subscriptionDetails.current_period_end)}</p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
+            {usageSummaryRows.map(({ quotaType, label, quota }) => (
+              <div className="rounded-xl border border-primary/15 bg-surface-container-lowest p-4" key={quotaType}>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-on-surface-variant">{label}</p>
+                <p className="mt-2 font-semibold text-on-surface">
+                  {Number(quota.used || 0)} / {formatUsageLimit(quota.limit)}
+                </p>
+              </div>
+            ))}
           </div>
         </section>
       ) : null}

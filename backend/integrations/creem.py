@@ -38,6 +38,26 @@ def verify_webhook_signature(raw_body: bytes, signature: str, *, secret: str | N
         raise ValueError("Invalid Creem webhook signature.")
 
 
+def verify_redirect_signature(raw_query: str, *, api_key: str | None = None) -> None:
+    checkout_api_key = str(api_key or require_env("CREEM_API_KEY")).strip()
+    provided_signature = ""
+    parts: list[str] = []
+    for key, value in urllib.parse.parse_qsl(str(raw_query or ""), keep_blank_values=False):
+        if key == "signature":
+            provided_signature = value
+            continue
+        if value in {"", "null"}:
+            continue
+        parts.append(f"{key}={value}")
+    if not checkout_api_key:
+        raise RuntimeError("Missing CREEM_API_KEY.")
+    if not provided_signature:
+        raise ValueError("Missing Creem redirect signature.")
+    expected_signature = hashlib.sha256(f"{'|'.join(parts)}|salt={checkout_api_key}".encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(expected_signature, provided_signature):
+        raise ValueError("Invalid Creem redirect signature.")
+
+
 def _creem_request(method: str, path: str, *, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
     api_key = require_env("CREEM_API_KEY")
     url = f"{_creem_api_base_url(api_key)}{path if str(path).startswith('/') else f'/{path}'}"

@@ -443,6 +443,17 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         self._send_json({"checkout_url": checkout_url}, status=HTTPStatus.OK)
                         return
 
+    if segments == ["billing", "checkout", "confirm"]:
+                        context = self._auth_context()
+                        raw_query = str(payload.get("query_string") or payload.get("queryString") or "").strip()
+                        if not raw_query:
+                            raise ValueError("query_string is required")
+                        self._send_json(
+                            _confirm_creem_checkout_redirect(application, context, raw_query),
+                            status=HTTPStatus.OK,
+                        )
+                        return
+
     if segments == ["billing", "portal"]:
                         context = self._auth_context()
                         subscription_record = _lookup_subscription_record(application, context.user.user_id) or {}

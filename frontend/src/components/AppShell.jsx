@@ -420,7 +420,7 @@ export default function AppShell({ children, muteSidebar = false }) {
   }, [desktopSidebarCollapsed]);
 
   const normalizedPlanId = String(
-    clerkUser?.publicMetadata?.plan_id || user?.plan_id || "none",
+    user?.plan_id || clerkUser?.publicMetadata?.plan_id || "none",
   ).trim().toLowerCase() || "none";
   const planBadgeLabel = normalizedPlanId === "free"
     ? "Free"

@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import os
@@ -3116,7 +3117,49 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "bad_request")
         self.assertIn("uppercase letters and numbers", payload["error"]["message"])
 
+    def test_billing_checkout_confirm_promotes_signed_creem_redirect(self):
+        checkout_user = self.app.upsert_user(
+            {
+                "email": "checkout-confirm@example.com",
+                "display_name": "Checkout Confirm",
+                "role": "viewer",
+            }
+        )
+        _, checkout_access_token = self.app.issue_api_token(user_id=checkout_user.user_id, name="checkout-confirm")
+        raw_query = (
+            "checkout=success&plan_id=momentum&checkout_id=ch_123&subscription_id=sub_123&"
+            "product_id=prod_123&customer_id=cust_123&request_id=req_123"
+        )
+        signed_payload = raw_query.replace("&", "|")
+        signature = hashlib.sha256(f"{signed_payload}|salt=creem_test_secret".encode("utf-8")).hexdigest()
+
+        with (
+            patch.dict(os.environ, {"CREEM_API_KEY": "creem_test_secret"}),
+            patch("backend.api.server.get_plan_for_product_id", return_value="momentum"),
+            patch("backend.api.server.update_user_plan_in_clerk"),
+        ):
+            status, _, payload = self._request_with_headers(
+                "POST",
+                "/billing/checkout/confirm",
+                headers={"Authorization": f"Bearer {checkout_access_token}"},
+                payload={"query_string": f"{raw_query}&signature={signature}"},
+            )
+
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["plan_id"], "momentum")
+        subscription = self.app.repositories.auth_repository.get_current_subscription_by_user_id(checkout_user.user_id)
+        self.assertEqual(subscription["plan_id"], "momentum")
+        self.assertEqual(subscription["creem_subscription_id"], "sub_123")
+
     def test_creem_webhook_active_subscription_updates_local_subscription(self):
+        webhook_user = self.app.upsert_user(
+            {
+                "email": "creem-webhook-active@example.com",
+                "display_name": "Creem Webhook Active",
+                "role": "viewer",
+            }
+        )
         event_payload = {
             "id": "evt_creem_active_1",
             "eventType": "subscription.active",
@@ -3127,7 +3170,7 @@ class BackendApiTests(unittest.TestCase):
                 "product": {"id": "prod_momentum", "name": "Momentum"},
                 "customer": {
                     "id": "cust_creem_123",
-                    "email": self.user.email,
+                    "email": webhook_user.email,
                 },
                 "status": "active",
                 "current_period_start_date": "2026-06-19T12:00:00.000Z",
@@ -3135,7 +3178,7 @@ class BackendApiTests(unittest.TestCase):
                 "created_at": "2026-06-19T12:00:00.000Z",
                 "updated_at": "2026-06-19T12:00:00.000Z",
                 "metadata": {
-                    "user_id": self.user.user_id,
+                    "user_id": webhook_user.user_id,
                     "plan_id": "momentum",
                 },
             },
@@ -3154,7 +3197,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["event_type"], "subscription.active")
         verify_mock.assert_called_once()
 
-        subscription = self.app.repositories.auth_repository.get_current_subscription_by_user_id(self.user.user_id)
+        subscription = self.app.repositories.auth_repository.get_current_subscription_by_user_id(webhook_user.user_id)
         self.assertEqual(subscription["billing_provider"], "creem")
         self.assertEqual(subscription["creem_subscription_id"], "sub_creem_123")
         self.assertEqual(subscription["creem_customer_id"], "cust_creem_123")

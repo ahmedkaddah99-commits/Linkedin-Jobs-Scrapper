@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qsl
 from uuid import uuid4
 
 from backend.api.routes import ApiRouteContext, build_route_registry
@@ -154,6 +155,7 @@ from backend.integrations.creem import (
     get_customer_portal_url as get_creem_customer_portal_url,
     list_discounts as list_creem_discounts,
     update_user_plan_in_clerk,
+    verify_redirect_signature as verify_creem_redirect_signature,
     verify_webhook_signature as verify_creem_webhook_signature,
 )
 from backend.worker import WorkerService, configure_worker_logging
@@ -6803,6 +6805,95 @@ def _insert_creem_subscription_event(
             "payload": payload,
         }
     )
+
+
+def _confirm_creem_checkout_redirect(application, context, raw_query: str) -> dict[str, object]:
+    normalized_query = str(raw_query or "").strip().lstrip("?")
+    verify_creem_redirect_signature(normalized_query)
+    params = dict(parse_qsl(normalized_query, keep_blank_values=False))
+    checkout_id = str(params.get("checkout_id") or "").strip()
+    product_id = str(params.get("product_id") or "").strip()
+    plan_id = normalize_plan_id(get_plan_for_product_id(product_id) or params.get("plan_id") or DEFAULT_PLAN_ID)
+    requested_plan_id = normalize_plan_id(params.get("plan_id") or plan_id)
+    if plan_id == DEFAULT_PLAN_ID:
+        raise ValueError("Creem checkout product is not configured for a paid Runr plan.")
+    if requested_plan_id != plan_id:
+        raise ValueError("Creem checkout product does not match the requested Runr plan.")
+
+    metadata = {
+        "user_id": context.user.user_id,
+        "plan_id": plan_id,
+        "clerk_user_id": context.clerk_user_id,
+    }
+    customer_id = str(params.get("customer_id") or "").strip()
+    subscription_id = str(params.get("subscription_id") or "").strip()
+    customer = {
+        "id": customer_id,
+        "email": context.user.email,
+    }
+    if not customer.get("email"):
+        customer["email"] = context.user.email
+    if customer_id and not customer.get("id"):
+        customer["id"] = customer_id
+
+    checkout_object = {
+        "id": checkout_id,
+        "object": "checkout",
+        "request_id": str(params.get("request_id") or "").strip(),
+        "status": "completed",
+        "product": product_id,
+        "customer": customer,
+        "metadata": metadata,
+    }
+    if subscription_id:
+        checkout_object["subscription"] = {
+            "id": subscription_id,
+            "object": "subscription",
+            "product": product_id,
+            "customer": customer,
+            "status": "active",
+            "metadata": metadata,
+        }
+    occurred_at = utc_plus_seconds(0)
+    current_subscription = _lookup_subscription_record(application, context.user.user_id) or {}
+    previous_plan_id = normalize_plan_id(current_subscription.get("plan_id") or DEFAULT_PLAN_ID)
+    repository = _auth_repository(application)
+    if subscription_id:
+        repository.upsert_subscription(
+            {
+                "subscription_id": subscription_id,
+                "user_id": context.user.user_id,
+                "plan_id": plan_id,
+                "status": "active",
+                "billing_provider": "creem",
+                "creem_subscription_id": subscription_id,
+                "creem_customer_id": customer_id,
+                "creem_order_id": str(params.get("order_id") or "").strip(),
+                "current_period_start": str(current_subscription.get("current_period_start") or occurred_at),
+                "current_period_end": str(current_subscription.get("current_period_end") or ""),
+                "cancelled_at": "",
+                "created_at": str(current_subscription.get("created_at") or occurred_at),
+                "updated_at": occurred_at,
+            }
+        )
+    _insert_creem_subscription_event(
+        repository,
+        event_id=str(params.get("checkout_id") or checkout_id or f"creem_redirect_{uuid4().hex[:12]}"),
+        user_id=context.user.user_id,
+        event_type="checkout_completed",
+        plan_id=plan_id,
+        previous_plan_id=previous_plan_id,
+        provider_event_name="checkout.redirect_confirmed",
+        occurred_at=occurred_at,
+        payload={"checkout": checkout_object},
+    )
+    if context.clerk_user_id:
+        update_user_plan_in_clerk(context.clerk_user_id, plan_id)
+    if compare_plan_tiers(previous_plan_id, plan_id) < 0:
+        reset_quota_usage = getattr(repository, "reset_quota_usage", None)
+        if callable(reset_quota_usage):
+            reset_quota_usage(context.user.user_id, _current_period_key())
+    return {"status": "ok", "event_type": "checkout.redirect_confirmed", "user_id": context.user.user_id, "plan_id": plan_id}
 
 
 def _handle_creem_webhook_event(

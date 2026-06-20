@@ -35,6 +35,18 @@ function formatUsageLimit(limit) {
   return Number(limit) === -1 ? "Unlimited" : String(limit ?? 0);
 }
 
+function formatDateTime(value) {
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue) return "Not available";
+  const parsed = new Date(normalizedValue);
+  if (Number.isNaN(parsed.getTime())) return normalizedValue;
+  return parsed.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 function UsageMetric({ label, quota }) {
   const used = Number(quota?.used || 0);
   const limit = Number(quota?.limit ?? 0);
@@ -1184,6 +1196,7 @@ export default function SettingsPage() {
   const usageQuotas = subscriptionData?.usage?.quotas || {};
   const currentPlanId = String(subscriptionData?.plan_id || "none").trim() || "none";
   const currentPlanName = String(subscriptionData?.plan?.display_name || "No subscription").trim() || "No subscription";
+  const subscriptionDetails = subscriptionData?.subscription || {};
   const hasBillingPortalAccess =
     currentPlanId !== "none" || Boolean(String(subscriptionData?.subscription?.creem_customer_id || "").trim());
   const scrapeopsPolicy = subscriptionData?.scrapeops_usage?.policy || {};
@@ -1389,6 +1402,10 @@ export default function SettingsPage() {
                     <div>
                       <p className="text-sm font-semibold text-primary">
                         You are subscribed to {currentPlanName}.
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+                        Period: {formatDateTime(subscriptionDetails.current_period_start)} to{" "}
+                        {formatDateTime(subscriptionDetails.current_period_end)}.
                       </p>
                       <p className="mt-1 text-xs leading-5 text-on-surface-variant">
                         Use the billing portal to manage payment details, invoices, and cancellation.
