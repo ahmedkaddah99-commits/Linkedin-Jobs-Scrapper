@@ -158,12 +158,24 @@ export default function DocumentsPage() {
     loading: documentsLoading,
     error: documentsError,
     refresh: refreshDocuments,
-  } = useApiResource(() => request("/documents?limit=500"), [request]);
+  } = useApiResource(() => request("/documents?limit=500"), [request], {
+    cacheKey: "documents:all",
+    staleMs: 30000,
+    backgroundRefresh: true,
+  });
   const {
     data: settingsPayload,
     refresh: refreshSettings,
-  } = useApiResource(() => request("/settings"), [request]);
-  const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100"), [request]);
+  } = useApiResource(() => request("/settings"), [request], {
+    cacheKey: "settings",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
+  const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100"), [request], {
+    cacheKey: "workspaces:list",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
 
   const allDocuments = documentsPayload?.documents || [];
   const documentGroups = documentsPayload?.groups || [];

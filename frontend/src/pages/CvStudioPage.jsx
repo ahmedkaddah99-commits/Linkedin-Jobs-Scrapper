@@ -301,7 +301,11 @@ export default function CvStudioPage() {
   const returnTo = String(consumedSeed?.returnTo || "/settings");
   const sourceLabel = String(consumedSeed?.sourceLabel || "Profile and document defaults");
 
-  const { data, loading, error, refresh } = useApiResource(() => request("/settings"), [request]);
+  const { data, loading, error, refresh } = useApiResource(() => request("/settings"), [request], {
+    cacheKey: "settings",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
 
   useEffect(() => {
     if (!data || studioState) return;

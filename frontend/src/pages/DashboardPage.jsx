@@ -865,7 +865,11 @@ function SourceEffectivenessPanel({ sources }) {
 
 export default function DashboardPage() {
   const { error: sessionError, isConnected, request, status } = useSession();
-  const { data, loading, error, refresh } = useApiResource(() => loadDashboardPayload(request), [request]);
+  const { data, loading, error, refresh } = useApiResource(() => loadDashboardPayload(request), [request], {
+    cacheKey: "dashboard",
+    staleMs: 30000,
+    backgroundRefresh: true,
+  });
   const hasActiveDashboardWork = Boolean(
     (data?.recent_runs || []).some((run) => ACTIVE_RUN_STATUSES.includes(String(run.status || "").trim()))
     || (data?.cards || []).some((card) =>

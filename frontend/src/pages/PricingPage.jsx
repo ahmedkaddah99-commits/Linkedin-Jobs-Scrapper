@@ -55,13 +55,21 @@ export default function PricingPage() {
     loading: plansLoading,
     error: plansError,
     refresh: refreshPlans,
-  } = useApiResource(() => request("/billing/plans"), [request]);
+  } = useApiResource(() => request("/billing/plans"), [request], {
+    cacheKey: "billing:plans",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
   const {
     data: subscriptionPayload,
     loading: subscriptionLoading,
     error: subscriptionError,
     refresh: refreshSubscription,
-  } = useApiResource(() => request("/billing/subscription"), [request]);
+  } = useApiResource(() => request("/billing/subscription"), [request], {
+    cacheKey: "billing:subscription",
+    staleMs: 300000,
+    backgroundRefresh: true,
+  });
 
   const plans = Array.isArray(plansPayload?.plans) ? plansPayload.plans : [];
   const currentPlanId = String(subscriptionPayload?.plan_id || user?.plan_id || "none").trim() || "none";

@@ -1015,13 +1015,21 @@ export default function SettingsPage() {
   const cvFileInputRef = useRef(null);
   const photoFileInputRef = useRef(null);
 
-  const { data, loading, error, refresh } = useApiResource(() => request("/settings"), [request]);
+  const { data, loading, error, refresh } = useApiResource(() => request("/settings"), [request], {
+    cacheKey: "settings",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
   const {
     data: subscriptionData,
     loading: usageLoading,
     error: usageError,
     refresh: refreshUsage,
-  } = useApiResource(() => request("/billing/subscription"), [request]);
+  } = useApiResource(() => request("/billing/subscription"), [request], {
+    cacheKey: "billing:subscription",
+    staleMs: 300000,
+    backgroundRefresh: true,
+  });
 
   useEffect(() => {
     if (data) {

@@ -1404,7 +1404,11 @@ export default function WorkspacesPage() {
     loading,
     error,
     refresh,
-  } = useApiResource(() => request("/workspaces?limit=100"), [request]);
+  } = useApiResource(() => request("/workspaces?limit=100"), [request], {
+    cacheKey: "workspaces:list",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
   const {
     scheduleEditorState,
     setScheduleEditorState,
@@ -1417,12 +1421,24 @@ export default function WorkspacesPage() {
     loading: builderLoading,
     error: builderError,
     refresh: refreshBuilderCatalog,
-  } = useApiResource(() => request("/workspace-builder/catalog"), [request]);
-  const { data: settingsPayload } = useApiResource(() => request("/settings"), [request]);
+  } = useApiResource(() => request("/workspace-builder/catalog"), [request], {
+    cacheKey: "workspace-builder:catalog",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
+  const { data: settingsPayload } = useApiResource(() => request("/settings"), [request], {
+    cacheKey: "settings",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
   const {
     data: cvAssetsPayload,
     refresh: refreshCvAssets,
-  } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request]);
+  } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request], {
+    cacheKey: "documents:workspace-cv",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
 
   const allCountryOptions = useMemo(() => getAllCountryOptions(), []);
   const workspaces = useMemo(
@@ -1445,7 +1461,12 @@ export default function WorkspacesPage() {
         ? request(`/documents?workspace_id=${encodeURIComponent(focusedWorkspaceId)}&limit=60`)
         : Promise.resolve({ documents: [] }),
     [request, focusedWorkspaceId],
-    { immediate: Boolean(focusedWorkspaceId) },
+    {
+      immediate: Boolean(focusedWorkspaceId),
+      cacheKey: focusedWorkspaceId ? `documents:workspace:${focusedWorkspaceId}` : "",
+      staleMs: Infinity,
+      backgroundRefresh: false,
+    },
   );
   const flows = useMemo(
     () => (builderCatalog?.flows || []).filter((flow) => flow.frontend_visible !== false),

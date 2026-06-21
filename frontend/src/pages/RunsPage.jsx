@@ -55,6 +55,11 @@ export default function RunsPage() {
         `/runs?limit=100&workspace_id=${encodeURIComponent(workspaceId)}&status=${encodeURIComponent(status)}`,
       ),
     [request, workspaceId, status],
+    {
+      cacheKey: `runs:${workspaceId}:${status}`,
+      staleMs: 10000,
+      backgroundRefresh: true,
+    },
   );
 
   const runs = data?.runs || [];

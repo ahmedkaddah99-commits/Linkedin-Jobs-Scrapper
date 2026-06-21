@@ -1,7 +1,6 @@
 import { useCallback, useState } from "react";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "./useApiResource";
-import { loadTrackerShell } from "../lib/trackerLoading";
 
 const COLUMN_ORDER = ["not_applied", "applied", "interview_invited", "rejected", "offer", "withdrawn", "unknown"];
 
@@ -25,13 +24,41 @@ export function useTracker() {
   const [integrationBusy, setIntegrationBusy] = useState("");
   const [lastSyncResult, setLastSyncResult] = useState(null);
 
-  const loader = useCallback(() => loadTrackerShell(request), [request]);
+  const {
+    data: tracker,
+    loading: trackerLoading,
+    error: trackerError,
+    refresh: refreshTracker,
+    setData: setTrackerData,
+  } = useApiResource(() => request("/tracker"), [request], {
+    cacheKey: "tracker:items",
+    staleMs: 15000,
+    backgroundRefresh: true,
+  });
+  const {
+    data: integration,
+    loading: integrationLoading,
+    error: integrationError,
+    refresh: refreshIntegration,
+    setData: setIntegrationData,
+  } = useApiResource(() => request("/tracker/email-integration"), [request], {
+    cacheKey: "tracker:email-integration",
+    staleMs: 300000,
+    backgroundRefresh: true,
+  });
+  const refresh = useCallback(async (options) => {
+    const [nextTracker, nextIntegration] = await Promise.all([
+      refreshTracker(options),
+      refreshIntegration(options),
+    ]);
+    return { tracker: nextTracker, integration: nextIntegration };
+  }, [refreshIntegration, refreshTracker]);
 
-  const { data, loading, error, refresh, setData } = useApiResource(loader, [loader]);
-
-  const items = data?.tracker?.items || [];
+  const items = tracker?.items || [];
   const columns = groupByStatus(items);
-  const emailIntegration = data?.integration || { providers: [], config: null };
+  const emailIntegration = integration || { providers: [], config: null };
+  const loading = trackerLoading || (!tracker && integrationLoading);
+  const error = trackerError || (!tracker ? integrationError : "");
 
   function removeDetectionsFromLastSyncResult(detections) {
     const resolvedIds = new Set((detections || []).map(detectionKey).filter(Boolean));
@@ -51,7 +78,7 @@ export function useTracker() {
 
   async function refreshEmailIntegration() {
     const integration = await request("/tracker/email-integration");
-    setData((prev) => ({ ...(prev || {}), integration }));
+    setIntegrationData(integration);
     return integration;
   }
 
@@ -62,16 +89,13 @@ export function useTracker() {
         method: "PUT",
         body: fields,
       });
-      setData((prev) => {
-        const tracker = prev?.tracker || { items: [] };
+      setTrackerData((prev) => {
+        const currentTracker = prev || { items: [] };
         return {
-          ...(prev || {}),
-          tracker: {
-            ...tracker,
-            items: (tracker.items || []).map((item) =>
-              item.review_id === reviewId ? { ...item, ...fields, ...result } : item,
-            ),
-          },
+          ...currentTracker,
+          items: (currentTracker.items || []).map((item) =>
+            item.review_id === reviewId ? { ...item, ...fields, ...result } : item,
+          ),
         };
       });
       return result;
@@ -90,14 +114,11 @@ export function useTracker() {
       const result = await request(`/tracker/${reviewId}`, {
         method: "DELETE",
       });
-      setData((prev) => {
-        const tracker = prev?.tracker || { items: [] };
+      setTrackerData((prev) => {
+        const currentTracker = prev || { items: [] };
         return {
-          ...(prev || {}),
-          tracker: {
-            ...tracker,
-            items: (tracker.items || []).filter((entry) => entry.review_id !== reviewId),
-          },
+          ...currentTracker,
+          items: (currentTracker.items || []).filter((entry) => entry.review_id !== reviewId),
         };
       });
       return result;
@@ -113,7 +134,7 @@ export function useTracker() {
         method: "POST",
         body: fields,
       });
-      setData((prev) => ({ ...(prev || {}), integration: result.integration }));
+      setIntegrationData(result.integration);
       return result;
     } finally {
       setIntegrationBusy("");
@@ -127,7 +148,7 @@ export function useTracker() {
         method: "PUT",
         body: fields,
       });
-      setData((prev) => ({ ...(prev || {}), integration: result }));
+      setIntegrationData(result);
       return result;
     } finally {
       setIntegrationBusy("");
@@ -143,11 +164,8 @@ export function useTracker() {
       });
       const tracker = await request("/tracker");
       setLastSyncResult(result.result || null);
-      setData((prev) => ({
-        ...(prev || {}),
-        tracker,
-        integration: result.integration,
-      }));
+      setTrackerData(tracker);
+      setIntegrationData(result.integration);
       return result;
     } finally {
       setIntegrationBusy("");
@@ -162,11 +180,8 @@ export function useTracker() {
         body: { detections },
       });
       removeDetectionsFromLastSyncResult(detections);
-      setData((prev) => ({
-        ...(prev || {}),
-        tracker: result.tracker,
-        integration: result.integration,
-      }));
+      setTrackerData(result.tracker);
+      setIntegrationData(result.integration);
       return result;
     } finally {
       setIntegrationBusy("");
@@ -181,10 +196,7 @@ export function useTracker() {
         body: { detections },
       });
       removeDetectionsFromLastSyncResult(detections);
-      setData((prev) => ({
-        ...(prev || {}),
-        integration: result.integration,
-      }));
+      setIntegrationData(result.integration);
       return result;
     } finally {
       setIntegrationBusy("");
@@ -198,10 +210,7 @@ export function useTracker() {
         method: "DELETE",
       });
       setLastSyncResult(null);
-      setData((prev) => ({
-        ...(prev || {}),
-        integration: result.integration,
-      }));
+      setIntegrationData(result.integration);
       return result;
     } finally {
       setIntegrationBusy("");

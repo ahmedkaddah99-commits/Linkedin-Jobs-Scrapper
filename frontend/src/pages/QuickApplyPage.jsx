@@ -374,23 +374,39 @@ export default function QuickApplyPage() {
     data: workspacesPayload,
     loading,
     error,
-  } = useApiResource(() => request("/workspaces?limit=100"), [request]);
+  } = useApiResource(() => request("/workspaces?limit=100"), [request], {
+    cacheKey: "workspaces:list",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
   const {
     data: builderCatalog,
     loading: builderLoading,
     error: builderError,
-  } = useApiResource(() => request("/workspace-builder/catalog"), [request]);
+  } = useApiResource(() => request("/workspace-builder/catalog"), [request], {
+    cacheKey: "workspace-builder:catalog",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
   const {
     data: settingsPayload,
     loading: settingsLoading,
     error: settingsError,
-  } = useApiResource(() => request("/settings"), [request]);
+  } = useApiResource(() => request("/settings"), [request], {
+    cacheKey: "settings",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
   const {
     data: cvAssetsPayload,
     loading: cvAssetsLoading,
     error: cvAssetsError,
     refresh: refreshCvAssets,
-  } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request]);
+  } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request], {
+    cacheKey: "documents:workspace-cv",
+    staleMs: Infinity,
+    backgroundRefresh: false,
+  });
 
   const eligibleWorkspaces = useMemo(
     () => (workspacesPayload?.workspaces || []).filter((workspace) => workspaceSupportsQuickApply(workspace)),
@@ -635,22 +651,6 @@ export default function QuickApplyPage() {
     }
   }
 
-  if (loadingOptions) {
-    return (
-      <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 text-on-surface-variant shadow-soft">
-        Loading quick-apply options...
-      </div>
-    );
-  }
-
-  if (resourceError) {
-    return (
-      <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
-        <p className="text-error">{resourceError}</p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-8">
       <header className="space-y-3">
@@ -664,6 +664,16 @@ export default function QuickApplyPage() {
           Exact job links only. No company-site crawling or motivation letters.
         </p>
       </header>
+
+      {resourceError ? (
+        <div className="rounded-xl border border-error/20 bg-error/5 px-4 py-3 text-sm text-error">
+          {resourceError}
+        </div>
+      ) : loadingOptions ? (
+        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm text-on-surface-variant shadow-soft">
+          Loading quick-apply options in the background...
+        </div>
+      ) : null}
 
       <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
         <label className="space-y-2">
