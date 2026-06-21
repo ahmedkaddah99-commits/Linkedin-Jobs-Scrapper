@@ -538,6 +538,7 @@ export default function QuickApplyPage() {
       const response = await request("/cv-upload", {
         method: "POST",
         body: formData,
+        timeoutMs: 90000,
       });
       const uploadedAssetId = response?.asset?.asset_id || "";
       if (uploadedAssetId) {

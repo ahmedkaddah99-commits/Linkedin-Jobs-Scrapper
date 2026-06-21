@@ -40,6 +40,13 @@ class DocumentTextTests(unittest.TestCase):
         self.assertEqual(extraction["text"], "")
         self.assertTrue(extraction["warnings"])
 
+    def test_fast_pdf_extraction_skips_ocr_when_native_text_is_missing(self):
+        extraction = extract_document_text("scan.pdf", b"%PDF-1.4\n", allow_ocr=False)
+
+        self.assertEqual(extraction["text"], "")
+        self.assertEqual(extraction["method"], "pdf_native")
+        self.assertIn("Scanned PDFs need OCR", extraction["warnings"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

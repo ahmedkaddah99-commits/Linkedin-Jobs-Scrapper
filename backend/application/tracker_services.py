@@ -130,7 +130,28 @@ class TrackerApplicationService:
                 "parsed": len(parsed_contacts),
                 "total_contacts": len(refreshed_contacts),
             },
-            "contacts": [contact.to_dict() for contact in refreshed_contacts if contact.contact_id in imported_contact_ids],
+            "imported_contact_ids": sorted(imported_contact_ids),
+            "contacts": [contact.to_dict() for contact in refreshed_contacts],
+        }
+
+    def delete_imported_referral_contacts(
+        self,
+        *,
+        user_id: str,
+    ) -> dict[str, Any]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        contacts = self.list_referral_contacts(user_id)
+        kept_contacts = [
+            contact
+            for contact in contacts
+            if contact.source_kind not in {"linkedin_csv", "linkedin_csv_import"}
+        ]
+        deleted_count = len(contacts) - len(kept_contacts)
+        if deleted_count:
+            self._persist_referral_contacts(user, kept_contacts)
+        return {
+            "deleted": deleted_count,
+            "contacts": [contact.to_dict() for contact in kept_contacts],
         }
 
     def delete_referral_contact(self, user_id: str, contact_id: str) -> None:

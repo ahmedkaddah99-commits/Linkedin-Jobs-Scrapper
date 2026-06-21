@@ -211,6 +211,8 @@ export async function apiRequest(baseUrl, accessTokenOrResolver, path, options =
     body,
     headers = {},
     responseType = "json",
+    timeoutMs = 0,
+    signal,
   } = options;
   const resolvedAccessToken = await resolveAccessToken(accessTokenOrResolver);
   const requestHeaders = {
@@ -224,11 +226,25 @@ export async function apiRequest(baseUrl, accessTokenOrResolver, path, options =
     requestHeaders["Content-Type"] = "application/json";
     requestBody = JSON.stringify(body);
   }
-  const response = await fetch(resolveApiUrl(baseUrl, path), {
-    method,
-    headers: requestHeaders,
-    body: requestBody,
-  });
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  let timeoutId = null;
+  if (controller) {
+    timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  }
+  if (signal && controller) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+  }
+  try {
+    const response = await fetch(resolveApiUrl(baseUrl, path), {
+      method,
+      headers: requestHeaders,
+      body: requestBody,
+      signal: controller?.signal || signal,
+    });
   if (responseType === "blob") {
     if (!response.ok) {
       const text = await response.text();
@@ -243,4 +259,14 @@ export async function apiRequest(baseUrl, accessTokenOrResolver, path, options =
     throw buildApiError(response, payload, text);
   }
   return payload || {};
+  } catch (error) {
+    if (error?.name === "AbortError" && timeoutMs > 0) {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+    }
+    throw error;
+  } finally {
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+    }
+  }
 }

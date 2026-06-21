@@ -2058,6 +2058,60 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"Jane Candidate", downloaded)
 
+    def test_cv_upload_is_idempotent_for_same_file_content(self):
+        file_bytes = (
+            b"Jane Candidate\n"
+            b"Operations Analyst\n"
+            b"Summary\nExperienced operations analyst.\n"
+            b"Skills\nExcel, SQL\n"
+        )
+        first_status, first_payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "structured_resume.txt",
+            file_bytes,
+        )
+        self.assertEqual(first_status, 201)
+        user = self.app.get_user(self.user.user_id)
+        metadata = dict(user.metadata or {})
+        assets = []
+        for asset in metadata.get("candidate_assets") or []:
+            asset = dict(asset)
+            asset_metadata = dict(asset.get("metadata") or {})
+            asset_metadata.pop("content_sha256", None)
+            asset["metadata"] = asset_metadata
+            assets.append(asset)
+        metadata["candidate_assets"] = assets
+        user.metadata = metadata
+        self.app.repositories.auth_repository.upsert_user(user)
+
+        second_status, second_payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "structured_resume_retry.txt",
+            file_bytes,
+        )
+
+        self.assertEqual(second_status, 201)
+        self.assertEqual(first_payload["asset"]["asset_id"], second_payload["asset"]["asset_id"])
+
+        user = self.app.get_user(self.user.user_id)
+        metadata = dict(user.metadata or {})
+        assets = list(metadata.get("candidate_assets") or [])
+        duplicate = json.loads(json.dumps(assets[0]))
+        duplicate["asset_id"] = "asset_duplicate_retry"
+        assets.append(duplicate)
+        metadata["candidate_assets"] = assets
+        user.metadata = metadata
+        self.app.repositories.auth_repository.upsert_user(user)
+
+        status, documents_payload = self._request("GET", "/documents?asset_kind=workspace_cv")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(documents_payload["documents"]), 1)
+        cleaned_user = self.app.get_user(self.user.user_id)
+        cleaned_assets = (cleaned_user.metadata or {}).get("candidate_assets") or []
+        self.assertEqual(len(cleaned_assets), 1)
+
     def test_workspace_cv_preview_does_not_render_language_entries_as_custom_sections(self):
         preview = _build_workspace_cv_preview_profile(
             "Jane Candidate\nOperations Analyst\nLanguages\nArabic - Native\nEnglish - C1\nGerman - B1/B2\n",
@@ -2903,6 +2957,14 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["database"]["target_backend"], "sqlite")
         self.assertEqual(payload["object_storage"]["backend"], "local")
+        self.assertIn("database_select", payload["timings_ms"])
+
+        status, payload = self._request("GET", "/health/ready?probe=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["probes"]["database_write"], "ok")
+        self.assertEqual(payload["probes"]["object_storage_write"], "ok")
+        self.assertIn("database_write_read_delete", payload["timings_ms"])
+        self.assertIn("object_storage_put_get_delete", payload["timings_ms"])
 
     def test_admin_events_endpoint_supports_filters_pagination_and_admin_role(self):
         analytics_store = self.app.repositories.analytics_store
@@ -3247,6 +3309,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(import_payload["summary"]["created"], 1)
         self.assertEqual(import_payload["summary"]["updated"], 1)
+        self.assertEqual(len(import_payload["contacts"]), 1)
 
         status, referrals_payload = self._request("GET", "/referrals")
         self.assertEqual(status, 200)
@@ -3256,6 +3319,43 @@ class BackendApiTests(unittest.TestCase):
             ["ACME API", "Contoso"],
         )
         self.assertEqual(referrals_payload["contacts"][0]["source_kind"], "linkedin_csv")
+
+    def test_referrals_import_can_be_cleared_without_deleting_manual_contacts(self):
+        status, manual_payload = self._request(
+            "POST",
+            "/referrals",
+            {
+                "name": "Manual Contact",
+                "company": "Manual Co",
+                "companies": [{"company_name": "Manual Co", "role_title": "", "can_refer": True}],
+                "source_kind": "manual",
+            },
+        )
+        self.assertEqual(status, 201)
+
+        status, _ = self._request(
+            "POST",
+            "/referrals/import",
+            {
+                "csv_text": (
+                    "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                    "Jane,Referrer,https://linkedin.com/in/jane-referrer,,ACME API,Engineering Manager,01 Jan 2024\n"
+                ),
+                "source_kind": "linkedin_csv",
+            },
+        )
+        self.assertEqual(status, 200)
+
+        status, clear_payload = self._request("DELETE", "/referrals/import")
+        self.assertEqual(status, 200)
+        self.assertEqual(clear_payload["deleted"], 1)
+        self.assertEqual(len(clear_payload["contacts"]), 1)
+        self.assertEqual(clear_payload["contacts"][0]["contact_id"], manual_payload["contact_id"])
+
+        status, referrals_payload = self._request("GET", "/referrals")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(referrals_payload["contacts"]), 1)
+        self.assertEqual(referrals_payload["contacts"][0]["source_kind"], "manual")
 
     def test_api_supports_versioned_routes_pagination_and_worker_visibility(self):
         self._request(

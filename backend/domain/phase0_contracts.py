@@ -813,6 +813,7 @@ def default_candidate_asset_descriptor() -> dict[str, Any]:
             "tags": [],
             "source_text": "",
             "source_char_count": 0,
+            "content_sha256": "",
             "text_extraction": {
                 "method": "",
                 "warnings": [],
@@ -857,6 +858,7 @@ def normalize_candidate_asset_descriptor(payload: Mapping[str, Any] | None) -> d
     contract["metadata"]["created_at"] = _clean_text(raw.get("created_at") or metadata.get("created_at"))
     contract["metadata"]["tags"] = _clean_tag_list(raw.get("tags") or metadata.get("tags"), limit=20)
     contract["metadata"]["source_text"] = str(metadata.get("source_text") or "")
+    contract["metadata"]["content_sha256"] = _clean_text(metadata.get("content_sha256"))
     try:
         contract["metadata"]["source_char_count"] = max(0, int(metadata.get("source_char_count") or 0))
     except (TypeError, ValueError):

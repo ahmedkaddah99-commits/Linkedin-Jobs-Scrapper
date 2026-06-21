@@ -1070,20 +1070,13 @@ export default function SettingsPage() {
     if (!file) return;
     setCvUploadState({ uploading: true, message: "", error: "" });
     try {
-      const accessToken = await getAccessToken();
       const formData = new FormData();
       formData.append("cv_file", file, file.name);
-      const res = await fetch(resolvePath("/cv-upload"), {
+      const json = await request("/cv-upload", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
         body: formData,
+        timeoutMs: 90000,
       });
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error?.message || "Upload failed");
-      }
       const parsed = json.parsed || {};
       const extractionProvider = String(json?.extraction?.provider || "").trim();
       setDraft((current) => ({

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
@@ -40,6 +40,28 @@ const REFERRAL_SECTION_OPTIONS = [
     icon: "group",
   },
 ];
+const CONTACT_RENDER_BATCH_SIZE = 50;
+let referralWorkspaceCache = null;
+let referralWorkspaceCacheRequest = null;
+
+function cacheReferralWorkspace(data, request = referralWorkspaceCacheRequest) {
+  referralWorkspaceCache = data;
+  referralWorkspaceCacheRequest = request;
+  return data;
+}
+
+function emptyReferralWorkspace() {
+  return {
+    contacts: [],
+    outreachItems: [],
+    trackerItems: [],
+    meta: {
+      contacts: { total: 0, returned: 0 },
+      outreach: { total: 0, returned: 0 },
+      detailsLoaded: false,
+    },
+  };
+}
 
 function ReferralFormField({ label, children, hint = "" }) {
   return (
@@ -160,20 +182,40 @@ async function loadAllReferralOutreachItems(request) {
 }
 
 async function loadReferralWorkspace(request) {
-  const [contactsPayload, outreachPayload, trackerPayload] = await Promise.all([
-    loadAllReferralContacts(request),
+  if (referralWorkspaceCache && referralWorkspaceCacheRequest === request) {
+    return referralWorkspaceCache;
+  }
+  const contactsPayload = await loadAllReferralContacts(request);
+  return cacheReferralWorkspace({
+    contacts: contactsPayload.contacts,
+    outreachItems: [],
+    trackerItems: [],
+    meta: {
+      contacts: contactsPayload.meta,
+      outreach: { total: 0, returned: 0 },
+      detailsLoaded: false,
+    },
+  }, request);
+}
+
+async function loadReferralDetails(request, currentData) {
+  if (currentData?.meta?.detailsLoaded) {
+    return currentData;
+  }
+  const [outreachPayload, trackerPayload] = await Promise.all([
     loadAllReferralOutreachItems(request),
     request("/tracker").catch(() => ({ items: [] })),
   ]);
-  return {
-    contacts: contactsPayload.contacts,
+  return cacheReferralWorkspace({
+    ...(currentData || emptyReferralWorkspace()),
     outreachItems: outreachPayload.items,
     trackerItems: Array.isArray(trackerPayload?.items) ? trackerPayload.items : [],
     meta: {
-      contacts: contactsPayload.meta,
+      ...(currentData?.meta || {}),
       outreach: outreachPayload.meta,
+      detailsLoaded: true,
     },
-  };
+  }, request);
 }
 
 function buildPeopleFinderTargetKey(runId, jobId) {
@@ -209,17 +251,20 @@ export default function ReferralsPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState("");
   const [activeSection, setActiveSection] = useState("manual");
+  const [visibleContactLimit, setVisibleContactLimit] = useState(CONTACT_RENDER_BATCH_SIZE);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [actionState, setActionState] = useState({ message: "", error: "", busyId: "" });
   const [importState, setImportState] = useState({
     csvText: "",
     fileName: "",
     busy: false,
+    clearing: false,
     message: "",
     error: "",
     summary: null,
   });
 
-  const { data, loading, error, refresh } = useApiResource(() => loadReferralWorkspace(request), [request]);
+  const { data, loading, error, refresh, setData } = useApiResource(() => loadReferralWorkspace(request), [request]);
 
   const contacts = data?.contacts || [];
   const outreachItems = data?.outreachItems || [];
@@ -237,6 +282,9 @@ export default function ReferralsPage() {
     [contacts],
   );
   const visibleContacts = activeSection === "linkedin" ? linkedinContacts : manualContacts;
+  const renderedContacts = visibleContacts.slice(0, visibleContactLimit);
+  const hiddenContactCount = Math.max(0, visibleContacts.length - renderedContacts.length);
+  const detailsLoaded = Boolean(data?.meta?.detailsLoaded);
   const editingLinkedInContact = isLinkedInImportedContact(editingContact);
   const stats = useMemo(() => {
     const uniqueCompanies = new Set(
@@ -323,6 +371,43 @@ export default function ReferralsPage() {
     );
   }, [outreachItems, trackerItems]);
 
+  useEffect(() => {
+    setVisibleContactLimit(CONTACT_RENDER_BATCH_SIZE);
+  }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "people" || !data || detailsLoaded || detailsLoading) {
+      return;
+    }
+    let cancelled = false;
+    setDetailsLoading(true);
+    loadReferralDetails(request, data)
+      .then((payload) => {
+        if (!cancelled) {
+          setData(payload);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) {
+          setDetailsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, data, detailsLoaded, detailsLoading, request, setData]);
+
+  function updateReferralData(updater) {
+    setData((current) => cacheReferralWorkspace(updater(current || referralWorkspaceCache || emptyReferralWorkspace())));
+  }
+
+  function refreshContactsFromServer() {
+    referralWorkspaceCache = null;
+    referralWorkspaceCacheRequest = null;
+    return refresh({ showLoading: false });
+  }
+
   function updateForm(patch) {
     setForm((current) => ({ ...current, ...patch }));
   }
@@ -364,7 +449,7 @@ export default function ReferralsPage() {
         : {
             source_kind: "manual",
           };
-      await request(path, {
+      const savedContact = await request(path, {
         method,
         body: {
           name: form.name,
@@ -382,7 +467,25 @@ export default function ReferralsPage() {
         error: "",
         busyId: "",
       });
-      await refresh();
+      updateReferralData((current) => {
+        const contacts = Array.isArray(current.contacts) ? current.contacts : [];
+        const existingIndex = contacts.findIndex((contact) => contact.contact_id === savedContact.contact_id);
+        const nextContacts = existingIndex >= 0
+          ? contacts.map((contact, index) => (index === existingIndex ? savedContact : contact))
+          : [...contacts, savedContact];
+        return {
+          ...current,
+          contacts: nextContacts,
+          meta: {
+            ...(current.meta || {}),
+            contacts: {
+              ...((current.meta || {}).contacts || {}),
+              total: nextContacts.length,
+              returned: nextContacts.length,
+            },
+          },
+        };
+      });
     } catch (saveError) {
       setActionState({
         message: "",
@@ -400,7 +503,23 @@ export default function ReferralsPage() {
         resetForm();
       }
       setActionState({ message: "Referral contact deleted.", error: "", busyId: "" });
-      await refresh();
+      updateReferralData((current) => {
+        const nextContacts = (Array.isArray(current.contacts) ? current.contacts : []).filter(
+          (contact) => contact.contact_id !== contactId,
+        );
+        return {
+          ...current,
+          contacts: nextContacts,
+          meta: {
+            ...(current.meta || {}),
+            contacts: {
+              ...((current.meta || {}).contacts || {}),
+              total: nextContacts.length,
+              returned: nextContacts.length,
+            },
+          },
+        };
+      });
     } catch (deleteError) {
       setActionState({
         message: "",
@@ -424,7 +543,13 @@ export default function ReferralsPage() {
         },
       });
       setActionState({ message: "Outreach status updated.", error: "", busyId: "" });
-      await refresh();
+      updateReferralData((current) => ({
+        ...current,
+        meta: {
+          ...(current.meta || {}),
+          detailsLoaded: false,
+        },
+      }));
     } catch (updateError) {
       setActionState({
         message: "",
@@ -445,6 +570,7 @@ export default function ReferralsPage() {
         },
       });
       const summary = payload?.summary || {};
+      const refreshedContacts = Array.isArray(payload?.contacts) ? payload.contacts : null;
       setImportState((current) => ({
         ...current,
         busy: false,
@@ -452,7 +578,22 @@ export default function ReferralsPage() {
         summary,
         error: "",
       }));
-      await refresh();
+      if (refreshedContacts) {
+        updateReferralData((current) => ({
+          ...current,
+          contacts: refreshedContacts,
+          meta: {
+            ...(current.meta || {}),
+            contacts: {
+              ...((current.meta || {}).contacts || {}),
+              total: refreshedContacts.length,
+              returned: refreshedContacts.length,
+            },
+          },
+        }));
+      } else {
+        await refresh({ showLoading: false });
+      }
     } catch (importError) {
       setImportState((current) => ({
         ...current,
@@ -460,6 +601,52 @@ export default function ReferralsPage() {
         message: "",
         error: importError.message || "Unable to import referral contacts.",
         summary: null,
+      }));
+    }
+  }
+
+  async function clearLinkedInConnections() {
+    if (!linkedinContacts.length) {
+      return;
+    }
+    const confirmed = window.confirm(
+      "Delete all imported LinkedIn connections? Personal contacts will stay saved.",
+    );
+    if (!confirmed) {
+      return;
+    }
+    setImportState((current) => ({ ...current, clearing: true, message: "", error: "", summary: null }));
+    try {
+      const payload = await request("/referrals/import", { method: "DELETE" });
+      const refreshedContacts = Array.isArray(payload?.contacts) ? payload.contacts : [];
+      updateReferralData((current) => ({
+        ...current,
+        contacts: refreshedContacts,
+        outreachItems: [],
+        trackerItems: current.trackerItems || [],
+        meta: {
+          ...(current.meta || {}),
+          contacts: {
+            ...((current.meta || {}).contacts || {}),
+            total: refreshedContacts.length,
+            returned: refreshedContacts.length,
+          },
+          outreach: { total: 0, returned: 0 },
+          detailsLoaded: false,
+        },
+      }));
+      setImportState((current) => ({
+        ...current,
+        clearing: false,
+        message: `Deleted ${payload?.deleted || 0} imported LinkedIn connection${Number(payload?.deleted || 0) === 1 ? "" : "s"}.`,
+        error: "",
+      }));
+    } catch (clearError) {
+      setImportState((current) => ({
+        ...current,
+        clearing: false,
+        message: "",
+        error: clearError.message || "Unable to delete imported LinkedIn connections.",
       }));
     }
   }
@@ -770,7 +957,7 @@ export default function ReferralsPage() {
                 </button>
                 <button
                   className="rounded bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                  onClick={() => refresh().catch(() => undefined)}
+                  onClick={() => refreshContactsFromServer().catch(() => undefined)}
                   type="button"
                 >
                   Refresh
@@ -860,11 +1047,19 @@ export default function ReferralsPage() {
               <div className="mt-6 flex flex-wrap gap-3">
                 <button
                   className="rounded bg-primary px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={!String(importState.csvText || "").trim() || importState.busy}
+                  disabled={!String(importState.csvText || "").trim() || importState.busy || importState.clearing}
                   onClick={handleImport}
                   type="button"
                 >
-                  {importState.busy ? "Importing..." : "Import CSV"}
+                  {importState.busy ? "Importing..." : linkedinContacts.length ? "Update CSV" : "Import CSV"}
+                </button>
+                <button
+                  className="rounded bg-error/10 px-4 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={!linkedinContacts.length || importState.busy || importState.clearing}
+                  onClick={clearLinkedInConnections}
+                  type="button"
+                >
+                  {importState.clearing ? "Deleting..." : "Delete Imported List"}
                 </button>
               </div>
             </div>
@@ -893,7 +1088,8 @@ export default function ReferralsPage() {
             ) : error ? (
               <div className="px-6 py-10 text-error">{error}</div>
             ) : visibleContacts.length ? (
-              visibleContacts.map((contact) => {
+              <>
+              {renderedContacts.map((contact) => {
                 const contactOutreach = outreachByContact.get(contact.contact_id) || [];
 
                 return (
@@ -961,6 +1157,7 @@ export default function ReferralsPage() {
                           {contact.relationship_note || "No relationship note saved yet."}
                         </p>
 
+                        {detailsLoaded ? (
                         <div className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
@@ -1061,6 +1258,7 @@ export default function ReferralsPage() {
                             </div>
                           )}
                         </div>
+                        ) : null}
                       </div>
 
                       <div className="flex flex-wrap gap-2">
@@ -1083,7 +1281,21 @@ export default function ReferralsPage() {
                     </div>
                   </article>
                 );
-              })
+              })}
+              {hiddenContactCount ? (
+                <div className="px-6 py-5">
+                  <button
+                    className="w-full rounded bg-surface-container-low px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    onClick={() =>
+                      setVisibleContactLimit((current) => current + CONTACT_RENDER_BATCH_SIZE)
+                    }
+                    type="button"
+                  >
+                    Show {Math.min(CONTACT_RENDER_BATCH_SIZE, hiddenContactCount)} more of {hiddenContactCount}
+                  </button>
+                </div>
+              ) : null}
+              </>
             ) : (
               <div className="px-6 py-10 text-on-surface-variant">
                 {visibleSectionEmptyCopy}

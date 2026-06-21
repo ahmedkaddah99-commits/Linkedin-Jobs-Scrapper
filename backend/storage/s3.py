@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -23,13 +24,31 @@ def _create_s3_client(
             "S3ObjectStorage requires boto3 and botocore. Install the runtime object-storage dependency."
         ) from exc
 
+    try:
+        connect_timeout = max(1, int(os.getenv("S3_CONNECT_TIMEOUT_SECONDS", "3") or "3"))
+    except (TypeError, ValueError):
+        connect_timeout = 3
+    try:
+        read_timeout = max(1, int(os.getenv("S3_READ_TIMEOUT_SECONDS", "15") or "15"))
+    except (TypeError, ValueError):
+        read_timeout = 15
+    try:
+        max_attempts = max(1, int(os.getenv("S3_MAX_ATTEMPTS", "2") or "2"))
+    except (TypeError, ValueError):
+        max_attempts = 2
+
     return boto3.client(
         "s3",
         endpoint_url=endpoint_url,
         aws_access_key_id=access_key_id,
         aws_secret_access_key=secret_access_key,
         region_name=region,
-        config=Config(signature_version="s3v4"),
+        config=Config(
+            signature_version="s3v4",
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
+            retries={"max_attempts": max_attempts, "mode": "standard"},
+        ),
     )
 
 

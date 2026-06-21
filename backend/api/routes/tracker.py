@@ -1018,6 +1018,13 @@ def _handle_delete(context: ApiRouteContext) -> bool | None:
     segments = list(context.segments)
     query = context.query
     if segments[:1] == ["referrals"] and len(segments) == 2:
+                        if segments[1] == "import":
+                            user, _ = self._require_identity()
+                            self._send_json(
+                                application.delete_imported_referral_contacts(user_id=user.user_id),
+                                status=HTTPStatus.OK,
+                            )
+                            return
                         user, _ = self._require_identity()
                         application.delete_referral_contact(user.user_id, segments[1])
                         self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)

@@ -12,6 +12,7 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, timedelta, timezone
 from email.parser import BytesFeedParser
+from hashlib import sha256
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -134,7 +135,10 @@ from backend.domain.tracker import (
     review_placed_in_tracker_at,
 )
 from backend.orchestration.workspace_builder import _slugify, build_quick_apply_workflow_template
-from backend.profiles.cv_profile_extraction import extract_cv_profile, normalize_profile_payload
+from backend.profiles.cv_profile_extraction import (
+    extract_cv_profile_fallback,
+    normalize_profile_payload,
+)
 from backend.profiles.cv_text import extract_cv_text_from_path
 from backend.storage import build_private_object_key, materialize_object
 from backend.integrations.clerk import (
@@ -390,6 +394,17 @@ def _extract_text_from_pdf(data: bytes) -> str:
 
 def _extract_text_from_uploaded_file(filename: str, data: bytes) -> str:
     return str(extract_document_text(filename, data).get("text") or "").strip()
+
+
+def _extract_cv_profile_for_upload(cv_text: str) -> dict[str, Any]:
+    normalized_text = str(cv_text or "").strip()
+    return {
+        "profile": extract_cv_profile_fallback(normalized_text),
+        "provider": "heuristic_fallback",
+        "model": "upload_fast_path",
+        "warnings": ["ai_profile_extraction_skipped_for_upload_latency"],
+        "extracted_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _parse_cv_sections(cv_text: str) -> dict:
@@ -3994,6 +4009,106 @@ def _upsert_candidate_asset(application, user, payload: dict) -> dict:
     return normalized
 
 
+def _candidate_asset_content_hash(application, asset: dict) -> str:
+    metadata = dict(asset.get("metadata") or {})
+    content_hash = str(metadata.get("content_sha256") or "").strip()
+    if content_hash:
+        return content_hash
+
+    file_payload = dict(asset.get("file") or {})
+    raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
+    if raw_path and Path(raw_path).is_file():
+        return sha256(Path(raw_path).read_bytes()).hexdigest()
+
+    object_key = str(file_payload.get("object_key") or "").strip()
+    if object_key:
+        try:
+            return sha256(application.object_storage.get(object_key)).hexdigest()
+        except Exception:
+            return ""
+    return ""
+
+
+def _dedupe_workspace_cv_upload_assets(application, user) -> tuple[object, list[dict]]:
+    assets = _load_candidate_assets(user)
+    grouped: dict[str, list[dict]] = {}
+    changed = False
+    for index, asset in enumerate(assets):
+        asset_id = str(asset.get("asset_id") or "").strip()
+        asset_kind = str(asset.get("asset_kind") or "").strip()
+        origin = str(asset.get("source", {}).get("origin") or "upload").strip()
+        if not asset_id or asset_kind != "workspace_cv" or origin != "upload":
+            continue
+        content_hash = _candidate_asset_content_hash(application, asset)
+        if not content_hash:
+            continue
+        grouped.setdefault(content_hash, []).append(asset)
+        metadata = dict(asset.get("metadata") or {})
+        if str(metadata.get("content_sha256") or "").strip() != content_hash:
+            metadata["content_sha256"] = content_hash
+            asset["metadata"] = metadata
+            assets[index] = asset
+            changed = True
+
+    duplicate_to_canonical: dict[str, str] = {}
+    referenced_asset_ids = set()
+    accessible_workspaces = [
+        workspace
+        for workspace in application.list_workspaces()
+        if application.user_can_access_workspace(user, workspace.id)
+    ]
+    for workspace in accessible_workspaces:
+        referenced_asset_id = str(getattr(workspace, "settings", {}).get("workspace_cv_asset_id") or "").strip()
+        if referenced_asset_id:
+            referenced_asset_ids.add(referenced_asset_id)
+
+    for duplicate_group in grouped.values():
+        if len(duplicate_group) < 2:
+            continue
+        # ponytail: only uploaded workspace CV retries are deduped here; extend if other assets show retry spam.
+        canonical = next(
+            (
+                asset
+                for asset in duplicate_group
+                if str(asset.get("asset_id") or "").strip() in referenced_asset_ids
+            ),
+            duplicate_group[0],
+        )
+        canonical_id = str(canonical.get("asset_id") or "").strip()
+        for asset in duplicate_group:
+            asset_id = str(asset.get("asset_id") or "").strip()
+            if asset_id and asset_id != canonical_id:
+                duplicate_to_canonical[asset_id] = canonical_id
+
+    if duplicate_to_canonical:
+        assets = [
+            asset
+            for asset in assets
+            if str(asset.get("asset_id") or "").strip() not in duplicate_to_canonical
+        ]
+        changed = True
+        for workspace in accessible_workspaces:
+            workspace_payload = workspace.to_dict()
+            settings = dict(workspace_payload.get("settings") or {})
+            current_asset_id = str(settings.get("workspace_cv_asset_id") or "").strip()
+            canonical_id = duplicate_to_canonical.get(current_asset_id)
+            if not canonical_id:
+                continue
+            settings["workspace_cv_asset_id"] = canonical_id
+            try:
+                runtime_settings, _asset = _resolve_workspace_cv_binding(application, user, canonical_id)
+                settings.update(runtime_settings)
+            except Exception:
+                pass
+            workspace_payload["settings"] = settings
+            application.upsert_workspace(workspace_payload)
+
+    if not changed:
+        return user, assets
+    refreshed_user = _persist_candidate_assets(application, user, assets)
+    return refreshed_user, _load_candidate_assets(refreshed_user)
+
+
 def _update_candidate_asset_section_decisions(
     application,
     user,
@@ -4038,6 +4153,18 @@ def _store_candidate_asset_upload(
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict:
+    content_hash = sha256(file_bytes).hexdigest()
+    for existing in _load_candidate_assets(user):
+        if str(existing.get("asset_kind") or "").strip() != asset_kind:
+            continue
+        if _candidate_asset_content_hash(application, existing) != content_hash:
+            continue
+        file_payload = dict(existing.get("file") or {})
+        object_key = str(file_payload.get("object_key") or "").strip()
+        raw_path = str(file_payload.get("path") or "").strip()
+        if (raw_path and Path(raw_path).is_file()) or (object_key and application.object_storage.exists(object_key)):
+            return normalize_candidate_asset_descriptor(existing)
+
     asset_id = f"asset_{uuid4().hex[:16]}"
     target_path = _candidate_asset_path(user, asset_id, filename)
     target_path.write_bytes(file_bytes)
@@ -4056,6 +4183,7 @@ def _store_candidate_asset_upload(
         metadata={"user_id": str(user.user_id), "asset_id": asset_id, "asset_kind": asset_kind},
     )
     normalized_metadata = dict(metadata or {})
+    normalized_metadata["content_sha256"] = content_hash
     if asset_kind == "workspace_cv" and target_path.suffix.lower() != ".docx":
         source_text = str(normalized_metadata.get("source_text") or "").strip()
         if source_text:
@@ -4569,7 +4697,8 @@ def _collect_document_entries(
         for entry in _collect_artifact_entries(application, user, workspace_id=workspace_id, run_id=run_id)
         if _artifact_entry_is_user_facing_document(entry)
     ]
-    for asset in _load_candidate_assets(user):
+    user, candidate_assets = _dedupe_workspace_cv_upload_assets(application, user)
+    for asset in candidate_assets:
         asset_workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
         if workspace_id and asset_workspace_id and asset_workspace_id != workspace_id:
             continue

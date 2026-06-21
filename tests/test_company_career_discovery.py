@@ -10,7 +10,9 @@ from backend.connectors.company_career_discovery import (
     domain_from_url,
 )
 from backend.connectors.company_career_sites import (
+    ACADEMIC_CAREER_SITE_FILES,
     PageFetchResult,
+    REGULAR_COMPANY_SITE_FILES,
     plan_company_site_scope,
     load_discovered_company_site_entries,
     parse_company_site_entries,
@@ -195,6 +197,32 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
             ],
         )
 
+    def test_discovered_company_site_loader_reads_jsonl_inventory(self):
+        temp_dir = Path("tests") / "_tmp_company_career_discovery"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        discovered_path = temp_dir / "discovered_sites.jsonl"
+        try:
+            discovered_path.write_text(
+                '{"company_name":"Acme","url":"https://careers.acme.example/jobs"}\n'
+                '{"company_name":"Beta","url":"https://jobs.beta.example"}\n',
+                encoding="utf-8",
+            )
+
+            entries = load_discovered_company_site_entries([discovered_path])
+        finally:
+            if discovered_path.exists():
+                discovered_path.unlink()
+            if temp_dir.exists():
+                temp_dir.rmdir()
+
+        self.assertEqual(
+            entries,
+            [
+                {"company_name": "Acme", "url": "https://careers.acme.example/jobs"},
+                {"company_name": "Beta", "url": "https://jobs.beta.example/"},
+            ],
+        )
+
     def test_discovered_company_site_loader_does_not_hardcap_backend_entries(self):
         temp_dir = Path("tests") / "_tmp_company_career_discovery"
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -218,6 +246,12 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(entries), 60)
         self.assertEqual(entries[0]["url"], "https://careers0.example/jobs")
         self.assertEqual(entries[-1]["url"], "https://careers59.example/jobs")
+
+    def test_tracked_company_site_seed_inventories_are_populated(self):
+        self.assertTrue(all(path.suffix == ".jsonl" for path in REGULAR_COMPANY_SITE_FILES[:1]))
+        self.assertTrue(all(path.suffix == ".jsonl" for path in ACADEMIC_CAREER_SITE_FILES[:1]))
+        self.assertGreater(len(load_discovered_company_site_entries(REGULAR_COMPANY_SITE_FILES)), 100)
+        self.assertGreater(len(load_discovered_company_site_entries(ACADEMIC_CAREER_SITE_FILES)), 100)
 
     def test_company_site_scraper_follows_external_ats_listing_page(self):
         root_url = "https://example.com/careers"

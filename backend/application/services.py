@@ -2206,6 +2206,9 @@ class BackendApplication:
             source_kind=source_kind,
         )
 
+    def delete_imported_referral_contacts(self, *, user_id: str) -> dict[str, Any]:
+        return self._tracker_application_service.delete_imported_referral_contacts(user_id=user_id)
+
     def delete_referral_contact(self, user_id: str, contact_id: str) -> None:
         self._tracker_application_service.delete_referral_contact(user_id, contact_id)
 

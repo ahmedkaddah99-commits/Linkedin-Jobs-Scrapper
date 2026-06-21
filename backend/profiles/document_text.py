@@ -67,7 +67,10 @@ def _extract_image_text(data: bytes) -> str:
         return ""
 
 
-def _extract_pdf_text(data: bytes) -> tuple[str, str]:
+def _extract_pdf_text(data: bytes, *, allow_ocr: bool = True) -> tuple[str, str]:
+    if not allow_ocr:
+        return "", "pdf_native"
+
     try:
         from pypdf import PdfReader
 
@@ -93,7 +96,7 @@ def _extract_pdf_text(data: bytes) -> tuple[str, str]:
         return "", "none"
 
 
-def extract_document_text(filename: str, data: bytes) -> dict[str, Any]:
+def extract_document_text(filename: str, data: bytes, *, allow_ocr: bool = True) -> dict[str, Any]:
     suffix = Path(filename or "").suffix.lower()
     warnings: list[str] = []
     text = ""
@@ -102,9 +105,12 @@ def extract_document_text(filename: str, data: bytes) -> dict[str, Any]:
     if suffix == ".docx":
         text, method = _extract_docx_text(data), "docx"
     elif suffix == ".pdf":
-        text, method = _extract_pdf_text(data)
+        text, method = _extract_pdf_text(data, allow_ocr=allow_ocr)
     elif suffix in _IMAGE_SUFFIXES:
-        text, method = _extract_image_text(data), "image_ocr"
+        if allow_ocr:
+            text, method = _extract_image_text(data), "image_ocr"
+        else:
+            text, method = "", "image_ocr_skipped"
     elif suffix == ".xlsx":
         text, method = _extract_xlsx_text(data), "xlsx"
     elif suffix in _PLAIN_TEXT_SUFFIXES or not suffix:
@@ -115,7 +121,13 @@ def extract_document_text(filename: str, data: bytes) -> dict[str, Any]:
             text, method = decoded, "plain_text_fallback"
 
     if not text:
-        if suffix in _IMAGE_SUFFIXES or suffix == ".pdf":
+        if suffix == ".pdf" and not allow_ocr:
+            warnings.append(
+                "No embedded PDF text was found. Scanned PDFs need OCR; upload a text-based PDF or DOCX."
+            )
+        elif suffix in _IMAGE_SUFFIXES and not allow_ocr:
+            warnings.append("Image OCR is skipped during upload. Upload a text-based PDF or DOCX.")
+        elif suffix in _IMAGE_SUFFIXES or suffix == ".pdf":
             warnings.append("OCR produced no text. Verify that Pillow, pytesseract, PyMuPDF, and Tesseract OCR are installed.")
         else:
             warnings.append(f"No text extractor is available for '{suffix or 'unknown'}' files.")

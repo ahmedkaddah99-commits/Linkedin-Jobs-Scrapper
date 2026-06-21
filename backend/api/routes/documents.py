@@ -133,13 +133,16 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                         display_name = str((query.get("display_name") or [filename])[0]).strip() or filename
                         tags = [asset_kind]
+                        is_cv_asset = asset_kind in {"workspace_cv", "master_career_profile"}
                         document_extraction = extract_document_text(filename, file_bytes)
                         asset_metadata: dict[str, Any] = extraction_metadata(document_extraction)
-                        if asset_kind in {"workspace_cv", "master_career_profile"}:
+                        if is_cv_asset:
                             cv_text = str(document_extraction.get("text") or "")
                             if not cv_text:
-                                raise ValueError(f"Could not extract any text from uploaded file '{filename}'.")
-                            extraction = extract_cv_profile(cv_text)
+                                warning = " ".join(str(item) for item in document_extraction.get("warnings") or []).strip()
+                                detail = f" {warning}" if warning else ""
+                                raise ValueError(f"Could not extract any text from uploaded file '{filename}'.{detail}")
+                            extraction = _extract_cv_profile_for_upload(cv_text)
                             asset_metadata.update({
                                 "parsed_profile": dict(extraction.get("profile") or {}),
                                 "profile_extraction": {
@@ -194,8 +197,10 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         document_extraction = extract_document_text(filename, file_bytes)
                         cv_text = str(document_extraction.get("text") or "")
                         if not cv_text.strip():
-                            raise ValueError(f"Could not extract any text from uploaded file '{filename}'.")
-                        extraction = extract_cv_profile(cv_text)
+                            warning = " ".join(str(item) for item in document_extraction.get("warnings") or []).strip()
+                            detail = f" {warning}" if warning else ""
+                            raise ValueError(f"Could not extract any text from uploaded file '{filename}'.{detail}")
+                        extraction = _extract_cv_profile_for_upload(cv_text)
                         # Save to disk (for legacy pipeline compatibility)
                         cv_save_path = Path("user_config") / "cv_master.txt"
                         cv_save_path.parent.mkdir(parents=True, exist_ok=True)

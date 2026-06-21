@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import re
 import time
@@ -91,10 +92,13 @@ IGNORED_LINK_HINTS = (
     "/sign-in",
 )
 
+COMPANY_SITE_INVENTORY_DIR = Path("backend") / "config" / "company_site_inventory"
 REGULAR_COMPANY_SITE_FILES = (
+    COMPANY_SITE_INVENTORY_DIR / "discovered_regular_company_career_sites.jsonl",
     Path("user_config") / "discovered_regular_company_career_sites.txt",
 )
 ACADEMIC_CAREER_SITE_FILES = (
+    COMPANY_SITE_INVENTORY_DIR / "discovered_phd_university_career_sites.jsonl",
     Path("user_config") / "discovered_phd_university_career_sites.txt",
 )
 DISCOVERED_COMPANY_SITE_FILES = (
@@ -792,6 +796,18 @@ def parse_company_site_entries(raw_value: Any, *, limit: int | None = None) -> l
     return parsed_entries
 
 
+def _read_company_site_entries_file(path: Path) -> list[dict[str, str]]:
+    if path.suffix.lower() == ".jsonl":
+        raw_entries = []
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            raw_entries.append(json.loads(line))
+        return parse_company_site_entries(raw_entries, limit=None)
+    return parse_company_site_entries(path.read_text(encoding="utf-8"), limit=None)
+
+
 def load_discovered_company_site_entries(paths: Any = None) -> list[dict[str, str]]:
     source_paths = paths or DISCOVERED_COMPANY_SITE_FILES
     entries: list[dict[str, str]] = []
@@ -801,7 +817,7 @@ def load_discovered_company_site_entries(paths: Any = None) -> list[dict[str, st
         for path in _discovery_path_variants(path_value):
             if not path.exists() or not path.is_file():
                 continue
-            parsed_entries = parse_company_site_entries(path.read_text(encoding="utf-8"), limit=None)
+            parsed_entries = _read_company_site_entries_file(path)
             for entry in parsed_entries:
                 url = entry.get("url") or ""
                 if not url or url in seen_urls:

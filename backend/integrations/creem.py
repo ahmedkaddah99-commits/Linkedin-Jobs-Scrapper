@@ -15,6 +15,14 @@ from backend.integrations.clerk import update_user_metadata
 
 _CREEM_API_BASE_URL = "https://api.creem.io/v1"
 _CREEM_TEST_API_BASE_URL = "https://test-api.creem.io/v1"
+_CREEM_REDIRECT_SIGNED_KEYS = {
+    "request_id",
+    "checkout_id",
+    "order_id",
+    "customer_id",
+    "subscription_id",
+    "product_id",
+}
 
 
 def _creem_api_base_url(api_key: str) -> str:
@@ -41,21 +49,30 @@ def verify_webhook_signature(raw_body: bytes, signature: str, *, secret: str | N
 def verify_redirect_signature(raw_query: str, *, api_key: str | None = None) -> None:
     checkout_api_key = str(api_key or require_env("CREEM_API_KEY")).strip()
     provided_signature = ""
-    parts: list[str] = []
+    pairs: list[tuple[str, str]] = []
     for key, value in urllib.parse.parse_qsl(str(raw_query or ""), keep_blank_values=False):
         if key == "signature":
             provided_signature = value
             continue
         if value in {"", "null"}:
             continue
-        parts.append(f"{key}={value}")
+        pairs.append((key, value))
     if not checkout_api_key:
         raise RuntimeError("Missing CREEM_API_KEY.")
     if not provided_signature:
         raise ValueError("Missing Creem redirect signature.")
+    parts = [f"{key}={value}" for key, value in pairs]
     expected_signature = hashlib.sha256(f"{'|'.join(parts)}|salt={checkout_api_key}".encode("utf-8")).hexdigest()
-    if not hmac.compare_digest(expected_signature, provided_signature):
-        raise ValueError("Invalid Creem redirect signature.")
+    if hmac.compare_digest(expected_signature, provided_signature):
+        return
+
+    creem_parts = [f"{key}={value}" for key, value in pairs if key in _CREEM_REDIRECT_SIGNED_KEYS]
+    if creem_parts != parts:
+        # ponytail: success_url may include local UI params; the signed Creem fields still carry product_id.
+        expected_signature = hashlib.sha256(f"{'|'.join(creem_parts)}|salt={checkout_api_key}".encode("utf-8")).hexdigest()
+        if hmac.compare_digest(expected_signature, provided_signature):
+            return
+    raise ValueError("Invalid Creem redirect signature.")
 
 
 def _creem_request(method: str, path: str, *, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
