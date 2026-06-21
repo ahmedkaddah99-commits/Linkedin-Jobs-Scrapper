@@ -1559,15 +1559,6 @@ def _validate_modules(flow_id: str, module_ids: list[str]) -> None:
         )
 
 
-def _default_modules_for_flow(flow_id: str) -> list[str]:
-    catalog = workspace_builder_catalog().to_dict()
-    return [
-        item["id"]
-        for item in catalog["modules"]
-        if flow_id in item["compatible_flows"] and bool(item.get("default_enabled"))
-    ]
-
-
 def _normalize_tag_list(raw_value: "Any") -> list[str]:
     if isinstance(raw_value, str):
         values = raw_value.split(",")
@@ -2305,8 +2296,18 @@ def build_workspace_from_scratch(payload: dict) -> tuple[WorkflowTemplate, Works
 
     module_ids = [str(item).strip() for item in payload.get("module_ids") or [] if str(item).strip()]
     if not module_ids:
-        module_ids = _default_modules_for_flow(flow_id)
+        raise ValueError("At least one automation module is required.")
     _validate_modules(flow_id, module_ids)
+    if flow_id == FLOW_TAILORED_DOCUMENTS:
+        missing_required_modules = [
+            module_id
+            for module_id in (MODULE_SCREENING, MODULE_TAILORED_DOCUMENTS)
+            if module_id not in module_ids
+        ]
+        if missing_required_modules:
+            raise ValueError(
+                f"Tailored-document workspaces require modules: {missing_required_modules}.",
+            )
 
     if flow_id == FLOW_REUSABLE_PACKAGES and MODULE_APPLICATION_PACKAGING in module_ids and MODULE_REUSABLE_PROFILES not in module_ids:
         raise ValueError("Application packaging requires the reusable profile builder module.")
@@ -2325,6 +2326,10 @@ def build_workspace_from_scratch(payload: dict) -> tuple[WorkflowTemplate, Works
         source_ids,
         dict(payload.get("settings") or {}),
     )
+    if flow_id == FLOW_TAILORED_DOCUMENTS and not workspace_settings.get("country_codes"):
+        raise ValueError("Tailored-document workspaces require at least one country code.")
+    if flow_id == FLOW_TAILORED_DOCUMENTS and not workspace_settings.get("workspace_cv_asset_id"):
+        raise ValueError("Tailored-document workspaces require workspace_cv_asset_id.")
     workspace_cv_asset = deepcopy(payload.get("workspace_cv_asset") or {})
     normalized_workspace_contract = normalize_workspace_configuration_v2(
         {

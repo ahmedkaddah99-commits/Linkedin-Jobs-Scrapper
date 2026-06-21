@@ -83,15 +83,15 @@ services:
       - key: TRACKER_GOOGLE_OAUTH_REDIRECT_URI
         sync: false
 
-  - type: cron
-    name: runr-process-next
+  - type: worker
+    name: runr-worker
     runtime: docker
-    plan: starter
+    plan: standard
     region: frankfurt
-    schedule: "*/5 * * * *"
     dockerfilePath: ./Dockerfile
-    dockerCommand: ./deploy/start.sh process-next
+    dockerCommand: ./deploy/start.sh worker
     autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 300
     envVars:
       - key: RUNR_ENV
         value: production
@@ -102,7 +102,7 @@ services:
       - key: RUNR_DATA_DIR
         value: .backend_data
       - key: WORKER_ID
-        value: render_cron
+        value: render_worker
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
@@ -119,10 +119,6 @@ services:
         sync: false
       - key: S3_REGION
         value: auto
-      - key: CLERK_SECRET_KEY
-        sync: false
-      - key: CLERK_PUBLISHABLE_KEY
-        sync: false
       - key: SCRAPEOPS_API_KEY
         sync: false
       - key: DEEPSEEK_API_KEY

@@ -15,6 +15,7 @@ import {
   matchPresetByPalette,
   stashCvStudioSeed,
 } from "../lib/cvStudio";
+import { uploadAndPollCv } from "../lib/cvUpload";
 
 const settingsTabs = [
   "Profile",
@@ -1090,12 +1091,13 @@ export default function SettingsPage() {
     if (!file) return;
     setCvUploadState({ uploading: true, message: "", error: "" });
     try {
-      const formData = new FormData();
-      formData.append("cv_file", file, file.name);
-      const json = await request("/cv-upload", {
-        method: "POST",
-        body: formData,
-        timeoutMs: 90000,
+      const json = await uploadAndPollCv({
+        request,
+        file,
+        refreshAssets: () => refresh().catch(() => undefined),
+        onStatus: (payload) => {
+          setCvUploadState({ uploading: true, message: payload.message, error: "" });
+        },
       });
       const parsed = json.parsed || {};
       const extractionProvider = String(json?.extraction?.provider || "").trim();

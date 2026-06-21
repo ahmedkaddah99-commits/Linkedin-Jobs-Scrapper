@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from backend.application import BackendApplication
+from backend.database.connection import transient_database_error_category
 from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_CANCELLED,
@@ -60,7 +61,7 @@ class WorkerService:
                     "queued_at": run.queued_at,
                     "started_at": run.started_at,
                     "finished_at": run.finished_at,
-                    "last_error": run.last_error,
+                    "has_error": bool(str(run.last_error or "").strip()),
                     "stage_count": len(run.stage_results),
                     "job_set_count": len(run.final_job_set_keys),
                     "artifact_count": sum(len(stage.artifact_ids) for stage in run.stage_results),
@@ -168,6 +169,7 @@ class WorkerService:
         thread = threading.Thread(target=_heartbeat_loop, daemon=True, name=f"worker-heartbeat-{self.worker_id}")
         thread.start()
         started_at = time.perf_counter()
+        task_error: Exception | None = None
         try:
             if claimed_run.attempt_count > 1:
                 self.logger.warning(
@@ -180,6 +182,7 @@ class WorkerService:
             self._log_run_completion(claimed_run=claimed_run, result=result, duration_ms=duration_ms)
             return result
         except Exception as exc:
+            task_error = exc
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             self.logger.exception(
                 "worker_task_exception",
@@ -201,7 +204,8 @@ class WorkerService:
                     "worker_release_failed",
                     extra=self._log_extra(task_name="release_worker", run=claimed_run),
                 )
-                raise
+                if task_error is None:
+                    raise
 
     def run_loop(self, *, max_runs: int = 0, auto_retry_failed: bool = True) -> int:
         processed = 0
@@ -217,12 +221,22 @@ class WorkerService:
         )
         try:
             self.heartbeat(status=WORKER_STATUS_IDLE, current_run_id="")
-        except Exception:
-            self.logger.exception(
-                "worker_initial_heartbeat_failed",
-                extra=self._log_extra(task_name="heartbeat_idle"),
+        except Exception as exc:
+            error_category = transient_database_error_category(exc)
+            if error_category is None:
+                self.logger.exception(
+                    "worker_initial_heartbeat_failed",
+                    extra=self._log_extra(task_name="heartbeat_idle"),
+                )
+                raise
+            self.logger.warning(
+                "worker_transient_database_failure",
+                extra=self._log_extra(
+                    task_name="heartbeat_idle",
+                    operation="initial_heartbeat",
+                    error_category=error_category,
+                ),
             )
-            raise
         try:
             while not self._stop_event.is_set():
                 now = time.monotonic()
@@ -256,7 +270,22 @@ class WorkerService:
                         ),
                     )
                     break
-                run = self.process_next(auto_retry_failed=auto_retry_failed)
+                try:
+                    run = self.process_next(auto_retry_failed=auto_retry_failed)
+                except Exception as exc:
+                    error_category = transient_database_error_category(exc)
+                    if error_category is None:
+                        raise
+                    self.logger.warning(
+                        "worker_transient_database_failure",
+                        extra=self._log_extra(
+                            task_name="process_next",
+                            operation="worker_loop",
+                            error_category=error_category,
+                        ),
+                    )
+                    self._stop_event.wait(max(0.1, float(self.poll_interval_seconds)))
+                    continue
                 if run is None:
                     self._stop_event.wait(max(0.1, float(self.poll_interval_seconds)))
                     continue

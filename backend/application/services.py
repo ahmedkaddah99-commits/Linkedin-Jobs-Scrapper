@@ -84,6 +84,14 @@ BUILDER_CONNECTOR_SOURCE_IDS = {
     "academic_career_sites": "academic_career_sites",
     "job_board_collection": "job_board_collection",
 }
+BUILDER_MODULE_FEATURE_FLAGS = {
+    "screening_filter": "screening_filter",
+    "priority_ranking": "priority_ranking",
+    "role_classification": "role_classification",
+    "reusable_profile_builder": "reusable_profile_builder",
+    "tailored_document_generation": "tailored_document_generation",
+    "application_packaging": "application_packaging",
+}
 AUTO_APPROVE_REVIEW_STAGE_TYPES = {
     "applications.generate.documents",
     "legacy.white_collar.docs",
@@ -202,12 +210,29 @@ def _builder_workspace_source_ids(workspace: WorkspaceDefinition) -> list[str]:
     source_ids = [str(item).strip() for item in metadata.get("source_ids") or [] if str(item).strip()]
     if source_ids:
         return source_ids
+    return _builder_workspace_connector_source_ids(workspace)
+
+
+def _builder_workspace_connector_source_ids(workspace: WorkspaceDefinition) -> list[str]:
     derived_source_ids: list[str] = []
     for source in workspace.sources:
         source_id = BUILDER_CONNECTOR_SOURCE_IDS.get(str(source.connector_id or "").strip())
         if source_id and source_id not in derived_source_ids:
             derived_source_ids.append(source_id)
     return derived_source_ids
+
+
+def _builder_workspace_module_ids(workspace: WorkspaceDefinition) -> list[str]:
+    metadata = dict(workspace.metadata or {})
+    return [str(item).strip() for item in metadata.get("modules") or [] if str(item).strip()]
+
+
+def _builder_workspace_enabled_module_ids(workspace: WorkspaceDefinition) -> list[str]:
+    return [
+        module_id
+        for module_id, feature_flag in BUILDER_MODULE_FEATURE_FLAGS.items()
+        if bool((workspace.feature_flags or {}).get(feature_flag))
+    ]
 
 
 def _workspace_cv_asset_id(workspace: WorkspaceDefinition) -> str:
@@ -223,18 +248,15 @@ def _workspace_cv_asset_is_available(
     object_key: str,
     object_storage: Any = None,
 ) -> bool:
-    if file_path and Path(file_path).is_file():
-        return True
-    if not object_key:
-        return False
-
-    exists = getattr(object_storage, "exists", None)
-    if not callable(exists):
-        return True
-    try:
-        return bool(exists(object_key))
-    except Exception:
-        return False
+    if object_key:
+        exists = getattr(object_storage, "exists", None)
+        if not callable(exists):
+            return True
+        try:
+            return bool(exists(object_key))
+        except Exception:
+            return False
+    return bool(file_path and Path(file_path).is_file())
 
 
 def _builder_workspace_cv_asset_field_errors(
@@ -244,18 +266,41 @@ def _builder_workspace_cv_asset_field_errors(
 ) -> list[dict[str, str]]:
     asset_id = _workspace_cv_asset_id(workspace)
     if not asset_id:
-        return []
+        if _builder_workspace_flow_id(workspace) != "tailored_documents":
+            return []
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "required",
+                "Select a workspace CV before saving or running this workspace.",
+            )
+        ]
 
     metadata = dict(workspace.metadata or {})
     asset = dict(metadata.get("workspace_cv_asset") or {})
     if not asset:
-        return [
-            _field_error(
-                "workspace_cv_asset_id",
-                "workspace_cv_asset_unresolved",
-                "Select an accessible workspace CV before saving or running this workspace.",
-            )
-        ]
+        settings = dict(workspace.settings or {})
+        if settings.get("workspace_cv_asset_object_key") or settings.get("workspace_cv_asset_path"):
+            asset = {
+                "asset_id": asset_id,
+                "asset_kind": "workspace_cv",
+                "display_name": str(settings.get("workspace_cv_asset_display_name") or ""),
+                "workspace_binding": {"workspace_id": ""},
+                "file": {
+                    "path": str(settings.get("workspace_cv_asset_path") or ""),
+                    "object_key": str(settings.get("workspace_cv_asset_object_key") or ""),
+                    "mime_type": str(settings.get("workspace_cv_asset_mime_type") or ""),
+                    "extension": str(settings.get("workspace_cv_asset_extension") or ""),
+                },
+            }
+        else:
+            return [
+                _field_error(
+                    "workspace_cv_asset_id",
+                    "workspace_cv_asset_unresolved",
+                    "Select an accessible workspace CV before saving or running this workspace.",
+                )
+            ]
 
     snapshot_asset_id = str(asset.get("asset_id") or "").strip()
     if snapshot_asset_id != asset_id:
@@ -326,11 +371,20 @@ def _builder_workspace_run_preflight_field_errors(
     run_plan_settings: Mapping[str, Any] | None = None,
     object_storage: Any = None,
 ) -> list[dict[str, str]]:
+    saved_asset_id = _workspace_cv_asset_id(workspace)
     asset_id = str(
         (run_plan_settings or {}).get("workspace_cv_asset_id")
-        or _workspace_cv_asset_id(workspace)
+        or saved_asset_id
         or ""
     ).strip()
+    if asset_id and saved_asset_id and asset_id != saved_asset_id:
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_mismatch",
+                "Run workspace_cv_asset_id does not match the saved workspace CV.",
+            )
+        ]
     if not asset_id:
         return _builder_workspace_cv_asset_field_errors(workspace, object_storage=object_storage)
 
@@ -368,11 +422,17 @@ def _builder_workspace_validation_report(
     *,
     flow_id: str,
     source_ids: list[str],
+    module_ids: list[str],
     settings: Mapping[str, Any],
 ) -> dict[str, Any]:
+    catalog = workspace_builder_catalog().to_dict()
     catalog_sources = {
         str(item["id"]): set(item.get("compatible_flows") or [])
-        for item in workspace_builder_catalog().to_dict()["sources"]
+        for item in catalog["sources"]
+    }
+    catalog_modules = {
+        str(item["id"]): set(item.get("compatible_flows") or [])
+        for item in catalog["modules"]
     }
     field_errors: list[dict[str, str]] = []
     valid_source_ids: list[str] = []
@@ -419,6 +479,68 @@ def _builder_workspace_validation_report(
                 )
             )
 
+    if not module_ids:
+        field_errors.append(
+            _field_error(
+                "module_ids",
+                "required",
+                "Enable at least one automation module for this workspace.",
+            )
+        )
+    else:
+        for module_id in module_ids:
+            compatible_flows = catalog_modules.get(module_id)
+            if compatible_flows is None:
+                field_errors.append(
+                    _field_error(
+                        "module_ids",
+                        "unknown_module",
+                        f"Unknown module_id '{module_id}'.",
+                    )
+                )
+            elif flow_id not in compatible_flows:
+                field_errors.append(
+                    _field_error(
+                        "module_ids",
+                        "incompatible_module",
+                        f"Module '{module_id}' is not compatible with flow '{flow_id}'.",
+                    )
+                )
+
+    if flow_id == "tailored_documents":
+        required_modules = {
+            "screening_filter": "Enable the screening_filter module for tailored-document workspaces.",
+            "tailored_document_generation": (
+                "Enable the tailored_document_generation module for tailored-document workspaces."
+            ),
+        }
+        for module_id, message in required_modules.items():
+            if module_id not in module_ids:
+                field_errors.append(
+                    _field_error(
+                        "module_ids",
+                        "required_module",
+                        message,
+                    )
+                )
+    elif flow_id == "reusable_packages":
+        if "application_packaging" in module_ids and "reusable_profile_builder" not in module_ids:
+            field_errors.append(
+                _field_error(
+                    "module_ids",
+                    "module_dependency",
+                    "application_packaging requires the reusable_profile_builder module.",
+                )
+            )
+        if "reusable_profile_builder" in module_ids and "role_classification" not in module_ids:
+            field_errors.append(
+                _field_error(
+                    "module_ids",
+                    "module_dependency",
+                    "reusable_profile_builder requires the role_classification module.",
+                )
+            )
+
     validation_payload = {
         "flow_id": flow_id,
         "source_ids": valid_source_ids,
@@ -429,6 +551,7 @@ def _builder_workspace_validation_report(
     return {
         "flow_id": flow_id,
         "source_ids": list(source_ids),
+        "module_ids": list(module_ids),
         "field_errors": merged_field_errors,
         "source_results": list(source_report.get("source_results") or []),
         "derived_runtime_defaults": dict(source_report.get("derived_runtime_defaults") or {}),
@@ -452,6 +575,7 @@ def _raise_builder_validation_error(
             "workspace_id": workspace_id,
             "flow_id": str(report.get("flow_id") or ""),
             "source_ids": [str(item) for item in report.get("source_ids") or [] if str(item).strip()],
+            "module_ids": [str(item) for item in report.get("module_ids") or [] if str(item).strip()],
             "field_errors": list(report.get("field_errors") or []),
             "source_results": list(report.get("source_results") or []),
         },
@@ -461,11 +585,28 @@ def _raise_builder_validation_error(
 def _validate_builder_workspace_payload(payload: Mapping[str, Any], *, workspace_id: str = "") -> None:
     flow_id = str(payload.get("flow_id") or "tailored_documents").strip()
     source_ids = [str(item).strip() for item in payload.get("source_ids") or [] if str(item).strip()]
+    module_ids = [str(item).strip() for item in payload.get("module_ids") or [] if str(item).strip()]
     report = _builder_workspace_validation_report(
         flow_id=flow_id,
         source_ids=source_ids,
+        module_ids=module_ids,
         settings=dict(payload.get("settings") or {}),
     )
+    settings = dict(payload.get("settings") or {})
+    if flow_id == "tailored_documents" and not str(
+        settings.get("workspace_cv_asset_id") or payload.get("workspace_cv_asset_id") or ""
+    ).strip():
+        report["field_errors"] = _dedupe_field_errors(
+            [
+                *(report.get("field_errors") or []),
+                _field_error(
+                    "workspace_cv_asset_id",
+                    "required",
+                    "Select a workspace CV before saving or running this workspace.",
+                ),
+            ]
+        )
+        report["valid"] = False
     if report["valid"]:
         return
     _raise_builder_validation_error(
@@ -491,8 +632,34 @@ def _validate_builder_workspace_definition(
     report = _builder_workspace_validation_report(
         flow_id=_builder_workspace_flow_id(workspace),
         source_ids=_builder_workspace_source_ids(workspace),
+        module_ids=_builder_workspace_module_ids(workspace),
         settings=dict(workspace.settings or {}),
     )
+    configured_source_ids = _builder_workspace_connector_source_ids(workspace)
+    if sorted(configured_source_ids) != sorted(_builder_workspace_source_ids(workspace)):
+        report["field_errors"] = _dedupe_field_errors(
+            [
+                *(report.get("field_errors") or []),
+                _field_error(
+                    "source_ids",
+                    "source_configuration_mismatch",
+                    "Saved source_ids do not match the workspace connector configuration.",
+                ),
+            ]
+        )
+    if sorted(_builder_workspace_enabled_module_ids(workspace)) != sorted(
+        _builder_workspace_module_ids(workspace)
+    ):
+        report["field_errors"] = _dedupe_field_errors(
+            [
+                *(report.get("field_errors") or []),
+                _field_error(
+                    "module_ids",
+                    "module_configuration_mismatch",
+                    "Saved module_ids do not match the enabled workspace automation modules.",
+                ),
+            ]
+        )
     if phase == "run_preflight" and run_plan_settings is not None:
         cv_field_errors = _builder_workspace_run_preflight_field_errors(
             workspace,
@@ -735,6 +902,7 @@ class BackendApplication:
             find_duplicate_user_tracker_posting=self._tracker_application_service.find_duplicate_user_tracker_posting,
             auto_approve_generated_job_reviews=self._auto_approve_generated_job_reviews,
             enqueue_due_scheduled_runs=self.enqueue_due_scheduled_runs,
+            object_storage=self.object_storage,
         )
 
     def _validate_workspace_definition(

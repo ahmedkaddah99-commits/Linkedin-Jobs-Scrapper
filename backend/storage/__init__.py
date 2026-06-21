@@ -8,20 +8,24 @@ from .base import (
 from .factory import create_object_storage
 from .keys import build_private_object_key, normalize_object_key
 from .local import LocalObjectStorage
-from .materialization import materialize_object, publish_file_artifacts
+from .materialization import ObjectMaterializationSession, materialize_object, publish_file_artifacts
+from .readiness import ObjectStorageProbeResult, probe_object_storage
 from .s3 import S3ObjectStorage
 
 __all__ = [
     "InvalidObjectKeyError",
     "LocalObjectStorage",
     "ObjectNotFoundError",
+    "ObjectMaterializationSession",
     "ObjectStorage",
     "ObjectStorageError",
+    "ObjectStorageProbeResult",
     "S3ObjectStorage",
     "StoredObject",
     "build_private_object_key",
     "create_object_storage",
     "materialize_object",
     "normalize_object_key",
+    "probe_object_storage",
     "publish_file_artifacts",
 ]

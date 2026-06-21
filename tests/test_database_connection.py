@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from backend.database.connection import (
     DatabaseConfigurationError,
+    DatabaseConnection,
     connect_database,
     database_session,
     database_target_info,
@@ -81,6 +82,21 @@ class DatabaseConnectionTests(unittest.TestCase):
 
         self.assertEqual(count, 0)
 
+    def test_database_session_cleanup_does_not_mask_original_error(self):
+        raw_connection = Mock()
+        raw_connection.rollback.side_effect = RuntimeError("HTTP 503 during rollback")
+        raw_connection.close.side_effect = RuntimeError("HTTP 503 during close")
+        connection = DatabaseConnection(raw_connection, backend="libsql")
+
+        with (
+            patch("backend.database.connection.connect_database", return_value=connection),
+            patch("backend.database.connection.time.sleep"),
+            patch("backend.database.connection.random.uniform", return_value=0.0),
+            self.assertRaisesRegex(RuntimeError, "primary failure"),
+        ):
+            with database_session(Path("unused.sqlite3")):
+                raise RuntimeError("primary failure")
+
     def test_remote_turso_connection_uses_libsql_environment_contract(self):
         db_path = self._db_path("database_connection_remote")
         raw_connection = sqlite3.connect(":memory:")
@@ -118,6 +134,104 @@ class DatabaseConnectionTests(unittest.TestCase):
             auth_token="test-token",
         )
         self.assertFalse(db_path.exists())
+
+    def test_remote_turso_connection_recovers_from_transient_upstream_failure(self):
+        db_path = self._db_path("database_connection_retry_recovery")
+        raw_connection = sqlite3.connect(":memory:")
+        connect = Mock(
+            side_effect=[
+                RuntimeError(
+                    "Hrana returned HTTP 502: upstream forward failed "
+                    "for libsql://private.example with token-secret"
+                ),
+                raw_connection,
+            ]
+        )
+        fake_libsql = types.ModuleType("libsql")
+        fake_libsql.connect = connect
+
+        with (
+            patch.dict(sys.modules, {"libsql": fake_libsql}),
+            patch.dict(
+                os.environ,
+                {
+                    "DATABASE_BACKEND": "turso",
+                    "RUNR_ENV": "development",
+                    "TURSO_DATABASE_URL": "libsql://example-database.turso.io",
+                    "TURSO_AUTH_TOKEN": "test-token",
+                },
+            ),
+            patch("backend.database.connection.time.sleep") as sleep,
+            patch("backend.database.connection.random.uniform", return_value=0.0),
+            self.assertLogs("backend.database.connection", level="WARNING") as captured_logs,
+        ):
+            connection = connect_database(db_path)
+            connection.close()
+
+        self.assertEqual(connect.call_count, 2)
+        sleep.assert_called_once()
+        retry_record = captured_logs.records[0]
+        self.assertEqual(retry_record.operation, "connect")
+        self.assertEqual(retry_record.attempt, 1)
+        self.assertEqual(retry_record.delay_seconds, 0.25)
+        self.assertEqual(retry_record.error_category, "upstream_forward")
+        self.assertNotIn("token-secret", retry_record.getMessage())
+        self.assertNotIn("private.example", retry_record.getMessage())
+
+    def test_libsql_operation_stops_after_bounded_transient_retries(self):
+        raw_connection = Mock()
+        raw_connection.execute.side_effect = RuntimeError("HTTP 503 service unavailable")
+        connection = DatabaseConnection(raw_connection, backend="libsql")
+
+        with (
+            patch("backend.database.connection.time.sleep") as sleep,
+            patch("backend.database.connection.random.uniform", return_value=0.0),
+            self.assertRaisesRegex(RuntimeError, "503"),
+        ):
+            connection.execute("SELECT 1")
+
+        self.assertEqual(raw_connection.execute.call_count, 4)
+        self.assertEqual(sleep.call_count, 3)
+
+    def test_libsql_operation_recovers_from_timeout_and_network_errors(self):
+        for error in (
+            TimeoutError("request timed out"),
+            OSError("temporary network failure"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                raw_cursor = Mock(rowcount=-1, lastrowid=None, description=None)
+                raw_connection = Mock()
+                raw_connection.execute.side_effect = [error, raw_cursor]
+                connection = DatabaseConnection(raw_connection, backend="libsql")
+
+                with (
+                    patch("backend.database.connection.time.sleep") as sleep,
+                    patch("backend.database.connection.random.uniform", return_value=0.0),
+                ):
+                    connection.execute("SELECT 1")
+
+                self.assertEqual(raw_connection.execute.call_count, 2)
+                sleep.assert_called_once()
+
+    def test_libsql_operation_does_not_retry_non_retryable_errors(self):
+        for error in (
+            RuntimeError("HTTP 401 unauthorized"),
+            sqlite3.ProgrammingError("syntax error in SQL statement"),
+            sqlite3.IntegrityError("unique constraint failed"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                raw_connection = Mock()
+                raw_connection.execute.side_effect = error
+                connection = DatabaseConnection(raw_connection, backend="libsql")
+
+                with (
+                    patch("backend.database.connection.time.sleep") as sleep,
+                    self.assertRaises(type(error)),
+                ):
+                    connection.execute("SELECT 1")
+
+                raw_connection.execute.assert_called_once()
+                sleep.assert_not_called()
 
     def test_remote_turso_connection_requires_auth_token(self):
         with patch.dict(

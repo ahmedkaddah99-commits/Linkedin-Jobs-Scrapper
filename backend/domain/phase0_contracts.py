@@ -835,6 +835,7 @@ def default_candidate_asset_descriptor() -> dict[str, Any]:
 
 def normalize_candidate_asset_descriptor(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = dict(payload or {})
+    raw_file = dict(raw.get("file") or {}) if isinstance(raw.get("file"), Mapping) else {}
     contract = deepcopy(default_candidate_asset_descriptor())
     contract["asset_id"] = _clean_text(raw.get("asset_id") or raw.get("artifact_id"))
     contract["asset_kind"] = _clean_text(raw.get("asset_kind") or raw.get("artifact_type") or "uploaded_document")
@@ -848,11 +849,11 @@ def normalize_candidate_asset_descriptor(payload: Mapping[str, Any] | None) -> d
     contract["source"]["origin"] = _clean_text(raw.get("origin") or raw.get("source_origin") or "upload")
     contract["source"]["run_id"] = _clean_text(raw.get("run_id"))
     contract["source"]["artifact_id"] = _clean_text(raw.get("artifact_id"))
-    contract["file"]["path"] = _clean_text(raw.get("path"))
-    contract["file"]["object_key"] = _clean_text(raw.get("object_key"))
-    contract["file"]["download_url"] = _clean_text(raw.get("download_url"))
-    contract["file"]["mime_type"] = _clean_text(raw.get("mime_type") or raw.get("content_type"))
-    contract["file"]["extension"] = _clean_text(raw.get("extension") or raw.get("file_extension"))
+    contract["file"]["path"] = _clean_text(raw.get("path") or raw_file.get("path"))
+    contract["file"]["object_key"] = _clean_text(raw.get("object_key") or raw_file.get("object_key"))
+    contract["file"]["download_url"] = _clean_text(raw.get("download_url") or raw_file.get("download_url"))
+    contract["file"]["mime_type"] = _clean_text(raw.get("mime_type") or raw.get("content_type") or raw_file.get("mime_type"))
+    contract["file"]["extension"] = _clean_text(raw.get("extension") or raw.get("file_extension") or raw_file.get("extension"))
     metadata = dict(raw.get("metadata") or {})
     contract["metadata"]["job_id"] = _clean_text(raw.get("job_id") or metadata.get("job_id"))
     contract["metadata"]["created_at"] = _clean_text(raw.get("created_at") or metadata.get("created_at"))
@@ -887,6 +888,9 @@ def normalize_candidate_asset_descriptor(payload: Mapping[str, Any] | None) -> d
         "warnings": _clean_tag_list(extraction_dict.get("warnings"), limit=20),
         "extracted_at": _clean_text(extraction_dict.get("extracted_at")),
     }
+    for key, value in metadata.items():
+        if key not in contract["metadata"]:
+            contract["metadata"][str(key)] = deepcopy(value)
     return contract
 
 

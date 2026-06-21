@@ -226,7 +226,7 @@ Then run:
 
 ```bash
 python -m backend.database.migrate --status
-python -m backend.database.migrate --apply
+python -m backend.database.migrate
 python -m backend.database.migrate --status
 ```
 
@@ -250,7 +250,7 @@ Goal: Render owns runtime infrastructure from `render.yaml`.
 
    - Static frontend service.
    - Docker API/web service.
-   - Worker/cron/background service for queued work.
+   - Docker Standard background worker (`runr-worker`) for queued work.
 
 5. Configure the API service as paid/always-on before offering to customers. Free is acceptable only for private testing.
 
@@ -264,16 +264,16 @@ Blocking output you need before continuing:
 
 - Render API service URL.
 - Render frontend URL.
-- Render worker/cron service exists.
+- Render background worker exists.
 
 ## Phase 6: Add Render environment variables
 
 Goal: production services use production Turso and R2.
 
-Set these on the Render API service and any worker service that touches the database or artifacts:
+Set these on both the Render API and worker services:
 
 ```env
-APP_ENV=production
+RUNR_ENV=production
 DATABASE_BACKEND=turso
 TURSO_DATABASE_URL=<RUNR_PROD_TURSO_DATABASE_URL>
 TURSO_AUTH_TOKEN=<RUNR_PROD_TURSO_AUTH_TOKEN>
@@ -288,11 +288,17 @@ S3_REGION=auto
 OBJECT_STORAGE_CACHE_ROOT=/tmp/runr-object-cache
 ```
 
-Set app-specific secrets too:
+Set workload-provider secrets on both API and worker when queued work uses them:
 
 ```env
 DEEPSEEK_API_KEY=<if used>
+GEMINI_API_KEY=<if used>
 SCRAPEOPS_API_KEY=<if used>
+```
+
+Set API-only application and web-provider secrets on the API:
+
+```env
 CLERK_SECRET_KEY=<if used>
 CLERK_WEBHOOK_SECRET=<if used>
 CREEM_API_KEY=<creem_live_or_test_key_for_this_environment>
@@ -327,12 +333,13 @@ Blocking output you need before continuing:
 
 Goal: production Turso has the expected schema.
 
-Preferred: let Render run migrations at startup if `deploy/start.sh` is wired into the service command.
+Preferred: let the `runr-api` Render pre-deploy command run
+`./deploy/start.sh migrate`. Do not configure migrations on `runr-worker`.
 
 Manual verification:
 
 ```bash
-APP_ENV=production \
+RUNR_ENV=production \
 DATABASE_BACKEND=turso \
 TURSO_DATABASE_URL=<RUNR_PROD_TURSO_DATABASE_URL> \
 TURSO_AUTH_TOKEN=<RUNR_PROD_TURSO_AUTH_TOKEN> \
@@ -347,7 +354,7 @@ python -m backend.database.migrate --status
 If status is clean, apply:
 
 ```bash
-python -m backend.database.migrate --apply
+python -m backend.database.migrate
 ```
 
 Do not run destructive SQL manually in production.

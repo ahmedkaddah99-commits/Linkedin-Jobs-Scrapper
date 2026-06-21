@@ -543,10 +543,18 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             )
                             if not validation.get("valid"):
                                 raise BackendValidationError(
-                                    "run_source_validation_failed",
+                                    "run_preflight_failed",
                                     "Run blocked until the workspace source setup is fixed.",
                                     details={
+                                        "phase": "run_preflight",
                                         "workspace_id": workspace.id,
+                                        "flow_id": _builder_workspace_flow_id(workspace),
+                                        "source_ids": _builder_workspace_source_ids(workspace),
+                                        "module_ids": [
+                                            str(item).strip()
+                                            for item in (workspace.metadata or {}).get("modules") or []
+                                            if str(item).strip()
+                                        ],
                                         "field_errors": list(validation.get("field_errors") or []),
                                         "source_results": list(validation.get("source_results") or []),
                                     },

@@ -4,7 +4,9 @@ import io
 import json
 import os
 import shutil
+import socket
 import threading
+import time
 import unittest
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -12,10 +14,15 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from backend import create_backend
-from backend.api.server import _build_workspace_cv_preview_profile, _customer_excluded_reason, build_handler
+from backend.api.server import (
+    _build_workspace_cv_preview_profile,
+    _customer_excluded_reason,
+    _store_candidate_asset_upload,
+    build_handler,
+)
 from backend.capabilities.networking import build_empty_relevant_people_discovery
 from backend.capabilities.tracker.email_integration import TrackerMailboxMessage
 from backend.domain.models import ArtifactRecord, JobRecord, StageDefinition
@@ -245,14 +252,58 @@ class BackendApiTests(unittest.TestCase):
             datetime.now(timezone.utc) - timedelta(days=days_ago)
         ).replace(hour=hour, minute=minute, second=0, microsecond=0).isoformat()
 
+    def test_http_handler_does_not_send_error_response_after_client_disconnect(self):
+        handler_class = build_handler(self.app)
+        for disconnect_error in (BrokenPipeError(), ConnectionResetError()):
+            with self.subTest(error=type(disconnect_error).__name__):
+                handler = object.__new__(handler_class)
+                handler._enforce_origin_policy = MagicMock()
+                handler._parse_request = MagicMock(return_value=("/health", ["health"], {}))
+                handler._dispatch_route = MagicMock(side_effect=disconnect_error)
+                handler._send_error = MagicMock()
+
+                handler.do_GET()
+
+                handler._send_error.assert_not_called()
+
+    def test_http_handler_swallows_disconnect_while_writing_error_response(self):
+        handler_class = build_handler(self.app)
+        handler = object.__new__(handler_class)
+        handler.headers = {}
+        handler.command = "POST"
+        handler.path = "/cv-upload"
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.wfile = MagicMock()
+        handler.wfile.write.side_effect = BrokenPipeError()
+
+        handler._send_error(500, "internal_error", "safe error")
+
+        self.assertTrue(handler._client_disconnected)
+        self.assertTrue(handler.close_connection)
+        handler.wfile.write.assert_called_once()
+
     def _upload_workspace_cv(
         self,
         *,
         filename: str = "builder-resume.txt",
         file_bytes: bytes = b"Builder CV Snapshot\nAnalyst with workflow-specific experience.",
+        process: bool = True,
     ) -> dict:
         status, payload = self._multipart_request("/cv-upload", "cv_file", filename, file_bytes)
-        self.assertEqual(status, 201)
+        self.assertEqual(status, 202)
+        if process:
+            self.app.process_next_queued_run(auto_retry_failed=False)
+            status, ready_payload = self._request("GET", payload["status_url"])
+            self.assertEqual(status, 200)
+            self.assertEqual(ready_payload["status"], "ready")
+            persisted_assets = (self.app.get_user(self.user.user_id).metadata or {}).get("candidate_assets") or []
+            self.assertTrue(
+                any(asset.get("asset_id") == ready_payload["asset"]["asset_id"] for asset in persisted_assets),
+                persisted_assets,
+            )
+            return ready_payload["asset"]
         return payload["asset"]
 
     def test_api_requires_bearer_auth_for_protected_routes(self):
@@ -420,7 +471,7 @@ class BackendApiTests(unittest.TestCase):
                 "/runs",
                 {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
             )
-        self.assertEqual(status, 201)
+        self.assertEqual(status, 202)
         run_id = run_payload["id"]
 
         status, review_payload = self._request(
@@ -525,7 +576,7 @@ class BackendApiTests(unittest.TestCase):
                 "/runs",
                 {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
             )
-        self.assertEqual(status, 201)
+        self.assertEqual(status, 202)
 
         status, payload = self._request("GET", "/dashboard?mode=summary")
         self.assertEqual(status, 200)
@@ -1213,6 +1264,10 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(workspace_payload["workspace_type"], "custom")
         self.assertEqual(workspace_payload["metadata"]["automation_flow"], "tailored_documents")
         self.assertEqual(workspace_payload["settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
+        self.assertFalse(workspace_payload["settings"].get("workspace_cv_asset_path"))
+        self.assertFalse(workspace_payload["settings"].get("workspace_cv_asset_docx_path"))
+        self.assertTrue(workspace_payload["settings"]["workspace_cv_asset_object_key"])
+        self.assertTrue(workspace_payload["settings"]["workspace_cv_asset_docx_object_key"])
         self.assertEqual(workspace_payload["settings"]["cv_generation_mode"], "standard_cv")
         self.assertEqual(workspace_payload["settings"]["keywords"], ["analyst"])
         self.assertEqual(workspace_payload["settings"]["work_arrangement"], "hybrid")
@@ -1259,6 +1314,8 @@ class BackendApiTests(unittest.TestCase):
             )
         self.assertEqual(status, 201)
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
+        self.assertFalse(run_payload["run_plan"]["resolved_run_settings"].get("workspace_cv_asset_path"))
+        self.assertFalse(run_payload["run_plan"]["resolved_run_settings"].get("workspace_cv_asset_docx_path"))
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["cv_generation_mode"], "standard_cv")
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["work_arrangement"], "hybrid")
         self.assertEqual(run_payload["run_plan"]["resolved_run_settings"]["industry"], "Fintech")
@@ -1464,6 +1521,141 @@ class BackendApiTests(unittest.TestCase):
             any(item["field"] == "country_codes" for item in payload["error"]["details"]["field_errors"])
         )
 
+    def test_workspace_builder_create_requires_workspace_cv_with_structured_field_error(self):
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, payload = self._request(
+                "POST",
+                "/workspace-builder/workspaces",
+                {
+                    "name": "Missing CV Builder Workspace",
+                    "flow_id": "tailored_documents",
+                    "source_ids": ["linkedin_jobs"],
+                    "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+                    "settings": {
+                        "keywords": ["analyst"],
+                        "country_codes": ["DE"],
+                    },
+                },
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "workspace_validation_failed")
+        self.assertEqual(payload["error"]["details"]["phase"], "save")
+        self.assertIn(
+            {
+                "field": "workspace_cv_asset_id",
+                "code": "required",
+                "message": "Select a workspace CV before saving or running this workspace.",
+            },
+            payload["error"]["details"]["field_errors"],
+        )
+
+    def test_workspace_builder_create_rejects_stale_workspace_cv_id_with_structured_field_error(self):
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, payload = self._request(
+                "POST",
+                "/workspace-builder/workspaces",
+                {
+                    "name": "Stale CV Builder Workspace",
+                    "flow_id": "tailored_documents",
+                    "source_ids": ["linkedin_jobs"],
+                    "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+                    "settings": {
+                        "workspace_cv_asset_id": "asset_missing_workspace_cv",
+                        "keywords": ["analyst"],
+                        "country_codes": ["DE"],
+                    },
+                },
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "workspace_validation_failed")
+        self.assertEqual(payload["error"]["details"]["phase"], "save")
+        self.assertIn(
+            {
+                "field": "workspace_cv_asset_id",
+                "code": "workspace_cv_asset_unresolved",
+                "message": "Select an accessible workspace CV before saving or running this workspace.",
+            },
+            payload["error"]["details"]["field_errors"],
+        )
+
+    def test_generic_workspace_api_cannot_bypass_builder_validation(self):
+        status, payload = self._request(
+            "POST",
+            "/workspaces",
+            {
+                "id": "malformed_api_builder_workspace",
+                "name": "Malformed API Builder Workspace",
+                "workflow_template_id": "api_template_v1",
+                "workspace_type": "custom",
+                "settings": {
+                    "automation_flow": "tailored_documents",
+                    "keywords": ["analyst"],
+                    "country_codes": ["DE"],
+                },
+                "metadata": {
+                    "builder_mode": "scratch",
+                    "automation_flow": "tailored_documents",
+                    "source_ids": [],
+                    "modules": [],
+                },
+            },
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "workspace_validation_failed")
+        field_errors = payload["error"]["details"]["field_errors"]
+        self.assertTrue(
+            any(item["field"] == "source_ids" and item["code"] == "required" for item in field_errors)
+        )
+        self.assertTrue(
+            any(item["field"] == "module_ids" and item["code"] == "required" for item in field_errors)
+        )
+        self.assertTrue(
+            any(item["field"] == "workspace_cv_asset_id" and item["code"] == "required" for item in field_errors)
+        )
+
+    def test_workspace_builder_update_rejects_empty_sources_with_structured_field_error(self):
+        workspace_cv_asset_id = self._upload_workspace_cv(filename="empty-update-sources-resume.txt")["asset_id"]
+        valid_payload = {
+            "name": "Update Validation Workspace",
+            "flow_id": "tailored_documents",
+            "source_ids": ["linkedin_jobs"],
+            "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+            "settings": {
+                "workspace_cv_asset_id": workspace_cv_asset_id,
+                "keywords": ["analyst"],
+                "country_codes": ["DE"],
+            },
+        }
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, workspace_payload = self._request(
+                "POST",
+                "/workspace-builder/workspaces",
+                valid_payload,
+            )
+        self.assertEqual(status, 201, workspace_payload)
+
+        status, payload = self._request(
+            "PUT",
+            f"/workspace-builder/workspaces/{workspace_payload['id']}",
+            {
+                **valid_payload,
+                "source_ids": [],
+            },
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "workspace_validation_failed")
+        self.assertEqual(payload["error"]["details"]["phase"], "save")
+        self.assertTrue(
+            any(
+                item["field"] == "source_ids" and item["code"] == "required"
+                for item in payload["error"]["details"]["field_errors"]
+            )
+        )
+
     def test_run_start_with_deleted_workspace_cv_returns_structured_validation_error(self):
         workspace_cv_asset_id = self._upload_workspace_cv(filename="deleted-run-resume.txt")["asset_id"]
         with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
@@ -1483,8 +1675,7 @@ class BackendApiTests(unittest.TestCase):
                     },
                 },
             )
-        self.assertEqual(status, 201)
-        Path(workspace_payload["settings"]["workspace_cv_asset_path"]).unlink()
+        self.assertEqual(status, 201, workspace_payload)
         self.app.object_storage.delete(workspace_payload["settings"]["workspace_cv_asset_object_key"])
 
         with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
@@ -1500,6 +1691,47 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(
             any(
                 item["code"] == "workspace_cv_asset_missing_file"
+                for item in payload["error"]["details"]["field_errors"]
+            )
+        )
+
+    def test_run_start_with_stale_builder_country_uses_run_preflight_error_contract(self):
+        workspace_cv_asset_id = self._upload_workspace_cv(filename="stale-country-resume.txt")["asset_id"]
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, workspace_payload = self._request(
+                "POST",
+                "/workspace-builder/workspaces",
+                {
+                    "name": "Stale Country Workspace",
+                    "flow_id": "tailored_documents",
+                    "source_ids": ["linkedin_jobs"],
+                    "module_ids": ["screening_filter", "priority_ranking", "tailored_document_generation"],
+                    "settings": {
+                        "workspace_cv_asset_id": workspace_cv_asset_id,
+                        "keywords": ["analyst"],
+                        "country_codes": ["DE"],
+                    },
+                },
+            )
+        self.assertEqual(status, 201, workspace_payload)
+
+        stale_workspace = self.app.get_workspace(workspace_payload["id"])
+        stale_workspace.settings["country_codes"] = []
+        self.app.repositories.workspace_repository.upsert_workspace(stale_workspace)
+
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, payload = self._request(
+                "POST",
+                "/runs",
+                {"workspace_id": stale_workspace.id, "execution_mode": "planned", "max_attempts": 1},
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "run_preflight_failed")
+        self.assertEqual(payload["error"]["details"]["phase"], "run_preflight")
+        self.assertTrue(
+            any(
+                item["field"] == "country_codes" and item["code"] == "required"
                 for item in payload["error"]["details"]["field_errors"]
             )
         )
@@ -2065,37 +2297,174 @@ class BackendApiTests(unittest.TestCase):
                 b"- Thesis on process optimization\n"
             ),
         )
-        self.assertEqual(status, 201)
-        self.assertIn(payload["extraction"]["provider"], {"heuristic_fallback", "deepseek"})
+        self.assertEqual(status, 202)
+        self.assertTrue(payload["asset_id"])
+        self.assertTrue(payload["job_id"])
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["status_url"], f"/cv-upload/{payload['job_id']}")
         self.assertTrue(payload["asset"]["file"]["object_key"])
         self.assertTrue(self.app.object_storage.exists(payload["asset"]["file"]["object_key"]))
-        word_companion_path = Path(payload["asset"]["metadata"]["word_companion_path"])
-        self.assertTrue(word_companion_path.exists())
-        self.assertEqual(word_companion_path.suffix, ".docx")
-        self.assertTrue(payload["asset"]["metadata"]["word_companion_object_key"])
-        self.assertTrue(
-            self.app.object_storage.exists(payload["asset"]["metadata"]["word_companion_object_key"])
-        )
-        self.assertEqual(payload["asset"]["metadata"]["text_extraction"]["method"], "plain_text")
+        self.assertEqual(payload["asset"]["file"]["path"], "")
         self.assertGreaterEqual(payload["timings_ms"]["total"], 0)
-        self.assertEqual(payload["parsed"]["name"], "Jane Candidate")
-        self.assertEqual(payload["parsed"]["role_title"], "Operations Analyst")
-        self.assertEqual(payload["parsed"]["email"], "jane@example.com")
-        self.assertIn("Excel", payload["parsed"]["competencies"])
-        self.assertEqual(payload["parsed"]["languages"], ["Arabic - Native", "English - C1", "German - B2"])
-        self.assertEqual(payload["parsed"]["custom_sections"], [])
-        self.assertEqual(payload["parsed"]["recent_experience"][0]["title"], "Business Analyst")
-        self.assertEqual(payload["parsed"]["education"][0]["degree_title"], "MSc Operations Management")
-        self.assertEqual(payload["parsed"]["education"][0]["institution"], "Example University")
 
-        source_path = Path(payload["asset"]["file"]["path"])
-        source_path.unlink()
+        status, queued_payload = self._request("GET", payload["status_url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(queued_payload["status"], "queued")
+        self.app.process_next_queued_run(auto_retry_failed=False)
+        status, ready_payload = self._request("GET", payload["status_url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(ready_payload["status"], "ready")
+        self.assertIn(ready_payload["extraction"]["provider"], {"heuristic_fallback", "deepseek"})
+        self.assertEqual(ready_payload["asset"]["metadata"]["word_companion_path"], "")
+        self.assertTrue(ready_payload["asset"]["metadata"]["word_companion_object_key"])
+        self.assertTrue(
+            self.app.object_storage.exists(ready_payload["asset"]["metadata"]["word_companion_object_key"])
+        )
+        self.assertEqual(ready_payload["asset"]["metadata"]["text_extraction"]["method"], "plain_text")
+        self.assertEqual(ready_payload["parsed"]["name"], "Jane Candidate")
+        self.assertEqual(ready_payload["parsed"]["role_title"], "Operations Analyst")
+        self.assertEqual(ready_payload["parsed"]["email"], "jane@example.com")
+        self.assertIn("Excel", ready_payload["parsed"]["competencies"])
+        self.assertEqual(ready_payload["parsed"]["languages"], ["Arabic - Native", "English - C1", "German - B2"])
+        self.assertEqual(ready_payload["parsed"]["custom_sections"], [])
+        self.assertEqual(ready_payload["parsed"]["recent_experience"][0]["title"], "Business Analyst")
+        self.assertEqual(ready_payload["parsed"]["education"][0]["degree_title"], "MSc Operations Management")
+        self.assertEqual(ready_payload["parsed"]["education"][0]["institution"], "Example University")
+
         status, _, downloaded = self._binary_request(
             "GET",
-            f"/documents/assets/{payload['asset']['asset_id']}/download",
+            f"/documents/assets/{payload['asset_id']}/download",
         )
         self.assertEqual(status, 200)
         self.assertIn(b"Jane Candidate", downloaded)
+
+    def test_candidate_asset_upload_rolls_back_objects_when_metadata_persistence_fails(self):
+        stored_keys: list[str] = []
+        original_put = self.app.object_storage.put
+
+        def tracked_put(key, data, **kwargs):
+            stored_keys.append(key)
+            return original_put(key, data, **kwargs)
+
+        with patch.object(self.app.object_storage, "put", side_effect=tracked_put), patch.object(
+            self.app.repositories.auth_repository,
+            "upsert_user",
+            side_effect=RuntimeError("metadata write failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "metadata write failed"):
+                _store_candidate_asset_upload(
+                    self.app,
+                    self.user,
+                    filename="rollback-resume.txt",
+                    file_bytes=b"Rollback Candidate\nOperations Analyst",
+                    asset_kind="workspace_cv",
+                    metadata={"source_text": "Rollback Candidate\nOperations Analyst"},
+                )
+
+        self.assertEqual(len(stored_keys), 2)
+        self.assertTrue(all(not self.app.object_storage.exists(key) for key in stored_keys))
+
+    def test_cv_upload_emits_structured_redacted_stage_timings(self):
+        sensitive_values = (
+            "Private Candidate",
+            "private.candidate@example.com",
+            "secret-cv-filename.txt",
+        )
+        with self.assertLogs("backend.api.cv_upload", level="INFO") as captured:
+            status, _ = self._multipart_request(
+                "/cv-upload",
+                "cv_file",
+                sensitive_values[2],
+                (
+                    b"Private Candidate\n"
+                    b"private.candidate@example.com\n"
+                    b"Summary\nConfidential employment history.\n"
+                ),
+            )
+
+        self.assertEqual(status, 202)
+        timing_record = json.loads(captured.output[-1].split(":", 2)[-1])
+        self.assertEqual(timing_record["event"], "cv_upload_timing")
+        self.assertEqual(timing_record["route"], "/cv-upload")
+        self.assertEqual(timing_record["outcome"], "success")
+        self.assertEqual(
+            set(timing_record["timings_ms"]),
+            {
+                "body_read",
+                "multipart_parse",
+                "r2_storage",
+                "turso_write",
+                "total",
+            },
+        )
+        serialized_record = json.dumps(timing_record)
+        for sensitive_value in sensitive_values:
+            self.assertNotIn(sensitive_value, serialized_record)
+
+    def test_cv_upload_emits_stage_timings_when_processing_fails(self):
+        with self.assertLogs("backend.api.cv_upload", level="INFO") as captured:
+            status, _, payload = self._request_with_headers(
+                "POST",
+                "/cv-upload",
+                headers={
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Content-Type": "application/json",
+                },
+                payload={"source_text": "must-not-appear-in-timing-log"},
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "bad_request")
+        timing_record = json.loads(captured.output[-1].split(":", 2)[-1])
+        self.assertEqual(timing_record["outcome"], "failed")
+        self.assertEqual(timing_record["error_type"], "ValueError")
+        self.assertIsNotNone(timing_record["timings_ms"]["total"])
+        self.assertNotIn("must-not-appear-in-timing-log", json.dumps(timing_record))
+
+    def test_cv_upload_rejects_oversized_request_before_processing(self):
+        status, payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "oversized.bin",
+            b"x" * (10 * 1024 * 1024 + 1),
+        )
+
+        self.assertEqual(status, 413)
+        self.assertEqual(payload["error"]["code"], "request_too_large")
+
+    def test_cv_upload_logs_timings_when_client_disconnects_during_body_read(self):
+        boundary = "----runrdisconnectboundary"
+        partial_body = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="cv_file"; filename="private.txt"\r\n'
+            "Content-Type: text/plain\r\n\r\n"
+            "private-payload-must-not-be-logged"
+        ).encode("latin-1")
+        request_headers = (
+            "POST /cv-upload HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{self.port}\r\n"
+            f"Authorization: Bearer {self.access_token}\r\n"
+            f"Content-Type: multipart/form-data; boundary={boundary}\r\n"
+            f"Content-Length: {len(partial_body) + 100}\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("latin-1")
+
+        with self.assertLogs("backend.api.cv_upload", level="INFO") as captured:
+            client = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            client.sendall(request_headers + partial_body)
+            client.shutdown(socket.SHUT_WR)
+            client.close()
+            deadline = time.monotonic() + 5
+            while not captured.records and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        self.assertTrue(captured.records)
+        timing_record = json.loads(captured.records[-1].getMessage())
+        self.assertEqual(timing_record["outcome"], "client_disconnected")
+        self.assertEqual(timing_record["error_type"], "ConnectionResetError")
+        self.assertIsNotNone(timing_record["timings_ms"]["body_read"])
+        self.assertIsNotNone(timing_record["timings_ms"]["total"])
+        self.assertNotIn("private-payload-must-not-be-logged", json.dumps(timing_record))
 
     def test_cv_upload_is_idempotent_for_same_file_content(self):
         file_bytes = (
@@ -2110,7 +2479,7 @@ class BackendApiTests(unittest.TestCase):
             "structured_resume.txt",
             file_bytes,
         )
-        self.assertEqual(first_status, 201)
+        self.assertEqual(first_status, 202)
         user = self.app.get_user(self.user.user_id)
         metadata = dict(user.metadata or {})
         assets = []
@@ -2131,7 +2500,7 @@ class BackendApiTests(unittest.TestCase):
             file_bytes,
         )
 
-        self.assertEqual(second_status, 201)
+        self.assertEqual(second_status, 202)
         self.assertEqual(first_payload["asset"]["asset_id"], second_payload["asset"]["asset_id"])
 
         user = self.app.get_user(self.user.user_id)
@@ -2150,6 +2519,78 @@ class BackendApiTests(unittest.TestCase):
         cleaned_user = self.app.get_user(self.user.user_id)
         cleaned_assets = (cleaned_user.metadata or {}).get("candidate_assets") or []
         self.assertEqual(len(cleaned_assets), 1)
+
+    def test_cv_upload_status_reports_failure_after_background_processing_error(self):
+        status, payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "scanned.bin",
+            b"\x00\x01\x02\x03",
+        )
+        self.assertEqual(status, 202)
+
+        processed = self.app.process_next_queued_run(auto_retry_failed=False)
+        self.assertEqual(processed.status, "failed")
+        status, failed_payload = self._request("GET", payload["status_url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(failed_payload["status"], "failed")
+        self.assertIn("Could not extract any text", failed_payload["error"])
+
+    def test_cv_upload_processing_retries_after_transient_extraction_failure(self):
+        status, payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "retry-resume.txt",
+            b"Retry Candidate\nSummary\nReliable analyst.\n",
+        )
+        self.assertEqual(status, 202)
+
+        with patch(
+            "backend.profiles.cv_upload_jobs.extract_document_text",
+            side_effect=[
+                RuntimeError("temporary extractor outage"),
+                {"text": "Retry Candidate\nSummary\nReliable analyst.", "char_count": 42, "method": "plain_text", "warnings": []},
+            ],
+        ):
+            first_attempt = self.app.process_next_queued_run(auto_retry_failed=True)
+            self.assertEqual(first_attempt.status, "queued")
+            status, queued_payload = self._request("GET", payload["status_url"])
+            self.assertEqual(status, 200)
+            self.assertEqual(queued_payload["status"], "queued")
+
+            second_attempt = self.app.process_next_queued_run(auto_retry_failed=True)
+            self.assertEqual(second_attempt.status, "completed")
+
+        status, ready_payload = self._request("GET", payload["status_url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(ready_payload["status"], "ready")
+        self.assertEqual(ready_payload["parsed"]["name"], "Retry Candidate")
+
+    def test_cv_upload_status_and_documents_refresh_during_processing(self):
+        status, payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "refresh-resume.txt",
+            b"Refresh Candidate\nSummary\nProcessing visibility.\n",
+        )
+        self.assertEqual(status, 202)
+
+        claimed = self.app.claim_next_queued_run()
+        self.assertEqual(claimed.id, payload["job_id"])
+        status, processing_payload = self._request("GET", payload["status_url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(processing_payload["status"], "processing")
+
+        status, documents_payload = self._request("GET", "/documents?asset_kind=workspace_cv")
+        self.assertEqual(status, 200)
+        uploaded_cv = next(item for item in documents_payload["documents"] if item["asset_id"] == payload["asset_id"])
+        self.assertEqual(uploaded_cv["display_status"], "processing")
+
+        completed = self.app.execute_claimed_run(claimed.id, auto_retry_failed=False)
+        self.assertEqual(completed.status, "completed")
+        status, ready_payload = self._request("GET", payload["status_url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(ready_payload["status"], "ready")
 
     def test_workspace_cv_preview_does_not_render_language_entries_as_custom_sections(self):
         preview = _build_workspace_cv_preview_profile(
@@ -2249,8 +2690,9 @@ class BackendApiTests(unittest.TestCase):
                 b"- Documented custom section handling\n"
             ),
         )
-        self.assertEqual(status, 201)
+        self.assertEqual(status, 202)
         self.assertEqual(cv_payload["asset"]["asset_kind"], "workspace_cv")
+        self.app.process_next_queued_run(auto_retry_failed=False)
 
         status, run_payload = self._request(
             "POST",

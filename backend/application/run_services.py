@@ -34,6 +34,7 @@ from backend.domain.tracker import (
     ensure_review_placed_in_tracker_at,
     review_placed_in_tracker_at,
 )
+from backend.profiles.cv_upload_jobs import is_cv_upload_processing_run, process_cv_upload_run
 from backend.repositories.contracts import BackendRepositories
 
 
@@ -57,6 +58,7 @@ class RunLifecycleService:
     find_duplicate_user_tracker_posting: TrackerDuplicateGuard
     auto_approve_generated_job_reviews: AutoApproveGeneratedReviews
     enqueue_due_scheduled_runs: ScheduledRunEnqueuer
+    object_storage: Any = None
 
     def get_run(self, run_id: str) -> RunRecord:
         return self.repositories.run_repository.get(run_id)
@@ -455,6 +457,12 @@ class RunLifecycleService:
             workflow=workflow,
             run_input_overrides=run_input_overrides or {},
         )
+        self.validate_workspace(
+            workspace,
+            phase="run_preflight",
+            error_code="run_preflight_failed",
+            run_plan_settings=run.run_plan.resolved_run_settings if run.run_plan else {},
+        )
         self.repositories.run_repository.save(run)
 
         if enqueue:
@@ -516,6 +524,13 @@ class RunLifecycleService:
 
     def execute_claimed_run(self, run_id: str, *, auto_retry_failed: bool = True) -> RunRecord:
         run = self.repositories.run_repository.get(run_id)
+        if is_cv_upload_processing_run(run):
+            return process_cv_upload_run(
+                repositories=self.repositories,
+                object_storage=self.object_storage,
+                run=run,
+                auto_retry_failed=auto_retry_failed,
+            )
         workspace = self.workspace_from_run_snapshot(run)
         workflow = self.workflow_from_run_snapshot(run)
         try:

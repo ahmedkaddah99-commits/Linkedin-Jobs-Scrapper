@@ -21,6 +21,7 @@ def _bind_server_globals() -> None:
 
 def register_routes(registry: RouteRegistry) -> None:
     registry.exact('GET', ('cv',), _handle_get, auth_required=True, name='documents.cv')
+    registry.prefix('GET', ('cv-upload',), _handle_get, auth_required=True, name='documents.cv_upload_status')
     registry.prefix('GET', ('contracts',), _handle_get, auth_required=True, name='documents.contracts')
     registry.prefix('GET', ('documents',), _handle_get, auth_required=True, name='documents.documents')
     registry.prefix('POST', ('documents',), _handle_post, auth_required=True, name='documents.documents.post')
@@ -50,6 +51,18 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                                 except Exception:
                                     cv_text = ""
                         self._send_json({"cv_text": cv_text, "char_count": len(cv_text)})
+                        return
+
+    if segments[:1] == ["cv-upload"] and len(segments) == 2:
+                        user, _ = self._require_identity()
+                        self._send_json(
+                            cv_upload_status_payload(
+                                application.repositories,
+                                user_id=user.user_id,
+                                job_id=segments[1],
+                            ),
+                            status=HTTPStatus.OK,
+                        )
                         return
 
     if segments == ["contracts", "phase0"]:
@@ -189,87 +202,98 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         return
 
     if segments == ["cv-upload"]:
-                        user, _ = self._require_identity()
                         upload_started = perf_counter()
-                        content_type_header = str(self.headers.get("Content-Type") or "")
-                        if "multipart/form-data" not in content_type_header:
-                            raise ValueError("cv-upload requires multipart/form-data content type")
-                        read_started = perf_counter()
-                        content_length = int(self.headers.get("Content-Length", "0"))
-                        raw_body = self.rfile.read(content_length) if content_length > 0 else b""
-                        parse_started = perf_counter()
-                        filename, file_bytes = _parse_multipart_file(content_type_header, raw_body)
-                        if not file_bytes:
-                            raise ValueError("No file found in multipart body. Ensure the form field has a filename.")
-                        extract_started = perf_counter()
-                        document_extraction = extract_document_text(filename, file_bytes, allow_ocr=False)
-                        cv_text = str(document_extraction.get("text") or "")
-                        if not cv_text.strip():
-                            warning = " ".join(str(item) for item in document_extraction.get("warnings") or []).strip()
-                            detail = f" {warning}" if warning else ""
-                            raise ValueError(f"Could not extract any text from uploaded file '{filename}'.{detail}")
-                        profile_started = perf_counter()
-                        extraction = _extract_cv_profile_for_upload(cv_text)
-                        # Save to disk (for legacy pipeline compatibility)
-                        cv_save_path = Path("user_config") / "cv_master.txt"
-                        cv_save_path.parent.mkdir(parents=True, exist_ok=True)
-                        cv_save_path.write_text(cv_text, encoding="utf-8")
-                        store_started = perf_counter()
-                        uploaded_asset = _store_candidate_asset_upload(
-                            application,
-                            user,
-                            filename=filename,
-                            file_bytes=file_bytes,
-                            asset_kind="workspace_cv",
-                            display_name=filename or "Workspace CV",
-                            role="workspace_cv",
-                            tags=["cv", "workspace_cv"],
-                            metadata={
-                                **extraction_metadata(document_extraction),
-                                "parsed_profile": dict(extraction.get("profile") or {}),
-                                "profile_extraction": {
-                                    "provider": str(extraction.get("provider") or ""),
-                                    "model": str(extraction.get("model") or ""),
-                                    "warnings": list(extraction.get("warnings") or []),
-                                    "extracted_at": str(extraction.get("extracted_at") or ""),
-                                },
-                            },
-                        )
-                        # Persist in user metadata
-                        metadata_started = perf_counter()
-                        user = application.get_user(user.user_id)
-                        metadata = dict(user.metadata or {})
-                        metadata["cv_text"] = cv_text
-                        user.metadata = metadata
-                        user.updated_at = datetime.now(timezone.utc).isoformat()
-                        application.repositories.auth_repository.upsert_user(user)
-                        finished = perf_counter()
-                        timings_ms = {
-                            "read_body": round((parse_started - read_started) * 1000, 2),
-                            "parse_multipart": round((extract_started - parse_started) * 1000, 2),
-                            "extract_text": round((profile_started - extract_started) * 1000, 2),
-                            "profile_parse": round((store_started - profile_started) * 1000, 2),
-                            "store_asset": round((metadata_started - store_started) * 1000, 2),
-                            "persist_user_metadata": round((finished - metadata_started) * 1000, 2),
-                            "total": round((finished - upload_started) * 1000, 2),
+                        timings_ms: dict[str, float | None] = {
+                            "body_read": None,
+                            "multipart_parse": None,
+                            "r2_storage": None,
+                            "turso_write": None,
+                            "total": None,
                         }
-                        self._send_json(
-                            {
-                                "cv_text": cv_text,
-                                "char_count": len(cv_text),
+                        outcome = "failed"
+                        error_type = ""
+                        response_payload: dict[str, Any] | None = None
+                        try:
+                            user, _ = self._require_identity()
+                            content_type_header = str(self.headers.get("Content-Type") or "")
+                            if "multipart/form-data" not in content_type_header:
+                                raise ValueError("cv-upload requires multipart/form-data content type")
+
+                            stage_started = perf_counter()
+                            try:
+                                raw_body = self._read_limited_body(
+                                    max_bytes=_MAX_CV_UPLOAD_REQUEST_BYTES,
+                                    request_label="CV upload",
+                                )
+                            finally:
+                                timings_ms["body_read"] = round((perf_counter() - stage_started) * 1000, 2)
+
+                            stage_started = perf_counter()
+                            try:
+                                filename, file_bytes = _parse_multipart_file(content_type_header, raw_body)
+                            finally:
+                                timings_ms["multipart_parse"] = round((perf_counter() - stage_started) * 1000, 2)
+                            if not file_bytes:
+                                raise ValueError("No file found in multipart body. Ensure the form field has a filename.")
+
+                            uploaded_asset = _store_candidate_asset_upload(
+                                application,
+                                user,
+                                filename=filename,
+                                file_bytes=file_bytes,
+                                asset_kind="workspace_cv",
+                                display_name=filename or "Workspace CV",
+                                role="workspace_cv",
+                                tags=["cv", "workspace_cv"],
+                                metadata={
+                                    "status": CV_STATUS_UPLOADED,
+                                },
+                                timings_ms=timings_ms,
+                            )
+
+                            processing_run, uploaded_asset = enqueue_cv_upload_processing_run(
+                                application.repositories,
+                                user_id=user.user_id,
+                                asset_id=str(uploaded_asset.get("asset_id") or ""),
+                            )
+                            status_payload = cv_upload_status_payload(
+                                application.repositories,
+                                user_id=user.user_id,
+                                job_id=processing_run.id,
+                            )
+
+                            timings_ms["total"] = round((perf_counter() - upload_started) * 1000, 2)
+                            response_payload = {
+                                "asset_id": str(uploaded_asset.get("asset_id") or ""),
+                                "job_id": processing_run.id,
+                                "status": str(status_payload.get("status") or "queued"),
+                                "status_url": str(status_payload.get("status_url") or f"/cv-upload/{processing_run.id}"),
                                 "filename": filename,
                                 "asset": uploaded_asset,
-                                "parsed": dict(extraction.get("profile") or {}),
                                 "timings_ms": timings_ms,
-                                "extraction": {
-                                    "provider": str(extraction.get("provider") or ""),
-                                    "model": str(extraction.get("model") or ""),
-                                    "warnings": list(extraction.get("warnings") or []),
-                                    "extracted_at": str(extraction.get("extracted_at") or ""),
-                                },
-                            },
-                            status=HTTPStatus.CREATED,
-                        )
+                            }
+                            outcome = "success"
+                        except _CLIENT_DISCONNECT_ERRORS as exc:
+                            outcome = "client_disconnected"
+                            error_type = type(exc).__name__
+                            raise
+                        except Exception as exc:
+                            error_type = type(exc).__name__
+                            raise
+                        finally:
+                            timings_ms["total"] = round((perf_counter() - upload_started) * 1000, 2)
+                            timing_record = {
+                                "event": "cv_upload_timing",
+                                "route": "/cv-upload",
+                                "outcome": outcome,
+                                "timings_ms": timings_ms,
+                            }
+                            if error_type:
+                                timing_record["error_type"] = error_type
+                            logging.getLogger("backend.api.cv_upload").info(
+                                json.dumps(timing_record, sort_keys=True, separators=(",", ":"))
+                            )
+                        self._send_json(response_payload, status=HTTPStatus.ACCEPTED)
                         return
 
     if segments == ["profile-photo-upload"]:

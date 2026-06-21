@@ -27,7 +27,7 @@ These steps require account access and production credentials.
 2. deploy `render.yaml` as a Blueprint.
 3. Set all secret environment variables in the Render dashboard.
 4. Confirm the API health check succeeds on the Render hostname.
-5. Trigger the cron processor and verify a queued run is claimed.
+5. Verify `runr-worker` is running and claims a queued run.
 6. Verify generated files survive API and worker redeploys because they are in
    R2.
 

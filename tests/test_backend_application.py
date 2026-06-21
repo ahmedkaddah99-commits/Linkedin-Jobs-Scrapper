@@ -330,6 +330,168 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(run.run_plan.resolved_run_settings["workspace_cv_text"], "Primary workspace CV snapshot")
         self.assertTrue((temp_dir / "backend.sqlite3").exists())
 
+    def test_builder_create_rejects_omitted_automation_modules(self):
+        temp_dir = self._workspace_tempdir("builder_missing_modules")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Workspace CV", encoding="utf-8")
+
+        with self.assertRaises(BackendValidationError) as error_context:
+            app.create_workspace_from_scratch(
+                {
+                    "name": "Missing Modules Workspace",
+                    "flow_id": "tailored_documents",
+                    "source_ids": ["linkedin_jobs"],
+                    "workspace_cv_asset": self._workspace_cv_asset_descriptor(
+                        asset_id="asset_workspace_cv_primary",
+                        cv_path=cv_path,
+                    ),
+                    "settings": {
+                        "workspace_cv_asset_id": "asset_workspace_cv_primary",
+                        "keywords": ["analyst"],
+                        "country_codes": ["DE"],
+                    },
+                }
+            )
+
+        self.assertEqual(error_context.exception.error_code, "workspace_validation_failed")
+        self.assertIn(
+            {
+                "field": "module_ids",
+                "code": "required",
+                "message": "Enable at least one automation module for this workspace.",
+            },
+            error_context.exception.details["field_errors"],
+        )
+
+    def test_builder_create_requires_tailored_document_automation_module(self):
+        temp_dir = self._workspace_tempdir("builder_missing_tailored_module")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Workspace CV", encoding="utf-8")
+
+        with self.assertRaises(BackendValidationError) as error_context:
+            app.create_workspace_from_scratch(
+                {
+                    "name": "Missing Tailored Module Workspace",
+                    "flow_id": "tailored_documents",
+                    "source_ids": ["linkedin_jobs"],
+                    "module_ids": ["screening_filter", "priority_ranking"],
+                    "workspace_cv_asset": self._workspace_cv_asset_descriptor(
+                        asset_id="asset_workspace_cv_primary",
+                        cv_path=cv_path,
+                    ),
+                    "settings": {
+                        "workspace_cv_asset_id": "asset_workspace_cv_primary",
+                        "keywords": ["analyst"],
+                        "country_codes": ["DE"],
+                    },
+                }
+            )
+
+        self.assertIn(
+            {
+                "field": "module_ids",
+                "code": "required_module",
+                "message": "Enable the tailored_document_generation module for tailored-document workspaces.",
+            },
+            error_context.exception.details["field_errors"],
+        )
+
+    def test_generic_workspace_upsert_cannot_bypass_builder_cv_validation(self):
+        app, _ = self._create_app_with_test_workflow("builder_generic_upsert_missing_cv")
+
+        with self.assertRaises(BackendValidationError) as error_context:
+            app.upsert_workspace(
+                {
+                    "id": "malformed_builder_workspace",
+                    "name": "Malformed Builder Workspace",
+                    "workflow_template_id": "custom_template_v1",
+                    "workspace_type": "custom",
+                    "settings": {
+                        "automation_flow": "tailored_documents",
+                        "keywords": ["analyst"],
+                        "country_codes": ["DE"],
+                    },
+                    "feature_flags": {
+                        "screening_filter": True,
+                        "priority_ranking": True,
+                        "tailored_document_generation": True,
+                    },
+                    "sources": [{"id": "linkedin", "connector_id": "linkedin_jobs"}],
+                    "metadata": {
+                        "builder_mode": "scratch",
+                        "automation_flow": "tailored_documents",
+                        "source_ids": ["linkedin_jobs"],
+                        "modules": [
+                            "screening_filter",
+                            "priority_ranking",
+                            "tailored_document_generation",
+                        ],
+                    },
+                }
+            )
+
+        self.assertEqual(error_context.exception.error_code, "workspace_validation_failed")
+        self.assertIn(
+            {
+                "field": "workspace_cv_asset_id",
+                "code": "required",
+                "message": "Select a workspace CV before saving or running this workspace.",
+            },
+            error_context.exception.details["field_errors"],
+        )
+
+    def test_generic_workspace_upsert_rejects_mismatched_saved_sources(self):
+        temp_dir = self._workspace_tempdir("builder_mismatched_sources")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Workspace CV", encoding="utf-8")
+        workspace = self._create_builder_workspace_with_cv_snapshot(
+            app,
+            cv_path=cv_path,
+            cv_text="Workspace CV",
+        )
+        workspace_payload = workspace.to_dict()
+        workspace_payload["sources"] = [{"id": "curated", "connector_id": "curated_job_urls"}]
+
+        with self.assertRaises(BackendValidationError) as error_context:
+            app.upsert_workspace(workspace_payload)
+
+        self.assertIn(
+            {
+                "field": "source_ids",
+                "code": "source_configuration_mismatch",
+                "message": "Saved source_ids do not match the workspace connector configuration.",
+            },
+            error_context.exception.details["field_errors"],
+        )
+
+    def test_generic_workspace_upsert_rejects_mismatched_enabled_modules(self):
+        temp_dir = self._workspace_tempdir("builder_mismatched_modules")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Workspace CV", encoding="utf-8")
+        workspace = self._create_builder_workspace_with_cv_snapshot(
+            app,
+            cv_path=cv_path,
+            cv_text="Workspace CV",
+        )
+        workspace_payload = workspace.to_dict()
+        workspace_payload["feature_flags"]["tailored_document_generation"] = False
+
+        with self.assertRaises(BackendValidationError) as error_context:
+            app.upsert_workspace(workspace_payload)
+
+        self.assertIn(
+            {
+                "field": "module_ids",
+                "code": "module_configuration_mismatch",
+                "message": "Saved module_ids do not match the enabled workspace automation modules.",
+            },
+            error_context.exception.details["field_errors"],
+        )
+
     def test_update_workspace_from_scratch_preserves_run_schedule(self):
         temp_dir = self._workspace_tempdir("builder_schedule_preserve")
         app = create_backend(temp_dir)
@@ -384,6 +546,8 @@ class BackendApplicationTests(unittest.TestCase):
     def test_builder_can_update_existing_workspace(self):
         temp_dir = self._workspace_tempdir("builder_update")
         app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Workspace CV", encoding="utf-8")
         workspace = app.create_workspace_from_scratch(
             {
                 "name": "My Search Workspace",
@@ -394,7 +558,12 @@ class BackendApplicationTests(unittest.TestCase):
                     "priority_ranking",
                     "tailored_document_generation",
                 ],
+                "workspace_cv_asset": self._workspace_cv_asset_descriptor(
+                    asset_id="asset_workspace_cv_primary",
+                    cv_path=cv_path,
+                ),
                 "settings": {
+                    "workspace_cv_asset_id": "asset_workspace_cv_primary",
                     "keywords": ["analyst"],
                     "country_codes": ["DE"],
                     "geo_id": "101282230",
@@ -415,7 +584,12 @@ class BackendApplicationTests(unittest.TestCase):
                     "priority_ranking",
                     "tailored_document_generation",
                 ],
+                "workspace_cv_asset": self._workspace_cv_asset_descriptor(
+                    asset_id="asset_workspace_cv_primary",
+                    cv_path=cv_path,
+                ),
                 "settings": {
+                    "workspace_cv_asset_id": "asset_workspace_cv_primary",
                     "keywords": ["analyst", "consultant"],
                     "country_codes": ["DE"],
                     "geo_id": "101282230",
@@ -436,6 +610,8 @@ class BackendApplicationTests(unittest.TestCase):
     def test_builder_can_create_academic_jobs_workspace(self):
         temp_dir = self._workspace_tempdir("builder_academic_workspace")
         app = create_backend(temp_dir)
+        cv_path = temp_dir / "academic_workspace_cv.txt"
+        cv_path.write_text("Academic Workspace CV", encoding="utf-8")
         workspace = app.create_workspace_from_scratch(
             {
                 "name": "Academic Search Workspace",
@@ -446,7 +622,12 @@ class BackendApplicationTests(unittest.TestCase):
                     "priority_ranking",
                     "tailored_document_generation",
                 ],
+                "workspace_cv_asset": self._workspace_cv_asset_descriptor(
+                    asset_id="asset_academic_workspace_cv",
+                    cv_path=cv_path,
+                ),
                 "settings": {
+                    "workspace_cv_asset_id": "asset_academic_workspace_cv",
                     "country_codes": ["DE"],
                     "academic_career_sites": ["Example University | https://university.example/jobs"],
                     "target_roles": ["PhD Researcher", "Postdoctoral Researcher"],
@@ -543,6 +724,8 @@ class BackendApplicationTests(unittest.TestCase):
             cv_text="Workspace CV Snapshot Text",
             cv_generation_mode="standard_cv",
         )
+        expected_cv_bytes = cv_path.read_bytes()
+        cv_path.unlink()
 
         with patch(
             "backend.adapters.stage_adapters.run_tailored_stage1_pipeline",
@@ -576,14 +759,16 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(len(generated_jobs), 1)
         generated_job = generated_jobs[0].to_dict()
         self.assertEqual(generated_job["cv_generation_mode"], "standard_cv")
-        self.assertEqual(generated_job["applied_cv"], str(cv_path.resolve()))
+        applied_cv_path = Path(generated_job["applied_cv"])
+        self.assertNotEqual(applied_cv_path, cv_path.resolve())
+        self.assertEqual(applied_cv_path.read_bytes(), expected_cv_bytes)
         self.assertEqual(generated_job["document_asset_kind"], "applied_cv")
 
         artifacts = app.list_artifacts(run.id)
         applied_cv_artifact = next(
             artifact for artifact in artifacts if artifact.artifact_type == "applied_cv"
         )
-        self.assertEqual(applied_cv_artifact.path, str(cv_path.resolve()))
+        self.assertEqual(applied_cv_artifact.path, str(applied_cv_path))
         self.assertEqual(applied_cv_artifact.metadata["job_id"], "builder_job_standard_1")
 
     def test_builder_run_start_rejects_deleted_workspace_cv_asset(self):
@@ -609,6 +794,35 @@ class BackendApplicationTests(unittest.TestCase):
             "workspace_cv_asset_missing_file",
         )
         stage1_pipeline.assert_not_called()
+
+    def test_builder_run_start_rejects_mismatched_workspace_cv_override(self):
+        temp_dir = self._workspace_tempdir("builder_cv_override_mismatch")
+        app = create_backend(temp_dir)
+        cv_path = temp_dir / "workspace_cv.txt"
+        cv_path.write_text("Workspace CV Snapshot Text", encoding="utf-8")
+        workspace = self._create_builder_workspace_with_cv_snapshot(
+            app,
+            cv_path=cv_path,
+            cv_text="Workspace CV Snapshot Text",
+        )
+
+        with self.assertRaises(BackendValidationError) as error_context:
+            app.start_run(
+                workspace.id,
+                run_input_overrides={"workspace_cv_asset_id": "asset_stale_workspace_cv"},
+                execute=False,
+                requested_by="test",
+            )
+
+        self.assertEqual(error_context.exception.error_code, "run_preflight_failed")
+        self.assertIn(
+            {
+                "field": "workspace_cv_asset_id",
+                "code": "workspace_cv_asset_mismatch",
+                "message": "Run workspace_cv_asset_id does not match the saved workspace CV.",
+            },
+            error_context.exception.details["field_errors"],
+        )
 
     def test_file_storage_backend_can_still_be_requested(self):
         temp_dir = self._workspace_tempdir("file_storage_backend")

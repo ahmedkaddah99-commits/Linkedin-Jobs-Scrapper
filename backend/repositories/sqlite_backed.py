@@ -27,9 +27,16 @@ from backend.domain.models import (
 from backend.domain.job_identity import canonicalize_url
 from backend.orchestration.seeded_workspaces import DEFAULT_WORKFLOW_TEMPLATES, DEFAULT_WORKSPACES
 from backend.repositories.sqlite_core import _SqliteStore
+from backend.repositories.document_payloads import (
+    prepare_run_payload,
+    prepare_user_payload,
+    prepare_workspace_payload,
+)
 from backend.repositories.sqlite_migrations import (
     _insert_application_status_history_row,
     _normalize_application_status_history_entry,
+    _upsert_candidate_asset,
+    _upsert_candidate_document,
 )
 from backend.security.auth import API_TOKEN_PREFIX_LENGTH
 
@@ -47,6 +54,133 @@ def _deserialize(payload: str | bytes | None, default: Any):
         return json.loads(payload)
     except Exception:
         return default
+
+
+def _document_text(
+    connection,
+    *,
+    document_id: str = "",
+    asset_id: str = "",
+    workspace_id: str = "",
+) -> str:
+    if document_id:
+        row = connection.execute(
+            "SELECT source_text FROM candidate_documents WHERE document_id = ?",
+            (document_id,),
+        ).fetchone()
+        if row is not None and str(row["source_text"] or ""):
+            return str(row["source_text"])
+    if asset_id:
+        row = connection.execute(
+            "SELECT source_text FROM candidate_documents WHERE asset_id = ? AND source_text != '' "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (asset_id,),
+        ).fetchone()
+        if row is not None:
+            return str(row["source_text"] or "")
+    if workspace_id:
+        row = connection.execute(
+            """
+            SELECT d.source_text
+            FROM workspace_document_bindings b
+            JOIN candidate_documents d ON d.document_id = b.document_id
+            WHERE b.workspace_id = ? AND b.binding_key = 'workspace_cv'
+            LIMIT 1
+            """,
+            (workspace_id,),
+        ).fetchone()
+        if row is not None:
+            return str(row["source_text"] or "")
+    return ""
+
+
+def _hydrate_workspace_payload(connection, payload: Mapping[str, Any]) -> dict[str, Any]:
+    hydrated = dict(payload)
+    settings = dict(hydrated.get("settings") or {})
+    if not str(settings.get("workspace_cv_text") or ""):
+        text = _document_text(
+            connection,
+            document_id=str(settings.get("workspace_cv_document_id") or ""),
+            asset_id=str(settings.get("workspace_cv_asset_id") or ""),
+            workspace_id=str(hydrated.get("id") or ""),
+        )
+        if text:
+            settings["workspace_cv_text"] = text
+    hydrated["settings"] = settings
+    return hydrated
+
+
+def _hydrate_run_payload(connection, payload: Mapping[str, Any]) -> dict[str, Any]:
+    hydrated = dict(payload)
+    run_plan = dict(hydrated.get("run_plan") or {})
+    resolved = dict(run_plan.get("resolved_run_settings") or {})
+    snapshot = _hydrate_workspace_payload(connection, dict(run_plan.get("workspace_snapshot") or {}))
+    asset_id = str(
+        resolved.get("workspace_cv_asset_id")
+        or dict(snapshot.get("settings") or {}).get("workspace_cv_asset_id")
+        or ""
+    )
+    if not str(resolved.get("workspace_cv_text") or ""):
+        text = _document_text(
+            connection,
+            document_id=str(resolved.get("workspace_cv_document_id") or ""),
+            asset_id=asset_id,
+            workspace_id=str(hydrated.get("workspace_id") or ""),
+        )
+        if not text:
+            binding = connection.execute(
+                "SELECT document_id FROM run_document_bindings "
+                "WHERE run_id = ? AND binding_key = 'workspace_cv'",
+                (str(hydrated.get("id") or ""),),
+            ).fetchone()
+            if binding is not None:
+                text = _document_text(connection, document_id=str(binding["document_id"] or ""))
+        if text:
+            resolved["workspace_cv_text"] = text
+    run_plan["resolved_run_settings"] = resolved
+    if snapshot:
+        run_plan["workspace_snapshot"] = snapshot
+    hydrated["run_plan"] = run_plan
+    return hydrated
+
+
+def _hydrate_user_payload(connection, payload: Mapping[str, Any]) -> dict[str, Any]:
+    hydrated = dict(payload)
+    user_id = str(hydrated.get("user_id") or "")
+    metadata = dict(hydrated.get("metadata") or {})
+    asset_rows = connection.execute(
+        "SELECT asset_id, payload_json FROM candidate_assets WHERE user_id = ? "
+        "ORDER BY updated_at ASC, asset_id ASC",
+        (user_id,),
+    ).fetchall()
+    assets: list[dict[str, Any]] = []
+    for row in asset_rows:
+        asset = dict(_deserialize(row["payload_json"], {}))
+        text = _document_text(connection, asset_id=str(row["asset_id"] or ""))
+        if text:
+            asset_metadata = dict(asset.get("metadata") or {})
+            asset_metadata["source_text"] = text
+            asset["metadata"] = asset_metadata
+        assets.append(asset)
+    if assets:
+        metadata["candidate_assets"] = assets
+    if not str(metadata.get("cv_text") or ""):
+        text = _document_text(
+            connection,
+            document_id=str(metadata.get("cv_document_id") or ""),
+        )
+        if not text:
+            row = connection.execute(
+                "SELECT source_text FROM candidate_documents "
+                "WHERE user_id = ? AND document_kind = 'workspace_cv' AND source_text != '' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+            text = str(row["source_text"] or "") if row is not None else ""
+        if text:
+            metadata["cv_text"] = text
+    hydrated["metadata"] = metadata
+    return hydrated
 
 
 class SqliteWorkspaceRepository(_SqliteStore):
@@ -142,7 +276,12 @@ class SqliteWorkspaceRepository(_SqliteStore):
     def list_workspaces(self) -> list[WorkspaceDefinition]:
         with self._connect() as connection:
             rows = connection.execute("SELECT payload_json FROM workspaces ORDER BY id").fetchall()
-        return [WorkspaceDefinition.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
+            return [
+                WorkspaceDefinition.from_dict(
+                    _hydrate_workspace_payload(connection, _deserialize(row["payload_json"], {}))
+                )
+                for row in rows
+            ]
 
     def get_workspace(self, workspace_id: str) -> WorkspaceDefinition:
         with self._connect() as connection:
@@ -150,11 +289,14 @@ class SqliteWorkspaceRepository(_SqliteStore):
                 "SELECT payload_json FROM workspaces WHERE id = ?",
                 (workspace_id,),
             ).fetchone()
-        if row is None:
-            raise KeyError(f"Workspace '{workspace_id}' not found.")
-        return WorkspaceDefinition.from_dict(_deserialize(row["payload_json"], {}))
+            if row is None:
+                raise KeyError(f"Workspace '{workspace_id}' not found.")
+            return WorkspaceDefinition.from_dict(
+                _hydrate_workspace_payload(connection, _deserialize(row["payload_json"], {}))
+            )
 
     def upsert_workspace(self, workspace: WorkspaceDefinition) -> None:
+        payload, document = prepare_workspace_payload(workspace.to_dict())
         with self._connect() as connection:
             connection.execute(
                 (
@@ -171,10 +313,34 @@ class SqliteWorkspaceRepository(_SqliteStore):
                     workspace.name,
                     workspace.workflow_template_id,
                     workspace.workspace_type,
-                    _serialize(workspace.to_dict()),
+                    _serialize(payload),
                     utc_now_iso(),
                 ),
             )
+            if document is not None:
+                _upsert_candidate_document(
+                    connection,
+                    {**document, "document_kind": "workspace_cv"},
+                )
+                connection.execute(
+                    """
+                    INSERT INTO workspace_document_bindings (
+                        workspace_id, binding_key, document_id, asset_id, object_key, updated_at
+                    ) VALUES (?, 'workspace_cv', ?, ?, ?, ?)
+                    ON CONFLICT(workspace_id, binding_key) DO UPDATE SET
+                        document_id=excluded.document_id,
+                        asset_id=excluded.asset_id,
+                        object_key=excluded.object_key,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        workspace.id,
+                        document["document_id"],
+                        document["asset_id"],
+                        document["object_key"],
+                        utc_now_iso(),
+                    ),
+                )
 
     def delete_workspace(self, workspace_id: str) -> None:
         with self._connect() as connection:
@@ -184,12 +350,14 @@ class SqliteWorkspaceRepository(_SqliteStore):
             ).rowcount
         if row_count == 0:
             raise KeyError(f"Workspace '{workspace_id}' not found.")
+        with self._connect() as connection:
+            connection.execute("DELETE FROM workspace_document_bindings WHERE workspace_id = ?", (workspace_id,))
 
 
 class SqliteRunRepository(_SqliteStore):
     def save(self, run: RunRecord) -> None:
         run.user_id = run.normalized_user_id
-        payload = run.to_dict()
+        payload, document = prepare_run_payload(run.to_dict())
         with self._connect() as connection:
             connection.execute(
                 (
@@ -224,12 +392,36 @@ class SqliteRunRepository(_SqliteStore):
                     run.last_error,
                     int(run.attempt_count),
                     int(run.max_attempts),
-                    _serialize(run.run_input_overrides),
-                    _serialize(run.run_plan.to_dict() if run.run_plan else {}),
-                    _serialize(run.metadata),
+                    _serialize(payload.get("run_input_overrides") or {}),
+                    _serialize(payload.get("run_plan") or {}),
+                    _serialize(payload.get("metadata") or {}),
                     _serialize(payload),
                 ),
             )
+            if document is not None:
+                _upsert_candidate_document(
+                    connection,
+                    {**document, "document_kind": "workspace_cv"},
+                )
+                connection.execute(
+                    """
+                    INSERT INTO run_document_bindings (
+                        run_id, binding_key, document_id, asset_id, object_key, updated_at
+                    ) VALUES (?, 'workspace_cv', ?, ?, ?, ?)
+                    ON CONFLICT(run_id, binding_key) DO UPDATE SET
+                        document_id=excluded.document_id,
+                        asset_id=excluded.asset_id,
+                        object_key=excluded.object_key,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        run.id,
+                        document["document_id"],
+                        document["asset_id"],
+                        document["object_key"],
+                        utc_now_iso(),
+                    ),
+                )
             connection.execute("DELETE FROM run_stage_results WHERE run_id = ?", (run.id,))
             if run.stage_results:
                 connection.executemany(
@@ -258,7 +450,7 @@ class SqliteRunRepository(_SqliteStore):
                 )
 
     def _run_from_row(self, row: sqlite3.Row, connection: sqlite3.Connection) -> RunRecord:
-        payload = _deserialize(row["payload_json"], {})
+        payload = _hydrate_run_payload(connection, _deserialize(row["payload_json"], {}))
         run = RunRecord.from_dict(payload if isinstance(payload, dict) else {})
         run.id = str(row["id"])
         run.workspace_id = str(row["workspace_id"])
@@ -277,7 +469,14 @@ class SqliteRunRepository(_SqliteStore):
         run.attempt_count = int(row["attempt_count"] or 0)
         run.max_attempts = max(1, int(row["max_attempts"] or 1))
         run.run_input_overrides = dict(_deserialize(row["run_input_overrides_json"], run.run_input_overrides or {}))
-        run_plan_payload = _deserialize(row["run_plan_json"], {})
+        run_plan_payload = _hydrate_run_payload(
+            connection,
+            {
+                "id": run.id,
+                "workspace_id": run.workspace_id,
+                "run_plan": _deserialize(row["run_plan_json"], {}),
+            },
+        ).get("run_plan", {})
         run.run_plan = RunPlan.from_dict(run_plan_payload) if isinstance(run_plan_payload, dict) and run_plan_payload else run.run_plan
         run.metadata = dict(_deserialize(row["metadata_json"], run.metadata or {}))
         stage_rows = connection.execute(
@@ -358,12 +557,20 @@ class SqliteRunRepository(_SqliteStore):
             run.started_at = now
             run.updated_at = now
             run.attempt_count += 1
+            normalized_payload, _document = prepare_run_payload(run.to_dict())
             connection.execute(
                 (
                     "UPDATE runs SET status = ?, started_at = ?, updated_at = ?, attempt_count = ?, payload_json = ? "
                     "WHERE id = ?"
                 ),
-                (run.status, run.started_at, run.updated_at, run.attempt_count, _serialize(run.to_dict()), run.id),
+                (
+                    run.status,
+                    run.started_at,
+                    run.updated_at,
+                    run.attempt_count,
+                    _serialize(normalized_payload),
+                    run.id,
+                ),
             )
             connection.commit()
             return run
@@ -376,6 +583,7 @@ class SqliteRunRepository(_SqliteStore):
             connection.execute("DELETE FROM run_blobs WHERE run_id = ?", (run_id,))
             connection.execute("DELETE FROM artifacts WHERE run_id = ?", (run_id,))
             connection.execute("DELETE FROM reviews WHERE run_id = ?", (run_id,))
+            connection.execute("DELETE FROM run_document_bindings WHERE run_id = ?", (run_id,))
             row_count = connection.execute("DELETE FROM runs WHERE id = ?", (run_id,)).rowcount
         if row_count == 0:
             raise KeyError(f"Run '{run_id}' not found.")
@@ -737,14 +945,19 @@ class SqliteAuthRepository(_SqliteStore):
     def list_users(self) -> list[UserRecord]:
         with self._connect() as connection:
             rows = connection.execute("SELECT payload_json FROM users ORDER BY email").fetchall()
-        return [UserRecord.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
+            return [
+                UserRecord.from_dict(_hydrate_user_payload(connection, _deserialize(row["payload_json"], {})))
+                for row in rows
+            ]
 
     def get_user(self, user_id: str) -> UserRecord:
         with self._connect() as connection:
             row = connection.execute("SELECT payload_json FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        if row is None:
-            raise KeyError(f"User '{user_id}' not found.")
-        return UserRecord.from_dict(_deserialize(row["payload_json"], {}))
+            if row is None:
+                raise KeyError(f"User '{user_id}' not found.")
+            return UserRecord.from_dict(
+                _hydrate_user_payload(connection, _deserialize(row["payload_json"], {}))
+            )
 
     def get_user_by_email(self, email: str) -> UserRecord:
         with self._connect() as connection:
@@ -752,9 +965,11 @@ class SqliteAuthRepository(_SqliteStore):
                 "SELECT payload_json FROM users WHERE lower(email) = lower(?)",
                 (email,),
             ).fetchone()
-        if row is None:
-            raise KeyError(f"User with email '{email}' not found.")
-        return UserRecord.from_dict(_deserialize(row["payload_json"], {}))
+            if row is None:
+                raise KeyError(f"User with email '{email}' not found.")
+            return UserRecord.from_dict(
+                _hydrate_user_payload(connection, _deserialize(row["payload_json"], {}))
+            )
 
     def get_user_by_clerk_user_id(self, clerk_user_id: str) -> UserRecord:
         with self._connect() as connection:
@@ -762,9 +977,11 @@ class SqliteAuthRepository(_SqliteStore):
                 "SELECT payload_json FROM users WHERE clerk_user_id = ?",
                 (str(clerk_user_id or "").strip(),),
             ).fetchone()
-        if row is None:
-            raise KeyError(f"User with Clerk user id '{clerk_user_id}' not found.")
-        return UserRecord.from_dict(_deserialize(row["payload_json"], {}))
+            if row is None:
+                raise KeyError(f"User with Clerk user id '{clerk_user_id}' not found.")
+            return UserRecord.from_dict(
+                _hydrate_user_payload(connection, _deserialize(row["payload_json"], {}))
+            )
 
     def get_user_clerk_user_id(self, user_id: str) -> str:
         with self._connect() as connection:
@@ -797,6 +1014,7 @@ class SqliteAuthRepository(_SqliteStore):
         return [{key: row[key] for key in row.keys()} for row in rows]
 
     def upsert_user(self, user: UserRecord) -> None:
+        payload, assets, documents = prepare_user_payload(user.to_dict())
         with self._connect() as connection:
             connection.execute(
                 (
@@ -812,13 +1030,29 @@ class SqliteAuthRepository(_SqliteStore):
                     user.role,
                     1 if user.is_active else 0,
                     utc_now_iso(),
-                    _serialize(user.to_dict()),
+                    _serialize(payload),
                 ),
             )
+            if assets is not None:
+                asset_ids = [str(asset.get("asset_id") or "") for asset in assets if str(asset.get("asset_id") or "")]
+                if asset_ids:
+                    placeholders = ",".join("?" for _ in asset_ids)
+                    connection.execute(
+                        f"DELETE FROM candidate_assets WHERE user_id = ? AND asset_id NOT IN ({placeholders})",
+                        (user.user_id, *asset_ids),
+                    )
+                else:
+                    connection.execute("DELETE FROM candidate_assets WHERE user_id = ?", (user.user_id,))
+                for asset in assets:
+                    _upsert_candidate_asset(connection, user_id=user.user_id, asset=asset)
+            for document in documents:
+                _upsert_candidate_document(connection, document)
 
     def delete_user(self, user_id: str) -> None:
         with self._connect() as connection:
             connection.execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
+            connection.execute("DELETE FROM candidate_assets WHERE user_id = ?", (user_id,))
+            connection.execute("DELETE FROM candidate_documents WHERE user_id = ?", (user_id,))
             row_count = connection.execute("DELETE FROM users WHERE user_id = ?", (user_id,)).rowcount
         if row_count == 0:
             raise KeyError(f"User '{user_id}' not found.")

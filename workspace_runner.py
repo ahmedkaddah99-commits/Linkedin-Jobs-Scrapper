@@ -9,6 +9,7 @@ load_project_dotenv()
 
 from backend import create_backend
 from backend.api import serve_api
+from backend.security.redaction import public_run_summary, redact_sensitive_data
 from backend.tools.discover_company_careers import (
     add_discover_company_careers_arguments,
     run_from_args as run_career_discovery_from_args,
@@ -31,7 +32,7 @@ def parse_key_value(items: list[str]) -> dict[str, str]:
 
 
 def _print_json(payload) -> None:
-    print(json.dumps(payload, indent=2, ensure_ascii=True))
+    print(json.dumps(redact_sensitive_data(payload), indent=2, ensure_ascii=True))
 
 
 def main() -> int:
@@ -292,22 +293,22 @@ def main() -> int:
             requested_by="workspace_runner",
             max_attempts=args.max_attempts,
         )
-        _print_json(run.to_dict())
+        _print_json(public_run_summary(run))
         return 0
 
     if args.command == "cancel-run":
         run = application.cancel_run(args.run_id)
-        _print_json(run.to_dict())
+        _print_json(public_run_summary(run))
         return 0
 
     if args.command == "retry-run":
         run = application.retry_run(args.run_id)
-        _print_json(run.to_dict())
+        _print_json(public_run_summary(run))
         return 0
 
     if args.command == "resume-run":
         run = application.resume_run(args.run_id)
-        _print_json(run.to_dict())
+        _print_json(public_run_summary(run))
         return 0
 
     if args.command == "process-next":
@@ -323,7 +324,7 @@ def main() -> int:
         if run is None:
             print("No queued runs.")
             return 0
-        _print_json(run.to_dict())
+        _print_json(public_run_summary(run))
         return 0
 
     if args.command == "run-worker":

@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,12 +10,14 @@ from urllib.parse import parse_qs, urlparse
 from backend.storage import (
     InvalidObjectKeyError,
     LocalObjectStorage,
+    ObjectMaterializationSession,
     ObjectNotFoundError,
     S3ObjectStorage,
     build_private_object_key,
     create_object_storage,
     materialize_object,
     normalize_object_key,
+    probe_object_storage,
     publish_file_artifacts,
 )
 from backend.domain.models import ArtifactRecord
@@ -181,6 +184,45 @@ class LocalObjectStorageTests(unittest.TestCase):
             self.assertEqual(materialized.read_bytes(), b"generated-pdf")
             self.assertTrue(storage.exists(object_key))
 
+    def test_materialization_session_does_not_download_the_same_key_twice(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            storage = LocalObjectStorage(root / "objects")
+            key = "private/users/user_1/documents/document_1/cv.pdf"
+            storage.put(key, b"pdf-content")
+            get_calls = 0
+            original_get = storage.get
+
+            def counted_get(object_key):
+                nonlocal get_calls
+                get_calls += 1
+                return original_get(object_key)
+
+            storage.get = counted_get
+            with patch.dict(os.environ, {"OBJECT_STORAGE_CACHE_ROOT": str(root / "cache")}):
+                session = ObjectMaterializationSession(storage)
+                first = session.materialize(key, filename="cv.pdf")
+                second = session.materialize(key, filename="renamed.pdf")
+
+            self.assertEqual(first, second)
+            self.assertEqual(get_calls, 1)
+
+    def test_readiness_probe_is_bounded_when_storage_hangs(self):
+        class SlowStorage:
+            def put(self, *_args, **_kwargs):
+                time.sleep(0.2)
+
+            def get(self, _key):
+                return b""
+
+            def delete(self, _key):
+                return None
+
+        started = time.perf_counter()
+        with self.assertRaises(TimeoutError):
+            probe_object_storage(SlowStorage(), timeout_seconds=0.02)
+        self.assertLess(time.perf_counter() - started, 0.15)
+
 
 class S3ObjectStorageTests(unittest.TestCase):
     def _storage(self, client):
@@ -242,6 +284,17 @@ class S3ObjectStorageTests(unittest.TestCase):
 
         storage.put("private/users/user_1/files/file_1/value.txt", b"value")
         self.assertEqual(storage.get("private/users/user_1/files/file_1/value.txt"), b"value")
+
+    def test_readiness_probe_performs_real_r2_write_read_delete_cycle(self):
+        client = _FakeS3Client()
+        result = probe_object_storage(self._storage(client), timeout_seconds=1)
+
+        self.assertGreaterEqual(result.elapsed_ms, 0)
+        self.assertEqual(
+            [operation for operation, _kwargs in client.calls],
+            ["put_object", "get_object", "delete_object"],
+        )
+        self.assertEqual(client.objects, {})
 
 
 if __name__ == "__main__":

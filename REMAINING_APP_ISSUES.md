@@ -485,7 +485,7 @@ Deploy to Render and measure the production `/tracker` load separately from expl
 
 ---
 
-## Issues Not Yet Resolved
+## Issues Not Yet Resolvedfix: improve workspace CV workflow validation and templatesfix: improve workspace CV workflow validation and templates
 
 [Go up](#table-of-contents)
 

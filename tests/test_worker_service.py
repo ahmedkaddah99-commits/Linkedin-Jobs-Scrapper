@@ -3,6 +3,7 @@ import logging
 import shutil
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from backend import create_backend
 from backend.domain.models import JobRecord, StageDefinition
@@ -80,6 +81,61 @@ class WorkerServiceTests(unittest.TestCase):
         worker_record = app.get_worker("worker_service_a")
         self.assertEqual(worker_record.status, "stopped")
         self.assertEqual(worker_record.current_run_id, "")
+
+    def test_worker_loop_survives_transient_database_failure(self):
+        application = Mock()
+        worker = WorkerService(
+            application=application,
+            worker_id="worker_service_transient_database",
+            poll_interval_seconds=0.1,
+            logger=Mock(),
+        )
+        recovered_run = object()
+
+        with patch.object(
+            WorkerService,
+            "process_next",
+            side_effect=[
+                RuntimeError("Hrana returned HTTP 502: upstream forward failed"),
+                recovered_run,
+            ],
+        ) as process_next:
+            processed = worker.run_loop(max_runs=1)
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(process_next.call_count, 2)
+        application.stop_worker.assert_called_once_with(worker.worker_id)
+
+    def test_worker_release_failure_does_not_mask_task_failure(self):
+        application = Mock()
+        application.recover_stale_workers.return_value = []
+        claimed_run = Mock(
+            id="run_transient_failure",
+            workspace_id="workspace",
+            status="running",
+            attempt_count=1,
+            max_attempts=3,
+            queued_at="",
+            started_at="",
+            finished_at="",
+            last_error="",
+            stage_results=[],
+            final_job_set_keys=[],
+        )
+        application.claim_next_queued_run.return_value = claimed_run
+        application.execute_claimed_run.side_effect = RuntimeError(
+            "HTTP 502 primary upstream forward failed"
+        )
+        application.release_worker.side_effect = RuntimeError("HTTP 503 cleanup failure")
+        worker = WorkerService(
+            application=application,
+            worker_id="worker_service_cleanup_masking",
+            lease_seconds=1,
+            logger=Mock(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "primary upstream"):
+            worker.process_next()
 
     def test_stale_worker_recovery_requeues_running_run(self):
         app = self._create_app("worker_service_recovery")

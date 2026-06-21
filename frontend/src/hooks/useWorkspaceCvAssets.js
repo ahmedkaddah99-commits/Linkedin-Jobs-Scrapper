@@ -48,17 +48,21 @@ export function useWorkspaceCvAssets({ cvAssetsPayload, formSettings, settingsPa
         })),
     [cvAssetsPayload?.documents],
   );
-  const workspaceCvAssetIds = useMemo(
-    () => new Set(workspaceCvAssets.map((item) => item.value)),
+  const readyWorkspaceCvAssets = useMemo(
+    () => workspaceCvAssets.filter((item) => String(item.status || "ready").toLowerCase() === "ready"),
     [workspaceCvAssets],
+  );
+  const workspaceCvAssetIds = useMemo(
+    () => new Set(readyWorkspaceCvAssets.map((item) => item.value)),
+    [readyWorkspaceCvAssets],
   );
   const selectedWorkspaceCvAsset = useMemo(() => {
     const selectedAssetId = String(formSettings.workspace_cv_asset_id || "").trim();
     if (!selectedAssetId) {
       return null;
     }
-    return workspaceCvAssets.find((item) => item.value === selectedAssetId) || null;
-  }, [formSettings.workspace_cv_asset_id, workspaceCvAssets]);
+    return readyWorkspaceCvAssets.find((item) => item.value === selectedAssetId) || null;
+  }, [formSettings.workspace_cv_asset_id, readyWorkspaceCvAssets]);
   const sharedDocumentDefaults = settingsPayload?.documents || {};
   const mergedPreviewProfile = useMemo(() => {
     if (!selectedWorkspaceCvAsset) {
@@ -140,7 +144,8 @@ export function useWorkspaceCvAssets({ cvAssetsPayload, formSettings, settingsPa
     selectedWorkspaceCvMissing,
     sharedDocumentDefaults,
     workspaceCvAssetIds,
-    workspaceCvAssets,
+    workspaceCvAssets: readyWorkspaceCvAssets,
+    allWorkspaceCvAssets: workspaceCvAssets,
     workspaceCvAssetsLoaded,
   };
 }

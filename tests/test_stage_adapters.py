@@ -1,4 +1,5 @@
 import unittest
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,13 +12,53 @@ from backend.adapters.stage_adapters import (
     TailoredPrioritizationStage,
     TailoredScreeningStage,
     _prepare_company_site_source_settings,
+    _materialize_workspace_cv_settings,
     _resolve_company_site_stage_limits,
     _tailored_document_artifacts,
 )
+from backend.storage import LocalObjectStorage
 from backend.domain.models import StageDefinition
 
 
 class StageAdapterTests(unittest.TestCase):
+    def test_workspace_cv_materializes_from_object_keys_on_an_empty_worker_filesystem(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            object_root = root / "shared-objects"
+            worker_cache = root / "worker-cache"
+            storage = LocalObjectStorage(object_root)
+            source_key = "private/users/user_1/workspace_cv/asset_1/resume.pdf"
+            companion_key = "private/users/user_1/workspace_cv/asset_1/resume.docx"
+            storage.put(source_key, b"%PDF-1.4 worker source")
+            storage.put(companion_key, b"worker companion")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "OBJECT_STORAGE_BACKEND": "local",
+                    "OBJECT_STORAGE_LOCAL_ROOT": str(object_root),
+                    "OBJECT_STORAGE_CACHE_ROOT": str(worker_cache),
+                    "LOCAL_OBJECT_STORAGE_SIGNING_SECRET": "test-secret",
+                },
+                clear=False,
+            ):
+                resolved = _materialize_workspace_cv_settings(
+                    {
+                        "workspace_cv_asset_path": str(root / "api-filesystem" / "missing.pdf"),
+                        "workspace_cv_asset_object_key": source_key,
+                        "workspace_cv_asset_docx_path": str(root / "api-filesystem" / "missing.docx"),
+                        "workspace_cv_asset_docx_object_key": companion_key,
+                        "workspace_cv_asset_display_name": "resume.pdf",
+                    }
+                )
+
+            source_path = Path(resolved["workspace_cv_asset_path"])
+            companion_path = Path(resolved["workspace_cv_asset_docx_path"])
+            self.assertTrue(source_path.is_relative_to(worker_cache))
+            self.assertTrue(companion_path.is_relative_to(worker_cache))
+            self.assertEqual(source_path.read_bytes(), b"%PDF-1.4 worker source")
+            self.assertEqual(companion_path.read_bytes(), b"worker companion")
+
     def test_deprecated_company_site_link_cap_setting_is_still_honored(self):
         with self.assertLogs("backend.adapters.stage_adapters", level="WARNING") as logs:
             limits = _resolve_company_site_stage_limits(

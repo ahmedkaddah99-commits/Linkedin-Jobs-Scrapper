@@ -4,6 +4,7 @@ import hashlib
 import mimetypes
 import os
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -40,6 +41,23 @@ def materialize_object(storage: ObjectStorage, object_key: str, *, filename: str
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
     return target.resolve()
+
+
+@dataclass
+class ObjectMaterializationSession:
+    """Request/run-scoped materialization cache for one storage backend."""
+
+    storage: ObjectStorage
+    _paths: dict[str, Path] = field(default_factory=dict)
+
+    def materialize(self, object_key: str, *, filename: str = "") -> Path:
+        normalized_key = normalize_object_key(object_key)
+        cached = self._paths.get(normalized_key)
+        if cached is not None and cached.is_file():
+            return cached
+        materialized = materialize_object(self.storage, normalized_key, filename=filename)
+        self._paths[normalized_key] = materialized
+        return materialized
 
 
 def publish_file_artifacts(

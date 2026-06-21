@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from backend.security.redaction import redact_sensitive_data
+
 
 def _rows(connection: sqlite3.Connection, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     connection.row_factory = sqlite3.Row
@@ -92,7 +94,7 @@ def dump_run_diagnostics(
         connection.close()
 
     root = db_path.parent.parent if db_path.parent.name == ".backend_data" else Path.cwd()
-    return {
+    return redact_sensitive_data({
         "run": run_rows[0],
         "stages": stage_rows,
         "job_sets": job_sets,
@@ -105,7 +107,7 @@ def dump_run_diagnostics(
             ".backend_worker_stderr.log": _tail(root / ".backend_worker_stderr.log", lines=log_lines),
             ".backend_api_stderr.log": _tail(root / ".backend_api_stderr.log", lines=log_lines),
         },
-    }
+    })
 
 
 def main() -> int:

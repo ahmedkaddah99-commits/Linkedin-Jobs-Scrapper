@@ -8,7 +8,8 @@ The production image uses Python 3.12 and includes the runtime dependencies need
 - LibreOffice Writer for headless document conversion
 - Python packages from `requirements-linux.txt`
 
-The same image is used for the API, scheduled queue processing, migrations, and a future continuous worker. This prevents dependency drift between service roles.
+The same image is used for the API, continuous worker, and API-owned pre-deploy
+migrations. This prevents dependency drift between service roles.
 
 ## Build and inspect the image
 
@@ -29,7 +30,6 @@ The image runs as the unprivileged `runr` user. Runtime files under `.backend_da
 ```bash
 ./deploy/start.sh api
 ./deploy/start.sh worker
-./deploy/start.sh process-next
 ./deploy/start.sh migrate
 ```
 
@@ -38,9 +38,12 @@ Role behavior:
 | Role | Command |
 | --- | --- |
 | `api` | Starts `workspace_runner.py serve-api` on `0.0.0.0:$PORT`. |
-| `worker` | Starts the existing continuous lease-aware worker. |
-| `process-next` | Processes at most one queued run and exits, suitable for a Render cron job. |
-| `migrate` | Runs `python -m backend.database.migrate`. The migration module must exist before deployment. |
+| `worker` | Starts the continuous lease-aware worker and is the only production queue consumer. |
+| `migrate` | Runs `python -m backend.database.migrate`; Render invokes it only as the API pre-deploy command. |
+
+The startup script retains `process-next` for local/manual diagnostics. It must
+not be configured as a production service or schedule while `runr-worker` is
+active because it also claims queued runs.
 
 Shared runtime settings:
 
@@ -56,7 +59,6 @@ Additional positional arguments are passed to the selected CLI role. For example
 
 ```bash
 ./deploy/start.sh worker --sleep-seconds 10 --lease-seconds 120
-./deploy/start.sh process-next --lease-seconds 120
 ```
 
 ## Local container smoke test

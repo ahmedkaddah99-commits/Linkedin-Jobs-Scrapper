@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.database import database_target_info
-from backend.storage import build_private_object_key
+from backend.storage import probe_object_storage
 
 
 def register_routes(registry: RouteRegistry) -> None:
@@ -55,6 +55,9 @@ def _get_readiness(context: ApiRouteContext) -> None:
         raise RuntimeError("Production readiness requires S3-compatible object storage.")
 
     probe_enabled = str((context.query.get("probe") or [""])[0]).strip().lower() in {"1", "true", "yes", "full"}
+    storage_probe_enabled = probe_enabled or (
+        is_production and object_storage_backend in {"s3", "r2"}
+    )
     probes: dict[str, object] = {}
     if probe_enabled:
         config_store = getattr(repositories, "config_store", None) if repositories is not None else None
@@ -76,28 +79,18 @@ def _get_readiness(context: ApiRouteContext) -> None:
             raise RuntimeError("Database readiness write/read probe failed.")
         probes["database_write"] = "ok"
 
+    if storage_probe_enabled:
         if object_storage is None:
             raise RuntimeError("Object storage probe requires an object storage backend.")
-        storage_key = build_private_object_key(
-            namespace="health",
-            owner_id="ready",
-            category="probe",
-            object_id=probe_id,
-            filename="probe.txt",
+        try:
+            timeout_seconds = float(os.getenv("OBJECT_STORAGE_READINESS_TIMEOUT_SECONDS", "5") or "5")
+        except (TypeError, ValueError):
+            timeout_seconds = 5.0
+        result = probe_object_storage(
+            object_storage,
+            timeout_seconds=timeout_seconds,
         )
-        storage_payload = f"runr-readiness:{probe_id}".encode("utf-8")
-        started = time.perf_counter()
-        object_storage.put(
-            storage_key,
-            storage_payload,
-            content_type="text/plain",
-            metadata={"probe": "readiness"},
-        )
-        stored_payload = object_storage.get(storage_key)
-        object_storage.delete(storage_key)
-        timings_ms["object_storage_put_get_delete"] = round((time.perf_counter() - started) * 1000, 2)
-        if stored_payload != storage_payload:
-            raise RuntimeError("Object storage readiness write/read probe failed.")
+        timings_ms["object_storage_put_get_delete"] = result.elapsed_ms
         probes["object_storage_write"] = "ok"
 
     context.send_json(

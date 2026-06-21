@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+import json
 
 from backend.database.migrations import Migration
 from backend.domain.models import utc_now_iso
+from backend.repositories.document_payloads import (
+    prepare_run_payload,
+    prepare_user_payload,
+    prepare_workspace_payload,
+)
 
 if TYPE_CHECKING:
     from backend.database.connection import DatabaseConnection
@@ -492,6 +498,243 @@ def _insert_application_status_history_row(
     )
 
 
+def _upsert_candidate_document(connection: DatabaseConnection, payload: dict[str, Any]) -> None:
+    source_text = str(payload.get("source_text") or "")
+    asset_id = str(payload.get("asset_id") or "")
+    if asset_id:
+        existing = connection.execute(
+            "SELECT source_text FROM candidate_documents WHERE document_id = ?",
+            (str(payload.get("document_id") or ""),),
+        ).fetchone()
+        if existing is not None and str(existing["source_text"] or ""):
+            return
+    connection.execute(
+        """
+        INSERT INTO candidate_documents (
+            document_id, user_id, asset_id, workspace_id, document_kind,
+            object_key, char_count, source_text, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(document_id) DO UPDATE SET
+            user_id=CASE WHEN excluded.user_id != '' THEN excluded.user_id ELSE candidate_documents.user_id END,
+            asset_id=CASE WHEN excluded.asset_id != '' THEN excluded.asset_id ELSE candidate_documents.asset_id END,
+            workspace_id=CASE WHEN excluded.workspace_id != '' THEN excluded.workspace_id ELSE candidate_documents.workspace_id END,
+            document_kind=CASE WHEN excluded.document_kind != '' THEN excluded.document_kind ELSE candidate_documents.document_kind END,
+            object_key=CASE WHEN excluded.object_key != '' THEN excluded.object_key ELSE candidate_documents.object_key END,
+            char_count=CASE WHEN excluded.source_text != '' THEN excluded.char_count ELSE candidate_documents.char_count END,
+            source_text=CASE WHEN excluded.source_text != '' THEN excluded.source_text ELSE candidate_documents.source_text END,
+            updated_at=excluded.updated_at
+        """,
+        (
+            str(payload.get("document_id") or ""),
+            str(payload.get("user_id") or ""),
+            asset_id,
+            str(payload.get("workspace_id") or ""),
+            str(payload.get("document_kind") or "workspace_cv"),
+            str(payload.get("object_key") or ""),
+            len(source_text),
+            source_text,
+            utc_now_iso(),
+        ),
+    )
+
+
+def _upsert_candidate_asset(
+    connection: DatabaseConnection,
+    *,
+    user_id: str,
+    asset: dict[str, Any],
+) -> None:
+    file_payload = dict(asset.get("file") or {})
+    metadata = dict(asset.get("metadata") or {})
+    connection.execute(
+        """
+        INSERT INTO candidate_assets (
+            asset_id, user_id, asset_kind, display_name, workspace_id, object_key,
+            mime_type, extension, created_at, updated_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(asset_id) DO UPDATE SET
+            user_id=excluded.user_id,
+            asset_kind=excluded.asset_kind,
+            display_name=excluded.display_name,
+            workspace_id=excluded.workspace_id,
+            object_key=excluded.object_key,
+            mime_type=excluded.mime_type,
+            extension=excluded.extension,
+            created_at=excluded.created_at,
+            updated_at=excluded.updated_at,
+            payload_json=excluded.payload_json
+        """,
+        (
+            str(asset.get("asset_id") or ""),
+            user_id,
+            str(asset.get("asset_kind") or ""),
+            str(asset.get("display_name") or ""),
+            str(asset.get("workspace_id") or ""),
+            str(file_payload.get("object_key") or asset.get("object_key") or ""),
+            str(file_payload.get("mime_type") or asset.get("mime_type") or ""),
+            str(file_payload.get("extension") or asset.get("extension") or ""),
+            str(metadata.get("created_at") or asset.get("created_at") or ""),
+            utc_now_iso(),
+            json.dumps(asset, ensure_ascii=False),
+        ),
+    )
+
+
+def _apply_candidate_document_normalization_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS candidate_assets (
+            asset_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            asset_kind TEXT NOT NULL DEFAULT '',
+            display_name TEXT NOT NULL DEFAULT '',
+            workspace_id TEXT NOT NULL DEFAULT '',
+            object_key TEXT NOT NULL DEFAULT '',
+            mime_type TEXT NOT NULL DEFAULT '',
+            extension TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS candidate_documents (
+            document_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL DEFAULT '',
+            asset_id TEXT NOT NULL DEFAULT '',
+            workspace_id TEXT NOT NULL DEFAULT '',
+            document_kind TEXT NOT NULL DEFAULT '',
+            object_key TEXT NOT NULL DEFAULT '',
+            char_count INTEGER NOT NULL DEFAULT 0,
+            source_text TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workspace_document_bindings (
+            workspace_id TEXT NOT NULL,
+            binding_key TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL DEFAULT '',
+            object_key TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, binding_key)
+        );
+        CREATE TABLE IF NOT EXISTS run_document_bindings (
+            run_id TEXT NOT NULL,
+            binding_key TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL DEFAULT '',
+            object_key TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, binding_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_candidate_assets_user_kind_updated
+            ON candidate_assets(user_id, asset_kind, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_candidate_assets_workspace
+            ON candidate_assets(workspace_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_candidate_documents_asset
+            ON candidate_documents(asset_id);
+        CREATE INDEX IF NOT EXISTS idx_candidate_documents_user_kind
+            ON candidate_documents(user_id, document_kind, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_workspace_document_bindings_document
+            ON workspace_document_bindings(document_id);
+        CREATE INDEX IF NOT EXISTS idx_run_document_bindings_document
+            ON run_document_bindings(document_id);
+        """
+    )
+
+    for row in connection.execute("SELECT user_id, payload_json FROM users").fetchall():
+        payload = json.loads(str(row["payload_json"] or "{}"))
+        clean, assets, documents = prepare_user_payload(payload)
+        if assets is not None:
+            for asset in assets:
+                _upsert_candidate_asset(connection, user_id=str(row["user_id"]), asset=asset)
+        for document in documents:
+            _upsert_candidate_document(connection, document)
+        connection.execute(
+            "UPDATE users SET payload_json = ? WHERE user_id = ?",
+            (json.dumps(clean, ensure_ascii=False), str(row["user_id"])),
+        )
+
+    for row in connection.execute("SELECT id, payload_json FROM workspaces").fetchall():
+        payload = json.loads(str(row["payload_json"] or "{}"))
+        clean, document = prepare_workspace_payload(payload)
+        if document is not None:
+            _upsert_candidate_document(
+                connection,
+                {
+                    **document,
+                    "document_kind": "workspace_cv",
+                },
+            )
+            connection.execute(
+                """
+                INSERT INTO workspace_document_bindings (
+                    workspace_id, binding_key, document_id, asset_id, object_key, updated_at
+                ) VALUES (?, 'workspace_cv', ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, binding_key) DO UPDATE SET
+                    document_id=excluded.document_id,
+                    asset_id=excluded.asset_id,
+                    object_key=excluded.object_key,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    document["workspace_id"],
+                    document["document_id"],
+                    document["asset_id"],
+                    document["object_key"],
+                    utc_now_iso(),
+                ),
+            )
+        connection.execute(
+            "UPDATE workspaces SET payload_json = ? WHERE id = ?",
+            (json.dumps(clean, ensure_ascii=False), str(row["id"])),
+        )
+
+    for row in connection.execute("SELECT id, payload_json FROM runs").fetchall():
+        payload = json.loads(str(row["payload_json"] or "{}"))
+        clean, document = prepare_run_payload(payload)
+        if document is not None:
+            _upsert_candidate_document(
+                connection,
+                {
+                    **document,
+                    "document_kind": "workspace_cv",
+                },
+            )
+            connection.execute(
+                """
+                INSERT INTO run_document_bindings (
+                    run_id, binding_key, document_id, asset_id, object_key, updated_at
+                ) VALUES (?, 'workspace_cv', ?, ?, ?, ?)
+                ON CONFLICT(run_id, binding_key) DO UPDATE SET
+                    document_id=excluded.document_id,
+                    asset_id=excluded.asset_id,
+                    object_key=excluded.object_key,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    document["run_id"],
+                    document["document_id"],
+                    document["asset_id"],
+                    document["object_key"],
+                    utc_now_iso(),
+                ),
+            )
+        run_plan = dict(clean.get("run_plan") or {})
+        connection.execute(
+            """
+            UPDATE runs
+            SET payload_json = ?, run_input_overrides_json = ?, run_plan_json = ?, metadata_json = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(clean, ensure_ascii=False),
+                json.dumps(clean.get("run_input_overrides") or {}, ensure_ascii=False),
+                json.dumps(run_plan, ensure_ascii=False),
+                json.dumps(clean.get("metadata") or {}, ensure_ascii=False),
+                str(row["id"]),
+            ),
+        )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -557,5 +800,17 @@ MIGRATIONS = (
         "Add Creem billing provider identifiers.",
         _apply_creem_billing_migration,
         dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "013_candidate_document_normalization",
+        "Normalize candidate assets and private document text out of aggregate JSON payloads.",
+        _apply_candidate_document_normalization_migration,
+        dependencies=(
+            _upsert_candidate_asset,
+            _upsert_candidate_document,
+            prepare_user_payload,
+            prepare_workspace_payload,
+            prepare_run_payload,
+        ),
     ),
 )

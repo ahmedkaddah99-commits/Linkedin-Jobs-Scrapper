@@ -1,18 +1,164 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
+import random
 import sqlite3
+import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 DatabaseParameters = Sequence[Any] | Mapping[str, Any]
+ResultT = TypeVar("ResultT")
+
+_LOGGER = logging.getLogger("backend.database.connection")
+_LIBSQL_RETRY_ATTEMPTS = 4
+_LIBSQL_RETRY_BASE_DELAY_SECONDS = 0.25
+_LIBSQL_RETRY_MAX_DELAY_SECONDS = 2.0
+_LIBSQL_RETRY_JITTER_SECONDS = 0.1
+
+_NON_RETRYABLE_ERROR_MARKERS = (
+    "authentication",
+    "authorization",
+    "unauthorized",
+    "forbidden",
+    "invalid token",
+    "invalid auth",
+    "http 400",
+    "http 401",
+    "http 403",
+    "status 400",
+    "status 401",
+    "status 403",
+    "constraint",
+    "syntax error",
+    "invalid sql",
+    "no such table",
+    "no such column",
+    "datatype mismatch",
+    "incorrect number of bindings",
+    "sqlite_auth",
+    "sqlite_constraint",
+    "sqlite_error",
+    "sqlite_mismatch",
+    "sqlite_misuse",
+    "sqlite_range",
+    "sqlite_readonly",
+    "sqlite_schema",
+)
+
+_TRANSIENT_ERROR_MARKERS = (
+    ("upstream forward", "upstream_forward"),
+    ("http 502", "http_502"),
+    ("status 502", "http_502"),
+    ("status code 502", "http_502"),
+    ("502 bad gateway", "http_502"),
+    ("http 503", "http_503"),
+    ("status 503", "http_503"),
+    ("status code 503", "http_503"),
+    ("service unavailable", "temporary_unavailable"),
+    ("temporarily unavailable", "temporary_unavailable"),
+    ("temporary failure", "temporary_unavailable"),
+    ("timed out", "timeout"),
+    ("timeout", "timeout"),
+    ("connection reset", "network"),
+    ("connection refused", "network"),
+    ("connection aborted", "network"),
+    ("broken pipe", "network"),
+    ("network", "network"),
+    ("transport", "network"),
+    ("server disconnected", "network"),
+)
 
 
 class DatabaseConfigurationError(RuntimeError):
     """Raised when the selected database backend is not configured correctly."""
+
+
+def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def transient_database_error_category(exc: BaseException) -> str | None:
+    """Return a safe category for retryable Turso/libSQL transport failures."""
+
+    chain = tuple(_exception_chain(exc))
+    if any(
+        isinstance(
+            error,
+            (
+                DatabaseConfigurationError,
+                sqlite3.DataError,
+                sqlite3.IntegrityError,
+                sqlite3.NotSupportedError,
+                sqlite3.ProgrammingError,
+            ),
+        )
+        for error in chain
+    ):
+        return None
+
+    messages = " ".join(str(error).lower() for error in chain)
+    if any(marker in messages for marker in _NON_RETRYABLE_ERROR_MARKERS):
+        return None
+    if any(isinstance(error, TimeoutError) for error in chain):
+        return "timeout"
+    if any(isinstance(error, ConnectionError) for error in chain):
+        return "network"
+    if any(isinstance(error, OSError) for error in chain):
+        return "network"
+    for marker, category in _TRANSIENT_ERROR_MARKERS:
+        if marker in messages:
+            return category
+    return None
+
+
+def is_transient_database_error(exc: BaseException) -> bool:
+    return transient_database_error_category(exc) is not None
+
+
+def _retry_libsql_operation(operation: str, callback: Callable[[], ResultT]) -> ResultT:
+    for attempt in range(1, _LIBSQL_RETRY_ATTEMPTS + 1):
+        try:
+            return callback()
+        except Exception as exc:
+            category = transient_database_error_category(exc)
+            if category is None or attempt >= _LIBSQL_RETRY_ATTEMPTS:
+                raise
+            backoff = min(
+                _LIBSQL_RETRY_MAX_DELAY_SECONDS,
+                _LIBSQL_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
+            )
+            delay = backoff + random.uniform(0.0, _LIBSQL_RETRY_JITTER_SECONDS)
+            _LOGGER.warning(
+                "database_operation_retry",
+                extra={
+                    "operation": operation,
+                    "attempt": attempt,
+                    "delay_seconds": round(delay, 3),
+                    "error_category": category,
+                },
+            )
+            time.sleep(delay)
+    raise AssertionError("libSQL retry loop exited unexpectedly")
+
+
+def _log_cleanup_failure(operation: str, exc: BaseException) -> None:
+    _LOGGER.warning(
+        "database_cleanup_failed",
+        extra={
+            "operation": operation,
+            "error_category": transient_database_error_category(exc) or "non_retryable",
+        },
+    )
 
 
 class DatabaseRow(Mapping[str, Any]):
@@ -119,13 +265,18 @@ class DatabaseConnection:
         self._connection = connection
         self.backend = backend
 
+    def _run(self, operation: str, callback: Callable[[], ResultT]) -> ResultT:
+        if self.backend == "libsql":
+            return _retry_libsql_operation(operation, callback)
+        return callback()
+
     def _changes(self) -> int:
-        cursor = self._connection.execute("SELECT changes()")
+        cursor = self._run("changes", lambda: self._connection.execute("SELECT changes()"))
         row = cursor.fetchone()
         return int(row[0] if row is not None else 0)
 
     def execute(self, sql: str, parameters: DatabaseParameters = ()) -> DatabaseCursor:
-        cursor = self._connection.execute(sql, parameters)
+        cursor = self._run("execute", lambda: self._connection.execute(sql, parameters))
         raw_rowcount = getattr(cursor, "rowcount", -1)
         rowcount = int(raw_rowcount) if raw_rowcount is not None else -1
         lastrowid = getattr(cursor, "lastrowid", None)
@@ -138,7 +289,8 @@ class DatabaseConnection:
         sql: str,
         parameter_rows: Iterable[DatabaseParameters],
     ) -> DatabaseCursor:
-        cursor = self._connection.executemany(sql, list(parameter_rows))
+        rows = list(parameter_rows)
+        cursor = self._run("executemany", lambda: self._connection.executemany(sql, rows))
         raw_rowcount = getattr(cursor, "rowcount", -1)
         rowcount = int(raw_rowcount) if raw_rowcount is not None else -1
         lastrowid = getattr(cursor, "lastrowid", None)
@@ -161,10 +313,10 @@ class DatabaseConnection:
         return last_cursor
 
     def commit(self) -> None:
-        self._connection.commit()
+        self._run("commit", self._connection.commit)
 
     def rollback(self) -> None:
-        self._connection.rollback()
+        self._run("rollback", self._connection.rollback)
 
     def close(self) -> None:
         self._connection.close()
@@ -173,11 +325,30 @@ class DatabaseConnection:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
-        if exc_type is None:
+        if exc_type is not None:
+            try:
+                self.rollback()
+            except Exception as cleanup_error:
+                _log_cleanup_failure("rollback", cleanup_error)
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                _log_cleanup_failure("close", cleanup_error)
+            return False
+
+        commit_error: BaseException | None = None
+        try:
             self.commit()
-        else:
-            self.rollback()
-        self.close()
+        except BaseException as error:
+            commit_error = error
+            raise
+        finally:
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                if commit_error is None:
+                    raise
+                _log_cleanup_failure("close", cleanup_error)
         return False
 
 
@@ -242,7 +413,10 @@ def connect_database(local_path: str | Path) -> DatabaseConnection:
             raise DatabaseConfigurationError(
                 "The 'libsql' package is required when TURSO_DATABASE_URL is configured."
             ) from exc
-        raw_connection = libsql.connect(database=remote_url, auth_token=auth_token)
+        raw_connection = _retry_libsql_operation(
+            "connect",
+            lambda: libsql.connect(database=remote_url, auth_token=auth_token),
+        )
         connection = DatabaseConnection(raw_connection, backend="libsql")
     else:
         path = Path(local_path)
@@ -257,11 +431,21 @@ def connect_database(local_path: str | Path) -> DatabaseConnection:
 @contextmanager
 def database_session(local_path: str | Path) -> Iterator[DatabaseConnection]:
     connection = connect_database(local_path)
+    original_error: BaseException | None = None
     try:
         yield connection
         connection.commit()
-    except Exception:
-        connection.rollback()
+    except BaseException as error:
+        original_error = error
+        try:
+            connection.rollback()
+        except Exception as cleanup_error:
+            _log_cleanup_failure("rollback", cleanup_error)
         raise
     finally:
-        connection.close()
+        try:
+            connection.close()
+        except Exception as cleanup_error:
+            if original_error is None:
+                raise
+            _log_cleanup_failure("close", cleanup_error)

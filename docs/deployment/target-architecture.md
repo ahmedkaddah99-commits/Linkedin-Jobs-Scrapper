@@ -28,7 +28,7 @@ Browser
           +-- Turso: structured application state and job queue
           +-- Cloudflare R2: uploads and generated artifacts
 
-Render Cron Job (initial) / Background Worker (customer stage)
+Render Background Worker
   |
   +-- claims queued runs from Turso
   +-- executes scraping, OCR, browser automation, and document generation
@@ -39,14 +39,16 @@ Render Cron Job (initial) / Background Worker (customer stage)
 
 - Frontend: Render Static Site, free.
 - API: Render Starter web service, always on.
-- Job execution: Render Cron Job running one queue item per invocation.
+- Job execution: Render Standard Background Worker continuously consuming the
+  queue.
 - Database: Turso Free initially; upgrade independently when usage or recovery
   requirements justify it.
 - Object storage: private Cloudflare R2 bucket using the S3-compatible API.
 - Authentication and billing: existing Clerk and Creem integrations.
 
-The expected initial infrastructure cost is approximately USD 8 per month,
-excluding third-party AI, scraping, email, and billing-provider usage.
+Costs include the paid API and Standard worker and should be checked against
+current Render pricing before rollout. Third-party AI, scraping, email, storage,
+database, and billing-provider usage are additional.
 
 ## Scaling Contract
 
@@ -59,8 +61,8 @@ The following boundaries must remain stable:
 - Database schema changes are immutable, versioned migrations.
 - Render configuration is versioned in `render.yaml`.
 
-Moving from a cron poller to a continuously running Render Background Worker
-must require only a Render service configuration change.
+Only the background worker may consume the production queue. A cron poller must
+not run alongside it.
 
 ## Environment Separation
 

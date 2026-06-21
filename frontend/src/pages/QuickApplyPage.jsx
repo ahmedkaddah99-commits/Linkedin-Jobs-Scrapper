@@ -6,6 +6,7 @@ import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { useWorkspaceCvAssets } from "../hooks/useWorkspaceCvAssets";
 import { getApiErrorDetails, getApiErrorMessage } from "../lib/api";
+import { uploadAndPollCv } from "../lib/cvUpload";
 
 const DEFAULT_FLOW_ID = "tailored_documents";
 const DEFAULT_CV_GENERATION_MODE = "aggressive_customization";
@@ -549,14 +550,15 @@ export default function QuickApplyPage() {
     resetSubmitFeedback();
     setCvUploadState({ uploading: true, message: "", error: "" });
     try {
-      const formData = new FormData();
-      formData.append("cv_file", file, file.name);
-      const response = await request("/cv-upload", {
-        method: "POST",
-        body: formData,
-        timeoutMs: 90000,
+      const response = await uploadAndPollCv({
+        request,
+        file,
+        refreshAssets: () => refreshCvAssets().catch(() => undefined),
+        onStatus: (payload) => {
+          setCvUploadState({ uploading: true, message: payload.message, error: "" });
+        },
       });
-      const uploadedAssetId = response?.asset?.asset_id || "";
+      const uploadedAssetId = response?.asset_id || response?.asset?.asset_id || "";
       if (uploadedAssetId) {
         updateSetting("workspace_cv_asset_id", uploadedAssetId);
       }

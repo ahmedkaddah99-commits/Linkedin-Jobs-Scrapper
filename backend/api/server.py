@@ -109,6 +109,9 @@ from backend.domain.models import (
     JobSource,
     ProfileRef,
     ROLE_ADMIN,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
     TOKEN_SCOPE_ADMIN,
     TOKEN_SCOPE_ARTIFACTS_READ,
     TOKEN_SCOPE_ARTIFACTS_WRITE,
@@ -140,6 +143,11 @@ from backend.profiles.cv_profile_extraction import (
     extract_cv_profile_fallback,
     normalize_profile_payload,
 )
+from backend.profiles.cv_upload_jobs import (
+    CV_STATUS_UPLOADED,
+    cv_upload_status_payload,
+    enqueue_cv_upload_processing_run,
+)
 from backend.profiles.cv_text import extract_cv_text_from_path
 from backend.storage import build_private_object_key, materialize_object
 from backend.integrations.clerk import (
@@ -168,12 +176,18 @@ from backend.worker import WorkerService, configure_worker_logging
 _EXPANDED_ARTIFACT_DELIMITER = "__item__"
 _EXPANDED_ARTIFACT_SUFFIXES = {".csv", ".docx", ".json", ".md", ".pdf", ".txt", ".xlsx"}
 _PROMO_CODE_PATTERN = re.compile(r"^[A-Z0-9]{3,256}$")
+_CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+_MAX_CV_UPLOAD_REQUEST_BYTES = 10 * 1024 * 1024
 
 
 class AtsExportBlockedError(ValueError):
     def __init__(self, gate: dict):
         self.gate = gate
         super().__init__(gate.get("last_warning") or "Final CV export is blocked until the ATS score target is reached.")
+
+
+class RequestBodyTooLargeError(ValueError):
+    pass
 
 
 def _workspace_schedule_summary(workspace) -> dict:
@@ -3847,13 +3861,6 @@ def _candidate_asset_storage_dir(user) -> Path:
     return Path("user_config") / "candidate_assets" / str(user.user_id)
 
 
-def _candidate_asset_path(user, asset_id: str, filename: str) -> Path:
-    suffix = Path(filename or "").suffix or ".bin"
-    root = _candidate_asset_storage_dir(user)
-    root.mkdir(parents=True, exist_ok=True)
-    return root / f"{asset_id}{suffix.lower()}"
-
-
 def _candidate_asset_bundle_dir(user) -> Path:
     target = _candidate_asset_storage_dir(user) / "bulk_exports"
     target.mkdir(parents=True, exist_ok=True)
@@ -3885,16 +3892,14 @@ def _get_candidate_asset_by_id(user, asset_id: str) -> dict:
 def _candidate_asset_file_path(application, asset: dict) -> Path | None:
     file_payload = dict(asset.get("file") or {})
     raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
-    if raw_path and Path(raw_path).is_file():
-        return Path(raw_path)
     object_key = str(file_payload.get("object_key") or "").strip()
-    if not object_key:
-        return Path(raw_path) if raw_path else None
-    return materialize_object(
-        application.object_storage,
-        object_key,
-        filename=str(asset.get("display_name") or Path(raw_path).name or ""),
-    )
+    if object_key:
+        return materialize_object(
+            application.object_storage,
+            object_key,
+            filename=str(asset.get("display_name") or Path(raw_path).name or ""),
+        )
+    return Path(raw_path) if raw_path else None
 
 
 def _resolve_workspace_cv_binding(application, user, asset_id: str) -> tuple[dict[str, str], dict]:
@@ -3903,39 +3908,61 @@ def _resolve_workspace_cv_binding(application, user, asset_id: str) -> tuple[dic
     if asset_kind != "workspace_cv":
         raise ValueError(f"Asset '{asset_id}' is not a workspace CV.")
 
-    asset_path = _candidate_asset_file_path(application, asset)
-    if asset_path is None or not asset_path.exists() or not asset_path.is_file():
+    metadata = dict(asset.get("metadata") or {})
+    file_payload = dict(asset.get("file") or {})
+    processing_status = str(metadata.get("status") or "").strip().lower()
+    if processing_status in {"uploaded", "queued", "processing"}:
+        raise ValueError(f"Workspace CV asset '{asset_id}' is still processing.")
+    if processing_status == "failed":
+        raise ValueError(f"Workspace CV asset '{asset_id}' failed processing.")
+    object_key = str(file_payload.get("object_key") or "").strip()
+    raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
+    cv_text = str(metadata.get("source_text") or "").strip()
+    if object_key and cv_text:
+        try:
+            if not application.object_storage.exists(object_key):
+                raise ValueError(f"Workspace CV asset '{asset_id}' is missing its source file.")
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Workspace CV asset '{asset_id}' is missing its source file.") from exc
+    elif not object_key and (not raw_path or not Path(raw_path).is_file()):
         raise ValueError(f"Workspace CV asset '{asset_id}' is missing its source file.")
 
-    metadata = dict(asset.get("metadata") or {})
-    cv_text = extract_cv_text_from_path(asset_path) or str(metadata.get("source_text") or "").strip()
+    if not cv_text:
+        if object_key:
+            try:
+                source_bytes = application.object_storage.get(object_key)
+            except Exception as exc:
+                raise ValueError(f"Workspace CV asset '{asset_id}' is missing its source file.") from exc
+            cv_text = str(
+                extract_document_text(
+                    str(asset.get("display_name") or Path(raw_path).name or "workspace-cv"),
+                    source_bytes,
+                    allow_ocr=False,
+                ).get("text")
+                or ""
+            )
+        else:
+            cv_text = extract_cv_text_from_path(raw_path)
     if not cv_text:
         raise ValueError(f"Workspace CV asset '{asset_id}' does not contain readable text.")
 
-    file_payload = dict(asset.get("file") or {})
-    companion_path = str(metadata.get("word_companion_path") or "").strip()
     companion_key = str(metadata.get("word_companion_object_key") or "").strip()
-    if companion_key and (not companion_path or not Path(companion_path).is_file()):
-        companion_path = str(
-            materialize_object(
-                application.object_storage,
-                companion_key,
-                filename=f"{asset_path.stem}.docx",
-            )
-        )
+    display_name = str(asset.get("display_name") or Path(raw_path).name or asset_id)
     return (
         {
             "workspace_cv_text": cv_text,
-            "workspace_cv_asset_path": str(asset_path.resolve()),
-            "workspace_cv_asset_object_key": str(file_payload.get("object_key") or ""),
-            "workspace_cv_asset_docx_path": companion_path,
+            "workspace_cv_asset_path": "",
+            "workspace_cv_asset_object_key": object_key,
+            "workspace_cv_asset_docx_path": "",
             "workspace_cv_asset_docx_object_key": companion_key,
-            "workspace_cv_asset_display_name": str(asset.get("display_name") or asset_path.name or asset_id),
+            "workspace_cv_asset_display_name": display_name,
             "workspace_cv_asset_extension": str(
-                file_payload.get("extension") or asset_path.suffix.lower().lstrip(".")
+                file_payload.get("extension") or Path(display_name).suffix.lower().lstrip(".")
             ),
             "workspace_cv_asset_mime_type": str(
-                file_payload.get("mime_type") or mimetypes.guess_type(asset_path.name)[0] or ""
+                file_payload.get("mime_type") or mimetypes.guess_type(display_name)[0] or ""
             ),
         },
         deepcopy(asset),
@@ -3949,6 +3976,10 @@ def _prepare_workspace_builder_payload_with_cv(
     *,
     existing_workspace=None,
 ) -> tuple[dict, dict[str, str]]:
+    try:
+        user = application.get_user(user.user_id)
+    except Exception:
+        pass
     builder_payload = deepcopy(dict(payload or {}))
     flow_id = str(
         builder_payload.get("flow_id")
@@ -3967,11 +3998,59 @@ def _prepare_workspace_builder_payload_with_cv(
             settings["workspace_cv_asset_id"] = asset_id
 
     if (flow_id or "tailored_documents") == "tailored_documents":
-        if not asset_id:
-            raise ValueError("workspace_cv_asset_id is required for tailored-documents workspaces.")
-        runtime_settings, workspace_cv_asset = _resolve_workspace_cv_binding(application, user, asset_id)
-        settings.update(runtime_settings)
-        builder_payload["workspace_cv_asset"] = workspace_cv_asset
+        if asset_id:
+            try:
+                runtime_settings, workspace_cv_asset = _resolve_workspace_cv_binding(application, user, asset_id)
+            except ValueError as exc:
+                message = str(exc)
+                if "was not found" in message:
+                    field_error_code = "workspace_cv_asset_unresolved"
+                    field_error_message = "Select an accessible workspace CV before saving or running this workspace."
+                elif "is not a workspace CV" in message:
+                    field_error_code = "workspace_cv_asset_invalid_kind"
+                    field_error_message = "workspace_cv_asset_id must reference an uploaded workspace CV."
+                elif "missing its source file" in message:
+                    field_error_code = "workspace_cv_asset_missing_file"
+                    field_error_message = "The selected workspace CV is no longer available in durable storage."
+                else:
+                    field_error_code = "workspace_cv_asset_unreadable"
+                    field_error_message = "The selected workspace CV does not contain readable text."
+                raise BackendValidationError(
+                    "workspace_validation_failed",
+                    "Workspace validation failed.",
+                    details={
+                        "phase": "save",
+                        "workspace_id": str(
+                            builder_payload.get("workspace_id")
+                            or getattr(existing_workspace, "id", "")
+                            or ""
+                        ).strip(),
+                        "flow_id": flow_id or "tailored_documents",
+                        "source_ids": [
+                            str(item).strip()
+                            for item in builder_payload.get("source_ids") or []
+                            if str(item).strip()
+                        ],
+                        "module_ids": [
+                            str(item).strip()
+                            for item in builder_payload.get("module_ids") or []
+                            if str(item).strip()
+                        ],
+                        "field_errors": [
+                            {
+                                "field": "workspace_cv_asset_id",
+                                "code": field_error_code,
+                                "message": field_error_message,
+                            }
+                        ],
+                        "source_results": [],
+                    },
+                ) from exc
+            settings.update(runtime_settings)
+            builder_payload["workspace_cv_asset"] = workspace_cv_asset
+            metadata = dict(builder_payload.get("metadata") or {})
+            metadata["workspace_cv_asset"] = workspace_cv_asset
+            builder_payload["metadata"] = metadata
 
     builder_payload["settings"] = settings
     return builder_payload, {
@@ -4026,16 +4105,15 @@ def _candidate_asset_content_hash(application, asset: dict) -> str:
         return content_hash
 
     file_payload = dict(asset.get("file") or {})
-    raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
-    if raw_path and Path(raw_path).is_file():
-        return sha256(Path(raw_path).read_bytes()).hexdigest()
-
     object_key = str(file_payload.get("object_key") or "").strip()
     if object_key:
         try:
             return sha256(application.object_storage.get(object_key)).hexdigest()
         except Exception:
             return ""
+    raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
+    if raw_path and Path(raw_path).is_file():
+        return sha256(Path(raw_path).read_bytes()).hexdigest()
     return ""
 
 
@@ -4162,7 +4240,15 @@ def _store_candidate_asset_upload(
     role: str = "",
     tags: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
+    timings_ms: dict[str, float | None] | None = None,
 ) -> dict:
+    def record_duration(stage: str, started: float) -> None:
+        if timings_ms is None:
+            return
+        duration_ms = round((perf_counter() - started) * 1000, 2)
+        previous = timings_ms.get(stage)
+        timings_ms[stage] = round((float(previous) if previous is not None else 0.0) + duration_ms, 2)
+
     content_hash = sha256(file_bytes).hexdigest()
     for existing in _load_candidate_assets(user):
         if str(existing.get("asset_kind") or "").strip() != asset_kind:
@@ -4172,76 +4258,100 @@ def _store_candidate_asset_upload(
         file_payload = dict(existing.get("file") or {})
         object_key = str(file_payload.get("object_key") or "").strip()
         raw_path = str(file_payload.get("path") or "").strip()
-        if (raw_path and Path(raw_path).is_file()) or (object_key and application.object_storage.exists(object_key)):
+        if object_key and application.object_storage.exists(object_key):
+            return normalize_candidate_asset_descriptor(existing)
+        if not object_key and raw_path and Path(raw_path).is_file():
             return normalize_candidate_asset_descriptor(existing)
 
     asset_id = f"asset_{uuid4().hex[:16]}"
-    target_path = _candidate_asset_path(user, asset_id, filename)
-    target_path.write_bytes(file_bytes)
     content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    extension = Path(filename or "").suffix.lower().lstrip(".")
     object_key = build_private_object_key(
         namespace="users",
         owner_id=user.user_id,
         category=asset_kind,
         object_id=asset_id,
-        filename=filename or target_path.name,
+        filename=filename or f"{asset_id}.bin",
     )
-    application.object_storage.put(
-        object_key,
-        file_bytes,
-        content_type=content_type,
-        metadata={"user_id": str(user.user_id), "asset_id": asset_id, "asset_kind": asset_kind},
-    )
+    uploaded_keys: list[str] = []
+    storage_started = perf_counter()
+    try:
+        application.object_storage.put(
+            object_key,
+            file_bytes,
+            content_type=content_type,
+            metadata={"user_id": str(user.user_id), "asset_id": asset_id, "asset_kind": asset_kind},
+        )
+        uploaded_keys.append(object_key)
+    finally:
+        record_duration("r2_storage", storage_started)
     normalized_metadata = dict(metadata or {})
     normalized_metadata["content_sha256"] = content_hash
-    if asset_kind == "workspace_cv" and target_path.suffix.lower() != ".docx":
-        source_text = str(normalized_metadata.get("source_text") or "").strip()
-        if source_text:
-            word_companion_path = target_path.with_suffix(".docx")
-            word_companion_bytes = create_word_companion_bytes(source_text, title=display_name or filename)
-            word_companion_path.write_bytes(word_companion_bytes)
-            word_companion_key = build_private_object_key(
-                namespace="users",
-                owner_id=user.user_id,
-                category=asset_kind,
-                object_id=f"{asset_id}-word-companion",
-                filename=word_companion_path.name,
-            )
-            application.object_storage.put(
-                word_companion_key,
-                word_companion_bytes,
-                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                metadata={"user_id": str(user.user_id), "asset_id": asset_id},
-            )
-            normalized_metadata.update(
+    try:
+        if asset_kind == "workspace_cv" and extension != "docx":
+            source_text = str(normalized_metadata.get("source_text") or "").strip()
+            if source_text:
+                word_companion_bytes = create_word_companion_bytes(source_text, title=display_name or filename)
+                word_companion_name = f"{Path(filename or asset_id).stem or asset_id}.docx"
+                word_companion_key = build_private_object_key(
+                    namespace="users",
+                    owner_id=user.user_id,
+                    category=asset_kind,
+                    object_id=f"{asset_id}-word-companion",
+                    filename=word_companion_name,
+                )
+                companion_storage_started = perf_counter()
+                try:
+                    application.object_storage.put(
+                        word_companion_key,
+                        word_companion_bytes,
+                        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        metadata={"user_id": str(user.user_id), "asset_id": asset_id},
+                    )
+                    uploaded_keys.append(word_companion_key)
+                finally:
+                    record_duration("r2_storage", companion_storage_started)
+                normalized_metadata.update(
+                    {
+                        "word_companion_path": "",
+                        "word_companion_object_key": word_companion_key,
+                        "word_companion_mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    }
+                )
+
+        turso_started = perf_counter()
+        try:
+            return _upsert_candidate_asset(
+                application,
+                user,
                 {
-                    "word_companion_path": str(word_companion_path.resolve()),
-                    "word_companion_object_key": word_companion_key,
-                    "word_companion_mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                }
+                    "asset_id": asset_id,
+                    "asset_kind": asset_kind,
+                    "display_name": display_name or filename or asset_id,
+                    "workspace_id": workspace_id,
+                    "asset_role": role or asset_kind,
+                    "source_origin": "upload",
+                    "path": "",
+                    "object_key": object_key,
+                    "download_url": _candidate_asset_download_url(asset_id),
+                    "mime_type": content_type,
+                    "extension": extension,
+                    "metadata": {
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "tags": list(tags or []),
+                        **normalized_metadata,
+                    },
+                },
             )
-    return _upsert_candidate_asset(
-        application,
-        user,
-        {
-            "asset_id": asset_id,
-            "asset_kind": asset_kind,
-            "display_name": display_name or filename or asset_id,
-            "workspace_id": workspace_id,
-            "asset_role": role or asset_kind,
-            "source_origin": "upload",
-            "path": str(target_path.resolve()),
-            "object_key": object_key,
-            "download_url": _candidate_asset_download_url(asset_id),
-            "mime_type": content_type,
-            "extension": target_path.suffix.lower().lstrip("."),
-            "metadata": {
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "tags": list(tags or []),
-                **normalized_metadata,
-            },
-        },
-    )
+        finally:
+            record_duration("turso_write", turso_started)
+    except Exception:
+        for uploaded_key in reversed(uploaded_keys):
+            try:
+                application.object_storage.delete(uploaded_key)
+            except Exception:
+                pass
+        raise
 
 
 def _document_group_for_asset_kind(asset_kind: str) -> tuple[str, str]:
@@ -4715,7 +4825,23 @@ def _collect_document_entries(
         asset_workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
         if workspace_id and asset_workspace_id and asset_workspace_id != workspace_id:
             continue
-        entries.append(_candidate_asset_to_document_item(asset, workspaces, shared_profile))
+        asset_for_item = deepcopy(asset)
+        asset_metadata = dict(asset_for_item.get("metadata") or {})
+        processing = dict(asset_metadata.get("cv_processing") or {})
+        processing_job_id = str(processing.get("job_id") or "").strip()
+        if processing_job_id and str(asset_for_item.get("asset_kind") or "").strip().lower() == "workspace_cv":
+            try:
+                processing_run = application.get_run(processing_job_id)
+                if processing_run.status == RUN_STATUS_RUNNING and str(asset_metadata.get("status") or "") not in {"ready", "failed"}:
+                    asset_metadata["status"] = "processing"
+                elif processing_run.status == RUN_STATUS_QUEUED and str(asset_metadata.get("status") or "") not in {"ready", "failed"}:
+                    asset_metadata["status"] = "queued"
+                elif processing_run.status == RUN_STATUS_FAILED and str(asset_metadata.get("status") or "") != "ready":
+                    asset_metadata["status"] = "failed"
+                asset_for_item["metadata"] = asset_metadata
+            except Exception:
+                pass
+        entries.append(_candidate_asset_to_document_item(asset_for_item, workspaces, shared_profile))
     if asset_kind:
         entries = [item for item in entries if str(item.get("asset_kind") or "").lower() == asset_kind.lower()]
     entries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
@@ -7736,7 +7862,8 @@ def _admin_user_health_segment_queries(
               AND json_extract(users.payload_json, '$.created_at') < ?
               AND NOT EXISTS (
                     SELECT 1
-                    FROM json_each(users.payload_json, '$.metadata.candidate_assets') AS asset
+                    FROM candidate_assets
+                    WHERE candidate_assets.user_id = users.user_id
                 )
             ORDER BY users.user_id
             """,
@@ -7749,8 +7876,9 @@ def _admin_user_health_segment_queries(
             WHERE users.is_active = 1
               AND EXISTS (
                     SELECT 1
-                    FROM json_each(users.payload_json, '$.metadata.candidate_assets') AS asset
-                    WHERE lower(COALESCE(json_extract(asset.value, '$.asset_kind'), '')) = 'workspace_cv'
+                    FROM candidate_assets
+                    WHERE candidate_assets.user_id = users.user_id
+                      AND lower(candidate_assets.asset_kind) = 'workspace_cv'
                 )
               AND NOT EXISTS (
                     SELECT 1
@@ -7879,6 +8007,19 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
     route_registry = build_route_registry()
 
     class BackendApiHandler(BaseHTTPRequestHandler):
+        def _begin_request(self) -> None:
+            self._response_started = False
+            self._client_disconnected = False
+
+        def _handle_client_disconnect(self, exc: BaseException) -> None:
+            self._client_disconnected = True
+            self.close_connection = True
+            logging.getLogger("backend.api.http").info(
+                "client_disconnect method=%s error_type=%s",
+                str(getattr(self, "command", "") or ""),
+                type(exc).__name__,
+            )
+
         def _cors_origin(self) -> str:
             origin = _normalize_origin_value(str(self.headers.get("Origin") or ""))
             if not origin:
@@ -7905,28 +8046,40 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 raise PermissionError(f"Origin '{request_origin}' is not allowed.")
 
         def _send_json(self, payload, status: int = 200, *, headers: dict[str, str] | None = None) -> None:
+            if getattr(self, "_client_disconnected", False) or getattr(self, "_response_started", False):
+                return
             body = _json_bytes(payload)
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            merged_headers = self._cors_headers()
-            merged_headers.update(headers or {})
-            for key, value in merged_headers.items():
-                self.send_header(key, value)
-            self.end_headers()
-            self.wfile.write(body)
+            self._response_started = True
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                merged_headers = self._cors_headers()
+                merged_headers.update(headers or {})
+                for key, value in merged_headers.items():
+                    self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(body)
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
 
         def _send_html(self, body: str, status: int = 200, *, headers: dict[str, str] | None = None) -> None:
+            if getattr(self, "_client_disconnected", False) or getattr(self, "_response_started", False):
+                return
             payload = str(body or "").encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
-            merged_headers = self._cors_headers()
-            merged_headers.update(headers or {})
-            for key, value in merged_headers.items():
-                self.send_header(key, value)
-            self.end_headers()
-            self.wfile.write(payload)
+            self._response_started = True
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                merged_headers = self._cors_headers()
+                merged_headers.update(headers or {})
+                for key, value in merged_headers.items():
+                    self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(payload)
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
 
         def _send_error(self, status: int, code: str, message: str, *, details=None, headers: dict[str, str] | None = None) -> None:
             payload = {"error": {"code": code, "message": message}}
@@ -7954,6 +8107,32 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             content_length = int(self.headers.get("Content-Length", "0"))
             raw_body = self.rfile.read(content_length) if content_length > 0 else b""
             self._cached_raw_body = raw_body
+            return raw_body
+
+        def _read_limited_body(self, *, max_bytes: int, request_label: str) -> bytes:
+            raw_content_length = str(self.headers.get("Content-Length") or "").strip()
+            if not raw_content_length:
+                raise ValueError(f"{request_label} requires a Content-Length header.")
+            try:
+                content_length = int(raw_content_length)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{request_label} has an invalid Content-Length header.") from exc
+            if content_length <= 0:
+                raise ValueError(f"{request_label} requires a non-empty request body.")
+            if content_length > max_bytes:
+                remaining = content_length
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 1024 * 1024))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                max_megabytes = max_bytes // (1024 * 1024)
+                raise RequestBodyTooLargeError(
+                    f"{request_label} request must be {max_megabytes} MB or smaller."
+                )
+            raw_body = self.rfile.read(content_length)
+            if len(raw_body) != content_length:
+                raise ConnectionResetError("client disconnected before request body was complete")
             return raw_body
 
         def _read_json_body(self):
@@ -8030,22 +8209,28 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             return {"limit": int(limit), "offset": int(offset), "returned": int(returned)}
 
         def _send_file(self, file_path: str, *, download_name: str = "") -> None:
+            if getattr(self, "_client_disconnected", False) or getattr(self, "_response_started", False):
+                return
             target = Path(file_path)
             if not target.exists() or not target.is_file():
                 raise KeyError(f"Artifact file '{file_path}' not found.")
             body = target.read_bytes()
             content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header(
-                "Content-Disposition",
-                f'attachment; filename="{download_name or target.name}"',
-            )
-            for key, value in self._cors_headers().items():
-                self.send_header(key, value)
-            self.end_headers()
-            self.wfile.write(body)
+            self._response_started = True
+            try:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{download_name or target.name}"',
+                )
+                for key, value in self._cors_headers().items():
+                    self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(body)
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
 
         def _auth_context(self):
             cached_context = getattr(self, "_cached_auth_context", None)
@@ -8108,16 +8293,20 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             )
 
         def do_OPTIONS(self):  # noqa: N802
+            self._begin_request()
             try:
                 self._enforce_origin_policy()
                 self.send_response(HTTPStatus.NO_CONTENT)
                 for key, value in self._cors_headers().items():
                     self.send_header(key, value)
                 self.end_headers()
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
             except PermissionError as exc:
                 self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
 
         def do_GET(self):  # noqa: N802
+            self._begin_request()
             try:
                 self._enforce_origin_policy()
                 _, segments, query = self._parse_request()
@@ -8128,6 +8317,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
 
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
             except PermissionError as exc:
                 if _is_unauthorized_permission_error(exc):
                     self._send_unauthorized(str(exc))
@@ -8147,6 +8338,7 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", str(exc))
 
         def do_POST(self):  # noqa: N802
+            self._begin_request()
             try:
                 _, segments, query = self._parse_request()
                 is_webhook_route = segments in (["webhooks", "clerk"], ["webhooks", "creem"])
@@ -8160,6 +8352,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
                 self._read_json_body()
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
             except PermissionError as exc:
                 if _is_unauthorized_permission_error(exc):
                     self._send_unauthorized(str(exc))
@@ -8173,12 +8367,15 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 self._send_error(HTTPStatus.BAD_REQUEST, exc.error_code, str(exc), details=dict(exc.details))
             except AtsExportBlockedError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "ats_export_blocked", str(exc), details={"gate": exc.gate})
+            except RequestBodyTooLargeError as exc:
+                self._send_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "request_too_large", str(exc))
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", str(exc))
 
         def do_PUT(self):  # noqa: N802
+            self._begin_request()
             try:
                 self._enforce_origin_policy()
                 _, segments, query = self._parse_request()
@@ -8189,6 +8386,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
                 self._read_json_body()
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
             except PermissionError as exc:
                 if _is_unauthorized_permission_error(exc):
                     self._send_unauthorized(str(exc))
@@ -8208,6 +8407,7 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", str(exc))
 
         def do_DELETE(self):  # noqa: N802
+            self._begin_request()
             try:
                 self._enforce_origin_policy()
                 _, segments, query = self._parse_request()
@@ -8217,6 +8417,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     return
 
                 self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Route not found.")
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
             except PermissionError as exc:
                 if _is_unauthorized_permission_error(exc):
                     self._send_unauthorized(str(exc))

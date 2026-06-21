@@ -51,7 +51,7 @@ from backend.domain.models import ArtifactRecord, JobRecord, StageContext, Stage
 from backend.orchestration.engine import BaseStage, StageOutcome
 from backend.orchestration.workspace_builder import derive_runtime_defaults_from_settings
 from backend.profiles.cv_text import runtime_cv_override
-from backend.storage import create_object_storage, materialize_object
+from backend.storage import ObjectMaterializationSession, create_object_storage
 
 TARGET_ROLE_KEYWORD_MAP = {
     "Product Manager": ["product manager", "product owner", "go-to-market"],
@@ -330,23 +330,24 @@ def _workspace_cv_snapshot_from_settings(settings: dict[str, Any]) -> dict[str, 
 
 def _materialize_workspace_cv_settings(settings: dict[str, Any]) -> dict[str, Any]:
     resolved = dict(settings)
-    source_path = Path(str(resolved.get("workspace_cv_asset_path") or ""))
+    session = ObjectMaterializationSession(create_object_storage())
+    source_path_text = str(resolved.get("workspace_cv_asset_path") or "").strip()
+    source_path = Path(source_path_text) if source_path_text else None
     object_key = str(resolved.get("workspace_cv_asset_object_key") or "").strip()
-    if object_key and not source_path.is_file():
-        source_path = materialize_object(
-            create_object_storage(),
+    if object_key:
+        source_path = session.materialize(
             object_key,
             filename=str(resolved.get("workspace_cv_asset_display_name") or ""),
         )
         resolved["workspace_cv_asset_path"] = str(source_path)
 
-    companion_path = Path(str(resolved.get("workspace_cv_asset_docx_path") or ""))
+    companion_path_text = str(resolved.get("workspace_cv_asset_docx_path") or "").strip()
+    companion_path = Path(companion_path_text) if companion_path_text else None
     companion_key = str(resolved.get("workspace_cv_asset_docx_object_key") or "").strip()
-    if companion_key and not companion_path.is_file():
-        companion_path = materialize_object(
-            create_object_storage(),
+    if companion_key:
+        companion_path = session.materialize(
             companion_key,
-            filename=f"{source_path.stem or 'workspace-cv'}.docx",
+            filename=f"{Path(str(resolved.get('workspace_cv_asset_display_name') or 'workspace-cv')).stem}.docx",
         )
         resolved["workspace_cv_asset_docx_path"] = str(companion_path)
     return resolved
@@ -497,6 +498,7 @@ def _build_root_cli_args(
     definition: StageDefinition,
     *,
     settings_transform: Any = None,
+    materialize_workspace_cv: bool = False,
 ):
     from backend.config.job_seeker import load_job_seeker_config, load_project_dotenv
 
@@ -504,7 +506,8 @@ def _build_root_cli_args(
     config = load_job_seeker_config()
     defaults = build_main_defaults(config)
     resolved_settings = _resolved_settings(context, definition)
-    resolved_settings = _materialize_workspace_cv_settings(resolved_settings)
+    if materialize_workspace_cv:
+        resolved_settings = _materialize_workspace_cv_settings(resolved_settings)
     _assert_workspace_cv_binding(resolved_settings)
     resolved_settings = _harmonize_tailored_runtime_settings(resolved_settings)
     resolved_settings["job_filtering_mode"] = normalize_job_filtering_mode(
@@ -900,7 +903,11 @@ class TailoredDocumentExportStage(BaseStage):
         if renderer_id:
             context.registries.renderer_registry.get(renderer_id)
 
-        config, cli_args = _build_root_cli_args(context, definition)
+        config, cli_args = _build_root_cli_args(
+            context,
+            definition,
+            materialize_workspace_cv=True,
+        )
         stage4_args = build_tailored_stage4_args(cli_args)
         jobs = context.get_job_dicts(definition.input_keys[0])
         if not jobs:

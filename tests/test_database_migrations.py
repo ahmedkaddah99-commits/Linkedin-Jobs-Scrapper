@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import sqlite3
 import unittest
@@ -14,6 +15,7 @@ from backend.database.migrations import (
     get_migration_status,
     run_migrations,
 )
+from backend.database.schema import BASE_SCHEMA_SQL
 from backend.repositories.sqlite_migrations import MIGRATIONS
 
 
@@ -127,7 +129,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual([row[0] for row in rows], [migration.migration_id for migration in MIGRATIONS])
         self.assertTrue(all(len(str(row[1])) == 64 for row in rows))
 
-    def test_committed_registry_preserves_migration_ids_001_through_012(self):
+    def test_committed_registry_preserves_migration_ids_001_through_013(self):
         self.assertEqual(
             [migration.migration_id for migration in MIGRATIONS],
             [
@@ -143,9 +145,104 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "010_site_job_url_history_workspace_scope",
                 "011_site_job_url_history_public_index",
                 "012_creem_billing",
+                "013_candidate_document_normalization",
             ],
         )
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
+
+    def test_candidate_document_migration_extracts_legacy_aggregate_text(self):
+        db_path = self._db_path("candidate_document_legacy_migration")
+        private_cv = "Legacy Private CV\nlegacy@example.com"
+        user_payload = {
+            "user_id": "user_legacy_cv",
+            "email": "legacy@example.com",
+            "role": "viewer",
+            "is_active": True,
+            "metadata": {
+                "cv_text": private_cv,
+                "candidate_assets": [
+                    {
+                        "asset_id": "asset_legacy_cv",
+                        "asset_kind": "workspace_cv",
+                        "display_name": "Legacy CV.pdf",
+                        "file": {"object_key": "users/user_legacy_cv/workspace_cv/asset_legacy_cv/cv.pdf"},
+                        "metadata": {"source_text": private_cv},
+                    }
+                ],
+            },
+        }
+        workspace_payload = {
+            "id": "workspace_legacy_cv",
+            "name": "Legacy CV workspace",
+            "workflow_template_id": "workflow_legacy_cv",
+            "settings": {
+                "workspace_cv_asset_id": "asset_legacy_cv",
+                "workspace_cv_text": private_cv,
+            },
+        }
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            connection.executescript(BASE_SCHEMA_SQL)
+            connection.executemany(
+                "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
+                [
+                    (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
+                    for migration in MIGRATIONS[:-1]
+                ],
+            )
+            connection.execute(
+                "INSERT INTO users (user_id, email, role, is_active, updated_at, payload_json) "
+                "VALUES (?, ?, 'viewer', 1, ?, ?)",
+                (
+                    "user_legacy_cv",
+                    "legacy@example.com",
+                    "2026-01-01T00:00:00+00:00",
+                    json.dumps(user_payload),
+                ),
+            )
+            connection.execute(
+                "INSERT INTO workspaces "
+                "(id, name, workflow_template_id, workspace_type, payload_json, updated_at) "
+                "VALUES (?, ?, ?, '', ?, ?)",
+                (
+                    "workspace_legacy_cv",
+                    "Legacy CV workspace",
+                    "workflow_legacy_cv",
+                    json.dumps(workspace_payload),
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            connection.commit()
+
+        with patch.dict(
+            os.environ,
+            {
+                "TURSO_DATABASE_URL": " ",
+                "TURSO_AUTH_TOKEN": " ",
+                "DATABASE_BACKEND": "sqlite",
+                "RUNR_ENV": "development",
+            },
+        ):
+            initialize_database(db_path, force=True)
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            raw_user = connection.execute(
+                "SELECT payload_json FROM users WHERE user_id = 'user_legacy_cv'"
+            ).fetchone()[0]
+            raw_workspace = connection.execute(
+                "SELECT payload_json FROM workspaces WHERE id = 'workspace_legacy_cv'"
+            ).fetchone()[0]
+            document = connection.execute(
+                "SELECT source_text FROM candidate_documents WHERE asset_id = 'asset_legacy_cv'"
+            ).fetchone()
+            asset = connection.execute(
+                "SELECT object_key FROM candidate_assets WHERE asset_id = 'asset_legacy_cv'"
+            ).fetchone()
+
+        self.assertNotIn(private_cv, raw_user)
+        self.assertNotIn(private_cv, raw_workspace)
+        self.assertEqual(document, (private_cv,))
+        self.assertEqual(asset, ("users/user_legacy_cv/workspace_cv/asset_legacy_cv/cv.pdf",))
 
 
 if __name__ == "__main__":

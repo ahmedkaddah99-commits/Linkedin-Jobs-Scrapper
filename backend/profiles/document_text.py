@@ -68,9 +68,6 @@ def _extract_image_text(data: bytes) -> str:
 
 
 def _extract_pdf_text(data: bytes, *, allow_ocr: bool = True) -> tuple[str, str]:
-    if not allow_ocr:
-        return "", "pdf_native"
-
     try:
         from pypdf import PdfReader
 
@@ -80,6 +77,9 @@ def _extract_pdf_text(data: bytes, *, allow_ocr: bool = True) -> tuple[str, str]
             return native_text, "pdf_native"
     except Exception:
         pass
+
+    if not allow_ocr:
+        return "", "pdf_ocr_skipped"
 
     try:
         import fitz
@@ -123,7 +123,8 @@ def extract_document_text(filename: str, data: bytes, *, allow_ocr: bool = True)
     if not text:
         if suffix == ".pdf" and not allow_ocr:
             warnings.append(
-                "No embedded PDF text was found. Scanned PDFs need OCR; upload a text-based PDF or DOCX."
+                "No embedded PDF text was found and OCR was skipped. "
+                "Scanned PDFs need OCR; upload a text-based PDF or DOCX."
             )
         elif suffix in _IMAGE_SUFFIXES and not allow_ocr:
             warnings.append("Image OCR is skipped during upload. Upload a text-based PDF or DOCX.")

@@ -9,6 +9,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+from backend.security.redaction import RedactingFilter, redact_sensitive_data
+
 
 WORKER_LOGGER_NAME = "backend.worker"
 DEFAULT_WORKER_LOG_DIR = "logs"
@@ -44,6 +46,7 @@ class WorkerJsonFormatter(logging.Formatter):
             "queued_at",
             "started_at",
             "finished_at",
+            "has_error",
             "last_error",
             "error_message",
             "claimed_status",
@@ -57,7 +60,7 @@ class WorkerJsonFormatter(logging.Formatter):
                 payload[field_name] = getattr(record, field_name)
         if record.exc_info:
             payload["stack_trace"] = "".join(traceback.format_exception(*record.exc_info)).strip()
-        return json.dumps(payload, ensure_ascii=False, default=str)
+        return json.dumps(redact_sensitive_data(payload), ensure_ascii=False, default=str)
 
 
 def _worker_handlers(logger: logging.Logger) -> list[logging.Handler]:
@@ -91,6 +94,7 @@ def configure_worker_logging(
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setLevel(int(normalized_level))
     stream_handler.setFormatter(formatter)
+    stream_handler.addFilter(RedactingFilter())
     stream_handler._runr_worker_handler = True  # type: ignore[attr-defined]
 
     log_path = Path(log_dir) / log_file
@@ -103,6 +107,7 @@ def configure_worker_logging(
     )
     file_handler.setLevel(int(normalized_level))
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(RedactingFilter())
     file_handler._runr_worker_handler = True  # type: ignore[attr-defined]
 
     logger.addHandler(stream_handler)
