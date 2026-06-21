@@ -516,6 +516,8 @@ Every major section is still slow to load on the deployed version, making the to
 
 2026-06-20, Codex local changes. The session provider was changed to preserve the last successful authenticated session during `/auth/me` refreshes, and `App.jsx` was changed so an existing authenticated user keeps the current route mounted during reconnect/session checks.
 
+2026-06-21, Codex local changes. Shared frontend API resources now dedupe in-flight requests by cache key and separate background `refreshing` from blocking `loading`, reducing duplicate route/data fetches during navigation, Strict Mode remounts, polling, and repeated refresh actions.
+
 **Why the issue is still open:**
 
 User feedback after the attempted fix says: "The error does not show but every section takes a very long time to load." That means the visible reset error may have been addressed, but the deployed app still has the practical problem of slow section loading and possible background refresh behavior.
@@ -571,6 +573,8 @@ Dashboard loading is still slow enough to be a user-facing issue. The page may b
 **Previous attempted fix:**
 
 2026-06-20, Codex local changes. `DashboardPage.jsx` was changed so `loading && !data` no longer returns a full `DashboardSkeleton`; the page shell, navigation actions, action plan fallback, and empty chart states render while `/dashboard` analytics load in the background.
+
+2026-06-21, Codex local changes. The dashboard now loads `/dashboard?mode=summary` first for fast cards and recent runs, then refreshes full `/dashboard` analytics in the background. The backend summary mode skips the expensive tracker/review/job-set analytics pass, and shared API resource request deduplication prevents overlapping dashboard refreshes.
 
 **Why the issue is still open:**
 

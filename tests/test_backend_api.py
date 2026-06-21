@@ -414,11 +414,12 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(test_run_item["placed_in_tracker_at"])
 
     def test_dashboard_returns_candidate_action_and_progress_insights(self):
-        status, run_payload = self._request(
-            "POST",
-            "/runs",
-            {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
-        )
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, run_payload = self._request(
+                "POST",
+                "/runs",
+                {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
+            )
         self.assertEqual(status, 201)
         run_id = run_payload["id"]
 
@@ -476,6 +477,7 @@ class BackendApiTests(unittest.TestCase):
 
         status, payload = self._request("GET", "/dashboard")
         self.assertEqual(status, 200)
+        self.assertEqual(payload["meta"]["mode"], "full")
         self.assertEqual(payload["analytics"]["outcomes"]["trackerTotal"], 2)
         self.assertEqual(payload["analytics"]["outcomes"]["submittedTotal"], 2)
 
@@ -515,6 +517,22 @@ class BackendApiTests(unittest.TestCase):
         self.assertIn("stale_applications", action_ids)
         self.assertIn("interviews", action_ids)
         self.assertIn("referral_outreach", action_ids)
+
+    def test_dashboard_summary_mode_returns_fast_shell_payload(self):
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, run_payload = self._request(
+                "POST",
+                "/runs",
+                {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
+            )
+        self.assertEqual(status, 201)
+
+        status, payload = self._request("GET", "/dashboard?mode=summary")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["meta"]["mode"], "summary")
+        self.assertTrue(any(run["id"] == run_payload["id"] for run in payload["recent_runs"]))
+        self.assertEqual(payload["analytics"]["outcomes"]["trackerTotal"], 0)
+        self.assertEqual(payload["analytics"]["candidateInsights"]["funnel"]["stages"], [])
 
     def test_api_supports_deleting_queued_run(self):
         status, run_payload = self._request(

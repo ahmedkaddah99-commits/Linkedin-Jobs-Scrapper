@@ -6111,10 +6111,65 @@ def _dashboard_analytics_payload(application, user, workspaces: dict[str, object
     }
 
 
-def _dashboard_payload(application, user) -> dict:
+def _empty_dashboard_analytics() -> dict:
+    return {
+        "outcomes": {
+            "total": 0,
+            "unknown": 0,
+            "trackerTotal": 0,
+            "submittedTotal": 0,
+            "segments": [{**segment, "value": 0} for segment in _DASHBOARD_APPLICATION_OUTCOME_SEGMENTS],
+        },
+        "referrals": {
+            "totalContacts": 0,
+            "noReferralCount": 0,
+            "trackedOutreachItems": 0,
+            "contactSources": [],
+            "outreachFunnel": [
+                {"label": "Not contacted", "value": 0, "color": "#94a3b8"},
+                {"label": "Contacted", "value": 0, "color": "#38bdf8"},
+                {"label": "Replied", "value": 0, "color": "#14b8a6"},
+                {"label": "Referral offered", "value": 0, "color": "#22c55e"},
+            ],
+        },
+        "candidateInsights": {
+            "actionPlan": [],
+            "funnel": {"stages": []},
+            "pipelineAging": [],
+            "roleStrategy": {
+                "summary": "",
+                "totalApplications": 0,
+                "averageResponseRate": 0,
+                "roles": [],
+            },
+            "sourceEffectiveness": [],
+            "weeklySummary": {
+                "windowDays": 7,
+                "current": {},
+                "previous": {},
+            },
+            "dataQuality": {
+                "confidence": 100,
+                "issueCount": 0,
+                "unknownStatuses": 0,
+                "missingApplicationDates": 0,
+                "missingSources": 0,
+            },
+        },
+    }
+
+
+def _dashboard_payload(application, user, *, mode: str = "") -> dict:
     workspaces, runs = _collect_authorized_runs(application, user)
-    analytics = _dashboard_analytics_payload(application, user, workspaces, runs)
-    workers = application.list_workers(limit=100, offset=0, status="")
+    summary_only = str(mode or "").strip().lower() == "summary"
+    analytics = (
+        {"waitingReviewCount": 0, **_empty_dashboard_analytics()}
+        if summary_only
+        else _dashboard_analytics_payload(application, user, workspaces, runs)
+    )
+    running_workers = 0
+    if not summary_only:
+        running_workers = len(application.list_workers(limit=100, offset=0, status="running"))
     today_iso = datetime.now(timezone.utc).date().isoformat()
     completed_today = sum(
         1
@@ -6140,7 +6195,7 @@ def _dashboard_payload(application, user) -> dict:
     return {
         "cards": [
             {"label": "Queued Runs", "value": sum(1 for run in runs if run.status == "queued")},
-            {"label": "Running Workers", "value": sum(1 for worker in workers if worker.status == "running")},
+            {"label": "Running Workers", "value": running_workers},
             {
                 "label": "Jobs Waiting Review",
                 "value": analytics["waitingReviewCount"],
@@ -6149,6 +6204,10 @@ def _dashboard_payload(application, user) -> dict:
         ],
         "recent_runs": recent_runs,
         "analytics": {key: value for key, value in analytics.items() if key != "waitingReviewCount"},
+        "meta": {
+            "mode": "summary" if summary_only else "full",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        },
     }
 
 

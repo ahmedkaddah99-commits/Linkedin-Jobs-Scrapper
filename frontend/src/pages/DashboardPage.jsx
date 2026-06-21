@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -60,8 +60,8 @@ const EMPTY_CANDIDATE_INSIGHTS = {
   },
 };
 
-function loadDashboardPayload(request) {
-  return request("/dashboard");
+function loadDashboardPayload(request, mode = "full") {
+  return request(mode === "summary" ? "/dashboard?mode=summary" : "/dashboard");
 }
 
 function getNumericValue(value) {
@@ -865,11 +865,22 @@ function SourceEffectivenessPanel({ sources }) {
 
 export default function DashboardPage() {
   const { error: sessionError, isConnected, request, status } = useSession();
-  const { data, loading, error, refresh } = useApiResource(() => loadDashboardPayload(request), [request], {
+  const dashboardLoadModeRef = useRef("summary");
+  const {
+    data,
+    loading,
+    refreshing,
+    error,
+    refresh,
+  } = useApiResource(() => loadDashboardPayload(request, dashboardLoadModeRef.current), [request], {
     cacheKey: "dashboard",
     staleMs: 30000,
     backgroundRefresh: true,
   });
+  const refreshFullDashboard = useCallback((options) => {
+    dashboardLoadModeRef.current = "full";
+    return refresh(options);
+  }, [refresh]);
   const hasActiveDashboardWork = Boolean(
     (data?.recent_runs || []).some((run) => ACTIVE_RUN_STATUSES.includes(String(run.status || "").trim()))
     || (data?.cards || []).some((card) =>
@@ -883,10 +894,17 @@ export default function DashboardPage() {
       return undefined;
     }
     const intervalId = window.setInterval(() => {
-      refresh().catch(() => undefined);
+      refreshFullDashboard({ showLoading: false }).catch(() => undefined);
     }, 30000);
     return () => window.clearInterval(intervalId);
-  }, [hasActiveDashboardWork, isConnected, refresh]);
+  }, [hasActiveDashboardWork, isConnected, refreshFullDashboard]);
+
+  useEffect(() => {
+    if (!isConnected || data?.meta?.mode !== "summary") {
+      return;
+    }
+    refreshFullDashboard({ showLoading: false, force: true }).catch(() => undefined);
+  }, [data?.meta?.mode, isConnected, refreshFullDashboard]);
 
   if (!isConnected && !loading) {
     const guidance = status === "error"
@@ -900,7 +918,7 @@ export default function DashboardPage() {
   }
 
   if (error && !data) {
-    return <DashboardError error={error} onRetry={refresh} />;
+    return <DashboardError error={error} onRetry={refreshFullDashboard} />;
   }
 
   const model = buildUserDashboardModel(data || {});
@@ -912,7 +930,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <DashboardHeader onRefresh={refresh} refreshing={loading} />
+      <DashboardHeader onRefresh={refreshFullDashboard} refreshing={loading || refreshing} />
 
       {loading && !data ? <DashboardLoadingNotice /> : null}
 

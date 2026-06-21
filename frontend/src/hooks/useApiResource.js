@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "../context/SessionContext";
 import {
   getApiResourceCacheEntry,
+  getApiResourceInFlight,
   isApiResourceCacheFresh,
   setApiResourceCacheEntry,
+  setApiResourceInFlight,
 } from "./apiResourceCache";
 
 export {
@@ -26,6 +28,7 @@ export function useApiResource(
   const cachedEntry = cacheKey ? getApiResourceCacheEntry(cacheKey) : null;
   const [data, setDataState] = useState(cachedEntry?.data ?? null);
   const [loading, setLoading] = useState(Boolean(immediate && !cachedEntry));
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const dataRef = useRef(cachedEntry?.data ?? null);
   const loaderRef = useRef(loader);
@@ -52,6 +55,7 @@ export function useApiResource(
 
     if (!isConnected) {
       setLoading(false);
+      setRefreshing(false);
       return null;
     }
 
@@ -62,10 +66,14 @@ export function useApiResource(
     const shouldShowLoading = showLoading ?? dataRef.current === null;
     if (shouldShowLoading) {
       setLoading(true);
+      setRefreshing(false);
+    } else {
+      setRefreshing(true);
     }
     setError("");
     try {
-      const payload = await loaderRef.current();
+      const pendingRequest = cacheKey ? getApiResourceInFlight(cacheKey) : null;
+      const payload = await (pendingRequest || setApiResourceInFlight(cacheKey, loaderRef.current()));
       if (requestCounterRef.current === requestId) {
         setData(payload);
       }
@@ -78,6 +86,7 @@ export function useApiResource(
     } finally {
       if (requestCounterRef.current === requestId) {
         setLoading(false);
+        setRefreshing(false);
       }
     }
   }, [cacheKey, isConnected, setData, staleMs]);
@@ -85,6 +94,7 @@ export function useApiResource(
   useEffect(() => {
     if (!immediate || !isConnected) {
       setLoading(false);
+      setRefreshing(false);
       return;
     }
     const cached = cacheKey ? getApiResourceCacheEntry(cacheKey) : null;
@@ -105,5 +115,5 @@ export function useApiResource(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [immediate, isConnected, cacheKey, backgroundRefresh, staleMs, ...deps]);
 
-  return { data, loading, error, refresh, setData };
+  return { data, loading, refreshing, error, refresh, setData };
 }

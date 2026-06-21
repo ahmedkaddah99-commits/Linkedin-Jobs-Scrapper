@@ -219,7 +219,8 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
 
     if segments == ["dashboard"]:
                         user, _ = self._require_identity()
-                        self._send_json(_dashboard_payload(application, user))
+                        mode = str((query.get("mode") or [""])[0]).strip().lower()
+                        self._send_json(_dashboard_payload(application, user, mode=mode))
                         return
 
     if segments == ["settings"]:
