@@ -221,6 +221,7 @@ class BackendApplicationTests(unittest.TestCase):
                     "workspace_cv_asset_id": asset_id,
                     "cv_generation_mode": cv_generation_mode,
                     "keywords": ["analyst"],
+                    "country_codes": ["DE"],
                     "geo_id": "101282230",
                     "experience_levels": [2, 3],
                     "stage4_max_jobs": 1,
@@ -274,6 +275,7 @@ class BackendApplicationTests(unittest.TestCase):
                     "keywords": ["analyst", "consultant"],
                     "work_arrangement": "remote",
                     "industry": "Healthcare",
+                    "country_codes": ["DE"],
                     "geo_id": "101282230",
                     "manual_url_seed_list": ["https://company.example/jobs/1"],
                     "experience_levels": [2, 3],
@@ -322,7 +324,7 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertTrue(run.run_plan.resolved_run_settings["reuse_scrape_snapshot"])
         self.assertEqual(run.run_plan.resolved_run_settings["page_fetch_sleep_seconds"], 1.5)
         self.assertFalse(run.run_plan.resolved_run_settings["include_photo"])
-        self.assertEqual(run.run_plan.resolved_run_settings["cv_template"], "modern")
+        self.assertEqual(run.run_plan.resolved_run_settings["cv_template"], "plain")
         self.assertEqual(run.run_plan.resolved_run_settings["french_special_char_threshold"], 9999)
         self.assertEqual(run.run_plan.resolved_run_settings["workspace_cv_asset_id"], "asset_workspace_cv_primary")
         self.assertEqual(run.run_plan.resolved_run_settings["workspace_cv_text"], "Primary workspace CV snapshot")
@@ -394,6 +396,7 @@ class BackendApplicationTests(unittest.TestCase):
                 ],
                 "settings": {
                     "keywords": ["analyst"],
+                    "country_codes": ["DE"],
                     "geo_id": "101282230",
                     "stage4_max_jobs": 10,
                 },
@@ -414,6 +417,7 @@ class BackendApplicationTests(unittest.TestCase):
                 ],
                 "settings": {
                     "keywords": ["analyst", "consultant"],
+                    "country_codes": ["DE"],
                     "geo_id": "101282230",
                     "manual_url_seed_list": ["https://company.example/jobs/2"],
                     "stage4_max_jobs": 20,
@@ -443,6 +447,7 @@ class BackendApplicationTests(unittest.TestCase):
                     "tailored_document_generation",
                 ],
                 "settings": {
+                    "country_codes": ["DE"],
                     "academic_career_sites": ["Example University | https://university.example/jobs"],
                     "target_roles": ["PhD Researcher", "Postdoctoral Researcher"],
                     "posted_within_days": 7,

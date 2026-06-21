@@ -1,5 +1,9 @@
 import { labelize } from "../../lib/formatters";
 
+function requiredLabel(field) {
+  return field?.required ? `${field.label} *` : field?.label;
+}
+
 export function WorkspaceDocumentPreviewSection({
   FieldRenderer,
   dynamicOptions,
@@ -12,6 +16,11 @@ export function WorkspaceDocumentPreviewSection({
   selectedWorkspaceCvMissing,
   updateSetting,
 }) {
+  const visibleFields =
+    effectiveDocumentPreviewDocuments.cv_template === "plain"
+      ? fields.filter((field) => field.id !== "include_photo")
+      : fields;
+
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(320px,1.1fr)]">
       <div className="space-y-4">
@@ -25,9 +34,9 @@ export function WorkspaceDocumentPreviewSection({
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          {fields.map((field) => (
+          {visibleFields.map((field) => (
             <label className="space-y-2" key={field.id}>
-              <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+              <span className="block text-sm font-semibold text-on-surface">{requiredLabel(field)}</span>
               <FieldRenderer
                 dynamicOptions={dynamicOptions}
                 field={field}

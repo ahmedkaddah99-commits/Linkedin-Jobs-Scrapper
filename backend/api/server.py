@@ -16,6 +16,7 @@ from hashlib import sha256
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -2210,8 +2211,14 @@ def _merge_document_metadata(existing_documents: dict, documents_payload: dict) 
     raw_web_cv_template = str(
         documents_payload.get("web_cv_template")
         or existing_documents.get("web_cv_template")
-        or "ats_single_column"
+        or "plain"
     ).strip()
+    cv_template = normalize_cv_template_id(
+        documents_payload.get("cv_template") or existing_documents.get("cv_template") or "plain"
+    )
+    include_photo = bool(documents_payload.get("include_photo", existing_documents.get("include_photo", True)))
+    if cv_template == "plain":
+        include_photo = False
 
     return {
         "generate_docx": bool(documents_payload.get("generate_docx", existing_documents.get("generate_docx", True))),
@@ -2219,13 +2226,11 @@ def _merge_document_metadata(existing_documents: dict, documents_payload: dict) 
         "export_tracker": bool(documents_payload.get("export_tracker", existing_documents.get("export_tracker", True))),
         "export_package": bool(documents_payload.get("export_package", existing_documents.get("export_package", True))),
         "file_naming": str(documents_payload.get("file_naming") or existing_documents.get("file_naming") or "workspace_job_title"),
-        "cv_template": normalize_cv_template_id(
-            documents_payload.get("cv_template") or existing_documents.get("cv_template") or "classic"
-        ),
+        "cv_template": cv_template,
         "cv_color_scheme": str(documents_payload.get("cv_color_scheme") or existing_documents.get("cv_color_scheme") or "classic_navy"),
         "cv_font": str(documents_payload.get("cv_font") or existing_documents.get("cv_font") or "Calibri"),
-        "include_photo": bool(documents_payload.get("include_photo", existing_documents.get("include_photo", True))),
-        "web_cv_template": "plain" if raw_web_cv_template == "teal_resume" else raw_web_cv_template,
+        "include_photo": include_photo,
+        "web_cv_template": normalize_cv_template_id(raw_web_cv_template),
         "web_cv_font": str(
             documents_payload.get("web_cv_font")
             or existing_documents.get("web_cv_font")
@@ -2233,7 +2238,7 @@ def _merge_document_metadata(existing_documents: dict, documents_payload: dict) 
             or existing_documents.get("cv_font")
             or "Aptos"
         ),
-        "web_cv_show_photo": bool(documents_payload.get("web_cv_show_photo", default_web_cv_show_photo)),
+        "web_cv_show_photo": bool(cv_template != "plain" and documents_payload.get("web_cv_show_photo", default_web_cv_show_photo)),
         "web_cv_palette": _merge_web_cv_palette(existing_web_cv_palette, payload_web_cv_palette),
         "master_career_profile_asset_id": str(
             documents_payload.get("master_career_profile_asset_id")
@@ -2340,18 +2345,23 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
     if github_url and not workspace_has_value("github_url"):
         overrides.setdefault("github_url", github_url)
 
+    effective_cv_template = normalize_cv_template_id(
+        workspace_settings.get("cv_template") or documents.get("cv_template") or "plain"
+    )
+
     if not workspace_has_value("cv_font"):
         overrides.setdefault("cv_font", str(documents.get("cv_font") or "Calibri"))
     if not workspace_has_value("cv_template"):
-        overrides.setdefault("cv_template", str(documents.get("cv_template") or "classic"))
+        overrides.setdefault("cv_template", effective_cv_template)
     if not workspace_has_value("cv_color_scheme"):
         overrides.setdefault("cv_color_scheme", str(documents.get("cv_color_scheme") or "classic_navy"))
     if not workspace_has_value("include_photo"):
-        overrides.setdefault("include_photo", bool(documents.get("include_photo", True)))
+        overrides.setdefault("include_photo", bool(effective_cv_template != "plain" and documents.get("include_photo", True)))
 
     include_photo_enabled = workspace_settings.get("include_photo")
     if include_photo_enabled is None:
         include_photo_enabled = bool(documents.get("include_photo", True))
+    include_photo_enabled = bool(effective_cv_template != "plain" and include_photo_enabled)
     if include_photo_enabled and not workspace_has_value("profile_image"):
         photo_path = str(profile.get("photo_path") or "")
         if photo_path:
@@ -4620,9 +4630,12 @@ def _candidate_asset_to_document_item(
     if asset_kind == "workspace_cv":
         asset_path = str(asset.get("file", {}).get("path") or asset.get("path") or "").strip()
         cv_text = (
-            extract_cv_text_from_path(asset_path)
-            if asset_path and Path(asset_path).is_file()
-            else str(metadata.get("source_text") or "")
+            str(metadata.get("source_text") or "").strip()
+            or (
+                extract_cv_text_from_path(asset_path)
+                if asset_path and Path(asset_path).is_file()
+                else ""
+            )
         )
         preview_profile = _build_workspace_cv_preview_profile(
             cv_text,

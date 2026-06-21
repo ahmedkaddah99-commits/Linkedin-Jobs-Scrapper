@@ -88,30 +88,36 @@ export function useWorkspaceRunActions({
           body: validationPayload,
         });
         if (!validation.valid) {
+          const fieldErrorDetails = (validation.field_errors || [])
+            .map((item) => item?.message)
+            .filter(Boolean);
           setActionState({
             ...EMPTY_ACTION_STATE,
             workspaceId,
             error: "Run blocked until the workspace source setup is fixed.",
-            details: (validation.source_results || [])
-              .filter((result) => result.status !== "valid")
-              .flatMap((result) => {
-                const prefix = resolveSourceName(result.source_id);
-                const messages = [];
-                if (result.summary) {
-                  messages.push(`${prefix}: ${result.summary}`);
-                }
-                if (Array.isArray(result.field_errors)) {
-                  for (const item of result.field_errors) {
-                    if (item?.message) {
-                      messages.push(`${prefix}: ${item.message}`);
+            details: [
+              ...fieldErrorDetails,
+              ...(validation.source_results || [])
+                .filter((result) => result.status !== "valid")
+                .flatMap((result) => {
+                  const prefix = resolveSourceName(result.source_id);
+                  const messages = [];
+                  if (result.summary) {
+                    messages.push(`${prefix}: ${result.summary}`);
+                  }
+                  if (Array.isArray(result.field_errors)) {
+                    for (const item of result.field_errors) {
+                      if (item?.message) {
+                        messages.push(`${prefix}: ${item.message}`);
+                      }
                     }
                   }
-                }
-                if (result.details?.length) {
-                  messages.push(...result.details.map((detail) => `${prefix}: ${detail}`));
-                }
-                return messages.length ? messages : [`${prefix}: Fix this source before running.`];
-              }),
+                  if (result.details?.length) {
+                    messages.push(...result.details.map((detail) => `${prefix}: ${detail}`));
+                  }
+                  return messages.length ? messages : [`${prefix}: Fix this source before running.`];
+                }),
+            ],
           });
           return;
         }

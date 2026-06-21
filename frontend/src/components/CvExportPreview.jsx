@@ -2,13 +2,21 @@ export const PROFILE_PLACEHOLDER_URL =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuCEbDDRgu4_REnkpR4gbSify0khawEFxHuQHLBm7Xbd6BmM7LDM-dlp8wOKL0QkSDuiFg7g9UDpYPZnV2uV8Qmu5cxn1MBriXeVmXUz8EGMsgieO36lJEpcY5FCDph2ooQGzwpKRq5qwQluOCY4JB_gfySIUY2T0ozlVp3DEmdnT9aCfADFkC1BXeteFPTxYhtUsABzZLWUOD6fNpuVFVFLjuxpQaEgkpVd_bvuz61H_FfJkq5V_4CESVQjz3tEa3rwtGfzcKHXwJE";
 
 const DEFAULT_TEMPLATE = {
-  id: "classic",
-  label: "Classic",
+  id: "plain",
+  label: "Plain",
 };
 
 const PLAIN_TEMPLATE = {
   id: "plain",
   label: "Plain",
+};
+
+const TEMPLATE_ALIASES = {
+  classic: "plain",
+  modern: "plain",
+  compact: "plain",
+  europass: "plain",
+  teal_resume: "plain",
 };
 
 const DEFAULT_SCHEME = {
@@ -59,6 +67,11 @@ function firstNonEmpty(...values) {
   return "";
 }
 
+function normalizeTemplateId(value) {
+  const normalizedValue = String(value || "").trim().toLowerCase();
+  return TEMPLATE_ALIASES[normalizedValue] || normalizedValue || "plain";
+}
+
 function normalizeBullets(item) {
   if (Array.isArray(item?.bullets) && item.bullets.length) {
     return item.bullets.map((entry) => String(entry || "").trim()).filter(Boolean);
@@ -73,7 +86,7 @@ function normalizeBullets(item) {
 }
 
 function buildPreviewModel(profile = {}, documents = {}, options = {}) {
-  const templateId = documents.cv_template === "teal_resume" ? "plain" : documents.cv_template;
+  const templateId = normalizeTemplateId(documents.cv_template);
   const template =
     (options.cv_templates || []).find((item) => item.id === templateId) ||
     (templateId === "plain" ? PLAIN_TEMPLATE : DEFAULT_TEMPLATE);

@@ -11,6 +11,7 @@ import {
   buildCvStudioHtml,
   buildCvStudioState,
   buildWorkspacePreviewState,
+  findCvTemplate,
   matchPresetByPalette,
   stashCvStudioSeed,
 } from "../lib/cvStudio";
@@ -703,6 +704,13 @@ function DocumentsTab({ draft, updateSection }) {
     () => matchPresetByPalette(documents.web_cv_palette || {}),
     [documents.web_cv_palette],
   );
+  const browserTemplateSupportsPhoto = Boolean(
+    findCvTemplate(browserStudioState.templateId).supportsPhoto,
+  );
+  const selectedExportTemplate = (options.cv_templates || []).find(
+    (template) => template.id === documents.cv_template,
+  );
+  const exportTemplateSupportsPhoto = Boolean(selectedExportTemplate?.supports_photo);
 
   function updateBrowserPalette(fieldId, value) {
     updateSection("documents", {
@@ -812,12 +820,14 @@ function DocumentsTab({ draft, updateSection }) {
                   value={documents.web_cv_font || documents.cv_font || ""}
                 />
               </SectionField>
-              <ToggleRow
-                checked={Boolean(documents.web_cv_show_photo ?? documents.include_photo)}
-                description="Keeps an optional image slot in the browser templates."
-                label="Show Photo In HTML CV"
-                onChange={(value) => updateSection("documents", { web_cv_show_photo: value })}
-              />
+              {browserTemplateSupportsPhoto ? (
+                <ToggleRow
+                  checked={Boolean(documents.web_cv_show_photo ?? documents.include_photo)}
+                  description="Keeps an optional image slot in the browser templates."
+                  label="Show Photo In HTML CV"
+                  onChange={(value) => updateSection("documents", { web_cv_show_photo: value })}
+                />
+              ) : null}
             </div>
 
             <p className="rounded-xl bg-surface-container-low px-4 py-3 text-xs leading-6 text-on-surface-variant">
@@ -919,12 +929,14 @@ function DocumentsTab({ draft, updateSection }) {
                     label="Export Package"
                     onChange={(value) => updateSection("documents", { export_package: value })}
                   />
-                  <ToggleRow
-                    checked={Boolean(documents.include_photo)}
-                    description="Embed your uploaded square profile photo in the top-right of generated CVs."
-                    label="Include Photo In CV"
-                    onChange={(value) => updateSection("documents", { include_photo: value })}
-                  />
+                  {exportTemplateSupportsPhoto ? (
+                    <ToggleRow
+                      checked={Boolean(documents.include_photo)}
+                      description="Embed your uploaded square profile photo in the top-right of generated CVs."
+                      label="Include Photo In CV"
+                      onChange={(value) => updateSection("documents", { include_photo: value })}
+                    />
+                  ) : null}
                 </div>
 
                 <div className="max-w-md">

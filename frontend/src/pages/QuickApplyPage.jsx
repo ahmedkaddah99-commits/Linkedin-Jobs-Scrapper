@@ -142,7 +142,7 @@ function buildInitialQuickApplySettings({
       "personalization_scope",
       "baseline_cv_only",
     ),
-    cv_template: String(documents.cv_template || "classic"),
+    cv_template: String(documents.cv_template || "plain"),
     cv_color_scheme: String(documents.cv_color_scheme || "classic_navy"),
     cv_font: String(documents.cv_font || "Calibri"),
     include_photo: documents.include_photo ?? fieldDefault(builderCatalog, "include_photo", true),

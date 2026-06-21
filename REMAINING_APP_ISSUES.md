@@ -11,14 +11,15 @@ Use this file as the main source of truth for Runr app issues, including open is
   - [Persistent After Attempted Fix Template](#persistent-after-attempted-fix-template)
   - [Resolved Issue Template](#resolved-issue-template)
 - [Resolved Issues](#resolved-issues)
-  - [Resolved Issue: Quick Apply Requires a Configured Workspace](#resolved-issue-quick-apply-requires-a-configured-workspace)
-  - [Resolved Issue: System-Created Workspaces Should Not Appear as User Workspaces](#resolved-issue-system-created-workspaces-should-not-appear-as-user-workspaces)
-  - [Resolved Issue: Missing Workspace Delete Button](#resolved-issue-missing-workspace-delete-button)
-  - [Resolved Issue: Missing Workspace QA Checklist](#resolved-issue-missing-workspace-qa-checklist)
-  - [Resolved Issue: Runs QA Checklist Needed for Filtering Quality](#resolved-issue-runs-qa-checklist-needed-for-filtering-quality)
-  - [Resolved Issue: ATS QA Testing Is Unclear and May Not Guarantee ATS Passing](#resolved-issue-ats-qa-testing-is-unclear-and-may-not-guarantee-ats-passing)
-  - [Resolved Issue: Application Tracker Takes Too Long to Load](#resolved-issue-application-tracker-takes-too-long-to-load)
+  - [Resolved Issue #3: Quick Apply Requires a Configured Workspace](#resolved-issue-3-quick-apply-requires-a-configured-workspace)
+  - [Resolved Issue #4: System-Created Workspaces Should Not Appear as User Workspaces](#resolved-issue-4-system-created-workspaces-should-not-appear-as-user-workspaces)
+  - [Resolved Issue #5: Missing Workspace Delete Button](#resolved-issue-5-missing-workspace-delete-button)
+  - [Resolved Issue #6: Missing Workspace QA Checklist](#resolved-issue-6-missing-workspace-qa-checklist)
+  - [Resolved Issue #7: Runs QA Checklist Needed for Filtering Quality](#resolved-issue-7-runs-qa-checklist-needed-for-filtering-quality)
+  - [Resolved Issue #8: ATS QA Testing Is Unclear and May Not Guarantee ATS Passing](#resolved-issue-8-ats-qa-testing-is-unclear-and-may-not-guarantee-ats-passing)
+  - [Resolved Issue #9: Application Tracker Takes Too Long to Load](#resolved-issue-9-application-tracker-takes-too-long-to-load)
 - [Issues Not Yet Resolved](#issues-not-yet-resolved)
+  - [Issue #10: Workspace Workflow Is Slow, Under-Validated, and Produces Poor CV Outputs](#issue-10-workspace-workflow-is-slow-under-validated-and-produces-poor-cv-outputs)
   - [Issue #1: Reset Error / Tool Keeps Refreshing](#issue-1-reset-error--tool-keeps-refreshing)
   - [Issue #2: Dashboard Takes 25-30 Seconds to Load](#issue-2-dashboard-takes-25-30-seconds-to-load)
 
@@ -31,6 +32,8 @@ Copy the rendered block below when adding a new issue or moving an issue to reso
 Standard rule for all new issues: add a `[Go up](#table-of-contents)` link directly below every new section heading and issue heading.
 
 Standard sorting rule: keep issues ordered from smallest to largest by original issue number within each issue section.
+
+Original issue number rule: keep the original issue number in every issue heading, including after an issue is moved to `Resolved Issues`. Resolved headings must use `Resolved Issue #N: Short Title`, where `#N` is the original issue number.
 
 External stack rule: if an issue may involve infrastructure, hosting, auth, database, routing, caching, CDN, DNS, or environment variables, document the relevant non-code systems explicitly. Do not treat Render, Cloudflare, Turso, OAuth providers, email providers, or similar services as code-only problems.
 
@@ -144,11 +147,11 @@ Do not move this issue back to resolved until it has been verified in the same e
 
 [Go up](#table-of-contents)
 
-#### Resolved Issue: Short Title
+#### Resolved Issue #N: Short Title
 
 [Go up](#table-of-contents)
 
-**Original issue:** Link to the original issue section or issue number.
+**Original issue:** Issue #N
 
 **Status:** Resolved
 
@@ -192,7 +195,7 @@ List any non-blocking cleanup, monitoring, or related work that remains.
 
 <!-- Move fixed issues here and fill out the resolved issue template. -->
 
-#### Resolved Issue: Quick Apply Requires a Configured Workspace
+#### Resolved Issue #3: Quick Apply Requires a Configured Workspace
 
 [Go up](#table-of-contents)
 
@@ -232,7 +235,7 @@ Not captured.
 
 Verify the deployed Render environment after release.
 
-#### Resolved Issue: System-Created Workspaces Should Not Appear as User Workspaces
+#### Resolved Issue #4: System-Created Workspaces Should Not Appear as User Workspaces
 
 [Go up](#table-of-contents)
 
@@ -272,7 +275,7 @@ Not captured.
 
 Verify against deployed data to catch any additional legacy internal workspace names not present in the issue notes.
 
-#### Resolved Issue: Missing Workspace Delete Button
+#### Resolved Issue #5: Missing Workspace Delete Button
 
 [Go up](#table-of-contents)
 
@@ -314,7 +317,7 @@ Verify the button placement visually in deployed UI after release.
 
 ---
 
-#### Resolved Issue: Missing Workspace QA Checklist
+#### Resolved Issue #6: Missing Workspace QA Checklist
 
 [Go up](#table-of-contents)
 
@@ -356,7 +359,7 @@ Deploy to Render and have QA validate a real workspace by opening Workspaces, se
 
 ---
 
-#### Resolved Issue: Runs QA Checklist Needed for Filtering Quality
+#### Resolved Issue #7: Runs QA Checklist Needed for Filtering Quality
 
 [Go up](#table-of-contents)
 
@@ -398,7 +401,7 @@ Deploy to Render and have QA inspect a completed run with language rejections to
 
 ---
 
-#### Resolved Issue: ATS QA Testing Is Unclear and May Not Guarantee ATS Passing
+#### Resolved Issue #8: ATS QA Testing Is Unclear and May Not Guarantee ATS Passing
 
 [Go up](#table-of-contents)
 
@@ -440,7 +443,7 @@ Deploy and verify the tracker card against a real generated CV whose best ATS sc
 
 ---
 
-#### Resolved Issue: Application Tracker Takes Too Long to Load
+#### Resolved Issue #9: Application Tracker Takes Too Long to Load
 
 [Go up](#table-of-contents)
 
@@ -487,6 +490,96 @@ Deploy to Render and measure the production `/tracker` load separately from expl
 [Go up](#table-of-contents)
 
 <!-- Add issues below this line. -->
+
+#### Issue #10: Workspace Workflow Is Slow, Under-Validated, and Produces Poor CV Outputs
+
+[Go up](#table-of-contents)
+
+**Status:** Local fix implemented; production timing verification pending
+
+**Priority:** Critical
+
+**Area:** Frontend / Backend / Workspace / CV Upload / CV Templates / Test Runs / Performance
+
+**Environment:** Deployed app and local reproduction needed; reported from desktop browser recording
+
+**URL or screen:** Workspace creation, CV upload, CV template selection, workspace CV loading, and workspace test run
+
+**What happens:**
+
+The workspace workflow is too slow and permits invalid setup. Uploading and loading a text-based CV takes far longer than expected, workspace creation can proceed without a selected country, most CV templates produce poor PDF output, and test runs take a long time to start before failing.
+
+**What should happen:**
+
+Text-based CV upload and load should be near-instant for a normal 2-page document, required workspace fields should block creation until complete, CV templates should produce normal readable PDFs, and test runs should start quickly or fail fast with a clear error.
+
+**Steps to reproduce:**
+
+1. Open the workspace flow.
+2. Upload a text-based CV with no photos.
+3. Create or edit a workspace without selecting a country.
+4. Review available CV templates and generated PDF output.
+5. Open the workspace CV after upload.
+6. Start a test run.
+
+**Reported problems, solution, and success criteria:**
+
+1. **CV upload takes too long for a text-based CV.**
+   **Solution:** Measure the upload path end to end before changing behavior: browser upload time, API request time, file parsing time, storage/database write time, and any AI/document processing triggered synchronously. Keep the upload endpoint responsible only for accepting, validating, extracting text, and saving the CV. Move expensive enrichment, scoring, or regeneration work behind an explicit later action or background job.
+   **Success criteria:** A normal 2-page text CV uploads and returns a usable workspace document state in under 2 seconds on local dev and under 5 seconds on the deployed app. The issue notes include the measured root cause, such as slow parsing, synchronous AI work, storage latency, database latency, or duplicate frontend requests.
+
+2. **Workspace can be created without selecting a country.**
+   **Solution:** Treat country as a required field in both frontend validation and backend/API validation. Mark every required workspace field with `*`, disable or reject submit while required fields are missing, and return field-level errors from the backend if a client bypasses the UI.
+   **Success criteria:** The country field visibly shows as required, creating a workspace without a country is blocked in the UI, the API rejects missing country with a clear validation error, and an automated check covers the missing-country case.
+
+3. **All CV templates except `Plain` should be removed or replaced.**
+   **Solution:** Delete or hide the current non-Plain templates if they rely on React-rendered layouts that waste space or export poorly to PDF. Keep `Plain` as the reliable baseline, then add only simple ATS-friendly document templates that render like normal CVs. Photo upload should be shown only when the selected template supports photos.
+   **Success criteria:** Non-Plain templates that produce poor PDFs are no longer selectable. Any remaining or replacement template exports to a readable PDF with normal spacing, no broken formatting, and no unexpected blank space. The photo control appears only for templates with explicit photo support.
+
+4. **Opening/loading a text-only CV takes far too long.**
+   **Solution:** Separate CV display from expensive processing. Cache extracted CV text and structured fields after upload, render the saved parsed result immediately, and avoid re-parsing or regenerating documents on every workspace view. Add timing logs around CV fetch, parse, and render to prove where the delay was.
+   **Success criteria:** Opening an already-uploaded 2-page text CV renders the saved content in under 1 second locally and under 3 seconds on the deployed app. Reloading the workspace does not trigger duplicate parse/generation calls for the same CV unless the CV changed.
+
+5. **Test run takes an incredibly long time to start and then fails.**
+   **Solution:** Add a preflight validation step before starting the test run: required workspace fields, CV availability, selected country, selected job sources/search settings, auth/session state, and backend worker/API readiness. Start the run only after preflight passes, and fail fast with a specific actionable error when setup is invalid. Measure queue/start latency separately from run execution latency.
+   **Success criteria:** A valid workspace test run leaves the starting state within 5 seconds or shows a clear queued/running state with progress. An invalid workspace fails preflight in under 2 seconds with the exact missing requirement. Test run failures include a user-visible reason and enough backend log context to debug the failing step.
+
+**Notes / clues:**
+
+The user explicitly requested the root cause for the slow CV upload, not only a symptom fix. Do not mark the performance parts resolved without timings that explain why the delay happened.
+
+Ponytail direction for the implementation: remove poor templates before adding replacements, use existing validation paths before adding new abstractions, and keep upload/view paths limited to the minimum synchronous work needed for the user to continue.
+
+**Local fix implemented on 2026-06-21:**
+
+- CV upload now skips OCR for workspace/master CV assets and returns `timings_ms` for body read, multipart parsing, text extraction, profile parsing, asset storage, metadata persistence, and total upload time.
+- Workspace CV listing/preview now prefers cached `source_text` metadata before re-reading or extracting from the original uploaded file.
+- Workspace creation and run preflight now reject missing country through backend `field_errors`, while the frontend marks required fields with `*` and blocks saving without a country.
+- CV template options now expose only `Plain`; legacy template IDs normalize to `plain`; photo toggles are hidden/disabled when the effective template does not support photos.
+- Test-run start now surfaces top-level validation errors before source-specific details so invalid workspaces fail fast with the missing requirement.
+
+**Verification completed locally:**
+
+- Backend/API checks cover Plain-only template options, legacy template normalization, missing-country save validation, deleted-CV run preflight, and CV-upload timing payload.
+- Frontend check passed with ESLint and production Vite build.
+
+**Verification still required before moving to resolved:**
+
+- Measure a real 2-page text CV upload locally and on the deployed app, then record before/after timings and the dominant slow step.
+- Measure opening an already-uploaded text CV locally and on the deployed app.
+- Measure valid and invalid test-run start latency locally and on the deployed app.
+
+**Screenshots / evidence:**
+
+User-provided issue card: `issue #10`, titled `Workspace workflow`.
+
+User-provided recording: `c:\Users\ahmed\Videos\Captures\runr. frontend and 10 more pages - School - Microsoft Edge 2026-06-21 17-31-12.mp4`
+
+**Resolution rule:**
+
+Do not move this issue to resolved until each numbered success criterion above is verified. Performance fixes must include measured before/after timings for upload, CV load, and test-run start.
+
+---
 
 #### Issue #1: Reset Error / Tool Keeps Refreshing
 

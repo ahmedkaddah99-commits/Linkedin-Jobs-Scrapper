@@ -37,6 +37,7 @@ from .rendering import (
     DEFAULT_LANGUAGES,
     create_cv_document,
     create_cv_pdf_document,
+    normalize_cv_template_id,
     resolve_assets_profile_png,
     resolve_optional_image_path,
     resolve_profile_image_path,
@@ -296,9 +297,9 @@ def main() -> int:
         "",
     )
     default_cv_font = cfg_str(config, ("candidate", "cv_font"), DEFAULT_CV_FONT) or DEFAULT_CV_FONT
-    default_cv_template = "classic"
+    default_cv_template = "plain"
     default_cv_color_scheme = "classic_navy"
-    default_include_photo = cfg_bool(config, ("candidate", "include_photo"), True)
+    default_include_photo = False
     default_languages = [str(item) for item in cfg_list(config, ("candidate", "languages"), DEFAULT_LANGUAGES)]
     default_stage4_extra_prompt = cfg_str(config, ("ai", "prompts", "stage4_extra_instructions"), "")
     default_stage4_prompt_override = cfg_str(config, ("ai", "prompts", "stage4_prompt_override"), "")
@@ -517,9 +518,11 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
     candidate_name = (args.candidate_name or DEFAULT_CANDIDATE_NAME).strip() or DEFAULT_CANDIDATE_NAME
     candidate_email = (args.candidate_email or DEFAULT_CANDIDATE_EMAIL).strip() or DEFAULT_CANDIDATE_EMAIL
     cv_font_name = (args.cv_font or DEFAULT_CV_FONT).strip() or DEFAULT_CV_FONT
-    cv_template_id = str(getattr(args, "cv_template", "classic") or "classic").strip() or "classic"
+    cv_template_id = normalize_cv_template_id(getattr(args, "cv_template", "plain"))
     cv_color_scheme = str(getattr(args, "cv_color_scheme", "classic_navy") or "classic_navy").strip() or "classic_navy"
-    include_photo = bool(getattr(args, "include_photo", True))
+    include_photo = bool(getattr(args, "include_photo", False))
+    if cv_template_id == "plain":
+        include_photo = False
     selected_cv_generation_mode = normalize_cv_generation_mode(
         getattr(args, "cv_generation_mode", DEFAULT_CV_GENERATION_MODE)
     )

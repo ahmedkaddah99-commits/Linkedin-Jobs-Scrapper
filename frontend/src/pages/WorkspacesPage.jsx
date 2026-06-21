@@ -125,6 +125,7 @@ const TARGETING_FIELD_FALLBACKS = {
     options: [],
     user_facing: true,
     frontend_visible: true,
+    required: true,
     section: "targeting",
     sort_order: 32,
   },
@@ -1370,6 +1371,10 @@ function FieldRenderer({ field, value, onChange, dynamicOptions = {}, formState 
   );
 }
 
+function requiredLabel(field) {
+  return field?.required ? `${field.label} *` : field?.label;
+}
+
 export default function WorkspacesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -1699,6 +1704,9 @@ export default function WorkspacesPage() {
     if (!form.sourceIds.length) {
       return "Choose one job source.";
     }
+    if (!selectedCountryCodes.length) {
+      return "Select a target country.";
+    }
     if (!resolvedModuleIds.length) {
       return "At least one automation module must stay enabled.";
     }
@@ -1714,6 +1722,7 @@ export default function WorkspacesPage() {
     form.settings.workspace_cv_asset_id,
     form.sourceIds.length,
     resolvedModuleIds.length,
+    selectedCountryCodes.length,
     selectedWorkspaceCvMissing,
   ]);
   const saveDisabled = Boolean(builderLoading || builderState.submitting || saveBlockedReason);
@@ -1956,7 +1965,6 @@ export default function WorkspacesPage() {
       if (uploadedAssetId) {
         updateSetting("workspace_cv_asset_id", uploadedAssetId);
       }
-      await refreshCvAssets().catch(() => undefined);
       setCvUploadState({
         uploading: false,
         message: uploadedAssetId
@@ -1964,6 +1972,7 @@ export default function WorkspacesPage() {
           : `Uploaded ${file.name}.`,
         error: "",
       });
+      refreshCvAssets().catch(() => undefined);
     } catch (uploadError) {
       setCvUploadState({
         uploading: false,
@@ -2476,12 +2485,15 @@ export default function WorkspacesPage() {
               title="Workspace Basics"
             >
             <div className="grid gap-4">
-              <input
-                className="rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
-                onChange={(event) => updateForm({ name: event.target.value })}
-                placeholder="Workspace name"
-                value={form.name}
-              />
+              <label className="space-y-2">
+                <span className="block text-sm font-semibold text-on-surface">Workspace name *</span>
+                <input
+                  className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                  onChange={(event) => updateForm({ name: event.target.value })}
+                  placeholder="Workspace name"
+                  value={form.name}
+                />
+              </label>
             </div>
             <textarea
               className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
@@ -2504,7 +2516,7 @@ export default function WorkspacesPage() {
                 <div className="grid gap-4 md:grid-cols-2">
                   {targetingFields.map((field) => (
                     <label className="space-y-2" key={field.id}>
-                      <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                      <span className="block text-sm font-semibold text-on-surface">{requiredLabel(field)}</span>
                       <FieldRenderer
                         dynamicOptions={dynamicFieldOptions}
                         field={field}
@@ -2526,7 +2538,7 @@ export default function WorkspacesPage() {
             <BuilderSection
               description="Choose one recurring source type for this workspace. Source-specific setup appears immediately after you select it."
               id="workspace-builder-sources"
-              title="Job Source"
+              title="Job Source *"
             >
               {availableSources.length ? (
                 <div className="grid gap-4 md:grid-cols-3">
@@ -2592,7 +2604,7 @@ export default function WorkspacesPage() {
                   {sourceFields.map((field) => (
                     <label className="space-y-2" key={field.id}>
                       <span className="block text-sm font-semibold text-on-surface">
-                        {field.type === "company_site_list" ? `${field.label} (Optional)` : field.label}
+                        {field.type === "company_site_list" ? `${field.label} (Optional)` : requiredLabel(field)}
                       </span>
                       <FieldRenderer
                         dynamicOptions={dynamicFieldOptions}
@@ -2702,7 +2714,7 @@ export default function WorkspacesPage() {
                   <div className="mt-4 grid gap-4 md:grid-cols-2">
                     {activeCvPromptFields.map((field) => (
                       <label className="space-y-2" key={field.id}>
-                        <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                        <span className="block text-sm font-semibold text-on-surface">{requiredLabel(field)}</span>
                         <FieldRenderer
                           dynamicOptions={dynamicFieldOptions}
                           field={field}
@@ -2744,7 +2756,7 @@ export default function WorkspacesPage() {
                         .map((field) => (
                           <label className="space-y-2" key={field.id}>
                             <span className="flex items-center gap-2 text-sm font-semibold text-on-surface">
-                              <span>{field.label}</span>
+                              <span>{requiredLabel(field)}</span>
                               {field.id === "posted_within_days" ? (
                                 <InfoHint
                                   content="This filter only applies when the job site publicly provides when the job was posted. Jobs with no public posting date are kept rather than guessed."
@@ -2797,7 +2809,7 @@ export default function WorkspacesPage() {
                     <div className="grid gap-4 md:grid-cols-2">
                       {fields.map((field) => (
                         <label className="space-y-2" key={field.id}>
-                          <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+                          <span className="block text-sm font-semibold text-on-surface">{requiredLabel(field)}</span>
                           <FieldRenderer
                             dynamicOptions={dynamicFieldOptions}
                             field={field}

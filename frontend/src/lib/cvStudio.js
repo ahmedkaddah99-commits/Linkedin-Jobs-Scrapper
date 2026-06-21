@@ -99,62 +99,21 @@ export const WEB_CV_COLOR_PRESETS = [
 
 export const WEB_CV_TEMPLATES = [
   {
-    id: "ats_single_column",
-    label: "ATS Single Column",
-    shortLabel: "ATS",
-    description: "Clean linear structure for fast tailoring and ATS-safe export.",
-    mood: "Direct, robust, low-risk",
-  },
-  {
-    id: "editorial_sidebar",
-    label: "Editorial Sidebar",
-    shortLabel: "Sidebar",
-    description: "Elegant left rail with a soft editorial hierarchy.",
-    mood: "Balanced, polished, readable",
-  },
-  {
-    id: "mono_nav",
-    label: "Mono Nav",
-    shortLabel: "Mono",
-    description: "Modern left navigation strip with a compact content flow.",
-    mood: "Modern, compact, focused",
-  },
-  {
-    id: "europass_lite",
-    label: "Europass Lite",
-    shortLabel: "EU",
-    description: "Europe-friendly structure without the heavy default Europass look.",
-    mood: "Familiar, structured, practical",
-  },
-  {
-    id: "signal_header",
-    label: "Signal Header",
-    shortLabel: "Signal",
-    description: "Bold banner header with confident section grouping.",
-    mood: "Strong, modern, expressive",
-  },
-  {
-    id: "ledger_split",
-    label: "Ledger Split",
-    shortLabel: "Ledger",
-    description: "Asymmetric grid with compact detail blocks and dense experience flow.",
-    mood: "Sharp, technical, dense",
-  },
-  {
     id: "plain",
     label: "Plain",
     shortLabel: "Plain",
     description: "Photo-free classic resume with a configurable name rule and compact skills.",
     mood: "Classic, polished, approachable",
+    supportsPhoto: false,
   },
 ];
 
 const DOCX_TO_WEB_TEMPLATE_MAP = {
   teal_resume: "plain",
-  classic: "ats_single_column",
-  modern: "signal_header",
-  compact: "mono_nav",
-  europass: "europass_lite",
+  classic: "plain",
+  modern: "plain",
+  compact: "plain",
+  europass: "plain",
   plain: "plain",
 };
 
@@ -318,7 +277,8 @@ export function normalizePalette(value) {
 }
 
 export function findCvTemplate(templateId) {
-  const normalizedTemplateId = templateId === "teal_resume" ? "plain" : templateId;
+  const normalizedTemplateId =
+    DOCX_TO_WEB_TEMPLATE_MAP[String(templateId || "").trim().toLowerCase()] || templateId;
   return (
     WEB_CV_TEMPLATES.find((template) => template.id === normalizedTemplateId) ||
     WEB_CV_TEMPLATES[0]
@@ -456,10 +416,11 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
     ...normalizedSession,
     templateId: findCvTemplate(normalizedSession.templateId || baseState.templateId).id,
     fontFamily: String(normalizedSession.fontFamily || baseState.fontFamily || "Aptos"),
-    showPhoto:
-      typeof normalizedSession.showPhoto === "boolean"
+    showPhoto: findCvTemplate(normalizedSession.templateId || baseState.templateId).supportsPhoto
+      ? typeof normalizedSession.showPhoto === "boolean"
         ? normalizedSession.showPhoto
-        : Boolean(baseState.showPhoto),
+        : Boolean(baseState.showPhoto)
+      : false,
     palette: normalizePalette(normalizedSession.palette || baseState.palette),
     outputLanguage: normalizeOutputLanguage(normalizedSession.outputLanguage || baseState.outputLanguage),
     experience: normalizeExperienceItems(normalizedSession.experience || baseState.experience),
@@ -467,10 +428,11 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
 }
 
 export function buildStudioDocumentPatch(state) {
+  const template = findCvTemplate(state.templateId);
   return {
-    web_cv_template: findCvTemplate(state.templateId).id,
+    web_cv_template: template.id,
     web_cv_font: String(state.fontFamily || "Aptos"),
-    web_cv_show_photo: Boolean(state.showPhoto),
+    web_cv_show_photo: Boolean(template.supportsPhoto && state.showPhoto),
     web_cv_palette: normalizePalette(state.palette || {}),
   };
 }
@@ -508,9 +470,10 @@ export function buildWorkspacePreviewDocuments(sharedDocuments = {}, workspaceSe
   const normalizedSettings =
     workspaceSettings && typeof workspaceSettings === "object" ? workspaceSettings : {};
   const rawCvTemplate = String(
-    normalizedSettings.cv_template || baseDocuments.cv_template || "classic",
+    normalizedSettings.cv_template || baseDocuments.cv_template || "plain",
   );
-  const cvTemplate = rawCvTemplate === "teal_resume" ? "plain" : rawCvTemplate;
+  const cvTemplate =
+    DOCX_TO_WEB_TEMPLATE_MAP[rawCvTemplate.trim().toLowerCase()] || rawCvTemplate;
   const cvColorScheme = String(
     normalizedSettings.cv_color_scheme || baseDocuments.cv_color_scheme || "classic_navy",
   );

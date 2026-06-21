@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Mapping
 from backend.capabilities.tailored_documents.rendering import (
     create_cv_document,
     convert_docx_to_pdf,
+    normalize_cv_template_id,
     resolve_assets_profile_png,
     resolve_optional_image_path,
     resolve_profile_image_path,
@@ -276,6 +277,12 @@ def write_docx(path: Path, text: str) -> bool:
 def build_stage4_args(config: dict | None = None, overrides: Mapping[str, Any] | None = None) -> SimpleNamespace:
     config = config or load_reusable_packages_config()
     style_config = load_job_seeker_config()
+    cv_template = normalize_cv_template_id(
+        job_cfg_str(style_config, ("candidate", "cv_template"), "plain") or "plain"
+    )
+    include_photo = bool(job_cfg_bool(style_config, ("candidate", "include_photo"), False))
+    if cv_template == "plain":
+        include_photo = False
     profile_links = []
     for key, default_text, default_icon in (("linkedin", "LinkedIn", "in"), ("github", "GitHub", "GH")):
         profile_links.append(
@@ -297,9 +304,9 @@ def build_stage4_args(config: dict | None = None, overrides: Mapping[str, Any] |
         "availability": cfg_str(config, ("candidate", "availability"), ""),
         "languages": [str(item) for item in cfg_list(config, ("candidate", "languages"), []) if str(item).strip()],
         "profile_image": job_cfg_str(style_config, ("candidate", "profile_image_path"), ""),
-        "include_photo": job_cfg_bool(style_config, ("candidate", "include_photo"), True),
+        "include_photo": include_photo,
         "cv_font": job_cfg_str(style_config, ("candidate", "cv_font"), "Calibri"),
-        "cv_template": job_cfg_str(style_config, ("candidate", "cv_template"), "classic") or "classic",
+        "cv_template": cv_template,
         "cv_color_scheme": job_cfg_str(style_config, ("candidate", "cv_color_scheme"), "classic_navy")
         or "classic_navy",
         "profile_links": profile_links,
@@ -334,7 +341,10 @@ def run_stage4_pipeline(args, *, config: dict | None = None, jobs: List[Dict] | 
     baseline_profile = _parse_baseline_profile(baseline_cv_text)
     cv_index_records: List[Dict] = []
     normalized_profile_input = normalize_windows_env_path(str(getattr(args, "profile_image", "") or ""))
-    include_photo = bool(getattr(args, "include_photo", True))
+    cv_template = normalize_cv_template_id(str(getattr(args, "cv_template", "plain") or "plain"))
+    include_photo = bool(getattr(args, "include_photo", False))
+    if cv_template == "plain":
+        include_photo = False
     profile_image_path = resolve_profile_image_path(normalized_profile_input) if include_photo else None
     if include_photo and not profile_image_path:
         profile_image_path = resolve_assets_profile_png(role_cv_output_dir.parent)
@@ -392,7 +402,7 @@ def run_stage4_pipeline(args, *, config: dict | None = None, jobs: List[Dict] | 
                 candidate_name=args.candidate_name,
                 candidate_email=args.candidate_email,
                 cv_font_name=str(getattr(args, "cv_font", "Calibri") or "Calibri"),
-                cv_template_id=str(getattr(args, "cv_template", "classic") or "classic"),
+                cv_template_id=cv_template,
                 cv_color_scheme=str(getattr(args, "cv_color_scheme", "classic_navy") or "classic_navy"),
                 languages=list(args.languages),
                 profile_image_path=profile_image_path,

@@ -12,6 +12,7 @@ from backend.capabilities.tailored_documents.rendering import (
     CV_COLOR_SCHEMES,
     CV_FONT_OPTIONS,
     CV_TEMPLATE_PRESETS,
+    normalize_cv_template_id,
 )
 from backend.capabilities.tailored_documents.modes import (
     AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
@@ -402,7 +403,11 @@ def _boolean_options(true_label: str, false_label: str) -> list[dict[str, Any]]:
 
 
 def _document_template_options() -> list[dict[str, str]]:
-    return [{"value": item["id"], "label": item["label"]} for item in CV_TEMPLATE_PRESETS.values()]
+    return [
+        {"value": item["id"], "label": item["label"]}
+        for item in CV_TEMPLATE_PRESETS.values()
+        if item["id"] == "plain"
+    ]
 
 
 def _document_color_scheme_options() -> list[dict[str, str]]:
@@ -1397,7 +1402,7 @@ def _annotate_builder_field(field_definition: dict) -> dict:
         field["description"] = (
             "Add the roles this workspace should target so search keywords and document emphasis stay aligned."
         )
-    if field_id == "workspace_cv_asset_id":
+    if field_id in {"workspace_cv_asset_id", "country_codes"}:
         field["required"] = True
     return field
 
@@ -1672,6 +1677,8 @@ def _normalize_setting_value(field_definition: dict, raw_value: "Any") -> "Any":
         return _normalize_country_codes(raw_value)
     if field_definition.get("id") == "work_arrangement":
         return normalize_work_arrangement(raw_value)
+    if field_definition.get("id") == "cv_template":
+        return normalize_cv_template_id(raw_value)
     if field_type == "tag_list":
         return _normalize_tag_list(raw_value)
     if field_type == "multi_select":
@@ -1788,6 +1795,8 @@ def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_setti
         settings["personalization_scope"] = normalize_personalization_scope(
             settings.get("personalization_scope")
         )
+        if settings.get("cv_template") == "plain":
+            settings["include_photo"] = False
     return settings
 
 
@@ -1799,6 +1808,16 @@ def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str
     effective_settings = {**settings, **derived_runtime_defaults}
     results: list[dict[str, Any]] = []
     field_errors: list[dict[str, str]] = []
+    country_codes = _normalize_country_codes(effective_settings.get("country_codes"))
+
+    if flow_id == FLOW_TAILORED_DOCUMENTS and not country_codes:
+        field_errors.append(
+            _field_error(
+                "country_codes",
+                "required",
+                "Select a target country before saving or running this workspace.",
+            )
+        )
 
     def add_result(
         source_id: str,
@@ -1953,7 +1972,6 @@ def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str
 
     if SOURCE_MULTI_PORTAL in source_ids:
         portals = [str(item).strip() for item in (effective_settings.get("portals") or []) if str(item).strip()]
-        country_codes = _normalize_country_codes(effective_settings.get("country_codes"))
         cities = effective_settings.get("cities") or []
         status = "valid"
         details: list[str] = []
@@ -2011,7 +2029,7 @@ def validate_workspace_source_configuration(payload: dict[str, Any]) -> dict[str
     return {
         "flow_id": flow_id,
         "source_ids": list(source_ids),
-        "valid": all(item["status"] == "valid" for item in results) if results else True,
+        "valid": not field_errors and (all(item["status"] == "valid" for item in results) if results else True),
         "field_errors": _dedupe_field_errors(field_errors),
         "source_results": results,
         "derived_runtime_defaults": derived_runtime_defaults,

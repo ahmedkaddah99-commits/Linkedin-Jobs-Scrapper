@@ -134,7 +134,11 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         display_name = str((query.get("display_name") or [filename])[0]).strip() or filename
                         tags = [asset_kind]
                         is_cv_asset = asset_kind in {"workspace_cv", "master_career_profile"}
-                        document_extraction = extract_document_text(filename, file_bytes)
+                        document_extraction = extract_document_text(
+                            filename,
+                            file_bytes,
+                            allow_ocr=not is_cv_asset,
+                        )
                         asset_metadata: dict[str, Any] = extraction_metadata(document_extraction)
                         if is_cv_asset:
                             cv_text = str(document_extraction.get("text") or "")
@@ -186,25 +190,31 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
 
     if segments == ["cv-upload"]:
                         user, _ = self._require_identity()
+                        upload_started = perf_counter()
                         content_type_header = str(self.headers.get("Content-Type") or "")
                         if "multipart/form-data" not in content_type_header:
                             raise ValueError("cv-upload requires multipart/form-data content type")
+                        read_started = perf_counter()
                         content_length = int(self.headers.get("Content-Length", "0"))
                         raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+                        parse_started = perf_counter()
                         filename, file_bytes = _parse_multipart_file(content_type_header, raw_body)
                         if not file_bytes:
                             raise ValueError("No file found in multipart body. Ensure the form field has a filename.")
-                        document_extraction = extract_document_text(filename, file_bytes)
+                        extract_started = perf_counter()
+                        document_extraction = extract_document_text(filename, file_bytes, allow_ocr=False)
                         cv_text = str(document_extraction.get("text") or "")
                         if not cv_text.strip():
                             warning = " ".join(str(item) for item in document_extraction.get("warnings") or []).strip()
                             detail = f" {warning}" if warning else ""
                             raise ValueError(f"Could not extract any text from uploaded file '{filename}'.{detail}")
+                        profile_started = perf_counter()
                         extraction = _extract_cv_profile_for_upload(cv_text)
                         # Save to disk (for legacy pipeline compatibility)
                         cv_save_path = Path("user_config") / "cv_master.txt"
                         cv_save_path.parent.mkdir(parents=True, exist_ok=True)
                         cv_save_path.write_text(cv_text, encoding="utf-8")
+                        store_started = perf_counter()
                         uploaded_asset = _store_candidate_asset_upload(
                             application,
                             user,
@@ -226,12 +236,23 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             },
                         )
                         # Persist in user metadata
+                        metadata_started = perf_counter()
                         user = application.get_user(user.user_id)
                         metadata = dict(user.metadata or {})
                         metadata["cv_text"] = cv_text
                         user.metadata = metadata
                         user.updated_at = datetime.now(timezone.utc).isoformat()
                         application.repositories.auth_repository.upsert_user(user)
+                        finished = perf_counter()
+                        timings_ms = {
+                            "read_body": round((parse_started - read_started) * 1000, 2),
+                            "parse_multipart": round((extract_started - parse_started) * 1000, 2),
+                            "extract_text": round((profile_started - extract_started) * 1000, 2),
+                            "profile_parse": round((store_started - profile_started) * 1000, 2),
+                            "store_asset": round((metadata_started - store_started) * 1000, 2),
+                            "persist_user_metadata": round((finished - metadata_started) * 1000, 2),
+                            "total": round((finished - upload_started) * 1000, 2),
+                        }
                         self._send_json(
                             {
                                 "cv_text": cv_text,
@@ -239,6 +260,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                                 "filename": filename,
                                 "asset": uploaded_asset,
                                 "parsed": dict(extraction.get("profile") or {}),
+                                "timings_ms": timings_ms,
                                 "extraction": {
                                     "provider": str(extraction.get("provider") or ""),
                                     "model": str(extraction.get("model") or ""),

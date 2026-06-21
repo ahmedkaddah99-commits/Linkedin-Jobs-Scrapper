@@ -5,6 +5,7 @@ from typing import Any
 
 from backend.config.job_seeker import cfg_bool, cfg_float, cfg_int, cfg_list, cfg_str
 
+from .rendering import normalize_cv_template_id
 from .modes import (
     AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
     AGGRESSIVE_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
@@ -45,6 +46,7 @@ def build_stage1_args(config: dict, cli_args) -> SimpleNamespace:
 
 
 def build_stage4_args(cli_args) -> SimpleNamespace:
+    cv_template = normalize_cv_template_id(getattr(cli_args, "cv_template", "plain"))
     return SimpleNamespace(
         input=cli_args.stage4_input,
         output_json=cli_args.output_json,
@@ -64,9 +66,9 @@ def build_stage4_args(cli_args) -> SimpleNamespace:
         github_url=getattr(cli_args, "github_url", ""),
         profile_image=cli_args.profile_image,
         cv_font=cli_args.cv_font,
-        cv_template=cli_args.cv_template,
+        cv_template=cv_template,
         cv_color_scheme=cli_args.cv_color_scheme,
-        include_photo=bool(cli_args.include_photo),
+        include_photo=bool(cli_args.include_photo) and cv_template != "plain",
         languages=list(cli_args.languages),
         light_customization_extra_prompt=getattr(cli_args, LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD, ""),
         light_customization_prompt_override=getattr(cli_args, LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD, ""),
@@ -240,9 +242,9 @@ def build_main_defaults(config: dict) -> dict[str, Any]:
         "github_url": cfg_str(config, ("candidate", "profile_links", "github", "url"), ""),
         "profile_image": cfg_str(config, ("candidate", "profile_image_path"), ""),
         "cv_font": cfg_str(config, ("candidate", "cv_font"), "Calibri"),
-        "cv_template": "classic",
+        "cv_template": "plain",
         "cv_color_scheme": "classic_navy",
-        "include_photo": True,
+        "include_photo": False,
         "languages": [str(item) for item in cfg_list(config, ("candidate", "languages"), []) if str(item).strip()],
     }
 

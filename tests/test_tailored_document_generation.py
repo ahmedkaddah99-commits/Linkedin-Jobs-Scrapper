@@ -892,10 +892,10 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             exported = Document(output_path)
             texts = [paragraph.text.strip() for paragraph in exported.paragraphs if paragraph.text.strip()]
 
-        self.assertIn("PROFIL", texts)
-        self.assertIn("BERUFSERFAHRUNG", texts)
-        self.assertIn("KOMPETENZEN", texts)
-        self.assertIn("AUSBILDUNG", texts)
+        self.assertIn("Profil", texts)
+        self.assertIn("Berufserfahrung", texts)
+        self.assertIn("Kompetenzen", texts)
+        self.assertIn("Ausbildung", texts)
 
     def test_html_pdf_payload_uses_same_structured_cv_content_as_docx(self):
         record = {
@@ -941,7 +941,7 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             profile_links=[{"text": "LinkedIn", "url": "https://linkedin.example/ahmed"}],
         )
 
-        self.assertEqual(payload["documents"]["cv_template"], "modern")
+        self.assertEqual(payload["documents"]["cv_template"], "plain")
         self.assertEqual(payload["documents"]["cv_output_language"], "English")
         self.assertEqual(payload["profile"]["summary"], "Tailored summary.")
         self.assertEqual(payload["profile"]["recent_experience"][0]["bullets"], ["Delivered reporting improvements."])

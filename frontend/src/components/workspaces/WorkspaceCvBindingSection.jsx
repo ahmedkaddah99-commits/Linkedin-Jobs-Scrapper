@@ -121,6 +121,10 @@ function CustomSectionMappingPanel({ sections = [], savingKey = "", message = ""
   );
 }
 
+function requiredLabel(field) {
+  return field?.required ? `${field.label} *` : field?.label;
+}
+
 export function WorkspaceCvBindingSection({
   FieldRenderer,
   cvUploadState,
@@ -142,7 +146,7 @@ export function WorkspaceCvBindingSection({
       <div className="grid gap-4 md:grid-cols-2">
         {fields.map((field) => (
           <label className="space-y-2" key={field.id}>
-            <span className="block text-sm font-semibold text-on-surface">{field.label}</span>
+            <span className="block text-sm font-semibold text-on-surface">{requiredLabel(field)}</span>
             <FieldRenderer
               dynamicOptions={dynamicOptions}
               field={field}

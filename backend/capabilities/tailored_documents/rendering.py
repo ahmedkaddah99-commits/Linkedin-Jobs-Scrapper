@@ -91,6 +91,10 @@ CV_TEMPLATE_PRESETS = {
 }
 
 CV_TEMPLATE_ALIASES = {
+    "classic": "plain",
+    "modern": "plain",
+    "compact": "plain",
+    "europass": "plain",
     "teal_resume": "plain",
 }
 
@@ -214,7 +218,7 @@ def resolve_assets_profile_png(docs_dir: Path):
 
 def get_document_design_options() -> dict:
     return {
-        "templates": list(CV_TEMPLATE_PRESETS.values()),
+        "templates": [dict(CV_TEMPLATE_PRESETS["plain"])],
         "color_schemes": list(CV_COLOR_SCHEMES.values()),
         "fonts": list(CV_FONT_OPTIONS),
     }
@@ -227,7 +231,7 @@ def normalize_cv_template_id(template_id: str) -> str:
 
 def _resolve_template(template_id: str) -> dict:
     canonical_id = normalize_cv_template_id(template_id)
-    return dict(CV_TEMPLATE_PRESETS.get(canonical_id) or CV_TEMPLATE_PRESETS["classic"])
+    return dict(CV_TEMPLATE_PRESETS.get(canonical_id) or CV_TEMPLATE_PRESETS["plain"])
 
 
 def _resolve_color_scheme(color_scheme_id: str) -> dict:
@@ -1088,7 +1092,7 @@ def build_cv_html_export_payload(
         "cv_output_language": cv_output_language,
     }
     documents = {
-        "cv_template": str(cv_template_id or "classic").strip() or "classic",
+        "cv_template": normalize_cv_template_id(str(cv_template_id or "plain").strip() or "plain"),
         "cv_color_scheme": str(cv_color_scheme or "classic_navy").strip() or "classic_navy",
         "cv_font": str(cv_font_name or DEFAULT_CV_FONT).strip() or DEFAULT_CV_FONT,
         "include_photo": bool(include_profile_image),
