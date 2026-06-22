@@ -54,7 +54,6 @@ Create `user_config/.env` for local external-service credentials:
 ```env
 SCRAPEOPS_API_KEY=your_scrapeops_key
 DEEPSEEK_API_KEY=your_deepseek_key
-GEMINI_API_KEY=your_gemini_key
 # Optional: disable billing quota enforcement during local development.
 RUNR_DISABLE_QUOTAS=true
 ```

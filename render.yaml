@@ -74,8 +74,6 @@ services:
         sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
-      - key: GEMINI_API_KEY
-        sync: false
       - key: TRACKER_GOOGLE_OAUTH_CLIENT_ID
         sync: false
       - key: TRACKER_GOOGLE_OAUTH_CLIENT_SECRET
@@ -122,6 +120,4 @@ services:
       - key: SCRAPEOPS_API_KEY
         sync: false
       - key: DEEPSEEK_API_KEY
-        sync: false
-      - key: GEMINI_API_KEY
         sync: false

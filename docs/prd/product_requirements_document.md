@@ -112,7 +112,7 @@ The old config has `ai.models` (per-stage model names) and `ai.prompts` (per-sta
 **Requirement:**  
 Add an "AI Configuration" section to the Workspace Builder (collapsed/advanced):
 - **Stage 1 model** — text input (e.g. `deepseek-chat`)
-- **Stage 3 model** — text input (e.g. `gemini-2.5-flash-lite`)
+- **Stage 3 model** — text input (e.g. `deepseek-chat`)
 - **Stage 4 model** — text input + fallback model field
 - **Stage 1 extra instructions** — textarea
 - **Stage 3 extra instructions** — textarea

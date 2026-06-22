@@ -203,8 +203,6 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         result = generate_docs_for_job(
             deepseek_api_key=None,
             deepseek_model="deepseek-chat",
-            gemini_client=None,
-            gemini_model="gemini-2.5-flash",
             cv_text=self.cv_text,
             job=self.job,
             candidate_name="Ahmed",
@@ -254,8 +252,6 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         result = generate_docs_for_job(
             deepseek_api_key=None,
             deepseek_model="deepseek-chat",
-            gemini_client=None,
-            gemini_model="gemini-2.5-flash",
             cv_text=self.cv_text,
             job=self.job,
             candidate_name="Ahmed",
@@ -319,8 +315,6 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         result = generate_docs_for_job(
             deepseek_api_key=None,
             deepseek_model="deepseek-chat",
-            gemini_client=None,
-            gemini_model="gemini-2.5-flash",
             cv_text=self.cv_text,
             job=self.job,
             candidate_name="Ahmed",
@@ -348,6 +342,47 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(improve_mock.call_count, 2)
+
+    @patch("backend.capabilities.tailored_documents.generation._improve_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_generate_docs_for_job_can_limit_ats_scoring_to_one_attempt(
+        self,
+        generate_mock,
+        score_mock,
+        improve_mock,
+    ):
+        generate_mock.return_value = _draft("Single pass draft.", skill="SQL")
+        score_mock.return_value = {
+            "score": 82,
+            "missing_requirements": ["Python"],
+            "improvement_actions": ["Add Python evidence."],
+            "rationale": "Needs one missing keyword.",
+        }
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+            ats_max_attempts=1,
+        )
+
+        self.assertEqual(result["ats_score"], 82)
+        self.assertEqual(result["ats_attempt_count"], 1)
+        self.assertEqual(result["ats_max_attempts"], 1)
+        self.assertEqual(result["ats_stop_reason"], "max_attempts_reached")
+        self.assertEqual(result["ats_missing_requirements"], ["Python"])
+        self.assertEqual(result["ats_gate_state"], "blocked")
+        self.assertTrue(result["ats_export_anyway_allowed"])
+        score_mock.assert_called_once()
+        improve_mock.assert_not_called()
 
     def test_resolve_cv_generation_prompt_settings_uses_mode_specific_fields(self):
         settings = SimpleNamespace(
@@ -488,8 +523,6 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         result = generate_docs_for_job(
             deepseek_api_key=None,
             deepseek_model="deepseek-chat",
-            gemini_client=None,
-            gemini_model="gemini-2.5-flash",
             cv_text=self.cv_text,
             job=self.job,
             candidate_name="Ahmed",
@@ -595,8 +628,6 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         result = generate_docs_for_job(
             deepseek_api_key=None,
             deepseek_model="deepseek-chat",
-            gemini_client=None,
-            gemini_model="gemini-2.5-flash",
             cv_text=self.cv_text,
             job=self.job,
             candidate_name="Ahmed",

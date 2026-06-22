@@ -55,9 +55,7 @@ def _get_readiness(context: ApiRouteContext) -> None:
         raise RuntimeError("Production readiness requires S3-compatible object storage.")
 
     probe_enabled = str((context.query.get("probe") or [""])[0]).strip().lower() in {"1", "true", "yes", "full"}
-    storage_probe_enabled = probe_enabled or (
-        is_production and object_storage_backend in {"s3", "r2"}
-    )
+    storage_probe_enabled = probe_enabled
     probes: dict[str, object] = {}
     if probe_enabled:
         config_store = getattr(repositories, "config_store", None) if repositories is not None else None

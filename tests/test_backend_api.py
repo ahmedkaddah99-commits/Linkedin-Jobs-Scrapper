@@ -115,7 +115,6 @@ class BackendApiTests(unittest.TestCase):
             {
                 "DEEPSEEK_API_KEY": "",
                 "RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": "",
-                "RUNR_ENABLE_NETWORKING_DISCOVERY_AI": "",
             },
             clear=False,
         )
@@ -374,6 +373,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(reviews_payload["reviews"]), 1)
 
+    @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
     def test_api_enforces_test_run_limits_and_exposes_test_run_badge_fields(self):
         status, run_payload = self._request(
             "POST",
@@ -399,6 +399,10 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(settings["company_site_max_sites_per_run"], 1)
         self.assertEqual(settings["max_enrich_jobs"], 1)
         self.assertEqual(settings["ai_batch_size"], 1)
+        self.assertEqual(settings["stage4_retries"], 1)
+        self.assertEqual(settings["stage4_retry_sleep"], 0)
+        self.assertEqual(settings["stage4_sleep_seconds"], 0)
+        self.assertEqual(settings["stage4_ats_max_attempts"], 1)
 
         status, runs_payload = self._request("GET", "/runs?workspace_id=api_workspace")
         self.assertEqual(status, 200)
@@ -1198,7 +1202,6 @@ class BackendApiTests(unittest.TestCase):
         self.assertIn("low_applicant_threshold", user_facing_fields)
         self.assertIn("stage1_model", user_facing_fields)
         self.assertIn("stage4_model", user_facing_fields)
-        self.assertIn("stage4_fallback_model", user_facing_fields)
         self.assertIn("cv_template", user_facing_fields)
         self.assertIn(
             "plain",
@@ -1256,7 +1259,6 @@ class BackendApiTests(unittest.TestCase):
                         "aggressive_customization_prompt_override": "Use the aggressive override.",
                         "stage1_model": "deepseek-chat",
                         "stage4_model": "deepseek-chat",
-                        "stage4_fallback_model": "gemini-2.5-flash",
                     },
                 },
             )
@@ -1300,7 +1302,6 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(workspace_payload["settings"]["stage1_model"], "deepseek-chat")
         self.assertEqual(workspace_payload["settings"]["stage4_model"], "deepseek-chat")
-        self.assertEqual(workspace_payload["settings"]["stage4_fallback_model"], "gemini-2.5-flash")
         self.assertEqual(
             workspace_payload["settings"]["workspace_cv_text"],
             "Builder CV Snapshot\nAnalyst with workflow-specific experience.",
@@ -1736,6 +1737,7 @@ class BackendApiTests(unittest.TestCase):
             )
         )
 
+    @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
     def test_api_supports_quick_apply_runs_without_creating_a_workspace(self):
         status, payload = self._request(
             "POST",
@@ -1756,6 +1758,11 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["run"]["workspace_id"], "api_workspace")
         self.assertEqual(payload["run"]["metadata"]["run_kind"], "quick_apply")
         self.assertEqual(payload["run"]["status"], "completed")
+        resolved_settings = payload["run"]["run_plan"]["resolved_run_settings"]
+        self.assertEqual(resolved_settings["stage4_retries"], 1)
+        self.assertEqual(resolved_settings["stage4_retry_sleep"], 0)
+        self.assertEqual(resolved_settings["stage4_sleep_seconds"], 0)
+        self.assertEqual(resolved_settings["stage4_ats_max_attempts"], 1)
 
         status, jobs_payload = self._request("GET", f"/runs/{payload['run']['id']}/jobs")
         self.assertEqual(status, 200)
@@ -1779,6 +1786,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(workspace.workspace_type, "internal")
         self.assertTrue(workspace.metadata["internal"])
 
+    @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
     def test_quick_apply_accepts_cv_generation_and_preview_settings(self):
         workspace_cv_asset = self._upload_workspace_cv(
             filename="quick-apply-resume.txt",
@@ -1810,11 +1818,15 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(resolved_settings["workspace_cv_text"], "Quick Apply CV Snapshot\nFocused application baseline.")
         self.assertEqual(resolved_settings["cv_generation_mode"], "light_customization")
         self.assertEqual(resolved_settings["personalization_scope"], "baseline_plus_selected_assets")
-        self.assertEqual(resolved_settings["cv_template"], "plain")
+        self.assertEqual(resolved_settings["cv_template"], "compact")
         self.assertEqual(resolved_settings["cv_color_scheme"], "forest")
         self.assertEqual(resolved_settings["cv_font"], "Aptos")
         self.assertFalse(resolved_settings["include_photo"])
         self.assertEqual(resolved_settings["manual_urls_inline"], ["https://company.example/jobs/quick-settings"])
+        self.assertEqual(resolved_settings["stage4_retries"], 1)
+        self.assertEqual(resolved_settings["stage4_retry_sleep"], 0)
+        self.assertEqual(resolved_settings["stage4_sleep_seconds"], 0)
+        self.assertEqual(resolved_settings["stage4_ats_max_attempts"], 1)
 
     def test_workspace_builder_source_validation_returns_runtime_hints(self):
         status, payload = self._request(
@@ -2673,6 +2685,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(settings_payload["profile"]["photo_data_url"].startswith("data:image/png;base64,"))
 
+    @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
     def test_documents_endpoint_bulk_export_and_candidate_assets(self):
         status, cv_payload = self._multipart_request(
             "/cv-upload",

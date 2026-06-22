@@ -3,7 +3,6 @@ import re
 import time
 from typing import Any, Callable, Dict, Optional
 
-from google import genai
 import requests
 
 from backend.domain.ats_export_gate import evaluate_ats_export_gate
@@ -357,15 +356,12 @@ def call_deepseek_json(
 def call_ai_json(
     deepseek_api_key: Optional[str],
     deepseek_model: str,
-    gemini_client: Optional[genai.Client],
-    gemini_model: str,
     prompt: str,
     *,
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
 ) -> Dict[str, Any]:
     parsed = None
     deepseek_error = None
-    gemini_error = None
 
     if deepseek_api_key:
         try:
@@ -378,23 +374,11 @@ def call_ai_json(
         except Exception as exc:
             deepseek_error = exc
 
-    if parsed is None and gemini_client is not None:
-        try:
-            response = gemini_client.models.generate_content(
-                model=gemini_model,
-                contents=prompt,
-            )
-            parsed = _load_json_object(getattr(response, "text", "") or "")
-        except Exception as exc:
-            gemini_error = exc
-
     if parsed is not None:
         return parsed
-    if deepseek_error and gemini_error:
-        raise RuntimeError(f"DeepSeek and Gemini fallback both failed. DeepSeek={deepseek_error} | Gemini={gemini_error}")
     if deepseek_error:
-        raise RuntimeError(f"DeepSeek failed and Gemini fallback is unavailable. DeepSeek={deepseek_error}")
-    raise RuntimeError("No Stage 4 AI provider available (DeepSeek/Gemini).")
+        raise RuntimeError(f"DeepSeek failed. DeepSeek={deepseek_error}")
+    raise RuntimeError("No Stage 4 AI provider available. DEEPSEEK_API_KEY is required.")
 
 
 def _normalize_skills(skills_raw: Any) -> list[str]:
@@ -530,8 +514,6 @@ def _structured_cv_for_prompt(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _generate_structured_cv_once(
     deepseek_api_key: Optional[str],
     deepseek_model: str,
-    gemini_client: Optional[genai.Client],
-    gemini_model: str,
     cv_text: str,
     job: Dict,
     candidate_name: str,
@@ -552,8 +534,6 @@ def _generate_structured_cv_once(
     parsed = call_ai_json(
         deepseek_api_key,
         deepseek_model,
-        gemini_client,
-        gemini_model,
         prompt,
     )
     return _parse_structured_cv_payload(parsed, output_language=output_language)
@@ -562,8 +542,6 @@ def _generate_structured_cv_once(
 def _score_structured_cv_once(
     deepseek_api_key: Optional[str],
     deepseek_model: str,
-    gemini_client: Optional[genai.Client],
-    gemini_model: str,
     cv_text: str,
     job: Dict,
     structured_cv: Dict[str, Any],
@@ -572,8 +550,6 @@ def _score_structured_cv_once(
     parsed = call_ai_json(
         deepseek_api_key,
         deepseek_model,
-        gemini_client,
-        gemini_model,
         prompt,
         system_prompt="You are a precise ATS resume reviewer.",
     )
@@ -583,8 +559,6 @@ def _score_structured_cv_once(
 def _improve_structured_cv_once(
     deepseek_api_key: Optional[str],
     deepseek_model: str,
-    gemini_client: Optional[genai.Client],
-    gemini_model: str,
     cv_text: str,
     job: Dict,
     structured_cv: Dict[str, Any],
@@ -603,8 +577,6 @@ def _improve_structured_cv_once(
     parsed = call_ai_json(
         deepseek_api_key,
         deepseek_model,
-        gemini_client,
-        gemini_model,
         prompt,
     )
     return _parse_structured_cv_payload(parsed, output_language=output_language)
@@ -659,6 +631,7 @@ def _attach_ats_metadata(
     best_score: int,
     best_missing_requirements: list[str],
     attempt_count: int,
+    max_attempts: int,
     stop_reason: str,
     attempt_history: list[Dict[str, Any]],
     best_attempt_index: int,
@@ -668,7 +641,7 @@ def _attach_ats_metadata(
             "target_score": ATS_TARGET_SCORE,
             "best_score": best_score,
             "attempt_count": attempt_count,
-            "max_attempts": ATS_MAX_ATTEMPTS,
+            "max_attempts": max(1, int(max_attempts or ATS_MAX_ATTEMPTS)),
             "missing_requirements": best_missing_requirements,
             "metadata": {
                 "stop_reason": stop_reason,
@@ -699,8 +672,6 @@ def _attach_ats_metadata(
 def _generate_docs_for_job_once(
     deepseek_api_key: Optional[str],
     deepseek_model: str,
-    gemini_client: Optional[genai.Client],
-    gemini_model: str,
     cv_text: str,
     job: Dict,
     candidate_name: str,
@@ -709,13 +680,12 @@ def _generate_docs_for_job_once(
     prompt_override: str,
     payload_postprocessor: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
     output_language: str = "English",
+    ats_max_attempts: int = ATS_MAX_ATTEMPTS,
 ) -> Dict[str, Any]:
     selected_output_language = normalize_output_language(output_language)
     current_payload = _generate_structured_cv_once(
         deepseek_api_key,
         deepseek_model,
-        gemini_client,
-        gemini_model,
         cv_text,
         job,
         candidate_name,
@@ -735,12 +705,11 @@ def _generate_docs_for_job_once(
     previous_scored_payload: Optional[Dict[str, Any]] = None
     stop_reason = "max_attempts_reached"
 
-    for attempt_number in range(1, ATS_MAX_ATTEMPTS + 1):
+    max_attempts = max(1, int(ats_max_attempts or ATS_MAX_ATTEMPTS))
+    for attempt_number in range(1, max_attempts + 1):
         score_payload = _score_structured_cv_once(
             deepseek_api_key,
             deepseek_model,
-            gemini_client,
-            gemini_model,
             cv_text,
             job,
             current_payload,
@@ -765,7 +734,7 @@ def _generate_docs_for_job_once(
         if current_score >= ATS_TARGET_SCORE:
             stop_reason = "target_reached"
             break
-        if attempt_number >= ATS_MAX_ATTEMPTS:
+        if attempt_number >= max_attempts:
             stop_reason = "max_attempts_reached"
             break
         if previous_score is not None and current_score <= previous_score:
@@ -776,8 +745,6 @@ def _generate_docs_for_job_once(
         current_payload = _improve_structured_cv_once(
             deepseek_api_key,
             deepseek_model,
-            gemini_client,
-            gemini_model,
             cv_text,
             job,
             current_payload,
@@ -793,6 +760,7 @@ def _generate_docs_for_job_once(
         best_score=max(0, best_score),
         best_missing_requirements=best_missing_requirements,
         attempt_count=len(attempt_history),
+        max_attempts=max_attempts,
         stop_reason=stop_reason,
         attempt_history=attempt_history,
         best_attempt_index=best_attempt_index,
@@ -802,8 +770,6 @@ def _generate_docs_for_job_once(
 def generate_docs_for_job(
     deepseek_api_key: Optional[str],
     deepseek_model: str,
-    gemini_client: Optional[genai.Client],
-    gemini_model: str,
     cv_text: str,
     job: Dict,
     candidate_name: str,
@@ -814,6 +780,7 @@ def generate_docs_for_job(
     retry_sleep: float,
     payload_postprocessor: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
     output_language: str = "English",
+    ats_max_attempts: int = ATS_MAX_ATTEMPTS,
 ) -> Dict[str, Any]:
     last_error = None
 
@@ -822,8 +789,6 @@ def generate_docs_for_job(
             return _generate_docs_for_job_once(
                 deepseek_api_key=deepseek_api_key,
                 deepseek_model=deepseek_model,
-                gemini_client=gemini_client,
-                gemini_model=gemini_model,
                 cv_text=cv_text,
                 job=job,
                 candidate_name=candidate_name,
@@ -832,6 +797,7 @@ def generate_docs_for_job(
                 prompt_override=prompt_override,
                 payload_postprocessor=payload_postprocessor,
                 output_language=output_language,
+                ats_max_attempts=ats_max_attempts,
             )
         except Exception as exc:
             last_error = exc

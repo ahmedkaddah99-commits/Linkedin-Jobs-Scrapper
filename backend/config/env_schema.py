@@ -156,11 +156,6 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Optional opt-in for live DuckDuckGo and DeepSeek target-contact discovery. Disabled by default for deterministic local/test behavior.",
     },
-    "RUNR_ENABLE_NETWORKING_DISCOVERY_AI": {
-        "required": False,
-        "scope": "backend",
-        "description": "Optional opt-in for DeepSeek planning/resolution inside live networking discovery. Disabled by default so public-profile search remains fast and deterministic.",
-    },
     "RUNR_DISABLE_QUOTAS": {
         "required": False,
         "scope": "backend",

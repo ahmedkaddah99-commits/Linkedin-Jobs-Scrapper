@@ -60,16 +60,57 @@ class _DocumentGenerationStage(BaseStage):
 
     def execute(self, context, definition) -> StageOutcome:
         jobs = context.get_job_set(definition.input_keys[0])
+        first_job_id = jobs[0].job_id if jobs else ""
         return StageOutcome(
             job_sets={definition.output_key or "generated_jobs": jobs},
             artifacts=[
                 ArtifactRecord(
-                    artifact_id="generated_job_1_cv",
+                    artifact_id=f"generated_{first_job_id}_cv",
                     artifact_type="cv_docx",
-                    path="generated_docs/job_1_cv.docx",
-                    metadata={"job_id": "job_1"},
+                    path=f"generated_docs/{first_job_id}_cv.docx",
+                    metadata={"job_id": first_job_id},
                 )
             ],
+            metrics={"generated_jobs": len(jobs)},
+        )
+
+
+class _FailedDocumentGenerationStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        return bool(definition.input_keys and context.get_job_set(definition.input_keys[0]))
+
+    def execute(self, context, definition) -> StageOutcome:
+        jobs = [
+            {
+                **job.to_dict(),
+                "cv_docx": "",
+                "tailored_cv_docx": "",
+                "doc_generation_error": "DeepSeek request timed out",
+            }
+            for job in context.get_job_set(definition.input_keys[0])
+        ]
+        return StageOutcome(
+            job_sets={definition.output_key or "generated_jobs": jobs},
+            metrics={"generated_jobs": len(jobs), "generation_errors": len(jobs)},
+        )
+
+
+class _NoArtifactDocumentGenerationStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        return bool(definition.input_keys and context.get_job_set(definition.input_keys[0]))
+
+    def execute(self, context, definition) -> StageOutcome:
+        jobs = [
+            {
+                **job.to_dict(),
+                "cv_docx": "",
+                "tailored_cv_docx": "",
+                "doc_generation_error": "",
+            }
+            for job in context.get_job_set(definition.input_keys[0])
+        ]
+        return StageOutcome(
+            job_sets={definition.output_key or "generated_jobs": jobs},
             metrics={"generated_jobs": len(jobs)},
         )
 
@@ -1255,6 +1296,114 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(reviews[0].reviewer, "system")
         self.assertTrue(reviews[0].metadata.get("auto_approved"))
         self.assertTrue(reviews[0].metadata.get("placed_in_tracker_at"))
+
+    def test_document_generation_failure_does_not_complete_run(self):
+        temp_dir = self._workspace_tempdir("document_generation_failure_blocks_completion")
+        app = create_backend(temp_dir)
+        app.registries.stage_registry.register("test.seed_jobs", _SeedJobsStage())
+        app.registries.stage_registry.register(
+            "applications.generate.documents",
+            _FailedDocumentGenerationStage(),
+        )
+        app.upsert_workflow_template(
+            {
+                "id": "failed_documents_template",
+                "name": "Failed Documents Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="seed_jobs",
+                        stage_type="test.seed_jobs",
+                        name="Seed Jobs",
+                        output_key="accepted_jobs",
+                    ).to_dict(),
+                    StageDefinition(
+                        stage_id="generate_documents",
+                        stage_type="applications.generate.documents",
+                        name="Generate Documents",
+                        input_keys=["accepted_jobs"],
+                        output_key="generated_jobs",
+                    ).to_dict(),
+                ],
+                "default_run_settings": {"automation_flow": "tailored_documents"},
+            }
+        )
+        app.upsert_workspace(
+            {
+                "id": "failed_documents_workspace",
+                "name": "Failed Documents Workspace",
+                "workflow_template_id": "failed_documents_template",
+                "settings": {"automation_flow": "tailored_documents"},
+                "sources": [],
+            }
+        )
+
+        run = app.start_run("failed_documents_workspace", execute=True, requested_by="test")
+
+        self.assertEqual(run.status, "failed")
+        self.assertIn("Document generation produced no usable documents", run.last_error)
+        self.assertFalse(
+            [
+                artifact
+                for artifact in app.list_artifacts(run.id)
+                if str(artifact.artifact_id).startswith("generated_")
+            ]
+        )
+        self.assertFalse(app.list_reviews(run_id=run.id))
+        self.assertEqual(run.stage_results[-1].status, "failed")
+
+    def test_document_generation_without_document_artifact_does_not_complete_run(self):
+        temp_dir = self._workspace_tempdir("document_generation_no_artifact_blocks_completion")
+        app = create_backend(temp_dir)
+        app.registries.stage_registry.register("test.seed_jobs", _SeedJobsStage())
+        app.registries.stage_registry.register(
+            "applications.generate.documents",
+            _NoArtifactDocumentGenerationStage(),
+        )
+        app.upsert_workflow_template(
+            {
+                "id": "no_artifact_documents_template",
+                "name": "No Artifact Documents Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="seed_jobs",
+                        stage_type="test.seed_jobs",
+                        name="Seed Jobs",
+                        output_key="accepted_jobs",
+                    ).to_dict(),
+                    StageDefinition(
+                        stage_id="generate_documents",
+                        stage_type="applications.generate.documents",
+                        name="Generate Documents",
+                        input_keys=["accepted_jobs"],
+                        output_key="generated_jobs",
+                    ).to_dict(),
+                ],
+                "default_run_settings": {"automation_flow": "tailored_documents"},
+            }
+        )
+        app.upsert_workspace(
+            {
+                "id": "no_artifact_documents_workspace",
+                "name": "No Artifact Documents Workspace",
+                "workflow_template_id": "no_artifact_documents_template",
+                "settings": {"automation_flow": "tailored_documents"},
+                "sources": [],
+            }
+        )
+
+        run = app.start_run("no_artifact_documents_workspace", execute=True, requested_by="test")
+
+        self.assertEqual(run.status, "failed")
+        self.assertIn("Document generation produced no usable documents", run.last_error)
+        self.assertFalse(
+            [
+                artifact
+                for artifact in app.list_artifacts(run.id)
+                if str(artifact.artifact_id).startswith("generated_")
+            ]
+        )
+        self.assertFalse(app.list_reviews(run_id=run.id))
+        self.assertEqual(run.stage_results[-1].status, "failed")
 
     def test_test_run_selects_one_surviving_job_and_adds_it_to_tracker(self):
         temp_dir = self._workspace_tempdir("test_run_single_survivor")

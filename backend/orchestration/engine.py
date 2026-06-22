@@ -232,6 +232,11 @@ class StageEngine:
                     self.artifact_store.save_artifacts(run.id, context.artifacts)
 
                 if definition.stage_type in DOCUMENT_GENERATION_STAGE_TYPES:
+                    self._validate_document_generation_output(
+                        context=context,
+                        definition=definition,
+                        outcome=outcome,
+                    )
                     self._emit_document_generation_events(
                         run=run,
                         definition=definition,
@@ -445,6 +450,76 @@ class StageEngine:
                     ats_stop_reason=job_payload.get("ats_stop_reason"),
                     doc_generation_errors=job_payload.get("doc_generation_error"),
                 )
+
+    def _validate_document_generation_output(
+        self,
+        *,
+        context: StageContext,
+        definition: StageDefinition,
+        outcome: StageOutcome,
+    ) -> None:
+        output_key = str(definition.output_key or "").strip()
+        generated_jobs = list(outcome.job_sets.get(output_key) or []) if output_key else []
+        if not generated_jobs and outcome.job_sets:
+            generated_jobs = [
+                job
+                for jobs in outcome.job_sets.values()
+                for job in jobs
+            ]
+
+        input_jobs = [
+            job
+            for key in definition.input_keys
+            for job in context.get_job_set(key)
+        ]
+        expected_job_count = len(input_jobs)
+        generated_job_count = len(generated_jobs)
+        usable_job_count = sum(
+            1
+            for job in generated_jobs
+            if self._document_job_has_required_output(job, outcome.artifacts)
+        )
+
+        outcome.metrics = {
+            **dict(outcome.metrics or {}),
+            "expected_document_jobs": expected_job_count,
+            "generated_job_records": generated_job_count,
+            "usable_document_jobs": usable_job_count,
+            "artifact_count": len(outcome.artifacts),
+        }
+
+        if expected_job_count > 0 and usable_job_count <= 0:
+            raise RuntimeError(
+                "Document generation produced no usable documents "
+                f"for {expected_job_count} selected job(s)."
+            )
+
+    @staticmethod
+    def _document_job_has_required_output(
+        job: JobRecord | Mapping[str, Any],
+        artifacts: list[ArtifactRecord],
+    ) -> bool:
+        job_payload = job.to_dict() if isinstance(job, JobRecord) else dict(job or {})
+        if str(job_payload.get("doc_generation_error") or "").strip():
+            return False
+        if str(
+            job_payload.get("cv_docx")
+            or job_payload.get("tailored_cv_docx")
+            or job_payload.get("applied_cv")
+            or ""
+        ).strip():
+            return True
+
+        job_id = str(job_payload.get("job_id") or "").strip()
+        if not job_id:
+            return False
+        for artifact in artifacts:
+            artifact_type = str(artifact.artifact_type or "").strip().lower()
+            if artifact_type not in {"cv_docx", "docx", "tailored_cv_docx", "applied_cv"}:
+                continue
+            if str((artifact.metadata or {}).get("job_id") or "").strip() == job_id:
+                return True
+        return False
 
     @staticmethod
     def _duration_seconds(started_at: str, finished_at: str) -> float:

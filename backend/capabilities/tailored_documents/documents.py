@@ -7,8 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from google import genai
-
 from backend.config.job_seeker import (
     cfg_bool,
     cfg_float,
@@ -280,10 +278,6 @@ def main() -> int:
         ("ai", "models", "stage4_docs_deepseek"),
         os.getenv("DEEPSEEK_STAGE4_MODEL", "deepseek-chat"),
     )
-    default_gemini_fallback_model = (
-        cfg_str(config, ("ai", "models", "stage4_docs_fallback_gemini"), "")
-        or os.getenv("GEMINI_DOCS_MODEL", "gemini-2.5-flash")
-    )
     default_candidate_name = cfg_str(config, ("candidate", "name"), "") or os.getenv(
         "CANDIDATE_NAME",
         DEFAULT_CANDIDATE_NAME,
@@ -363,11 +357,6 @@ def main() -> int:
         help="Primary DeepSeek model for Stage 4 (e.g., deepseek-reasoner, deepseek-chat).",
     )
     parser.add_argument(
-        "--fallback-model",
-        default=default_gemini_fallback_model,
-        help="Gemini fallback model used only if DeepSeek fails.",
-    )
-    parser.add_argument(
         "--candidate-name",
         default=default_candidate_name,
         help="Candidate name used in document title, filename, and signature.",
@@ -426,6 +415,12 @@ def main() -> int:
     parser.add_argument("--sleep-seconds", type=float, default=default_stage4_sleep_seconds)
     parser.add_argument("--retries", type=int, default=default_stage4_retries)
     parser.add_argument("--retry-sleep", type=float, default=default_stage4_retry_sleep)
+    parser.add_argument(
+        "--ats-max-attempts",
+        type=int,
+        default=int(os.getenv("STAGE4_ATS_MAX_ATTEMPTS", "3") or 3),
+        help="Maximum ATS score/improvement attempts per generated CV.",
+    )
     parser.add_argument(
         "--max-jobs",
         type=int,
@@ -494,9 +489,8 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
     )
 
     deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if not deepseek_api_key and not gemini_api_key:
-        raise RuntimeError("Both DEEPSEEK_API_KEY and GEMINI_API_KEY are missing in environment/user_config/.env")
+    if not deepseek_api_key:
+        raise RuntimeError("DEEPSEEK_API_KEY is missing in environment/user_config/.env")
 
     if jobs is None:
         input_path = Path(args.input)
@@ -563,7 +557,6 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
         )
 
     cv_text = load_cv_text()
-    gemini_client = genai.Client(api_key=gemini_api_key) if gemini_api_key else None
     selected_stage4_extra_prompt, selected_stage4_prompt_override = resolve_cv_generation_prompt_settings(
         selected_cv_generation_mode,
         args,
@@ -784,8 +777,6 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
             generated_payload = generate_docs_for_job(
                 deepseek_api_key=deepseek_api_key,
                 deepseek_model=args.model,
-                gemini_client=gemini_client,
-                gemini_model=args.fallback_model,
                 cv_text=cv_text,
                 job=job,
                 candidate_name=candidate_name,
@@ -794,6 +785,7 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
                 prompt_override=selected_stage4_prompt_override,
                 retries=max(1, args.retries),
                 retry_sleep=max(0.0, args.retry_sleep),
+                ats_max_attempts=max(1, int(getattr(args, "ats_max_attempts", 3) or 3)),
                 payload_postprocessor=lambda payload: _clamp_generated_payload(
                     payload,
                     cv_output_language=job_cv_output_language,
@@ -941,6 +933,21 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
 
     failed_count = sum(1 for item in final_records if item.get("doc_generation_error"))
     pdf_failed_count = sum(1 for item in final_records if item.get("pdf_generation_error"))
+    usable_doc_count = sum(
+        1
+        for item in final_records
+        if not item.get("doc_generation_error")
+        and (
+            str(item.get("cv_docx") or "").strip()
+            or str(item.get("tailored_cv_docx") or "").strip()
+            or str(item.get("applied_cv") or "").strip()
+        )
+    )
+    if total_jobs > 0 and usable_doc_count <= 0:
+        raise RuntimeError(
+            f"Stage 4 generated no usable CV documents for {total_jobs} selected job(s). "
+            f"Generation errors: {failed_count}."
+        )
     print("Stage 4 complete.")
     print(f"Generated records: {len(final_records)} -> {output_json_path}")
     print(f"Excel export: {output_xlsx_path} (mode={args.excel_mode})")

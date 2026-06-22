@@ -707,7 +707,7 @@ class ReferralNetworkingTests(unittest.TestCase):
         self.assertEqual(request_params["api_key"], "test-scrapeops-key")
         self.assertIn("html.duckduckgo.com", request_params["url"])
 
-    def test_live_target_contact_discovery_does_not_call_deepseek_without_ai_opt_in(self):
+    def test_live_target_contact_discovery_uses_deepseek_without_separate_ai_opt_in(self):
         def fake_search_provider(query, max_results=5, pass_index=1, lane="", objective=""):
             return [
                 {
@@ -717,15 +717,50 @@ class ReferralNetworkingTests(unittest.TestCase):
                 }
             ][:max_results]
 
+        def fake_deepseek_json(*, prompt, system_prompt, timeout_seconds=90):
+            if "candidate" in prompt.casefold() or "resolve" in prompt.casefold():
+                return {
+                    "candidates": [
+                        {
+                            "role_label": "Likely Hiring Manager",
+                            "confidence": "medium",
+                            "resolved_name": "Jane Product",
+                            "current_title": "Product Manager",
+                            "current_company": "ACME GmbH",
+                            "location": "Berlin",
+                            "evidence": ["Product Manager at ACME GmbH in Berlin."],
+                            "source_urls": ["https://www.linkedin.com/in/jane-product"],
+                            "source_titles": [
+                                "Jane Product - Product Manager - ACME GmbH | LinkedIn"
+                            ],
+                            "search_query": 'site:linkedin.com/in "ACME GmbH" "Product Manager"',
+                            "lane": "direct_hiring_chain",
+                            "resolved_in_pass": 1,
+                        }
+                    ]
+                }
+            return {
+                "query_plans": [
+                    {
+                        "query": 'site:linkedin.com/in "ACME GmbH" "Product Manager" "Berlin"',
+                        "objective": "Find relevant product contacts.",
+                        "lane": "direct_hiring_chain",
+                    }
+                ]
+            }
+
         with patch.dict(
             os.environ,
             {
                 "RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": "1",
-                "RUNR_ENABLE_NETWORKING_DISCOVERY_AI": "",
                 "DEEPSEEK_API_KEY": "test-deepseek-key",
             },
             clear=False,
-        ), patch.object(discovery_module, "_call_live_deepseek_json") as deepseek_mock:
+        ), patch.object(
+            discovery_module,
+            "_call_live_deepseek_json",
+            side_effect=fake_deepseek_json,
+        ) as deepseek_mock:
             payload = build_target_contact_discovery(
                 profile={"summary": "Product manager focused on experimentation."},
                 job=JobRecord(
@@ -737,9 +772,9 @@ class ReferralNetworkingTests(unittest.TestCase):
                 search_provider=fake_search_provider,
             )
 
-        deepseek_mock.assert_not_called()
-        self.assertEqual(payload["provider"]["query_planner"], "heuristic_fallback")
-        self.assertEqual(payload["provider"]["resolver"], "heuristic_fallback")
+        self.assertGreaterEqual(deepseek_mock.call_count, 3)
+        self.assertEqual(payload["provider"]["query_planner"], "ai")
+        self.assertEqual(payload["provider"]["resolver"], "ai")
         self.assertGreaterEqual(payload["passes"][0]["result_count"], 1)
 
     def test_relevant_people_discovery_does_not_promote_job_pages_as_people(self):

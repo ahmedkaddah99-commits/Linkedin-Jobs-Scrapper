@@ -82,7 +82,6 @@ WORKSPACE_USER_FACING_FIELD_IDS = [
     "stage1_extra_prompt",
     "stage1_prompt_override",
     "stage4_model",
-    "stage4_fallback_model",
     LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD,
     LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD,
     AGGRESSIVE_CUSTOMIZATION_EXTRA_PROMPT_FIELD,

@@ -292,7 +292,6 @@ Set workload-provider secrets on both API and worker when queued work uses them:
 
 ```env
 DEEPSEEK_API_KEY=<if used>
-GEMINI_API_KEY=<if used>
 SCRAPEOPS_API_KEY=<if used>
 ```
 

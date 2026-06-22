@@ -5,6 +5,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import unittest
 from contextlib import closing, redirect_stdout
 from pathlib import Path
@@ -86,7 +87,7 @@ class LogPrivacyTests(unittest.TestCase):
         )
         cli_result = subprocess.run(
             [
-                "python",
+                sys.executable,
                 "-c",
                 (
                     "from workspace_runner import _print_json; "

@@ -212,11 +212,7 @@ def build_target_contact_discovery(
     effective_ai_provider = (
         ai_provider
         if ai_provider is not None
-        else (
-            None
-            if live_discovery_enabled and _live_networking_ai_discovery_enabled()
-            else _heuristic_only_ai_provider
-        )
+        else (None if live_discovery_enabled else _disabled_ai_provider)
     )
     discipline_key = _infer_target_contact_discipline(job)
     discipline = _TARGET_DISCIPLINE_LIBRARY.get(discipline_key, _TARGET_DISCIPLINE_LIBRARY["general"])
@@ -538,17 +534,8 @@ def _live_target_contact_discovery_enabled() -> bool:
     return str(os.getenv("RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY") or "").strip().lower() in _TRUTHY_VALUES
 
 
-def _live_networking_ai_discovery_enabled() -> bool:
-    load_project_dotenv()
-    return str(os.getenv("RUNR_ENABLE_NETWORKING_DISCOVERY_AI") or "").strip().lower() in _TRUTHY_VALUES
-
-
 def _disabled_ai_provider(*_args, **_kwargs) -> dict[str, Any]:
     raise RuntimeError("live networking discovery is disabled")
-
-
-def _heuristic_only_ai_provider(*_args, **_kwargs) -> dict[str, Any]:
-    raise RuntimeError("networking discovery AI is disabled")
 
 
 def _offline_search_provider(*_args, **_kwargs) -> list[dict[str, Any]]:

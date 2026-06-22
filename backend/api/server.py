@@ -2319,6 +2319,10 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
                 "run_mode": "test",
                 "test_run_job_limit": 1,
                 "stage4_max_jobs": 1,
+                "stage4_retries": 1,
+                "stage4_retry_sleep": 0,
+                "stage4_sleep_seconds": 0,
+                "stage4_ats_max_attempts": 1,
                 "max_jobs_total": 1,
                 "linkedin_max_pages": 1,
                 "max_enrich_jobs": 1,
@@ -2428,6 +2432,10 @@ def _build_quick_apply_run_input_overrides(application, user, workspace, payload
         },
         workspace_settings=workspace_settings,
     )
+    overrides.setdefault("stage4_retries", 1)
+    overrides.setdefault("stage4_retry_sleep", 0)
+    overrides.setdefault("stage4_sleep_seconds", 0)
+    overrides.setdefault("stage4_ats_max_attempts", 1)
 
     asset_id = str(overrides.get("workspace_cv_asset_id") or "").strip()
     if asset_id:

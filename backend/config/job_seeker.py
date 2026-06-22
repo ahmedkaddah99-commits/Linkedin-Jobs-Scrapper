@@ -139,9 +139,7 @@ DEFAULT_JOB_SEEKER_CONFIG = {
         "models": {
             "stage1_title_filter": "deepseek-chat",
             "stage1_title_filter_deepseek": "deepseek-chat",
-            "stage3_filter": "gemini-2.5-flash-lite",
             "stage4_docs_deepseek": "deepseek-chat",
-            "stage4_docs_fallback_gemini": "gemini-2.5-flash",
         },
         "prompts": {
             "stage1_extra_instructions": "",
