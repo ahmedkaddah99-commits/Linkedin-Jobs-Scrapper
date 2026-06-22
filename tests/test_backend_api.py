@@ -693,7 +693,16 @@ class BackendApiTests(unittest.TestCase):
             [{"url": "https://company.example/careers", "links_fetched": 25, "cap_value": 25}],
         )
 
-        with patch("backend.api.server._collect_tracker_entries", side_effect=AssertionError("customer-view must stay run-scoped")):
+        with patch("backend.api.server._collect_tracker_entries", side_effect=AssertionError("customer-view must stay run-scoped")), patch(
+            "backend.api.server._collect_authorized_runs",
+            side_effect=AssertionError("customer-view must not scan all runs"),
+        ), patch(
+            "backend.api.server._load_candidate_assets",
+            side_effect=AssertionError("customer-view must not collect candidate assets"),
+        ), patch(
+            "backend.api.server._run_jobs_for_document_lookup",
+            side_effect=AssertionError("customer-view must reuse its loaded job sets"),
+        ):
             status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
         self.assertEqual(status, 200)
         self.assertEqual(customer_view["run"]["workspace_name"], "API Workspace")
@@ -1497,6 +1506,31 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(run_payload["run_input_overrides"]["linkedin_url"], linkedin_url)
         self.assertEqual(run_payload["run_input_overrides"]["github_url"], github_url)
+
+    def test_workspace_cv_document_listing_stays_candidate_asset_scoped(self):
+        workspace_cv_asset_id = self._upload_workspace_cv(filename="dropdown-scope-resume.txt")["asset_id"]
+        with patch(
+            "backend.api.server._collect_authorized_runs",
+            side_effect=AssertionError("workspace CV listing must not scan runs"),
+        ), patch(
+            "backend.api.server._persist_candidate_assets",
+            side_effect=AssertionError("workspace CV listing must not mutate candidate assets"),
+        ), patch.object(
+            self.app.object_storage,
+            "get",
+            side_effect=AssertionError("workspace CV listing must not download object contents"),
+        ):
+            status, documents_payload = self._request("GET", "/documents?asset_kind=workspace_cv")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(
+            any(item["asset_id"] == workspace_cv_asset_id for item in documents_payload["documents"]),
+            documents_payload["documents"],
+        )
+        self.assertTrue(
+            all(item["asset_kind"] == "workspace_cv" for item in documents_payload["documents"]),
+            documents_payload["documents"],
+        )
 
     def test_settings_and_run_fall_back_to_configured_candidate_profile_links(self):
         linkedin_url = "https://linkedin.example/configured-candidate"
@@ -2559,9 +2593,9 @@ class BackendApiTests(unittest.TestCase):
         status, documents_payload = self._request("GET", "/documents?asset_kind=workspace_cv")
         self.assertEqual(status, 200)
         self.assertEqual(len(documents_payload["documents"]), 1)
-        cleaned_user = self.app.get_user(self.user.user_id)
-        cleaned_assets = (cleaned_user.metadata or {}).get("candidate_assets") or []
-        self.assertEqual(len(cleaned_assets), 1)
+        persisted_user = self.app.get_user(self.user.user_id)
+        persisted_assets = (persisted_user.metadata or {}).get("candidate_assets") or []
+        self.assertEqual(len(persisted_assets), 2)
 
     def test_cv_upload_same_filename_different_content_creates_new_asset(self):
         first_status, first_payload = self._multipart_request(

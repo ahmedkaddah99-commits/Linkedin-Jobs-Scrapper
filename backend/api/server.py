@@ -1828,7 +1828,14 @@ def _collect_run_customer_view(application, user, run) -> dict:
     record_phase("job_sets", phase_started)
 
     phase_started = perf_counter()
-    documents = _collect_document_entries(application, user, run_id=run.id)
+    documents = _collect_document_entries(
+        application,
+        user,
+        run_id=run.id,
+        run_record=run,
+        workspace_record=workspace,
+        run_jobs=_ordered_run_jobs_for_document_lookup(run, job_sets),
+    )
     record_phase("documents", phase_started)
 
     document_count_by_job: dict[str, int] = {}
@@ -3836,8 +3843,7 @@ def _normalized_document_lookup_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
-def _run_jobs_for_document_lookup(application, run) -> list[object]:
-    job_sets = application.list_job_sets(run.id)
+def _ordered_run_jobs_for_document_lookup(run, job_sets: Mapping[str, list[object]]) -> list[object]:
     ordered_keys = list(run.final_job_set_keys or []) + [key for key in job_sets if key not in (run.final_job_set_keys or [])]
     ordered_jobs: list[object] = []
     seen_job_ids: set[str] = set()
@@ -3850,6 +3856,10 @@ def _run_jobs_for_document_lookup(application, run) -> list[object]:
                 seen_job_ids.add(job_id)
             ordered_jobs.append(job)
     return ordered_jobs
+
+
+def _run_jobs_for_document_lookup(application, run) -> list[object]:
+    return _ordered_run_jobs_for_document_lookup(run, application.list_job_sets(run.id))
 
 
 def _match_run_job_for_document_entry(entry: dict, run_jobs: list[object]) -> object | None:
@@ -3918,18 +3928,49 @@ def _enrich_artifact_entry_with_job_context(entry: dict, run_jobs: list[object])
     }
 
 
-def _collect_artifact_entries(application, user, *, workspace_id: str = "", run_id: str = "") -> list[dict]:
-    workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
+def _collect_artifact_entries(
+    application,
+    user,
+    *,
+    workspace_id: str = "",
+    run_id: str = "",
+    run_record=None,
+    workspace_record=None,
+    run_jobs: list[object] | None = None,
+) -> list[dict]:
+    if run_id:
+        run = run_record if str(getattr(run_record, "id", "") or "") == run_id else None
+        if run is None:
+            try:
+                run = application.get_run(run_id)
+            except KeyError:
+                return []
+        if workspace_id and run.workspace_id != workspace_id:
+            return []
+        if not application.user_can_access_workspace(user, run.workspace_id):
+            return []
+        workspace = (
+            workspace_record
+            if str(getattr(workspace_record, "id", "") or "") == run.workspace_id
+            else None
+        )
+        if workspace is None:
+            try:
+                workspace = application.get_workspace(run.workspace_id)
+            except KeyError:
+                workspace = None
+        workspaces = {run.workspace_id: workspace} if workspace is not None else {}
+        runs = [run]
+    else:
+        workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
     entries: list[dict] = []
     for run in runs:
-        if run_id and run.id != run_id:
-            continue
         workspace = workspaces.get(run.workspace_id)
-        run_jobs = _run_jobs_for_document_lookup(application, run)
+        resolved_run_jobs = run_jobs if run_id and run_jobs is not None else _run_jobs_for_document_lookup(application, run)
         artifacts = application.list_artifacts(run.id)
         for artifact in artifacts:
             entries.extend(
-                _enrich_artifact_entry_with_job_context(entry, run_jobs)
+                _enrich_artifact_entry_with_job_context(entry, resolved_run_jobs)
                 for entry in _expand_artifact_entries(run, workspace, artifact)
             )
     entries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
@@ -4198,25 +4239,6 @@ def _upsert_candidate_asset(application, user, payload: dict) -> dict:
     return normalized
 
 
-def _candidate_asset_content_hash(application, asset: dict) -> str:
-    metadata = dict(asset.get("metadata") or {})
-    content_hash = str(metadata.get("content_sha256") or "").strip()
-    if content_hash:
-        return content_hash
-
-    file_payload = dict(asset.get("file") or {})
-    object_key = str(file_payload.get("object_key") or "").strip()
-    if object_key:
-        try:
-            return sha256(application.object_storage.get(object_key)).hexdigest()
-        except Exception:
-            return ""
-    raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
-    if raw_path and Path(raw_path).is_file():
-        return sha256(Path(raw_path).read_bytes()).hexdigest()
-    return ""
-
-
 def _candidate_asset_stored_content_hash(asset: dict) -> str:
     metadata = dict(asset.get("metadata") or {})
     return str(metadata.get("content_sha256") or "").strip()
@@ -4230,43 +4252,27 @@ def _candidate_asset_is_ready(asset: dict) -> bool:
     )
 
 
-def _dedupe_workspace_cv_upload_assets(application, user) -> tuple[object, list[dict]]:
-    assets = _load_candidate_assets(user)
+def _dedupe_workspace_cv_assets_for_display(
+    assets: list[dict],
+    *,
+    referenced_asset_ids: set[str],
+) -> list[dict]:
     grouped: dict[str, list[dict]] = {}
-    changed = False
-    for index, asset in enumerate(assets):
+    for asset in assets:
         asset_id = str(asset.get("asset_id") or "").strip()
         asset_kind = str(asset.get("asset_kind") or "").strip()
         origin = str(asset.get("source", {}).get("origin") or "upload").strip()
         if not asset_id or asset_kind != "workspace_cv" or origin != "upload":
             continue
-        content_hash = _candidate_asset_content_hash(application, asset)
+        content_hash = _candidate_asset_stored_content_hash(asset)
         if not content_hash:
             continue
         grouped.setdefault(content_hash, []).append(asset)
-        metadata = dict(asset.get("metadata") or {})
-        if str(metadata.get("content_sha256") or "").strip() != content_hash:
-            metadata["content_sha256"] = content_hash
-            asset["metadata"] = metadata
-            assets[index] = asset
-            changed = True
 
-    duplicate_to_canonical: dict[str, str] = {}
-    referenced_asset_ids = set()
-    accessible_workspaces = [
-        workspace
-        for workspace in application.list_workspaces()
-        if application.user_can_access_workspace(user, workspace.id)
-    ]
-    for workspace in accessible_workspaces:
-        referenced_asset_id = str(getattr(workspace, "settings", {}).get("workspace_cv_asset_id") or "").strip()
-        if referenced_asset_id:
-            referenced_asset_ids.add(referenced_asset_id)
-
+    duplicate_asset_ids: set[str] = set()
     for duplicate_group in grouped.values():
         if len(duplicate_group) < 2:
             continue
-        # ponytail: only uploaded workspace CV retries are deduped here; extend if other assets show retry spam.
         canonical = next(
             (
                 asset
@@ -4279,35 +4285,13 @@ def _dedupe_workspace_cv_upload_assets(application, user) -> tuple[object, list[
         for asset in duplicate_group:
             asset_id = str(asset.get("asset_id") or "").strip()
             if asset_id and asset_id != canonical_id:
-                duplicate_to_canonical[asset_id] = canonical_id
+                duplicate_asset_ids.add(asset_id)
 
-    if duplicate_to_canonical:
-        assets = [
-            asset
-            for asset in assets
-            if str(asset.get("asset_id") or "").strip() not in duplicate_to_canonical
-        ]
-        changed = True
-        for workspace in accessible_workspaces:
-            workspace_payload = workspace.to_dict()
-            settings = dict(workspace_payload.get("settings") or {})
-            current_asset_id = str(settings.get("workspace_cv_asset_id") or "").strip()
-            canonical_id = duplicate_to_canonical.get(current_asset_id)
-            if not canonical_id:
-                continue
-            settings["workspace_cv_asset_id"] = canonical_id
-            try:
-                runtime_settings, _asset = _resolve_workspace_cv_binding(application, user, canonical_id)
-                settings.update(runtime_settings)
-            except Exception:
-                pass
-            workspace_payload["settings"] = settings
-            application.upsert_workspace(workspace_payload)
-
-    if not changed:
-        return user, assets
-    refreshed_user = _persist_candidate_assets(application, user, assets)
-    return refreshed_user, _load_candidate_assets(refreshed_user)
+    return [
+        asset
+        for asset in assets
+        if str(asset.get("asset_id") or "").strip() not in duplicate_asset_ids
+    ]
 
 
 def _update_candidate_asset_section_decisions(
@@ -4849,15 +4833,7 @@ def _candidate_asset_to_document_item(
     metadata = dict(asset.get("metadata") or {})
     preview_profile: dict[str, Any] = {}
     if asset_kind == "workspace_cv":
-        asset_path = str(asset.get("file", {}).get("path") or asset.get("path") or "").strip()
-        cv_text = (
-            str(metadata.get("source_text") or "").strip()
-            or (
-                extract_cv_text_from_path(asset_path)
-                if asset_path and Path(asset_path).is_file()
-                else ""
-            )
-        )
+        cv_text = str(metadata.get("source_text") or "").strip()
         preview_profile = _build_workspace_cv_preview_profile(
             cv_text,
             shared_profile,
@@ -4900,7 +4876,11 @@ def _collect_document_entries(
     workspace_id: str = "",
     run_id: str = "",
     asset_kind: str = "",
+    run_record=None,
+    workspace_record=None,
+    run_jobs: list[object] | None = None,
 ) -> list[dict]:
+    asset_kind_filter = str(asset_kind or "").strip().lower()
     raw_profile = dict((user.metadata or {}).get("profile") or {})
     shared_profile = {
         "name": str(raw_profile.get("name") or user.display_name or user.email.split("@")[0]),
@@ -4921,40 +4901,68 @@ def _collect_document_entries(
         "photo_data_url": str(raw_profile.get("photo_data_url") or ""),
         "avatar_url": str(raw_profile.get("avatar_url") or ""),
     }
-    workspaces = {
-        workspace.id: workspace.name
-        for workspace in application.list_workspaces()
-        if application.user_can_access_workspace(user, workspace.id)
-    }
-    entries = [
-        _artifact_entry_to_document_item(entry)
-        for entry in _collect_artifact_entries(application, user, workspace_id=workspace_id, run_id=run_id)
-        if _artifact_entry_is_user_facing_document(entry)
-    ]
-    user, candidate_assets = _dedupe_workspace_cv_upload_assets(application, user)
-    for asset in candidate_assets:
-        asset_workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
-        if workspace_id and asset_workspace_id and asset_workspace_id != workspace_id:
-            continue
-        asset_for_item = deepcopy(asset)
-        asset_metadata = dict(asset_for_item.get("metadata") or {})
-        processing = dict(asset_metadata.get("cv_processing") or {})
-        processing_job_id = str(processing.get("job_id") or "").strip()
-        if processing_job_id and str(asset_for_item.get("asset_kind") or "").strip().lower() == "workspace_cv":
-            try:
-                processing_run = application.get_run(processing_job_id)
-                if processing_run.status == RUN_STATUS_RUNNING and str(asset_metadata.get("status") or "") not in {"ready", "failed"}:
-                    asset_metadata["status"] = "processing"
-                elif processing_run.status == RUN_STATUS_QUEUED and str(asset_metadata.get("status") or "") not in {"ready", "failed"}:
-                    asset_metadata["status"] = "queued"
-                elif processing_run.status == RUN_STATUS_FAILED and str(asset_metadata.get("status") or "") != "ready":
-                    asset_metadata["status"] = "failed"
-                asset_for_item["metadata"] = asset_metadata
-            except Exception:
-                pass
-        entries.append(_candidate_asset_to_document_item(asset_for_item, workspaces, shared_profile))
-    if asset_kind:
-        entries = [item for item in entries if str(item.get("asset_kind") or "").lower() == asset_kind.lower()]
+    run_artifacts_requested = not (
+        asset_kind_filter in {"workspace_cv", "master_career_profile"} and not run_id
+    )
+    entries = []
+    if run_artifacts_requested:
+        entries = [
+            _artifact_entry_to_document_item(entry)
+            for entry in _collect_artifact_entries(
+                application,
+                user,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                run_record=run_record,
+                workspace_record=workspace_record,
+                run_jobs=run_jobs,
+            )
+            if _artifact_entry_is_user_facing_document(entry)
+        ]
+
+    candidate_assets_requested = not run_id
+    if candidate_assets_requested:
+        accessible_workspaces = [
+            workspace
+            for workspace in application.list_workspaces()
+            if application.user_can_access_workspace(user, workspace.id)
+        ]
+        workspaces = {
+            workspace.id: workspace.name
+            for workspace in accessible_workspaces
+        }
+        referenced_asset_ids = {
+            str(getattr(workspace, "settings", {}).get("workspace_cv_asset_id") or "").strip()
+            for workspace in accessible_workspaces
+            if str(getattr(workspace, "settings", {}).get("workspace_cv_asset_id") or "").strip()
+        }
+        candidate_assets = _dedupe_workspace_cv_assets_for_display(
+            _load_candidate_assets(user),
+            referenced_asset_ids=referenced_asset_ids,
+        )
+        for asset in candidate_assets:
+            asset_workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
+            if workspace_id and asset_workspace_id and asset_workspace_id != workspace_id:
+                continue
+            asset_for_item = deepcopy(asset)
+            asset_metadata = dict(asset_for_item.get("metadata") or {})
+            processing = dict(asset_metadata.get("cv_processing") or {})
+            processing_job_id = str(processing.get("job_id") or "").strip()
+            if processing_job_id and str(asset_for_item.get("asset_kind") or "").strip().lower() == "workspace_cv":
+                try:
+                    processing_run = application.get_run(processing_job_id)
+                    if processing_run.status == RUN_STATUS_RUNNING and str(asset_metadata.get("status") or "") not in {"ready", "failed"}:
+                        asset_metadata["status"] = "processing"
+                    elif processing_run.status == RUN_STATUS_QUEUED and str(asset_metadata.get("status") or "") not in {"ready", "failed"}:
+                        asset_metadata["status"] = "queued"
+                    elif processing_run.status == RUN_STATUS_FAILED and str(asset_metadata.get("status") or "") != "ready":
+                        asset_metadata["status"] = "failed"
+                    asset_for_item["metadata"] = asset_metadata
+                except Exception:
+                    pass
+            entries.append(_candidate_asset_to_document_item(asset_for_item, workspaces, shared_profile))
+    if asset_kind_filter:
+        entries = [item for item in entries if str(item.get("asset_kind") or "").lower() == asset_kind_filter]
     entries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
     return entries
 
