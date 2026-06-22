@@ -2404,6 +2404,7 @@ class BackendApiTests(unittest.TestCase):
             {
                 "body_read",
                 "multipart_parse",
+                "dedupe_lookup",
                 "r2_storage",
                 "turso_write",
                 "total",
@@ -2492,18 +2493,8 @@ class BackendApiTests(unittest.TestCase):
             file_bytes,
         )
         self.assertEqual(first_status, 202)
-        user = self.app.get_user(self.user.user_id)
-        metadata = dict(user.metadata or {})
-        assets = []
-        for asset in metadata.get("candidate_assets") or []:
-            asset = dict(asset)
-            asset_metadata = dict(asset.get("metadata") or {})
-            asset_metadata.pop("content_sha256", None)
-            asset["metadata"] = asset_metadata
-            assets.append(asset)
-        metadata["candidate_assets"] = assets
-        user.metadata = metadata
-        self.app.repositories.auth_repository.upsert_user(user)
+        processed = self.app.process_next_queued_run(auto_retry_failed=False)
+        self.assertEqual(processed.status, "completed")
 
         second_status, second_payload = self._multipart_request(
             "/cv-upload",
@@ -2514,6 +2505,9 @@ class BackendApiTests(unittest.TestCase):
 
         self.assertEqual(second_status, 202)
         self.assertEqual(first_payload["asset"]["asset_id"], second_payload["asset"]["asset_id"])
+        self.assertEqual(second_payload["status"], "ready")
+        self.assertEqual(second_payload["job_id"], "")
+        self.assertEqual(second_payload["status_url"], "")
 
         user = self.app.get_user(self.user.user_id)
         metadata = dict(user.metadata or {})
@@ -2531,6 +2525,28 @@ class BackendApiTests(unittest.TestCase):
         cleaned_user = self.app.get_user(self.user.user_id)
         cleaned_assets = (cleaned_user.metadata or {}).get("candidate_assets") or []
         self.assertEqual(len(cleaned_assets), 1)
+
+    def test_cv_upload_same_filename_different_content_creates_new_asset(self):
+        first_status, first_payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "resume.txt",
+            b"Jane Candidate\nSummary\nOperations analyst.\n",
+        )
+        self.assertEqual(first_status, 202)
+
+        second_status, second_payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "resume.txt",
+            b"Jane Candidate\nSummary\nFinance analyst with SQL experience.\n",
+        )
+
+        self.assertEqual(second_status, 202)
+        self.assertNotEqual(first_payload["asset_id"], second_payload["asset_id"])
+        user = self.app.get_user(self.user.user_id)
+        assets = (user.metadata or {}).get("candidate_assets") or []
+        self.assertEqual(len(assets), 2)
 
     def test_cv_upload_status_reports_failure_after_background_processing_error(self):
         status, payload = self._multipart_request(

@@ -517,7 +517,7 @@ export default function RunDetailPage() {
   });
 
   const { data, loading, error, refresh } = useApiResource(
-    () => request(`/runs/${runId}/customer-view`),
+    () => request(`/runs/${runId}/customer-view`, { timeoutMs: 20000 }),
     [request, runId],
   );
 
@@ -529,16 +529,31 @@ export default function RunDetailPage() {
   const hasActiveChildRuns = (review.excluded_jobs || []).some((job) =>
     ACTIVE_RUN_STATUSES.includes(String(job.create_documents_run_status || "").trim()),
   );
+  const shouldPollRun = loading || !run || hasActiveRun || hasActiveChildRuns;
 
   useEffect(() => {
-    if (!hasActiveRun && !hasActiveChildRuns) {
+    if (!shouldPollRun) {
       return undefined;
     }
     const intervalId = window.setInterval(() => {
-      refresh().catch(() => undefined);
+      refresh({ showLoading: false }).catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(intervalId);
-  }, [hasActiveChildRuns, hasActiveRun, refresh]);
+  }, [refresh, shouldPollRun]);
+
+  useEffect(() => {
+    function refreshVisibleRun() {
+      if (document.visibilityState === "visible") {
+        refresh({ showLoading: false }).catch(() => undefined);
+      }
+    }
+    window.addEventListener("focus", refreshVisibleRun);
+    document.addEventListener("visibilitychange", refreshVisibleRun);
+    return () => {
+      window.removeEventListener("focus", refreshVisibleRun);
+      document.removeEventListener("visibilitychange", refreshVisibleRun);
+    };
+  }, [refresh]);
 
   async function deleteRun() {
     if (!run) {

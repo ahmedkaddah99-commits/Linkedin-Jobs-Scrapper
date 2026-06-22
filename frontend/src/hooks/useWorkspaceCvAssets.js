@@ -4,6 +4,10 @@ import {
   buildWorkspacePreviewDocuments,
   buildWorkspacePreviewState,
 } from "../lib/cvStudio";
+import {
+  selectedWorkspaceCvMissingFromPayload,
+  toWorkspaceCvAssetOption,
+} from "./workspaceCvAssetState";
 
 function normalizeStringList(value) {
   return (Array.isArray(value) ? value : [])
@@ -36,36 +40,38 @@ export function useWorkspaceCvAssets({ cvAssetsPayload, formSettings, settingsPa
     () =>
       (cvAssetsPayload?.documents || [])
         .filter((item) => item.asset_kind === "workspace_cv")
-        .map((item) => ({
-          value: item.asset_id,
-          label: item.display_name,
-          assetId: item.asset_id,
-          createdAt: item.created_at,
-          downloadUrl: item.download_url,
-          sourceOrigin: item.source_origin,
-          status: item.display_status || item.status || "ready",
-          previewProfile: item.preview_profile || null,
-        })),
+        .map(toWorkspaceCvAssetOption),
     [cvAssetsPayload?.documents],
   );
+  const selectedAssetId = String(formSettings.workspace_cv_asset_id || "").trim();
   const readyWorkspaceCvAssets = useMemo(
     () => workspaceCvAssets.filter((item) => String(item.status || "ready").toLowerCase() === "ready"),
     [workspaceCvAssets],
   );
   const workspaceCvAssetIds = useMemo(
-    () => new Set(readyWorkspaceCvAssets.map((item) => item.value)),
-    [readyWorkspaceCvAssets],
+    () => new Set(workspaceCvAssets.map((item) => item.value)),
+    [workspaceCvAssets],
+  );
+  const selectableWorkspaceCvAssets = useMemo(
+    () =>
+      workspaceCvAssets.filter((item) => {
+        if (String(item.status || "ready").toLowerCase() === "ready") {
+          return true;
+        }
+        return selectedAssetId && item.value === selectedAssetId;
+      }),
+    [selectedAssetId, workspaceCvAssets],
   );
   const selectedWorkspaceCvAsset = useMemo(() => {
-    const selectedAssetId = String(formSettings.workspace_cv_asset_id || "").trim();
     if (!selectedAssetId) {
       return null;
     }
-    return readyWorkspaceCvAssets.find((item) => item.value === selectedAssetId) || null;
-  }, [formSettings.workspace_cv_asset_id, readyWorkspaceCvAssets]);
+    return workspaceCvAssets.find((item) => item.value === selectedAssetId) || null;
+  }, [selectedAssetId, workspaceCvAssets]);
+  const selectedWorkspaceCvReady = String(selectedWorkspaceCvAsset?.status || "ready").toLowerCase() === "ready";
   const sharedDocumentDefaults = settingsPayload?.documents || {};
   const mergedPreviewProfile = useMemo(() => {
-    if (!selectedWorkspaceCvAsset) {
+    if (!selectedWorkspaceCvAsset || !selectedWorkspaceCvReady) {
       return null;
     }
     const sharedProfile = settingsPayload?.profile || {};
@@ -87,7 +93,7 @@ export function useWorkspaceCvAssets({ cvAssetsPayload, formSettings, settingsPa
         sharedProfile.photo_data_url ||
         "",
     };
-  }, [selectedWorkspaceCvAsset, settingsPayload?.profile]);
+  }, [selectedWorkspaceCvAsset, selectedWorkspaceCvReady, settingsPayload?.profile]);
   const selectedCvCustomSections = useMemo(() => {
     const previewProfile = selectedWorkspaceCvAsset?.previewProfile || {};
     const detectedSections = Array.isArray(previewProfile.detected_custom_sections)
@@ -130,8 +136,7 @@ export function useWorkspaceCvAssets({ cvAssetsPayload, formSettings, settingsPa
   const workspaceCvAssetsLoaded = cvAssetsPayload !== undefined;
   const selectedWorkspaceCvMissing = Boolean(
     workspaceCvAssetsLoaded &&
-      formSettings.workspace_cv_asset_id &&
-      !workspaceCvAssetIds.has(formSettings.workspace_cv_asset_id),
+      selectedWorkspaceCvMissingFromPayload(cvAssetsPayload, selectedAssetId),
   );
 
   return {
@@ -141,10 +146,11 @@ export function useWorkspaceCvAssets({ cvAssetsPayload, formSettings, settingsPa
     mergedPreviewProfile,
     selectedCvCustomSections,
     selectedWorkspaceCvAsset,
+    selectedWorkspaceCvReady,
     selectedWorkspaceCvMissing,
     sharedDocumentDefaults,
     workspaceCvAssetIds,
-    workspaceCvAssets: readyWorkspaceCvAssets,
+    workspaceCvAssets: selectableWorkspaceCvAssets,
     allWorkspaceCvAssets: workspaceCvAssets,
     workspaceCvAssetsLoaded,
   };

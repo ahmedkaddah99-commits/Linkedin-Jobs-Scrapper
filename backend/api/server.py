@@ -144,6 +144,7 @@ from backend.profiles.cv_profile_extraction import (
     normalize_profile_payload,
 )
 from backend.profiles.cv_upload_jobs import (
+    CV_STATUS_READY,
     CV_STATUS_UPLOADED,
     cv_upload_status_payload,
     enqueue_cv_upload_processing_run,
@@ -4125,6 +4126,19 @@ def _candidate_asset_content_hash(application, asset: dict) -> str:
     return ""
 
 
+def _candidate_asset_stored_content_hash(asset: dict) -> str:
+    metadata = dict(asset.get("metadata") or {})
+    return str(metadata.get("content_sha256") or "").strip()
+
+
+def _candidate_asset_is_ready(asset: dict) -> bool:
+    metadata = dict(asset.get("metadata") or {})
+    return (
+        str(metadata.get("status") or "").strip().lower() == CV_STATUS_READY
+        and bool(str(metadata.get("source_text") or "").strip())
+    )
+
+
 def _dedupe_workspace_cv_upload_assets(application, user) -> tuple[object, list[dict]]:
     assets = _load_candidate_assets(user)
     grouped: dict[str, list[dict]] = {}
@@ -4258,18 +4272,16 @@ def _store_candidate_asset_upload(
         timings_ms[stage] = round((float(previous) if previous is not None else 0.0) + duration_ms, 2)
 
     content_hash = sha256(file_bytes).hexdigest()
-    for existing in _load_candidate_assets(user):
-        if str(existing.get("asset_kind") or "").strip() != asset_kind:
-            continue
-        if _candidate_asset_content_hash(application, existing) != content_hash:
-            continue
-        file_payload = dict(existing.get("file") or {})
-        object_key = str(file_payload.get("object_key") or "").strip()
-        raw_path = str(file_payload.get("path") or "").strip()
-        if object_key and application.object_storage.exists(object_key):
+    dedupe_started = perf_counter()
+    try:
+        for existing in _load_candidate_assets(user):
+            if str(existing.get("asset_kind") or "").strip() != asset_kind:
+                continue
+            if _candidate_asset_stored_content_hash(existing) != content_hash:
+                continue
             return normalize_candidate_asset_descriptor(existing)
-        if not object_key and raw_path and Path(raw_path).is_file():
-            return normalize_candidate_asset_descriptor(existing)
+    finally:
+        record_duration("dedupe_lookup", dedupe_started)
 
     asset_id = f"asset_{uuid4().hex[:16]}"
     content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"

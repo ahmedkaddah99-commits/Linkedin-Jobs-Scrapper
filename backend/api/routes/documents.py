@@ -206,6 +206,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         timings_ms: dict[str, float | None] = {
                             "body_read": None,
                             "multipart_parse": None,
+                            "dedupe_lookup": None,
                             "r2_storage": None,
                             "turso_write": None,
                             "total": None,
@@ -251,25 +252,48 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                                 timings_ms=timings_ms,
                             )
 
-                            processing_run, uploaded_asset = enqueue_cv_upload_processing_run(
-                                application.repositories,
-                                user_id=user.user_id,
-                                asset_id=str(uploaded_asset.get("asset_id") or ""),
-                            )
-                            status_payload = cv_upload_status_payload(
-                                application.repositories,
-                                user_id=user.user_id,
-                                job_id=processing_run.id,
-                            )
+                            if _candidate_asset_is_ready(uploaded_asset):
+                                processing_run = None
+                                status_payload = {
+                                    "asset_id": str(uploaded_asset.get("asset_id") or ""),
+                                    "job_id": "",
+                                    "status": CV_STATUS_READY,
+                                    "status_url": "",
+                                    "asset": uploaded_asset,
+                                    "parsed": dict((uploaded_asset.get("metadata") or {}).get("parsed_profile") or {}),
+                                    "cv_text": str((uploaded_asset.get("metadata") or {}).get("source_text") or ""),
+                                    "char_count": len(str((uploaded_asset.get("metadata") or {}).get("source_text") or "")),
+                                    "extraction": dict((uploaded_asset.get("metadata") or {}).get("profile_extraction") or {}),
+                                    "error": "",
+                                    "run": {},
+                                }
+                            else:
+                                processing_run, uploaded_asset = enqueue_cv_upload_processing_run(
+                                    application.repositories,
+                                    user_id=user.user_id,
+                                    asset_id=str(uploaded_asset.get("asset_id") or ""),
+                                )
+                                status_payload = cv_upload_status_payload(
+                                    application.repositories,
+                                    user_id=user.user_id,
+                                    job_id=processing_run.id,
+                                )
 
                             timings_ms["total"] = round((perf_counter() - upload_started) * 1000, 2)
+                            status_url = str(status_payload.get("status_url") or "")
+                            if not status_url and processing_run is not None:
+                                status_url = f"/cv-upload/{processing_run.id}"
                             response_payload = {
                                 "asset_id": str(uploaded_asset.get("asset_id") or ""),
-                                "job_id": processing_run.id,
+                                "job_id": str(status_payload.get("job_id") or ""),
                                 "status": str(status_payload.get("status") or "queued"),
-                                "status_url": str(status_payload.get("status_url") or f"/cv-upload/{processing_run.id}"),
+                                "status_url": status_url,
                                 "filename": filename,
                                 "asset": uploaded_asset,
+                                "parsed": dict(status_payload.get("parsed") or {}),
+                                "cv_text": str(status_payload.get("cv_text") or ""),
+                                "char_count": int(status_payload.get("char_count") or 0),
+                                "extraction": dict(status_payload.get("extraction") or {}),
                                 "timings_ms": timings_ms,
                             }
                             outcome = "success"
