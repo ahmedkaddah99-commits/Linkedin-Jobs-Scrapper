@@ -179,6 +179,89 @@ def _summarize_customer_view_events(events: list[dict[str, Any]], *, run_id: str
     }
 
 
+def _summarize_customer_view_payload_events(events: list[dict[str, Any]], *, run_id: str = "") -> dict[str, Any]:
+    filtered = [
+        event
+        for event in events
+        if not run_id or str(event.get("run_id") or "") == run_id
+    ]
+    rows = []
+    for event in filtered:
+        timings = event.get("timings_ms") if isinstance(event.get("timings_ms"), dict) else {}
+        phase_rows = [
+            {"phase": str(key), "duration_ms": float(value or 0)}
+            for key, value in timings.items()
+            if str(key) != "total"
+        ]
+        rows.append(
+            {
+                "run_id": str(event.get("run_id") or ""),
+                "workspace_id": str(event.get("workspace_id") or ""),
+                "run_status": str(event.get("run_status") or ""),
+                "total_ms": float(timings.get("total") or sum(item["duration_ms"] for item in phase_rows)),
+                "slowest_phases": sorted(phase_rows, key=lambda item: -float(item["duration_ms"]))[:8],
+                "counts": event.get("counts") if isinstance(event.get("counts"), dict) else {},
+            }
+        )
+    return {
+        "count": len(filtered),
+        "slowest": sorted(rows, key=lambda item: -float(item["total_ms"]))[:10],
+    }
+
+
+def _summarize_auth_timing_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    by_outcome: dict[str, dict[str, Any]] = {}
+    slowest: list[dict[str, Any]] = []
+    for event in events:
+        outcome_key = "::".join(
+            [
+                str(event.get("token_shape") or "unknown"),
+                str(event.get("auth_method") or "unknown"),
+                str(event.get("outcome") or "unknown"),
+            ]
+        )
+        bucket = by_outcome.setdefault(
+            outcome_key,
+            {"count": 0, "max_duration_ms": 0.0, "total_duration_ms": 0.0, "fallback_attempted": 0},
+        )
+        duration = float(event.get("duration_ms") or 0)
+        bucket["count"] += 1
+        bucket["total_duration_ms"] += duration
+        bucket["max_duration_ms"] = max(float(bucket["max_duration_ms"]), duration)
+        if event.get("fallback_attempted"):
+            bucket["fallback_attempted"] += 1
+        slowest.append(
+            {
+                "token_shape": str(event.get("token_shape") or ""),
+                "auth_method": str(event.get("auth_method") or ""),
+                "outcome": str(event.get("outcome") or ""),
+                "duration_ms": duration,
+                "fallback_attempted": bool(event.get("fallback_attempted")),
+                "error_type": str(event.get("error_type") or ""),
+            }
+        )
+    groups = []
+    for key, bucket in by_outcome.items():
+        token_shape, auth_method, outcome = key.split("::", 2)
+        count = int(bucket["count"])
+        groups.append(
+            {
+                "token_shape": token_shape,
+                "auth_method": auth_method,
+                "outcome": outcome,
+                "count": count,
+                "fallback_attempted": int(bucket["fallback_attempted"]),
+                "avg_duration_ms": round(float(bucket["total_duration_ms"]) / max(count, 1), 2),
+                "max_duration_ms": round(float(bucket["max_duration_ms"]), 2),
+            }
+        )
+    return {
+        "count": len(events),
+        "groups": sorted(groups, key=lambda item: (-float(item["max_duration_ms"]), item["auth_method"]))[:10],
+        "slowest": sorted(slowest, key=lambda item: -float(item["duration_ms"]))[:10],
+    }
+
+
 def _safe_json_object(raw_value: Any) -> dict[str, Any]:
     try:
         payload = json.loads(str(raw_value or "{}"))
@@ -218,12 +301,18 @@ def check_render(*, log_start: str = "", log_end: str = "", run_id: str = "") ->
         for item in raw_services:
             service = item.get("service") if isinstance(item, dict) and isinstance(item.get("service"), dict) else item
             if isinstance(service, dict):
+                service_details = service.get("serviceDetails") or service.get("service_details") or {}
+                if not isinstance(service_details, dict):
+                    service_details = {}
                 services.append(
                     {
                         "name": service.get("name"),
                         "id": service.get("id"),
                         "type": service.get("type"),
                         "owner_id": service.get("ownerId") or (service.get("owner") or {}).get("id"),
+                        "health_check_path": service_details.get("healthCheckPath")
+                        or service_details.get("health_check_path")
+                        or "",
                     }
                 )
         emit("render.services", "OK", count=len(services), services=services[:10])
@@ -300,17 +389,26 @@ def check_render(*, log_start: str = "", log_end: str = "", run_id: str = "") ->
                 ]
                 api_timings = [payload for payload in parsed_payloads if payload.get("event") == "api_request_timing"]
                 customer_timings = [payload for payload in parsed_payloads if payload.get("event") == "customer_view_timing"]
+                customer_payload_timings = [payload for payload in parsed_payloads if payload.get("event") == "customer_view_payload_timing"]
+                auth_timings = [payload for payload in parsed_payloads if payload.get("event") == "auth_resolution_timing"]
                 disconnects = [
                     _render_log_message(item)
                     for item in items
                     if "client_disconnect" in _render_log_message(item)
                 ]
                 emit("render.logs.runr-api.request_timing", "OK", **_summarize_api_timing_events(api_timings))
+                emit("render.logs.runr-api.auth_timing", "OK", **_summarize_auth_timing_events(auth_timings))
                 emit(
                     "render.logs.runr-api.customer_view_timing",
                     "OK",
                     run_id=run_id,
                     **_summarize_customer_view_events(customer_timings, run_id=run_id),
+                )
+                emit(
+                    "render.logs.runr-api.customer_view_payload_timing",
+                    "OK",
+                    run_id=run_id,
+                    **_summarize_customer_view_payload_events(customer_payload_timings, run_id=run_id),
                 )
                 emit(
                     "render.logs.runr-api.client_disconnects",

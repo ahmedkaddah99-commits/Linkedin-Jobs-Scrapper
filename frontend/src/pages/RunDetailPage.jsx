@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
@@ -516,12 +516,48 @@ export default function RunDetailPage() {
     error: "",
   });
 
-  const { data, loading, error, refresh } = useApiResource(
-    () => request(`/runs/${runId}/customer-view`, { timeoutMs: 20000 }),
+  const {
+    data: runStatusData,
+    loading: runStatusLoading,
+    error: runStatusError,
+    refresh: refreshRunStatus,
+  } = useApiResource(
+    () => request(`/runs/${runId}`, { timeoutMs: 8000 }),
     [request, runId],
+    {
+      cacheKey: `run-status:${runId}`,
+      staleMs: 2000,
+      backgroundRefresh: true,
+    },
   );
 
-  const run = data?.run || null;
+  const {
+    data,
+    loading: reviewLoading,
+    error: reviewError,
+    refresh,
+  } = useApiResource(
+    () => request(`/runs/${runId}/customer-view`, { timeoutMs: 20000 }),
+    [request, runId],
+    {
+      cacheKey: `run-customer-view:${runId}`,
+      staleMs: 2000,
+      backgroundRefresh: true,
+    },
+  );
+
+  const customerRun = data?.run || null;
+  const runStatus = runStatusData?.id ? runStatusData : null;
+  const run = customerRun && runStatus ? {
+    ...customerRun,
+    status: runStatus.status || customerRun.status,
+    updated_at: runStatus.updated_at || customerRun.updated_at,
+    finished_at: runStatus.finished_at || customerRun.finished_at,
+    current_stage_id: runStatus.current_stage_id || customerRun.current_stage_id,
+    last_error: runStatus.last_error || customerRun.last_error,
+    attempt_count: runStatus.attempt_count ?? customerRun.attempt_count,
+    max_attempts: runStatus.max_attempts ?? customerRun.max_attempts,
+  } : (customerRun || runStatus);
   const tracker = data?.tracker || {};
   const review = data?.review || { included_jobs: [], excluded_jobs: [] };
   const stages = data?.stages || [];
@@ -529,22 +565,43 @@ export default function RunDetailPage() {
   const hasActiveChildRuns = (review.excluded_jobs || []).some((job) =>
     ACTIVE_RUN_STATUSES.includes(String(job.create_documents_run_status || "").trim()),
   );
-  const shouldPollRun = loading || !run || hasActiveRun || hasActiveChildRuns;
+  const shouldPollRunStatus = !runStatus || hasActiveRun;
+  const shouldPollReview = Boolean(run) && (hasActiveRun || hasActiveChildRuns);
+  const detailLoading = reviewLoading && !data;
+  const pageLoading = !run && (runStatusLoading || reviewLoading);
+  const pageError = !run ? (runStatusError || reviewError) : "";
+
+  const refreshRunResources = useCallback((options = {}) => {
+    return Promise.allSettled([
+      refreshRunStatus({ showLoading: false }),
+      refresh(options),
+    ]);
+  }, [refresh, refreshRunStatus]);
 
   useEffect(() => {
-    if (!shouldPollRun) {
+    if (!shouldPollRunStatus) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      refreshRunStatus({ showLoading: false }).catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshRunStatus, shouldPollRunStatus]);
+
+  useEffect(() => {
+    if (!shouldPollReview || reviewLoading) {
       return undefined;
     }
     const intervalId = window.setInterval(() => {
       refresh({ showLoading: false }).catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(intervalId);
-  }, [refresh, shouldPollRun]);
+  }, [refresh, reviewLoading, shouldPollReview]);
 
   useEffect(() => {
     function refreshVisibleRun() {
       if (document.visibilityState === "visible") {
-        refresh({ showLoading: false }).catch(() => undefined);
+        refreshRunResources({ showLoading: false }).catch(() => undefined);
       }
     }
     window.addEventListener("focus", refreshVisibleRun);
@@ -553,7 +610,7 @@ export default function RunDetailPage() {
       window.removeEventListener("focus", refreshVisibleRun);
       document.removeEventListener("visibilitychange", refreshVisibleRun);
     };
-  }, [refresh]);
+  }, [refreshRunResources]);
 
   async function deleteRun() {
     if (!run) {
@@ -617,7 +674,7 @@ export default function RunDetailPage() {
             <div className="flex flex-wrap gap-3">
               <button
                 className="rounded-full bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                onClick={() => refresh().catch(() => undefined)}
+                onClick={() => refreshRunResources().catch(() => undefined)}
                 type="button"
               >
                 Refresh
@@ -672,13 +729,27 @@ export default function RunDetailPage() {
       <RunChecklist stages={stages} />
       <SourceCoverageNotice run={run} stages={stages} />
 
-      {loading ? (
+      {run?.last_error ? (
+        <section className="rounded-[1.75rem] border border-error/20 bg-error/5 px-6 py-5 text-sm text-error shadow-soft">
+          {run.last_error}
+        </section>
+      ) : null}
+
+      {pageLoading ? (
         <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest px-6 py-5 text-on-surface-variant shadow-soft">
           Loading run review...
         </section>
-      ) : error ? (
+      ) : pageError ? (
         <section className="rounded-[1.75rem] border border-error/20 bg-error/5 px-6 py-5 text-error shadow-soft">
-          {error}
+          {pageError}
+        </section>
+      ) : detailLoading ? (
+        <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest px-6 py-5 text-on-surface-variant shadow-soft">
+          Loading detailed review...
+        </section>
+      ) : reviewError && !data ? (
+        <section className="rounded-[1.75rem] border border-error/20 bg-error/5 px-6 py-5 text-error shadow-soft">
+          {reviewError}
         </section>
       ) : (
         <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">

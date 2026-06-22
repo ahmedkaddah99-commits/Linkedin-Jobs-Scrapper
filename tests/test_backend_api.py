@@ -20,6 +20,7 @@ from backend import create_backend
 from backend.api.server import (
     _build_workspace_cv_preview_profile,
     _customer_excluded_reason,
+    _resolve_auth_context,
     _store_candidate_asset_upload,
     build_handler,
 )
@@ -310,6 +311,40 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertIn("error", payload)
         self.assertEqual(payload["error"]["code"], "unauthorized")
+
+    def test_clerk_like_jwt_failure_does_not_try_legacy_token_lookup(self):
+        def jwt_segment(payload):
+            raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+
+        token = ".".join(
+            [
+                jwt_segment({"alg": "RS256", "kid": "test-key"}),
+                jwt_segment(
+                    {
+                        "iss": "https://resolved-lobster-79.clerk.accounts.dev",
+                        "sub": "user_test",
+                        "sid": "sess_test",
+                        "exp": int(time.time()) + 3600,
+                    }
+                ),
+                "signature",
+            ]
+        )
+
+        class LegacyAuthTrap:
+            def __init__(self):
+                self.called = False
+
+            def authenticate_access_token(self, raw_token):
+                self.called = True
+                raise AssertionError("legacy token lookup should not run for Clerk JWTs")
+
+        app = LegacyAuthTrap()
+        with patch("backend.api.server.verify_session_token", side_effect=ValueError("bad clerk jwt")):
+            with self.assertRaises(PermissionError):
+                _resolve_auth_context(app, token)
+        self.assertFalse(app.called)
 
     def test_api_allows_loopback_cors_origin(self):
         status, headers, payload = self._request_with_headers(
@@ -626,11 +661,12 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(missing_payload["error"]["code"], "not_found")
 
     def test_run_customer_view_includes_stage_jobs_and_rejection_reasons(self):
-        status, run_payload = self._request(
-            "POST",
-            "/runs",
-            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
-        )
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, run_payload = self._request(
+                "POST",
+                "/runs",
+                {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+            )
         self.assertEqual(status, 201)
         run_id = run_payload["id"]
 
@@ -657,7 +693,8 @@ class BackendApiTests(unittest.TestCase):
             [{"url": "https://company.example/careers", "links_fetched": 25, "cap_value": 25}],
         )
 
-        status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
+        with patch("backend.api.server._collect_tracker_entries", side_effect=AssertionError("customer-view must stay run-scoped")):
+            status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
         self.assertEqual(status, 200)
         self.assertEqual(customer_view["run"]["workspace_name"], "API Workspace")
         self.assertEqual(customer_view["summary"]["included_job_count"], 1)

@@ -1756,21 +1756,81 @@ def _customer_excluded_job_payload(entry: dict, user) -> dict:
     }
 
 
+def _count_run_tracker_items(reviews: list[object], job_sets: Mapping[str, list[object]]) -> int:
+    jobs_by_id: dict[str, object] = {}
+    for jobs in job_sets.values():
+        for job in jobs:
+            job_id = str(getattr(job, "job_id", "") or "")
+            if job_id:
+                jobs_by_id[job_id] = job
+
+    tracker_count = 0
+    counted_posting_urls: set[str] = set()
+    for review in reviews:
+        review_meta = dict(getattr(review, "metadata", {}) or {})
+        tracker_status = str(review_meta.get("tracker_status") or "")
+        if getattr(review, "decision", "") != "approved" and not tracker_status:
+            continue
+        job = jobs_by_id.get(str(getattr(review, "job_id", "") or ""))
+        posting_url = canonical_posting_url(job.to_dict() if job else {})
+        if posting_url:
+            if posting_url in counted_posting_urls:
+                continue
+            counted_posting_urls.add(posting_url)
+        tracker_count += 1
+    return tracker_count
+
+
 def _collect_run_customer_view(application, user, run) -> dict:
+    payload_started_at = perf_counter()
+    payload_timings_ms: dict[str, float] = {}
+
+    def record_phase(name: str, started_at: float) -> None:
+        payload_timings_ms[name] = round((perf_counter() - started_at) * 1000, 2)
+
+    phase_started = perf_counter()
     progress = _run_progress_payload(run)
+    record_phase("progress", phase_started)
+
+    phase_started = perf_counter()
     scrapeops_usage = application.get_scrapeops_usage_summary(run_id=run.id)
+    record_phase("scrapeops_usage", phase_started)
+
+    phase_started = perf_counter()
     capped_sites = application.repositories.job_store.load_blob(run.id, "capped_sites", [])
+    record_phase("capped_sites", phase_started)
+
+    phase_started = perf_counter()
     workflow_snapshot = _workflow_snapshot_for_run(application, run)
+    record_phase("workflow_snapshot", phase_started)
+
+    phase_started = perf_counter()
     workflow_stages = [
         dict(stage)
         for stage in workflow_snapshot.get("stages") or []
         if isinstance(stage, dict)
     ]
+    record_phase("workflow_stages", phase_started)
+
+    phase_started = perf_counter()
     workspace = application.get_workspace(run.workspace_id)
+    record_phase("workspace", phase_started)
+
+    phase_started = perf_counter()
+    if bool(getattr(run, "is_test_run", False)):
+        application.backfill_completed_test_run_tracker_reviews(run_ids=[run.id])
     reviews = application.list_reviews(run_id=run.id, limit=1000, offset=0)
+    record_phase("reviews", phase_started)
+
+    phase_started = perf_counter()
     reviews_by_job = {review.job_id: review for review in reviews}
     job_sets = application.list_job_sets(run.id)
+    record_phase("job_sets", phase_started)
+
+    phase_started = perf_counter()
     documents = _collect_document_entries(application, user, run_id=run.id)
+    record_phase("documents", phase_started)
+
     document_count_by_job: dict[str, int] = {}
     documents_by_job: dict[str, list[dict]] = {}
     for document in documents:
@@ -1778,7 +1838,11 @@ def _collect_run_customer_view(application, user, run) -> dict:
         if job_id:
             document_count_by_job[job_id] = document_count_by_job.get(job_id, 0) + 1
             documents_by_job.setdefault(job_id, []).append(document)
+
+    phase_started = perf_counter()
     rejected_entries = _collect_rejected_job_entries(application, user, run_id=run.id)
+    record_phase("rejected_entries", phase_started)
+
     rejected_by_stage: dict[str, list[dict]] = {}
     for entry in rejected_entries:
         rejected_by_stage.setdefault(str(entry.get("source_stage") or ""), []).append(entry)
@@ -1890,7 +1954,11 @@ def _collect_run_customer_view(application, user, run) -> dict:
             }
         )
 
-    tracker_items = [item for item in _collect_tracker_entries(application, user) if str(item.get("run_id") or "") == run.id]
+    phase_started = perf_counter()
+    tracker_item_count = _count_run_tracker_items(reviews, job_sets)
+    record_phase("tracker_count", phase_started)
+
+    phase_started = perf_counter()
     review_included_jobs = list(included_jobs_by_id.values())
     review_included_jobs.sort(key=lambda item: (str(item.get("title") or "").casefold(), str(item.get("company") or "").casefold(), str(item.get("job_id") or "")))
     review_excluded_jobs = list(excluded_jobs_by_id.values())
@@ -1913,8 +1981,9 @@ def _collect_run_customer_view(application, user, run) -> dict:
     generated_job_count = 0
     for key in run.final_job_set_keys or []:
         generated_job_count += len(job_sets.get(key, []))
+    record_phase("final_assembly", phase_started)
 
-    return {
+    payload = {
         "run": {
             **_run_summary(run),
             "workspace_name": workspace.name,
@@ -1930,7 +1999,7 @@ def _collect_run_customer_view(application, user, run) -> dict:
             "included_job_count": len(included_job_ids),
             "excluded_job_count": len(excluded_job_ids),
             "generated_job_count": generated_job_count,
-            "tracker_job_count": len(tracker_items),
+            "tracker_job_count": tracker_item_count,
             "excluded_ready_for_documents_count": sum(
                 1
                 for item in rejected_entries
@@ -1941,7 +2010,7 @@ def _collect_run_customer_view(application, user, run) -> dict:
             "runner_credits_consumed": int(scrapeops_usage.get("totals", {}).get("runner_credits") or 0),
         },
         "tracker": {
-            "item_count": len(tracker_items),
+            "item_count": tracker_item_count,
             "href": "/tracker",
             "note": "Jobs with generated documents appear in Tracker automatically once the document run finishes.",
         },
@@ -1953,6 +2022,28 @@ def _collect_run_customer_view(application, user, run) -> dict:
         },
         "stages": stages,
     }
+    payload_timings_ms["total"] = round((perf_counter() - payload_started_at) * 1000, 2)
+    logging.getLogger("backend.api.customer_view").info(
+        json.dumps(
+            {
+                "event": "customer_view_payload_timing",
+                "run_id": str(run.id or ""),
+                "workspace_id": str(run.workspace_id or ""),
+                "run_status": str(run.status or ""),
+                "timings_ms": payload_timings_ms,
+                "counts": {
+                    "stages": len(stages),
+                    "documents": len(documents),
+                    "rejected_entries": len(rejected_entries),
+                    "reviews": len(reviews),
+                    "job_sets": len(job_sets),
+                    "tracker_items": tracker_item_count,
+                },
+            },
+            separators=(",", ":"),
+        )
+    )
+    return payload
 
 
 def _workspace_option(workspace) -> dict:
@@ -5124,7 +5215,23 @@ def _upsert_rejected_review_override(
 
 
 def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", run_id: str = "") -> list[dict]:
-    workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
+    if run_id:
+        try:
+            run = application.get_run(run_id)
+        except KeyError:
+            return []
+        if workspace_id and run.workspace_id != workspace_id:
+            return []
+        if not application.user_can_access_workspace(user, run.workspace_id):
+            return []
+        try:
+            workspace = application.get_workspace(run.workspace_id)
+        except KeyError:
+            workspace = None
+        workspaces = {run.workspace_id: workspace} if workspace is not None else {}
+        runs = [run]
+    else:
+        workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
     reason_labels = _rejection_reason_labels()
     entries: list[dict] = []
     requeue_run_cache: dict[str, object | None] = {}
@@ -6649,30 +6756,124 @@ def _build_legacy_auth_context(application, token_value: str):
     )
 
 
+def _decode_jwt_payload_unverified(token_value: str) -> dict[str, Any]:
+    parts = str(token_value or "").split(".")
+    if len(parts) != 3:
+        return {}
+    try:
+        payload_segment = parts[1]
+        padding_length = (-len(payload_segment)) % 4
+        decoded = base64.urlsafe_b64decode(f"{payload_segment}{'=' * padding_length}").decode("utf-8")
+        payload = json.loads(decoded or "{}")
+    except Exception:
+        return {}
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _token_looks_like_clerk_jwt(token_value: str) -> bool:
+    claims = _decode_jwt_payload_unverified(token_value)
+    if not claims:
+        return False
+    issuer = str(claims.get("iss") or "").strip().lower()
+    subject = str(claims.get("sub") or "").strip()
+    session_id = str(claims.get("sid") or "").strip()
+    return (
+        "clerk" in issuer
+        or subject.startswith("user_")
+        or bool(session_id and claims.get("exp"))
+    )
+
+
+def _log_auth_resolution_timing(
+    *,
+    token_shape: str,
+    outcome: str,
+    auth_method: str = "",
+    duration_ms: float,
+    fallback_attempted: bool = False,
+    error_type: str = "",
+) -> None:
+    logging.getLogger("backend.auth").info(
+        json.dumps(
+            {
+                "event": "auth_resolution_timing",
+                "token_shape": token_shape,
+                "outcome": outcome,
+                "auth_method": auth_method,
+                "duration_ms": round(float(duration_ms or 0), 2),
+                "fallback_attempted": bool(fallback_attempted),
+                "error_type": str(error_type or ""),
+            },
+            separators=(",", ":"),
+        )
+    )
+
+
 def _resolve_auth_context(application, token_value: str):
     normalized_token = str(token_value or "").strip()
     if not normalized_token:
         raise PermissionError("Missing bearer token.")
     auth_logger = logging.getLogger("backend.auth")
     if normalized_token.count(".") == 2:
+        started_at = perf_counter()
+        clerk_like_jwt = _token_looks_like_clerk_jwt(normalized_token)
         try:
-            return _build_clerk_auth_context(application, normalized_token)
+            context = _build_clerk_auth_context(application, normalized_token)
+            _log_auth_resolution_timing(
+                token_shape="jwt",
+                outcome="success",
+                auth_method="clerk_jwt",
+                duration_ms=(perf_counter() - started_at) * 1000,
+            )
+            return context
         except Exception as clerk_exc:
+            if clerk_like_jwt:
+                _log_auth_resolution_timing(
+                    token_shape="jwt",
+                    outcome="failed",
+                    auth_method="clerk_jwt",
+                    duration_ms=(perf_counter() - started_at) * 1000,
+                    fallback_attempted=False,
+                    error_type=type(clerk_exc).__name__,
+                )
+                raise PermissionError(str(clerk_exc)) from clerk_exc
             try:
                 legacy_context = _build_legacy_auth_context(application, normalized_token)
             except Exception:
+                _log_auth_resolution_timing(
+                    token_shape="jwt",
+                    outcome="failed",
+                    auth_method="legacy_api_token",
+                    duration_ms=(perf_counter() - started_at) * 1000,
+                    fallback_attempted=True,
+                    error_type=type(clerk_exc).__name__,
+                )
                 raise PermissionError(str(clerk_exc)) from clerk_exc
             auth_logger.warning(
                 "Accepted legacy api_token fallback for %s while Clerk JWT verification failed: %s",
                 legacy_context.user.user_id,
                 clerk_exc,
             )
+            _log_auth_resolution_timing(
+                token_shape="jwt",
+                outcome="success",
+                auth_method="legacy_api_token",
+                duration_ms=(perf_counter() - started_at) * 1000,
+                fallback_attempted=True,
+            )
             return legacy_context
 
+    started_at = perf_counter()
     legacy_context = _build_legacy_auth_context(application, normalized_token)
     auth_logger.warning(
         "Accepted legacy api_token fallback for %s during Clerk migration window.",
         legacy_context.user.user_id,
+    )
+    _log_auth_resolution_timing(
+        token_shape="opaque",
+        outcome="success",
+        auth_method="legacy_api_token",
+        duration_ms=(perf_counter() - started_at) * 1000,
     )
     return legacy_context
 

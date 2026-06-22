@@ -212,8 +212,8 @@ class StageEngine:
                 )
                 raise
 
+            output_keys: list[str] = []
             try:
-                output_keys: list[str] = []
                 for key, jobs in outcome.job_sets.items():
                     context.set_job_set(key, jobs)
                     self.job_store.save_job_set(run.id, key, context.get_job_set(key))
@@ -255,12 +255,19 @@ class StageEngine:
                 )
                 completed_stage_ids.add(definition.stage_id)
             except Exception as exc:
+                failed_artifact_ids = [
+                    artifact.artifact_id
+                    for artifact in list(getattr(outcome, "artifacts", []) or [])
+                ]
                 self._append_stage_result(
                     context=context,
                     definition=definition,
                     status=STAGE_STATUS_FAILED,
                     started_at=started_at,
                     finished_at=utc_now_iso(),
+                    metrics=dict(getattr(outcome, "metrics", {}) or {}),
+                    output_keys=output_keys,
+                    artifact_ids=failed_artifact_ids,
                     error=str(exc),
                 )
                 run.status = RUN_STATUS_FAILED

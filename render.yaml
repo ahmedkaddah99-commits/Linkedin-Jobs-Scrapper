@@ -24,7 +24,7 @@ services:
     dockerfilePath: ./Dockerfile
     dockerCommand: ./deploy/start.sh api
     preDeployCommand: ./deploy/start.sh migrate
-    healthCheckPath: /health/ready
+    healthCheckPath: /health/live
     autoDeployTrigger: checksPass
     maxShutdownDelaySeconds: 60
     envVars:

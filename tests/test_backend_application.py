@@ -1350,6 +1350,11 @@ class BackendApplicationTests(unittest.TestCase):
         )
         self.assertFalse(app.list_reviews(run_id=run.id))
         self.assertEqual(run.stage_results[-1].status, "failed")
+        generated_jobs = app.get_job_set(run.id, "generated_jobs")
+        self.assertEqual(len(generated_jobs), 1)
+        self.assertEqual(generated_jobs[0].to_dict()["doc_generation_error"], "DeepSeek request timed out")
+        self.assertEqual(run.stage_results[-1].metrics["generated_job_records"], 1)
+        self.assertEqual(run.stage_results[-1].metrics["usable_document_jobs"], 0)
 
     def test_document_generation_without_document_artifact_does_not_complete_run(self):
         temp_dir = self._workspace_tempdir("document_generation_no_artifact_blocks_completion")

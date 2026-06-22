@@ -200,6 +200,11 @@ def _json_request(
     payload: Mapping[str, Any] | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
+    try:
+        timeout_seconds = float(os.getenv("CLERK_HTTP_TIMEOUT_SECONDS", "5") or "5")
+    except (TypeError, ValueError):
+        timeout_seconds = 5.0
+    timeout_seconds = min(10.0, max(1.0, timeout_seconds))
     encoded_body = None
     request_headers = {
         "Accept": "application/json",
@@ -216,7 +221,7 @@ def _json_request(
         method=str(method or "GET").upper(),
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             response_body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")

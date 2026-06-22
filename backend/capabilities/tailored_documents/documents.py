@@ -944,7 +944,7 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
         )
     )
     if total_jobs > 0 and usable_doc_count <= 0:
-        raise RuntimeError(
+        print(
             f"Stage 4 generated no usable CV documents for {total_jobs} selected job(s). "
             f"Generation errors: {failed_count}."
         )
