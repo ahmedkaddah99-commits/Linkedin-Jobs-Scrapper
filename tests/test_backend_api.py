@@ -3476,6 +3476,48 @@ class BackendApiTests(unittest.TestCase):
         self.assertIn("database_write_read_delete", payload["timings_ms"])
         self.assertIn("object_storage_put_get_delete", payload["timings_ms"])
 
+    def test_frontend_api_request_diagnostic_event_is_persisted(self):
+        status, payload = self._request(
+            "POST",
+            "/analytics/events",
+            {
+                "event_name": "frontend_api_request_failed",
+                "route": "/runs/:run_id/customer-view",
+                "source": "frontend_api_request_diagnostic",
+                "payload": {
+                    "event": "api_request_failed",
+                    "method": "GET",
+                    "path": "/runs/:run_id/customer-view",
+                    "status": 500,
+                    "duration_ms": 20001,
+                    "timeout_ms": 20000,
+                    "error_name": "Error",
+                    "error_code": "internal_error",
+                    "aborted": False,
+                },
+            },
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(payload["event_name"], "frontend_api_request_failed")
+
+        rows = self.app.repositories.analytics_store.query_rows(
+            """
+            SELECT event_name, route, source, payload_json
+            FROM analytics_events
+            WHERE event_name = 'frontend_api_request_failed'
+            ORDER BY occurred_at DESC
+            LIMIT 1
+            """
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["route"], "/runs/:run_id/customer-view")
+        self.assertEqual(rows[0]["source"], "frontend_api_request_diagnostic")
+        event_payload = json.loads(rows[0]["payload_json"])
+        self.assertEqual(event_payload["status"], 500)
+        self.assertEqual(event_payload["path"], "/runs/:run_id/customer-view")
+        self.assertNotIn("Authorization", event_payload)
+        self.assertNotIn("body", event_payload)
+
     def test_admin_events_endpoint_supports_filters_pagination_and_admin_role(self):
         analytics_store = self.app.repositories.analytics_store
         analytics_store.emit_event(

@@ -160,6 +160,7 @@ class RouteRegistry:
                 continue
             if not route.matches(context.method, context.segments):
                 continue
+            setattr(context.handler, "_matched_route_name", route.name)
             handled = route.handler(context)
             if handled is False:
                 continue

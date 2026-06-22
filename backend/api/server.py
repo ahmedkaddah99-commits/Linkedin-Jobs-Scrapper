@@ -8028,15 +8028,78 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
     class BackendApiHandler(BaseHTTPRequestHandler):
         def _begin_request(self) -> None:
+            self._request_started_at = perf_counter()
             self._response_started = False
             self._client_disconnected = False
+            self._matched_route_name = ""
+            self._response_status = 0
+            self._response_bytes = 0
+            self._request_error_type = ""
+
+        def _route_shape(self) -> str:
+            try:
+                _, segments, _ = self._parse_request()
+            except Exception:
+                return "/"
+            shaped: list[str] = []
+            previous = ""
+            for segment in segments:
+                value = str(segment or "")
+                lower = value.lower()
+                if previous == "runs":
+                    shaped.append(":run_id")
+                elif previous == "workspaces":
+                    shaped.append(":workspace_id")
+                elif previous == "documents":
+                    shaped.append(":document_id")
+                elif previous == "artifacts":
+                    shaped.append(":artifact_id")
+                elif previous in {"users", "reviews", "secrets", "tokens"}:
+                    shaped.append(":id")
+                elif previous == "by-id":
+                    shaped.append(":id")
+                elif re.match(r"^(run|asset|doc|review|user)_[a-z0-9_-]+$", lower):
+                    shaped.append(":id")
+                elif re.match(r"^\d{6,}$", lower):
+                    shaped.append(":id")
+                elif re.match(r"^[a-f0-9]{16,}$", lower):
+                    shaped.append(":id")
+                elif re.match(r"^[a-z0-9_-]{32,}$", lower):
+                    shaped.append(":id")
+                else:
+                    shaped.append(value)
+                previous = value
+            return "/" + "/".join(shaped) if shaped else "/"
+
+        def _finish_request_log(self) -> None:
+            started_at = getattr(self, "_request_started_at", None)
+            if started_at is None:
+                return
+            duration_ms = round((perf_counter() - started_at) * 1000, 2)
+            payload = {
+                "event": "api_request_timing",
+                "method": str(getattr(self, "command", "") or ""),
+                "route": self._route_shape(),
+                "route_name": str(getattr(self, "_matched_route_name", "") or ""),
+                "status": int(getattr(self, "_response_status", 0) or 0),
+                "duration_ms": duration_ms,
+                "response_bytes": int(getattr(self, "_response_bytes", 0) or 0),
+                "client_disconnected": bool(getattr(self, "_client_disconnected", False)),
+            }
+            error_type = str(getattr(self, "_request_error_type", "") or "")
+            if error_type:
+                payload["error_type"] = error_type
+            logging.getLogger("backend.api.http").info(json.dumps(payload, separators=(",", ":")))
 
         def _handle_client_disconnect(self, exc: BaseException) -> None:
             self._client_disconnected = True
             self.close_connection = True
+            self._request_error_type = type(exc).__name__
             logging.getLogger("backend.api.http").info(
-                "client_disconnect method=%s error_type=%s",
+                "client_disconnect method=%s route=%s route_name=%s error_type=%s",
                 str(getattr(self, "command", "") or ""),
+                self._route_shape(),
+                str(getattr(self, "_matched_route_name", "") or ""),
                 type(exc).__name__,
             )
 
@@ -8070,6 +8133,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 return
             body = _json_bytes(payload)
             self._response_started = True
+            self._response_status = int(status)
+            self._response_bytes = len(body)
             try:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -8088,6 +8153,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 return
             payload = str(body or "").encode("utf-8")
             self._response_started = True
+            self._response_status = int(status)
+            self._response_bytes = len(payload)
             try:
                 self.send_response(status)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -8237,6 +8304,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             body = target.read_bytes()
             content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
             self._response_started = True
+            self._response_status = int(HTTPStatus.OK)
+            self._response_bytes = len(body)
             try:
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", content_type)
@@ -8316,6 +8385,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             self._begin_request()
             try:
                 self._enforce_origin_policy()
+                self._response_status = int(HTTPStatus.NO_CONTENT)
+                self._response_bytes = 0
                 self.send_response(HTTPStatus.NO_CONTENT)
                 for key, value in self._cors_headers().items():
                     self.send_header(key, value)
@@ -8324,6 +8395,8 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 self._handle_client_disconnect(exc)
             except PermissionError as exc:
                 self._send_error(HTTPStatus.FORBIDDEN, "forbidden", str(exc))
+            finally:
+                self._finish_request_log()
 
         def do_GET(self):  # noqa: N802
             self._begin_request()
@@ -8355,7 +8428,10 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:
+                self._request_error_type = type(exc).__name__
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", str(exc))
+            finally:
+                self._finish_request_log()
 
         def do_POST(self):  # noqa: N802
             self._begin_request()
@@ -8392,7 +8468,10 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:
+                self._request_error_type = type(exc).__name__
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", str(exc))
+            finally:
+                self._finish_request_log()
 
         def do_PUT(self):  # noqa: N802
             self._begin_request()
@@ -8424,7 +8503,10 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:
+                self._request_error_type = type(exc).__name__
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", str(exc))
+            finally:
+                self._finish_request_log()
 
         def do_DELETE(self):  # noqa: N802
             self._begin_request()
@@ -8455,7 +8537,10 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             except ValueError as exc:
                 self._send_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
             except Exception as exc:
+                self._request_error_type = type(exc).__name__
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", str(exc))
+            finally:
+                self._finish_request_log()
 
         def log_message(self, format, *args):  # noqa: A003
             return

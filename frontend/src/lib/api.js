@@ -8,6 +8,8 @@ const STORAGE_KEYS = {
 export const CLERK_JWT_TEMPLATE_NAME = "runr_backend";
 
 export const QUOTA_EXCEEDED_EVENT = "runr:quota-exceeded";
+const SLOW_REQUEST_THRESHOLD_MS = 5000;
+const REQUEST_DIAGNOSTIC_SOURCE = "frontend_api_request_diagnostic";
 
 export function getDefaultApiBaseUrl() {
   return String(import.meta.env.VITE_API_BASE_URL || "/v1").replace(/\/$/, "");
@@ -55,6 +57,76 @@ function parseJsonText(text) {
   } catch {
     return null;
   }
+}
+
+function nowMs() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+export function diagnosticPathShape(path) {
+  const rawPath = String(path || "").split("?")[0] || "/";
+  return rawPath
+    .replace(/\/runs\/[^/]+/g, "/runs/:run_id")
+    .replace(/\/workspaces\/[^/]+/g, "/workspaces/:workspace_id")
+    .replace(/\/documents\/[^/]+/g, "/documents/:document_id")
+    .replace(/\/artifacts\/[^/]+/g, "/artifacts/:artifact_id")
+    .replace(/\/by-id\/[^/]+/g, "/by-id/:id")
+    .replace(/\/[a-z0-9_-]{32,}(?=\/|$)/gi, "/:id")
+    .replace(/\/\d{6,}(?=\/|$)/g, "/:id");
+}
+
+function emitApiRequestDiagnostic(level, payload) {
+  if (typeof console === "undefined") {
+    return;
+  }
+  const log = level === "warn" && typeof console.warn === "function" ? console.warn : console.info;
+  if (typeof log !== "function") {
+    return;
+  }
+  log("[runr-api-request]", payload);
+}
+
+function shouldPersistApiRequestDiagnostic(payload) {
+  const path = String(payload?.path || "");
+  return Boolean(path) && path !== "/analytics/events";
+}
+
+function persistApiRequestDiagnostic(baseUrl, accessToken, payload) {
+  if (!shouldPersistApiRequestDiagnostic(payload) || !accessToken || typeof fetch !== "function") {
+    return;
+  }
+  const eventName =
+    payload.event === "api_request_failed"
+      ? "frontend_api_request_failed"
+      : "frontend_api_request_slow";
+  const body = JSON.stringify({
+    event_name: eventName,
+    route: String(payload.path || ""),
+    source: REQUEST_DIAGNOSTIC_SOURCE,
+    payload,
+  });
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  };
+  try {
+    fetch(resolveApiUrl(baseUrl, "/analytics/events"), {
+      method: "POST",
+      headers,
+      body,
+      keepalive: body.length < 60000,
+    }).catch(() => {});
+  } catch {
+    // Diagnostics must never change the behavior of the original request.
+  }
+}
+
+function recordApiRequestDiagnostic(level, baseUrl, accessToken, payload) {
+  emitApiRequestDiagnostic(level, payload);
+  persistApiRequestDiagnostic(baseUrl, accessToken, payload);
 }
 
 function normalizeResponseErrorPayload(payload, fallbackMessage) {
@@ -238,6 +310,8 @@ export async function apiRequest(baseUrl, accessTokenOrResolver, path, options =
       signal.addEventListener("abort", () => controller.abort(), { once: true });
     }
   }
+  const requestStartedAt = nowMs();
+  let responseStatus = 0;
   try {
     const response = await fetch(resolveApiUrl(baseUrl, path), {
       method,
@@ -245,21 +319,57 @@ export async function apiRequest(baseUrl, accessTokenOrResolver, path, options =
       body: requestBody,
       signal: controller?.signal || signal,
     });
-  if (responseType === "blob") {
+    responseStatus = response.status;
+    if (responseType === "blob") {
+      if (!response.ok) {
+        const text = await response.text();
+        const payload = parseJsonText(text);
+        throw buildApiError(response, payload, text);
+      }
+      const blob = await response.blob();
+      const durationMs = Math.round(nowMs() - requestStartedAt);
+      if (durationMs >= SLOW_REQUEST_THRESHOLD_MS) {
+        recordApiRequestDiagnostic("info", baseUrl, resolvedAccessToken, {
+          event: "api_request_slow",
+          method,
+          path: diagnosticPathShape(path),
+          status: responseStatus,
+          duration_ms: durationMs,
+          response_type: "blob",
+        });
+      }
+      return blob;
+    }
+    const text = await response.text();
+    const payload = parseJsonText(text);
     if (!response.ok) {
-      const text = await response.text();
-      const payload = parseJsonText(text);
       throw buildApiError(response, payload, text);
     }
-    return response.blob();
-  }
-  const text = await response.text();
-  const payload = parseJsonText(text);
-  if (!response.ok) {
-    throw buildApiError(response, payload, text);
-  }
-  return payload || {};
+    const durationMs = Math.round(nowMs() - requestStartedAt);
+    if (durationMs >= SLOW_REQUEST_THRESHOLD_MS) {
+      recordApiRequestDiagnostic("info", baseUrl, resolvedAccessToken, {
+        event: "api_request_slow",
+        method,
+        path: diagnosticPathShape(path),
+        status: responseStatus,
+        duration_ms: durationMs,
+        response_type: "json",
+      });
+    }
+    return payload || {};
   } catch (error) {
+    const durationMs = Math.round(nowMs() - requestStartedAt);
+    recordApiRequestDiagnostic("warn", baseUrl, resolvedAccessToken, {
+      event: "api_request_failed",
+      method,
+      path: diagnosticPathShape(path),
+      status: Number(error?.status || responseStatus || 0),
+      duration_ms: durationMs,
+      timeout_ms: Number(timeoutMs || 0),
+      error_name: String(error?.name || "Error"),
+      error_code: String(error?.code || ""),
+      aborted: Boolean(error?.name === "AbortError"),
+    });
     if (error?.name === "AbortError" && timeoutMs > 0) {
       throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
     }

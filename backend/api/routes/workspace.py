@@ -191,12 +191,64 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "customer-view":
-                        user, _ = self._require_identity()
-                        run = application.get_run(segments[1])
-                        if not application.user_can_access_workspace(user, run.workspace_id):
-                            raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
-                        self._send_json(_collect_run_customer_view(application, user, run))
-                        return
+                        request_started = perf_counter()
+                        timings_ms: dict[str, float] = {}
+                        run = None
+                        payload = None
+                        outcome = "success"
+                        try:
+                            phase_started = perf_counter()
+                            user, _ = self._require_identity()
+                            timings_ms["auth"] = round((perf_counter() - phase_started) * 1000, 2)
+
+                            phase_started = perf_counter()
+                            run = application.get_run(segments[1])
+                            timings_ms["run_load"] = round((perf_counter() - phase_started) * 1000, 2)
+
+                            phase_started = perf_counter()
+                            if not application.user_can_access_workspace(user, run.workspace_id):
+                                raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                            timings_ms["access_check"] = round((perf_counter() - phase_started) * 1000, 2)
+
+                            phase_started = perf_counter()
+                            payload = _collect_run_customer_view(application, user, run)
+                            timings_ms["payload_build"] = round((perf_counter() - phase_started) * 1000, 2)
+
+                            phase_started = perf_counter()
+                            self._send_json(payload)
+                            timings_ms["send_json_call"] = round((perf_counter() - phase_started) * 1000, 2)
+                            return
+                        except Exception as exc:
+                            outcome = type(exc).__name__
+                            raise
+                        finally:
+                            timings_ms["total"] = round((perf_counter() - request_started) * 1000, 2)
+                            run_payload = payload.get("run") if isinstance(payload, dict) and isinstance(payload.get("run"), dict) else {}
+                            summary = payload.get("summary") if isinstance(payload, dict) and isinstance(payload.get("summary"), dict) else {}
+                            stages = payload.get("stages") if isinstance(payload, dict) and isinstance(payload.get("stages"), list) else []
+                            review = payload.get("review") if isinstance(payload, dict) and isinstance(payload.get("review"), dict) else {}
+                            logging.getLogger("backend.api.customer_view").info(
+                                json.dumps(
+                                    {
+                                        "event": "customer_view_timing",
+                                        "outcome": outcome,
+                                        "run_id": str(segments[1] or ""),
+                                        "workspace_id": str(getattr(run, "workspace_id", "") or ""),
+                                        "run_status": str(run_payload.get("status") or getattr(run, "status", "") or ""),
+                                        "timings_ms": timings_ms,
+                                        "counts": {
+                                            "stages": len(stages),
+                                            "included_jobs": int(summary.get("included_job_count") or 0),
+                                            "excluded_jobs": int(summary.get("excluded_job_count") or 0),
+                                            "generated_jobs": int(summary.get("generated_job_count") or 0),
+                                            "review_included_jobs": int(review.get("included_count") or 0),
+                                            "review_excluded_jobs": int(review.get("excluded_count") or 0),
+                                        },
+                                        "client_disconnected": bool(getattr(self, "_client_disconnected", False)),
+                                    },
+                                    separators=(",", ":"),
+                                )
+                            )
 
     if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "jobs" and segments[3] == "by-id":
                         user, _ = self._require_identity()
