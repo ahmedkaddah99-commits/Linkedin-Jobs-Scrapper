@@ -4,10 +4,16 @@ from urllib.error import HTTPError
 from unittest.mock import patch
 
 from backend.capabilities.tracker.email_integration import GmailMailboxClient, _gmail_query_for_scan_window
-from backend.capabilities.tracker.google_oauth import _google_json_request
+from backend.capabilities.tracker.google_oauth import _google_json_request, tracker_google_oauth_metadata
 
 
 class TrackerGmailIntegrationTests(unittest.TestCase):
+    def test_google_oauth_metadata_does_not_override_runtime_environment(self):
+        with patch("backend.capabilities.tracker.google_oauth.load_project_dotenv") as load_dotenv:
+            tracker_google_oauth_metadata()
+
+        load_dotenv.assert_called_once_with(override=False)
+
     def test_gmail_scan_window_uses_safe_newer_than_query(self):
         query_suffix = "{application interview recruiter recruiting candidate career hiring offer rejection bewerbung angebot absage}"
         self.assertEqual(_gmail_query_for_scan_window("now"), f"newer_than:1d {query_suffix}")

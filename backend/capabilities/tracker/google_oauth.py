@@ -23,7 +23,7 @@ _PLACEHOLDER_ENV_VALUES = {
 
 
 def tracker_google_oauth_metadata() -> dict[str, Any]:
-    load_project_dotenv(override=True)
+    load_project_dotenv(override=False)
     client_id = str(os.getenv("TRACKER_GOOGLE_OAUTH_CLIENT_ID") or "").strip()
     client_secret = str(os.getenv("TRACKER_GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
     redirect_uri = str(os.getenv("TRACKER_GOOGLE_OAUTH_REDIRECT_URI") or "").strip()

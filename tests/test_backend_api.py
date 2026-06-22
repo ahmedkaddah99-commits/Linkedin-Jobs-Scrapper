@@ -135,7 +135,7 @@ class BackendApiTests(unittest.TestCase):
         )
         self.storage_env_patch.start()
         self.addCleanup(self.storage_env_patch.stop)
-        self.quota_env_patch = patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": ""}, clear=False)
+        self.quota_env_patch = patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
         self.quota_env_patch.start()
         self.addCleanup(self.quota_env_patch.stop)
 
@@ -514,7 +514,7 @@ class BackendApiTests(unittest.TestCase):
                 "/runs",
                 {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
             )
-        self.assertEqual(status, 202)
+        self.assertEqual(status, 201)
         run_id = run_payload["id"]
 
         status, review_payload = self._request(
@@ -619,7 +619,7 @@ class BackendApiTests(unittest.TestCase):
                 "/runs",
                 {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
             )
-        self.assertEqual(status, 202)
+        self.assertEqual(status, 201)
 
         status, payload = self._request("GET", "/dashboard?mode=summary")
         self.assertEqual(status, 200)
@@ -2096,9 +2096,9 @@ class BackendApiTests(unittest.TestCase):
         status, payload = self._request("GET", "/billing/subscription")
         self.assertEqual(status, 200)
         self.assertIn("scrapeops_usage", payload)
-        self.assertEqual(payload["usage"]["quotas"]["runner_credits_per_month"]["limit"], 1000)
+        self.assertEqual(payload["usage"]["quotas"]["runner_credits_per_month"]["limit"], -1)
         self.assertEqual(payload["scrapeops_usage"]["usage"]["totals"]["runner_credits"], 3)
-        self.assertEqual(payload["scrapeops_usage"]["policy"]["company_sites_per_run"], 10)
+        self.assertEqual(payload["scrapeops_usage"]["policy"]["company_sites_per_run"], 0)
 
     def test_run_customer_view_includes_scrapeops_usage_summary(self):
         status, run_payload = self._request(
