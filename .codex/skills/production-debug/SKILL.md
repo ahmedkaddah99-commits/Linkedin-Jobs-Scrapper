@@ -80,11 +80,45 @@ Provider failure:
 - Provider read-only API probe result.
 - App log entry that records the provider error without leaking credentials.
 
+Slow page or API timeout:
+
+- Capture the exact reproduction window in UTC and the affected `run_id` when available.
+- Run the production access script with `--log-start`, `--log-end`, and `--run-id`.
+- Compare browser timeout duration with Render route timing and structured phase timing.
+- Identify the dominant backend phase before changing frontend timeout or loading behavior.
+- Trace that phase's call graph for unscoped scans, repeated remote reads, object downloads, parsing, or writes performed by a GET request.
+- Preserve content correctness: uploaded files are deduplicated only by a persisted content hash, never by filename.
+- Add regression tests that fail if a scoped endpoint calls global collectors, downloads object contents, mutates persisted data, or reloads data already available to the caller.
+- After deployment, repeat the same production window check and compare route and phase timings against the pre-fix baseline.
+
 Deployment mismatch:
 
 - Git diff/commit expected to be deployed.
 - Render latest deploy ID/status for API and worker.
 - Runtime logs proving the new code path is active.
+
+## Slow Request Command
+
+Use exact UTC timestamps covering the browser reproduction:
+
+```powershell
+python .codex\skills\production-debug\scripts\check_production_access.py `
+  --env user_config\.env `
+  --log-start 2026-06-22T07:25:00Z `
+  --log-end 2026-06-22T07:50:00Z `
+  --run-id run_example `
+  --skip-r2-write
+```
+
+Treat the output as a comparison of layers:
+
+1. Browser duration and aborts.
+2. Render route duration.
+3. Structured endpoint phase timings such as `customer_view_payload_timing`.
+4. Turso query health and run state.
+5. R2 object existence and provider health.
+
+Do not recommend deleting or consolidating infrastructure until the dominant phase is proven to be infrastructure-bound after its application call graph has been scoped.
 
 ## Blocker Standard
 
