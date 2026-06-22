@@ -445,7 +445,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(listed_run["is_test_run"])
         self.assertEqual(listed_run["run_mode"], "test")
 
-    def test_tracker_backfills_completed_legacy_test_run(self):
+    def test_tracker_reads_persisted_test_run_review_without_backfilling(self):
         self.app.upsert_workflow_template(
             {
                 "id": "api_test_run_tracker_template",
@@ -477,21 +477,25 @@ class BackendApiTests(unittest.TestCase):
             }
         )
 
-        status, run_payload = self._request(
-            "POST",
-            "/runs",
-            {
-                "workspace_id": "api_test_run_tracker_workspace",
-                "execution_mode": "sync",
-                "run_mode": "test",
-            },
-        )
+        with patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False):
+            status, run_payload = self._request(
+                "POST",
+                "/runs",
+                {
+                    "workspace_id": "api_test_run_tracker_workspace",
+                    "execution_mode": "sync",
+                    "run_mode": "test",
+                },
+            )
         self.assertEqual(status, 201)
         reviews = self.app.list_reviews(run_id=run_payload["id"])
         self.assertEqual(len(reviews), 1)
-        self.app.delete_review(reviews[0].review_id)
 
-        status, tracker_payload = self._request("GET", "/tracker")
+        with patch(
+            "backend.application.services.BackendApplication.backfill_completed_test_run_tracker_reviews",
+            side_effect=AssertionError("tracker GET must not mutate persisted reviews"),
+        ):
+            status, tracker_payload = self._request("GET", "/tracker")
         self.assertEqual(status, 200)
         test_run_item = next(
             item for item in tracker_payload["items"]
@@ -702,6 +706,9 @@ class BackendApiTests(unittest.TestCase):
         ), patch(
             "backend.api.server._run_jobs_for_document_lookup",
             side_effect=AssertionError("customer-view must reuse its loaded job sets"),
+        ), patch(
+            "backend.application.services.BackendApplication.backfill_completed_test_run_tracker_reviews",
+            side_effect=AssertionError("customer-view GET must not mutate persisted reviews"),
         ):
             status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
         self.assertEqual(status, 200)

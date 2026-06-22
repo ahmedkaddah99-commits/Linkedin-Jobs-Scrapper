@@ -128,6 +128,7 @@ from backend.domain.models import (
     TOKEN_SCOPE_WORKER_EXECUTE,
     TOKEN_SCOPE_WORKSPACES_READ,
     TOKEN_SCOPE_WORKSPACES_WRITE,
+    ReferralContactRecord,
     UserRecord,
     WorkspaceDefinition,
     utc_plus_seconds,
@@ -1797,7 +1798,15 @@ def _collect_run_customer_view(application, user, run) -> dict:
     record_phase("scrapeops_usage", phase_started)
 
     phase_started = perf_counter()
-    capped_sites = application.repositories.job_store.load_blob(run.id, "capped_sites", [])
+    run_snapshot = _load_run_read_snapshot(
+        application,
+        [run],
+        include_artifacts=True,
+        include_reviews=True,
+        include_blobs=True,
+    )
+    run_blobs = run_snapshot["blobs"].get(run.id, {})
+    capped_sites = run_blobs.get("capped_sites", [])
     record_phase("capped_sites", phase_started)
 
     phase_started = perf_counter()
@@ -1817,14 +1826,12 @@ def _collect_run_customer_view(application, user, run) -> dict:
     record_phase("workspace", phase_started)
 
     phase_started = perf_counter()
-    if bool(getattr(run, "is_test_run", False)):
-        application.backfill_completed_test_run_tracker_reviews(run_ids=[run.id])
-    reviews = application.list_reviews(run_id=run.id, limit=1000, offset=0)
+    reviews = run_snapshot["reviews"].get(run.id, [])
     record_phase("reviews", phase_started)
 
     phase_started = perf_counter()
     reviews_by_job = {review.job_id: review for review in reviews}
-    job_sets = application.list_job_sets(run.id)
+    job_sets = run_snapshot["job_sets"].get(run.id, {})
     record_phase("job_sets", phase_started)
 
     phase_started = perf_counter()
@@ -1835,6 +1842,7 @@ def _collect_run_customer_view(application, user, run) -> dict:
         run_record=run,
         workspace_record=workspace,
         run_jobs=_ordered_run_jobs_for_document_lookup(run, job_sets),
+        artifacts_by_run=run_snapshot["artifacts"],
     )
     record_phase("documents", phase_started)
 
@@ -1847,7 +1855,15 @@ def _collect_run_customer_view(application, user, run) -> dict:
             documents_by_job.setdefault(job_id, []).append(document)
 
     phase_started = perf_counter()
-    rejected_entries = _collect_rejected_job_entries(application, user, run_id=run.id)
+    rejected_entries = _collect_rejected_job_entries(
+        application,
+        user,
+        run_id=run.id,
+        run_record=run,
+        workspace_record=workspace,
+        review_records=reviews,
+        run_blobs=run_blobs,
+    )
     record_phase("rejected_entries", phase_started)
 
     rejected_by_stage: dict[str, list[dict]] = {}
@@ -2588,6 +2604,14 @@ def _ensure_quick_apply_workspace(application, user):
     )
 
 
+def _referral_contacts_from_user(user) -> list[ReferralContactRecord]:
+    return [
+        ReferralContactRecord.from_dict(item)
+        for item in (user.metadata or {}).get("referrals") or []
+        if isinstance(item, dict)
+    ]
+
+
 def _build_settings_payload(application, user) -> dict:
     workspaces = [workspace for workspace in application.list_workspaces() if application.user_can_access_workspace(user, workspace.id)]
     profile_options: dict[str, dict] = {}
@@ -2606,7 +2630,7 @@ def _build_settings_payload(application, user) -> dict:
     defaults = dict(metadata.get("defaults") or {})
     documents = _merge_document_metadata(dict(metadata.get("documents") or {}), {})
     review_preferences = dict(metadata.get("review_preferences") or {})
-    referrals = [contact.to_dict() for contact in application.list_referral_contacts(user.user_id)]
+    referrals = [contact.to_dict() for contact in _referral_contacts_from_user(user)]
 
     if not defaults.get("default_workspace_id") and workspaces:
         defaults["default_workspace_id"] = workspaces[0].id
@@ -2694,19 +2718,100 @@ def _collect_authorized_runs(application, user, *, workspace_id: str = "") -> tu
     return workspaces, runs
 
 
+def _load_job_sets_by_run(application, runs: list[object]) -> dict[str, dict[str, list[object]]]:
+    run_ids = [str(run.id) for run in runs]
+    loader = getattr(application.repositories.job_store, "load_job_sets_for_runs", None)
+    if callable(loader):
+        return loader(run_ids)
+    return {
+        run_id: application.repositories.job_store.load_all_job_sets(run_id)
+        for run_id in run_ids
+    }
+
+
+def _load_reviews_by_run(application, runs: list[object]) -> dict[str, list[object]]:
+    run_ids = [str(run.id) for run in runs]
+    loader = getattr(application.repositories.review_store, "list_reviews_for_runs", None)
+    if callable(loader):
+        return loader(run_ids)
+    return {
+        run_id: application.repositories.review_store.list_reviews(
+            run_id=run_id,
+            limit=1000,
+            offset=0,
+        )
+        for run_id in run_ids
+    }
+
+
+def _load_artifacts_by_run(application, runs: list[object]) -> dict[str, list[object]]:
+    run_ids = [str(run.id) for run in runs]
+    loader = getattr(application.repositories.artifact_store, "load_artifacts_for_runs", None)
+    if callable(loader):
+        return loader(run_ids)
+    return {
+        run_id: application.repositories.artifact_store.load_artifacts(run_id)
+        for run_id in run_ids
+    }
+
+
+def _load_run_read_snapshot(
+    application,
+    runs: list[object],
+    *,
+    include_artifacts: bool = False,
+    include_reviews: bool = False,
+    include_blobs: bool = False,
+    preserve_job_sets: bool = True,
+    review_jobs_only: bool = False,
+) -> dict[str, dict]:
+    loader = getattr(application.repositories.job_store, "load_run_read_snapshot", None)
+    if callable(loader):
+        return loader(
+            [str(run.id) for run in runs],
+            include_artifacts=include_artifacts,
+            include_reviews=include_reviews,
+            include_blobs=include_blobs,
+            preserve_job_sets=preserve_job_sets,
+            review_jobs_only=review_jobs_only,
+        )
+    return {
+        "job_sets": _load_job_sets_by_run(application, runs),
+        "artifacts": _load_artifacts_by_run(application, runs) if include_artifacts else {},
+        "reviews": _load_reviews_by_run(application, runs) if include_reviews else {},
+        "blobs": (
+            {
+                str(run.id): application.repositories.job_store.load_all_blobs(str(run.id))
+                for run in runs
+            }
+            if include_blobs
+            else {}
+        ),
+    }
+
+
 def _collect_review_queue_entries(application, user, *, workspace_id: str = "", run_id: str = "") -> list[dict]:
     workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
-    referral_contacts = application.list_referral_contacts(user.user_id)
+    referral_contacts = _referral_contacts_from_user(user)
+    snapshot = _load_run_read_snapshot(
+        application,
+        runs,
+        include_artifacts=True,
+        include_reviews=True,
+    )
+    job_sets_by_run = snapshot["job_sets"]
+    reviews_by_run = snapshot["reviews"]
+    artifacts_by_run = snapshot["artifacts"]
     entries: list[dict] = []
     for run in runs:
         if run_id and run.id != run_id:
             continue
-        job_sets = application.list_job_sets(run.id)
-        review_records = application.list_reviews(run_id=run.id, limit=1000, offset=0)
+        job_sets = job_sets_by_run.get(run.id, {})
+        review_records = reviews_by_run.get(run.id, [])
         reviews_by_job: dict[str, object] = {}
         for review in review_records:
             reviews_by_job.setdefault(review.job_id, review)
-        artifact_count = len(application.list_artifacts(run.id))
+        artifact_count = len(artifacts_by_run.get(run.id, []))
         workspace = workspaces.get(run.workspace_id)
         preferred_keys = run.final_job_set_keys or list(job_sets.keys())
         for set_key in preferred_keys:
@@ -3158,20 +3263,38 @@ def _is_explicit_tracker_application(*, tracker_status: object = "", email_confi
 def _collect_tracker_entries(application, user) -> list[dict]:
     """Return all reviews that have been approved or have a tracker_status set."""
     workspaces, runs = _collect_authorized_runs(application, user)
-    application.backfill_completed_test_run_tracker_reviews(run_ids=[run.id for run in runs])
-    workspaces_map = {ws.id: ws for ws in application.list_workspaces()}
-    application_documents, standard_documents = _index_tracker_documents(_collect_document_entries(application, user))
+    snapshot = _load_run_read_snapshot(
+        application,
+        runs,
+        include_artifacts=True,
+        include_reviews=True,
+        preserve_job_sets=False,
+        review_jobs_only=True,
+    )
+    job_sets_by_run = snapshot["job_sets"]
+    reviews_by_run = snapshot["reviews"]
+    artifacts_by_run = snapshot["artifacts"]
+    application_documents, standard_documents = _index_tracker_documents(
+        _collect_document_entries(
+            application,
+            user,
+            run_records=runs,
+            workspace_records=workspaces,
+            job_sets_by_run=job_sets_by_run,
+            artifacts_by_run=artifacts_by_run,
+        )
+    )
     entries: list[dict] = []
     entries_by_posting_url: dict[str, int] = {}
     for run in runs:
-        job_sets = application.list_job_sets(run.id)
-        review_records = application.list_reviews(run_id=run.id, limit=1000, offset=0)
+        job_sets = job_sets_by_run.get(run.id, {})
+        review_records = reviews_by_run.get(run.id, [])
         # build a fast job lookup
         jobs_by_id: dict[str, object] = {}
         for jobs in job_sets.values():
             for job in jobs:
                 jobs_by_id[job.job_id] = job
-        workspace = workspaces_map.get(run.workspace_id)
+        workspace = workspaces.get(run.workspace_id)
         for review in review_records:
             review_meta = dict(review.metadata or {})
             raw_tracker_status = str(review_meta.get("tracker_status") or "")
@@ -3517,7 +3640,7 @@ def _collect_referral_outreach_entries(
     workspaces, runs = _collect_authorized_runs(application, user)
     runs_by_id = {run.id: run for run in runs}
     contacts_by_id = {
-        contact.contact_id: contact.to_dict() for contact in application.list_referral_contacts(user.user_id)
+        contact.contact_id: contact.to_dict() for contact in _referral_contacts_from_user(user)
     }
     jobs_by_run: dict[str, dict[str, object]] = {}
     entries: list[dict] = []
@@ -3937,6 +4060,10 @@ def _collect_artifact_entries(
     run_record=None,
     workspace_record=None,
     run_jobs: list[object] | None = None,
+    run_records: list[object] | None = None,
+    workspace_records: dict[str, object] | None = None,
+    job_sets_by_run: dict[str, dict[str, list[object]]] | None = None,
+    artifacts_by_run: dict[str, list[object]] | None = None,
 ) -> list[dict]:
     if run_id:
         run = run_record if str(getattr(run_record, "id", "") or "") == run_id else None
@@ -3961,13 +4088,43 @@ def _collect_artifact_entries(
                 workspace = None
         workspaces = {run.workspace_id: workspace} if workspace is not None else {}
         runs = [run]
+    elif run_records is not None and workspace_records is not None:
+        workspaces = workspace_records
+        runs = run_records
     else:
         workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
+    snapshot = (
+        _load_run_read_snapshot(
+            application,
+            runs,
+            include_artifacts=True,
+            preserve_job_sets=False,
+        )
+        if artifacts_by_run is None and job_sets_by_run is None and not (run_id and run_jobs is not None)
+        else None
+    )
+    resolved_job_sets_by_run = (
+        {}
+        if run_id and run_jobs is not None
+        else (job_sets_by_run or (snapshot or {}).get("job_sets") or _load_job_sets_by_run(application, runs))
+    )
+    resolved_artifacts_by_run = (
+        artifacts_by_run
+        or (snapshot or {}).get("artifacts")
+        or _load_artifacts_by_run(application, runs)
+    )
     entries: list[dict] = []
     for run in runs:
         workspace = workspaces.get(run.workspace_id)
-        resolved_run_jobs = run_jobs if run_id and run_jobs is not None else _run_jobs_for_document_lookup(application, run)
-        artifacts = application.list_artifacts(run.id)
+        resolved_run_jobs = (
+            run_jobs
+            if run_id and run_jobs is not None
+            else _ordered_run_jobs_for_document_lookup(
+                run,
+                resolved_job_sets_by_run.get(run.id, {}),
+            )
+        )
+        artifacts = resolved_artifacts_by_run.get(run.id, [])
         for artifact in artifacts:
             entries.extend(
                 _enrich_artifact_entry_with_job_context(entry, resolved_run_jobs)
@@ -4879,6 +5036,10 @@ def _collect_document_entries(
     run_record=None,
     workspace_record=None,
     run_jobs: list[object] | None = None,
+    run_records: list[object] | None = None,
+    workspace_records: dict[str, object] | None = None,
+    job_sets_by_run: dict[str, dict[str, list[object]]] | None = None,
+    artifacts_by_run: dict[str, list[object]] | None = None,
 ) -> list[dict]:
     asset_kind_filter = str(asset_kind or "").strip().lower()
     raw_profile = dict((user.metadata or {}).get("profile") or {})
@@ -4916,6 +5077,10 @@ def _collect_document_entries(
                 run_record=run_record,
                 workspace_record=workspace_record,
                 run_jobs=run_jobs,
+                run_records=run_records,
+                workspace_records=workspace_records,
+                job_sets_by_run=job_sets_by_run,
+                artifacts_by_run=artifacts_by_run,
             )
             if _artifact_entry_is_user_facing_document(entry)
         ]
@@ -4924,7 +5089,11 @@ def _collect_document_entries(
     if candidate_assets_requested:
         accessible_workspaces = [
             workspace
-            for workspace in application.list_workspaces()
+            for workspace in (
+                list(workspace_records.values())
+                if workspace_records is not None
+                else application.list_workspaces()
+            )
             if application.user_can_access_workspace(user, workspace.id)
         ]
         workspaces = {
@@ -4948,7 +5117,12 @@ def _collect_document_entries(
             asset_metadata = dict(asset_for_item.get("metadata") or {})
             processing = dict(asset_metadata.get("cv_processing") or {})
             processing_job_id = str(processing.get("job_id") or "").strip()
-            if processing_job_id and str(asset_for_item.get("asset_kind") or "").strip().lower() == "workspace_cv":
+            persisted_status = str(asset_metadata.get("status") or "").strip().lower()
+            if (
+                processing_job_id
+                and persisted_status not in {"ready", "failed"}
+                and str(asset_for_item.get("asset_kind") or "").strip().lower() == "workspace_cv"
+            ):
                 try:
                     processing_run = application.get_run(processing_job_id)
                     if processing_run.status == RUN_STATUS_RUNNING and str(asset_metadata.get("status") or "") not in {"ready", "failed"}:
@@ -5222,24 +5396,47 @@ def _upsert_rejected_review_override(
     return review.to_dict()
 
 
-def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", run_id: str = "") -> list[dict]:
+def _collect_rejected_job_entries(
+    application,
+    user,
+    *,
+    workspace_id: str = "",
+    run_id: str = "",
+    run_record=None,
+    workspace_record=None,
+    review_records: list[object] | None = None,
+    run_blobs: dict[str, object] | None = None,
+) -> list[dict]:
     if run_id:
-        try:
-            run = application.get_run(run_id)
-        except KeyError:
-            return []
+        run = run_record if str(getattr(run_record, "id", "") or "") == run_id else None
+        if run is None:
+            try:
+                run = application.get_run(run_id)
+            except KeyError:
+                return []
         if workspace_id and run.workspace_id != workspace_id:
             return []
         if not application.user_can_access_workspace(user, run.workspace_id):
             return []
-        try:
-            workspace = application.get_workspace(run.workspace_id)
-        except KeyError:
-            workspace = None
+        workspace = (
+            workspace_record
+            if str(getattr(workspace_record, "id", "") or "") == run.workspace_id
+            else None
+        )
+        if workspace is None:
+            try:
+                workspace = application.get_workspace(run.workspace_id)
+            except KeyError:
+                workspace = None
         workspaces = {run.workspace_id: workspace} if workspace is not None else {}
         runs = [run]
     else:
         workspaces, runs = _collect_authorized_runs(application, user, workspace_id=workspace_id)
+    reviews_by_run = (
+        {run_id: review_records}
+        if run_id and review_records is not None
+        else _load_reviews_by_run(application, runs)
+    )
     reason_labels = _rejection_reason_labels()
     entries: list[dict] = []
     requeue_run_cache: dict[str, object | None] = {}
@@ -5249,9 +5446,13 @@ def _collect_rejected_job_entries(application, user, *, workspace_id: str = "", 
         workspace = workspaces.get(run.workspace_id)
         reviews_by_job = {
             review.job_id: review
-            for review in application.list_reviews(run_id=run.id, limit=1000, offset=0)
+            for review in reviews_by_run.get(run.id, [])
         }
-        blobs = application.repositories.job_store.load_all_blobs(run.id)
+        blobs = (
+            run_blobs
+            if run_id and run_blobs is not None
+            else application.repositories.job_store.load_all_blobs(run.id)
+        )
         seen_job_ids: set[str] = set()
         for blob_key, value in blobs.items():
             if not isinstance(value, list):
@@ -5649,12 +5850,21 @@ def _dashboard_tracker_items(application, user, runs: list[object]) -> tuple[lis
 
     tracker_items: list[dict] = []
     waiting_review_count = 0
+    snapshot = _load_run_read_snapshot(
+        application,
+        runs,
+        include_reviews=True,
+        preserve_job_sets=False,
+        review_jobs_only=True,
+    )
+    job_sets_by_run = snapshot["job_sets"]
+    reviews_by_run = snapshot["reviews"]
     for run in runs:
         jobs_by_id: dict[str, object] = {}
-        for jobs in application.list_job_sets(run.id).values():
+        for jobs in job_sets_by_run.get(run.id, {}).values():
             for job in jobs:
                 jobs_by_id[job.job_id] = job
-        for review in application.list_reviews(run_id=run.id, limit=1000, offset=0):
+        for review in reviews_by_run.get(run.id, []):
             review_status = str(getattr(review, "status", "") or "").strip().lower()
             if review_status in {"waiting_review", "pending"}:
                 waiting_review_count += 1
@@ -6266,7 +6476,7 @@ def _dashboard_analytics_payload(application, user, workspaces: dict[str, object
         for segment in _DASHBOARD_APPLICATION_OUTCOME_SEGMENTS
     ]
 
-    contacts = application.list_referral_contacts(user.user_id)
+    contacts = _referral_contacts_from_user(user)
     source_kind_map: dict[str, int] = {}
     for contact in contacts:
         source_kind = _dashboard_labelize(str(getattr(contact, "source_kind", "manual") or "manual").strip() or "manual")

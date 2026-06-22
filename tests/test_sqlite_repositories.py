@@ -4,6 +4,7 @@ import unittest
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.domain.models import (
     ApiTokenRecord,
@@ -15,6 +16,7 @@ from backend.domain.models import (
     StageResult,
     UserRecord,
     WorkerRecord,
+    WorkspaceDefinition,
 )
 from backend.repositories.sqlite_backed import (
     SqliteAnalyticsStore,
@@ -49,6 +51,98 @@ class SqliteRepositoryTests(unittest.TestCase):
         self.assertIn("search_apply_v1", template_ids)
         self.assertIn("board_package_v1", template_ids)
         self.assertEqual(workspace_ids, set())
+
+    def test_summary_list_reads_do_not_hydrate_document_text_or_issue_per_set_reads(self):
+        db_path = self._db_path("sqlite_summary_reads")
+        workspace_repository = SqliteWorkspaceRepository(db_path)
+        run_repository = SqliteRunRepository(db_path)
+        job_store = SqliteJobStore(db_path)
+        artifact_store = SqliteArtifactStore(db_path)
+        review_store = SqliteReviewStore(db_path)
+
+        workspace = WorkspaceDefinition.from_dict(
+            {
+                "id": "summary_workspace",
+                "name": "Summary Workspace",
+                "workflow_template_id": "search_apply_v1",
+                "workspace_type": "custom",
+                "settings": {"workspace_cv_text": "Large CV body"},
+            }
+        )
+        workspace_repository.upsert_workspace(workspace)
+        run = RunRecord.create(
+            workspace_id=workspace.id,
+            workflow_template_id=workspace.workflow_template_id,
+            requested_by="test",
+        )
+        run.stage_results = [
+            StageResult(
+                stage_id="seed",
+                stage_type="test.seed",
+                status="completed",
+                started_at="",
+                finished_at="",
+            )
+        ]
+        run_repository.save(run)
+        job_store.save_job_set(
+            run.id,
+            "first",
+            [JobRecord(job_id="job_1", title="Analyst", company="ACME")],
+        )
+        job_store.save_job_set(
+            run.id,
+            "second",
+            [
+                JobRecord(job_id="job_1", title="Senior Analyst", company="ACME"),
+                JobRecord(job_id="job_2", title="Engineer", company="Beta"),
+            ],
+        )
+        artifact_store.save_artifacts(
+            run.id,
+            [ArtifactRecord(artifact_id="artifact_1", artifact_type="cv_pdf", path="cv.pdf")],
+        )
+        review = ReviewRecord.create(run_id=run.id, job_id="job_1", decision="approved")
+        review_store.upsert_review(review)
+
+        with patch(
+            "backend.repositories.sqlite_backed._hydrate_workspace_payload",
+            side_effect=AssertionError("workspace list must not hydrate document contents"),
+        ), patch(
+            "backend.repositories.sqlite_backed._hydrate_run_payload",
+            side_effect=AssertionError("run list must not hydrate document contents"),
+        ), patch.object(
+            job_store,
+            "load_job_set",
+            side_effect=AssertionError("all job sets must load in one batch"),
+        ):
+            listed_workspaces = workspace_repository.list_workspaces()
+            listed_runs = run_repository.list_runs(limit=10)
+            job_sets = job_store.load_all_job_sets(run.id)
+
+        self.assertEqual([item.id for item in listed_workspaces], [workspace.id])
+        self.assertNotIn("workspace_cv_text", listed_workspaces[0].settings)
+        self.assertEqual(listed_runs[0].stage_results[0].stage_id, "seed")
+        self.assertEqual(set(job_sets), {"first", "second"})
+        self.assertEqual(
+            list(artifact_store.load_artifacts_for_runs([run.id])),
+            [run.id],
+        )
+        self.assertEqual(
+            [item.review_id for item in review_store.list_reviews_for_runs([run.id])[run.id]],
+            [review.review_id],
+        )
+        read_snapshot = job_store.load_run_read_snapshot(
+            [run.id],
+            include_artifacts=True,
+            include_reviews=True,
+            preserve_job_sets=False,
+        )
+        jobs = read_snapshot["job_sets"][run.id]["__all__"]
+        self.assertEqual(
+            {job.job_id: job.title for job in jobs},
+            {"job_1": "Senior Analyst", "job_2": "Engineer"},
+        )
 
     def test_run_job_artifact_and_review_persistence(self):
         db_path = self._db_path("sqlite_runtime")

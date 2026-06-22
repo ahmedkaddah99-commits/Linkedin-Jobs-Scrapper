@@ -158,7 +158,7 @@ export default function DocumentsPage() {
     loading: documentsLoading,
     error: documentsError,
     refresh: refreshDocuments,
-  } = useApiResource(() => request("/documents?limit=500"), [request], {
+  } = useApiResource(() => request("/documents?limit=500", { timeoutMs: 10000 }), [request], {
     cacheKey: "documents:all",
     staleMs: 30000,
     backgroundRefresh: true,
@@ -166,12 +166,12 @@ export default function DocumentsPage() {
   const {
     data: settingsPayload,
     refresh: refreshSettings,
-  } = useApiResource(() => request("/settings"), [request], {
+  } = useApiResource(() => request("/settings", { timeoutMs: 10000 }), [request], {
     cacheKey: "settings",
     staleMs: Infinity,
     backgroundRefresh: false,
   });
-  const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100"), [request], {
+  const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100", { timeoutMs: 10000 }), [request], {
     cacheKey: "workspaces:list",
     staleMs: Infinity,
     backgroundRefresh: false,

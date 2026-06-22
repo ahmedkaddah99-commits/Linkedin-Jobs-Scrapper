@@ -1410,7 +1410,7 @@ export default function WorkspacesPage() {
     loading,
     error,
     refresh,
-  } = useApiResource(() => request("/workspaces?limit=100"), [request], {
+  } = useApiResource(() => request("/workspaces?limit=100", { timeoutMs: 10000 }), [request], {
     cacheKey: "workspaces:list",
     staleMs: Infinity,
     backgroundRefresh: false,
@@ -1427,12 +1427,12 @@ export default function WorkspacesPage() {
     loading: builderLoading,
     error: builderError,
     refresh: refreshBuilderCatalog,
-  } = useApiResource(() => request("/workspace-builder/catalog"), [request], {
+  } = useApiResource(() => request("/workspace-builder/catalog", { timeoutMs: 10000 }), [request], {
     cacheKey: "workspace-builder:catalog",
     staleMs: Infinity,
     backgroundRefresh: false,
   });
-  const { data: settingsPayload } = useApiResource(() => request("/settings"), [request], {
+  const { data: settingsPayload } = useApiResource(() => request("/settings", { timeoutMs: 10000 }), [request], {
     cacheKey: "settings",
     staleMs: Infinity,
     backgroundRefresh: false,
@@ -1440,7 +1440,7 @@ export default function WorkspacesPage() {
   const {
     data: cvAssetsPayload,
     refresh: refreshCvAssets,
-  } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100"), [request], {
+  } = useApiResource(() => request("/documents?asset_kind=workspace_cv&limit=100", { timeoutMs: 10000 }), [request], {
     cacheKey: "documents:workspace-cv",
     staleMs: Infinity,
     backgroundRefresh: false,
@@ -1464,7 +1464,10 @@ export default function WorkspacesPage() {
   } = useApiResource(
     () =>
       focusedWorkspaceId
-        ? request(`/documents?workspace_id=${encodeURIComponent(focusedWorkspaceId)}&limit=60`)
+        ? request(
+          `/documents?workspace_id=${encodeURIComponent(focusedWorkspaceId)}&limit=60`,
+          { timeoutMs: 10000 },
+        )
         : Promise.resolve({ documents: [] }),
     [request, focusedWorkspaceId],
     {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -60,8 +60,8 @@ const EMPTY_CANDIDATE_INSIGHTS = {
   },
 };
 
-function loadDashboardPayload(request, mode = "full") {
-  return request(mode === "summary" ? "/dashboard?mode=summary" : "/dashboard");
+function loadDashboardPayload(request) {
+  return request("/dashboard", { timeoutMs: 10000 });
 }
 
 function getNumericValue(value) {
@@ -371,7 +371,7 @@ function DashboardError({ error, onRetry }) {
   );
 }
 
-function DashboardHeader({ onRefresh, refreshing }) {
+function DashboardHeader({ disabled = false, onRefresh, refreshing }) {
   return (
     <section className="relative overflow-hidden rounded-[2rem] bg-slate-950 px-6 py-8 text-white shadow-[0_28px_80px_rgba(15,23,42,0.28)] sm:px-8">
       <div
@@ -408,7 +408,7 @@ function DashboardHeader({ onRefresh, refreshing }) {
           <div className="flex flex-wrap gap-3">
             <button
               className="inline-flex items-center justify-center rounded-full border border-white/12 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={refreshing}
+              disabled={disabled || refreshing}
               onClick={() => onRefresh().catch(() => undefined)}
               type="button"
             >
@@ -865,22 +865,18 @@ function SourceEffectivenessPanel({ sources }) {
 
 export default function DashboardPage() {
   const { error: sessionError, isConnected, request, status } = useSession();
-  const dashboardLoadModeRef = useRef("summary");
   const {
     data,
     loading,
     refreshing,
     error,
     refresh,
-  } = useApiResource(() => loadDashboardPayload(request, dashboardLoadModeRef.current), [request], {
+  } = useApiResource(() => loadDashboardPayload(request), [request], {
     cacheKey: "dashboard",
     staleMs: 30000,
     backgroundRefresh: true,
   });
-  const refreshFullDashboard = useCallback((options) => {
-    dashboardLoadModeRef.current = "full";
-    return refresh(options);
-  }, [refresh]);
+  const refreshDashboard = useCallback((options) => refresh(options), [refresh]);
   const hasActiveDashboardWork = Boolean(
     (data?.recent_runs || []).some((run) => ACTIVE_RUN_STATUSES.includes(String(run.status || "").trim()))
     || (data?.cards || []).some((card) =>
@@ -894,17 +890,10 @@ export default function DashboardPage() {
       return undefined;
     }
     const intervalId = window.setInterval(() => {
-      refreshFullDashboard({ showLoading: false }).catch(() => undefined);
+      refreshDashboard({ showLoading: false }).catch(() => undefined);
     }, 30000);
     return () => window.clearInterval(intervalId);
-  }, [hasActiveDashboardWork, isConnected, refreshFullDashboard]);
-
-  useEffect(() => {
-    if (!isConnected || data?.meta?.mode !== "summary") {
-      return;
-    }
-    refreshFullDashboard({ showLoading: false, force: true }).catch(() => undefined);
-  }, [data?.meta?.mode, isConnected, refreshFullDashboard]);
+  }, [hasActiveDashboardWork, isConnected, refreshDashboard]);
 
   if (!isConnected && !loading) {
     const guidance = status === "error"
@@ -918,7 +907,16 @@ export default function DashboardPage() {
   }
 
   if (error && !data) {
-    return <DashboardError error={error} onRetry={refreshFullDashboard} />;
+    return <DashboardError error={error} onRetry={refreshDashboard} />;
+  }
+
+  if (loading && !data) {
+    return (
+      <div className="space-y-8">
+        <DashboardHeader disabled onRefresh={refreshDashboard} refreshing={false} />
+        <DashboardLoadingNotice />
+      </div>
+    );
   }
 
   const model = buildUserDashboardModel(data || {});
@@ -930,9 +928,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <DashboardHeader onRefresh={refreshFullDashboard} refreshing={loading || refreshing} />
-
-      {loading && !data ? <DashboardLoadingNotice /> : null}
+      <DashboardHeader onRefresh={refreshDashboard} refreshing={refreshing} />
 
       {error ? (
         <section className="rounded-2xl border border-error/20 bg-error/5 px-5 py-4 text-sm text-error">

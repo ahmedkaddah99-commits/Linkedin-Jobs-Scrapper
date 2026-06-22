@@ -148,15 +148,43 @@ def _hydrate_user_payload(connection, payload: Mapping[str, Any]) -> dict[str, A
     hydrated = dict(payload)
     user_id = str(hydrated.get("user_id") or "")
     metadata = dict(hydrated.get("metadata") or {})
-    asset_rows = connection.execute(
-        "SELECT asset_id, payload_json FROM candidate_assets WHERE user_id = ? "
-        "ORDER BY updated_at ASC, asset_id ASC",
-        (user_id,),
+    rows = connection.execute(
+        """
+        SELECT 'asset' AS row_kind, asset_id AS key_1, '' AS key_2, '' AS key_3,
+               updated_at AS key_4, payload_json AS payload
+        FROM candidate_assets
+        WHERE user_id = ?
+        UNION ALL
+        SELECT 'document' AS row_kind, document_id AS key_1, asset_id AS key_2,
+               document_kind AS key_3, updated_at AS key_4, source_text AS payload
+        FROM candidate_documents
+        WHERE user_id = ?
+        ORDER BY row_kind, key_4, key_1
+        """,
+        (user_id, user_id),
     ).fetchall()
+    document_text_by_asset: dict[str, str] = {}
+    document_text_by_id: dict[str, str] = {}
+    latest_workspace_cv_text = ""
+    asset_payloads: list[tuple[str, dict[str, Any]]] = []
+    for row in rows:
+        if str(row["row_kind"]) == "asset":
+            asset_payloads.append(
+                (str(row["key_1"] or ""), dict(_deserialize(row["payload"], {})))
+            )
+            continue
+        source_text = str(row["payload"] or "")
+        document_id = str(row["key_1"] or "")
+        asset_id = str(row["key_2"] or "")
+        if document_id and source_text:
+            document_text_by_id[document_id] = source_text
+        if asset_id and source_text:
+            document_text_by_asset[asset_id] = source_text
+        if str(row["key_3"] or "") == "workspace_cv" and source_text:
+            latest_workspace_cv_text = source_text
     assets: list[dict[str, Any]] = []
-    for row in asset_rows:
-        asset = dict(_deserialize(row["payload_json"], {}))
-        text = _document_text(connection, asset_id=str(row["asset_id"] or ""))
+    for asset_id, asset in asset_payloads:
+        text = document_text_by_asset.get(asset_id, "")
         if text:
             asset_metadata = dict(asset.get("metadata") or {})
             asset_metadata["source_text"] = text
@@ -165,18 +193,10 @@ def _hydrate_user_payload(connection, payload: Mapping[str, Any]) -> dict[str, A
     if assets:
         metadata["candidate_assets"] = assets
     if not str(metadata.get("cv_text") or ""):
-        text = _document_text(
-            connection,
-            document_id=str(metadata.get("cv_document_id") or ""),
+        text = document_text_by_id.get(
+            str(metadata.get("cv_document_id") or ""),
+            latest_workspace_cv_text,
         )
-        if not text:
-            row = connection.execute(
-                "SELECT source_text FROM candidate_documents "
-                "WHERE user_id = ? AND document_kind = 'workspace_cv' AND source_text != '' "
-                "ORDER BY updated_at DESC LIMIT 1",
-                (user_id,),
-            ).fetchone()
-            text = str(row["source_text"] or "") if row is not None else ""
         if text:
             metadata["cv_text"] = text
     hydrated["metadata"] = metadata
@@ -276,12 +296,10 @@ class SqliteWorkspaceRepository(_SqliteStore):
     def list_workspaces(self) -> list[WorkspaceDefinition]:
         with self._connect() as connection:
             rows = connection.execute("SELECT payload_json FROM workspaces ORDER BY id").fetchall()
-            return [
-                WorkspaceDefinition.from_dict(
-                    _hydrate_workspace_payload(connection, _deserialize(row["payload_json"], {}))
-                )
-                for row in rows
-            ]
+        return [
+            WorkspaceDefinition.from_dict(_deserialize(row["payload_json"], {}))
+            for row in rows
+        ]
 
     def get_workspace(self, workspace_id: str) -> WorkspaceDefinition:
         with self._connect() as connection:
@@ -449,8 +467,16 @@ class SqliteRunRepository(_SqliteStore):
                     ],
                 )
 
-    def _run_from_row(self, row: sqlite3.Row, connection: sqlite3.Connection) -> RunRecord:
-        payload = _hydrate_run_payload(connection, _deserialize(row["payload_json"], {}))
+    def _run_from_row(
+        self,
+        row,
+        connection,
+        *,
+        hydrate_documents: bool = True,
+        stage_rows: list | None = None,
+    ) -> RunRecord:
+        raw_payload = _deserialize(row["payload_json"], {})
+        payload = _hydrate_run_payload(connection, raw_payload) if hydrate_documents else raw_payload
         run = RunRecord.from_dict(payload if isinstance(payload, dict) else {})
         run.id = str(row["id"])
         run.workspace_id = str(row["workspace_id"])
@@ -469,25 +495,32 @@ class SqliteRunRepository(_SqliteStore):
         run.attempt_count = int(row["attempt_count"] or 0)
         run.max_attempts = max(1, int(row["max_attempts"] or 1))
         run.run_input_overrides = dict(_deserialize(row["run_input_overrides_json"], run.run_input_overrides or {}))
-        run_plan_payload = _hydrate_run_payload(
-            connection,
-            {
-                "id": run.id,
-                "workspace_id": run.workspace_id,
-                "run_plan": _deserialize(row["run_plan_json"], {}),
-            },
-        ).get("run_plan", {})
+        raw_run_plan_payload = _deserialize(row["run_plan_json"], {})
+        run_plan_payload = (
+            _hydrate_run_payload(
+                connection,
+                {
+                    "id": run.id,
+                    "workspace_id": run.workspace_id,
+                    "run_plan": raw_run_plan_payload,
+                },
+            ).get("run_plan", {})
+            if hydrate_documents
+            else raw_run_plan_payload
+        )
         run.run_plan = RunPlan.from_dict(run_plan_payload) if isinstance(run_plan_payload, dict) and run_plan_payload else run.run_plan
         run.metadata = dict(_deserialize(row["metadata_json"], run.metadata or {}))
-        stage_rows = connection.execute(
-            (
-                "SELECT stage_id, stage_type, status, started_at, finished_at, error, metrics_json, "
-                "output_keys_json, artifact_ids_json "
-                "FROM run_stage_results WHERE run_id = ? ORDER BY sequence_no"
-            ),
-            (run.id,),
-        ).fetchall()
-        if stage_rows:
+        resolved_stage_rows = stage_rows
+        if resolved_stage_rows is None:
+            resolved_stage_rows = connection.execute(
+                (
+                    "SELECT stage_id, stage_type, status, started_at, finished_at, error, metrics_json, "
+                    "output_keys_json, artifact_ids_json "
+                    "FROM run_stage_results WHERE run_id = ? ORDER BY sequence_no"
+                ),
+                (run.id,),
+            ).fetchall()
+        if resolved_stage_rows:
             run.stage_results = [
                 StageResult(
                     stage_id=str(stage_row["stage_id"]),
@@ -500,7 +533,7 @@ class SqliteRunRepository(_SqliteStore):
                     output_keys=[str(item) for item in _deserialize(stage_row["output_keys_json"], []) if str(item).strip()],
                     artifact_ids=[str(item) for item in _deserialize(stage_row["artifact_ids_json"], []) if str(item).strip()],
                 )
-                for stage_row in stage_rows
+                for stage_row in resolved_stage_rows
             ]
         return run
 
@@ -534,7 +567,30 @@ class SqliteRunRepository(_SqliteStore):
         params.extend([max(1, int(limit)), max(0, int(offset))])
         with self._connect() as connection:
             rows = connection.execute(query, tuple(params)).fetchall()
-            return [self._run_from_row(row, connection) for row in rows]
+            run_ids = [str(row["id"]) for row in rows]
+            stage_rows_by_run: dict[str, list] = {run_id: [] for run_id in run_ids}
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                stage_rows = connection.execute(
+                    (
+                        "SELECT run_id, stage_id, stage_type, status, started_at, finished_at, error, "
+                        "metrics_json, output_keys_json, artifact_ids_json "
+                        f"FROM run_stage_results WHERE run_id IN ({placeholders}) "
+                        "ORDER BY run_id, sequence_no"
+                    ),
+                    tuple(run_ids),
+                ).fetchall()
+                for stage_row in stage_rows:
+                    stage_rows_by_run.setdefault(str(stage_row["run_id"]), []).append(stage_row)
+            return [
+                self._run_from_row(
+                    row,
+                    connection,
+                    hydrate_documents=False,
+                    stage_rows=stage_rows_by_run.get(str(row["id"]), []),
+                )
+                for row in rows
+            ]
 
     def claim_next_queued(self) -> RunRecord | None:
         with self._connect() as connection:
@@ -670,7 +726,139 @@ class SqliteJobStore(_SqliteStore):
         return [str(row["set_key"]) for row in rows]
 
     def load_all_job_sets(self, run_id: str) -> dict[str, list[JobRecord]]:
-        return {key: self.load_job_set(run_id, key) for key in self.list_job_set_keys(run_id)}
+        return self.load_job_sets_for_runs([run_id]).get(run_id, {})
+
+    def load_job_sets_for_runs(self, run_ids: Iterable[str]) -> dict[str, dict[str, list[JobRecord]]]:
+        return self.load_run_read_snapshot(run_ids)["job_sets"]
+
+    def load_run_read_snapshot(
+        self,
+        run_ids: Iterable[str],
+        *,
+        include_artifacts: bool = False,
+        include_reviews: bool = False,
+        include_blobs: bool = False,
+        preserve_job_sets: bool = True,
+        review_jobs_only: bool = False,
+    ) -> dict[str, dict]:
+        normalized_run_ids = list(dict.fromkeys(str(run_id or "").strip() for run_id in run_ids))
+        normalized_run_ids = [run_id for run_id in normalized_run_ids if run_id]
+        job_sets_by_run: dict[str, dict[str, list[JobRecord]]] = {
+            run_id: {} for run_id in normalized_run_ids
+        }
+        artifacts_by_run: dict[str, list[ArtifactRecord]] = {
+            run_id: [] for run_id in normalized_run_ids
+        }
+        reviews_by_run: dict[str, list[ReviewRecord]] = {
+            run_id: [] for run_id in normalized_run_ids
+        }
+        blobs_by_run: dict[str, dict[str, Any]] = {
+            run_id: {} for run_id in normalized_run_ids
+        }
+        snapshot = {
+            "job_sets": job_sets_by_run,
+            "artifacts": artifacts_by_run,
+            "reviews": reviews_by_run,
+            "blobs": blobs_by_run,
+        }
+        if not normalized_run_ids:
+            return snapshot
+        placeholders = ",".join("?" for _ in normalized_run_ids)
+        if preserve_job_sets:
+            job_select = (
+                "SELECT 'job_set' AS row_kind, run_id, set_key AS key_1, "
+                "'' AS key_2, '' AS key_3, payload_json "
+                f"FROM run_job_sets WHERE run_id IN ({placeholders})"
+            )
+        else:
+            review_filter = (
+                "AND EXISTS ("
+                "SELECT 1 FROM reviews "
+                "WHERE reviews.run_id = run_jobs.run_id AND reviews.job_id = run_jobs.job_id"
+                ") "
+                if review_jobs_only
+                else ""
+            )
+            job_select = (
+                "SELECT 'job' AS row_kind, run_id, job_id AS key_1, "
+                "'' AS key_2, '' AS key_3, payload_json "
+                "FROM run_jobs "
+                f"WHERE run_id IN ({placeholders}) {review_filter}"
+                "AND rowid = ("
+                "SELECT candidate.rowid FROM run_jobs AS candidate "
+                "WHERE candidate.run_id = run_jobs.run_id AND candidate.job_id = run_jobs.job_id "
+                "ORDER BY candidate.updated_at DESC, candidate.rowid DESC LIMIT 1"
+                ")"
+            )
+        select_parts = [job_select]
+        parameters: list[str] = list(normalized_run_ids)
+        if include_artifacts:
+            select_parts.append(
+                (
+                    "SELECT 'artifact' AS row_kind, run_id, artifact_id AS key_1, "
+                    "artifact_type AS key_2, path AS key_3, metadata_json AS payload_json "
+                    f"FROM artifacts WHERE run_id IN ({placeholders})"
+                )
+            )
+            parameters.extend(normalized_run_ids)
+        if include_reviews:
+            select_parts.append(
+                (
+                    "SELECT 'review' AS row_kind, run_id, '' AS key_1, "
+                    "'' AS key_2, '' AS key_3, payload_json "
+                    f"FROM reviews WHERE run_id IN ({placeholders})"
+                )
+            )
+            parameters.extend(normalized_run_ids)
+        if include_blobs:
+            select_parts.append(
+                (
+                    "SELECT 'blob' AS row_kind, run_id, blob_key AS key_1, "
+                    "'' AS key_2, '' AS key_3, payload_json "
+                    f"FROM run_blobs WHERE run_id IN ({placeholders})"
+                )
+            )
+            parameters.extend(normalized_run_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                " UNION ALL ".join(select_parts) + " ORDER BY run_id, row_kind, key_1",
+                tuple(parameters),
+            ).fetchall()
+        for row in rows:
+            row_kind = str(row["row_kind"])
+            run_id = str(row["run_id"])
+            if row_kind == "job_set":
+                payload = _deserialize(row["payload_json"], [])
+                job_sets_by_run.setdefault(run_id, {})[str(row["key_1"])] = [
+                    JobRecord.from_mapping(item)
+                    for item in payload
+                    if isinstance(item, dict)
+                ]
+            elif row_kind == "job":
+                job_sets_by_run.setdefault(run_id, {}).setdefault("__all__", []).append(
+                    JobRecord.from_mapping(_deserialize(row["payload_json"], {}))
+                )
+            elif row_kind == "artifact":
+                artifacts_by_run.setdefault(run_id, []).append(
+                    ArtifactRecord(
+                        artifact_id=str(row["key_1"]),
+                        artifact_type=str(row["key_2"]),
+                        path=str(row["key_3"]),
+                        metadata=dict(_deserialize(row["payload_json"], {})),
+                    )
+                )
+            elif row_kind == "review":
+                reviews_by_run.setdefault(run_id, []).append(
+                    ReviewRecord.from_dict(_deserialize(row["payload_json"], {}))
+                )
+            elif row_kind == "blob":
+                blobs_by_run.setdefault(run_id, {})[str(row["key_1"])] = _deserialize(
+                    row["payload_json"],
+                    None,
+                )
+        for reviews in reviews_by_run.values():
+            reviews.sort(key=lambda review: str(review.updated_at or ""), reverse=True)
+        return snapshot
 
     def delete_job_set(self, run_id: str, key: str) -> None:
         with self._connect() as connection:
@@ -706,7 +894,15 @@ class SqliteJobStore(_SqliteStore):
         return [str(row["blob_key"]) for row in rows]
 
     def load_all_blobs(self, run_id: str) -> dict[str, Any]:
-        return {key: self.load_blob(run_id, key, None) for key in self.list_blob_keys(run_id)}
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT blob_key, payload_json FROM run_blobs WHERE run_id = ? ORDER BY blob_key",
+                (run_id,),
+            ).fetchall()
+        return {
+            str(row["blob_key"]): _deserialize(row["payload_json"], None)
+            for row in rows
+        }
 
     def delete_blob(self, run_id: str, key: str) -> None:
         with self._connect() as connection:
@@ -742,20 +938,33 @@ class SqliteArtifactStore(_SqliteStore):
             )
 
     def load_artifacts(self, run_id: str) -> list[ArtifactRecord]:
+        return self.load_artifacts_for_runs([run_id]).get(run_id, [])
+
+    def load_artifacts_for_runs(self, run_ids: Iterable[str]) -> dict[str, list[ArtifactRecord]]:
+        normalized_run_ids = list(dict.fromkeys(str(run_id or "").strip() for run_id in run_ids))
+        normalized_run_ids = [run_id for run_id in normalized_run_ids if run_id]
+        result: dict[str, list[ArtifactRecord]] = {
+            run_id: [] for run_id in normalized_run_ids
+        }
+        if not normalized_run_ids:
+            return result
+        placeholders = ",".join("?" for _ in normalized_run_ids)
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT artifact_id, artifact_type, path, metadata_json FROM artifacts WHERE run_id = ? ORDER BY artifact_id",
-                (run_id,),
+                (
+                    "SELECT run_id, artifact_id, artifact_type, path, metadata_json "
+                    f"FROM artifacts WHERE run_id IN ({placeholders}) ORDER BY run_id, artifact_id"
+                ),
+                tuple(normalized_run_ids),
             ).fetchall()
-        return [
-            ArtifactRecord(
+        for row in rows:
+            result.setdefault(str(row["run_id"]), []).append(ArtifactRecord(
                 artifact_id=str(row["artifact_id"]),
                 artifact_type=str(row["artifact_type"]),
                 path=str(row["path"]),
                 metadata=dict(_deserialize(row["metadata_json"], {})),
-            )
-            for row in rows
-        ]
+            ))
+        return result
 
     def get_artifact(self, run_id: str, artifact_id: str) -> ArtifactRecord:
         with self._connect() as connection:
@@ -902,6 +1111,29 @@ class SqliteReviewStore(_SqliteStore):
         with self._connect() as connection:
             rows = connection.execute(query, tuple(params)).fetchall()
         return [ReviewRecord.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
+
+    def list_reviews_for_runs(self, run_ids: Iterable[str]) -> dict[str, list[ReviewRecord]]:
+        normalized_run_ids = list(dict.fromkeys(str(run_id or "").strip() for run_id in run_ids))
+        normalized_run_ids = [run_id for run_id in normalized_run_ids if run_id]
+        result: dict[str, list[ReviewRecord]] = {
+            run_id: [] for run_id in normalized_run_ids
+        }
+        if not normalized_run_ids:
+            return result
+        placeholders = ",".join("?" for _ in normalized_run_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                (
+                    "SELECT run_id, payload_json FROM reviews "
+                    f"WHERE run_id IN ({placeholders}) ORDER BY run_id, updated_at DESC"
+                ),
+                tuple(normalized_run_ids),
+            ).fetchall()
+        for row in rows:
+            result.setdefault(str(row["run_id"]), []).append(
+                ReviewRecord.from_dict(_deserialize(row["payload_json"], {}))
+            )
+        return result
 
     def list_application_status_history(
         self,

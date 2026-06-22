@@ -189,6 +189,13 @@ class FileJobStore:
     def load_all_job_sets(self, run_id: str) -> dict[str, list[JobRecord]]:
         return {key: self.load_job_set(run_id, key) for key in self.list_job_set_keys(run_id)}
 
+    def load_job_sets_for_runs(self, run_ids: Iterable[str]) -> dict[str, dict[str, list[JobRecord]]]:
+        return {
+            normalized_run_id: self.load_all_job_sets(normalized_run_id)
+            for run_id in run_ids
+            if (normalized_run_id := str(run_id or "").strip())
+        }
+
     def delete_job_set(self, run_id: str, key: str) -> None:
         path = self._run_dir(run_id) / "job_sets" / f"{key}.json"
         if path.exists():
@@ -234,6 +241,13 @@ class FileArtifactStore:
     def load_artifacts(self, run_id: str) -> list[ArtifactRecord]:
         payload = _read_json(self._artifact_path(run_id), [])
         return [ArtifactRecord.from_dict(item) for item in payload if isinstance(item, dict)]
+
+    def load_artifacts_for_runs(self, run_ids: Iterable[str]) -> dict[str, list[ArtifactRecord]]:
+        return {
+            normalized_run_id: self.load_artifacts(normalized_run_id)
+            for run_id in run_ids
+            if (normalized_run_id := str(run_id or "").strip())
+        }
 
     def get_artifact(self, run_id: str, artifact_id: str) -> ArtifactRecord:
         for artifact in self.load_artifacts(run_id):
@@ -335,6 +349,20 @@ class FileReviewStore:
         if job_id:
             reviews = [review for review in reviews if review.job_id == job_id]
         return reviews[: max(1, int(limit))]
+
+    def list_reviews_for_runs(self, run_ids: Iterable[str]) -> dict[str, list[ReviewRecord]]:
+        normalized_run_ids = {
+            str(run_id or "").strip()
+            for run_id in run_ids
+            if str(run_id or "").strip()
+        }
+        result = {run_id: [] for run_id in normalized_run_ids}
+        if not normalized_run_ids:
+            return result
+        for review in self.list_reviews(limit=100000):
+            if review.run_id in result:
+                result[review.run_id].append(review)
+        return result
 
     def append_application_status_history(
         self,
@@ -719,4 +747,3 @@ class FileConfigStore:
             for key, value in payload.items()
             if str(key).startswith(normalized_prefix)
         }
-

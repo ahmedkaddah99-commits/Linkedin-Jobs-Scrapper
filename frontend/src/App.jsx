@@ -5,7 +5,7 @@ import AppShell from "./components/AppShell";
 import ConnectionPanel from "./components/ConnectionPanel";
 import UpgradeModal from "./components/UpgradeModal";
 import { SessionProvider, useSession } from "./context/SessionContext";
-import { QUOTA_EXCEEDED_EVENT, getDefaultApiBaseUrl } from "./lib/api";
+import { QUOTA_EXCEEDED_EVENT } from "./lib/api";
 import { logEvent } from "./lib/analytics";
 import { isAdminUser } from "./lib/auth";
 import { hasAuthenticatedSession } from "./lib/sessionState";
@@ -114,21 +114,15 @@ function UpgradeModalHost() {
 }
 
 function BackendConnectionPanel() {
-  const { apiBaseUrl, connect, error, refreshSession, status } = useSession();
-  const [isResetting, setIsResetting] = useState(false);
+  const { error, refreshSession, status } = useSession();
   const isChecking = status === "connecting";
-  const defaultApiBaseUrl = getDefaultApiBaseUrl();
-  const isUsingDefaultApi = String(apiBaseUrl || "").trim() === defaultApiBaseUrl;
 
   function handleRetry() {
     refreshSession().catch(() => undefined);
   }
 
-  function handleResetApiBaseUrl() {
-    setIsResetting(true);
-    connect({ baseUrl: defaultApiBaseUrl })
-      .catch(() => undefined)
-      .finally(() => setIsResetting(false));
+  if (isChecking) {
+    return <RouteLoadingFallback />;
   }
 
   return (
@@ -136,56 +130,29 @@ function BackendConnectionPanel() {
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">
-            Backend connection
+            Service status
           </p>
           <h1 className="mt-3 font-headline text-2xl font-bold tracking-tight text-on-surface">
-            {isChecking ? "Connecting to Runr API" : "Runr API is not reachable"}
+            Runr is temporarily unavailable
           </h1>
           <p className="mt-3 text-sm leading-7 text-on-surface-variant">
-            {isChecking
-              ? "The app is waiting for the authenticated backend session to finish."
-              : error || "The frontend could not authenticate with the backend API."}
+            {error || "We could not load your account. Retry in a moment."}
           </p>
         </div>
-        <span
-          className={[
-            "material-symbols-outlined rounded-full p-3 text-2xl",
-            isChecking
-              ? "bg-primary/10 text-primary"
-              : "bg-error-container text-on-error-container",
-          ].join(" ")}
-        >
-          {isChecking ? "sync" : "cloud_off"}
+        <span className="material-symbols-outlined rounded-full bg-error-container p-3 text-2xl text-on-error-container">
+          cloud_off
         </span>
-      </div>
-
-      <div className="mt-6 rounded-lg border border-outline-variant/15 bg-surface p-4 text-sm text-on-surface-variant">
-        <span className="font-semibold text-on-surface">API target:</span>
-        {" "}
-        <span className="break-all">{apiBaseUrl || defaultApiBaseUrl}</span>
       </div>
 
       <div className="mt-6 flex flex-wrap gap-3">
         <button
           className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={isChecking}
           onClick={handleRetry}
           type="button"
         >
           <span className="material-symbols-outlined text-[18px]">refresh</span>
           Retry
         </button>
-        {!isUsingDefaultApi ? (
-          <button
-            className="inline-flex items-center gap-2 rounded-lg border border-outline-variant/20 bg-surface-container-low px-4 py-2.5 text-sm font-semibold text-on-surface transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isResetting}
-            onClick={handleResetApiBaseUrl}
-            type="button"
-          >
-            <span className="material-symbols-outlined text-[18px]">settings_backup_restore</span>
-            {isResetting ? "Resetting..." : "Use default API"}
-          </button>
-        ) : null}
       </div>
     </section>
   );

@@ -30,7 +30,7 @@ export function useTracker() {
     error: trackerError,
     refresh: refreshTracker,
     setData: setTrackerData,
-  } = useApiResource(() => request("/tracker"), [request], {
+  } = useApiResource(() => request("/tracker", { timeoutMs: 10000 }), [request], {
     cacheKey: "tracker:items",
     staleMs: 15000,
     backgroundRefresh: true,
@@ -41,7 +41,7 @@ export function useTracker() {
     error: integrationError,
     refresh: refreshIntegration,
     setData: setIntegrationData,
-  } = useApiResource(() => request("/tracker/email-integration"), [request], {
+  } = useApiResource(() => request("/tracker/email-integration", { timeoutMs: 10000 }), [request], {
     cacheKey: "tracker:email-integration",
     staleMs: 300000,
     backgroundRefresh: true,
