@@ -4,6 +4,7 @@ import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
 import { isAdminUser } from "../lib/auth";
+import { currentEntryAssetPath, fetchLatestEntryAssetPath } from "../lib/deployVersion";
 import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
@@ -427,6 +428,7 @@ export default function AppShell({ children, muteSidebar = false }) {
     }
     return window.localStorage.getItem(DESKTOP_SIDEBAR_STORAGE_KEY) === "true";
   });
+  const [deployUpdateAvailable, setDeployUpdateAvailable] = useState(false);
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -438,6 +440,53 @@ export default function AppShell({ children, muteSidebar = false }) {
       desktopSidebarCollapsed ? "true" : "false",
     );
   }, [desktopSidebarCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return undefined;
+    }
+    const loadedEntryAsset = currentEntryAssetPath(document);
+    const fetchImpl = window.fetch?.bind(window);
+    if (!loadedEntryAsset || !fetchImpl) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    async function checkForNewDeploy() {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      try {
+        const latestEntryAsset = await fetchLatestEntryAssetPath({
+          baseUrl: window.location.href,
+          fetchImpl,
+        });
+        if (!cancelled && latestEntryAsset && latestEntryAsset !== loadedEntryAsset) {
+          setDeployUpdateAvailable(true);
+        }
+      } catch {
+        // Update checks are best-effort; a failed check should not affect normal app use.
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        checkForNewDeploy();
+      }
+    }
+
+    window.addEventListener("focus", checkForNewDeploy);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    const intervalId = window.setInterval(checkForNewDeploy, 120000);
+    checkForNewDeploy();
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", checkForNewDeploy);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   const normalizedPlanId = String(
     user?.plan_id || clerkUser?.publicMetadata?.plan_id || "none",
@@ -616,6 +665,28 @@ export default function AppShell({ children, muteSidebar = false }) {
             </Show>
           </div>
         </header>
+
+        {deployUpdateAvailable ? (
+          <div
+            className="mx-4 mt-4 flex flex-col gap-3 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-on-surface shadow-soft md:mx-8 md:flex-row md:items-center md:justify-between"
+            role="status"
+          >
+            <div>
+              <div className="font-semibold text-on-surface">A newer Runr version is available.</div>
+              <div className="text-xs leading-5 text-on-surface-variant">
+                Refresh once to load the latest deployed UI and avoid stale pages from an older tab.
+              </div>
+            </div>
+            <button
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+              onClick={() => window.location.reload()}
+              type="button"
+            >
+              <span className="material-symbols-outlined text-[16px]">refresh</span>
+              Refresh now
+            </button>
+          </div>
+        ) : null}
 
         <main className="w-full px-4 pb-12 pt-6 md:px-8">{children}</main>
       </div>
