@@ -424,6 +424,7 @@ class RunLifecycleService:
         execute: bool = True,
         enqueue: bool = False,
         requested_by: str = "cli",
+        user_id: str = "",
         max_attempts: int = 1,
     ) -> RunRecord:
         if execute and enqueue:
@@ -441,6 +442,7 @@ class RunLifecycleService:
             workflow_template_id=workflow.id,
             run_input_overrides=run_input_overrides or {},
             requested_by=requested_by,
+            user_id=user_id,
             max_attempts=max_attempts,
             metadata={
                 "workspace_type": workspace.workspace_type,
@@ -477,6 +479,7 @@ class RunLifecycleService:
         *,
         run_input_overrides: Mapping[str, Any] | None = None,
         requested_by: str = "api",
+        user_id: str = "",
         max_attempts: int = 1,
     ) -> RunRecord:
         return self.start_run(
@@ -485,6 +488,7 @@ class RunLifecycleService:
             execute=False,
             enqueue=True,
             requested_by=requested_by,
+            user_id=user_id,
             max_attempts=max_attempts,
         )
 

@@ -31,11 +31,9 @@ export default function CareerMemoryBuilder({
   guideTo = "/career-memory/guide",
   manageDocumentsTo = "/documents",
   masterCareerProfileAsset = null,
-  masterProfileUploadState,
   onChangeField,
   onSave,
   onToggleSourceAsset,
-  onUploadMasterProfile,
   saveState,
   workspaceScopeTo = "/workspaces?focus=documents",
 }) {
@@ -244,10 +242,8 @@ export default function CareerMemoryBuilder({
           manageDocumentsTo={manageDocumentsTo}
           masterCareerProfileAsset={masterCareerProfileAsset}
           masterProfileAssetId={draft.masterProfileAssetId}
-          masterProfileUploadState={masterProfileUploadState}
           onChangeField={onChangeField}
           onToggleSourceAsset={onToggleSourceAsset}
-          onUploadMasterProfile={onUploadMasterProfile}
           selectedAssetIds={draft.selectedAssetIds}
         />
         <MissingContextCards items={missingContextItems} onHelp={(item) => handleUsePrompt(item.chipId)} />

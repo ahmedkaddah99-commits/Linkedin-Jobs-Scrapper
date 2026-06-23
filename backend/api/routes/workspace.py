@@ -182,7 +182,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
 
     if segments[:1] == ["runs"] and len(segments) == 2:
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_READ)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_READ)
                         payload = run.to_dict()
                         payload["capped_sites"] = list(
                             application.repositories.job_store.load_blob(run.id, "capped_sites", []) or []
@@ -206,7 +206,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                             timings_ms["run_load"] = round((perf_counter() - phase_started) * 1000, 2)
 
                             phase_started = perf_counter()
-                            if not application.user_can_access_workspace(user, run.workspace_id):
+                            if not application.user_can_access_run(user, run):
                                 raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                             timings_ms["access_check"] = round((perf_counter() - phase_started) * 1000, 2)
 
@@ -253,7 +253,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "jobs" and segments[3] == "by-id":
                         user, _ = self._require_identity()
                         run = application.get_run(segments[1])
-                        if not application.user_can_access_workspace(user, run.workspace_id):
+                        if not application.user_can_access_run(user, run):
                             raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                         self._send_json(
                             application.get_job_workspace(
@@ -267,34 +267,34 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "jobs":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_READ)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_READ)
                         job_sets = application.list_job_sets(segments[1])
                         self._send_json({"run_id": segments[1], "job_sets": {key: [job.to_dict() for job in jobs] for key, jobs in job_sets.items()}})
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "jobs":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_READ)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_READ)
                         jobs = application.get_job_set(segments[1], segments[3])
                         self._send_json({"run_id": segments[1], "set_key": segments[3], "jobs": [job.to_dict() for job in jobs]})
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "artifacts":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_ARTIFACTS_READ)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_ARTIFACTS_READ)
                         artifacts = application.list_artifacts(segments[1])
                         self._send_json({"run_id": segments[1], "artifacts": [artifact.to_dict() for artifact in artifacts]})
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "artifacts":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_ARTIFACTS_READ)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_ARTIFACTS_READ)
                         self._send_json(application.get_artifact(segments[1], segments[3]).to_dict())
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "artifacts" and segments[4] == "download":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_ARTIFACTS_READ)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_ARTIFACTS_READ)
                         document_id = _document_id_for_artifact(segments[1], segments[3])
                         document = _find_document_entry(application, self._require_identity()[0], document_id)
                         _assert_document_export_allowed(
@@ -307,7 +307,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "reviews":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_REVIEWS_READ)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_REVIEWS_READ)
                         limit = _parse_int_param(query, "limit", default=100, maximum=500)
                         offset = _parse_int_param(query, "offset", default=0, maximum=100000)
                         reviews = application.list_reviews(run_id=segments[1], limit=limit, offset=offset)
@@ -342,7 +342,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "reviews":
                         review = application.get_review(segments[3])
                         run = application.get_run(review.run_id)
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_REVIEWS_READ)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_REVIEWS_READ)
                         if review.run_id != segments[1]:
                             self._send_error(HTTPStatus.NOT_FOUND, "not_found", "Review not found for run.")
                             return
@@ -426,9 +426,18 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
 
     if segments == ["workspaces"]:
                         user, _ = self._require_scope(TOKEN_SCOPE_WORKSPACES_WRITE)
-                        workspace_id = str(payload.get("id") or "")
-                        if workspace_id and not application.user_can_access_workspace(user, workspace_id):
+                        workspace_id = str(payload.get("id") or "").strip()
+                        existing_workspace = None
+                        if workspace_id:
+                            try:
+                                existing_workspace = application.get_workspace(workspace_id)
+                            except KeyError:
+                                existing_workspace = None
+                        if existing_workspace and not application.user_can_access_workspace(user, workspace_id):
                             raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
+                        payload["owner_user_id"] = (
+                            existing_workspace.owner_user_id if existing_workspace else user.user_id
+                        )
                         self._send_json(application.upsert_workspace(payload).to_dict(), status=HTTPStatus.CREATED)
                         return
 
@@ -517,6 +526,21 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             application,
                             payload,
                             user,
+                        )
+                        workspace_id = str(
+                            prepared_payload.get("workspace_id")
+                            or _slugify(str(prepared_payload.get("name") or ""))
+                        ).strip()
+                        existing_workspace = None
+                        if workspace_id:
+                            try:
+                                existing_workspace = application.get_workspace(workspace_id)
+                            except KeyError:
+                                existing_workspace = None
+                        if existing_workspace and not application.user_can_access_workspace(user, workspace_id):
+                            raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
+                        prepared_payload["owner_user_id"] = (
+                            existing_workspace.owner_user_id if existing_workspace else user.user_id
                         )
                         workspace = application.create_workspace_from_scratch(prepared_payload)
                         workspace = _persist_workspace_runtime_settings(application, workspace, runtime_settings)
@@ -656,25 +680,25 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "cancel":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_WRITE)
                         self._send_json(application.cancel_run(segments[1]).to_dict(), status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "retry":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_WRITE)
                         self._send_json(application.retry_run(segments[1]).to_dict(), status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "resume":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_WRITE)
                         self._send_json(application.resume_run(segments[1]).to_dict(), status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "reviews":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_REVIEWS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_REVIEWS_WRITE)
                         self._send_json(application.upsert_review(run_id=segments[1], payload=payload).to_dict(), status=HTTPStatus.CREATED)
                         return
 
@@ -725,6 +749,7 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
                             user,
                             existing_workspace=existing_workspace,
                         )
+                        prepared_payload["owner_user_id"] = existing_workspace.owner_user_id
                         workspace = application.update_workspace_from_scratch(segments[2], prepared_payload)
                         workspace = _persist_workspace_runtime_settings(application, workspace, runtime_settings)
                         self._send_json(workspace.to_dict(), status=HTTPStatus.OK)
@@ -741,7 +766,9 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
 
     if segments[:1] == ["workspaces"] and len(segments) == 2:
                         self._require_workspace_access(workspace_id=segments[1], required_scope=TOKEN_SCOPE_WORKSPACES_WRITE)
+                        existing_workspace = application.get_workspace(segments[1])
                         payload["id"] = segments[1]
+                        payload["owner_user_id"] = existing_workspace.owner_user_id
                         self._send_json(application.upsert_workspace(payload).to_dict(), status=HTTPStatus.OK)
                         return
 
@@ -753,7 +780,7 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
 
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "jobs":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_WRITE)
                         jobs = payload.get("jobs")
                         if not isinstance(jobs, list):
                             raise ValueError("jobs must be a list")
@@ -763,14 +790,14 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
 
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "artifacts":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_ARTIFACTS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_ARTIFACTS_WRITE)
                         payload["artifact_id"] = segments[3]
                         self._send_json(application.upsert_artifact(segments[1], payload).to_dict(), status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "reviews":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_REVIEWS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_REVIEWS_WRITE)
                         self._send_json(application.upsert_review(run_id=segments[1], payload=payload, review_id=segments[3]).to_dict(), status=HTTPStatus.OK)
                         return
 
@@ -797,21 +824,21 @@ def _handle_delete(context: ApiRouteContext) -> bool | None:
 
     if segments[:1] == ["runs"] and len(segments) == 5 and segments[2] == "jobs" and segments[3] == "by-id":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_WRITE)
                         application.delete_job(segments[1], segments[4])
                         self._send_json({"deleted": segments[4], "run_id": segments[1]}, status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "jobs":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_WRITE)
                         application.delete_job_set(segments[1], segments[3])
                         self._send_json({"deleted": segments[3], "run_id": segments[1]}, status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "artifacts":
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_ARTIFACTS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_ARTIFACTS_WRITE)
                         application.delete_artifact(segments[1], segments[3])
                         self._send_json({"deleted": segments[3], "run_id": segments[1]}, status=HTTPStatus.OK)
                         return
@@ -819,14 +846,14 @@ def _handle_delete(context: ApiRouteContext) -> bool | None:
     if segments[:1] == ["runs"] and len(segments) == 4 and segments[2] == "reviews":
                         review = application.get_review(segments[3])
                         run = application.get_run(review.run_id)
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_REVIEWS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_REVIEWS_WRITE)
                         application.delete_review(segments[3])
                         self._send_json({"deleted": segments[3], "run_id": segments[1]}, status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 2:
                         run = application.get_run(segments[1])
-                        self._require_workspace_access(workspace_id=run.workspace_id, required_scope=TOKEN_SCOPE_RUNS_WRITE)
+                        self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_WRITE)
                         application.delete_run(segments[1])
                         self._send_json({"deleted": segments[1]}, status=HTTPStatus.OK)
                         return

@@ -732,6 +732,7 @@ class WorkspaceDefinition:
     id: str
     name: str
     workflow_template_id: str
+    owner_user_id: str = ""
     description: str = ""
     workspace_type: str = ""
     settings: dict[str, Any] = field(default_factory=dict)
@@ -746,6 +747,7 @@ class WorkspaceDefinition:
             "id": self.id,
             "name": self.name,
             "workflow_template_id": self.workflow_template_id,
+            "owner_user_id": self.owner_user_id,
             "description": self.description,
             "workspace_type": self.workspace_type,
             "settings": dict(self.settings),
@@ -762,6 +764,7 @@ class WorkspaceDefinition:
             id=str(payload.get("id") or ""),
             name=str(payload.get("name") or ""),
             workflow_template_id=str(payload.get("workflow_template_id") or ""),
+            owner_user_id=str(payload.get("owner_user_id") or ""),
             description=str(payload.get("description") or ""),
             workspace_type=str(payload.get("workspace_type") or ""),
             settings=dict(payload.get("settings") or {}),
@@ -865,6 +868,7 @@ class RunRecord:
         workflow_template_id: str,
         run_input_overrides: Mapping[str, Any] | None = None,
         requested_by: str = "",
+        user_id: str = "",
         max_attempts: int = 1,
         metadata: Mapping[str, Any] | None = None,
     ) -> "RunRecord":
@@ -875,7 +879,7 @@ class RunRecord:
             workflow_template_id=workflow_template_id,
             status=RUN_STATUS_PLANNED,
             requested_by=requested_by,
-            user_id=resolve_run_user_id(requested_by),
+            user_id=resolve_run_user_id(requested_by, user_id),
             created_at=now,
             updated_at=now,
             max_attempts=max(1, int(max_attempts)),

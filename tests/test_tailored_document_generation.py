@@ -736,7 +736,7 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             ],
         )
 
-    def test_create_cv_document_writes_visible_experience_bullet_prefixes(self):
+    def test_create_cv_document_writes_semantic_experience_bullets(self):
         record = {
             "job_id": "job_1",
             "title": "Senior Analyst",
@@ -748,7 +748,10 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
                     "role_title": "Business Analyst",
                     "company": "ACME",
                     "period": "2022-2024",
-                    "bullets": ["Delivered reporting improvements."],
+                    "bullets": [
+                        "Delivered reporting improvements.",
+                        {"text": "Included a nested implementation detail.", "level": 1},
+                    ],
                 }
             ],
             "cv_skills": ["SQL"],
@@ -771,9 +774,19 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
                 profile_links=[],
             )
             exported = Document(output_path)
-            texts = [paragraph.text.strip() for paragraph in exported.paragraphs if paragraph.text.strip()]
+            bullet_paragraph = next(
+                paragraph
+                for paragraph in exported.paragraphs
+                if paragraph.text.strip() == "Delivered reporting improvements."
+            )
+            nested_paragraph = next(
+                paragraph
+                for paragraph in exported.paragraphs
+                if paragraph.text.strip() == "Included a nested implementation detail."
+            )
 
-        self.assertIn("\u2022 Delivered reporting improvements.", texts)
+        self.assertEqual(bullet_paragraph.style.name, "List Bullet")
+        self.assertEqual(nested_paragraph.style.name, "List Bullet 2")
 
     def test_create_plain_document_uses_reference_layout_with_selected_design_tokens(self):
         record = {

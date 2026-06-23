@@ -184,6 +184,7 @@ const CV_EXPORT_LABELS = {
     languages: "Languages",
     optionalPhoto: "Optional photo",
     profile: "Profile",
+    projects: "Projects",
     skills: "Skills",
     summary: "Summary",
     tailoredProfile: "Tailored profile",
@@ -204,6 +205,7 @@ const CV_EXPORT_LABELS = {
     languages: "Sprachen",
     optionalPhoto: "Optionales Foto",
     profile: "Profil",
+    projects: "Projekte",
     skills: "Kompetenzen",
     summary: "Profil",
     tailoredProfile: "Zielprofil",
@@ -226,11 +228,81 @@ function labelFor(model, key) {
 
 function emptyExperienceItem() {
   return {
+    id: "experience-1",
     title: "",
     company: "",
+    location: "",
+    startDate: "",
+    endDate: "",
     period: "",
-    bulletsText: "",
+    bullets: [],
   };
+}
+
+function stripLegacyBulletMarker(value) {
+  return String(value || "").replace(/^\s*[-*•]\s*/, "").trim();
+}
+
+function clampListLevel(value) {
+  return Math.max(0, Math.min(2, Number.parseInt(value, 10) || 0));
+}
+
+export function normalizeCvListItems(rawItems, fallbackText = "", idPrefix = "bullet") {
+  const sourceItems = Array.isArray(rawItems)
+    ? rawItems
+    : String(fallbackText || "").split(/\r?\n/);
+  return sourceItems
+    .map((item, index) => {
+      const isObject = item && typeof item === "object";
+      const text = stripLegacyBulletMarker(
+        isObject ? item.text || item.value || item.label || "" : item,
+      );
+      if (!text) return null;
+      return {
+        id: String((isObject && item.id) || `${idPrefix}-${index + 1}`),
+        text,
+        level: clampListLevel(isObject ? item.level : 0),
+      };
+    })
+    .filter(Boolean);
+}
+
+function splitExperiencePeriod(item) {
+  const explicitStart = String(item.startDate || item.start_date || item.start || "").trim();
+  const explicitEnd = String(item.endDate || item.end_date || item.end || "").trim();
+  if (explicitStart || explicitEnd) {
+    return { startDate: explicitStart, endDate: explicitEnd };
+  }
+  const period = String(item.period || item.date_range || "").trim();
+  const spacedParts = period.split(/\s+(?:-|–|—|to)\s+/i);
+  const compactYearRange = period.match(/^(\d{4})-(\d{4}|present|current)$/i);
+  const parts = spacedParts.length > 1
+    ? spacedParts
+    : compactYearRange
+      ? [compactYearRange[1], compactYearRange[2]]
+      : [period];
+  return {
+    startDate: String(parts[0] || "").trim(),
+    endDate: String(parts.slice(1).join(" - ") || "").trim(),
+  };
+}
+
+export function formatCvExperiencePeriod(item) {
+  const values = [item?.startDate, item?.endDate]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  return values.length ? values.join(" - ") : String(item?.period || "").trim();
+}
+
+function normalizeProjectItems(rawItems) {
+  return (Array.isArray(rawItems) ? rawItems : [])
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => ({
+      id: String(item.id || `project-${index + 1}`),
+      title: String(item.title || item.name || ""),
+      period: String(item.period || item.date || item.year || ""),
+      bullets: normalizeCvListItems(item.bullets, item.bulletsText, `project-${index + 1}-bullet`),
+    }));
 }
 
 function educationItemToLine(item) {
@@ -337,19 +409,27 @@ export function saveCvStudioSession(session) {
   window.localStorage.setItem(CV_STUDIO_SESSION_KEY, JSON.stringify(session));
 }
 
-function normalizeExperienceItems(rawItems) {
+export function normalizeExperienceItems(rawItems) {
   const items = Array.isArray(rawItems) ? rawItems : [];
   const normalizedItems = items
     .filter((item) => item && typeof item === "object")
-    .map((item) => ({
-      title: String(item.title || item.role || ""),
-      company: String(item.company || ""),
-      period: String(item.period || ""),
-      bulletsText:
-        Array.isArray(item.bullets) && item.bullets.length
-          ? item.bullets.map((entry) => String(entry || "").trim()).filter(Boolean).join("\n")
-          : String(item.bulletsText || ""),
-    }));
+    .map((item, index) => {
+      const dates = splitExperiencePeriod(item);
+      return {
+        id: String(item.id || `experience-${index + 1}`),
+        title: String(item.title || item.role || item.role_title || ""),
+        company: String(item.company || item.employer || ""),
+        location: String(item.location || item.city || ""),
+        startDate: dates.startDate,
+        endDate: dates.endDate,
+        period: String(item.period || item.date_range || ""),
+        bullets: normalizeCvListItems(
+          item.bullets,
+          item.bulletsText,
+          `experience-${index + 1}-bullet`,
+        ),
+      };
+    });
   return normalizedItems.length ? normalizedItems : [emptyExperienceItem()];
 }
 
@@ -369,8 +449,8 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
     palette: normalizePalette(normalizedDocuments.web_cv_palette || {}),
     name: String(profile.name || ""),
     headline: String(profile.role_title || ""),
-    targetRole: "",
-    targetCompany: "",
+    targetRole: String(profile.target_role || ""),
+    targetCompany: String(profile.target_company || ""),
     outputLanguage: normalizeOutputLanguage(
       profile.cv_output_language ||
         profile.output_language ||
@@ -395,17 +475,10 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
       : "",
     experience: normalizeExperienceItems(
       Array.isArray(profile.recent_experience)
-        ? profile.recent_experience.map((item) => ({
-            title: item.title || item.role || "",
-            company: item.company || "",
-            period: item.period || "",
-            bulletsText:
-              Array.isArray(item.bullets) && item.bullets.length
-                ? item.bullets.join("\n")
-                : item.bulletsText || "",
-          }))
+        ? profile.recent_experience
         : [],
     ),
+    projects: normalizeProjectItems(profile.projects),
     photoDataUrl: String(profile.photo_data_url || profile.avatar_url || ""),
   };
 
@@ -424,6 +497,7 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
     palette: normalizePalette(normalizedSession.palette || baseState.palette),
     outputLanguage: normalizeOutputLanguage(normalizedSession.outputLanguage || baseState.outputLanguage),
     experience: normalizeExperienceItems(normalizedSession.experience || baseState.experience),
+    projects: normalizeProjectItems(normalizedSession.projects || baseState.projects),
   };
 }
 
@@ -539,15 +613,16 @@ function toList(value) {
 }
 
 function normalizeModel(state) {
-  const experience = normalizeExperienceItems(state.experience).map((item) => ({
-    title: String(item.title || ""),
-    company: String(item.company || ""),
-    period: String(item.period || ""),
-    bullets: String(item.bulletsText || "")
-      .split(/\r?\n/)
-      .map((entry) => entry.replace(/^\s*[-*]\s*/, "").trim())
-      .filter(Boolean),
-  }));
+  const experience = normalizeExperienceItems(state.experience)
+    .map((item) => ({
+      title: String(item.title || ""),
+      company: String(item.company || ""),
+      location: String(item.location || ""),
+      period: formatCvExperiencePeriod(item),
+      bullets: normalizeCvListItems(item.bullets),
+    }))
+    .filter((item) => item.title || item.company || item.location || item.period || item.bullets.length);
+  const projects = normalizeProjectItems(state.projects);
 
   const template = findCvTemplate(state.templateId);
   const isPlainResume = template.id === "plain";
@@ -576,6 +651,7 @@ function normalizeModel(state) {
       .map((entry) => entry.trim())
       .filter(Boolean),
     experience,
+    projects,
     photoDataUrl: String(state.photoDataUrl || ""),
   };
 }
@@ -654,14 +730,42 @@ function buildEducationMarkup(model) {
     .join("");
 }
 
+export function buildStructuredListMarkup(items) {
+  const normalizedItems = normalizeCvListItems(items);
+  if (!normalizedItems.length) return "";
+  let markup = "";
+  let currentLevel = -1;
+  normalizedItems.forEach((item, index) => {
+    const targetLevel = Math.min(item.level, currentLevel + 1);
+    const previousLevel = currentLevel;
+    while (currentLevel < targetLevel) {
+      markup += "<ul>";
+      currentLevel += 1;
+    }
+    while (currentLevel > targetLevel) {
+      markup += "</li></ul>";
+      currentLevel -= 1;
+    }
+    if (index > 0 && targetLevel <= previousLevel) {
+      markup += "</li>";
+    }
+    markup += `<li>${escapeHtml(item.text)}`;
+  });
+  while (currentLevel >= 0) {
+    markup += "</li></ul>";
+    currentLevel -= 1;
+  }
+  return markup;
+}
+
 function buildExperienceMarkup(model, className = "experience-stack") {
   return `
     <div class="${className}">
       ${model.experience
         .map((item) => {
-          const heading = [item.title, item.company].filter(Boolean).join(" - ");
+          const heading = [item.title, item.company, item.location].filter(Boolean).join(" - ");
           const bullets = item.bullets.length
-            ? `<ul>${item.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join("")}</ul>`
+            ? buildStructuredListMarkup(item.bullets)
             : `<p class="empty-note">Add tailored achievement bullets for this role.</p>`;
           return `
             <article class="experience-card">
@@ -750,9 +854,9 @@ function templatePlainResume(model) {
     : `<p class="empty-note">Add skills or keywords in the editor.</p>`;
   const experience = model.experience
     .map((item) => {
-      const heading = [item.title, item.company, item.period].filter(Boolean).join(" | ");
+      const heading = [item.title, item.company, item.location, item.period].filter(Boolean).join(" | ");
       const bullets = item.bullets.length
-        ? `<ul>${item.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join("")}</ul>`
+        ? buildStructuredListMarkup(item.bullets)
         : `<p class="empty-note">Add tailored achievement bullets for this role.</p>`;
       return `
         <article class="plain-resume-entry">
@@ -777,6 +881,11 @@ function templatePlainResume(model) {
         <h2>${escapeHtml(labelFor(model, "experience"))}</h2>
         <div class="plain-resume-experience">${experience}</div>
       </section>
+      ${
+        model.projects.length
+          ? `<section class="plain-resume-section"><h2>${escapeHtml(labelFor(model, "projects"))}</h2>${buildProjectsMarkup(model)}</section>`
+          : ""
+      }
       <section class="plain-resume-section">
         <h2>${escapeHtml(labelFor(model, "education"))}</h2>
         <div class="plain-resume-education">${buildEducationMarkup(model)}</div>
@@ -792,6 +901,27 @@ function templatePlainResume(model) {
       }
     </main>
   `;
+}
+
+function buildProjectsMarkup(model) {
+  if (!model.projects.length) {
+    return `<p class="empty-note">Add relevant projects or initiatives in the editor.</p>`;
+  }
+  return model.projects
+    .map((item) => `
+      <article class="experience-card">
+        <div class="experience-head">
+          <h3>${escapeHtml(item.title || "Project")}</h3>
+          ${item.period ? `<span class="period">${escapeHtml(item.period)}</span>` : ""}
+        </div>
+        ${
+          item.bullets.length
+            ? buildStructuredListMarkup(item.bullets)
+            : `<p class="empty-note">Add project outcomes or responsibilities.</p>`
+        }
+      </article>
+    `)
+    .join("");
 }
 
 function templateEditorialSidebar(model) {

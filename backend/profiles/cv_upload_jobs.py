@@ -319,33 +319,41 @@ def process_cv_upload_run(
         if not object_key:
             raise ValueError(f"CV asset '{asset_id}' is missing its source object key.")
         source_bytes = object_storage.get(object_key)
-        document_extraction = extract_document_text(_asset_filename(asset), source_bytes, allow_ocr=False)
+        is_cv_asset = str(asset.get("asset_kind") or "").strip().lower() == "workspace_cv"
+        document_extraction = extract_document_text(
+            _asset_filename(asset),
+            source_bytes,
+            allow_ocr=not is_cv_asset,
+        )
         cv_text = str(document_extraction.get("text") or "").strip()
         if not cv_text:
             warning = " ".join(str(item) for item in document_extraction.get("warnings") or []).strip()
             detail = f" {warning}" if warning else ""
             raise ValueError(f"Could not extract any text from uploaded file '{_asset_filename(asset)}'.{detail}")
 
-        extraction = extract_cv_profile(cv_text)
-        companion_metadata = _store_word_companion_if_needed(
-            object_storage=object_storage,
-            user_id=user_id,
-            asset=asset,
-            cv_text=cv_text,
-        )
         extra_metadata = {
             **extraction_metadata(document_extraction),
-            **companion_metadata,
             "content_sha256": str(metadata.get("content_sha256") or sha256(source_bytes).hexdigest()),
-            "parsed_profile": dict(extraction.get("profile") or {}),
-            "profile_extraction": {
-                "provider": str(extraction.get("provider") or ""),
-                "model": str(extraction.get("model") or ""),
-                "warnings": list(extraction.get("warnings") or []),
-                "extracted_at": str(extraction.get("extracted_at") or ""),
-            },
             "processed_at": _now(),
         }
+        if is_cv_asset:
+            extraction = extract_cv_profile(cv_text)
+            companion_metadata = _store_word_companion_if_needed(
+                object_storage=object_storage,
+                user_id=user_id,
+                asset=asset,
+                cv_text=cv_text,
+            )
+            extra_metadata.update({
+                **companion_metadata,
+                "parsed_profile": dict(extraction.get("profile") or {}),
+                "profile_extraction": {
+                    "provider": str(extraction.get("provider") or ""),
+                    "model": str(extraction.get("model") or ""),
+                    "warnings": list(extraction.get("warnings") or []),
+                    "extracted_at": str(extraction.get("extracted_at") or ""),
+                },
+            })
         refreshed_user, _asset = update_cv_asset_processing_state(
             repositories,
             user_id=user_id,
@@ -354,11 +362,12 @@ def process_cv_upload_run(
             job_id=run.id,
             extra_metadata=extra_metadata,
         )
-        user_metadata = dict(refreshed_user.metadata or {})
-        user_metadata["cv_text"] = cv_text
-        refreshed_user.metadata = user_metadata
-        refreshed_user.updated_at = _now()
-        repositories.auth_repository.upsert_user(refreshed_user)
+        if is_cv_asset:
+            user_metadata = dict(refreshed_user.metadata or {})
+            user_metadata["cv_text"] = cv_text
+            refreshed_user.metadata = user_metadata
+            refreshed_user.updated_at = _now()
+            repositories.auth_repository.upsert_user(refreshed_user)
         return _complete_run(repositories, run)
     except Exception as exc:
         message = str(exc)

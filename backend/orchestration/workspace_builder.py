@@ -2387,6 +2387,7 @@ def build_workspace_from_scratch(payload: dict) -> tuple[WorkflowTemplate, Works
         id=workspace_slug,
         name=name,
         workflow_template_id=workflow_template.id,
+        owner_user_id=str(payload.get("owner_user_id") or "").strip(),
         description=description,
         workspace_type="custom",
         settings={**settings, **workspace_settings},

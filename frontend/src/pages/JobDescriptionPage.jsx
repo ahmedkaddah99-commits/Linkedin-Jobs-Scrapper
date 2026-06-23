@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
+import { trackerDescriptionForItem } from "../lib/trackerDescription";
 
 export default function JobDescriptionPage() {
   const { reviewId = "" } = useParams();
@@ -12,7 +13,7 @@ export default function JobDescriptionPage() {
     [request, reviewId],
   );
   const item = (data?.items || []).find((candidate) => candidate.review_id === reviewId);
-  const description = String(item?.full_description || item?.tracker_table_row?.full_description || "").trim();
+  const description = trackerDescriptionForItem(item);
 
   async function copyDescription() {
     if (!description) return;

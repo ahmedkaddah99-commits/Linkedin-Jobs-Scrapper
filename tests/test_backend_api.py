@@ -26,7 +26,7 @@ from backend.api.server import (
 )
 from backend.capabilities.networking import build_empty_relevant_people_discovery
 from backend.capabilities.tracker.email_integration import TrackerMailboxMessage
-from backend.domain.models import ArtifactRecord, JobRecord, StageDefinition
+from backend.domain.models import ArtifactRecord, JobRecord, ReviewRecord, StageDefinition
 from backend.orchestration import BaseStage, StageOutcome
 from backend.profiles.cv_profile_extraction import extract_cv_profile_fallback
 
@@ -174,6 +174,9 @@ class BackendApiTests(unittest.TestCase):
                 "role": "admin",
             }
         )
+        api_workspace = self.app.get_workspace("api_workspace")
+        api_workspace.owner_user_id = self.user.user_id
+        self.app.upsert_workspace(api_workspace)
         _, self.access_token = self.app.issue_api_token(user_id=self.user.user_id, name="api-test")
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(self.app))
@@ -251,6 +254,84 @@ class BackendApiTests(unittest.TestCase):
         return (
             datetime.now(timezone.utc) - timedelta(days=days_ago)
         ).replace(hour=hour, minute=minute, second=0, microsecond=0).isoformat()
+
+    def test_non_admin_users_only_see_their_owned_workspaces_runs_and_tracker_items(self):
+        user_a = self.app.upsert_user(
+            {
+                "email": "owner-a@example.com",
+                "display_name": "Owner A",
+                "role": "viewer",
+            }
+        )
+        user_b = self.app.upsert_user(
+            {
+                "email": "owner-b@example.com",
+                "display_name": "Owner B",
+                "role": "viewer",
+            }
+        )
+        _, token_b = self.app.issue_api_token(user_id=user_b.user_id, name="owner-b-token")
+
+        for user, suffix in ((user_a, "a"), (user_b, "b")):
+            workspace_id = f"owned_workspace_{suffix}"
+            self.app.upsert_workspace(
+                {
+                    "id": workspace_id,
+                    "name": f"Owned Workspace {suffix.upper()}",
+                    "workflow_template_id": "api_template_v1",
+                    "workspace_type": "custom",
+                    "owner_user_id": user.user_id,
+                    "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
+                }
+            )
+            run = self.app.start_run(
+                workspace_id,
+                execute=False,
+                requested_by=f"api:{user.user_id}",
+            )
+            self.app.upsert_job_set(
+                run.id,
+                "accepted_jobs",
+                [
+                    {
+                        "job_id": f"job_{suffix}",
+                        "title": f"Role {suffix.upper()}",
+                        "company": f"Company {suffix.upper()}",
+                    }
+                ],
+            )
+            review = ReviewRecord.create(
+                run_id=run.id,
+                job_id=f"job_{suffix}",
+                decision="approved",
+                status="approved",
+                reviewer=user.user_id,
+                metadata={"tracker_status": "applied"},
+            )
+            self.app.repositories.review_store.upsert_review(review)
+            if suffix == "a":
+                run_a = run
+
+        self.access_token = token_b
+
+        status, workspace_payload = self._request("GET", "/workspaces")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            [workspace["id"] for workspace in workspace_payload["workspaces"]],
+            ["owned_workspace_b"],
+        )
+
+        status, runs_payload = self._request("GET", "/runs")
+        self.assertEqual(status, 200)
+        self.assertEqual([run["workspace_id"] for run in runs_payload["runs"]], ["owned_workspace_b"])
+
+        status, tracker_payload = self._request("GET", "/tracker")
+        self.assertEqual(status, 200)
+        self.assertEqual([item["company"] for item in tracker_payload["items"]], ["Company B"])
+
+        status, error_payload = self._request("GET", f"/runs/{run_a.id}")
+        self.assertEqual(status, 403)
+        self.assertEqual(error_payload["error"]["code"], "forbidden")
 
     def test_http_handler_does_not_send_error_response_after_client_disconnect(self):
         handler_class = build_handler(self.app)
@@ -524,7 +605,9 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         review = self.app.get_review(review_payload["review_id"])
-        old_application_date = self._recent_tracker_timestamp(days_ago=20, hour=9)
+        old_application_date = (
+            datetime.now(timezone.utc) - timedelta(days=20, minutes=1)
+        ).replace(microsecond=0).isoformat()
         review.metadata = {
             **dict(review.metadata or {}),
             "tracker_status": "applied",
@@ -1317,6 +1400,7 @@ class BackendApiTests(unittest.TestCase):
             )
         self.assertEqual(status, 201)
         self.assertEqual(workspace_payload["workspace_type"], "custom")
+        self.assertEqual(workspace_payload["owner_user_id"], self.user.user_id)
         self.assertEqual(workspace_payload["metadata"]["automation_flow"], "tailored_documents")
         self.assertEqual(workspace_payload["settings"]["workspace_cv_asset_id"], workspace_cv_asset_id)
         self.assertFalse(workspace_payload["settings"].get("workspace_cv_asset_path"))
@@ -2778,6 +2862,47 @@ class BackendApiTests(unittest.TestCase):
         status, settings_payload = self._request("GET", "/settings")
         self.assertEqual(status, 200)
         self.assertTrue(settings_payload["profile"]["photo_data_url"].startswith("data:image/png;base64,"))
+
+    def test_documents_upload_rejects_legacy_general_asset_types(self):
+        for asset_kind in ("master_career_profile", "motivation_letter"):
+            status, payload = self._multipart_request(
+                f"/documents/upload?asset_kind={asset_kind}",
+                "document",
+                "legacy.txt",
+                b"Legacy content",
+            )
+
+            self.assertEqual(status, 400)
+            self.assertIn("legacy asset type", str(payload).lower())
+
+    def test_pdf_supporting_document_uses_background_text_extraction(self):
+        import fitz
+
+        document = fitz.open()
+        page = document.new_page()
+        page.insert_text((72, 72), "Searchable supporting document content")
+        pdf_bytes = document.tobytes()
+        document.close()
+
+        status, upload_payload = self._multipart_request(
+            "/documents/upload?asset_kind=uploaded_document",
+            "document",
+            "supporting.pdf",
+            pdf_bytes,
+        )
+        self.assertEqual(status, 201)
+        self.assertTrue(upload_payload["job_id"])
+        self.assertEqual(upload_payload["asset"]["metadata"]["status"], "queued")
+
+        self.app.process_next_queued_run(auto_retry_failed=False)
+        status, processing_payload = self._request("GET", upload_payload["status_url"])
+
+        self.assertEqual(status, 200)
+        self.assertEqual(processing_payload["status"], "ready")
+        self.assertEqual(
+            processing_payload["asset"]["metadata"]["text_extraction"]["method"],
+            "pdf_native",
+        )
 
     @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
     def test_documents_endpoint_bulk_export_and_candidate_assets(self):
@@ -4938,6 +5063,183 @@ class BackendApiTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_career_memory_endpoints_extract_confirm_generate_and_version_outputs(self):
+        user = self.app.get_user(self.user.user_id)
+        user.metadata = {
+            **dict(user.metadata or {}),
+            "candidate_assets": [
+                {
+                    "asset_id": "asset_career_memory",
+                    "asset_kind": "workspace_cv",
+                    "metadata": {
+                        "content_sha256": "career-memory-signature",
+                        "source_text": (
+                            "Built Python automation for weekly application reporting.\n"
+                            "Reduced manual review time by 40 percent across the recruiting team."
+                        ),
+                    },
+                }
+            ],
+        }
+        self.app.repositories.auth_repository.upsert_user(user)
+
+        status, extracted = self._request(
+            "POST",
+            "/career-memory/facts/extract",
+            {"source_asset_ids": ["asset_career_memory"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(extracted["created_count"], 2)
+        metric = next(fact for fact in extracted["active_facts"] if fact["type"] == "metric")
+
+        status, question = self._request("POST", "/career-memory/questions/next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(question["fact_id"], metric["fact_id"])
+        self.assertTrue(question["requires_confirmation"])
+
+        status, confirmed = self._request(
+            "POST",
+            f"/career-memory/facts/{metric['fact_id']}/confirm",
+            {
+                "value": metric["value"],
+                "type": "metric",
+                "certainty": "confirmed",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(confirmed["fact"]["version"], 2)
+
+        status, generated = self._request(
+            "POST",
+            "/career-memory/outputs/generate",
+            {"mode": "standard"},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(generated["output"]["quality"]["status"], "passed")
+        self.assertNotEqual(
+            generated["output"]["cv_bullet"],
+            generated["output"]["cover_letter"],
+        )
+
+        output_id = generated["output"]["output_id"]
+        fact_history_before = generated["fact_history"]
+        status, edited = self._request(
+            "POST",
+            f"/career-memory/outputs/{output_id}/regenerate",
+            {
+                "action": "edit",
+                "cv_bullet": "Invented unsupported synergy claim.",
+                "cover_letter": generated["output"]["cover_letter"],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(edited["output"]["version"], 2)
+        self.assertEqual(edited["fact_history"], fact_history_before)
+        self.assertIn(
+            "unsupported_phrase",
+            {issue["code"] for issue in edited["output"]["quality"]["issues"]},
+        )
+
+    def test_tracker_ats_detail_returns_persisted_read_only_diagnostics(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+        status, review_payload = self._request(
+            "POST",
+            f"/runs/{run_id}/reviews",
+            {
+                "job_id": "api_job_1",
+                "decision": "approved",
+                "status": "approved",
+                "reviewer": "tester",
+            },
+        )
+        self.assertEqual(status, 201)
+        review = self.app.get_review(review_payload["review_id"])
+        review.metadata = {
+            **dict(review.metadata or {}),
+            "tracker_status": "applied",
+            "application_status": "Applied",
+        }
+        self.app.repositories.review_store.upsert_review(review)
+
+        cv_path = self.temp_dir / "ats_detail_cv.docx"
+        cv_path.write_bytes(b"ats-detail")
+        status, _ = self._request(
+            "PUT",
+            f"/runs/{run_id}/artifacts/api_ats_detail_cv",
+            {
+                "artifact_type": "cv_docx",
+                "path": str(cv_path),
+                "metadata": {
+                    "job_id": "api_job_1",
+                    "job_title": "Engineer",
+                    "company": "ACME API",
+                    "document_asset_kind": "generated_cv",
+                    "ats_best_score": 84,
+                    "ats_target_score": 90,
+                    "ats_attempt_count": 2,
+                    "ats_max_attempts": 3,
+                    "ats_stop_reason": "score_stalled",
+                    "workspace_cv_asset_id": "asset_source_cv",
+                    "scorer_model": "deepseek-test",
+                    "prompt_version": "ats-v2",
+                    "ats_attempt_history": [
+                        {
+                            "attempt": 1,
+                            "score": 72,
+                            "missing_requirements": ["SQL"],
+                            "improvement_actions": ["Add grounded SQL evidence."],
+                        },
+                        {
+                            "attempt": 2,
+                            "score": 84,
+                            "missing_requirements": ["German B2"],
+                            "improvement_actions": ["Confirm German proficiency."],
+                        },
+                    ],
+                    "missing_requirements": ["German B2"],
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+
+        status, detail = self._request(
+            "GET",
+            f"/tracker/{review.review_id}/ats",
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(detail["read_only"])
+        self.assertEqual(detail["score"]["best"], 84)
+        self.assertEqual(detail["score"]["gate_state"], "blocked")
+        self.assertEqual(detail["score"]["stop_reason"], "score_stalled")
+        self.assertEqual(len(detail["attempt_history"]), 2)
+        self.assertEqual(detail["criteria"]["missing"], ["German B2"])
+        self.assertEqual(detail["identifiers"]["cv_asset_id"], "asset_source_cv")
+        self.assertEqual(detail["scorer"]["model"], "deepseek-test")
+        self.assertEqual(detail["recommendations"], ["Confirm German proficiency."])
+        self.assertIn("does not recalculate", detail["diagnostic_limitations"])
+
+    def test_run_customer_view_exposes_server_eta_state(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "sync", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+
+        status, customer_view = self._request(
+            "GET",
+            f"/runs/{run_payload['id']}/customer-view",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(customer_view["run"]["eta"]["state"], "unavailable")
+        self.assertTrue(customer_view["run"]["eta"]["calculated_at"])
 
 
 if __name__ == "__main__":

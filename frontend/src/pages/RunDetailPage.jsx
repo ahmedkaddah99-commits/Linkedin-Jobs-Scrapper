@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
+import {
+  claimRunProgressFocus,
+  runProgressScrollBehavior,
+} from "../lib/runProgressFocus";
 
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
@@ -334,93 +338,6 @@ function ExcludedJobRow({ job, runId }) {
   );
 }
 
-function runFilteringQaChecklistItems(review) {
-  const includedJobs = review.included_jobs || [];
-  const excludedJobs = review.excluded_jobs || [];
-  const excludedWithReasons = excludedJobs.filter((job) => job.reason_label && job.reason_summary);
-  const languageRejectedJobs = excludedJobs.filter((job) => {
-    const searchable = [
-      job.reason_code,
-      job.reason_label,
-      job.reason_summary,
-      ...(job.details || []),
-    ].join(" ").toLowerCase();
-    return ["language", "german", "deutsch", "french", "francais"].some((term) =>
-      searchable.includes(term),
-    );
-  });
-
-  return [
-    {
-      title: "Suitable jobs kept",
-      status: includedJobs.length ? `${includedJobs.length} included` : "No included jobs",
-      description: "Sample included jobs and confirm they fit the workspace target roles and location.",
-      evidence: includedJobs.length
-        ? includedJobs.slice(0, 3).map((job) => job.title || job.job_id).join(" | ")
-        : "Review workspace targeting or source coverage if the run should have kept jobs.",
-    },
-    {
-      title: "Unsuitable jobs rejected",
-      status: excludedJobs.length ? `${excludedJobs.length} rejected` : "No rejected jobs",
-      description: "Sample rejected jobs and confirm unsuitable roles stay out of document generation.",
-      evidence: excludedJobs.length
-        ? excludedJobs.slice(0, 3).map((job) => job.title || job.job_id).join(" | ")
-        : "No excluded jobs were saved for this run.",
-    },
-    {
-      title: "Accurate rejection reasons",
-      status: excludedWithReasons.length === excludedJobs.length ? "Reasons present" : "Needs reason",
-      description: "Each rejected job should explain the actual filter that removed it.",
-      evidence: excludedJobs.length
-        ? `${excludedWithReasons.length}/${excludedJobs.length} rejected jobs include a label and summary.`
-        : "No rejected jobs to audit.",
-    },
-    {
-      title: "Language rejection audit",
-      status: languageRejectedJobs.length ? `${languageRejectedJobs.length} language reason` : "No language rejects",
-      description: "Check language reasons against the posting text, especially French versus German.",
-      evidence: languageRejectedJobs.length
-        ? languageRejectedJobs
-          .slice(0, 3)
-          .map((job) => `${job.title || job.job_id}: ${job.reason_summary}`)
-          .join(" | ")
-        : "No language-specific rejection reason appears in this run.",
-    },
-  ];
-}
-
-function RunFilteringQaChecklist({ review }) {
-  const items = runFilteringQaChecklistItems(review);
-  return (
-    <section className="mt-6 rounded-2xl border border-outline-variant/15 bg-surface p-4">
-      <div>
-        <h3 className="text-sm font-semibold text-on-surface">Filtering QA Checklist</h3>
-        <p className="mt-1 text-xs leading-6 text-on-surface-variant">
-          Use this before trusting a run: confirm kept jobs are suitable, rejected jobs are unsuitable,
-          and rejection reasons name the real blocker.
-        </p>
-      </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        {items.map((item) => (
-          <div
-            className="rounded-xl border border-outline-variant/10 bg-surface-container-lowest p-3"
-            key={item.title}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="text-sm font-semibold text-on-surface">{item.title}</div>
-              <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                {item.status}
-              </span>
-            </div>
-            <p className="mt-2 text-xs leading-6 text-on-surface-variant">{item.description}</p>
-            <div className="mt-2 text-xs font-medium leading-5 text-on-surface">{item.evidence}</div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function RunChecklist({ stages }) {
   const checklistStages = (stages || []).filter(
     (stage) => stage.stage_type !== "synthetic_review_stage" && stage.status !== "skipped",
@@ -430,7 +347,7 @@ function RunChecklist({ stages }) {
   }
 
   return (
-    <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+    <div>
       <ol aria-label="Run progress" className="space-y-2">
         {checklistStages.map((stage) => {
           const status = checklistStageStatus(stage);
@@ -461,8 +378,17 @@ function RunChecklist({ stages }) {
           );
         })}
       </ol>
-    </section>
+    </div>
   );
+}
+
+function etaLabel(eta) {
+  if (!eta || eta.state !== "estimated") return "";
+  const lowMinutes = Math.max(1, Math.floor(Number(eta.remaining_seconds_low || 0) / 60));
+  const highMinutes = Math.max(lowMinutes, Math.ceil(Number(eta.remaining_seconds_high || 0) / 60));
+  return lowMinutes === highMinutes
+    ? `Estimated ${highMinutes} minute${highMinutes === 1 ? "" : "s"} remaining.`
+    : `Estimated ${lowMinutes}-${highMinutes} minutes remaining.`;
 }
 
 function SourceCoverageNotice({ run, stages = [] }) {
@@ -510,6 +436,9 @@ export default function RunDetailPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { request } = useSession();
+  const progressRef = useRef(null);
+  const progressHeadingRef = useRef(null);
+  const focusedRunIdsRef = useRef(new Set());
   const [actionState, setActionState] = useState({
     deletingRun: false,
     message: String(location.state?.runStartedMessage || ""),
@@ -611,6 +540,26 @@ export default function RunDetailPage() {
       document.removeEventListener("visibilitychange", refreshVisibleRun);
     };
   }, [refreshRunResources]);
+
+  useEffect(() => {
+    const resolvedRunId = String(run?.id || runId || "");
+    if (
+      !progressRef.current
+      || !claimRunProgressFocus(focusedRunIdsRef.current, {
+        hash: location.hash,
+        runId: resolvedRunId,
+        runStatus: run?.status,
+      })
+    ) {
+      return;
+    }
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    progressHeadingRef.current?.focus({ preventScroll: true });
+    progressRef.current.scrollIntoView({
+      behavior: runProgressScrollBehavior(Boolean(reducedMotion)),
+      block: "start",
+    });
+  }, [location.hash, run?.id, run?.status, runId]);
 
   async function deleteRun() {
     if (!run) {
@@ -726,7 +675,39 @@ export default function RunDetailPage() {
         </section>
       ) : null}
 
-      <RunChecklist stages={stages} />
+      <section
+        aria-labelledby="run-progress-heading"
+        className="scroll-mt-20 rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft"
+        id="run-progress"
+        ref={progressRef}
+        tabIndex={-1}
+      >
+        <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2
+              className="font-headline text-2xl font-bold text-on-surface outline-none"
+              id="run-progress-heading"
+              ref={progressHeadingRef}
+              tabIndex={-1}
+            >
+              Run progress
+            </h2>
+            <p className="mt-1 text-sm text-on-surface-variant">
+              You can leave this page and return later; progress is saved.
+            </p>
+          </div>
+          {run?.eta?.state === "estimated" ? (
+            <div className="rounded-full bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary">
+              {etaLabel(run.eta)}
+            </div>
+          ) : hasActiveRun ? (
+            <div className="rounded-full bg-surface-container-low px-3 py-1.5 text-sm font-medium text-on-surface-variant">
+              Estimating remaining time...
+            </div>
+          ) : null}
+        </div>
+        <RunChecklist stages={stages} />
+      </section>
       <SourceCoverageNotice run={run} stages={stages} />
 
       {run?.last_error ? (
@@ -769,8 +750,6 @@ export default function RunDetailPage() {
               Open Tracker
             </Link>
           </div>
-
-          <RunFilteringQaChecklist review={review} />
 
           <div className="mt-6 space-y-4">
             <ReviewSection count={review.included_jobs?.length || 0} title="Included Jobs">

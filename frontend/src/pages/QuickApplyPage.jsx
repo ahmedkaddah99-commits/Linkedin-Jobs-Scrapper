@@ -363,6 +363,7 @@ export default function QuickApplyPage() {
   });
   const [submitState, setSubmitState] = useState({
     submitting: false,
+    phase: "",
     message: "",
     error: "",
     details: [],
@@ -527,6 +528,7 @@ export default function QuickApplyPage() {
       }
       return {
         ...current,
+        phase: "",
         message: "",
         error: "",
         details: [],
@@ -611,7 +613,8 @@ export default function QuickApplyPage() {
     }
     setSubmitState({
       submitting: true,
-      message: "",
+      phase: "queueing",
+      message: "Validating the job URLs and adding the quick application to the queue...",
       error: "",
       details: [],
       invalidEntries: [],
@@ -633,6 +636,7 @@ export default function QuickApplyPage() {
       const acceptedUrlCount = Number(payload.accepted_url_count || run.metadata?.accepted_url_count || 0);
       setSubmitState({
         submitting: false,
+        phase: "",
         message: `Quick application ${run.id} added to the queue. Accepted ${acceptedUrlCount} exact job URL${acceptedUrlCount === 1 ? "" : "s"}.`,
         error: "",
         details: [],
@@ -643,6 +647,7 @@ export default function QuickApplyPage() {
     } catch (submitError) {
       setSubmitState({
         submitting: false,
+        phase: "",
         message: "",
         error: getApiErrorMessage(submitError, "Unable to start the quick application."),
         details: getApiErrorDetails(submitError),
@@ -661,9 +666,6 @@ export default function QuickApplyPage() {
         </h1>
         <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
           Already have a job posting link? Paste the URL, choose how the CV should be generated, and review the export preview.
-        </p>
-        <p className="text-xs uppercase tracking-wider text-on-surface-variant/80">
-          Exact job links only. No company-site crawling or motivation letters.
         </p>
       </header>
 
@@ -760,12 +762,25 @@ export default function QuickApplyPage() {
           </div>
         ) : null}
         {submitState.message ? (
-          <div className="rounded-lg bg-surface-container-low px-4 py-3 text-sm text-on-surface">
-            <div>{submitState.message}</div>
+          <div
+            aria-live="polite"
+            className="rounded-lg bg-surface-container-low px-4 py-3 text-sm text-on-surface"
+          >
+            <div className="flex items-center gap-2">
+              {submitState.submitting ? (
+                <span
+                  aria-hidden="true"
+                  className="material-symbols-outlined animate-spin text-[18px]"
+                >
+                  progress_activity
+                </span>
+              ) : null}
+              <span>{submitState.message}</span>
+            </div>
             {submitState.runId ? (
               <Link
                 className="mt-3 inline-flex rounded bg-surface px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                to={`/runs/${submitState.runId}`}
+                to={`/runs/${submitState.runId}#run-progress`}
               >
                 Open Run
               </Link>
@@ -797,7 +812,7 @@ export default function QuickApplyPage() {
             onClick={submitQuickApply}
             type="button"
           >
-            {submitState.submitting ? "Starting..." : "Run Quick Application"}
+            {submitState.submitting ? "Queueing..." : "Run Quick Application"}
           </button>
           <Link
             className="rounded bg-surface-container-low px-5 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"

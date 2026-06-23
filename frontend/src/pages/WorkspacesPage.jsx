@@ -146,6 +146,7 @@ const TARGETING_FIELD_FALLBACKS = {
 const EMPTY_ACTION_STATE = {
   workspaceId: "",
   loading: false,
+  phase: "",
   message: "",
   error: "",
   details: [],
@@ -2119,6 +2120,7 @@ export default function WorkspacesPage() {
     }
     return (
       <div
+        aria-live="polite"
         className={[
           "rounded-lg px-4 py-3 text-sm",
           actionState.error
@@ -2126,7 +2128,17 @@ export default function WorkspacesPage() {
             : "bg-surface-container-low text-on-surface",
         ].join(" ")}
       >
-        <div>{actionState.error || actionState.message}</div>
+        <div className="flex items-center gap-2">
+          {actionState.loading ? (
+            <span
+              aria-hidden="true"
+              className="material-symbols-outlined animate-spin text-[18px]"
+            >
+              progress_activity
+            </span>
+          ) : null}
+          <span>{actionState.error || actionState.message}</span>
+        </div>
         {actionState.details.length ? (
           <div className="mt-2 space-y-1 text-xs leading-6">
             {actionState.details.map((detail) => (
@@ -2178,8 +2190,12 @@ export default function WorkspacesPage() {
                     disabled={workspaceActionPending}
                     onClick={() => triggerRun(workspace.id)}
                     type="button"
-                    >
-                    Run
+                  >
+                    {workspaceActionPending
+                      ? actionState.phase === "queueing"
+                        ? "Queueing..."
+                        : "Validating..."
+                      : "Run"}
                   </button>
                   <button
                     className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-primary/25 bg-primary/5 px-4 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2187,7 +2203,11 @@ export default function WorkspacesPage() {
                     onClick={() => triggerTestRun(workspace.id)}
                     type="button"
                   >
-                    Test Run
+                    {workspaceActionPending
+                      ? actionState.phase === "queueing"
+                        ? "Queueing..."
+                        : "Validating..."
+                      : "Test Run"}
                   </button>
                   <button
                     className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
@@ -2278,7 +2298,11 @@ export default function WorkspacesPage() {
                 onClick={() => triggerRun(workspace.id)}
                 type="button"
               >
-                Run
+                {workspaceActionPending
+                  ? actionState.phase === "queueing"
+                    ? "Queueing..."
+                    : "Validating..."
+                  : "Run"}
               </button>
               <button
                 className="rounded border border-primary/25 bg-primary/5 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
@@ -2286,7 +2310,11 @@ export default function WorkspacesPage() {
                 onClick={() => triggerTestRun(workspace.id)}
                 type="button"
               >
-                Test Run
+                {workspaceActionPending
+                  ? actionState.phase === "queueing"
+                    ? "Queueing..."
+                    : "Validating..."
+                  : "Test Run"}
               </button>
               <Link
                 className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"

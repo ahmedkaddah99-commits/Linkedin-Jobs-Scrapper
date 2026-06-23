@@ -13,6 +13,7 @@ from backend.domain.models import (
     SECRET_PROVIDER_ENV,
     SECRET_PROVIDER_STORED,
     ApiTokenRecord,
+    RunRecord,
     SecretRecord,
     UserRecord,
     WorkflowTemplate,
@@ -226,10 +227,24 @@ class IdentityAccessService:
     def user_can_access_workspace(self, user: UserRecord, workspace_id: str) -> bool:
         if user.role == ROLE_ADMIN:
             return True
-        allowed = {item for item in user.allowed_workspace_ids if item}
-        if not allowed:
+        normalized_workspace_id = str(workspace_id or "").strip()
+        if not normalized_workspace_id:
+            return False
+        try:
+            workspace = self.repositories.workspace_repository.get_workspace(normalized_workspace_id)
+        except KeyError:
+            return False
+        if str(workspace.owner_user_id or "").strip() == str(user.user_id or "").strip():
             return True
-        return workspace_id in allowed
+        allowed = {str(item).strip() for item in user.allowed_workspace_ids if str(item).strip()}
+        return normalized_workspace_id in allowed
+
+    def user_can_access_run(self, user: UserRecord, run: RunRecord) -> bool:
+        if user.role == ROLE_ADMIN:
+            return True
+        if str(run.normalized_user_id or "").strip() != str(user.user_id or "").strip():
+            return False
+        return self.user_can_access_workspace(user, run.workspace_id)
 
     def list_secrets(self, *, workspace_id: str = "", limit: int = 100, offset: int = 0) -> list[SecretRecord]:
         repository = self.repositories.secret_store

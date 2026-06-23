@@ -129,7 +129,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual([row[0] for row in rows], [migration.migration_id for migration in MIGRATIONS])
         self.assertTrue(all(len(str(row[1])) == 64 for row in rows))
 
-    def test_committed_registry_preserves_migration_ids_001_through_013(self):
+    def test_committed_registry_preserves_migration_ids_001_through_014(self):
         self.assertEqual(
             [migration.migration_id for migration in MIGRATIONS],
             [
@@ -146,9 +146,123 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "011_site_job_url_history_public_index",
                 "012_creem_billing",
                 "013_candidate_document_normalization",
+                "014_workspace_ownership",
             ],
         )
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
+
+    def test_workspace_ownership_migration_backfills_from_the_single_run_owner(self):
+        db_path = self._db_path("workspace_ownership_backfill")
+        user_id = "user_existing_owner"
+        workspace_id = "workspace_existing_owner"
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            connection.executescript(BASE_SCHEMA_SQL)
+            connection.executemany(
+                "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
+                [
+                    (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
+                    for migration in MIGRATIONS[:-1]
+                ],
+            )
+            connection.execute(
+                "INSERT INTO workflow_templates (id, name, description, payload_json, updated_at) "
+                "VALUES (?, ?, '', ?, ?)",
+                (
+                    "workflow_existing_owner",
+                    "Existing workflow",
+                    json.dumps(
+                        {
+                            "id": "workflow_existing_owner",
+                            "name": "Existing workflow",
+                            "stages": [],
+                        }
+                    ),
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO users (user_id, email, role, is_active, updated_at, payload_json) "
+                "VALUES (?, ?, 'viewer', 1, ?, ?)",
+                (
+                    user_id,
+                    "existing-owner@example.com",
+                    "2026-01-01T00:00:00+00:00",
+                    json.dumps(
+                        {
+                            "user_id": user_id,
+                            "email": "existing-owner@example.com",
+                            "role": "viewer",
+                            "is_active": True,
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                "INSERT INTO workspaces "
+                "(id, name, workflow_template_id, workspace_type, payload_json, updated_at) "
+                "VALUES (?, ?, ?, 'custom', ?, ?)",
+                (
+                    workspace_id,
+                    "Existing workspace",
+                    "workflow_existing_owner",
+                    json.dumps(
+                        {
+                            "id": workspace_id,
+                            "name": "Existing workspace",
+                            "workflow_template_id": "workflow_existing_owner",
+                            "workspace_type": "custom",
+                        }
+                    ),
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO runs "
+                "(id, workspace_id, workflow_template_id, status, requested_by, user_id, "
+                "created_at, updated_at, payload_json) "
+                "VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?)",
+                (
+                    "run_existing_owner",
+                    workspace_id,
+                    "workflow_existing_owner",
+                    f"api:{user_id}",
+                    user_id,
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                    json.dumps(
+                        {
+                            "id": "run_existing_owner",
+                            "workspace_id": workspace_id,
+                            "workflow_template_id": "workflow_existing_owner",
+                            "status": "completed",
+                            "requested_by": f"api:{user_id}",
+                            "user_id": user_id,
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+
+        with patch.dict(
+            os.environ,
+            {
+                "TURSO_DATABASE_URL": "",
+                "TURSO_AUTH_TOKEN": "",
+                "DATABASE_BACKEND": "sqlite",
+                "RUNR_ENV": "development",
+            },
+        ):
+            initialize_database(db_path, force=True)
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            workspace_row = connection.execute(
+                "SELECT owner_user_id, payload_json FROM workspaces WHERE id = ?",
+                (workspace_id,),
+            ).fetchone()
+
+        self.assertEqual(workspace_row[0], user_id)
+        self.assertEqual(json.loads(workspace_row[1])["owner_user_id"], user_id)
 
     def test_candidate_document_migration_extracts_legacy_aggregate_text(self):
         db_path = self._db_path("candidate_document_legacy_migration")
@@ -187,7 +301,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
                 [
                     (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
-                    for migration in MIGRATIONS[:-1]
+                    for migration in MIGRATIONS[:-2]
                 ],
             )
             connection.execute(

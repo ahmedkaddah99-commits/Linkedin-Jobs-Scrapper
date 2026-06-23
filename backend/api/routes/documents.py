@@ -140,19 +140,42 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         filename, file_bytes = _parse_multipart_file(content_type_header, raw_body)
                         if not file_bytes:
                             raise ValueError("No file found in multipart body. Ensure the form field has a filename.")
-                        asset_kind = str((query.get("asset_kind") or ["uploaded_document"])[0]).strip() or "uploaded_document"
+                        asset_kind = str((query.get("asset_kind") or ["uploaded_document"])[0]).strip().lower() or "uploaded_document"
+                        if asset_kind in {"master_career_profile", "motivation_letter"}:
+                            raise ValueError(
+                                "This legacy asset type can no longer be uploaded. "
+                                "Use Baseline CV, Supporting Document, Certification, or Recommendation Letter."
+                            )
                         workspace_id = str((query.get("workspace_id") or [""])[0]).strip()
                         if workspace_id and not application.user_can_access_workspace(user, workspace_id):
                             raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                         display_name = str((query.get("display_name") or [filename])[0]).strip() or filename
                         tags = [asset_kind]
-                        is_cv_asset = asset_kind in {"workspace_cv", "master_career_profile"}
-                        document_extraction = extract_document_text(
-                            filename,
-                            file_bytes,
-                            allow_ocr=not is_cv_asset,
+                        is_cv_asset = asset_kind == "workspace_cv"
+                        suffix = Path(filename or "").suffix.lower()
+                        needs_async_extraction = not is_cv_asset and (
+                            suffix == ".pdf"
+                            or suffix in {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
                         )
-                        asset_metadata: dict[str, Any] = extraction_metadata(document_extraction)
+                        if needs_async_extraction:
+                            document_extraction = {
+                                "text": "",
+                                "char_count": 0,
+                                "method": "pending",
+                                "warnings": [],
+                                "pages": [],
+                                "confidence": 0.0,
+                                "status": "uploaded",
+                            }
+                            asset_metadata = extraction_metadata(document_extraction)
+                            asset_metadata["status"] = CV_STATUS_UPLOADED
+                        else:
+                            document_extraction = extract_document_text(
+                                filename,
+                                file_bytes,
+                                allow_ocr=not is_cv_asset,
+                            )
+                            asset_metadata = extraction_metadata(document_extraction)
                         if is_cv_asset:
                             cv_text = str(document_extraction.get("text") or "")
                             if not cv_text:
@@ -186,6 +209,14 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             tags=tags,
                             metadata=asset_metadata,
                         )
+                        processing_run = None
+                        if needs_async_extraction:
+                            # ponytail: reuse the proven upload-processing run instead of creating a second queue protocol.
+                            processing_run, asset = enqueue_cv_upload_processing_run(
+                                application.repositories,
+                                user_id=user.user_id,
+                                asset_id=str(asset.get("asset_id") or ""),
+                            )
                         profile_extraction = dict(asset_metadata.get("profile_extraction") or {})
                         application.emit_event(
                             "document_uploaded",
@@ -198,7 +229,14 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             char_count=int(asset_metadata.get("source_char_count") or 0),
                             warning_count=len(profile_extraction.get("warnings") or []),
                         )
-                        self._send_json({"asset": asset}, status=HTTPStatus.CREATED)
+                        self._send_json(
+                            {
+                                "asset": asset,
+                                "job_id": str(processing_run.id if processing_run else ""),
+                                "status_url": cv_upload_status_url(processing_run.id) if processing_run else "",
+                            },
+                            status=HTTPStatus.CREATED,
+                        )
                         return
 
     if segments == ["cv-upload"]:
@@ -382,7 +420,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         user, _ = self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
                         context = self._auth_context()
                         run = application.get_run(segments[1])
-                        if not application.user_can_access_workspace(user, run.workspace_id):
+                        if not application.user_can_access_run(user, run):
                             raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                         job_id = str(segments[3] or "").strip()
                         if not job_id:

@@ -27,6 +27,7 @@ const RunDetailPage = lazy(() => import("./pages/RunDetailPage"));
 const RunsPage = lazy(() => import("./pages/RunsPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const TrackerPage = lazy(() => import("./pages/TrackerPage"));
+const TrackerAtsPage = lazy(() => import("./pages/TrackerAtsPage"));
 const WorkspacesPage = lazy(() => import("./pages/WorkspacesPage"));
 
 function RouteLoadingFallback() {
@@ -197,6 +198,7 @@ function AuthenticatedApp() {
               <Route path="/job-workspaces/:runId/:jobId" element={<JobWorkspacePage />} />
               <Route path="/review-queue" element={<Navigate replace to="/tracker" />} />
               <Route path="/tracker" element={<TrackerPage />} />
+              <Route path="/tracker/:reviewId/ats" element={<TrackerAtsPage />} />
               <Route path="/tracker/job-descriptions/:reviewId" element={<JobDescriptionPage />} />
               <Route path="/documents" element={<DocumentsPage />} />
               <Route path="/career-memory" element={<Navigate replace to="/documents?view=memory" />} />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -27,17 +27,18 @@ function Field({ label, hint = "", children }) {
   );
 }
 
-function Input(props) {
+const Input = forwardRef(function Input(props, ref) {
   return (
     <input
       {...props}
+      ref={ref}
       className={[
         "w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface",
         props.className || "",
       ].join(" ")}
     />
   );
-}
+});
 
 function TextArea(props) {
   return (
@@ -92,6 +93,143 @@ function copyPreviewToWindow(html, { shouldPrint = false } = {}) {
   return true;
 }
 
+let editorIdCounter = 0;
+
+function newEditorId(prefix) {
+  editorIdCounter += 1;
+  return `${prefix}-${Date.now()}-${editorIdCounter}`;
+}
+
+function StructuredListEditor({ items = [], label, onChange }) {
+  const inputRefs = useRef(new Map());
+  const addButtonRef = useRef(null);
+
+  function focusItem(itemId) {
+    window.requestAnimationFrame(() => {
+      inputRefs.current.get(itemId)?.focus();
+    });
+  }
+
+  function updateItem(index, patch) {
+    onChange(items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  }
+
+  function addItem(index = items.length - 1) {
+    const item = { id: newEditorId("bullet"), text: "", level: items[index]?.level || 0 };
+    const nextItems = [...items];
+    nextItems.splice(index + 1, 0, item);
+    onChange(nextItems);
+    focusItem(item.id);
+  }
+
+  function removeItem(index) {
+    const nextItems = items.filter((_, itemIndex) => itemIndex !== index);
+    const focusTarget = nextItems[Math.min(index, nextItems.length - 1)];
+    onChange(nextItems);
+    if (focusTarget) {
+      focusItem(focusTarget.id);
+    } else {
+      window.requestAnimationFrame(() => addButtonRef.current?.focus());
+    }
+  }
+
+  function adjustLevel(index, delta) {
+    const currentLevel = Number(items[index]?.level || 0);
+    const previousLevel = Number(items[index - 1]?.level || 0);
+    const maxLevel = index === 0 ? 0 : Math.min(2, previousLevel + 1);
+    updateItem(index, { level: Math.max(0, Math.min(maxLevel, currentLevel + delta)) });
+  }
+
+  function handleKeyDown(event, index) {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      adjustLevel(index, event.shiftKey ? -1 : 1);
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      if (!String(items[index]?.text || "").trim()) {
+        removeItem(index);
+      } else {
+        addItem(index);
+      }
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {items.length ? (
+        <div className="space-y-2" role="list">
+          {items.map((item, index) => (
+            <div
+              className="flex items-start gap-2"
+              key={item.id}
+              role="listitem"
+              style={{ paddingLeft: `${Math.min(Number(item.level || 0), 2) * 20}px` }}
+            >
+              <span aria-hidden="true" className="pt-3 text-sm text-on-surface-variant">•</span>
+              <Input
+                aria-label={`${label} ${index + 1}`}
+                onChange={(event) => updateItem(index, { text: event.target.value })}
+                onKeyDown={(event) => handleKeyDown(event, index)}
+                placeholder="Describe a measurable result or responsibility"
+                ref={(node) => {
+                  if (node) inputRefs.current.set(item.id, node);
+                  else inputRefs.current.delete(item.id);
+                }}
+                value={item.text || ""}
+              />
+              <div className="flex shrink-0 gap-1">
+                <button
+                  aria-label={`Outdent ${label.toLowerCase()} ${index + 1}`}
+                  className="rounded-lg border border-outline-variant/20 px-2 py-3 text-xs text-on-surface-variant disabled:opacity-40"
+                  disabled={!item.level}
+                  onClick={() => adjustLevel(index, -1)}
+                  type="button"
+                >
+                  ←
+                </button>
+                <button
+                  aria-label={`Indent ${label.toLowerCase()} ${index + 1}`}
+                  className="rounded-lg border border-outline-variant/20 px-2 py-3 text-xs text-on-surface-variant disabled:opacity-40"
+                  disabled={Number(item.level || 0) >= 2 || index === 0}
+                  onClick={() => adjustLevel(index, 1)}
+                  type="button"
+                >
+                  →
+                </button>
+                <button
+                  aria-label={`Remove ${label.toLowerCase()} ${index + 1}`}
+                  className="rounded-lg border border-outline-variant/20 px-2 py-3 text-xs text-on-surface-variant hover:bg-error-container hover:text-on-error-container"
+                  onClick={() => removeItem(index)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="rounded-lg bg-surface-container-low px-3 py-2 text-sm text-on-surface-variant">
+          No {label.toLowerCase()} added yet.
+        </p>
+      )}
+      <button
+        className="rounded-lg bg-surface-container-low px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-surface-container-high"
+        onClick={() => addItem()}
+        ref={addButtonRef}
+        type="button"
+      >
+        Add {label}
+      </button>
+      <p className="text-xs leading-5 text-on-surface-variant">
+        Enter adds the next item. Tab indents; Shift+Tab outdents. Enter on an empty item removes it.
+      </p>
+    </div>
+  );
+}
+
 function ExperienceEditor({ items, onChange }) {
   function updateItem(index, field, value) {
     onChange(
@@ -104,57 +242,90 @@ function ExperienceEditor({ items, onChange }) {
   function addItem() {
     onChange([
       ...(items || []),
-      { title: "", company: "", period: "", bulletsText: "" },
+      {
+        id: newEditorId("experience"),
+        title: "",
+        company: "",
+        location: "",
+        startDate: "",
+        endDate: "",
+        period: "",
+        bullets: [],
+      },
     ]);
   }
 
   function removeItem(index) {
-    if ((items || []).length === 1) {
-      onChange([{ title: "", company: "", period: "", bulletsText: "" }]);
-      return;
-    }
     onChange(items.filter((_, itemIndex) => itemIndex !== index));
   }
 
   return (
     <div className="space-y-4">
+      {!items?.length ? (
+        <p className="rounded-xl border border-dashed border-outline-variant/30 bg-surface px-4 py-5 text-sm text-on-surface-variant">
+          No experience entries are in this draft. Add one to include an Experience section.
+        </p>
+      ) : null}
       {(items || []).map((item, index) => (
         <div
-          key={`studio-exp-${index}`}
+          key={item.id || `studio-exp-${index}`}
           className="rounded-xl border border-outline-variant/15 bg-surface p-4"
         >
-          <div className="grid gap-4 md:grid-cols-3">
-            <Input
-              onChange={(event) => updateItem(index, "title", event.target.value)}
-              placeholder="Role title"
-              value={item.title || ""}
-            />
-            <Input
-              onChange={(event) => updateItem(index, "company", event.target.value)}
-              placeholder="Company"
-              value={item.company || ""}
-            />
-            <div className="flex gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-on-surface">Experience {index + 1}</h3>
+            <button
+              className="rounded-lg border border-outline-variant/20 px-3 py-2 text-sm font-medium text-on-surface-variant transition-colors hover:bg-error-container hover:text-on-error-container"
+              onClick={() => removeItem(index)}
+              type="button"
+            >
+              Remove
+            </button>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <Field label="Role title">
               <Input
-                className="flex-1"
-                onChange={(event) => updateItem(index, "period", event.target.value)}
-                placeholder="2024 - Present"
-                value={item.period || ""}
+                onChange={(event) => updateItem(index, "title", event.target.value)}
+                placeholder="Operations Analyst"
+                value={item.title || ""}
               />
-              <button
-                className="rounded-lg border border-outline-variant/20 px-4 py-3 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
-                onClick={() => removeItem(index)}
-                type="button"
-              >
-                Remove
-              </button>
+            </Field>
+            <Field label="Company">
+              <Input
+                onChange={(event) => updateItem(index, "company", event.target.value)}
+                placeholder="Example GmbH"
+                value={item.company || ""}
+              />
+            </Field>
+            <Field label="Location">
+              <Input
+                onChange={(event) => updateItem(index, "location", event.target.value)}
+                placeholder="Berlin, Germany"
+                value={item.location || ""}
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Start date">
+                <Input
+                  onChange={(event) => updateItem(index, "startDate", event.target.value)}
+                  placeholder="Jan 2022"
+                  value={item.startDate || ""}
+                />
+              </Field>
+              <Field label="End date">
+                <Input
+                  onChange={(event) => updateItem(index, "endDate", event.target.value)}
+                  placeholder="Present"
+                  value={item.endDate || ""}
+                />
+              </Field>
             </div>
           </div>
           <div className="mt-4">
-            <TextArea
-              onChange={(event) => updateItem(index, "bulletsText", event.target.value)}
-              placeholder={"One achievement bullet per line\nQuantify results where possible"}
-              value={item.bulletsText || ""}
+            <div className="mb-2 text-sm font-semibold text-on-surface">Achievements</div>
+            <StructuredListEditor
+              items={item.bullets || []}
+              label="Achievement"
+              onChange={(bullets) => updateItem(index, "bullets", bullets)}
             />
           </div>
         </div>
@@ -181,7 +352,10 @@ function ProjectEditor({ items, onChange }) {
   }
 
   function addItem() {
-    onChange([...(items || []), { title: "", period: "", bulletsText: "" }]);
+    onChange([
+      ...(items || []),
+      { id: newEditorId("project"), title: "", period: "", bullets: [] },
+    ]);
   }
 
   function removeItem(index) {
@@ -190,24 +364,33 @@ function ProjectEditor({ items, onChange }) {
 
   return (
     <div className="space-y-4">
+      {!items?.length ? (
+        <p className="rounded-xl border border-dashed border-outline-variant/30 bg-surface px-4 py-5 text-sm text-on-surface-variant">
+          No projects are in this draft. Add one when it strengthens the application.
+        </p>
+      ) : null}
       {(items || []).map((item, index) => (
         <div
           className="rounded-xl border border-outline-variant/15 bg-surface p-4"
-          key={`studio-project-${index}`}
+          key={item.id || `studio-project-${index}`}
         >
           <div className="grid gap-4 md:grid-cols-[1fr_180px_auto]">
-            <Input
-              onChange={(event) => updateItem(index, "title", event.target.value)}
-              placeholder="Project or initiative"
-              value={item.title || ""}
-            />
-            <Input
-              onChange={(event) => updateItem(index, "period", event.target.value)}
-              placeholder="2024"
-              value={item.period || ""}
-            />
+            <Field label="Project or initiative">
+              <Input
+                onChange={(event) => updateItem(index, "title", event.target.value)}
+                placeholder="Analytics automation"
+                value={item.title || ""}
+              />
+            </Field>
+            <Field label="Date or period">
+              <Input
+                onChange={(event) => updateItem(index, "period", event.target.value)}
+                placeholder="2024"
+                value={item.period || ""}
+              />
+            </Field>
             <button
-              className="rounded-lg border border-outline-variant/20 px-4 py-3 text-sm font-medium text-on-surface-variant transition-colors hover:bg-surface-container-low"
+              className="self-end rounded-lg border border-outline-variant/20 px-4 py-3 text-sm font-medium text-on-surface-variant transition-colors hover:bg-error-container hover:text-on-error-container"
               onClick={() => removeItem(index)}
               type="button"
             >
@@ -215,10 +398,11 @@ function ProjectEditor({ items, onChange }) {
             </button>
           </div>
           <div className="mt-4">
-            <TextArea
-              onChange={(event) => updateItem(index, "bulletsText", event.target.value)}
-              placeholder="One project result per line"
-              value={item.bulletsText || ""}
+            <div className="mb-2 text-sm font-semibold text-on-surface">Results</div>
+            <StructuredListEditor
+              items={item.bullets || []}
+              label="Project result"
+              onChange={(bullets) => updateItem(index, "bullets", bullets)}
             />
           </div>
         </div>
@@ -298,6 +482,7 @@ export default function CvStudioPage() {
   const [studioState, setStudioState] = useState(null);
   const [savedSource, setSavedSource] = useState(null);
   const [saveState, setSaveState] = useState({ message: "", error: "", saving: false });
+  const [mobilePane, setMobilePane] = useState("editor");
   const returnTo = String(consumedSeed?.returnTo || "/settings");
   const sourceLabel = String(consumedSeed?.sourceLabel || "Profile and document defaults");
 
@@ -477,8 +662,30 @@ export default function CvStudioPage() {
         </p>
       </section>
 
+      <div className="grid grid-cols-2 gap-2 rounded-xl bg-surface-container-low p-1 xl:hidden">
+        {[
+          ["editor", "Editor"],
+          ["preview", "Preview"],
+        ].map(([paneId, label]) => (
+          <button
+            aria-pressed={mobilePane === paneId}
+            className={[
+              "rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors",
+              mobilePane === paneId
+                ? "bg-surface text-primary shadow-sm"
+                : "text-on-surface-variant",
+            ].join(" ")}
+            key={paneId}
+            onClick={() => setMobilePane(paneId)}
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <div className="grid gap-6 xl:grid-cols-[minmax(360px,430px)_minmax(0,1fr)]">
-        <div className="space-y-5 xl:sticky xl:top-6 xl:self-start">
+        <div className={[mobilePane === "editor" ? "block" : "hidden", "space-y-5 xl:block"].join(" ")}>
           <Section
             description="These controls affect the browser template only. DOCX settings remain in the Settings page."
             title="Design"
@@ -762,13 +969,16 @@ export default function CvStudioPage() {
         </div>
 
         <Section
-          className="overflow-hidden"
+          className={[
+            mobilePane === "preview" ? "block" : "hidden",
+            "overflow-hidden xl:sticky xl:top-20 xl:block xl:self-start",
+          ].join(" ")}
           description="This is the actual HTML output. Open it in a new tab, keep editing here, then print or save directly from the browser."
           title="Live HTML Preview"
         >
           <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-3">
             <iframe
-              className="h-[1120px] w-full rounded-xl bg-white"
+              className="h-[72vh] min-h-[560px] w-full rounded-xl bg-white xl:h-[calc(100vh-8rem)]"
               srcDoc={previewHtml}
               title="Browser CV preview"
             />

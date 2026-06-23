@@ -104,6 +104,7 @@ from backend.domain.phase0_contracts import (
     phase0_contract_catalog,
 )
 from backend.domain.ats_export_gate import evaluate_ats_export_gate
+from backend.domain.run_eta import build_run_eta
 from backend.tools.discover_company_careers import run_discovery as run_career_url_discovery
 from backend.domain.models import (
     JobSource,
@@ -147,6 +148,7 @@ from backend.profiles.cv_profile_extraction import (
 from backend.profiles.cv_upload_jobs import (
     CV_STATUS_READY,
     CV_STATUS_UPLOADED,
+    cv_upload_status_url,
     cv_upload_status_payload,
     enqueue_cv_upload_processing_run,
 )
@@ -1337,6 +1339,7 @@ def _workspace_summary(workspace) -> dict:
         "name": workspace.name,
         "description": workspace.description,
         "workflow_template_id": workspace.workflow_template_id,
+        "owner_user_id": workspace.owner_user_id,
         "workspace_type": workspace.workspace_type,
         "automation_flow": str(workspace.metadata.get("automation_flow") or workspace.settings.get("automation_flow") or ""),
         "settings": dict(workspace.settings),
@@ -1822,6 +1825,17 @@ def _collect_run_customer_view(application, user, run) -> dict:
     record_phase("workflow_stages", phase_started)
 
     phase_started = perf_counter()
+    historical_runs = [
+        candidate
+        for candidate in application.list_runs(limit=200, offset=0, status="completed")
+        if candidate.id != run.id
+        and candidate.workflow_template_id == run.workflow_template_id
+        and application.user_can_access_run(user, candidate)
+    ]
+    eta = build_run_eta(run, workflow_stages, historical_runs)
+    record_phase("eta", phase_started)
+
+    phase_started = perf_counter()
     workspace = application.get_workspace(run.workspace_id)
     record_phase("workspace", phase_started)
 
@@ -2013,6 +2027,7 @@ def _collect_run_customer_view(application, user, run) -> dict:
             "workflow_name": str(workflow_snapshot.get("name") or run.workflow_template_id),
             "current_stage_name": current_stage_name,
             "progress": progress,
+            "eta": eta,
             "scrapeops_usage": scrapeops_usage,
             "capped_sites": list(capped_sites or []),
         },
@@ -2578,6 +2593,7 @@ def _ensure_quick_apply_workspace(application, user):
             id=workspace_id,
             name="Quick Apply Workspace",
             workflow_template_id=workflow.id,
+            owner_user_id=user.user_id,
             description="Internal workspace used for quick applications.",
             workspace_type="internal",
             settings={
@@ -2713,7 +2729,7 @@ def _collect_authorized_runs(application, user, *, workspace_id: str = "") -> tu
     runs = [
         run
         for run in application.list_runs(limit=1000, offset=0, status="", workspace_id=workspace_id)
-        if application.user_can_access_workspace(user, run.workspace_id)
+        if application.user_can_access_run(user, run)
     ]
     return workspaces, runs
 
@@ -3187,10 +3203,19 @@ def _cv_studio_seed_from_job_extra(job_extra: Mapping[str, Any], *, user, job=No
             continue
         experiences.append(
             {
+                "id": str(item.get("id") or item.get("experience_id") or ""),
                 "title": str(item.get("role_title") or item.get("title") or ""),
-                "company": str(item.get("company") or ""),
-                "period": str(item.get("period") or ""),
-                "bullets": [str(value).strip() for value in item.get("bullets") or [] if str(value).strip()],
+                "company": str(item.get("company") or item.get("employer") or ""),
+                "location": str(item.get("location") or item.get("city") or ""),
+                "start_date": str(item.get("start_date") or item.get("start") or ""),
+                "end_date": str(item.get("end_date") or item.get("end") or ""),
+                "period": str(item.get("period") or item.get("date_range") or ""),
+                "bullets": [
+                    dict(value) if isinstance(value, Mapping) else str(value).strip()
+                    for value in item.get("bullets") or []
+                    if (isinstance(value, Mapping) and str(value.get("text") or "").strip())
+                    or (not isinstance(value, Mapping) and str(value).strip())
+                ],
             }
         )
     education = [dict(item) for item in job_extra.get("cv_education") or [] if isinstance(item, Mapping)]
@@ -3199,8 +3224,15 @@ def _cv_studio_seed_from_job_extra(job_extra: Mapping[str, Any], *, user, job=No
         if isinstance(item, Mapping):
             projects.append(
                 {
+                    "id": str(item.get("id") or item.get("project_id") or ""),
                     "title": str(item.get("title") or ""),
-                    "bullets": [str(value).strip() for value in item.get("bullets") or [] if str(value).strip()],
+                    "period": str(item.get("period") or item.get("date") or item.get("year") or ""),
+                    "bullets": [
+                        dict(value) if isinstance(value, Mapping) else str(value).strip()
+                        for value in item.get("bullets") or []
+                        if (isinstance(value, Mapping) and str(value.get("text") or "").strip())
+                        or (not isinstance(value, Mapping) and str(value).strip())
+                    ],
                 }
             )
     return {
@@ -3469,6 +3501,112 @@ def _collect_tracker_entries(application, user) -> list[dict]:
     return entries
 
 
+def _tracker_ats_detail_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
+    documents = [dict(item) for item in entry.get("documents") or [] if isinstance(item, Mapping)]
+    ats_documents = [
+        document
+        for document in documents
+        if isinstance(document.get("ats_export_gate"), Mapping)
+        or bool(document.get("final_export_blocked"))
+        or str(document.get("asset_kind") or "").lower() == "generated_cv"
+    ]
+    selected_document = next(
+        (document for document in ats_documents if document.get("final_export_blocked")),
+        ats_documents[0] if ats_documents else {},
+    )
+    gate = evaluate_ats_export_gate(
+        selected_document.get("ats_export_gate")
+        if isinstance(selected_document.get("ats_export_gate"), Mapping)
+        else {}
+    )
+    metadata = dict(gate.get("metadata") or {})
+    attempt_history = [
+        dict(attempt)
+        for attempt in metadata.get("attempt_history") or []
+        if isinstance(attempt, Mapping)
+    ]
+    present_criteria = [
+        str(item).strip()
+        for item in (
+            metadata.get("present_requirements")
+            or metadata.get("covered_requirements")
+            or metadata.get("matched_requirements")
+            or []
+        )
+        if str(item).strip()
+    ]
+    recommendations: list[str] = []
+    for attempt in reversed(attempt_history):
+        recommendations.extend(
+            str(item).strip()
+            for item in attempt.get("improvement_actions") or []
+            if str(item).strip()
+        )
+        if recommendations:
+            break
+    description = str(entry.get("full_description") or "")
+    extraction_warnings: list[str] = []
+    if not description.strip():
+        description_state = "missing"
+        extraction_warnings.append("No stored job description is available for this ATS assessment.")
+    elif len(description.strip()) < 200:
+        description_state = "insufficient"
+        extraction_warnings.append("The stored job description is short and may be a listing teaser.")
+    else:
+        description_state = "ready"
+    if any(marker in description for marker in ("\ufffd", "Ã", "Â", "â€")):
+        extraction_warnings.append("The stored job description contains possible encoding corruption.")
+    extraction_warnings.extend(
+        str(item.get("message") or item.get("title") or "").strip()
+        for item in entry.get("application_warnings") or []
+        if isinstance(item, Mapping) and str(item.get("message") or item.get("title") or "").strip()
+    )
+    return {
+        "review_id": str(entry.get("review_id") or ""),
+        "read_only": True,
+        "application": {
+            "run_id": str(entry.get("run_id") or ""),
+            "job_id": str(entry.get("job_id") or ""),
+            "title": str(entry.get("title") or ""),
+            "company": str(entry.get("company") or ""),
+            "workspace_id": str(entry.get("workspace_id") or ""),
+        },
+        "score": {
+            "best": int(gate.get("best_score") or 0),
+            "target": int(gate.get("target_score") or 90),
+            "gate_state": str(gate.get("gate_state") or "not_started"),
+            "attempt_count": int(gate.get("attempt_count") or 0),
+            "max_attempts": int(gate.get("max_attempts") or 3),
+            "stop_reason": str(metadata.get("stop_reason") or ""),
+            "last_warning": str(gate.get("last_warning") or ""),
+        },
+        "attempt_history": attempt_history,
+        "criteria": {
+            "missing": list(gate.get("missing_requirements") or []),
+            "present": present_criteria,
+        },
+        "identifiers": {
+            "cv_asset_id": str(metadata.get("workspace_cv_asset_id") or metadata.get("cv_asset_id") or ""),
+            "generated_document_id": str(selected_document.get("document_id") or ""),
+            "generated_artifact_id": str(metadata.get("artifact_id") or selected_document.get("document_id") or ""),
+            "job_description_id": str(entry.get("job_id") or ""),
+        },
+        "job_description": {
+            "state": description_state,
+            "char_count": len(description.strip()),
+            "warnings": list(dict.fromkeys(extraction_warnings)),
+        },
+        "scorer": {
+            "model": str(metadata.get("model") or metadata.get("scorer_model") or "legacy-unversioned"),
+            "prompt_version": str(metadata.get("prompt_version") or "legacy-unversioned"),
+        },
+        "recommendations": list(dict.fromkeys(recommendations)),
+        "diagnostic_limitations": (
+            "This view reports the persisted ATS assessment. It does not recalculate or change the score."
+        ),
+    }
+
+
 def _tracker_email_secret_name(user) -> str:
     return _tracker_email_named_secret(user, kind="password")
 
@@ -3710,7 +3848,7 @@ def _save_referral_outreach_status_from_payload(application, user, payload: dict
     if not contact_id or not run_id or not job_id:
         raise ValueError("run_id, job_id, and contact_id are required")
     run = application.get_run(run_id)
-    if not application.user_can_access_workspace(user, run.workspace_id):
+    if not application.user_can_access_run(user, run):
         raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
     contact = application.get_referral_contact(user.user_id, contact_id)
     previous_status = _get_referral_outreach_status(user, run_id=run_id, job_id=job_id, contact_id=contact_id)
@@ -4074,7 +4212,7 @@ def _collect_artifact_entries(
                 return []
         if workspace_id and run.workspace_id != workspace_id:
             return []
-        if not application.user_can_access_workspace(user, run.workspace_id):
+        if not application.user_can_access_run(user, run):
             return []
         workspace = (
             workspace_record
@@ -4661,6 +4799,19 @@ def _evaluate_ats_export_gate_for_document(document: dict, *, export_anyway: boo
     metadata = dict(document.get("metadata") or {})
     nested_gate = metadata.get("ats_export_gate") if isinstance(metadata.get("ats_export_gate"), dict) else {}
     gate_metadata = dict((nested_gate or {}).get("metadata") or {})
+    for metadata_key in (
+        "artifact_id",
+        "cv_asset_id",
+        "workspace_cv_asset_id",
+        "model",
+        "scorer_model",
+        "prompt_version",
+        "present_requirements",
+        "covered_requirements",
+        "matched_requirements",
+    ):
+        if metadata.get(metadata_key) is not None and metadata_key not in gate_metadata:
+            gate_metadata[metadata_key] = metadata.get(metadata_key)
     if metadata.get("ats_stop_reason") and "stop_reason" not in gate_metadata:
         gate_metadata["stop_reason"] = metadata.get("ats_stop_reason")
     if metadata.get("ats_attempt_history") and "attempt_history" not in gate_metadata:
@@ -5416,7 +5567,7 @@ def _collect_rejected_job_entries(
                 return []
         if workspace_id and run.workspace_id != workspace_id:
             return []
-        if not application.user_can_access_workspace(user, run.workspace_id):
+        if not application.user_can_access_run(user, run):
             return []
         workspace = (
             workspace_record
@@ -8785,12 +8936,18 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
             return user, token
 
+        def _require_run_access(self, *, run, required_scope: str):
+            user, token = self._require_scope(required_scope)
+            if not application.user_can_access_run(user, run):
+                raise PermissionError(f"Run access denied for '{run.id}'.")
+            return user, token
+
         def _authorized_workspaces(self, user):
             return [workspace for workspace in application.list_workspaces() if application.user_can_access_workspace(user, workspace.id)]
 
         def _authorized_runs(self, user, *, limit: int, offset: int, status: str, workspace_id: str):
             runs = application.list_runs(limit=limit, offset=offset, status=status, workspace_id=workspace_id)
-            return [run for run in runs if application.user_can_access_workspace(user, run.workspace_id)]
+            return [run for run in runs if application.user_can_access_run(user, run)]
 
         def _send_unauthorized(self, message: str) -> None:
             self._send_error(

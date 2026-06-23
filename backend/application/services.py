@@ -97,13 +97,13 @@ AUTO_APPROVE_REVIEW_STAGE_TYPES = {
     "legacy.white_collar.docs",
 }
 WORKSPACE_RUN_SCHEDULE_METADATA_KEY = "run_schedule"
-SCHEDULED_RUN_REQUESTED_BY = "scheduler"
 SCHEDULED_RUN_ACTIVE_STATUSES = {
     RUN_STATUS_PLANNED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
     RUN_STATUS_CANCEL_REQUESTED,
 }
+SCHEDULED_RUN_REQUESTED_BY = "scheduler"
 SCRAPEOPS_RECONCILIATION_EVENT_NAME = "scrapeops_reconciliation_snapshot"
 SCRAPEOPS_ALERT_EVENT_NAME = "scrapeops_alert"
 
@@ -1994,6 +1994,7 @@ class BackendApplication:
         builder_payload.setdefault("workflow_template_id", existing_workspace.workflow_template_id)
         _validate_builder_workspace_payload(builder_payload, workspace_id=existing_workspace.id)
         workflow_template, workspace = build_workspace_from_scratch(builder_payload)
+        workspace.owner_user_id = existing_workspace.owner_user_id
         existing_schedule = (existing_workspace.metadata or {}).get(WORKSPACE_RUN_SCHEDULE_METADATA_KEY)
         if isinstance(existing_schedule, dict):
             workspace.metadata = dict(workspace.metadata or {})
@@ -2073,9 +2074,15 @@ class BackendApplication:
                 continue
 
             try:
+                owner_user_id = str(workspace.owner_user_id or "").strip()
+                if not owner_user_id:
+                    raise ValueError(
+                        f"Workspace '{workspace.id}' has no owner and cannot enqueue scheduled runs."
+                    )
                 run = self.enqueue_run(
                     workspace.id,
                     requested_by=SCHEDULED_RUN_REQUESTED_BY,
+                    user_id=owner_user_id,
                     max_attempts=1,
                 )
             except Exception as exc:
@@ -2533,6 +2540,9 @@ class BackendApplication:
     def user_can_access_workspace(self, user: UserRecord, workspace_id: str) -> bool:
         return self._identity_access_service.user_can_access_workspace(user, workspace_id)
 
+    def user_can_access_run(self, user: UserRecord, run: RunRecord) -> bool:
+        return self._identity_access_service.user_can_access_run(user, run)
+
     def list_secrets(self, *, workspace_id: str = "", limit: int = 100, offset: int = 0) -> list[SecretRecord]:
         return self._identity_access_service.list_secrets(
             workspace_id=workspace_id,
@@ -2711,6 +2721,7 @@ class BackendApplication:
         execute: bool = True,
         enqueue: bool = False,
         requested_by: str = "cli",
+        user_id: str = "",
         max_attempts: int = 1,
     ) -> RunRecord:
         return self._run_lifecycle_service.start_run(
@@ -2719,6 +2730,7 @@ class BackendApplication:
             execute=execute,
             enqueue=enqueue,
             requested_by=requested_by,
+            user_id=user_id,
             max_attempts=max_attempts,
         )
 
@@ -2728,12 +2740,14 @@ class BackendApplication:
         *,
         run_input_overrides: Mapping[str, Any] | None = None,
         requested_by: str = "api",
+        user_id: str = "",
         max_attempts: int = 1,
     ) -> RunRecord:
         return self._run_lifecycle_service.enqueue_run(
             workspace_id,
             run_input_overrides=run_input_overrides,
             requested_by=requested_by,
+            user_id=user_id,
             max_attempts=max_attempts,
         )
 

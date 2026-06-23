@@ -4,6 +4,7 @@ import { matchPath, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
 import { isAdminUser } from "../lib/auth";
+import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
 
@@ -21,7 +22,10 @@ const navItems = [
     label: "Workspaces",
     icon: "workspaces",
     to: "/workspaces",
-    matchers: [{ path: "/workspaces", end: false }],
+    matchers: [
+      { path: "/workspaces", end: false },
+      { path: "/job-workspaces/:runId/:jobId", end: true },
+    ],
   },
   {
     label: "Quick Apply",
@@ -115,14 +119,29 @@ function HoverLabel({ label }) {
 
 function SidebarLink({ collapsed = false, item, onNavigate }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const isActive = isNavItemActive(location.pathname, item);
+  const parentRoute = isActive ? resolveRouteParent(location) : "";
+
+  function handleClick(event) {
+    if (!isActive) {
+      onNavigate?.();
+      return;
+    }
+    event.preventDefault();
+    if (!parentRoute || !requestRouteNavigation(parentRoute)) {
+      return;
+    }
+    navigate(parentRoute);
+    onNavigate?.();
+  }
 
   return (
     <NavLink
       aria-current={isActive ? "page" : undefined}
       aria-label={collapsed ? item.label : undefined}
       className={["shell-nav-link", isActive ? "is-active" : "", collapsed ? "is-collapsed" : ""].join(" ")}
-      onClick={onNavigate}
+      onClick={handleClick}
       title={collapsed ? item.label : undefined}
       to={item.to}
     >
@@ -396,6 +415,7 @@ export default function AppShell({ children, muteSidebar = false }) {
   const location = useLocation();
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
   const isRunDetail = Boolean(runMatch);
+  const routeParent = resolveRouteParent(location);
   const { status, user } = useSession();
   const { user: clerkUser } = useUser();
   const { isDark, toggleTheme } = useTheme();
@@ -492,8 +512,13 @@ export default function AppShell({ children, muteSidebar = false }) {
             {isRunDetail ? (
               <>
                 <button
+                  aria-label="Back to runs"
                   className="rounded p-1 text-on-surface-variant transition-colors hover:text-primary"
-                  onClick={() => navigate(-1)}
+                  onClick={() => {
+                    if (routeParent && requestRouteNavigation(routeParent)) {
+                      navigate(routeParent);
+                    }
+                  }}
                   type="button"
                 >
                   <span className="material-symbols-outlined">arrow_back</span>

@@ -57,58 +57,181 @@ def _ocr_image(image: Any) -> str:
     return str(pytesseract.image_to_string(image) or "").strip()
 
 
-def _extract_image_text(data: bytes) -> str:
+def _native_pdf_text_is_sufficient(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if len(normalized) < 8:
+        return False
+    alphanumeric_count = sum(character.isalnum() for character in normalized)
+    # ponytail: this deliberately cheap heuristic handles normal PDFs; layout-aware detection is the upgrade path.
+    return alphanumeric_count / max(len(normalized), 1) >= 0.35
+
+
+def _ocr_image_with_metadata(image: Any, *, page_number: int = 1) -> dict[str, Any]:
+    import pytesseract
+
+    warnings: list[str] = []
+    width, height = image.size
+    if min(width, height) < 800:
+        warnings.append(f"Page {page_number} is low resolution ({width}x{height}); OCR accuracy may be reduced.")
+
+    rotation_degrees = 0
+    try:
+        osd = pytesseract.image_to_osd(image, output_type=pytesseract.Output.DICT)
+        rotation_degrees = int(osd.get("rotate") or 0) % 360
+    except Exception:
+        rotation_degrees = 0
+    if rotation_degrees:
+        image = image.rotate(-rotation_degrees, expand=True)
+
+    text = _ocr_image(image)
+    confidence_values: list[float] = []
+    try:
+        ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+        for value in ocr_data.get("conf") or []:
+            try:
+                confidence = float(value)
+            except (TypeError, ValueError):
+                continue
+            if confidence >= 0:
+                confidence_values.append(confidence)
+    except Exception:
+        confidence_values = []
+    confidence = (
+        round(sum(confidence_values) / len(confidence_values) / 100, 3)
+        if confidence_values
+        else (0.5 if text else 0.0)
+    )
+    if text and confidence < 0.45:
+        warnings.append(f"Page {page_number} OCR confidence is low ({confidence:.0%}).")
+    return {
+        "text": text,
+        "page_number": page_number,
+        "method": "ocr",
+        "status": "ready" if text else "failed",
+        "char_count": len(text),
+        "confidence": confidence,
+        "rotation_degrees": rotation_degrees,
+        "width": width,
+        "height": height,
+        "warnings": warnings,
+    }
+
+
+def _extract_image_text(data: bytes) -> dict[str, Any]:
     try:
         from PIL import Image
 
         with Image.open(io.BytesIO(data)) as image:
-            return _ocr_image(image)
+            return _ocr_image_with_metadata(image, page_number=1)
     except Exception:
-        return ""
+        return {
+            "text": "",
+            "page_number": 1,
+            "method": "ocr",
+            "status": "failed",
+            "char_count": 0,
+            "confidence": 0.0,
+            "rotation_degrees": 0,
+            "warnings": ["Image OCR failed before text could be extracted."],
+        }
 
 
-def _extract_pdf_text(data: bytes, *, allow_ocr: bool = True) -> tuple[str, str]:
+def _extract_pdf_text(data: bytes, *, allow_ocr: bool = True) -> tuple[str, str, list[dict[str, Any]], list[str]]:
+    native_pages: list[str] = []
     try:
         from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(data))
-        native_text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
-        if native_text:
-            return native_text, "pdf_native"
+        native_pages = [str(page.extract_text() or "").strip() for page in reader.pages]
     except Exception:
-        pass
+        native_pages = []
+
+    if native_pages and all(_native_pdf_text_is_sufficient(text) for text in native_pages):
+        pages = [
+            {
+                "page_number": index + 1,
+                "method": "native",
+                "status": "ready",
+                "char_count": len(text),
+                "confidence": 1.0,
+                "rotation_degrees": 0,
+                "warnings": [],
+            }
+            for index, text in enumerate(native_pages)
+        ]
+        return "\n".join(native_pages).strip(), "pdf_native", pages, []
 
     if not allow_ocr:
-        return "", "pdf_ocr_skipped"
+        pages = [
+            {
+                "page_number": index + 1,
+                "method": "native" if text else "ocr_skipped",
+                "status": "ready" if text else "failed",
+                "char_count": len(text),
+                "confidence": 1.0 if text else 0.0,
+                "rotation_degrees": 0,
+                "warnings": [] if text else [f"Page {index + 1} needs OCR, but OCR was skipped."],
+            }
+            for index, text in enumerate(native_pages)
+        ]
+        return "\n".join(text for text in native_pages if text).strip(), "pdf_ocr_skipped", pages, [
+            warning
+            for page in pages
+            for warning in page.get("warnings") or []
+        ]
 
     try:
         import fitz
         from PIL import Image
 
         document = fitz.open(stream=data, filetype="pdf")
-        pages = []
-        for page in document:
+        pages: list[dict[str, Any]] = []
+        page_texts: list[str] = []
+        for page_index, page in enumerate(document):
+            native_text = native_pages[page_index] if page_index < len(native_pages) else ""
+            if _native_pdf_text_is_sufficient(native_text):
+                pages.append({
+                    "page_number": page_index + 1,
+                    "method": "native",
+                    "status": "ready",
+                    "char_count": len(native_text),
+                    "confidence": 1.0,
+                    "rotation_degrees": 0,
+                    "warnings": [],
+                })
+                page_texts.append(native_text)
+                continue
             pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
             image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-            pages.append(_ocr_image(image))
-        return "\n".join(page for page in pages if page).strip(), "pdf_ocr"
+            page_result = _ocr_image_with_metadata(image, page_number=page_index + 1)
+            pages.append(page_result)
+            page_texts.append(str(page_result.get("text") or ""))
+        methods = {str(page.get("method") or "") for page in pages}
+        method = "pdf_mixed" if len(methods) > 1 else "pdf_ocr"
+        warnings = [warning for page in pages for warning in page.get("warnings") or []]
+        return "\n".join(text for text in page_texts if text).strip(), method, pages, warnings
     except Exception:
-        return "", "none"
+        return "", "none", [], ["PDF parsing and OCR both failed."]
 
 
 def extract_document_text(filename: str, data: bytes, *, allow_ocr: bool = True) -> dict[str, Any]:
     suffix = Path(filename or "").suffix.lower()
     warnings: list[str] = []
+    pages: list[dict[str, Any]] = []
     text = ""
     method = "none"
 
     if suffix == ".docx":
         text, method = _extract_docx_text(data), "docx"
     elif suffix == ".pdf":
-        text, method = _extract_pdf_text(data, allow_ocr=allow_ocr)
+        text, method, pages, pdf_warnings = _extract_pdf_text(data, allow_ocr=allow_ocr)
+        warnings.extend(pdf_warnings)
     elif suffix in _IMAGE_SUFFIXES:
         if allow_ocr:
-            text, method = _extract_image_text(data), "image_ocr"
+            image_result = _extract_image_text(data)
+            text, method = str(image_result.get("text") or ""), "image_ocr"
+            pages = [image_result]
+            warnings.extend(image_result.get("warnings") or [])
         else:
             text, method = "", "image_ocr_skipped"
     elif suffix == ".xlsx":
@@ -122,7 +245,8 @@ def extract_document_text(filename: str, data: bytes, *, allow_ocr: bool = True)
 
     if not text:
         if suffix == ".pdf" and not allow_ocr:
-            warnings.append(
+            warnings.insert(
+                0,
                 "No embedded PDF text was found and OCR was skipped. "
                 "Scanned PDFs need OCR; upload a text-based PDF or DOCX."
             )
@@ -132,7 +256,27 @@ def extract_document_text(filename: str, data: bytes, *, allow_ocr: bool = True)
             warnings.append("OCR produced no text. Verify that Pillow, pytesseract, PyMuPDF, and Tesseract OCR are installed.")
         else:
             warnings.append(f"No text extractor is available for '{suffix or 'unknown'}' files.")
-    return {"text": text.strip(), "char_count": len(text.strip()), "method": method, "warnings": warnings}
+    page_confidences = [
+        float(page.get("confidence") or 0)
+        for page in pages
+        if page.get("status") == "ready"
+    ]
+    confidence = (
+        round(sum(page_confidences) / len(page_confidences), 3)
+        if page_confidences
+        else (1.0 if text else 0.0)
+    )
+    failed_pages = [page for page in pages if page.get("status") == "failed"]
+    status = "partial" if text and failed_pages else ("ready" if text else "failed")
+    return {
+        "text": text.strip(),
+        "char_count": len(text.strip()),
+        "method": method,
+        "warnings": list(dict.fromkeys(warnings)),
+        "pages": pages,
+        "confidence": confidence,
+        "status": status,
+    }
 
 
 def create_word_companion_bytes(text: str, *, title: str = "") -> bytes:
@@ -158,6 +302,9 @@ def extraction_metadata(extraction: dict[str, Any]) -> dict[str, Any]:
         "text_extraction": {
             "method": str(extraction.get("method") or "none"),
             "warnings": list(extraction.get("warnings") or []),
+            "status": str(extraction.get("status") or "failed"),
+            "confidence": float(extraction.get("confidence") or 0),
+            "pages": list(extraction.get("pages") or []),
         },
     }
 

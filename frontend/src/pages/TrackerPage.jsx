@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTracker } from "../hooks/useTracker";
+import { trackerDescriptionForItem } from "../lib/trackerDescription";
 import { CV_STUDIO_ROUTE, stashCvStudioSeed } from "../lib/cvStudio";
 
 const COLUMNS = [
@@ -84,6 +85,21 @@ const TRACKER_SOURCE_FILTERS = [
   { value: "test_run", label: "Test runs" },
   { value: "external", label: "External applications" },
 ];
+const EMPTY_TRACKER_FILTERS = {
+  query: "",
+  status: "all",
+  workspace: "all",
+  source: "all",
+};
+
+function trackerFiltersFromSearchParams(searchParams) {
+  return {
+    query: searchParams.get("query") || "",
+    status: searchParams.get("status") || "all",
+    workspace: searchParams.get("workspace") || "all",
+    source: searchParams.get("source") || "all",
+  };
+}
 
 function formatDate(iso) {
   if (!iso) return "";
@@ -387,6 +403,32 @@ function statusKeyFromItem(item) {
   return COLUMNS.some((column) => column.key === trackerStatus) ? trackerStatus : "unknown";
 }
 
+function trackerItemMatchesFilters(item, filters, { ignoreStatus = false } = {}) {
+  const row = item.tracker_table_row || {};
+  const query = filters.query.trim().toLocaleLowerCase();
+  const sourceType = item.tracker_source_type
+    || (item.external_application ? "external" : item.is_test_run ? "test_run" : "standard_run");
+  const searchableText = [
+    item.title,
+    row.title,
+    item.company,
+    row.company,
+    item.location,
+    row.location_raw,
+    item.workspace_name,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase();
+
+  return (
+    (!query || searchableText.includes(query))
+    && (ignoreStatus || filters.status === "all" || statusKeyFromItem(item) === filters.status)
+    && (filters.workspace === "all" || item.workspace_name === filters.workspace)
+    && (filters.source === "all" || sourceType === filters.source)
+  );
+}
+
 const TRACKER_RESOURCE_BUTTON_CLASS =
   "inline-flex min-w-[120px] items-center justify-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors";
 
@@ -549,7 +591,16 @@ function summarizeTrackerAtsState(documents = []) {
     targetScore,
     bestScore,
     maxAttempts,
+    gateState,
   };
+}
+
+function trackerAtsGateLabel(gateState) {
+  const normalized = String(gateState || "").trim().toLowerCase();
+  if (normalized === "blocked") return "Blocked";
+  if (normalized === "passed") return "Cleared";
+  if (normalized === "exported_anyway") return "Override";
+  return "Preflight";
 }
 
 function trackerDocumentExtension(document = {}) {
@@ -655,6 +706,7 @@ function selectTrackerExportDocuments(documents = []) {
 
 function TrackerResourceCell({ item, request }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [exporting, setExporting] = useState(false);
   const [descriptionFeedback, setDescriptionFeedback] = useState("");
   const [error, setError] = useState("");
@@ -662,8 +714,10 @@ function TrackerResourceCell({ item, request }) {
   const exportableDocuments = selectTrackerExportDocuments(item.documents);
   const documentLabels = exportableDocuments.map((document) => String(document.label || document.document_type || "Document").trim()).filter(Boolean);
   const canEditGeneratedCv = Boolean(item.cv_studio_seed?.profile);
-  const description = String(item.full_description || item.tracker_table_row?.full_description || "").trim();
+  const description = trackerDescriptionForItem(item);
   const descriptionUrl = `/tracker/job-descriptions/${encodeURIComponent(item.review_id)}`;
+  const trackerReturnTo = `${location.pathname}${location.search}#review-${encodeURIComponent(item.review_id)}`;
+  const atsDetailUrl = `/tracker/${encodeURIComponent(item.review_id)}/ats?return=${encodeURIComponent(trackerReturnTo)}`;
 
   function openGeneratedCvEditor() {
     if (!canEditGeneratedCv) return;
@@ -700,12 +754,15 @@ function TrackerResourceCell({ item, request }) {
   }
 
   async function copyDescription() {
-    if (!description) return;
     setDescriptionFeedback("");
     setError("");
+    if (!description) {
+      setError("No full job description is stored for this application. Open the description to review what is available.");
+      return;
+    }
     try {
       await navigator.clipboard.writeText(description);
-      setDescriptionFeedback("Description copied.");
+      setDescriptionFeedback("Full job description copied.");
     } catch (copyError) {
       setError(copyError.message || "Unable to copy the job description.");
     }
@@ -752,116 +809,34 @@ function TrackerResourceCell({ item, request }) {
             TRACKER_RESOURCE_BUTTON_CLASS,
             description
               ? "bg-surface-container-low text-on-surface hover:bg-surface-container-high"
-              : "cursor-not-allowed bg-surface-container-low text-on-surface-variant/60",
+              : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high",
           ].join(" ")}
-          disabled={!description}
           onClick={copyDescription}
-          title={description ? "Copy the full job description" : "No job description available"}
+          title={description ? "Copy the full job description" : "No full job description is stored"}
           type="button"
         >
           <span className="material-symbols-outlined text-[13px]">content_copy</span>
           Copy description
         </button>
-        {description ? (
-          <a
-            className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`}
-            href={descriptionUrl}
-            rel="noreferrer"
-            target="_blank"
-            title="Open the full job description in a new Runr tab"
-          >
-            <span className="material-symbols-outlined text-[13px]">open_in_new</span>
-            Open description
-          </a>
-        ) : (
-          <span
-            className={`${TRACKER_RESOURCE_BUTTON_CLASS} cursor-not-allowed bg-surface-container-low text-on-surface-variant/60`}
-            title="No job description available"
-          >
-            <span className="material-symbols-outlined text-[13px]">open_in_new</span>
-            Open description
-          </span>
-        )}
+        <a
+          className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`}
+          href={descriptionUrl}
+          rel="noreferrer"
+          target="_blank"
+          title="Open the stored job description in a new Runr tab"
+        >
+          <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+          Open description
+        </a>
       </div>
       <ApplicationWarnings compact warnings={item.application_warnings} />
       {atsSummary ? (
-        <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={["rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide", atsSummary.badgeClass].join(" ")}>
-              {atsSummary.label}
-            </span>
-            {atsSummary.metrics.map((metric) => (
-              <span
-                className="rounded-full bg-surface-container-lowest px-2.5 py-1 text-[10px] font-medium text-on-surface-variant"
-                key={metric}
-              >
-                {metric}
-              </span>
-            ))}
-          </div>
-          <div className="mt-2 text-[11px] leading-5 text-on-surface-variant">
-            {atsSummary.message}
-          </div>
-          {atsSummary.stopReasonLabel ? (
-            <div className="mt-2 text-[11px] font-medium text-on-surface">
-              Result: {atsSummary.stopReasonLabel}
-            </div>
-          ) : null}
-          {atsSummary.belowTarget && atsSummary.maxAttempts ? (
-            <div className="mt-2 text-[11px] leading-5 text-on-surface-variant">
-              {atsSummary.maxAttempts} ATS passes are a capped optimization effort, not a guarantee. A CV can still fail when the
-              source CV lacks evidence for required job criteria or when later passes stop improving the score.
-            </div>
-          ) : null}
-          {atsSummary.missingRequirements.length ? (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {atsSummary.missingRequirements.slice(0, 4).map((requirement) => (
-                <span
-                  className="rounded-full bg-surface-container-lowest px-2 py-0.5 text-[10px] font-medium text-on-surface"
-                  key={requirement}
-                >
-                  {requirement}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {atsSummary.attemptHistory.length ? (
-            <details className="mt-3">
-              <summary className="cursor-pointer text-[11px] font-semibold text-primary">
-                ATS pass audit
-              </summary>
-              <div className="mt-2 space-y-2">
-                {atsSummary.attemptHistory.map((attempt) => (
-                  <div
-                    className="rounded-xl border border-outline-variant/15 bg-surface-container-lowest p-2 text-[11px] leading-5"
-                    key={`ats-pass-${attempt.attempt}`}
-                  >
-                    <div className="flex flex-wrap items-center gap-2 font-semibold text-on-surface">
-                      <span>Pass {attempt.attempt}</span>
-                      {attempt.score !== null ? <span>{attempt.score}%</span> : null}
-                    </div>
-                    {attempt.changeSummary ? (
-                      <div className="mt-1 text-on-surface-variant">{attempt.changeSummary}</div>
-                    ) : null}
-                    {attempt.improvementActions.length ? (
-                      <div className="mt-1 text-on-surface-variant">
-                        Next action: {attempt.improvementActions[0]}
-                      </div>
-                    ) : null}
-                    {attempt.rationale ? (
-                      <div className="mt-1 text-on-surface-variant">{attempt.rationale}</div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </details>
-          ) : null}
-          {atsSummary.lastWarning ? (
-            <div className="mt-2 text-[11px] leading-5 text-on-surface-variant">
-              {atsSummary.lastWarning}
-            </div>
-          ) : null}
-        </div>
+        <Link
+          className="inline-flex rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-surface-container-high"
+          to={atsDetailUrl}
+        >
+          ATS {atsSummary.bestScore ?? 0}% · {trackerAtsGateLabel(atsSummary.gateState)}
+        </Link>
       ) : null}
       {descriptionFeedback ? <div className="text-xs text-primary">{descriptionFeedback}</div> : null}
       {error ? <div className="text-xs text-error">{error}</div> : null}
@@ -936,51 +911,22 @@ function TrackerNotesCell({ item, onUpdate, updating }) {
   );
 }
 
-function TrackerTable({ items, onUpdate, updating, request }) {
-  const [filters, setFilters] = useState({
-    query: "",
-    status: "all",
-    workspace: "all",
-    source: "all",
-  });
+function TrackerTable({ filters, items, onFiltersChange, onUpdate, updating, request }) {
   const workspaceOptions = useMemo(
     () => [...new Set(items.map((item) => item.workspace_name).filter(Boolean))].sort(),
     [items],
   );
   const filteredItems = useMemo(() => {
-    const query = filters.query.trim().toLocaleLowerCase();
-    return items.filter((item) => {
-      const row = item.tracker_table_row || {};
-      const sourceType = item.tracker_source_type
-        || (item.external_application ? "external" : item.is_test_run ? "test_run" : "standard_run");
-      const searchableText = [
-        item.title,
-        row.title,
-        item.company,
-        row.company,
-        item.location,
-        row.location_raw,
-        item.workspace_name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLocaleLowerCase();
-      return (
-        (!query || searchableText.includes(query))
-        && (filters.status === "all" || statusKeyFromItem(item) === filters.status)
-        && (filters.workspace === "all" || item.workspace_name === filters.workspace)
-        && (filters.source === "all" || sourceType === filters.source)
-      );
-    });
+    return items.filter((item) => trackerItemMatchesFilters(item, filters));
   }, [filters, items]);
   const hasActiveFilters = Object.values(filters).some((value) => value && value !== "all");
 
   function updateFilter(field, value) {
-    setFilters((current) => ({ ...current, [field]: value }));
+    onFiltersChange((current) => ({ ...current, [field]: value }));
   }
 
   function clearFilters() {
-    setFilters({ query: "", status: "all", workspace: "all", source: "all" });
+    onFiltersChange(EMPTY_TRACKER_FILTERS);
   }
 
   if (!items.length) {
@@ -1086,6 +1032,7 @@ function TrackerTable({ items, onUpdate, updating, request }) {
                 return (
                   <tr
                     className="tracker-table__row align-top transition-colors hover:bg-surface-container-low/70"
+                    id={`review-${item.review_id}`}
                     key={item.review_id}
                   >
                     <td className="px-4 py-4">
@@ -1660,14 +1607,64 @@ function EmailIntegrationPanel({
   );
 }
 
+function InboxSyncControl(props) {
+  const [expanded, setExpanded] = useState(false);
+  const config = props.integration?.config || {};
+  const pendingCount = Number(config.pending_detection_count || config.pending_detections?.length || 0);
+  const statusLabel = config.connected
+    ? `Connected${config.email_address ? ` as ${config.email_address}` : ""}`
+    : "Not connected";
+
+  return (
+    <section className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className={[
+            "material-symbols-outlined rounded-full p-2",
+            config.connected ? "bg-primary/10 text-primary" : "bg-surface-container text-on-surface-variant",
+          ].join(" ")}>
+            mark_email_read
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-on-surface">Inbox Sync</h2>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-on-surface-variant">
+              <span>{statusLabel}</span>
+              {config.last_sync_at ? <span>Last sync {formatDateTime(config.last_sync_at)}</span> : null}
+              {pendingCount ? <span>{pendingCount} awaiting review</span> : null}
+            </div>
+          </div>
+        </div>
+        <button
+          aria-expanded={expanded}
+          className="inline-flex items-center gap-2 rounded-xl bg-surface-container-low px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-surface-container-high"
+          onClick={() => setExpanded((current) => !current)}
+          type="button"
+        >
+          {expanded ? "Close" : config.connected ? "Configure" : "Connect"}
+          <span className="material-symbols-outlined text-[18px]">
+            {expanded ? "expand_less" : "expand_more"}
+          </span>
+        </button>
+      </div>
+      {expanded ? (
+        <div className="border-t border-outline-variant/10 p-4">
+          <EmailIntegrationPanel {...props} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export default function TrackerPage() {
   const { request } = useSession();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [deleteFeedback, setDeleteFeedback] = useState({ message: "", error: "" });
   const [discoveringId, setDiscoveringId] = useState("");
   const [discoveryModal, setDiscoveryModal] = useState(EMPTY_DISCOVERY_MODAL);
   const [discoveryFeedback, setDiscoveryFeedback] = useState(EMPTY_DISCOVERY_FEEDBACK);
+  const [trackerFilters, setTrackerFilters] = useState(() => trackerFiltersFromSearchParams(searchParams));
   const {
-    columns,
     items,
     loading,
     error,
@@ -1687,6 +1684,33 @@ export default function TrackerPage() {
     deleteEmailIntegration,
   } = useTracker();
   const totalCards = items.length;
+  const statusCounts = useMemo(() => {
+    const visibleItems = items.filter((item) => (
+      trackerItemMatchesFilters(item, trackerFilters, { ignoreStatus: true })
+    ));
+    return Object.fromEntries(
+      COLUMNS.map((column) => [
+        column.key,
+        visibleItems.filter((item) => statusKeyFromItem(item) === column.key).length,
+      ]),
+    );
+  }, [items, trackerFilters]);
+
+  useEffect(() => {
+    const next = new URLSearchParams();
+    Object.entries(trackerFilters).forEach(([key, value]) => {
+      if (value && value !== "all") next.set(key, value);
+    });
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams, trackerFilters]);
+
+  useEffect(() => {
+    if (loading || !location.hash) return;
+    const target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    target?.scrollIntoView({ block: "center" });
+  }, [items, loading, location.hash]);
 
   async function handleDeleteCard(item) {
     const confirmed = window.confirm(
@@ -1812,7 +1836,7 @@ export default function TrackerPage() {
       ) : null}
 
       {!loading && !error ? (
-        <EmailIntegrationPanel
+        <InboxSyncControl
           busy={integrationBusy}
           integration={emailIntegration}
           lastSyncResult={lastSyncResult}
@@ -1828,25 +1852,43 @@ export default function TrackerPage() {
 
       {!loading && !error && (
         <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">
-          {COLUMNS.map((column) => (
-            <div
-              className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-3"
-              key={column.key}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-on-surface-variant">{column.label}</span>
-                <span className={["rounded-full px-2 py-0.5 text-xs font-bold", column.badge].join(" ")}>
-                  {columns[column.key]?.length || 0}
-                </span>
-              </div>
-            </div>
-          ))}
+          {COLUMNS.map((column) => {
+            const selected = trackerFilters.status === column.key;
+            return (
+              <button
+                aria-pressed={selected}
+                className={[
+                  "rounded-2xl border px-4 py-3 text-left transition-colors",
+                  selected
+                    ? `${column.border} bg-surface-container-low shadow-sm`
+                    : "border-outline-variant/20 bg-surface-container-lowest hover:bg-surface-container-low",
+                ].join(" ")}
+                key={column.key}
+                onClick={() => {
+                  setTrackerFilters((current) => ({
+                    ...current,
+                    status: current.status === column.key ? "all" : column.key,
+                  }));
+                }}
+                type="button"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-on-surface-variant">{column.label}</span>
+                  <span className={["rounded-full px-2 py-0.5 text-xs font-bold", column.badge].join(" ")}>
+                    {statusCounts[column.key] || 0}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
       {!loading && !error ? (
         <TrackerTable
+          filters={trackerFilters}
           items={items}
+          onFiltersChange={setTrackerFilters}
           onUpdate={updateCard}
           request={request}
           updating={updating}

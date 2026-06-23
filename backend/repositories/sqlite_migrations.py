@@ -735,6 +735,53 @@ def _apply_candidate_document_normalization_migration(connection: DatabaseConnec
         )
 
 
+def _apply_workspace_ownership_migration(connection: DatabaseConnection) -> None:
+    _ensure_table_column(connection, "workspaces", "owner_user_id", "TEXT NOT NULL DEFAULT ''")
+    user_ids = {
+        str(row["user_id"] or "").strip()
+        for row in connection.execute("SELECT user_id FROM users").fetchall()
+        if str(row["user_id"] or "").strip()
+    }
+    sole_user_id = next(iter(user_ids)) if len(user_ids) == 1 else ""
+
+    for row in connection.execute(
+        "SELECT id, owner_user_id, payload_json FROM workspaces"
+    ).fetchall():
+        workspace_id = str(row["id"] or "").strip()
+        payload = json.loads(str(row["payload_json"] or "{}"))
+        owner_user_id = str(
+            row["owner_user_id"]
+            or payload.get("owner_user_id")
+            or dict(payload.get("metadata") or {}).get("owner_user_id")
+            or ""
+        ).strip()
+        if not owner_user_id:
+            run_owner_rows = connection.execute(
+                "SELECT DISTINCT user_id FROM runs WHERE workspace_id = ? AND user_id != ''",
+                (workspace_id,),
+            ).fetchall()
+            run_owner_ids = {
+                str(run_row["user_id"] or "").strip()
+                for run_row in run_owner_rows
+                if str(run_row["user_id"] or "").strip()
+            }
+            if len(run_owner_ids) == 1:
+                owner_user_id = next(iter(run_owner_ids))
+            elif not run_owner_ids:
+                owner_user_id = sole_user_id
+
+        payload["owner_user_id"] = owner_user_id
+        connection.execute(
+            "UPDATE workspaces SET owner_user_id = ?, payload_json = ? WHERE id = ?",
+            (owner_user_id, json.dumps(payload, ensure_ascii=False), workspace_id),
+        )
+
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workspaces_owner_user_id "
+        "ON workspaces(owner_user_id, updated_at DESC)"
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -812,5 +859,11 @@ MIGRATIONS = (
             prepare_workspace_payload,
             prepare_run_payload,
         ),
+    ),
+    Migration.from_callable(
+        "014_workspace_ownership",
+        "Add workspace ownership and safely backfill legacy workspaces.",
+        _apply_workspace_ownership_migration,
+        dependencies=(_table_columns, _ensure_table_column),
     ),
 )

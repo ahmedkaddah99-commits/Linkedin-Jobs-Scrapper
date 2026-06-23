@@ -10,11 +10,9 @@ export default function SourcesTab({
   importedCareerContext,
   masterCareerProfileAsset,
   masterProfileAssetId,
-  masterProfileUploadState,
   onChangeImportedCareerContext,
   onChangeMasterProfile,
   onToggleAsset,
-  onUploadMasterProfile,
   selectedAssetIds = [],
   sourceSummary,
 }) {
@@ -35,10 +33,8 @@ export default function SourcesTab({
           importedCareerContext={importedCareerContext}
           masterCareerProfileAsset={masterCareerProfileAsset}
           masterProfileAssetId={masterProfileAssetId}
-          masterProfileUploadState={masterProfileUploadState}
           onChangeImportedCareerContext={onChangeImportedCareerContext}
           onChangeMasterProfile={onChangeMasterProfile}
-          onUploadMasterProfile={onUploadMasterProfile}
         />
       </div>
     </div>

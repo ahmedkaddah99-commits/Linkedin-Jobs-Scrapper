@@ -16,6 +16,10 @@ const VIEW_MEMORY = "memory";
 const LEGACY_VIEW_CANVAS = "canvas";
 const DEFAULT_UPLOAD_KIND = "uploaded_document";
 const MASTER_CAREER_PROFILE_KIND = "master_career_profile";
+const LEGACY_GENERAL_ASSET_KINDS = new Set([
+  MASTER_CAREER_PROFILE_KIND,
+  "motivation_letter",
+]);
 const CAREER_ASSET_KINDS = new Set([
   "workspace_cv",
   MASTER_CAREER_PROFILE_KIND,
@@ -36,11 +40,9 @@ function normalizeViewParam(value) {
 
 const UPLOAD_KIND_OPTIONS = [
   { value: "workspace_cv", label: "Baseline CV" },
-  { value: MASTER_CAREER_PROFILE_KIND, label: "Master Career Profile" },
   { value: "uploaded_document", label: "Supporting Document" },
   { value: "certification", label: "Certification" },
   { value: "recommendation_letter", label: "Recommendation Letter" },
-  { value: "motivation_letter", label: "Motivation Letter" },
 ];
 
 function matchesQuery(values, search) {
@@ -98,10 +100,10 @@ function documentStatusLabel(document) {
 function assetKindLabel(assetKind) {
   const normalized = String(assetKind || "").trim().toLowerCase();
   if (normalized === "workspace_cv") return "Baseline CV";
-  if (normalized === MASTER_CAREER_PROFILE_KIND) return "Master Career Profile";
+  if (normalized === MASTER_CAREER_PROFILE_KIND) return "Legacy Master Career Profile";
   if (normalized === "uploaded_document") return "Supporting Document";
   if (normalized === "recommendation_letter") return "Recommendation Letter";
-  if (normalized === "motivation_letter") return "Motivation Letter";
+  if (normalized === "motivation_letter") return "Legacy Motivation Letter";
   return labelize(assetKind);
 }
 
@@ -147,11 +149,7 @@ export default function DocumentsPage() {
     message: "",
     error: "",
   });
-  const [masterProfileUploadState, setMasterProfileUploadState] = useState({
-    uploading: false,
-    message: "",
-    error: "",
-  });
+  const [memoryDirty, setMemoryDirty] = useState(false);
 
   const {
     data: documentsPayload,
@@ -186,7 +184,27 @@ export default function DocumentsPage() {
       return;
     }
     setMemoryDraft(buildCareerMemoryDraft(settingsPayload.documents));
+    setMemoryDirty(false);
   }, [settingsPayload?.documents]);
+
+  useEffect(() => {
+    if (!memoryDirty || activeView !== VIEW_MEMORY) return undefined;
+    function confirmNavigation(event) {
+      if (!window.confirm("You have unsaved Career Memory changes. Leave without saving them?")) {
+        event.preventDefault();
+      }
+    }
+    function confirmUnload(event) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("runr:before-navigation", confirmNavigation);
+    window.addEventListener("beforeunload", confirmUnload);
+    return () => {
+      window.removeEventListener("runr:before-navigation", confirmNavigation);
+      window.removeEventListener("beforeunload", confirmUnload);
+    };
+  }, [activeView, memoryDirty]);
 
   useEffect(() => {
     const rawView = String(searchParams.get("view") || "").trim().toLowerCase();
@@ -219,7 +237,11 @@ export default function DocumentsPage() {
     () =>
       assetDocuments.filter((item) => {
         const assetKind = String(item.asset_kind || "").trim().toLowerCase();
-        return assetKind === "workspace_cv" || assetKind === MASTER_CAREER_PROFILE_KIND;
+        return (
+          assetKind === "workspace_cv" ||
+          assetKind === "uploaded_document" ||
+          assetKind === MASTER_CAREER_PROFILE_KIND
+        );
       }),
     [assetDocuments],
   );
@@ -227,10 +249,12 @@ export default function DocumentsPage() {
     () =>
       Array.from(
         new Map(
-          assetDocuments.map((item) => [
-            String(item.asset_kind || ""),
-            assetKindLabel(item.asset_kind || item.document_type),
-          ]),
+          assetDocuments
+            .filter((item) => !LEGACY_GENERAL_ASSET_KINDS.has(String(item.asset_kind || "").trim().toLowerCase()))
+            .map((item) => [
+              String(item.asset_kind || ""),
+              assetKindLabel(item.asset_kind || item.document_type),
+            ]),
         ).entries(),
       ).map(([value, label]) => ({ value, label })),
     [assetDocuments],
@@ -396,6 +420,28 @@ export default function DocumentsPage() {
         method: "POST",
         body: formData,
       });
+      if (response?.status_url) {
+        let extractionReady = false;
+        setUploadState({
+          uploading: true,
+          message: `Uploaded ${file.name}. Extracting searchable text...`,
+          error: "",
+        });
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          const processing = await request(response.status_url);
+          if (processing.status === "ready") {
+            extractionReady = true;
+            break;
+          }
+          if (processing.status === "failed") {
+            throw new Error(processing.error || "Text extraction failed.");
+          }
+        }
+        if (!extractionReady) {
+          throw new Error("Text extraction is still processing. Refresh Career Assets in a moment.");
+        }
+      }
       await refreshDocuments().catch(() => undefined);
       setUploadState({
         uploading: false,
@@ -404,6 +450,7 @@ export default function DocumentsPage() {
       });
       return response?.asset || null;
     } catch (uploadError) {
+      await refreshDocuments().catch(() => undefined);
       setUploadState({
         uploading: false,
         message: "",
@@ -415,6 +462,7 @@ export default function DocumentsPage() {
 
   function updateMemoryField(field, value) {
     setMemoryDraft((current) => ({ ...current, [field]: value }));
+    setMemoryDirty(true);
     setMemorySaveState((current) => ({ ...current, message: "", error: "" }));
   }
 
@@ -433,51 +481,12 @@ export default function DocumentsPage() {
         message: "Career Memory Builder saved.",
         error: "",
       });
+      setMemoryDirty(false);
     } catch (saveError) {
       setMemorySaveState({
         saving: false,
         message: "",
         error: saveError.message || "Unable to save the Career Memory Builder.",
-      });
-    }
-  }
-
-  async function uploadMasterCareerProfile(file) {
-    if (!file) {
-      return;
-    }
-    setMasterProfileUploadState({ uploading: true, message: "", error: "" });
-    try {
-      const formData = new FormData();
-      formData.append("document_file", file);
-      const params = new URLSearchParams();
-      params.set("asset_kind", MASTER_CAREER_PROFILE_KIND);
-      params.set("display_name", file.name);
-      const response = await request(`/documents/upload?${params.toString()}`, {
-        method: "POST",
-        body: formData,
-      });
-      const uploadedAsset = response?.asset || null;
-      await refreshDocuments().catch(() => undefined);
-      if (uploadedAsset?.asset_id) {
-        setMemoryDraft((current) => ({
-          ...current,
-          masterProfileAssetId: String(uploadedAsset.asset_id || ""),
-          importedCareerContext:
-            String(uploadedAsset?.metadata?.source_text || "").trim() || current.importedCareerContext,
-        }));
-      }
-      setMasterProfileUploadState({
-        uploading: false,
-        message: `Uploaded ${file.name}. Review the imported text, then save the Career Memory Builder.`,
-        error: "",
-      });
-      setMemorySaveState((current) => ({ ...current, message: "", error: "" }));
-    } catch (uploadError) {
-      setMasterProfileUploadState({
-        uploading: false,
-        message: "",
-        error: uploadError.message || "Unable to upload the master career profile.",
       });
     }
   }
@@ -594,9 +603,8 @@ export default function DocumentsPage() {
                   Upload Career Assets
                 </h2>
                 <p className="text-sm leading-7 text-on-surface-variant">
-                  Add baseline CVs, a master career profile, certifications, recommendation
-                  letters, motivation-letter examples, or other supporting files to the shared
-                  asset library.
+                  Add baseline CVs, certifications, recommendation letters, or other supporting
+                  files to the shared asset library.
                 </p>
               </div>
 
@@ -933,6 +941,9 @@ export default function DocumentsPage() {
                                 <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
                                   {assetKindLabel(document.asset_kind || document.document_type)}
                                 </span>
+                                <StatusBadge tone={statusTone(documentStatusValue(document))}>
+                                  {documentStatusLabel(document)}
+                                </StatusBadge>
                               </div>
                               <p className="text-sm text-on-surface-variant">
                                 {[document.job_title, document.company].filter(Boolean).join(" at ") ||
@@ -955,6 +966,19 @@ export default function DocumentsPage() {
                               Select
                             </label>
                           </div>
+                          {document.metadata?.text_extraction ? (
+                            <div className="rounded-lg bg-surface-container-low px-3 py-2 text-xs leading-5 text-on-surface-variant">
+                              <div>
+                                Text extraction: {labelize(document.metadata.text_extraction.method || "pending")}
+                                {Number(document.metadata.text_extraction.confidence) > 0
+                                  ? ` · ${Math.round(Number(document.metadata.text_extraction.confidence) * 100)}% confidence`
+                                  : ""}
+                              </div>
+                              {(document.metadata.text_extraction.warnings || []).map((warning) => (
+                                <div className="mt-1 text-error" key={warning}>{warning}</div>
+                              ))}
+                            </div>
+                          ) : null}
                           <div className="flex flex-wrap gap-3">
                             <button
                               className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
@@ -989,12 +1013,9 @@ export default function DocumentsPage() {
           cvLikeAssets={cvLikeAssets}
           draft={memoryDraft}
           formatDateTime={formatDateTime}
-          manageDocumentsTo="/documents?view=library"
           masterCareerProfileAsset={masterCareerProfileAsset}
-          masterProfileUploadState={masterProfileUploadState}
           onChangeField={updateMemoryField}
           onSave={saveCareerMemory}
-          onUploadMasterProfile={uploadMasterCareerProfile}
           saveState={memorySaveState}
         />
       ) : null}

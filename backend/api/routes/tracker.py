@@ -198,6 +198,22 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         self._send_json(application.get_referral_contact(user.user_id, segments[1]).to_dict())
                         return
 
+    if segments[:1] == ["tracker"] and len(segments) == 3 and segments[2] == "ats":
+                        user, _ = self._require_identity()
+                        review_id = str(segments[1] or "").strip()
+                        entry = next(
+                            (
+                                item
+                                for item in _collect_tracker_entries(application, user)
+                                if str(item.get("review_id") or "") == review_id
+                            ),
+                            None,
+                        )
+                        if entry is None:
+                            raise KeyError(f"Tracker review '{review_id}' not found.")
+                        self._send_json(_tracker_ats_detail_payload(entry), status=HTTPStatus.OK)
+                        return
+
     if segments == ["tracker"]:
                         user, _ = self._require_identity()
                         entries = _collect_tracker_entries(application, user)
@@ -246,7 +262,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                     ):
                         user, _ = self._require_identity()
                         run = application.get_run(segments[1])
-                        if not application.user_can_access_workspace(user, run.workspace_id):
+                        if not application.user_can_access_run(user, run):
                             raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                         self._send_json(
                             application.get_relevant_people_discovery_status(
@@ -268,7 +284,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                     ):
                         user, _ = self._require_identity()
                         run = application.get_run(segments[1])
-                        if not application.user_can_access_workspace(user, run.workspace_id):
+                        if not application.user_can_access_run(user, run):
                             raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                         self._send_json(
                             application.get_relevant_people_discovery_results(
@@ -322,7 +338,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                                     include_legacy_fallback=False,
                                 )
                                 run = application.get_run(review.run_id)
-                                if not application.user_can_access_workspace(user, run.workspace_id):
+                                if not application.user_can_access_run(user, run):
                                     raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                                 review_meta = dict(review.metadata or {})
                                 application_status = normalize_application_status(
@@ -532,7 +548,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                     ):
                         user, _ = self._require_identity()
                         run = application.get_run(segments[1])
-                        if not application.user_can_access_workspace(user, run.workspace_id):
+                        if not application.user_can_access_run(user, run):
                             raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                         self._send_json(
                             application.start_relevant_people_discovery(
@@ -554,7 +570,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                     ):
                         user, _ = self._require_identity()
                         run = application.get_run(segments[1])
-                        if not application.user_can_access_workspace(user, run.workspace_id):
+                        if not application.user_can_access_run(user, run):
                             raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                         person_id = str(payload.get("person_id") or payload.get("personId") or "").strip()
                         if not person_id:
@@ -583,7 +599,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         if not run_id or not job_id:
                             raise ValueError("run_id and job_id are required")
                         original_run = application.get_run(run_id)
-                        if not application.user_can_access_workspace(user, original_run.workspace_id):
+                        if not application.user_can_access_run(user, original_run):
                             raise PermissionError(f"Workspace access denied for '{original_run.workspace_id}'.")
                         execution_mode = str(payload.get("execution_mode") or "queued").strip().lower()
                         requeued_run = application.requeue_job_for_generation(
@@ -907,7 +923,7 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
                             include_legacy_fallback=False,
                         )
                         run = application.get_run(review.run_id)
-                        if not application.user_can_access_workspace(user, run.workspace_id):
+                        if not application.user_can_access_run(user, run):
                             raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                         review_meta = dict(review.metadata or {})
                         previous_status = normalize_application_status(
@@ -1072,7 +1088,7 @@ def _handle_delete(context: ApiRouteContext) -> bool | None:
                             return
                         review = application.get_review(segments[1])
                         run = application.get_run(review.run_id)
-                        if not application.user_can_access_workspace(user, run.workspace_id):
+                        if not application.user_can_access_run(user, run):
                             raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
                         application.delete_job(review.run_id, review.job_id)
                         self._send_json(

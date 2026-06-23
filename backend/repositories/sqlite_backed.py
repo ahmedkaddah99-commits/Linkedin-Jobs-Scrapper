@@ -295,23 +295,27 @@ class SqliteWorkspaceRepository(_SqliteStore):
 
     def list_workspaces(self) -> list[WorkspaceDefinition]:
         with self._connect() as connection:
-            rows = connection.execute("SELECT payload_json FROM workspaces ORDER BY id").fetchall()
-        return [
-            WorkspaceDefinition.from_dict(_deserialize(row["payload_json"], {}))
-            for row in rows
-        ]
+            rows = connection.execute(
+                "SELECT owner_user_id, payload_json FROM workspaces ORDER BY id"
+            ).fetchall()
+        workspaces = []
+        for row in rows:
+            payload = _deserialize(row["payload_json"], {})
+            payload["owner_user_id"] = str(row["owner_user_id"] or payload.get("owner_user_id") or "")
+            workspaces.append(WorkspaceDefinition.from_dict(payload))
+        return workspaces
 
     def get_workspace(self, workspace_id: str) -> WorkspaceDefinition:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT payload_json FROM workspaces WHERE id = ?",
+                "SELECT owner_user_id, payload_json FROM workspaces WHERE id = ?",
                 (workspace_id,),
             ).fetchone()
             if row is None:
                 raise KeyError(f"Workspace '{workspace_id}' not found.")
-            return WorkspaceDefinition.from_dict(
-                _hydrate_workspace_payload(connection, _deserialize(row["payload_json"], {}))
-            )
+            payload = _hydrate_workspace_payload(connection, _deserialize(row["payload_json"], {}))
+            payload["owner_user_id"] = str(row["owner_user_id"] or payload.get("owner_user_id") or "")
+            return WorkspaceDefinition.from_dict(payload)
 
     def upsert_workspace(self, workspace: WorkspaceDefinition) -> None:
         payload, document = prepare_workspace_payload(workspace.to_dict())
@@ -319,17 +323,19 @@ class SqliteWorkspaceRepository(_SqliteStore):
             connection.execute(
                 (
                     "INSERT INTO workspaces "
-                    "(id, name, workflow_template_id, workspace_type, payload_json, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "(id, name, workflow_template_id, owner_user_id, workspace_type, payload_json, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(id) DO UPDATE SET "
                     "name=excluded.name, workflow_template_id=excluded.workflow_template_id, "
-                    "workspace_type=excluded.workspace_type, payload_json=excluded.payload_json, "
+                    "owner_user_id=excluded.owner_user_id, workspace_type=excluded.workspace_type, "
+                    "payload_json=excluded.payload_json, "
                     "updated_at=excluded.updated_at"
                 ),
                 (
                     workspace.id,
                     workspace.name,
                     workspace.workflow_template_id,
+                    workspace.owner_user_id,
                     workspace.workspace_type,
                     _serialize(payload),
                     utc_now_iso(),

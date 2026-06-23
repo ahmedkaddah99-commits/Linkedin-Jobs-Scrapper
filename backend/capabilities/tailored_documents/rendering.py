@@ -4,8 +4,9 @@ import shutil
 import subprocess
 import zipfile
 from copy import deepcopy
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from backend.config.job_seeker import cfg_str, load_job_seeker_config, normalize_windows_env_path
 from backend.profiles.cv_text import resolve_runtime_cv_docx_path
@@ -628,15 +629,27 @@ def create_cv_document(
         style_run(run, size_pt=size_pt or float(template["base_font_size"]), bold=bold)
         return paragraph
 
-    def write_bullet_paragraph(target, text: str, *, compact: bool = False):
-        bullet_text = str(text or "").strip()
+    def write_bullet_paragraph(target, bullet: Any, *, compact: bool = False):
+        if isinstance(bullet, Mapping):
+            bullet_text = str(bullet.get("text") or bullet.get("value") or "").strip()
+            try:
+                level = max(0, min(2, int(bullet.get("level") or 0)))
+            except (TypeError, ValueError):
+                level = 0
+        else:
+            bullet_text = str(bullet or "").strip()
+            level = 0
         if not bullet_text:
             return None
         paragraph = new_paragraph(target)
         configure_paragraph(paragraph, before_pt=0, after_pt=0 if compact else 1)
-        paragraph.paragraph_format.left_indent = Inches(0.2 if compact else 0.25)
-        paragraph.paragraph_format.first_line_indent = Inches(-0.12)
-        run = paragraph.add_run(f"\u2022 {bullet_text}")
+        try:
+            paragraph.style = "List Bullet" if level == 0 else f"List Bullet {level + 1}"
+        except (KeyError, ValueError):
+            paragraph.paragraph_format.first_line_indent = Inches(-0.12)
+            bullet_text = f"\u2022 {bullet_text}"
+        paragraph.paragraph_format.left_indent = Inches((0.2 if compact else 0.25) + (0.2 * level))
+        run = paragraph.add_run(bullet_text)
         style_run(run, size_pt=float(template["base_font_size"]) - (0.1 if compact else 0.0))
         return paragraph
 
@@ -689,18 +702,16 @@ def create_cv_document(
         for index, item in enumerate(experiences):
             role_title = str(item.get("role_title") or "").strip()
             exp_company = str(item.get("company") or "").strip()
+            exp_location = str(item.get("location") or "").strip()
             period = str(item.get("period") or "").strip()
-            headline_parts = [part for part in [role_title, exp_company, period] if part]
+            headline_parts = [part for part in [role_title, exp_company, exp_location, period] if part]
             if headline_parts:
                 exp_header = new_paragraph(target)
                 configure_paragraph(exp_header, before_pt=0, after_pt=0 if compact else 1)
                 header_run = exp_header.add_run(" | ".join(headline_parts))
                 style_run(header_run, bold=True, color=primary_rgb)
             for bullet in item.get("bullets", []):
-                bullet_text = str(bullet).strip()
-                if not bullet_text:
-                    continue
-                write_bullet_paragraph(target, bullet_text, compact=compact)
+                write_bullet_paragraph(target, bullet, compact=compact)
             if index < len(experiences) - 1:
                 spacer = new_paragraph(target)
                 configure_paragraph(spacer, before_pt=0, after_pt=1 if compact else 2)
@@ -714,10 +725,7 @@ def create_cv_document(
                 header_run = ini_header.add_run(initiative_title)
                 style_run(header_run, bold=True, color=primary_rgb)
             for bullet in item.get("bullets", []):
-                bullet_text = str(bullet).strip()
-                if not bullet_text:
-                    continue
-                write_bullet_paragraph(target, bullet_text, compact=compact)
+                write_bullet_paragraph(target, bullet, compact=compact)
             if index < len(initiatives) - 1:
                 spacer = new_paragraph(target)
                 configure_paragraph(spacer, before_pt=0, after_pt=1 if compact else 2)
@@ -945,6 +953,7 @@ def create_cv_document(
                 headline_parts = [
                     str(item.get("role_title") or "").strip(),
                     str(item.get("company") or "").strip(),
+                    str(item.get("location") or "").strip(),
                     str(item.get("period") or "").strip(),
                 ]
                 headline = " | ".join(part for part in headline_parts if part)
@@ -954,7 +963,7 @@ def create_cv_document(
                     run = paragraph.add_run(headline.upper())
                     style_run(run, size_pt=12.0, bold=True)
                 for bullet in item.get("bullets", []):
-                    write_bullet_paragraph(doc, str(bullet).strip(), compact=True)
+                    write_bullet_paragraph(doc, bullet, compact=True)
 
         def render_plain_projects() -> None:
             for item in initiatives:
@@ -965,7 +974,7 @@ def create_cv_document(
                     run = paragraph.add_run(title_text.upper())
                     style_run(run, size_pt=12.0, bold=True)
                 for bullet in item.get("bullets", []):
-                    write_bullet_paragraph(doc, str(bullet).strip(), compact=True)
+                    write_bullet_paragraph(doc, bullet, compact=True)
 
         def render_plain_education() -> None:
             for item in education_items:
@@ -1071,8 +1080,16 @@ def build_cv_html_export_payload(
             {
                 "title": str(item.get("role_title") or item.get("title") or "").strip(),
                 "company": str(item.get("company") or "").strip(),
+                "location": str(item.get("location") or "").strip(),
+                "start_date": str(item.get("start_date") or item.get("start") or "").strip(),
+                "end_date": str(item.get("end_date") or item.get("end") or "").strip(),
                 "period": str(item.get("period") or "").strip(),
-                "bullets": [str(bullet).strip() for bullet in item.get("bullets", []) if str(bullet).strip()],
+                "bullets": [
+                    dict(bullet) if isinstance(bullet, Mapping) else str(bullet).strip()
+                    for bullet in item.get("bullets", [])
+                    if (isinstance(bullet, Mapping) and str(bullet.get("text") or "").strip())
+                    or (not isinstance(bullet, Mapping) and str(bullet).strip())
+                ],
             }
             for item in (record.get("cv_professional_experience") or [])
             if isinstance(item, dict)
@@ -1081,7 +1098,12 @@ def build_cv_html_export_payload(
             {
                 "title": str(item.get("title") or item.get("name") or "").strip(),
                 "period": str(item.get("period") or item.get("date") or item.get("year") or "").strip(),
-                "bullets": [str(bullet).strip() for bullet in item.get("bullets", []) if str(bullet).strip()],
+                "bullets": [
+                    dict(bullet) if isinstance(bullet, Mapping) else str(bullet).strip()
+                    for bullet in item.get("bullets", [])
+                    if (isinstance(bullet, Mapping) and str(bullet.get("text") or "").strip())
+                    or (not isinstance(bullet, Mapping) and str(bullet).strip())
+                ],
             }
             for item in (record.get("cv_strategic_initiatives") or [])
             if isinstance(item, dict)

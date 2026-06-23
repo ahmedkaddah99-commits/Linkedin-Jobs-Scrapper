@@ -1,8 +1,4 @@
-import { Link } from "react-router-dom";
-
 export default function MemoryBuilderHeader({
-  cvStudioTo,
-  manageDocumentsTo,
   onContinueInterview,
   saveState,
 }) {
@@ -31,20 +27,6 @@ export default function MemoryBuilderHeader({
             Continue guided interview
             <span className="material-symbols-outlined text-[18px]">forum</span>
           </button>
-          <Link
-            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-surface-container-low px-5 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-            to={cvStudioTo}
-          >
-            Edit a CV
-            <span className="material-symbols-outlined text-[18px]">edit_document</span>
-          </Link>
-          <Link
-            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-surface-container-low px-5 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-            to={manageDocumentsTo}
-          >
-            Manage documents
-            <span className="material-symbols-outlined text-[18px]">folder_open</span>
-          </Link>
         </div>
       </div>
       <div className="mt-5 grid gap-3 md:grid-cols-3">

@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     workflow_template_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL DEFAULT '',
     workspace_type TEXT NOT NULL DEFAULT '',
     payload_json TEXT NOT NULL,
     updated_at TEXT NOT NULL,

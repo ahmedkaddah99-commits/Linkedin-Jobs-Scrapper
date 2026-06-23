@@ -15,8 +15,6 @@ export default function SourceDocumentsPanel({
   importedCareerContext = "",
   onToggleSourceAsset,
   onChangeField,
-  onUploadMasterProfile,
-  masterProfileUploadState,
   assetKindLabel,
   formatDateTime,
   manageDocumentsTo = "/documents",
@@ -133,38 +131,24 @@ export default function SourceDocumentsPanel({
 
         <div className="space-y-4">
           <div className="rounded-2xl border border-outline-variant/15 bg-surface p-4">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
               <div>
-                <div className="text-sm font-semibold text-on-surface">Master profile status</div>
+                <div className="text-sm font-semibold text-on-surface">Primary career source</div>
                 <p className="mt-1 text-sm leading-6 text-on-surface-variant">
-                  Link your detailed CV or long-form career profile so Runr can import fuller
-                  career context before the guided interview fills the gaps.
+                  Link an existing baseline CV or supporting document. Upload new files in the
+                  Asset Library first.
                 </p>
               </div>
-              <label className="inline-flex cursor-pointer items-center justify-center rounded-xl bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high">
-                <input
-                  className="hidden"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) {
-                      onUploadMasterProfile(file);
-                      event.target.value = "";
-                    }
-                  }}
-                  type="file"
-                />
-                {masterProfileUploadState.uploading ? "Uploading..." : "Upload detailed CV"}
-              </label>
             </div>
 
             <label className="mt-4 block space-y-2">
-              <span className="block text-sm font-semibold text-on-surface">Linked master profile</span>
+              <span className="block text-sm font-semibold text-on-surface">Linked career source</span>
               <select
                 className="w-full rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-2.5 text-sm text-on-surface"
                 onChange={(event) => onChangeField("masterProfileAssetId", event.target.value)}
                 value={masterProfileAssetId}
               >
-                <option value="">Choose an uploaded detailed CV or master profile</option>
+                <option value="">Choose a baseline CV or supporting document</option>
                 {cvLikeAssets.map((item) => (
                   <option key={item.asset_id || item.document_id} value={String(item.asset_id || "")}>
                     {item.display_name} ({assetKindLabel(item.asset_kind)})
@@ -191,16 +175,9 @@ export default function SourceDocumentsPanel({
               </div>
             ) : (
               <div className="mt-4 rounded-2xl border border-dashed border-outline-variant/20 bg-surface-container-low p-4 text-sm text-on-surface-variant">
-                No master profile linked yet.
+                No primary career source linked yet.
               </div>
             )}
-
-            {masterProfileUploadState.message ? (
-              <p className="mt-3 text-sm text-primary">{masterProfileUploadState.message}</p>
-            ) : null}
-            {masterProfileUploadState.error ? (
-              <p className="mt-3 text-sm text-error">{masterProfileUploadState.error}</p>
-            ) : null}
           </div>
 
           <div className="rounded-2xl border border-outline-variant/15 bg-surface p-4">
@@ -221,4 +198,3 @@ export default function SourceDocumentsPanel({
     </section>
   );
 }
-

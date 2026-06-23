@@ -4,6 +4,7 @@ import { getApiErrorDetails, getApiErrorMessage } from "../lib/api";
 const EMPTY_ACTION_STATE = {
   workspaceId: "",
   loading: false,
+  phase: "",
   message: "",
   error: "",
   details: [],
@@ -79,6 +80,7 @@ export function useWorkspaceRunActions({
         ...EMPTY_ACTION_STATE,
         workspaceId,
         loading: true,
+        phase: "validating",
         message: "Checking workspace setup before starting the run...",
       });
       try {
@@ -146,6 +148,7 @@ export function useWorkspaceRunActions({
           ...EMPTY_ACTION_STATE,
           workspaceId,
           loading: true,
+          phase: "queueing",
           message: "Pre-run company-site estimate calculated. Starting the run...",
           details: preRunDetails,
         });
@@ -166,7 +169,7 @@ export function useWorkspaceRunActions({
           message: `${runLabel} ${run.id} added to the queue and will start automatically.`,
           details: preRunDetails,
         });
-        navigate(`/runs/${encodeURIComponent(run.id)}`, {
+        navigate(`/runs/${encodeURIComponent(run.id)}#run-progress`, {
           state: {
             runStartedMessage: `${runLabel} ${run.id} added to the queue and will start automatically.`,
           },
