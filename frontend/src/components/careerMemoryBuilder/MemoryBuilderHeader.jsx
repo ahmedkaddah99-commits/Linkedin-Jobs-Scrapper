@@ -24,16 +24,16 @@ export default function MemoryBuilderHeader({
             onClick={onContinueInterview}
             type="button"
           >
-            Continue guided interview
-            <span className="material-symbols-outlined text-[18px]">forum</span>
+            Continue fact builder
+            <span className="material-symbols-outlined text-[18px]">fact_check</span>
           </button>
         </div>
       </div>
       <div className="mt-5 grid gap-3 md:grid-cols-3">
         {[
-          ["1. Answer one prompt", "Use rough notes. Exact CV wording is not required."],
-          ["2. Review the memory", "Check the generated story, metric, and suggested CV angle."],
-          ["3. Save for reuse", "Runr can reuse approved memories across future applications."],
+          ["1. Capture one fact", "Add a sourced achievement, metric, project, or motivation detail."],
+          ["2. Review provenance", "Confirm where the fact came from before it becomes reusable."],
+          ["3. Save approved facts", "Runr can reuse confirmed facts across future applications."],
         ].map(([title, description]) => (
           <div className="rounded-2xl bg-surface-container-low px-4 py-3" key={title}>
             <div className="text-sm font-semibold text-on-surface">{title}</div>
