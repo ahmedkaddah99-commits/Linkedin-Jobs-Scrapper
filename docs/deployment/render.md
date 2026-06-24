@@ -35,7 +35,7 @@ configured for both backend services.
 5. Create the Blueprint and allow the first builds to complete.
 6. Test the generated `onrender.com` URLs before configuring DNS.
 
-Render is configured with `autoDeployTrigger: checksPass`, so production deploys wait for repository checks instead of deploying every commit immediately.
+Render is configured with `autoDeployTrigger: commit`, so production deploys automatically on every commit pushed to the linked Render branch.
 
 ## Required values
 

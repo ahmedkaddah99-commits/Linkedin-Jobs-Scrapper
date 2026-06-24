@@ -5,7 +5,7 @@ services:
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     envVars:
       - key: VITE_API_BASE_URL
         sync: false
@@ -25,7 +25,7 @@ services:
     dockerCommand: ./deploy/start.sh api
     preDeployCommand: ./deploy/start.sh migrate
     healthCheckPath: /health/live
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     maxShutdownDelaySeconds: 60
     envVars:
       - key: RUNR_ENV
@@ -88,7 +88,7 @@ services:
     region: frankfurt
     dockerfilePath: ./Dockerfile
     dockerCommand: ./deploy/start.sh worker
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     maxShutdownDelaySeconds: 300
     envVars:
       - key: RUNR_ENV
