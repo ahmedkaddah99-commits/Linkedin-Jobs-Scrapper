@@ -476,6 +476,8 @@ function CustomSectionEditor({ items, onChange }) {
   );
 }
 
+const PREVIEW_DEBOUNCE_MS = 250;
+
 export default function CvStudioPage() {
   const { request } = useSession();
   const [consumedSeed] = useState(() => consumeCvStudioSeed());
@@ -483,6 +485,8 @@ export default function CvStudioPage() {
   const [savedSource, setSavedSource] = useState(null);
   const [saveState, setSaveState] = useState({ message: "", error: "", saving: false });
   const [mobilePane, setMobilePane] = useState("editor");
+  const previewIframeRef = useRef(null);
+  const debounceTimerRef = useRef(null);
   const returnTo = String(consumedSeed?.returnTo || "/settings");
   const sourceLabel = String(consumedSeed?.sourceLabel || "Profile and document defaults");
 
@@ -518,6 +522,52 @@ export default function CvStudioPage() {
     () => (studioState ? buildCvStudioHtml(studioState, { forIframe: true }) : ""),
     [studioState],
   );
+
+  // Debounced, non-navigating iframe update to prevent scroll jumps
+  useEffect(() => {
+    const iframe = previewIframeRef.current;
+    if (!iframe || !previewHtml) return;
+
+    function writeContent() {
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (!doc) return;
+        doc.open();
+        doc.write(previewHtml);
+        doc.close();
+      } catch (_err) {
+        // cross-origin guard, safe to ignore
+      }
+    }
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(writeContent, PREVIEW_DEBOUNCE_MS);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+    };
+  }, [previewHtml]);
+
+  // Write initial content once the iframe mounts (before debounce)
+  useEffect(() => {
+    const iframe = previewIframeRef.current;
+    if (!iframe || !previewHtml) return;
+    try {
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (!doc) return;
+      doc.open();
+      doc.write(previewHtml);
+      doc.close();
+    } catch (_err) {
+      // cross-origin guard, safe to ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function updateState(patch) {
     setStudioState((current) => ({ ...current, ...patch }));
@@ -979,7 +1029,7 @@ export default function CvStudioPage() {
           <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-3">
             <iframe
               className="h-[72vh] min-h-[560px] w-full rounded-xl bg-white xl:h-[calc(100vh-8rem)]"
-              srcDoc={previewHtml}
+              ref={previewIframeRef}
               title="Browser CV preview"
             />
           </div>

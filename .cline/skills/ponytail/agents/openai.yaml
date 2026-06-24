@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ponytail"
+  short_description: "YAGNI-first senior dev mode"
+  default_prompt: "Use $ponytail to solve this with the smallest viable implementation."

@@ -1,4 +1,5 @@
 import GuidedInterviewPanel from "./GuidedInterviewPanel";
+import FactGroundedMemoryWorkspace from "./FactGroundedMemoryWorkspace";
 import LatestMemoryCard from "./LatestMemoryCard";
 import NextBestActions from "./NextBestActions";
 import TailoringProgressPanel from "./TailoringProgressPanel";
@@ -25,6 +26,8 @@ export default function BuildWorkspace({
   onStartAction,
   previousAnswers,
   questionSet,
+  request,
+  selectedAssetIds,
   tailoringChecklist,
   triggers,
 }) {
@@ -61,7 +64,8 @@ export default function BuildWorkspace({
       </div>
 
       <NextBestActions items={nextBestActions} onStart={onStartAction} />
+
+      <FactGroundedMemoryWorkspace request={request} selectedAssetIds={selectedAssetIds} />
     </div>
   );
 }
-

@@ -3298,19 +3298,25 @@ def _collect_tracker_entries(application, user) -> list[dict]:
     snapshot = _load_run_read_snapshot(
         application,
         runs,
-        include_artifacts=True,
         include_reviews=True,
         preserve_job_sets=False,
         review_jobs_only=True,
     )
     job_sets_by_run = snapshot["job_sets"]
     reviews_by_run = snapshot["reviews"]
-    artifacts_by_run = snapshot["artifacts"]
+    tracker_run_ids = {
+        str(run.id)
+        for run in runs
+        for review in reviews_by_run.get(run.id, [])
+        if review.decision == "approved" or str((review.metadata or {}).get("tracker_status") or "")
+    }
+    tracker_runs = [run for run in runs if str(run.id) in tracker_run_ids]
+    artifacts_by_run = _load_artifacts_by_run(application, tracker_runs)
     application_documents, standard_documents = _index_tracker_documents(
         _collect_document_entries(
             application,
             user,
-            run_records=runs,
+            run_records=tracker_runs,
             workspace_records=workspaces,
             job_sets_by_run=job_sets_by_run,
             artifacts_by_run=artifacts_by_run,

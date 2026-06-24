@@ -1189,6 +1189,60 @@ class BackendApiTests(unittest.TestCase):
         tracked_urls = [item["apply_link"] for item in tracker_payload["items"]]
         self.assertEqual(tracked_urls, [posting_url])
 
+    def test_tracker_only_loads_artifacts_for_runs_with_tracker_reviews(self):
+        status, tracked_run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        tracked_run_id = tracked_run_payload["id"]
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+        status, review_payload = self._request(
+            "POST",
+            f"/runs/{tracked_run_id}/reviews",
+            {"job_id": "api_job_1", "decision": "approved", "status": "approved", "reviewer": "tester"},
+        )
+        self.assertEqual(status, 201)
+        self.assertTrue(review_payload["review_id"])
+
+        status, untracked_run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        untracked_run_id = untracked_run_payload["id"]
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+
+        original_loader = self.app.repositories.artifact_store.load_artifacts_for_runs
+        loaded_run_batches: list[list[str]] = []
+
+        def recording_loader(run_ids):
+            batch = [str(run_id) for run_id in run_ids]
+            loaded_run_batches.append(batch)
+            return original_loader(batch)
+
+        self.app.repositories.artifact_store.load_artifacts_for_runs = MagicMock(side_effect=recording_loader)
+        self.addCleanup(
+            lambda: setattr(
+                self.app.repositories.artifact_store,
+                "load_artifacts_for_runs",
+                original_loader,
+            )
+        )
+
+        status, tracker_payload = self._request("GET", "/tracker")
+        self.assertEqual(status, 200)
+        self.assertTrue(any(item["run_id"] == tracked_run_id for item in tracker_payload["items"]))
+        loaded_run_ids = {run_id for batch in loaded_run_batches for run_id in batch}
+        self.assertIn(tracked_run_id, loaded_run_ids)
+        self.assertNotIn(untracked_run_id, loaded_run_ids)
+
     def test_api_supports_deleting_single_job_from_run(self):
         status, run_payload = self._request(
             "POST",

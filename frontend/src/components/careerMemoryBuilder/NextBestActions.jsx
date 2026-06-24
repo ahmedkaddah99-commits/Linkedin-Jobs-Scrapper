@@ -3,7 +3,7 @@ export default function NextBestActions({ items = [], onStart }) {
     <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="font-headline text-lg font-bold text-on-surface">Next Best Actions</h3>
+          <h3 className="font-headline text-lg font-bold text-on-surface">Memory spikes</h3>
           <p className="mt-1 text-sm leading-6 text-on-surface-variant">
             Small targeted prompts usually beat a big blank form.
           </p>
@@ -35,4 +35,3 @@ export default function NextBestActions({ items = [], onStart }) {
     </section>
   );
 }
-
