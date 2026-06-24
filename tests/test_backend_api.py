@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 from backend import create_backend
 from backend.api.server import (
     _build_workspace_cv_preview_profile,
+    _collect_authorized_runs,
     _customer_excluded_reason,
     _resolve_auth_context,
     _store_candidate_asset_upload,
@@ -332,6 +333,56 @@ class BackendApiTests(unittest.TestCase):
         status, error_payload = self._request("GET", f"/runs/{run_a.id}")
         self.assertEqual(status, 403)
         self.assertEqual(error_payload["error"]["code"], "forbidden")
+
+    def test_authorized_run_collection_does_not_requery_workspaces_per_run(self):
+        user_a = self.app.upsert_user(
+            {
+                "email": "owner-a@example.com",
+                "display_name": "Owner A",
+                "role": "viewer",
+            }
+        )
+        user_b = self.app.upsert_user(
+            {
+                "email": "owner-b@example.com",
+                "display_name": "Owner B",
+                "role": "viewer",
+            }
+        )
+        for user, suffix in ((user_a, "a"), (user_b, "b")):
+            workspace_id = f"collector_workspace_{suffix}"
+            self.app.upsert_workspace(
+                {
+                    "id": workspace_id,
+                    "name": f"Collector Workspace {suffix.upper()}",
+                    "workflow_template_id": "api_template_v1",
+                    "workspace_type": "custom",
+                    "owner_user_id": user.user_id,
+                    "sources": [{"id": "manual_source", "connector_id": "curated_job_urls"}],
+                }
+            )
+            self.app.start_run(
+                workspace_id,
+                execute=False,
+                requested_by=f"api:{user.user_id}",
+            )
+
+        original_get_workspace = self.app.repositories.workspace_repository.get_workspace
+        self.app.repositories.workspace_repository.get_workspace = MagicMock(
+            side_effect=AssertionError("authorized run collection should use the loaded workspace map")
+        )
+        self.addCleanup(
+            lambda: setattr(
+                self.app.repositories.workspace_repository,
+                "get_workspace",
+                original_get_workspace,
+            )
+        )
+
+        workspaces, runs = _collect_authorized_runs(self.app, user_a)
+
+        self.assertEqual(set(workspaces), {"collector_workspace_a"})
+        self.assertEqual([run.workspace_id for run in runs], ["collector_workspace_a"])
 
     def test_http_handler_does_not_send_error_response_after_client_disconnect(self):
         handler_class = build_handler(self.app)

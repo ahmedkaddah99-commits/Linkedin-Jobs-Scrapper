@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { PROFILE_PLACEHOLDER_URL } from "../components/CvExportPreview";
+import { profilePlaceholderSrc } from "../components/CvExportPreview";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import {
@@ -143,7 +143,9 @@ function mergeUploadedProfile(currentProfile = {}, parsedProfile = {}) {
 }
 
 function getProfilePhotoSrc(profile = {}) {
-  return profile.photo_data_url || profile.avatar_url || PROFILE_PLACEHOLDER_URL;
+  const photoSrc = profile.photo_data_url || profile.avatar_url || "";
+  if (photoSrc) return photoSrc;
+  return profilePlaceholderSrc(profile.name || "");
 }
 
 function sanitizeHexInput(value) {
@@ -1274,11 +1276,23 @@ export default function SettingsPage() {
                     ref={photoFileInputRef}
                     type="file"
                   />
-                  <img
-                    alt={profile.name || account.display_name}
-                    className="mx-auto h-28 w-28 rounded-full border-4 border-surface-container-lowest object-cover shadow-sm"
-                    src={getProfilePhotoSrc(profile)}
-                  />
+                  {hasProfilePhoto ? (
+                    <img
+                      alt={profile.name || account.display_name}
+                      className="mx-auto h-28 w-28 rounded-full border-4 border-surface-container-lowest object-cover shadow-sm"
+                      src={getProfilePhotoSrc(profile)}
+                    />
+                  ) : (
+                    <div className="mx-auto flex h-28 w-28 items-center justify-center rounded-full bg-surface-container-high text-[2.2rem] font-bold text-on-surface-variant/60 shadow-sm">
+                      {String(profile.name || account.display_name || "?")
+                        .trim()
+                        .split(/\s+/)
+                        .slice(0, 2)
+                        .map((p) => p[0] || "")
+                        .join("")
+                        .toUpperCase() || "?"}
+                    </div>
+                  )}
                   <button
                     className="absolute bottom-0 right-0 rounded-full border border-outline-variant/20 bg-surface-container-lowest p-2 text-on-surface-variant shadow-sm transition-colors hover:text-primary"
                     onClick={() => photoFileInputRef.current?.click()}

@@ -1,5 +1,9 @@
 import { useCallback, useState } from "react";
 import { useSession } from "../context/SessionContext";
+import {
+  TRACKER_INTEGRATION_REQUEST_TIMEOUT_MS,
+  TRACKER_REQUEST_TIMEOUT_MS,
+} from "../lib/trackerLoading";
 import { useApiResource } from "./useApiResource";
 
 const COLUMN_ORDER = ["not_applied", "applied", "interview_invited", "rejected", "offer", "withdrawn", "unknown"];
@@ -30,7 +34,7 @@ export function useTracker() {
     error: trackerError,
     refresh: refreshTracker,
     setData: setTrackerData,
-  } = useApiResource(() => request("/tracker", { timeoutMs: 10000 }), [request], {
+  } = useApiResource(() => request("/tracker", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS }), [request], {
     cacheKey: "tracker:items",
     staleMs: 15000,
     backgroundRefresh: true,
@@ -41,7 +45,7 @@ export function useTracker() {
     error: integrationError,
     refresh: refreshIntegration,
     setData: setIntegrationData,
-  } = useApiResource(() => request("/tracker/email-integration", { timeoutMs: 10000 }), [request], {
+  } = useApiResource(() => request("/tracker/email-integration", { timeoutMs: TRACKER_INTEGRATION_REQUEST_TIMEOUT_MS }), [request], {
     cacheKey: "tracker:email-integration",
     staleMs: 300000,
     backgroundRefresh: true,
@@ -162,7 +166,7 @@ export function useTracker() {
         method: "POST",
         body: fields,
       });
-      const tracker = await request("/tracker");
+      const tracker = await request("/tracker", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS });
       setLastSyncResult(result.result || null);
       setTrackerData(tracker);
       setIntegrationData(result.integration);

@@ -1,5 +1,27 @@
-export const PROFILE_PLACEHOLDER_URL =
-  "https://lh3.googleusercontent.com/aida-public/AB6AXuCEbDDRgu4_REnkpR4gbSify0khawEFxHuQHLBm7Xbd6BmM7LDM-dlp8wOKL0QkSDuiFg7g9UDpYPZnV2uV8Qmu5cxn1MBriXeVmXUz8EGMsgieO36lJEpcY5FCDph2ooQGzwpKRq5qwQluOCY4JB_gfySIUY2T0ozlVp3DEmdnT9aCfADFkC1BXeteFPTxYhtUsABzZLWUOD6fNpuVFVFLjuxpQaEgkpVd_bvuz61H_FfJkq5V_4CESVQjz3tEa3rwtGfzcKHXwJE";
+export function profilePlaceholderSrc(name = "") {
+  return `data:image/svg+xml,${encodeURIComponent(profilePlaceholderSvg(name))}`;
+}
+
+function profilePlaceholderSvg(name = "") {
+  const initials = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0] || "")
+    .join("")
+    .toUpperCase() || "?";
+  const bg = "E0E4E8";
+  const fg = "64748B";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"><rect fill="%23${bg}" width="200" height="200" rx="100"/><text fill="%23${fg}" font-family="system-ui,-apple-system,sans-serif" font-size="80" font-weight="600" x="50%" y="52%" dominant-baseline="middle" text-anchor="middle">${escapeSvgText(initials)}</text></svg>`;
+}
+
+function escapeSvgText(value) {
+  return String(value || "")
+    .replace(/&/g, "\u0026amp;")
+    .replace(/"/g, "\u0026quot;")
+    .replace(/</g, "\u0026lt;")
+    .replace(/>/g, "\u0026gt;");
+}
 
 const DEFAULT_TEMPLATE = {
   id: "plain",
@@ -186,7 +208,7 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
     contacts,
     education:
       education.length > 0 ? education : ["Education and certifications appear here"],
-    photoUrl: firstNonEmpty(profile.photo_data_url, profile.avatar_url, PROFILE_PLACEHOLDER_URL),
+    photoUrl: firstNonEmpty(profile.photo_data_url, profile.avatar_url, profilePlaceholderSrc(profile.name || "")),
   };
 }
 

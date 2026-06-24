@@ -501,8 +501,8 @@ export default function AppShell({ children, muteSidebar = false }) {
         ? "Launch"
         : "Choose plan";
   const shellUser = {
-    name: user?.display_name || user?.email || "Disconnected",
-    subtitle: user?.email || (status === "connected" ? "" : "Backend not connected"),
+    name: user?.display_name || user?.email || "",
+    subtitle: user?.email || "",
   };
   const topRibbonItems = secondaryTopRibbonItems.filter((item) => !item.adminOnly || isAdmin);
 

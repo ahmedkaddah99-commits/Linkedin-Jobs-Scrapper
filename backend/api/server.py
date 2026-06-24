@@ -2720,16 +2720,36 @@ def _build_settings_payload(application, user) -> dict:
     }
 
 
+def _user_can_access_workspace_record(user, workspace) -> bool:
+    if user.role == ROLE_ADMIN:
+        return True
+    normalized_workspace_id = str(getattr(workspace, "id", "") or "").strip()
+    if not normalized_workspace_id:
+        return False
+    if str(getattr(workspace, "owner_user_id", "") or "").strip() == str(user.user_id or "").strip():
+        return True
+    allowed = {str(item).strip() for item in user.allowed_workspace_ids if str(item).strip()}
+    return normalized_workspace_id in allowed
+
+
+def _user_can_access_run_from_workspace_map(user, run, workspaces: Mapping[str, object]) -> bool:
+    if user.role == ROLE_ADMIN:
+        return True
+    if str(getattr(run, "normalized_user_id", "") or "").strip() != str(user.user_id or "").strip():
+        return False
+    return str(getattr(run, "workspace_id", "") or "").strip() in workspaces
+
+
 def _collect_authorized_runs(application, user, *, workspace_id: str = "") -> tuple[dict[str, object], list[object]]:
     workspaces = {
         workspace.id: workspace
         for workspace in application.list_workspaces()
-        if application.user_can_access_workspace(user, workspace.id)
+        if _user_can_access_workspace_record(user, workspace)
     }
     runs = [
         run
         for run in application.list_runs(limit=1000, offset=0, status="", workspace_id=workspace_id)
-        if application.user_can_access_run(user, run)
+        if _user_can_access_run_from_workspace_map(user, run, workspaces)
     ]
     return workspaces, runs
 
