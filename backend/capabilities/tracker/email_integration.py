@@ -1,10 +1,11 @@
-from __future__ import annotations
+ issue from __future__ import annotations
 
 import base64
 import html
 import imaplib
 import re
 from dataclasses import dataclass
+from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 from email import message_from_bytes
 from email.message import Message
@@ -20,7 +21,6 @@ from backend.capabilities.tracker.google_oauth import (
 from backend.domain.phase0_contracts import (
     normalize_application_status,
     normalize_gmail_application_detection,
-    normalize_gmail_scan_window,
 )
 from backend.domain.models import utc_now_iso, utc_plus_seconds
 from backend.domain.tracker import (
@@ -31,8 +31,11 @@ from backend.domain.tracker import (
 
 TRACKER_EMAIL_INTEGRATION_METADATA_KEY = "tracker_email_integration"
 
-_MAX_PROCESSED_MESSAGE_IDS = 250
+_MAX_PROCESSED_MESSAGE_IDS = 5000
 _MAX_PENDING_REVIEW_DETECTIONS = 50
+_EMAIL_SYNC_LOCK_EXPIRY_SECONDS = 900  # 15 minutes
+_EMAIL_SYNC_COOLDOWN_SECONDS = 120  # 2 minutes between login-triggered syncs
+_GMAIL_PAGE_SIZE = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +265,21 @@ def _normalize_pending_review_detections(payload: Any) -> list[dict[str, Any]]:
     return deduped[:_MAX_PENDING_REVIEW_DETECTIONS]
 
 
+def _validate_email_sync_start_date(value: Any) -> str:
+    """Validate and normalize an email sync start date to YYYY-MM-DD format."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = date_type.fromisoformat(text)
+    except (ValueError, TypeError):
+        raise ValueError("email_sync_start_date must be a valid date in YYYY-MM-DD format.")
+    today = date_type.today()
+    if parsed > today:
+        raise ValueError("email_sync_start_date must not be in the future.")
+    return parsed.isoformat()
+
+
 def normalize_tracker_email_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = dict(payload or {})
     provider_id = str(raw.get("provider_id") or "gmail").strip().lower() or "gmail"
@@ -282,10 +300,15 @@ def normalize_tracker_email_config(payload: Mapping[str, Any] | None) -> dict[st
         imap_port = int(raw.get("imap_port") or preset.imap_port or 993)
     except (TypeError, ValueError):
         imap_port = preset.imap_port or 993
-    try:
-        max_messages = max(1, min(100, int(raw.get("max_messages") or 40)))
-    except (TypeError, ValueError):
-        max_messages = 40
+    email_sync_start_date = str(raw.get("email_sync_start_date") or "").strip()
+    if email_sync_start_date:
+        try:
+            email_sync_start_date = _validate_email_sync_start_date(email_sync_start_date)
+        except ValueError:
+            email_sync_start_date = ""
+    email_sync_enabled = bool(raw.get("email_sync_enabled") or False)
+    if email_sync_enabled and not email_sync_start_date:
+        email_sync_enabled = False
     processed_message_ids = [
         str(item).strip()
         for item in raw.get("processed_message_ids") or []
@@ -299,8 +322,13 @@ def normalize_tracker_email_config(payload: Mapping[str, Any] | None) -> dict[st
         "imap_host": imap_host,
         "imap_port": max(1, imap_port),
         "folder": str(raw.get("folder") or "INBOX").strip() or "INBOX",
-        "max_messages": max_messages,
-        "scan_window": normalize_gmail_scan_window(raw.get("scan_window")),
+        "email_sync_start_date": email_sync_start_date,
+        "email_sync_enabled": email_sync_enabled,
+        "last_email_sync_at": str(raw.get("last_email_sync_at") or "").strip(),
+        "next_email_sync_at": str(raw.get("next_email_sync_at") or "").strip(),
+        "email_sync_status": str(raw.get("email_sync_status") or "idle").strip() or "idle",
+        "email_sync_error": str(raw.get("email_sync_error") or "").strip(),
+        "last_processed_history_id": str(raw.get("last_processed_history_id") or "").strip(),
         "password_secret_id": str(raw.get("password_secret_id") or "").strip(),
         "access_token_secret_id": str(raw.get("access_token_secret_id") or "").strip(),
         "refresh_token_secret_id": str(raw.get("refresh_token_secret_id") or "").strip(),
@@ -356,8 +384,12 @@ def build_public_tracker_email_config(
         "imap_host": config["imap_host"],
         "imap_port": config["imap_port"],
         "folder": config["folder"],
-        "max_messages": config["max_messages"],
-        "scan_window": config["scan_window"],
+        "email_sync_start_date": config["email_sync_start_date"],
+        "email_sync_enabled": config["email_sync_enabled"],
+        "last_email_sync_at": config["last_email_sync_at"],
+        "next_email_sync_at": config["next_email_sync_at"],
+        "email_sync_status": config["email_sync_status"],
+        "email_sync_error": config["email_sync_error"],
         "connected": connected,
         "has_password": bool(has_password),
         "has_access_token": bool(has_access_token),
@@ -423,9 +455,9 @@ def sync_tracker_email(
         password=password,
         folder=normalized["folder"],
     )
-    messages = client.fetch_recent_messages(
-        limit=int(normalized["max_messages"]),
-        scan_window=str(normalized.get("scan_window") or "last_1_month"),
+    messages = client.fetch_all_messages(
+        start_date=normalized.get("email_sync_start_date") or "",
+        processed_ids=set(normalized.get("processed_message_ids") or []),
     )
     return _process_tracker_messages(
         application=application,
@@ -436,6 +468,201 @@ def sync_tracker_email(
     )
 
 
+def _resolve_email_sync_access_token(application, config: dict[str, Any]) -> str:
+    """Resolve or refresh a Google access token and return it."""
+    from backend.capabilities.tracker.google_oauth import refresh_google_tracker_access_token
+
+    access_token = str(config.get("_resolved_access_token") or "").strip()
+    if access_token:
+        expires_at = str(config.get("access_token_expires_at") or "").strip()
+        if expires_at:
+            try:
+                if datetime.fromisoformat(expires_at) > datetime.now(timezone.utc) + timedelta(minutes=1):
+                    return access_token
+            except (ValueError, TypeError):
+                pass
+
+    refresh_token = str(config.get("_resolved_refresh_token") or "").strip()
+    if not refresh_token:
+        raise ValueError("No refresh token available for Gmail sync.")
+
+    token_payload = refresh_google_tracker_access_token(refresh_token=refresh_token)
+    new_access_token = str(token_payload.get("access_token") or "").strip()
+    if not new_access_token:
+        raise ValueError("Google did not return an access token during refresh.")
+    return new_access_token
+
+
+def sync_user_inbox(
+    *,
+    application,
+    user_id: str,
+    trigger: str,
+) -> dict[str, Any]:
+    """Central sync service for all triggers: manual, login, daily.
+
+    Handles settings loading, OAuth token refresh, lock acquisition,
+    date-boundary calculation, paginated Gmail fetch, deduplication,
+    tracker updates, checkpoint saving, status updates, and lock release.
+    """
+    user = application.get_user(user_id)
+    current_config = dict((user.metadata or {}).get(TRACKER_EMAIL_INTEGRATION_METADATA_KEY) or {})
+    if not current_config:
+        raise ValueError("No email integration configured.")
+
+    normalized = normalize_tracker_email_config(current_config)
+    if normalized["auth_strategy"] != "google_oauth":
+        raise ValueError("Only Google OAuth is supported for automatic inbox sync.")
+    if not normalized.get("email_sync_start_date"):
+        raise ValueError("A start date must be configured before syncing.")
+
+    # Acquire per-user lock via status check
+    current_status = str(normalized.get("email_sync_status") or "idle").strip()
+    if current_status == "syncing":
+        existing_sync_at = str(normalized.get("last_email_sync_at") or "").strip()
+        if existing_sync_at:
+            try:
+                last_sync_dt = datetime.fromisoformat(existing_sync_at)
+                if datetime.now(timezone.utc) - last_sync_dt < timedelta(seconds=_EMAIL_SYNC_LOCK_EXPIRY_SECONDS):
+                    return {"status": "already_syncing", "message": "A sync is already in progress."}
+            except (ValueError, TypeError):
+                pass
+
+    # For login trigger, apply cooldown
+    if trigger == "login":
+        last_sync = str(normalized.get("last_email_sync_at") or "").strip()
+        if last_sync:
+            try:
+                if datetime.now(timezone.utc) - datetime.fromisoformat(last_sync) < timedelta(seconds=_EMAIL_SYNC_COOLDOWN_SECONDS):
+                    return {"status": "cooling_down", "message": "A sync was completed recently. Skipping login-triggered sync."}
+            except (ValueError, TypeError):
+                pass
+
+    # Set status to syncing
+    now_iso = utc_now_iso()
+    normalized["email_sync_status"] = "syncing"
+    normalized["email_sync_error"] = ""
+    normalized["updated_at"] = now_iso
+    _persist_config_in_user(application, user, normalized)
+
+    try:
+        # Resolve tokens
+        from backend.capabilities.tracker.google_oauth import refresh_google_tracker_access_token
+
+        refresh_token_val = _resolve_tracker_email_refresh_token_from_app(application, normalized)
+        if not refresh_token_val:
+            raise ValueError("No refresh token available. Please reconnect Google.")
+
+        token_payload = refresh_google_tracker_access_token(refresh_token=refresh_token_val)
+        access_token = str(token_payload.get("access_token") or "").strip()
+        if not access_token:
+            raise ValueError("Google did not return an access token during refresh.")
+
+        normalized["access_token_secret_id"] = _upsert_tracker_email_token_secret(
+            application, user, normalized, access_token, "access"
+        )
+        normalized["access_token_expires_at"] = utc_plus_seconds(int(token_payload.get("expires_in") or 3600))
+
+        # Fetch all messages paginated
+        start_date = str(normalized.get("email_sync_start_date") or "").strip()
+        processed_ids = set(normalized.get("processed_message_ids") or [])
+        messages, history_id = _fetch_all_gmail_messages_paginated(
+            access_token=access_token,
+            start_date=start_date,
+            processed_ids=processed_ids,
+            last_history_id=str(normalized.get("last_processed_history_id") or ""),
+        )
+
+        tracker_items = _collect_tracker_entries(application, user)
+
+        result = _process_tracker_messages(
+            application=application,
+            user=user,
+            tracker_items=tracker_items,
+            messages=messages,
+            normalized=normalized,
+        )
+
+        # Update checkpoints
+        updated_config = dict(normalized)
+        updated_config["processed_message_ids"] = result["processed_message_ids"]
+        updated_config["last_sync_at"] = result["synced_at"]
+        updated_config["updated_at"] = result["synced_at"]
+        updated_config["last_error"] = ""
+        updated_config["last_sync_summary"] = dict(result["summary"] or {})
+        updated_config["pending_detections"] = _merge_pending_tracker_detections(
+            existing=updated_config.get("pending_detections") or [],
+            additions=[
+                detection
+                for detection in result.get("detections") or []
+                if isinstance(detection, dict)
+                and str(detection.get("status", {}).get("approval_state") or "") == "pending_review"
+            ],
+        )
+        updated_config["authorization_state"] = "authorized"
+        if result.get("history_id"):
+            updated_config["history_id"] = str(result.get("history_id") or "")
+        updated_config["last_processed_history_id"] = str(history_id or "")
+        updated_config["email_sync_status"] = "success"
+        updated_config["email_sync_error"] = ""
+        updated_config["last_email_sync_at"] = result["synced_at"]
+        updated_config["next_email_sync_at"] = utc_plus_seconds(24 * 3600)
+
+        _persist_config_in_user(application, user, updated_config)
+
+        return {
+            "status": "success",
+            "trigger": trigger,
+            "result": result,
+        }
+
+    except Exception as exc:
+        error_text = str(exc)
+        failed_config = dict(normalized)
+        failed_config["email_sync_status"] = "error"
+        failed_config["email_sync_error"] = error_text
+        failed_config["updated_at"] = utc_now_iso()
+        if "invalid_grant" in error_text.lower() or "expired or revoked" in error_text.lower():
+            failed_config["connected"] = False
+            failed_config["authorization_state"] = "reauthorization_required"
+        _persist_config_in_user(application, user, failed_config)
+        raise
+
+
+def _resolve_tracker_email_refresh_token_from_app(application, config: dict[str, Any]) -> str:
+    """Resolve the refresh token from the secrets store."""
+    refresh_token_secret_id = str(config.get("refresh_token_secret_id") or "").strip()
+    if not refresh_token_secret_id:
+        return ""
+    try:
+        secret = application.get_secret(refresh_token_secret_id)
+        return str(secret.get("value") or "").strip()
+    except KeyError:
+        return ""
+
+
+def _upsert_tracker_email_token_secret(
+    application,
+    user,
+    config: dict[str, Any],
+    token_value: str,
+    kind: str,
+) -> str:
+    """Store an OAuth token as a secret and return its secret ID."""
+    existing_secret_id = str(config.get(f"{kind}_token_secret_id") or "").strip()
+    secret = {
+        "value": token_value,
+        "provider": "google_oauth",
+        "workspace_id": "",
+        "secret_id": existing_secret_id or f"tracker_{kind}_token_{user.user_id}",
+    }
+    if existing_secret_id:
+        application.upsert_secret(secret)
+    else:
+        application.create_secret(secret)
+    return secret["secret_id"]
+
+
 def sync_tracker_gmail(
     *,
     application,
@@ -444,16 +671,22 @@ def sync_tracker_gmail(
     config: Mapping[str, Any],
     access_token: str,
 ) -> dict[str, Any]:
+    """Legacy sync path. Prefer sync_user_inbox for all trigger types."""
     normalized = normalize_tracker_email_config(config)
     if normalized["auth_strategy"] != "google_oauth":
         raise ValueError("This inbox is not configured for Google OAuth.")
     if not access_token:
         raise ValueError("A Google access token is required before syncing Gmail.")
-    client = GmailMailboxClient(access_token=access_token)
-    messages, history_id = client.fetch_recent_messages(
-        limit=int(normalized["max_messages"]),
-        scan_window=str(normalized.get("scan_window") or "last_1_month"),
+
+    start_date = str(normalized.get("email_sync_start_date") or "").strip()
+    processed_ids = set(normalized.get("processed_message_ids") or [])
+    messages, history_id = _fetch_all_gmail_messages_paginated(
+        access_token=access_token,
+        start_date=start_date,
+        processed_ids=processed_ids,
+        last_history_id=str(normalized.get("last_processed_history_id") or ""),
     )
+
     result = _process_tracker_messages(
         application=application,
         user=user,
@@ -463,6 +696,131 @@ def sync_tracker_gmail(
     )
     result["history_id"] = history_id
     return result
+
+
+def _fetch_all_gmail_messages_paginated(
+    *,
+    access_token: str,
+    start_date: str,
+    processed_ids: set[str],
+    last_history_id: str = "",
+) -> tuple[list[TrackerMailboxMessage], str]:
+    """Fetch all matching Gmail messages using pagination, from start_date onward.
+
+    Continues fetching pages until no more results are available.
+    Returns all messages and the latest history_id seen.
+    """
+    query_text = _gmail_query_for_start_date(start_date)
+    all_messages: list[TrackerMailboxMessage] = []
+    latest_history_id = str(last_history_id or "").strip()
+    page_token = ""
+    page_count = 0
+
+    while True:
+        page_count += 1
+        try:
+            listing = list_google_gmail_messages(
+                access_token=access_token,
+                limit=_GMAIL_PAGE_SIZE,
+                query_text=query_text,
+                page_token=page_token,
+            )
+        except ValueError as exc:
+            error_text = str(exc)
+            if query_text and ("400" in error_text or "invalid query" in error_text.lower()):
+                listing = list_google_gmail_messages(
+                    access_token=access_token,
+                    limit=_GMAIL_PAGE_SIZE,
+                    query_text="",
+                    page_token=page_token,
+                )
+            else:
+                raise
+
+        message_refs = listing.get("messages") or []
+        for item in message_refs:
+            if not isinstance(item, Mapping):
+                continue
+            message_id = str(item.get("id") or "").strip()
+            if not message_id or message_id in processed_ids:
+                continue
+            try:
+                raw_message = get_google_gmail_message(access_token=access_token, message_id=message_id)
+            except ValueError:
+                continue
+            message_bytes = _decode_gmail_raw_payload(str(raw_message.get("raw") or ""))
+            if not message_bytes:
+                continue
+            parsed = message_from_bytes(message_bytes, policy=default)
+            message = TrackerMailboxMessage(
+                message_id=_build_message_id(parsed, fallback=message_id),
+                subject=str(parsed.get("subject") or "").strip(),
+                from_address=parseaddr(str(parsed.get("from") or ""))[1],
+                sent_at=_parse_message_date(str(parsed.get("date") or "")),
+                text=_extract_text_body(parsed),
+            )
+            if start_date and not _message_on_or_after_date(message, start_date):
+                continue
+            all_messages.append(message)
+            history_id = str(raw_message.get("historyId") or "")
+            if history_id:
+                latest_history_id = history_id
+
+        page_token = str(listing.get("nextPageToken") or "").strip()
+        if not page_token:
+            break
+
+    return all_messages, latest_history_id
+
+
+def _gmail_query_for_start_date(start_date: str) -> str:
+    """Build a Gmail search query for emails on or after the start date."""
+    keyword_group = "{" + " ".join(_GMAIL_APPLICATION_QUERY_TERMS) + "}"
+    start_date = str(start_date or "").strip()
+    if not start_date:
+        return f"in:inbox {keyword_group}"
+    try:
+        parsed = date_type.fromisoformat(start_date)
+    except (ValueError, TypeError):
+        return f"in:inbox {keyword_group}"
+    date_str = parsed.strftime("%Y/%m/%d")
+    return f"in:inbox after:{date_str} {keyword_group}"
+
+
+def _message_on_or_after_date(message: TrackerMailboxMessage, start_date: str) -> bool:
+    """Check if a message was sent on or after the specified date."""
+    if not message.sent_at or not start_date:
+        return True
+    try:
+        start_dt = datetime.fromisoformat(start_date)
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+        else:
+            start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        sent_dt = datetime.fromisoformat(message.sent_at)
+        if sent_dt.tzinfo is None:
+            sent_dt = sent_dt.replace(tzinfo=timezone.utc)
+        return sent_dt >= start_dt
+    except (ValueError, TypeError):
+        return True
+
+
+def _collect_tracker_entries(application, user) -> list[dict[str, Any]]:
+    """Collect all tracker entries for a user."""
+    try:
+        from backend.api.routes.tracker import _collect_tracker_entries as _collect
+        return _collect(application, user)
+    except ImportError:
+        return []
+
+
+def _persist_config_in_user(application, user, config: dict[str, Any]) -> None:
+    """Persist the email integration config into the user's metadata."""
+    metadata = dict(user.metadata or {})
+    metadata[TRACKER_EMAIL_INTEGRATION_METADATA_KEY] = dict(config)
+    user.metadata = metadata
+    user.updated_at = utc_now_iso()
+    application.repositories.auth_repository.upsert_user(user)
 
 
 def begin_google_tracker_authorization(
@@ -582,24 +940,37 @@ class ImapMailboxClient:
             except Exception:
                 pass
 
-    def fetch_recent_messages(self, *, limit: int, scan_window: str = "last_1_month") -> list[TrackerMailboxMessage]:
+    def fetch_all_messages(
+        self,
+        *,
+        start_date: str = "",
+        processed_ids: set[str] | None = None,
+    ) -> list[TrackerMailboxMessage]:
+        """Fetch all IMAP messages since start_date, excluding already processed IDs."""
+        processed = processed_ids or set()
         mailbox = imaplib.IMAP4_SSL(self.host, self.port)
         try:
             mailbox.login(self.email_address, self.password)
             status, _ = mailbox.select(self.folder, readonly=True)
             if status != "OK":
                 raise ValueError(f"Unable to open folder '{self.folder}'.")
-            since_date = _scan_window_since_date(scan_window)
-            if since_date:
-                search_status, payload = mailbox.search(None, "SINCE", since_date.strftime("%d-%b-%Y"))
+
+            if start_date:
+                try:
+                    since_dt = datetime.fromisoformat(start_date)
+                    search_status, payload = mailbox.search(
+                        None, "SINCE", since_dt.strftime("%d-%b-%Y")
+                    )
+                except (ValueError, TypeError):
+                    search_status, payload = mailbox.search(None, "ALL")
             else:
                 search_status, payload = mailbox.search(None, "ALL")
+
             if search_status != "OK":
                 raise ValueError("Unable to search the inbox.")
             message_ids = (payload[0] or b"").split()
-            selected_ids = message_ids[-max(1, int(limit)) :]
             messages: list[TrackerMailboxMessage] = []
-            for message_id in selected_ids:
+            for message_id in message_ids:
                 fetch_status, fetched = mailbox.fetch(message_id, "(RFC822)")
                 if fetch_status != "OK":
                     continue
@@ -607,15 +978,16 @@ class ImapMailboxClient:
                 if not message_bytes:
                     continue
                 parsed = message_from_bytes(message_bytes, policy=default)
-                messages.append(
-                    TrackerMailboxMessage(
-                        message_id=_build_message_id(parsed, fallback=str(message_id.decode("ascii", "ignore"))),
-                        subject=str(parsed.get("subject") or "").strip(),
-                        from_address=parseaddr(str(parsed.get("from") or ""))[1],
-                        sent_at=_parse_message_date(str(parsed.get("date") or "")),
-                        text=_extract_text_body(parsed),
-                    )
+                msg = TrackerMailboxMessage(
+                    message_id=_build_message_id(parsed, fallback=str(message_id.decode("ascii", "ignore"))),
+                    subject=str(parsed.get("subject") or "").strip(),
+                    from_address=parseaddr(str(parsed.get("from") or ""))[1],
+                    sent_at=_parse_message_date(str(parsed.get("date") or "")),
+                    text=_extract_text_body(parsed),
                 )
+                if msg.message_id in processed:
+                    continue
+                messages.append(msg)
             return messages
         except imaplib.IMAP4.error as exc:
             raise ValueError(f"IMAP sync failed: {exc}") from exc
@@ -624,54 +996,6 @@ class ImapMailboxClient:
                 mailbox.logout()
             except Exception:
                 pass
-
-
-class GmailMailboxClient:
-    def __init__(self, *, access_token: str) -> None:
-        self.access_token = str(access_token or "").strip()
-
-    def fetch_recent_messages(self, *, limit: int, scan_window: str = "last_1_month") -> tuple[list[TrackerMailboxMessage], str]:
-        query_text = _gmail_query_for_scan_window(scan_window)
-        try:
-            listing = list_google_gmail_messages(
-                access_token=self.access_token,
-                limit=limit,
-                query_text=query_text,
-            )
-        except ValueError as exc:
-            error_text = str(exc)
-            if not query_text or ("400" not in error_text and "invalid query" not in error_text.lower()):
-                raise
-            listing = list_google_gmail_messages(
-                access_token=self.access_token,
-                limit=limit,
-                query_text="",
-            )
-        message_refs = listing.get("messages") or []
-        messages: list[TrackerMailboxMessage] = []
-        latest_history_id = ""
-        for item in message_refs:
-            if not isinstance(item, Mapping):
-                continue
-            message_id = str(item.get("id") or "").strip()
-            if not message_id:
-                continue
-            raw_message = get_google_gmail_message(access_token=self.access_token, message_id=message_id)
-            message_bytes = _decode_gmail_raw_payload(str(raw_message.get("raw") or ""))
-            if not message_bytes:
-                continue
-            parsed = message_from_bytes(message_bytes, policy=default)
-            messages.append(
-                TrackerMailboxMessage(
-                    message_id=_build_message_id(parsed, fallback=message_id),
-                    subject=str(parsed.get("subject") or "").strip(),
-                    from_address=parseaddr(str(parsed.get("from") or ""))[1],
-                    sent_at=_parse_message_date(str(parsed.get("date") or "")),
-                    text=_extract_text_body(parsed),
-                )
-            )
-            latest_history_id = str(raw_message.get("historyId") or latest_history_id or "").strip()
-        return messages, latest_history_id
 
 
 def _process_tracker_messages(
@@ -690,7 +1014,8 @@ def _process_tracker_messages(
     seen_new_ids: list[str] = []
 
     for message in sorted(messages, key=lambda item: item.sent_at or ""):
-        if not _message_in_scan_window(message, str(normalized.get("scan_window") or "last_1_month")):
+        start_date = str(normalized.get("email_sync_start_date") or "").strip()
+        if start_date and not _message_on_or_after_date(message, start_date):
             skipped_messages += 1
             continue
         if message.message_id in processed_ids:
@@ -712,7 +1037,7 @@ def _process_tracker_messages(
         seen_new_ids.append(message.message_id)
         detection_payload = {
             "detection_id": f"gmail::{message.message_id}",
-            "scan_window": normalized.get("scan_window"),
+            "email_sync_start_date": normalized.get("email_sync_start_date"),
             "message_id": message.message_id,
             "subject": message.subject,
             "from_address": message.from_address,
@@ -919,90 +1244,41 @@ def _parse_message_date(value: str) -> str:
         return ""
 
 
-def _scan_window_since_date(scan_window: str) -> datetime | None:
-    normalized = normalize_gmail_scan_window(scan_window)
-    now = datetime.now(timezone.utc)
-    if normalized == "now":
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
-    if normalized == "last_1_month":
-        return now - timedelta(days=30)
-    if normalized == "last_2_months":
-        return now - timedelta(days=60)
-    if normalized == "last_3_months":
-        return now - timedelta(days=90)
-    return None
-
-
-def _gmail_query_for_scan_window(scan_window: str) -> str:
-    normalized = normalize_gmail_scan_window(scan_window)
-    keyword_group = "{" + " ".join(_GMAIL_APPLICATION_QUERY_TERMS) + "}"
-    if normalized == "now":
-        return f"newer_than:1d {keyword_group}"
-    if normalized == "last_1_month":
-        return f"newer_than:30d {keyword_group}"
-    if normalized == "last_2_months":
-        return f"newer_than:60d {keyword_group}"
-    if normalized == "last_3_months":
-        return f"newer_than:90d {keyword_group}"
-    if not _scan_window_since_date(scan_window):
-        return ""
-    return f"newer_than:30d {keyword_group}"
-
-
-def _message_in_scan_window(message: TrackerMailboxMessage, scan_window: str) -> bool:
-    since_date = _scan_window_since_date(scan_window)
-    if not since_date or not message.sent_at:
-        return True
-    try:
-        sent_at = datetime.fromisoformat(message.sent_at)
-        if sent_at.tzinfo is None:
-            sent_at = sent_at.replace(tzinfo=timezone.utc)
-        return sent_at.astimezone(timezone.utc) >= since_date
-    except Exception:
-        return True
-
-
-def _extract_text_body(message: Message) -> str:
-    plain_parts: list[str] = []
-    html_parts: list[str] = []
-    if message.is_multipart():
-        for part in message.walk():
-            if part.get_content_disposition() == "attachment":
-                continue
-            content_type = part.get_content_type()
-            try:
-                payload = part.get_payload(decode=True) or b""
-                charset = part.get_content_charset() or "utf-8"
-                text = payload.decode(charset, errors="ignore")
-            except Exception:
-                continue
-            if content_type == "text/plain":
-                plain_parts.append(text)
-            elif content_type == "text/html":
-                html_parts.append(text)
-    else:
-        content_type = message.get_content_type()
-        try:
-            payload = message.get_payload(decode=True) or b""
-            charset = message.get_content_charset() or "utf-8"
-            text = payload.decode(charset, errors="ignore")
-        except Exception:
-            text = ""
-        if content_type == "text/plain":
-            plain_parts.append(text)
-        elif content_type == "text/html":
-            html_parts.append(text)
-    body = "\n".join(part for part in plain_parts if part.strip())
-    if body.strip():
-        return body
-    return _html_to_text("\n".join(part for part in html_parts if part.strip()))
-
-
-def _html_to_text(value: str) -> str:
-    without_breaks = re.sub(r"(?i)<br\s*/?>", "\n", value)
-    without_blocks = re.sub(r"(?i)</(p|div|li|tr|h[1-6])>", "\n", without_breaks)
-    without_tags = re.sub(r"<[^>]+>", " ", without_blocks)
-    return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
+def _merge_pending_tracker_detections(
+    *,
+    existing: list[dict[str, Any]],
+    additions: list[dict[str, Any]] | None = None,
+    remove_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Merge new detections into the pending list, respecting dedup and limits."""
+    seen: set[str] = set()
+    for detection in existing:
+        detection_id = _gmail_detection_key(detection)
+        if detection_id:
+            seen.add(detection_id)
+    if remove_ids:
+        seen.difference_update(remove_ids)
+        existing = [
+            detection
+            for detection in existing
+            if _gmail_detection_key(detection) not in remove_ids
+        ]
+    for detection in additions or []:
+        detection_id = _gmail_detection_key(detection)
+        if not detection_id or detection_id in seen:
+            continue
+        seen.add(detection_id)
+        existing.append(detection)
+    existing.sort(key=lambda item: str(item.get("source_email", {}).get("sent_at") or ""), reverse=True)
+    deduped: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for detection in existing:
+        detection_id = _gmail_detection_key(detection)
+        if not detection_id or detection_id in seen_ids:
+            continue
+        seen_ids.add(detection_id)
+        deduped.append(detection)
+    return deduped[:_MAX_PENDING_REVIEW_DETECTIONS]
 
 
 def _normalized_text(value: str) -> str:

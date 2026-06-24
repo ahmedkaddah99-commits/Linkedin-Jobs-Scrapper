@@ -782,6 +782,42 @@ def _apply_workspace_ownership_migration(connection: DatabaseConnection) -> None
     )
 
 
+def _apply_email_sync_start_date_migration(connection: DatabaseConnection) -> None:
+    """015: Add email sync start date, status, and scheduling columns. Remove scan_depth/max_messages."""
+    _ensure_user_column(connection, "email_sync_enabled", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_user_column(connection, "email_sync_start_date", "TEXT NOT NULL DEFAULT ''")
+    _ensure_user_column(connection, "last_email_sync_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_user_column(connection, "next_email_sync_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_user_column(connection, "email_sync_status", "TEXT NOT NULL DEFAULT 'idle'")
+    _ensure_user_column(connection, "email_sync_error", "TEXT NOT NULL DEFAULT ''")
+    _ensure_user_column(connection, "last_processed_history_id", "TEXT NOT NULL DEFAULT ''")
+
+    for row in connection.execute("SELECT user_id, payload_json FROM users").fetchall():
+        payload = json.loads(str(row["payload_json"] or "{}"))
+        tracker_config = dict(payload.get("tracker_email_integration") or {})
+        if not tracker_config:
+            continue
+        tracker_config.pop("max_messages", None)
+        tracker_config.pop("scan_window", None)
+        tracker_config["email_sync_start_date"] = ""
+        tracker_config["email_sync_enabled"] = False
+        tracker_config["last_email_sync_at"] = ""
+        tracker_config["next_email_sync_at"] = ""
+        tracker_config["email_sync_status"] = "idle"
+        tracker_config["email_sync_error"] = ""
+        tracker_config["last_processed_history_id"] = ""
+        payload["tracker_email_integration"] = tracker_config
+        connection.execute(
+            "UPDATE users SET payload_json = ? WHERE user_id = ?",
+            (json.dumps(payload, ensure_ascii=False), str(row["user_id"])),
+        )
+
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_users_email_sync_enabled_next_at "
+        "ON users(email_sync_enabled, next_email_sync_at)"
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -865,5 +901,11 @@ MIGRATIONS = (
         "Add workspace ownership and safely backfill legacy workspaces.",
         _apply_workspace_ownership_migration,
         dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "015_email_sync_start_date",
+        "Add email sync start date, status, and scheduling columns. Remove scan_depth.",
+        _apply_email_sync_start_date_migration,
+        dependencies=(_table_columns, _ensure_user_column),
     ),
 )

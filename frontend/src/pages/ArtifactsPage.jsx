@@ -15,6 +15,7 @@ const VIEW_LIBRARY = "library";
 const VIEW_MEMORY = "memory";
 const LEGACY_VIEW_CANVAS = "canvas";
 const DEFAULT_UPLOAD_KIND = "uploaded_document";
+const DOCUMENTS_REQUEST_TIMEOUT_MS = 60000;
 const MASTER_CAREER_PROFILE_KIND = "master_career_profile";
 const LEGACY_GENERAL_ASSET_KINDS = new Set([
   MASTER_CAREER_PROFILE_KIND,
@@ -156,7 +157,7 @@ export default function DocumentsPage() {
     loading: documentsLoading,
     error: documentsError,
     refresh: refreshDocuments,
-  } = useApiResource(() => request("/documents?limit=500", { timeoutMs: 10000 }), [request], {
+  } = useApiResource(() => request("/documents?limit=500", { timeoutMs: DOCUMENTS_REQUEST_TIMEOUT_MS }), [request], {
     cacheKey: "documents:all",
     staleMs: 30000,
     backgroundRefresh: true,

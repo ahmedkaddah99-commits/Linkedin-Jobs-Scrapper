@@ -159,12 +159,12 @@ export function useTracker() {
     }
   }
 
-  async function syncEmailIntegration(fields = {}) {
+  async function syncEmailIntegration() {
     setIntegrationBusy("sync");
     try {
       const result = await request("/tracker/email-integration/sync", {
         method: "POST",
-        body: fields,
+        body: { trigger: "manual" },
       });
       const tracker = await request("/tracker", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS });
       setLastSyncResult(result.result || null);
