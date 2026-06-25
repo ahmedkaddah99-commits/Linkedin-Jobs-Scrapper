@@ -9,7 +9,11 @@ from docx import Document
 
 from backend.capabilities.tailored_documents.application_requirements import detect_application_requirements
 from backend.capabilities.tailored_documents.cv_structuring import ensure_structured_cv_fields
-from backend.capabilities.tailored_documents.documents import _resolve_profile_link_url, _stage4_generation_fingerprint
+from backend.capabilities.tailored_documents.documents import (
+    _resolve_candidate_identity,
+    _resolve_profile_link_url,
+    _stage4_generation_fingerprint,
+)
 from backend.capabilities.tailored_documents.generation import build_docs_prompt, generate_docs_for_job
 from backend.capabilities.tailored_documents.language_rules import detect_reasons
 from backend.capabilities.tailored_documents.modes import resolve_cv_generation_prompt_settings
@@ -735,6 +739,91 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
                 "Designed AI-enabled workflows for support analytics.",
             ],
         )
+
+    def test_keeps_baseline_role_headers_when_generated_title_is_promoted_bullet(self):
+        record = {
+            "title": "Decision Scientist Supply",
+            "company": "Vinted",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Technology Transformation & Strategy Consulting (Internship)",
+                    "company": "Allianz Technology",
+                    "period": "May 2025 - Sep 2025",
+                    "bullets": [
+                        "Contributed to enterprise AI transformation programs.",
+                        "Produced structured analyses and presentations for senior stakeholders.",
+                    ],
+                },
+                {
+                    "role_title": "Produced structured analyses and presentations for senior stakeholders",
+                    "company": "Business Transformation & AI Associate (Internship)",
+                    "period": "Nov 2024 - Apr 2025",
+                    "bullets": [
+                        "Identified and prioritized AI use cases across business units.",
+                        "Established feedback loops to improve solution adoption and performance.",
+                    ],
+                },
+            ],
+            "cv_skills": ["Python"],
+        }
+        cv_text = "\n".join(
+            [
+                "Professional Experience",
+                "Technology Transformation & Strategy Consulting (Internship)",
+                "Allianz Technology | Germany | May 2025 - Sep 2025",
+                "Contributed to enterprise AI transformation programs.",
+                "Produced structured analyses and presentations for senior stakeholders.",
+                "",
+                "Business Transformation & AI Associate (Internship)",
+                "Allianz SE | Germany | Nov 2024 - Apr 2025",
+                "Identified and prioritized AI use cases across business units.",
+                "Established feedback loops to improve solution adoption and performance.",
+                "Education",
+            ]
+        )
+
+        ensure_structured_cv_fields(
+            record,
+            candidate_name="Ahmed",
+            cv_text=cv_text,
+            cv_generation_mode="aggressive_customization",
+        )
+
+        self.assertEqual(
+            record["cv_professional_experience"][0]["role_title"],
+            "Technology Transformation & Strategy Consulting (Internship)",
+        )
+        self.assertEqual(record["cv_professional_experience"][0]["company"], "Allianz Technology")
+        self.assertEqual(record["cv_professional_experience"][0]["location"], "Germany")
+        self.assertEqual(
+            record["cv_professional_experience"][1]["role_title"],
+            "Business Transformation & AI Associate (Internship)",
+        )
+        self.assertEqual(record["cv_professional_experience"][1]["company"], "Allianz SE")
+        self.assertNotIn(
+            "Produced structured analyses",
+            record["cv_professional_experience"][1]["role_title"],
+        )
+
+    def test_candidate_identity_falls_back_to_cv_text_for_clerk_placeholders(self):
+        cv_text = "\n".join(
+            [
+                "Ahmed Kaddah",
+                "Düsseldorf, Germany | ahmed.kaddah@tutamail.com",
+                "Professional Summary",
+                "Business transformation specialist.",
+            ]
+        )
+
+        name, email = _resolve_candidate_identity(
+            "user_3DtxNJbFAnuqOgglJN4MwHY6cRx",
+            "user_3DtxNJbFAnuqOgglJN4MwHY6cRx@clerk.local",
+            cv_text,
+        )
+
+        self.assertEqual(name, "Ahmed Kaddah")
+        self.assertEqual(email, "ahmed.kaddah@tutamail.com")
 
     def test_create_cv_document_writes_semantic_experience_bullets(self):
         record = {

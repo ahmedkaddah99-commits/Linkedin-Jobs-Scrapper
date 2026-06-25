@@ -106,6 +106,14 @@ export const WEB_CV_TEMPLATES = [
     mood: "Classic, polished, approachable",
     supportsPhoto: false,
   },
+  {
+    id: "europass_lite",
+    label: "Europass",
+    shortLabel: "Europass",
+    description: "Clean Europass-inspired layout with optional profile photo. Grid-based, structured, and widely recognized in Europe.",
+    mood: "Structured, professional, European",
+    supportsPhoto: true,
+  },
 ];
 
 const DOCX_TO_WEB_TEMPLATE_MAP = {
@@ -113,7 +121,7 @@ const DOCX_TO_WEB_TEMPLATE_MAP = {
   classic: "plain",
   modern: "plain",
   compact: "plain",
-  europass: "plain",
+  europass: "europass_lite",
   plain: "plain",
 };
 
@@ -1433,10 +1441,10 @@ function buildBaseCss(model, { forIframe = false } = {}) {
     .template-plain-resume {
       width: 215.9mm;
       min-height: 279.4mm;
-      padding: 17.78mm 20.32mm 15.24mm;
+      padding: 14.5mm 17.5mm 12mm;
       color: var(--cv-text);
-      font-size: 10.5pt;
-      line-height: 1.2;
+      font-size: 9.8pt;
+      line-height: 1.15;
     }
     .plain-resume-head {
       padding-bottom: 1.5mm;
@@ -1444,10 +1452,10 @@ function buildBaseCss(model, { forIframe = false } = {}) {
     }
     .plain-resume-head h1 {
       color: var(--cv-primary);
-      font-size: 28pt;
+      font-size: 24pt;
       font-weight: 400;
       line-height: 1;
-      letter-spacing: -0.02em;
+      letter-spacing: 0;
     }
     .plain-resume-contact {
       display: flex;
@@ -1462,29 +1470,29 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       white-space: pre;
     }
     .plain-resume-section {
-      margin-top: 16pt;
+      margin-top: 10pt;
     }
     .plain-resume-section h2 {
-      margin-bottom: 5pt;
+      margin-bottom: 3pt;
       color: var(--cv-primary);
-      font-size: 14pt;
+      font-size: 12.5pt;
       line-height: 1.1;
     }
     .plain-resume-section .summary-copy,
     .plain-resume-section .education-line,
     .plain-resume-section .meta-stack p {
-      font-size: 10.5pt;
-      line-height: 1.2;
+      font-size: 9.8pt;
+      line-height: 1.15;
     }
     .plain-resume-experience {
       display: grid;
-      gap: 8pt;
+      gap: 5pt;
     }
     .plain-resume-entry h3 {
-      margin-bottom: 2pt;
+      margin-bottom: 1pt;
       color: var(--cv-text);
-      font-size: 12pt;
-      line-height: 1.15;
+      font-size: 10.5pt;
+      line-height: 1.1;
       text-transform: uppercase;
     }
     .plain-resume-entry ul {
@@ -1492,24 +1500,24 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       padding-left: 18px;
     }
     .plain-resume-entry li {
-      font-size: 10.5pt;
-      line-height: 1.2;
+      font-size: 9.6pt;
+      line-height: 1.14;
     }
     .plain-resume-entry li + li {
-      margin-top: 2pt;
+      margin-top: 1pt;
     }
     .plain-resume-education {
       display: grid;
       gap: 4pt;
     }
     .plain-resume-education .education-line {
-      font-size: 12pt;
+      font-size: 10.5pt;
       font-weight: 700;
       text-transform: uppercase;
     }
     .plain-resume-skills {
-      font-size: 10.5pt;
-      line-height: 1.35;
+      font-size: 9.6pt;
+      line-height: 1.22;
     }
     .plain-resume-skills p {
       margin: 0;

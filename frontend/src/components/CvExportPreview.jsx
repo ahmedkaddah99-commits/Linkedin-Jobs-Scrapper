@@ -37,7 +37,7 @@ const TEMPLATE_ALIASES = {
   classic: "plain",
   modern: "plain",
   compact: "plain",
-  europass: "plain",
+  europass: "europass_lite",
   teal_resume: "plain",
 };
 
@@ -1080,7 +1080,7 @@ export function CvExportPreview({ documents = {}, profile = {}, options = {}, cl
     content = <ModernPreview model={model} />;
   } else if (model.template.id === "compact") {
     content = <CompactPreview model={model} />;
-  } else if (model.template.id === "europass") {
+  } else if (model.template.id === "europass" || model.template.id === "europass_lite") {
     content = <EuropassPreview model={model} />;
   } else if (model.template.id === "plain") {
     content = <PlainPreview model={model} />;

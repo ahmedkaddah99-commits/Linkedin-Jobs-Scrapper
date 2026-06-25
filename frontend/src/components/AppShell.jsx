@@ -67,8 +67,8 @@ const navItems = [
     matchers: [{ path: "/referrals", end: false }],
   },
   {
-    label: "Settings",
-    icon: "settings",
+    label: "Account",
+    icon: "account_circle",
     to: "/settings",
     matchers: [
       { path: "/settings", end: false },

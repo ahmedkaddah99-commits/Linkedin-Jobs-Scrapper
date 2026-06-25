@@ -2289,6 +2289,72 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["scrapeops_usage"]["usage"]["totals"]["runner_credits"], 3)
         self.assertEqual(payload["scrapeops_usage"]["policy"]["company_sites_per_run"], 0)
 
+    def test_account_delete_deactivates_current_user_and_cancels_subscription(self):
+        account_user = self.app.upsert_user(
+            {
+                "email": "delete-me@example.com",
+                "display_name": "Delete Me",
+                "role": "viewer",
+            }
+        )
+        _, account_token = self.app.issue_api_token(user_id=account_user.user_id, name="delete-account")
+        self.app.repositories.auth_repository.upsert_subscription(
+            {
+                "subscription_id": "sub_delete_account",
+                "user_id": account_user.user_id,
+                "plan_id": "momentum",
+                "status": "active",
+                "billing_provider": "creem",
+                "creem_subscription_id": "sub_delete_account",
+                "creem_customer_id": "cust_delete_account",
+                "current_period_start": "2026-06-01T00:00:00+00:00",
+                "current_period_end": "2026-07-01T00:00:00+00:00",
+            }
+        )
+
+        status, _, bad_payload = self._request_with_headers(
+            "DELETE",
+            "/account",
+            headers={"Authorization": f"Bearer {account_token}"},
+            payload={"confirmation": "wrong"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(bad_payload["error"]["code"], "bad_request")
+        self.assertTrue(self.app.get_user(account_user.user_id).is_active)
+
+        status, _, payload = self._request_with_headers(
+            "DELETE",
+            "/account",
+            headers={"Authorization": f"Bearer {account_token}"},
+            payload={"confirmation": account_user.email},
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["deleted"], account_user.user_id)
+        self.assertEqual(payload["status"], "deactivated")
+
+        deleted_user = self.app.get_user(account_user.user_id)
+        self.assertFalse(deleted_user.is_active)
+        self.assertEqual(deleted_user.metadata["account_deleted_by"], "self_service")
+
+        subscription = self.app.repositories.auth_repository.get_current_subscription_by_user_id(account_user.user_id)
+        self.assertEqual(subscription["status"], "cancelled")
+        self.assertTrue(subscription["cancelled_at"])
+
+        event_rows = self.app.repositories.analytics_store.query_rows(
+            "SELECT event_name, user_id, payload_json FROM analytics_events WHERE event_name = 'account_deleted'"
+        )
+        self.assertEqual(len(event_rows), 1)
+        self.assertEqual(event_rows[0]["user_id"], account_user.user_id)
+        self.assertEqual(json.loads(event_rows[0]["payload_json"])["user_id"], account_user.user_id)
+
+        status, _, inactive_payload = self._request_with_headers(
+            "GET",
+            "/auth/me",
+            headers={"Authorization": f"Bearer {account_token}"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(inactive_payload["error"]["code"], "forbidden")
+
     def test_run_customer_view_includes_scrapeops_usage_summary(self):
         status, run_payload = self._request(
             "POST",

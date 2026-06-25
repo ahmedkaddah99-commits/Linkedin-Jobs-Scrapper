@@ -737,7 +737,7 @@ export default function CvStudioPage() {
       <div className="grid gap-6 xl:grid-cols-[minmax(360px,430px)_minmax(0,1fr)]">
         <div className={[mobilePane === "editor" ? "block" : "hidden", "space-y-5 xl:block"].join(" ")}>
           <Section
-            description="These controls affect the browser template only. DOCX settings remain in the Settings page."
+            description="These controls affect the browser template only. DOCX export defaults are handled by the document workflow."
             title="Design"
           >
             <div className="space-y-5">

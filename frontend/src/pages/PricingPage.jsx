@@ -227,7 +227,7 @@ export default function PricingPage() {
             to="/settings"
           >
             <span className="material-symbols-outlined text-[18px]">monitoring</span>
-            View usage
+            Account usage
           </Link>
         </div>
       </section>

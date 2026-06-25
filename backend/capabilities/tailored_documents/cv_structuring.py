@@ -44,6 +44,17 @@ _EXPERIENCE_END_MARKERS = {
     "strategic technology initiatives",
     "strategic and technology initiatives",
 }
+_PROMOTED_BULLET_TITLE_RE = re.compile(
+    r"^(achieved|built|contributed|created|delivered|designed|developed|drove|established|"
+    r"facilitated|generated|identified|implemented|improved|increased|led|managed|negotiated|"
+    r"optimized|produced|reduced|supported)\b",
+    flags=re.IGNORECASE,
+)
+_ROLE_TITLE_HINT_RE = re.compile(
+    r"\b(analyst|associate|consultant|contractor|co-?founder|developer|director|engineer|founder|"
+    r"intern|internship|lead|manager|scientist|specialist|strategist|advisor|coordinator|owner)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def split_paragraphs(text: str) -> List[str]:
@@ -66,6 +77,15 @@ def parse_cv_role_header(role_line: str, fallback_company: str = "") -> Dict:
     role_title = ""
     company = fallback_company
 
+    if len(parts) >= 4:
+        role_title = parts[0]
+        company = parts[1]
+        return {
+            "role_title": role_title,
+            "company": company,
+            "location": " | ".join(parts[2:-1]),
+            "period": period,
+        }
     if len(parts) >= 3:
         role_title = parts[0]
         company = parts[1]
@@ -170,6 +190,15 @@ def _parse_experience_header_at(lines: List[str], cursor: int, end_index: int) -
                 next_cursor += 1
         return header, next_cursor
 
+    if following and "|" in following[0] and _looks_like_date_line(following[0]):
+        parsed_detail = parse_cv_role_header(following[0])
+        return {
+            "role_title": current,
+            "company": str(parsed_detail.get("role_title") or parsed_detail.get("company") or "").strip(),
+            "location": str(parsed_detail.get("company") or parsed_detail.get("location") or "").strip(),
+            "period": str(parsed_detail.get("period") or "").strip() or following[0],
+        }, cursor + 2
+
     if following and _looks_like_date_line(following[0]):
         return {"role_title": current, "company": "", "period": following[0]}, cursor + 2
 
@@ -185,6 +214,25 @@ def _experience_key(item: Dict) -> tuple:
         normalize_compare_token(str(item.get("company") or "")),
         normalize_compare_token(str(item.get("period") or "")),
     )
+
+
+def _looks_like_promoted_bullet_title(value: str) -> bool:
+    text = compact_whitespace(value)
+    if not text:
+        return False
+    words = [word for word in re.split(r"\s+", text) if word]
+    if _is_bullet_line(text) or text.endswith((".", ";")):
+        return True
+    if len(words) >= 5 and _PROMOTED_BULLET_TITLE_RE.match(text) and not _ROLE_TITLE_HINT_RE.search(text):
+        return True
+    return len(words) > 12 and not _ROLE_TITLE_HINT_RE.search(text)
+
+
+def _is_trustworthy_generated_display(item: Dict) -> bool:
+    role_title = str(item.get("role_title") or item.get("title") or "").strip()
+    if not role_title or _looks_like_promoted_bullet_title(role_title):
+        return False
+    return bool(str(item.get("company") or "").strip() or _ROLE_TITLE_HINT_RE.search(role_title))
 
 
 def _tokens_overlap(left: str, right: str) -> bool:
@@ -257,6 +305,7 @@ def extract_cv_professional_experiences(cv_text: str) -> List[Dict]:
             {
                 "role_title": header["role_title"],
                 "company": header["company"],
+                "location": str(header.get("location") or "").strip(),
                 "period": header["period"],
                 "bullets": bullets,
             }
@@ -337,6 +386,7 @@ def dedupe_experiences(experiences: List[Dict]) -> List[Dict]:
         clone = {
             "role_title": str(item.get("role_title") or "").strip(),
             "company": str(item.get("company") or "").strip(),
+            "location": str(item.get("location") or "").strip(),
             "period": str(item.get("period") or "").strip(),
             "bullets": [str(b).strip() for b in item.get("bullets", []) if str(b).strip()],
         }
@@ -683,7 +733,9 @@ def ensure_structured_cv_fields(
             if not generated_bullets and index < len(generated_bullets_by_index):
                 generated_bullets = generated_bullets_by_index[index]
                 if index < len(generated_experiences):
-                    generated_display = generated_experiences[index]
+                    index_display = generated_experiences[index]
+                    if _is_trustworthy_generated_display(index_display):
+                        generated_display = index_display
             if normalized_mode == CV_GENERATION_MODE_AGGRESSIVE:
                 selected_bullets = _clamp_rewritten_bullets(generated_bullets, base_bullets)
             elif use_generated_language_content and generated_bullets:
@@ -695,6 +747,7 @@ def ensure_structured_cv_fields(
                 normalized_mode == CV_GENERATION_MODE_AGGRESSIVE
                 and generated_display
                 and generated_bullets
+                and _is_trustworthy_generated_display(generated_display)
                 and (not base_bullets or looks_like_location_value(str(base_item.get("company") or "")))
             ):
                 display_item = generated_display
@@ -702,6 +755,7 @@ def ensure_structured_cv_fields(
                 {
                     "role_title": str(display_item.get("role_title") or base_item.get("role_title", "")).strip(),
                     "company": str(display_item.get("company") or base_item.get("company", "")).strip(),
+                    "location": str(display_item.get("location") or base_item.get("location", "")).strip(),
                     "period": str(display_item.get("period") or base_item.get("period", "")).strip(),
                     "bullets": selected_bullets,
                 }
@@ -712,6 +766,7 @@ def ensure_structured_cv_fields(
                 {
                     "role_title": str(item.get("role_title", "")).strip(),
                     "company": str(item.get("company", "")).strip(),
+                    "location": str(item.get("location", "")).strip(),
                     "period": str(item.get("period", "")).strip(),
                     "bullets": [str(b).strip() for b in item.get("bullets", []) if str(b).strip()],
                 }

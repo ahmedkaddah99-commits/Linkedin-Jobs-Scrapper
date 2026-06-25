@@ -17,6 +17,7 @@ from backend.config.job_seeker import (
     load_project_dotenv,
     normalize_windows_env_path,
 )
+from backend.profiles.cv_profile_extraction import extract_cv_profile_fallback
 from backend.profiles.cv_text import load_cv_text
 
 from .common import load_json_file, save_json_file
@@ -48,7 +49,40 @@ DEFAULT_CANDIDATE_EMAIL = "ahmed.kaddah@tutamail.com"
 DEFAULT_CV_FONT = "Calibri"
 GENERATED_CV_ASSET_KIND = "generated_cv"
 GENERATED_CV_DISPLAY_NAME = "Tailored CV"
-CV_RENDERER_VERSION = "2026-05-31-cv-output-language"
+CV_RENDERER_VERSION = "2026-06-24-cv-identity-and-plain-layout"
+
+
+def _looks_like_internal_candidate_name(value: str) -> bool:
+    normalized = str(value or "").strip()
+    lowered = normalized.lower()
+    return (
+        not normalized
+        or lowered.startswith("user_")
+        or lowered.endswith("@clerk.local")
+        or "@clerk.local" in lowered
+    )
+
+
+def _looks_like_internal_candidate_email(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    return not normalized or normalized.startswith("user_") or normalized.endswith("@clerk.local")
+
+
+def _resolve_candidate_identity(candidate_name: str, candidate_email: str, cv_text: str) -> tuple[str, str]:
+    resolved_name = str(candidate_name or "").strip()
+    resolved_email = str(candidate_email or "").strip()
+    if not (_looks_like_internal_candidate_name(resolved_name) or _looks_like_internal_candidate_email(resolved_email)):
+        return resolved_name, resolved_email
+
+    extracted_profile = extract_cv_profile_fallback(cv_text) if str(cv_text or "").strip() else {}
+    extracted_name = str(extracted_profile.get("name") or "").strip()
+    extracted_email = str(extracted_profile.get("email") or "").strip()
+
+    if _looks_like_internal_candidate_name(resolved_name):
+        resolved_name = extracted_name or DEFAULT_CANDIDATE_NAME
+    if _looks_like_internal_candidate_email(resolved_email):
+        resolved_email = extracted_email or DEFAULT_CANDIDATE_EMAIL
+    return resolved_name, resolved_email
 
 
 def _record_has_ats_export_gate(record: Dict) -> bool:
@@ -214,6 +248,8 @@ def run_standard_cv_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = 
     run_date = args.run_date.strip() or run_dt.strftime("%Y-%m-%d")
     run_timestamp = run_dt.isoformat(timespec="seconds")
     candidate_name = (args.candidate_name or DEFAULT_CANDIDATE_NAME).strip() or DEFAULT_CANDIDATE_NAME
+    candidate_email = (getattr(args, "candidate_email", "") or DEFAULT_CANDIDATE_EMAIL).strip() or DEFAULT_CANDIDATE_EMAIL
+    candidate_name, candidate_email = _resolve_candidate_identity(candidate_name, candidate_email, cv_text)
 
     records: list[dict] = []
     for job in jobs:
@@ -557,6 +593,7 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
         )
 
     cv_text = load_cv_text()
+    candidate_name, candidate_email = _resolve_candidate_identity(candidate_name, candidate_email, cv_text)
     selected_stage4_extra_prompt, selected_stage4_prompt_override = resolve_cv_generation_prompt_settings(
         selected_cv_generation_mode,
         args,

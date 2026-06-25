@@ -44,6 +44,7 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.prefix('PUT', ('users',), _handle_put, auth_required=True, name='admin.users.put')
     registry.prefix('PUT', ('secrets',), _handle_put, auth_required=True, name='admin.secrets.put')
     registry.prefix('DELETE', ('users',), _handle_delete, auth_required=True, name='admin.users.delete')
+    registry.exact('DELETE', ('account',), _handle_delete, auth_required=True, name='admin.account.delete')
     registry.prefix('DELETE', ('admin',), _handle_delete, auth_required=True, name='admin.admin.delete')
     registry.prefix('DELETE', ('secrets',), _handle_delete, auth_required=True, name='admin.secrets.delete')
 
@@ -578,6 +579,46 @@ def _handle_delete(context: ApiRouteContext) -> bool | None:
     application = context.application
     segments = list(context.segments)
     query = context.query
+    if segments == ["account"]:
+                        auth_context = self._auth_context()
+                        user = auth_context.user
+                        payload = self._read_json_body()
+                        confirmation = str(payload.get("confirmation") or payload.get("confirm") or "").strip()
+                        if confirmation not in {"DELETE", str(user.email or "").strip()}:
+                            raise ValueError("Type DELETE or your account email address to delete this account.")
+                        deleted_at = datetime.now(timezone.utc).isoformat()
+                        metadata = dict(user.metadata or {})
+                        metadata["account_deleted_at"] = deleted_at
+                        metadata["account_deleted_by"] = "self_service"
+                        user.metadata = metadata
+                        user.is_active = False
+                        user.updated_at = deleted_at
+                        application.repositories.auth_repository.upsert_user(user)
+                        cancel_subscriptions = getattr(application.repositories.auth_repository, "cancel_subscriptions_for_user", None)
+                        if callable(cancel_subscriptions):
+                            cancel_subscriptions(user.user_id, cancelled_at=deleted_at)
+                        application.emit_event(
+                            "account_deleted",
+                            user_id=user.user_id,
+                            session_id=getattr(auth_context, "session_id", ""),
+                            route="/account",
+                            source="api",
+                            payload={
+                                "user_id": user.user_id,
+                                "clerk_user_id": getattr(auth_context, "clerk_user_id", ""),
+                                "deleted_at": deleted_at,
+                            },
+                        )
+                        self._send_json(
+                            {
+                                "deleted": user.user_id,
+                                "status": "deactivated",
+                                "clerk_user_id": getattr(auth_context, "clerk_user_id", ""),
+                            },
+                            status=HTTPStatus.OK,
+                        )
+                        return
+
     if segments[:1] == ["users"] and len(segments) == 2:
                         self._require_scope(TOKEN_SCOPE_USERS_WRITE)
                         application.delete_user(segments[1])

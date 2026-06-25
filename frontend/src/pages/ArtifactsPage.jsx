@@ -784,9 +784,9 @@ export default function DocumentsPage() {
                     </button>
                     <Link
                       className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
-                      to="/settings"
+                      to="/documents"
                     >
-                      Edit CV/profile inputs
+                      Open Career Assets
                     </Link>
                     <button
                       className="rounded bg-primary/10 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/20"
@@ -873,9 +873,9 @@ export default function DocumentsPage() {
                     </Link>
                     <Link
                       className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
-                      to="/settings"
+                      to="/documents"
                     >
-                      Edit CV/profile inputs
+                      Open Career Assets
                     </Link>
                     {selectedBlockedDocuments.length === 1 && selectedBlockedDocuments[0].run_id ? (
                       <Link
