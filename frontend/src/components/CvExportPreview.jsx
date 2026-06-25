@@ -1108,6 +1108,108 @@ function SectionBarsPreview({ model }) {
   );
 }
 
+function ModernMinimalPreview({ model }) {
+  return (
+    <div className="space-y-4" style={{ fontFamily: model.fontFamily }}>
+      <div className="flex items-start justify-between gap-4 border-b pb-3" style={{ borderColor: model.palette.border }}>
+        <div className="min-w-0">
+          <div className="text-2xl font-black uppercase" style={{ color: model.palette.text }}>
+            {model.name}
+          </div>
+          <div className="mt-1 text-xs font-bold uppercase" style={{ color: model.palette.primary }}>
+            {model.headline}
+          </div>
+          {model.contacts.length ? (
+            <div className="mt-2 text-[11px] leading-5" style={{ color: model.palette.muted }}>
+              {model.contacts.join(" • ")}
+            </div>
+          ) : null}
+        </div>
+        <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="h-20 w-16" />
+      </div>
+      <div>
+        <SectionHeading label="Professional Profile" palette={model.palette} templateId={model.template.id} />
+        <div className="text-xs leading-6" style={{ color: model.palette.text }}>{model.summary}</div>
+      </div>
+      <div>
+        <SectionHeading label="Core Skills" palette={model.palette} templateId={model.template.id} />
+        <div className="grid grid-cols-3 gap-2 text-[11px]" style={{ color: model.palette.text }}>
+          {model.skills.slice(0, 6).map((skill) => <div className="border px-2 py-1" key={skill} style={{ borderColor: model.palette.softBorder }}>{skill}</div>)}
+        </div>
+      </div>
+      <div>
+        <SectionHeading label="Professional Experience" palette={model.palette} templateId={model.template.id} />
+        <ExperienceList compact model={model} />
+      </div>
+    </div>
+  );
+}
+
+function ModernSidebarPreview({ model }) {
+  return (
+    <div className="grid min-h-[560px] grid-cols-[130px_minmax(0,1fr)]" style={{ fontFamily: model.fontFamily }}>
+      <div className="space-y-4 p-4" style={{ backgroundColor: model.palette.primary, color: "#FFFFFF" }}>
+        <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="h-20 w-full" />
+        <div>
+          <div className="text-[11px] font-bold uppercase">Contact</div>
+          <div className="mt-2 space-y-1 text-[11px] leading-5 opacity-90">
+            {model.contacts.slice(0, 4).map((item) => <div className="break-words" key={item}>{item}</div>)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] font-bold uppercase">Skills</div>
+          <div className="mt-2 space-y-1 text-[11px] leading-5 opacity-90">
+            {model.skills.slice(0, 6).map((item) => <div key={item}>{item}</div>)}
+          </div>
+        </div>
+      </div>
+      <div className="space-y-4 p-5">
+        <div>
+          <div className="text-2xl font-black uppercase" style={{ color: model.palette.text }}>{model.name}</div>
+          <div className="mt-1 text-xs font-bold uppercase" style={{ color: model.palette.primary }}>{model.headline}</div>
+        </div>
+        <div>
+          <SectionHeading label="Profile" palette={model.palette} templateId={model.template.id} />
+          <div className="text-xs leading-6" style={{ color: model.palette.text }}>{model.summary}</div>
+        </div>
+        <div>
+          <SectionHeading label="Experience" palette={model.palette} templateId={model.template.id} />
+          <ExperienceList compact model={model} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClassicExecutivePreview({ model }) {
+  return (
+    <div className="space-y-4" style={{ fontFamily: model.fontFamily }}>
+      <div className="grid grid-cols-[minmax(0,1fr)_150px] gap-4 border-b-2 pb-3" style={{ borderColor: model.palette.text }}>
+        <div>
+          <div className="text-2xl font-black uppercase" style={{ color: model.palette.text }}>{model.name}</div>
+          <div className="mt-1 text-xs font-bold uppercase" style={{ color: model.palette.muted }}>{model.headline}</div>
+        </div>
+        <div className="text-right">
+          <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="ml-auto h-16 w-14" />
+          {model.contacts.length ? (
+            <div className="mt-2 text-[11px] leading-5" style={{ color: model.palette.muted }}>
+              {model.contacts.slice(0, 3).join(" | ")}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div>
+        <SectionHeading label="Executive Summary" palette={model.palette} templateId={model.template.id} />
+        <div className="text-xs leading-6" style={{ color: model.palette.text }}>{model.summary}</div>
+      </div>
+      <div>
+        <SectionHeading label="Career Experience" palette={model.palette} templateId={model.template.id} />
+        <ExperienceList compact model={model} />
+      </div>
+    </div>
+  );
+}
+
 export function CvExportPreview({ documents = {}, profile = {}, options = {}, className = "" }) {
   const model = buildPreviewModel(profile, documents, options);
 
@@ -1122,6 +1224,12 @@ export function CvExportPreview({ documents = {}, profile = {}, options = {}, cl
     content = <PlainPreview model={model} />;
   } else if (model.template.id === "section_bars") {
     content = <SectionBarsPreview model={model} />;
+  } else if (model.template.id === "modern_minimal") {
+    content = <ModernMinimalPreview model={model} />;
+  } else if (model.template.id === "modern_sidebar") {
+    content = <ModernSidebarPreview model={model} />;
+  } else if (model.template.id === "classic_executive") {
+    content = <ClassicExecutivePreview model={model} />;
   }
 
   return (

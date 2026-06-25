@@ -115,6 +115,30 @@ export const WEB_CV_TEMPLATES = [
     supportsPhoto: true,
   },
   {
+    id: "modern_minimal",
+    label: "Modern Minimal",
+    shortLabel: "Minimal",
+    description: "Clean one-column layout inspired by the modern minimal reference template.",
+    mood: "Modern, crisp, direct",
+    supportsPhoto: true,
+  },
+  {
+    id: "modern_sidebar",
+    label: "Modern Sidebar",
+    shortLabel: "Sidebar",
+    description: "Two-column layout inspired by the modern sidebar reference template.",
+    mood: "Structured, modern, compact",
+    supportsPhoto: true,
+  },
+  {
+    id: "classic_executive",
+    label: "Classic Executive",
+    shortLabel: "Executive",
+    description: "Formal executive layout inspired by the classic executive reference template.",
+    mood: "Classic, senior, conservative",
+    supportsPhoto: true,
+  },
+  {
     id: "europass_lite",
     label: "Europass",
     shortLabel: "Europass",
@@ -135,6 +159,12 @@ const DOCX_TO_WEB_TEMPLATE_MAP = {
   simple: "section_bars",
   simple_resume: "section_bars",
   blue_bars: "section_bars",
+  modern_minimal: "modern_minimal",
+  minimal: "modern_minimal",
+  modern_sidebar: "modern_sidebar",
+  sidebar: "modern_sidebar",
+  classic_executive: "classic_executive",
+  executive: "classic_executive",
 };
 
 const DOCX_COLOR_SCHEME_TO_WEB_PALETTE = {
@@ -989,6 +1019,128 @@ function templateSectionBars(model) {
   `;
 }
 
+function templateModernMinimal(model) {
+  const experience = buildExperienceMarkup(model, "minimal-experience-stack");
+  return `
+    <main class="cv-sheet template-modern-minimal">
+      <header class="minimal-head">
+        <div class="minimal-title">
+          <h1>${escapeHtml(model.name)}</h1>
+          <p>${escapeHtml(model.headline)}</p>
+          ${buildContactLinks(model, "minimal-contact")}
+        </div>
+        ${buildPhotoMarkup(model, "cv-photo-shell minimal-photo")}
+      </header>
+      <section class="minimal-section">
+        <h2>${escapeHtml(labelFor(model, "profile"))}</h2>
+        ${buildSummaryMarkup(model)}
+      </section>
+      <section class="minimal-section">
+        <h2>${escapeHtml(labelFor(model, "coreSkills"))}</h2>
+        ${buildSkillsMarkup(model, "minimal-skill")}
+      </section>
+      <section class="minimal-section">
+        <h2>${escapeHtml(labelFor(model, "experience"))}</h2>
+        ${experience}
+      </section>
+      ${
+        model.projects.length
+          ? `<section class="minimal-section"><h2>${escapeHtml(labelFor(model, "projects"))}</h2>${buildProjectsMarkup(model)}</section>`
+          : ""
+      }
+      <section class="minimal-section">
+        <h2>${escapeHtml(labelFor(model, "education"))}</h2>
+        ${buildEducationMarkup(model)}
+      </section>
+      ${buildFooterMeta(model) ? `<section class="minimal-section"><h2>${escapeHtml(labelFor(model, "additional"))}</h2>${buildFooterMeta(model)}</section>` : ""}
+    </main>
+  `;
+}
+
+function templateModernSidebar(model) {
+  return `
+    <main class="cv-sheet template-modern-sidebar">
+      <aside class="sidebar-rail">
+        ${buildPhotoMarkup(model, "cv-photo-shell sidebar-photo")}
+        <section>
+          <h2>${escapeHtml(labelFor(model, "contact"))}</h2>
+          ${buildContactLinks(model, "sidebar-contact")}
+        </section>
+        <section>
+          <h2>${escapeHtml(labelFor(model, "skills"))}</h2>
+          ${buildSkillsMarkup(model, "sidebar-skill")}
+        </section>
+        <section>
+          <h2>${escapeHtml(labelFor(model, "education"))}</h2>
+          ${buildEducationMarkup(model)}
+        </section>
+        ${buildFooterMeta(model) ? `<section><h2>${escapeHtml(labelFor(model, "additional"))}</h2>${buildFooterMeta(model)}</section>` : ""}
+      </aside>
+      <section class="sidebar-main">
+        <header>
+          <h1>${escapeHtml(model.name)}</h1>
+          <p>${escapeHtml(model.headline)}</p>
+          ${buildTargetBanner(model)}
+        </header>
+        <section class="sidebar-section">
+          <h2>${escapeHtml(labelFor(model, "profile"))}</h2>
+          ${buildSummaryMarkup(model)}
+        </section>
+        <section class="sidebar-section">
+          <h2>${escapeHtml(labelFor(model, "experience"))}</h2>
+          ${buildExperienceMarkup(model, "sidebar-experience-stack")}
+        </section>
+        ${
+          model.projects.length
+            ? `<section class="sidebar-section"><h2>${escapeHtml(labelFor(model, "projects"))}</h2>${buildProjectsMarkup(model)}</section>`
+            : ""
+        }
+      </section>
+    </main>
+  `;
+}
+
+function templateClassicExecutive(model) {
+  return `
+    <main class="cv-sheet template-classic-executive">
+      <header class="executive-head">
+        <div>
+          <h1>${escapeHtml(model.name)}</h1>
+          <p>${escapeHtml(model.headline)}</p>
+        </div>
+        <div class="executive-contact-wrap">
+          ${buildPhotoMarkup(model, "cv-photo-shell executive-photo")}
+          ${buildContactLinks(model, "executive-contact")}
+        </div>
+      </header>
+      <section class="executive-section">
+        <h2>${escapeHtml(model.outputLanguage === "German" ? labelFor(model, "profile") : "Executive Summary")}</h2>
+        ${buildSummaryMarkup(model)}
+      </section>
+      <section class="executive-section">
+        <h2>${escapeHtml(model.outputLanguage === "German" ? labelFor(model, "experience") : "Career Experience")}</h2>
+        ${buildExperienceMarkup(model, "executive-experience-stack")}
+      </section>
+      ${
+        model.projects.length
+          ? `<section class="executive-section"><h2>${escapeHtml(labelFor(model, "projects"))}</h2>${buildProjectsMarkup(model)}</section>`
+          : ""
+      }
+      <div class="executive-two-col">
+        <section class="executive-section">
+          <h2>${escapeHtml(labelFor(model, "skills"))}</h2>
+          ${buildSkillsMarkup(model, "executive-skill")}
+        </section>
+        <section class="executive-section">
+          <h2>${escapeHtml(labelFor(model, "education"))}</h2>
+          ${buildEducationMarkup(model)}
+        </section>
+      </div>
+      ${buildFooterMeta(model) ? `<section class="executive-section"><h2>${escapeHtml(labelFor(model, "additional"))}</h2>${buildFooterMeta(model)}</section>` : ""}
+    </main>
+  `;
+}
+
 function buildProjectsMarkup(model) {
   if (!model.projects.length) {
     return `<p class="empty-note">Add relevant projects or initiatives in the editor.</p>`;
@@ -1159,6 +1311,12 @@ function renderTemplate(model) {
       return templatePlainResume(model);
     case "section_bars":
       return templateSectionBars(model);
+    case "modern_minimal":
+      return templateModernMinimal(model);
+    case "modern_sidebar":
+      return templateModernSidebar(model);
+    case "classic_executive":
+      return templateClassicExecutive(model);
     case "editorial_sidebar":
       return templateEditorialSidebar(model);
     case "mono_nav":
@@ -1750,6 +1908,286 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       font-size: 9.5pt;
       line-height: 1.24;
     }
+    .template-modern-minimal {
+      width: 210mm;
+      min-height: 297mm;
+      padding: 14mm 17mm 13mm;
+      color: #1D252C;
+      font-size: 9pt;
+      line-height: 1.35;
+    }
+    .minimal-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12mm;
+      align-items: start;
+      padding-bottom: 8pt;
+      border-bottom: 1.5pt solid color-mix(in srgb, var(--cv-primary) 18%, white);
+    }
+    .minimal-title h1 {
+      color: #203040;
+      font-size: 24pt;
+      font-weight: 900;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .minimal-title > p {
+      margin-top: 5pt;
+      color: var(--cv-primary);
+      font-size: 10.5pt;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .minimal-contact {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0;
+      margin-top: 7pt;
+      color: #5D6670;
+      font-size: 8.5pt;
+    }
+    .minimal-contact > * + *::before {
+      content: "  •  ";
+      white-space: pre;
+    }
+    .minimal-photo {
+      width: 25mm;
+      min-width: 25mm;
+      height: 30mm;
+      border-radius: 5px;
+    }
+    .minimal-section {
+      margin-top: 13pt;
+    }
+    .minimal-section h2 {
+      margin-bottom: 6pt;
+      padding-bottom: 3pt;
+      border-bottom: 1pt solid color-mix(in srgb, var(--cv-primary) 28%, white);
+      color: var(--cv-primary);
+      font-size: 10pt;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .minimal-section .summary-copy,
+    .minimal-section .education-line,
+    .minimal-section .meta-stack p {
+      font-size: 9pt;
+      line-height: 1.35;
+    }
+    .minimal-section .experience-card {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+    .minimal-section .experience-head h3 {
+      color: #1D252C;
+      font-size: 9.5pt;
+      font-weight: 900;
+    }
+    .minimal-section .period {
+      color: #5D6670;
+      font-size: 8.5pt;
+    }
+    .minimal-experience-stack {
+      display: grid;
+      gap: 9pt;
+    }
+    .minimal-skill {
+      display: inline-flex;
+      min-width: 30%;
+      padding: 5pt 6pt;
+      border: 1pt solid color-mix(in srgb, var(--cv-primary) 18%, white);
+      color: #1D252C;
+      font-size: 8.7pt;
+      font-weight: 800;
+    }
+    .template-modern-sidebar {
+      display: grid;
+      grid-template-columns: 64mm minmax(0, 1fr);
+      width: 210mm;
+      min-height: 297mm;
+      padding: 8mm;
+      color: #1D252C;
+      font-size: 9pt;
+      line-height: 1.35;
+    }
+    .sidebar-rail {
+      padding: 10mm 8mm;
+      background: #203040;
+      color: rgba(255, 255, 255, 0.86);
+    }
+    .sidebar-rail section + section {
+      margin-top: 15pt;
+    }
+    .sidebar-rail h2 {
+      margin-bottom: 7pt;
+      color: white;
+      font-size: 9pt;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .sidebar-photo {
+      width: 32mm;
+      min-width: 32mm;
+      height: 36mm;
+      margin-bottom: 15pt;
+      border-color: rgba(255, 255, 255, 0.28);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .sidebar-contact {
+      display: grid;
+      gap: 5pt;
+      margin-top: 0;
+      color: rgba(255, 255, 255, 0.82);
+      font-size: 8.5pt;
+      overflow-wrap: anywhere;
+    }
+    .sidebar-skill {
+      display: block;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.88);
+      font-size: 8.6pt;
+      font-weight: 700;
+    }
+    .sidebar-rail .pill-row {
+      display: grid;
+      gap: 5pt;
+    }
+    .sidebar-rail .education-line,
+    .sidebar-rail .meta-stack p,
+    .sidebar-rail .mini-label {
+      color: rgba(255, 255, 255, 0.84);
+      font-size: 8.4pt;
+    }
+    .sidebar-main {
+      padding: 11mm 10mm 9mm;
+      background: white;
+    }
+    .sidebar-main > header h1 {
+      color: #203040;
+      font-size: 25pt;
+      font-weight: 900;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .sidebar-main > header p {
+      margin-top: 6pt;
+      color: var(--cv-primary);
+      font-size: 10.5pt;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .sidebar-section {
+      margin-top: 16pt;
+    }
+    .sidebar-section h2 {
+      margin-bottom: 7pt;
+      padding-bottom: 3pt;
+      border-bottom: 1.2pt solid var(--cv-primary);
+      color: #203040;
+      font-size: 10pt;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .sidebar-section .experience-card {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+    .sidebar-experience-stack {
+      display: grid;
+      gap: 10pt;
+    }
+    .template-classic-executive {
+      width: 210mm;
+      min-height: 297mm;
+      padding: 15mm 18mm 13mm;
+      color: #1D252C;
+      font-size: 9pt;
+      line-height: 1.35;
+    }
+    .executive-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 64mm;
+      gap: 14mm;
+      align-items: start;
+      padding-bottom: 10pt;
+      border-bottom: 2pt solid #203040;
+    }
+    .executive-head h1 {
+      color: #203040;
+      font-size: 23pt;
+      font-weight: 900;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .executive-head > div > p {
+      margin-top: 6pt;
+      color: #5D6670;
+      font-size: 10pt;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .executive-contact-wrap {
+      display: grid;
+      gap: 7pt;
+      justify-items: end;
+      color: #5D6670;
+      text-align: right;
+    }
+    .executive-contact {
+      display: grid;
+      gap: 4pt;
+      margin-top: 0;
+      font-size: 8.5pt;
+      overflow-wrap: anywhere;
+    }
+    .executive-photo {
+      width: 25mm;
+      min-width: 25mm;
+      height: 30mm;
+      border-radius: 5px;
+    }
+    .executive-section {
+      margin-top: 14pt;
+    }
+    .executive-section h2 {
+      margin-bottom: 7pt;
+      padding-bottom: 3pt;
+      border-bottom: 1pt solid color-mix(in srgb, #203040 22%, white);
+      color: #203040;
+      font-size: 9.5pt;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .executive-section .experience-card {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+    .executive-experience-stack {
+      display: grid;
+      gap: 10pt;
+    }
+    .executive-skill {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #1D252C;
+      font-size: 8.8pt;
+      font-weight: 700;
+    }
+    .executive-two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12mm;
+    }
     @media (max-width: 1000px) {
       body {
         padding: 0;
@@ -1763,9 +2201,11 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       }
       .template-editorial,
       .template-mono,
+      .template-modern-sidebar,
       .ledger-grid,
       .template-europass .europass-grid,
-      .two-up {
+      .two-up,
+      .executive-two-col {
         grid-template-columns: 1fr;
       }
       .template-editorial {
@@ -1787,8 +2227,16 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       .bar-resume-head {
         grid-template-columns: 1fr;
       }
+      .minimal-head,
+      .executive-head {
+        grid-template-columns: 1fr;
+      }
       .bar-resume-photo {
         justify-self: center;
+      }
+      .executive-contact-wrap {
+        justify-items: start;
+        text-align: left;
       }
       .compact-links {
         text-align: left;

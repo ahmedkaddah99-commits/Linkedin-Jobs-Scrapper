@@ -1454,7 +1454,13 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(
             {option["value"] for option in user_facing_fields["cv_template"]["options"]},
-            {"plain", "section_bars"},
+            {
+                "plain",
+                "section_bars",
+                "modern_minimal",
+                "modern_sidebar",
+                "classic_executive",
+            },
         )
         self.assertNotIn(
             "teal_resume",
@@ -2525,7 +2531,13 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(
             {item["id"] for item in settings_payload["options"]["cv_templates"]},
-            {"plain", "section_bars"},
+            {
+                "plain",
+                "section_bars",
+                "modern_minimal",
+                "modern_sidebar",
+                "classic_executive",
+            },
         )
         self.assertNotIn(
             "teal_resume",

@@ -403,7 +403,14 @@ def _document_template_options() -> list[dict[str, str]]:
     return [
         {"value": item["id"], "label": item["label"]}
         for item in CV_TEMPLATE_PRESETS.values()
-        if item["id"] in {"plain", "section_bars"}
+        if item["id"]
+        in {
+            "plain",
+            "section_bars",
+            "modern_minimal",
+            "modern_sidebar",
+            "classic_executive",
+        }
     ]
 
 
