@@ -21,6 +21,7 @@ from backend.capabilities.tracker.google_oauth import (
 from backend.domain.phase0_contracts import (
     normalize_application_status,
     normalize_gmail_application_detection,
+    normalize_gmail_scan_window,
 )
 from backend.domain.models import utc_now_iso, utc_plus_seconds
 from backend.domain.tracker import (
@@ -680,12 +681,20 @@ def sync_tracker_gmail(
 
     start_date = str(normalized.get("email_sync_start_date") or "").strip()
     processed_ids = set(normalized.get("processed_message_ids") or [])
-    messages, history_id = _fetch_all_gmail_messages_paginated(
-        access_token=access_token,
-        start_date=start_date,
-        processed_ids=processed_ids,
-        last_history_id=str(normalized.get("last_processed_history_id") or ""),
-    )
+    if start_date:
+        messages, history_id = _fetch_all_gmail_messages_paginated(
+            access_token=access_token,
+            start_date=start_date,
+            processed_ids=processed_ids,
+            last_history_id=str(normalized.get("last_processed_history_id") or ""),
+        )
+    else:
+        messages, history_id = GmailMailboxClient(access_token=access_token).fetch_recent_messages(
+            limit=_gmail_message_limit(config),
+            scan_window=normalize_gmail_scan_window(dict(config or {}).get("scan_window")),
+        )
+        if processed_ids:
+            messages = [message for message in messages if message.message_id not in processed_ids]
 
     result = _process_tracker_messages(
         application=application,
@@ -696,6 +705,64 @@ def sync_tracker_gmail(
     )
     result["history_id"] = history_id
     return result
+
+
+class GmailMailboxClient:
+    def __init__(self, *, access_token: str) -> None:
+        self.access_token = str(access_token or "").strip()
+
+    def fetch_recent_messages(
+        self,
+        *,
+        limit: int,
+        scan_window: str = "last_1_month",
+    ) -> tuple[list[TrackerMailboxMessage], str]:
+        query_text = _gmail_query_for_scan_window(scan_window)
+        try:
+            listing = list_google_gmail_messages(
+                access_token=self.access_token,
+                limit=limit,
+                query_text=query_text,
+            )
+        except ValueError as exc:
+            error_text = str(exc)
+            if "400" not in error_text and "invalid query" not in error_text.lower():
+                raise
+            listing = list_google_gmail_messages(
+                access_token=self.access_token,
+                limit=limit,
+                query_text="",
+            )
+
+        messages: list[TrackerMailboxMessage] = []
+        latest_history_id = ""
+        for item in listing.get("messages") or []:
+            if not isinstance(item, Mapping):
+                continue
+            message_id = str(item.get("id") or "").strip()
+            if not message_id:
+                continue
+            try:
+                raw_message = get_google_gmail_message(access_token=self.access_token, message_id=message_id)
+            except ValueError:
+                continue
+            message_bytes = _decode_gmail_raw_payload(str(raw_message.get("raw") or ""))
+            if not message_bytes:
+                continue
+            parsed = message_from_bytes(message_bytes, policy=default)
+            messages.append(
+                TrackerMailboxMessage(
+                    message_id=_build_message_id(parsed, fallback=message_id),
+                    subject=str(parsed.get("subject") or "").strip(),
+                    from_address=parseaddr(str(parsed.get("from") or ""))[1],
+                    sent_at=_parse_message_date(str(parsed.get("date") or "")),
+                    text=_extract_text_body(parsed),
+                )
+            )
+            history_id = str(raw_message.get("historyId") or "")
+            if history_id:
+                latest_history_id = history_id
+        return messages, latest_history_id
 
 
 def _fetch_all_gmail_messages_paginated(
@@ -771,6 +838,25 @@ def _fetch_all_gmail_messages_paginated(
             break
 
     return all_messages, latest_history_id
+
+
+def _gmail_message_limit(config: Mapping[str, Any]) -> int:
+    try:
+        return max(1, min(500, int(dict(config or {}).get("max_messages") or 25)))
+    except (TypeError, ValueError):
+        return 25
+
+
+def _gmail_query_for_scan_window(scan_window: str) -> str:
+    days_by_window = {
+        "now": 1,
+        "last_1_month": 30,
+        "last_2_months": 60,
+        "last_3_months": 90,
+    }
+    normalized = normalize_gmail_scan_window(scan_window)
+    keyword_group = "{" + " ".join(_GMAIL_APPLICATION_QUERY_TERMS) + "}"
+    return f"newer_than:{days_by_window[normalized]}d {keyword_group}"
 
 
 def _gmail_query_for_start_date(start_date: str) -> str:
@@ -1212,6 +1298,56 @@ def _extract_rfc822_payload(fetched: Any) -> bytes:
         if isinstance(item, tuple) and len(item) >= 2 and isinstance(item[1], (bytes, bytearray)):
             return bytes(item[1])
     return b""
+
+
+def _extract_text_body(message: Message) -> str:
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+    parts = message.walk() if message.is_multipart() else [message]
+    for part in parts:
+        if part.is_multipart():
+            continue
+        if str(part.get_content_disposition() or "").casefold() == "attachment":
+            continue
+        content_type = str(part.get_content_type() or "").casefold()
+        part_text = _decode_message_text_part(part)
+        if not part_text:
+            continue
+        if content_type == "text/plain":
+            plain_parts.append(part_text)
+        elif content_type == "text/html":
+            html_parts.append(_html_email_to_text(part_text))
+    return _compact_email_text("\n".join(plain_parts or html_parts))
+
+
+def _decode_message_text_part(part: Message) -> str:
+    try:
+        content = part.get_content()
+        if isinstance(content, bytes):
+            return content.decode(part.get_content_charset() or "utf-8", errors="replace")
+        if isinstance(content, str):
+            return content
+    except Exception:
+        pass
+
+    payload = part.get_payload(decode=True)
+    if isinstance(payload, (bytes, bytearray)):
+        return bytes(payload).decode(part.get_content_charset() or "utf-8", errors="replace")
+    if isinstance(payload, str):
+        return payload
+    return ""
+
+
+def _html_email_to_text(value: str) -> str:
+    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", str(value or ""))
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return html.unescape(text)
+
+
+def _compact_email_text(value: str) -> str:
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in str(value or "").replace("\r", "\n").split("\n")]
+    return "\n".join(line for line in lines if line).strip()
 
 
 def _decode_gmail_raw_payload(raw_payload: str) -> bytes:

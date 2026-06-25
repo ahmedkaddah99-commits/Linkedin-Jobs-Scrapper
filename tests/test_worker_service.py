@@ -58,6 +58,7 @@ class WorkerServiceTests(unittest.TestCase):
                 "id": "worker_workspace",
                 "name": "Worker Workspace",
                 "workflow_template_id": "worker_template_v1",
+                "owner_user_id": "worker_test_user",
                 "workspace_type": "custom",
                 "sources": [],
             }
