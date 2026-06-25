@@ -2093,20 +2093,52 @@ def _workspace_option(workspace) -> dict:
     }
 
 
+def _looks_like_internal_clerk_value(value: object) -> bool:
+    normalized = str(value or "").strip()
+    lowered = normalized.lower()
+    return (
+        not normalized
+        or normalized.startswith("user_")
+        or lowered.endswith("@clerk.local")
+        or "@clerk.local" in lowered
+    )
+
+
+def _public_user_email(user) -> str:
+    email = str(getattr(user, "email", "") or "").strip()
+    return "" if _looks_like_internal_clerk_value(email) else email
+
+
+def _public_user_display_name(user) -> str:
+    display_name = str(getattr(user, "display_name", "") or "").strip()
+    return "" if _looks_like_internal_clerk_value(display_name) else display_name
+
+
+def _public_profile_text(value: object) -> str:
+    text = str(value or "").strip()
+    return "" if _looks_like_internal_clerk_value(text) else text
+
+
 def _merge_profile_metadata(existing_profile: dict, profile_payload: dict, user) -> dict:
     normalized_existing = normalize_profile_payload(existing_profile)
     normalized_payload = normalize_profile_payload(profile_payload)
     payload_keys = set(profile_payload or {})
+    public_display_name = _public_user_display_name(user)
+    public_email = _public_user_email(user)
+    payload_name = _public_profile_text(normalized_payload.get("name"))
+    existing_name = _public_profile_text(normalized_existing.get("name"))
+    payload_email = _public_profile_text(normalized_payload.get("email"))
+    existing_email = _public_profile_text(normalized_existing.get("email"))
     merged = {
         "name": str(
-            normalized_payload.get("name")
-            or normalized_existing.get("name")
-            or user.display_name
-            or user.email.split("@")[0]
+            payload_name
+            or existing_name
+            or public_display_name
+            or (public_email.split("@")[0] if public_email else "")
         ),
         "role_title": str(normalized_payload.get("role_title") or normalized_existing.get("role_title") or ""),
         "industry": str(normalized_payload.get("industry") or normalized_existing.get("industry") or ""),
-        "email": str(normalized_payload.get("email") or normalized_existing.get("email") or user.email),
+        "email": str(payload_email or existing_email or public_email),
         "location": str(normalized_payload.get("location") or normalized_existing.get("location") or ""),
         "website": str(normalized_payload.get("website") or normalized_existing.get("website") or ""),
         "linkedin_url": str(normalized_payload.get("linkedin_url") or normalized_existing.get("linkedin_url") or ""),
@@ -2361,8 +2393,6 @@ def _merge_document_metadata(existing_documents: dict, documents_payload: dict) 
         documents_payload.get("cv_template") or existing_documents.get("cv_template") or "plain"
     )
     include_photo = bool(documents_payload.get("include_photo", existing_documents.get("include_photo", True)))
-    if cv_template == "plain":
-        include_photo = False
 
     return {
         "generate_docx": bool(documents_payload.get("generate_docx", existing_documents.get("generate_docx", True))),
@@ -2382,7 +2412,7 @@ def _merge_document_metadata(existing_documents: dict, documents_payload: dict) 
             or existing_documents.get("cv_font")
             or "Aptos"
         ),
-        "web_cv_show_photo": bool(cv_template != "plain" and documents_payload.get("web_cv_show_photo", default_web_cv_show_photo)),
+        "web_cv_show_photo": bool(documents_payload.get("web_cv_show_photo", default_web_cv_show_photo)),
         "web_cv_palette": _merge_web_cv_palette(existing_web_cv_palette, payload_web_cv_palette),
         "master_career_profile_asset_id": str(
             documents_payload.get("master_career_profile_asset_id")
@@ -2504,12 +2534,12 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
     if not workspace_has_value("cv_color_scheme"):
         overrides.setdefault("cv_color_scheme", str(documents.get("cv_color_scheme") or "classic_navy"))
     if not workspace_has_value("include_photo"):
-        overrides.setdefault("include_photo", bool(effective_cv_template != "plain" and documents.get("include_photo", True)))
+        overrides.setdefault("include_photo", bool(documents.get("include_photo", True)))
 
     include_photo_enabled = workspace_settings.get("include_photo")
     if include_photo_enabled is None:
         include_photo_enabled = bool(documents.get("include_photo", True))
-    include_photo_enabled = bool(effective_cv_template != "plain" and include_photo_enabled)
+    include_photo_enabled = bool(include_photo_enabled)
     if include_photo_enabled and not workspace_has_value("profile_image"):
         photo_path = str(profile.get("photo_path") or "")
         if photo_path:
@@ -2688,8 +2718,8 @@ def _build_settings_payload(application, user) -> dict:
         "review_preferences": review_preferences,
         "referrals": referrals,
         "account": {
-            "display_name": user.display_name,
-            "email": user.email,
+            "display_name": _public_user_display_name(user),
+            "email": _public_user_email(user),
             "role": user.role,
             "allowed_workspace_ids": list(user.allowed_workspace_ids),
             "is_active": user.is_active,
@@ -6923,6 +6953,8 @@ def _serialize_authenticated_user(
     quota_overrides: dict[str, object] | None = None,
 ) -> dict[str, object]:
     payload = user.to_dict()
+    payload["display_name"] = _public_user_display_name(user)
+    payload["email"] = _public_user_email(user)
     public_metadata = {
         "role": normalize_clerk_role(role),
         "plan_id": normalize_plan_id(plan_id),
@@ -6988,7 +7020,7 @@ def _claim_email_address(raw_claims: dict[str, Any], clerk_user_id: str) -> str:
                 candidate = _claim_string(item, "email_address", "emailAddress")
                 if candidate:
                     return candidate
-    return f"{clerk_user_id}@clerk.local"
+    return ""
 
 
 def _provision_user_from_clerk_claims(application, claims) -> UserRecord:
@@ -7093,14 +7125,14 @@ def _lookup_user_by_clerk_subject(application, clerk_user_id: str, *, claims=Non
     try:
         return application.get_user(normalized_clerk_user_id)
     except KeyError as exc:
-        if claims is not None:
-            try:
-                return _provision_user_from_clerk_claims(application, claims)
-            except Exception:
-                pass
         try:
             return _provision_user_from_clerk(application, normalized_clerk_user_id)
         except Exception as provision_exc:
+            if claims is not None:
+                try:
+                    return _provision_user_from_clerk_claims(application, claims)
+                except Exception:
+                    pass
             raise KeyError(f"User for Clerk subject '{normalized_clerk_user_id}' not found.") from provision_exc
 
 

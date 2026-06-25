@@ -981,6 +981,68 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         self.assertAlmostEqual(exported.sections[0].page_width.inches, 8.5, places=2)
         self.assertEqual(exported.tables[0].cell(0, 0).text.strip(), "May Riley")
 
+    def test_section_bars_template_uses_centered_bar_layout(self):
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "location_raw": "New York, NY",
+            "cv_professional_summary": "Known for structured execution and clear communication.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Analyst",
+                    "company": "ACME",
+                    "location": "New York",
+                    "period": "2023 - Present",
+                    "bullets": ["Improved reporting quality."],
+                }
+            ],
+            "cv_skills": ["Analysis", "Communication"],
+            "cv_education": [
+                {
+                    "degree_title": "BSc Business",
+                    "institution": "Example University",
+                    "period": "2022",
+                    "thesis_bullets": [],
+                }
+            ],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record,
+                docs_dir=Path(temp_dir),
+                run_date="2026-06-05",
+                candidate_name="Roy J. Weatherspoon",
+                candidate_email="roy@example.com",
+                cv_font_name="Georgia",
+                cv_template_id="section_bars",
+                cv_color_scheme="classic_navy",
+                languages=[],
+                profile_image_path=None,
+                include_profile_image=False,
+                profile_links=[],
+            )
+            exported = Document(output_path)
+
+        paragraph_texts = [paragraph.text.strip() for paragraph in exported.paragraphs if paragraph.text.strip()]
+        table_texts = [
+            cell.text.strip()
+            for table in exported.tables
+            for row in table.rows
+            for cell in row.cells
+            if cell.text.strip()
+        ]
+
+        self.assertAlmostEqual(exported.sections[0].page_width.inches, 8.5, places=2)
+        self.assertIn("SUMMARY", paragraph_texts)
+        self.assertIn("PROFESSIONAL EXPERIENCE", paragraph_texts)
+        self.assertIn("EDUCATION", paragraph_texts)
+        self.assertIn("SKILLS", paragraph_texts)
+        self.assertIn("ROY J. WEATHERSPOON", table_texts[0])
+        self.assertIn("Analyst", table_texts)
+        self.assertIn("2023 - Present", table_texts)
+
     def test_create_cv_document_localizes_section_labels_for_german_output(self):
         record = {
             "job_id": "job_1",

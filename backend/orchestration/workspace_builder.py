@@ -403,7 +403,7 @@ def _document_template_options() -> list[dict[str, str]]:
     return [
         {"value": item["id"], "label": item["label"]}
         for item in CV_TEMPLATE_PRESETS.values()
-        if item["id"] == "plain"
+        if item["id"] in {"plain", "section_bars"}
     ]
 
 
@@ -1775,8 +1775,6 @@ def _build_workspace_settings(flow_id: str, source_ids: list[str], payload_setti
         settings["personalization_scope"] = normalize_personalization_scope(
             settings.get("personalization_scope")
         )
-        if settings.get("cv_template") == "plain":
-            settings["include_photo"] = False
     return settings
 
 

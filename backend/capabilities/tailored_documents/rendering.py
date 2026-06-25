@@ -78,16 +78,30 @@ CV_TEMPLATE_PRESETS = {
     "plain": {
         "id": "plain",
         "label": "Plain",
-        "description": "Photo-free single-column resume with a name rule, classic headings, and compact skills.",
+        "description": "Single-column resume with a name rule, classic headings, compact skills, and optional photo.",
         "layout": "plain_resume",
         "heading_case": "title",
         "base_font_size": 10.5,
         "header_font_size": 28.0,
         "divider_weight": "12",
-        "photo_width": 0,
+        "photo_width": 1.05,
         "top_offset_inches": 0,
         "page_margin_inches": 0.7,
-        "supports_photo": False,
+        "supports_photo": True,
+    },
+    "section_bars": {
+        "id": "section_bars",
+        "label": "Section Bars",
+        "description": "Centered resume with light section bars, compact contact line, and optional photo.",
+        "layout": "section_bar_resume",
+        "heading_case": "upper",
+        "base_font_size": 10.0,
+        "header_font_size": 16.5,
+        "divider_weight": "4",
+        "photo_width": 0.95,
+        "top_offset_inches": 0,
+        "page_margin_inches": 0.6,
+        "supports_photo": True,
     },
 }
 
@@ -97,6 +111,9 @@ CV_TEMPLATE_ALIASES = {
     "compact": "plain",
     "europass": "plain",
     "teal_resume": "plain",
+    "simple": "section_bars",
+    "simple_resume": "section_bars",
+    "blue_bars": "section_bars",
 }
 
 CV_COLOR_SCHEMES = {
@@ -219,7 +236,10 @@ def resolve_assets_profile_png(docs_dir: Path):
 
 def get_document_design_options() -> dict:
     return {
-        "templates": [dict(CV_TEMPLATE_PRESETS["plain"])],
+        "templates": [
+            dict(CV_TEMPLATE_PRESETS["plain"]),
+            dict(CV_TEMPLATE_PRESETS["section_bars"]),
+        ],
         "color_schemes": list(CV_COLOR_SCHEMES.values()),
         "fonts": list(CV_FONT_OPTIONS),
     }
@@ -310,6 +330,7 @@ def create_cv_document(
 ) -> str:
     try:
         from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.opc.constants import RELATIONSHIP_TYPE as RT
         from docx.oxml import OxmlElement
         from docx.oxml.ns import qn
@@ -350,7 +371,7 @@ def create_cv_document(
             pass
 
     section = doc.sections[0]
-    if layout == "plain_resume":
+    if layout in {"plain_resume", "section_bar_resume"}:
         section.page_width = Inches(8.5)
         section.page_height = Inches(11)
         section.top_margin = Inches(0.7)
@@ -905,7 +926,7 @@ def create_cv_document(
             render_europass_section(section_labels["languages"], lambda target: write_text_paragraph(target, language_line, after_pt=1))
 
     def render_plain_resume():
-        header_table = doc.add_table(rows=1, cols=1)
+        header_table = doc.add_table(rows=1, cols=2 if include_profile_image and profile_image_path else 1)
         header_cell = header_table.cell(0, 0)
         set_cell_border(
             header_cell,
@@ -922,6 +943,13 @@ def create_cv_document(
             size_pt=float(template["header_font_size"]),
             color=primary_rgb,
         )
+        if include_profile_image and profile_image_path and len(header_table.columns) > 1:
+            photo_cell = header_table.cell(0, 1)
+            set_cell_margins(photo_cell, top=0, right=0, bottom=0, left=80)
+            photo_paragraph = photo_cell.paragraphs[0]
+            configure_paragraph(photo_paragraph, before_pt=0, after_pt=0)
+            photo_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            insert_inline_photo(photo_paragraph, width_inches=float(template["photo_width"]))
 
         contact_paragraph = doc.add_paragraph()
         configure_paragraph(contact_paragraph, before_pt=6, after_pt=0)
@@ -1012,12 +1040,135 @@ def create_cv_document(
             begin_section("Skills & Abilities" if output_language == "English" else section_labels["skills"])
             render_plain_skills()
 
+    def render_section_bar_resume():
+        header_table = doc.add_table(rows=1, cols=2 if include_profile_image and profile_image_path else 1)
+        header_cell = header_table.cell(0, 0)
+        set_cell_margins(header_cell, top=0, right=0, bottom=20, left=0)
+        name_paragraph = header_cell.paragraphs[0]
+        configure_paragraph(name_paragraph, before_pt=0, after_pt=2)
+        name_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        name_run = name_paragraph.add_run(candidate_name.upper())
+        style_run(name_run, size_pt=float(template["header_font_size"]), bold=True)
+
+        rule_paragraph = header_cell.add_paragraph()
+        configure_paragraph(rule_paragraph, before_pt=0, after_pt=4, line_spacing_pt=1)
+        set_paragraph_border(rule_paragraph, color_hex="B8C7D9", size="8")
+
+        contact_paragraph = header_cell.add_paragraph()
+        configure_paragraph(contact_paragraph, before_pt=0, after_pt=0)
+        contact_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        has_contact_item = False
+        if contact_line:
+            contact_run = contact_paragraph.add_run(contact_line)
+            style_run(contact_run, size_pt=8.8, bold=True)
+            has_contact_item = True
+        for link in valid_profile_links:
+            if has_contact_item:
+                separator = contact_paragraph.add_run(" | ")
+                style_run(separator, size_pt=8.8, bold=True)
+            add_hyperlink(contact_paragraph, text=link["text"], url=link["url"], font_size_pt=8.8)
+            has_contact_item = True
+
+        if include_profile_image and profile_image_path and len(header_table.columns) > 1:
+            photo_cell = header_table.cell(0, 1)
+            set_cell_margins(photo_cell, top=0, right=0, bottom=0, left=80)
+            photo_paragraph = photo_cell.paragraphs[0]
+            configure_paragraph(photo_paragraph, before_pt=0, after_pt=0)
+            photo_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            insert_inline_photo(photo_paragraph, width_inches=float(template["photo_width"]))
+
+        def begin_bar_section(title: str) -> None:
+            paragraph = doc.add_paragraph()
+            configure_paragraph(paragraph, before_pt=10, after_pt=5)
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            set_paragraph_shading(paragraph, color_scheme["surface"])
+            run = paragraph.add_run(title.upper())
+            style_run(run, size_pt=11.5, color=primary_rgb)
+
+        def render_bar_experience() -> None:
+            for item in experiences:
+                role_title = str(item.get("role_title") or "").strip()
+                exp_company = str(item.get("company") or "").strip()
+                exp_location = str(item.get("location") or "").strip()
+                period = str(item.get("period") or "").strip()
+                heading_table = doc.add_table(rows=1, cols=2)
+                heading_table.autofit = True
+                left_cell = heading_table.cell(0, 0)
+                right_cell = heading_table.cell(0, 1)
+                set_cell_margins(left_cell, top=0, right=0, bottom=0, left=0)
+                set_cell_margins(right_cell, top=0, right=0, bottom=0, left=0)
+                role_line = left_cell.paragraphs[0]
+                configure_paragraph(role_line, before_pt=2, after_pt=0)
+                role_run = role_line.add_run(role_title or section_labels["professional_experience"])
+                style_run(role_run, size_pt=9.6, bold=True)
+                if period:
+                    period_line = right_cell.paragraphs[0]
+                    configure_paragraph(period_line, before_pt=2, after_pt=0)
+                    period_line.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    period_run = period_line.add_run(period)
+                    style_run(period_run, size_pt=9.4, bold=True)
+                company_line = doc.add_paragraph()
+                configure_paragraph(company_line, before_pt=0, after_pt=2)
+                company_run = company_line.add_run(" / ".join(part for part in [exp_company, exp_location] if part))
+                style_run(company_run, size_pt=9.2, bold=True)
+                company_run.italic = True
+                for bullet in item.get("bullets", []):
+                    write_bullet_paragraph(doc, bullet, compact=True)
+
+        def render_bar_education() -> None:
+            for item in education_items:
+                degree_title = str(item.get("degree_title") or "").strip()
+                institution = str(item.get("institution") or "").strip()
+                period = str(item.get("period") or "").strip()
+                heading_table = doc.add_table(rows=1, cols=2)
+                left_cell = heading_table.cell(0, 0)
+                right_cell = heading_table.cell(0, 1)
+                set_cell_margins(left_cell, top=0, right=0, bottom=0, left=0)
+                set_cell_margins(right_cell, top=0, right=0, bottom=0, left=0)
+                left_line = left_cell.paragraphs[0]
+                configure_paragraph(left_line, before_pt=2, after_pt=0)
+                head = ", ".join(part for part in [institution, degree_title] if part)
+                head_run = left_line.add_run(head or degree_title)
+                style_run(head_run, size_pt=9.4, bold=True)
+                if period:
+                    right_line = right_cell.paragraphs[0]
+                    configure_paragraph(right_line, before_pt=2, after_pt=0)
+                    right_line.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    period_run = right_line.add_run(period)
+                    style_run(period_run, size_pt=9.4, bold=True)
+                thesis_title = str(item.get("thesis_title") or "").strip()
+                if thesis_title:
+                    write_text_paragraph(doc, thesis_title, after_pt=1, size_pt=9.0)
+                for bullet in item.get("thesis_bullets", []):
+                    write_bullet_paragraph(doc, str(bullet).strip(), compact=True)
+
+        if summary_text:
+            begin_bar_section("Summary" if output_language == "English" else section_labels["profile"])
+            write_text_paragraph(doc, summary_text, after_pt=2, size_pt=9.4, bold=False)
+        if experiences:
+            begin_bar_section(section_labels["professional_experience"])
+            render_bar_experience()
+        if initiatives:
+            begin_bar_section(section_labels["projects"])
+            render_plain_projects()
+        if education_items:
+            begin_bar_section(section_labels["education"])
+            render_bar_education()
+        if skills:
+            begin_bar_section(section_labels["skills"])
+            write_text_paragraph(doc, ", ".join(skills), after_pt=1, size_pt=9.4)
+        if language_values:
+            begin_bar_section(section_labels["languages"])
+            write_text_paragraph(doc, language_line, after_pt=1, size_pt=9.4)
+
     if layout == "modern":
         render_modern()
     elif layout == "compact":
         render_compact()
     elif layout == "europass":
         render_europass()
+    elif layout == "section_bar_resume":
+        render_section_bar_resume()
     elif layout == "plain_resume":
         render_plain_resume()
     else:

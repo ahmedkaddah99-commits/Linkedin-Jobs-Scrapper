@@ -467,30 +467,6 @@ function BillingSection({
   );
 }
 
-function AccountAccessSection({ account }) {
-  const workspaceSummary = (account.allowed_workspace_ids || []).length
-    ? account.allowed_workspace_ids.join(", ")
-    : "All accessible workspaces";
-
-  return (
-    <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
-      <h2 className="font-headline text-lg font-bold text-on-surface">Access</h2>
-      <div className="mt-5 grid gap-4">
-        <div className="rounded-lg bg-surface-container-low p-4">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant">Role</h3>
-          <p className="mt-2 text-lg font-semibold text-on-surface">{account.role || "viewer"}</p>
-        </div>
-        <div className="rounded-lg bg-surface-container-low p-4">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant">
-            Workspace Access
-          </h3>
-          <p className="mt-2 text-sm leading-7 text-on-surface">{workspaceSummary}</p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function DeleteAccountSection({
   accountEmail,
   confirmation,
@@ -781,7 +757,6 @@ export default function SettingsPage() {
               photoUploadState={photoUploadState}
               profile={profile}
             />
-            <AccountAccessSection account={account} />
             <DeleteAccountSection
               accountEmail={account.email || ""}
               confirmation={deleteConfirmation}

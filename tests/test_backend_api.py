@@ -1448,9 +1448,13 @@ class BackendApiTests(unittest.TestCase):
             "plain",
             {option["value"] for option in user_facing_fields["cv_template"]["options"]},
         )
+        self.assertIn(
+            "section_bars",
+            {option["value"] for option in user_facing_fields["cv_template"]["options"]},
+        )
         self.assertEqual(
             {option["value"] for option in user_facing_fields["cv_template"]["options"]},
-            {"plain"},
+            {"plain", "section_bars"},
         )
         self.assertNotIn(
             "teal_resume",
@@ -2515,9 +2519,13 @@ class BackendApiTests(unittest.TestCase):
             "plain",
             {item["id"] for item in settings_payload["options"]["cv_templates"]},
         )
+        self.assertIn(
+            "section_bars",
+            {item["id"] for item in settings_payload["options"]["cv_templates"]},
+        )
         self.assertEqual(
             {item["id"] for item in settings_payload["options"]["cv_templates"]},
-            {"plain"},
+            {"plain", "section_bars"},
         )
         self.assertNotIn(
             "teal_resume",
@@ -2573,6 +2581,33 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(updated_payload["profile"]["education"][0]["degree_title"], "MSc Operations Management")
         self.assertEqual(updated_payload["profile"]["education"][0]["institution"], "Example University")
+
+    def test_settings_and_auth_payload_hide_internal_clerk_fallback_identity(self):
+        leaked_user = self.app.get_user(self.user.user_id)
+        leaked_user.display_name = "user_3DtxNJbFAnuqOgglJN4MwHY6cRx"
+        leaked_user.email = "user_3DtxNJbFAnuqOgglJN4MwHY6cRx@clerk.local"
+        leaked_user.metadata = {
+            **(leaked_user.metadata or {}),
+            "profile": {
+                "name": "user_3DtxNJbFAnuqOgglJN4MwHY6cRx",
+                "email": "user_3DtxNJbFAnuqOgglJN4MwHY6cRx@clerk.local",
+                "industry": "Fintech",
+            },
+        }
+        self.app.repositories.auth_repository.upsert_user(leaked_user)
+
+        status, settings_payload = self._request("GET", "/settings")
+        self.assertEqual(status, 200)
+        self.assertEqual(settings_payload["account"]["display_name"], "")
+        self.assertEqual(settings_payload["account"]["email"], "")
+        self.assertEqual(settings_payload["profile"]["name"], "")
+        self.assertEqual(settings_payload["profile"]["email"], "")
+        self.assertEqual(settings_payload["profile"]["industry"], "Fintech")
+
+        status, auth_payload = self._request("GET", "/auth/me")
+        self.assertEqual(status, 200)
+        self.assertEqual(auth_payload["user"]["display_name"], "")
+        self.assertEqual(auth_payload["user"]["email"], "")
 
     def test_settings_round_trip_persists_generated_memory_cards(self):
         memory_cards = [

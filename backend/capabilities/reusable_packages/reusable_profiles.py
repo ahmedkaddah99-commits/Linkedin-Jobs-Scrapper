@@ -281,8 +281,6 @@ def build_stage4_args(config: dict | None = None, overrides: Mapping[str, Any] |
         job_cfg_str(style_config, ("candidate", "cv_template"), "plain") or "plain"
     )
     include_photo = bool(job_cfg_bool(style_config, ("candidate", "include_photo"), False))
-    if cv_template == "plain":
-        include_photo = False
     profile_links = []
     for key, default_text, default_icon in (("linkedin", "LinkedIn", "in"), ("github", "GitHub", "GH")):
         profile_links.append(
@@ -343,8 +341,6 @@ def run_stage4_pipeline(args, *, config: dict | None = None, jobs: List[Dict] | 
     normalized_profile_input = normalize_windows_env_path(str(getattr(args, "profile_image", "") or ""))
     cv_template = normalize_cv_template_id(str(getattr(args, "cv_template", "plain") or "plain"))
     include_photo = bool(getattr(args, "include_photo", False))
-    if cv_template == "plain":
-        include_photo = False
     profile_image_path = resolve_profile_image_path(normalized_profile_input) if include_photo else None
     if include_photo and not profile_image_path:
         profile_image_path = resolve_assets_profile_png(role_cv_output_dir.parent)

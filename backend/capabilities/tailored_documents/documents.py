@@ -551,8 +551,6 @@ def run_stage4_pipeline(args, *, config=None, jobs: Optional[List[Dict]] = None)
     cv_template_id = normalize_cv_template_id(getattr(args, "cv_template", "plain"))
     cv_color_scheme = str(getattr(args, "cv_color_scheme", "classic_navy") or "classic_navy").strip() or "classic_navy"
     include_photo = bool(getattr(args, "include_photo", False))
-    if cv_template_id == "plain":
-        include_photo = False
     selected_cv_generation_mode = normalize_cv_generation_mode(
         getattr(args, "cv_generation_mode", DEFAULT_CV_GENERATION_MODE)
     )

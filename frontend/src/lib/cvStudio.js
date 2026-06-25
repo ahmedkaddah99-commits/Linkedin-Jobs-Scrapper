@@ -102,9 +102,17 @@ export const WEB_CV_TEMPLATES = [
     id: "plain",
     label: "Plain",
     shortLabel: "Plain",
-    description: "Photo-free classic resume with a configurable name rule and compact skills.",
+    description: "Classic resume with a configurable name rule, compact skills, and optional profile photo.",
     mood: "Classic, polished, approachable",
-    supportsPhoto: false,
+    supportsPhoto: true,
+  },
+  {
+    id: "section_bars",
+    label: "Section Bars",
+    shortLabel: "Bars",
+    description: "Centered header, compact contact line, and pale section bars similar to a traditional Word resume.",
+    mood: "Formal, compact, familiar",
+    supportsPhoto: true,
   },
   {
     id: "europass_lite",
@@ -123,6 +131,10 @@ const DOCX_TO_WEB_TEMPLATE_MAP = {
   compact: "plain",
   europass: "europass_lite",
   plain: "plain",
+  section_bars: "section_bars",
+  simple: "section_bars",
+  simple_resume: "section_bars",
+  blue_bars: "section_bars",
 };
 
 const DOCX_COLOR_SCHEME_TO_WEB_PALETTE = {
@@ -561,7 +573,7 @@ export function buildWorkspacePreviewDocuments(sharedDocuments = {}, workspaceSe
   );
   const cvFont = String(normalizedSettings.cv_font || baseDocuments.cv_font || "Calibri");
   const includePhoto = normalizedSettings.include_photo ?? baseDocuments.include_photo ?? true;
-  const effectiveIncludePhoto = cvTemplate === "plain" ? false : Boolean(includePhoto);
+  const effectiveIncludePhoto = Boolean(includePhoto);
   const cvOutputLanguage = normalizeOutputLanguage(
     normalizedSettings.cv_output_language ||
       baseDocuments.cv_output_language ||
@@ -633,13 +645,12 @@ function normalizeModel(state) {
   const projects = normalizeProjectItems(state.projects);
 
   const template = findCvTemplate(state.templateId);
-  const isPlainResume = template.id === "plain";
   return {
     templateId: template.id,
     template,
     palette: normalizePalette(state.palette || {}),
     fontFamily: String(state.fontFamily || "Aptos"),
-    showPhoto: isPlainResume ? false : Boolean(state.showPhoto),
+    showPhoto: Boolean(template.supportsPhoto && state.showPhoto),
     outputLanguage: normalizeOutputLanguage(state.outputLanguage || "English"),
     name: String(state.name || "Candidate Name"),
     headline: String(state.headline || "Target Role"),
@@ -878,7 +889,10 @@ function templatePlainResume(model) {
   return `
     <main class="cv-sheet template-plain-resume">
       <header class="plain-resume-head">
-        <h1>${escapeHtml(model.name)}</h1>
+        <div>
+          <h1>${escapeHtml(model.name)}</h1>
+        </div>
+        ${buildPhotoMarkup(model, "cv-photo-shell plain-resume-photo")}
       </header>
       ${buildContactLinks(model, "plain-resume-contact")}
       <section class="plain-resume-section">
@@ -905,6 +919,70 @@ function templatePlainResume(model) {
       ${
         additional
           ? `<section class="plain-resume-section"><h2>${escapeHtml(labelFor(model, "additional"))}</h2>${additional}</section>`
+          : ""
+      }
+    </main>
+  `;
+}
+
+function templateSectionBars(model) {
+  const experience = model.experience
+    .map((item) => {
+      const employerLine = [item.company, item.location].filter(Boolean).join(" / ");
+      const bullets = item.bullets.length
+        ? buildStructuredListMarkup(item.bullets)
+        : `<p class="empty-note">Add tailored achievement bullets for this role.</p>`;
+      return `
+        <article class="bar-resume-entry">
+          <div class="bar-resume-entry-head">
+            <div>
+              <h3>${escapeHtml(item.title || labelFor(model, "experienceItem"))}</h3>
+              ${employerLine ? `<p>${escapeHtml(employerLine)}</p>` : ""}
+            </div>
+            ${item.period ? `<span>${escapeHtml(item.period)}</span>` : ""}
+          </div>
+          ${bullets}
+        </article>
+      `;
+    })
+    .join("");
+  const skills = model.skills.length
+    ? `<p>${model.skills.map((skill) => escapeHtml(skill)).join(", ")}</p>`
+    : `<p class="empty-note">Add skills or keywords in the editor.</p>`;
+  const additional = buildFooterMeta(model);
+  return `
+    <main class="cv-sheet template-section-bars">
+      <header class="bar-resume-head">
+        <div class="bar-resume-title">
+          <h1>${escapeHtml(model.name)}</h1>
+          ${buildContactLinks(model, "bar-resume-contact")}
+        </div>
+        ${buildPhotoMarkup(model, "cv-photo-shell bar-resume-photo")}
+      </header>
+      <section class="bar-resume-section">
+        <h2>${escapeHtml(labelFor(model, "summary"))}</h2>
+        ${buildSummaryMarkup(model)}
+      </section>
+      <section class="bar-resume-section">
+        <h2>${escapeHtml(labelFor(model, "experience"))}</h2>
+        <div class="bar-resume-experience">${experience}</div>
+      </section>
+      ${
+        model.projects.length
+          ? `<section class="bar-resume-section"><h2>${escapeHtml(labelFor(model, "projects"))}</h2>${buildProjectsMarkup(model)}</section>`
+          : ""
+      }
+      <section class="bar-resume-section">
+        <h2>${escapeHtml(labelFor(model, "education"))}</h2>
+        <div class="bar-resume-education">${buildEducationMarkup(model)}</div>
+      </section>
+      <section class="bar-resume-section">
+        <h2>${escapeHtml(labelFor(model, "skills"))}</h2>
+        <div class="bar-resume-skills">${skills}</div>
+      </section>
+      ${
+        additional
+          ? `<section class="bar-resume-section"><h2>${escapeHtml(labelFor(model, "additional"))}</h2>${additional}</section>`
           : ""
       }
     </main>
@@ -1079,6 +1157,8 @@ function renderTemplate(model) {
   switch (model.templateId) {
     case "plain":
       return templatePlainResume(model);
+    case "section_bars":
+      return templateSectionBars(model);
     case "editorial_sidebar":
       return templateEditorialSidebar(model);
     case "mono_nav":
@@ -1098,8 +1178,9 @@ function renderTemplate(model) {
 function buildBaseCss(model, { forIframe = false } = {}) {
   const palette = model.palette;
   const background = forIframe ? "#EEF3F8" : "#E8EEF5";
-  const printPageSize = model.templateId === "plain" ? "Letter" : "A4";
-  const printPageMargin = model.templateId === "plain" ? "0" : "10mm";
+  const usesLetterPage = model.templateId === "plain" || model.templateId === "section_bars";
+  const printPageSize = usesLetterPage ? "Letter" : "A4";
+  const printPageMargin = usesLetterPage ? "0" : "10mm";
   return `
     :root {
       color-scheme: light;
@@ -1447,6 +1528,10 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       line-height: 1.15;
     }
     .plain-resume-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14pt;
+      align-items: flex-start;
       padding-bottom: 1.5mm;
       border-bottom: 1.5pt solid var(--cv-accent);
     }
@@ -1456,6 +1541,12 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       font-weight: 400;
       line-height: 1;
       letter-spacing: 0;
+    }
+    .plain-resume-photo {
+      width: 26mm;
+      min-width: 26mm;
+      height: 31mm;
+      border-radius: 6px;
     }
     .plain-resume-contact {
       display: flex;
@@ -1536,6 +1627,129 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       font-size: 10.5pt;
       font-weight: 400;
     }
+    .template-section-bars {
+      width: 215.9mm;
+      min-height: 279.4mm;
+      padding: 14mm 17.5mm 12mm;
+      color: var(--cv-text);
+      font-family: Georgia, ${JSON.stringify(model.fontFamily)}, "Times New Roman", serif;
+      font-size: 9.6pt;
+      line-height: 1.22;
+    }
+    .bar-resume-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12mm;
+      align-items: start;
+      padding-bottom: 7pt;
+    }
+    .bar-resume-title {
+      text-align: center;
+    }
+    .bar-resume-title h1 {
+      padding-bottom: 5pt;
+      border-bottom: 1.5pt solid #B8C7D9;
+      color: #111827;
+      font-size: 18pt;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .bar-resume-contact {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0;
+      margin-top: 6pt;
+      color: var(--cv-muted);
+      font-size: 8.7pt;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .bar-resume-contact > * + *::before {
+      content: " | ";
+      white-space: pre;
+    }
+    .bar-resume-photo {
+      width: 24mm;
+      min-width: 24mm;
+      height: 29mm;
+      border-radius: 4px;
+    }
+    .bar-resume-section {
+      margin-top: 10pt;
+    }
+    .bar-resume-section h2 {
+      margin-bottom: 6pt;
+      padding: 2pt 6pt 2.5pt;
+      background: var(--cv-surface);
+      color: #4B5563;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 11.5pt;
+      font-weight: 400;
+      line-height: 1.05;
+      text-align: center;
+      text-transform: uppercase;
+    }
+    .bar-resume-section .summary-copy,
+    .bar-resume-section .education-line,
+    .bar-resume-section .meta-stack p {
+      font-size: 9.6pt;
+      line-height: 1.24;
+    }
+    .bar-resume-experience {
+      display: grid;
+      gap: 8pt;
+    }
+    .bar-resume-entry-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12pt;
+      align-items: baseline;
+      margin-bottom: 3pt;
+    }
+    .bar-resume-entry-head h3 {
+      color: #111827;
+      font-size: 9.8pt;
+      font-weight: 800;
+      line-height: 1.15;
+    }
+    .bar-resume-entry-head p {
+      margin-top: 2pt;
+      color: #111827;
+      font-size: 9.4pt;
+      font-style: italic;
+      font-weight: 700;
+    }
+    .bar-resume-entry-head span {
+      color: #111827;
+      font-size: 9.3pt;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .template-section-bars ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .template-section-bars li {
+      font-size: 9.4pt;
+      line-height: 1.22;
+    }
+    .template-section-bars li + li {
+      margin-top: 1.5pt;
+    }
+    .bar-resume-education {
+      display: grid;
+      gap: 5pt;
+    }
+    .bar-resume-education .education-line {
+      font-weight: 700;
+    }
+    .bar-resume-skills p {
+      font-size: 9.5pt;
+      line-height: 1.24;
+    }
     @media (max-width: 1000px) {
       body {
         padding: 0;
@@ -1566,8 +1780,15 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       .hero-row,
       .ledger-head,
       .europass-head,
-      .mono-hero {
+      .mono-hero,
+      .plain-resume-head {
         flex-direction: column;
+      }
+      .bar-resume-head {
+        grid-template-columns: 1fr;
+      }
+      .bar-resume-photo {
+        justify-self: center;
       }
       .compact-links {
         text-align: left;

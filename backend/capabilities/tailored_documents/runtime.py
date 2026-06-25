@@ -67,7 +67,7 @@ def build_stage4_args(cli_args) -> SimpleNamespace:
         cv_font=cli_args.cv_font,
         cv_template=cv_template,
         cv_color_scheme=cli_args.cv_color_scheme,
-        include_photo=bool(cli_args.include_photo) and cv_template != "plain",
+        include_photo=bool(cli_args.include_photo),
         languages=list(cli_args.languages),
         light_customization_extra_prompt=getattr(cli_args, LIGHT_CUSTOMIZATION_EXTRA_PROMPT_FIELD, ""),
         light_customization_prompt_override=getattr(cli_args, LIGHT_CUSTOMIZATION_PROMPT_OVERRIDE_FIELD, ""),

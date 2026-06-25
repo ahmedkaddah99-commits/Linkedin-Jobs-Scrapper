@@ -177,7 +177,7 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
     template,
     palette: previewPalette(scheme),
     fontFamily: documents.cv_font || "Calibri",
-    showPhoto: template.id === "plain" ? false : Boolean(documents.include_photo),
+    showPhoto: Boolean(documents.include_photo),
     name: firstNonEmpty(profile.name, "Candidate Name"),
     headline: firstNonEmpty(profile.role_title, template.label),
     summary: firstNonEmpty(
@@ -1010,10 +1010,13 @@ function EuropassPreview({ model }) {
 function PlainPreview({ model }) {
   return (
     <div className="space-y-4" style={{ fontFamily: model.fontFamily }}>
-      <div className="border-b-[3px] pb-2" style={{ borderColor: model.palette.accent }}>
-        <div className="text-[28px] font-normal leading-none" style={{ color: model.palette.primary }}>
-          {model.name}
+      <div className="flex items-start justify-between gap-4 border-b-[3px] pb-2" style={{ borderColor: model.palette.accent }}>
+        <div className="min-w-0">
+          <div className="text-[28px] font-normal leading-none" style={{ color: model.palette.primary }}>
+            {model.name}
+          </div>
         </div>
+        <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="h-20 w-16" />
       </div>
       {model.contacts.length ? (
         <div className="text-[11px] leading-5" style={{ color: model.palette.text }}>
@@ -1072,6 +1075,39 @@ function PlainPreview({ model }) {
   );
 }
 
+function SectionBarsPreview({ model }) {
+  return (
+    <div className="space-y-3 font-serif" style={{ fontFamily: model.fontFamily }}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1 text-center">
+          <div className="border-b pb-2 text-lg font-bold uppercase" style={{ borderColor: model.palette.border, color: model.palette.text }}>
+            {model.name}
+          </div>
+          {model.contacts.length ? (
+            <div className="mt-2 text-[11px] font-semibold leading-5" style={{ color: model.palette.muted }}>
+              {model.contacts.join(" | ")}
+            </div>
+          ) : null}
+        </div>
+        <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="h-20 w-16" />
+      </div>
+      {[
+        ["Summary", <div className="text-xs leading-5">{model.summary}</div>],
+        ["Professional Experience", <ExperienceList compact model={model} />],
+        ["Education", <div className="space-y-1 text-xs font-semibold leading-5">{model.education.map((item) => <div key={item}>{item}</div>)}</div>],
+        ["Skills", <div className="text-xs leading-5">{model.skills.join(", ")}</div>],
+      ].map(([label, content]) => (
+        <div key={label}>
+          <div className="mb-2 py-1 text-center text-sm uppercase" style={{ backgroundColor: model.palette.surface, color: model.palette.muted }}>
+            {label}
+          </div>
+          <div style={{ color: model.palette.text }}>{content}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function CvExportPreview({ documents = {}, profile = {}, options = {}, className = "" }) {
   const model = buildPreviewModel(profile, documents, options);
 
@@ -1084,6 +1120,8 @@ export function CvExportPreview({ documents = {}, profile = {}, options = {}, cl
     content = <EuropassPreview model={model} />;
   } else if (model.template.id === "plain") {
     content = <PlainPreview model={model} />;
+  } else if (model.template.id === "section_bars") {
+    content = <SectionBarsPreview model={model} />;
   }
 
   return (

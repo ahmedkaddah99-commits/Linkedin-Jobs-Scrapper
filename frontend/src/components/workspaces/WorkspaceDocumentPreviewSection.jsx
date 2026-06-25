@@ -16,11 +16,6 @@ export function WorkspaceDocumentPreviewSection({
   selectedWorkspaceCvMissing,
   updateSetting,
 }) {
-  const visibleFields =
-    effectiveDocumentPreviewDocuments.cv_template === "plain"
-      ? fields.filter((field) => field.id !== "include_photo")
-      : fields;
-
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(320px,1.1fr)]">
       <div className="space-y-4">
@@ -34,7 +29,7 @@ export function WorkspaceDocumentPreviewSection({
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          {visibleFields.map((field) => (
+          {fields.map((field) => (
             <label className="space-y-2" key={field.id}>
               <span className="block text-sm font-semibold text-on-surface">{requiredLabel(field)}</span>
               <FieldRenderer
