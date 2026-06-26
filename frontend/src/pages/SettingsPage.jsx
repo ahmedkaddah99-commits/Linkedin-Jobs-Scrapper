@@ -746,72 +746,75 @@ export default function SettingsPage() {
           </button>
         </div>
       ) : draft ? (
-        <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
-          <div className="flex flex-col gap-8 xl:col-span-4">
-            <ProfileCard
-              account={account}
-              hasProfilePhoto={hasProfilePhoto}
-              onPhotoRemove={handlePhotoRemove}
-              onPhotoUpload={handlePhotoUpload}
-              photoFileInputRef={photoFileInputRef}
-              photoUploadState={photoUploadState}
-              profile={profile}
-            />
-            <DeleteAccountSection
-              accountEmail={account.email || ""}
-              confirmation={deleteConfirmation}
-              deleteState={deleteState}
-              onConfirmationChange={setDeleteConfirmation}
-              onDelete={handleDeleteAccount}
-            />
-          </div>
+        <div className="space-y-8">
+          <div className="grid grid-cols-1 gap-8 xl:grid-cols-12">
+            <div className="flex flex-col gap-8 xl:col-span-4">
+              <ProfileCard
+                account={account}
+                hasProfilePhoto={hasProfilePhoto}
+                onPhotoRemove={handlePhotoRemove}
+                onPhotoUpload={handlePhotoUpload}
+                photoFileInputRef={photoFileInputRef}
+                photoUploadState={photoUploadState}
+                profile={profile}
+              />
+            </div>
 
-          <div className="flex flex-col gap-8 xl:col-span-8">
-            <PersonalDetailsSection
-              account={account}
-              profile={profile}
-              updateSection={updateSection}
-            />
-            <BillingSection
-              billingPortalState={billingPortalState}
-              currentPlanId={currentPlanId}
-              currentPlanName={currentPlanName}
-              hasBillingPortalAccess={hasBillingPortalAccess}
-              onManageBilling={handleManageBilling}
-              onRefreshUsage={() => refreshUsage().catch(() => undefined)}
-              scrapeopsPolicy={scrapeopsPolicy}
-              subscriptionDetails={subscriptionDetails}
-              usageError={usageError}
-              usageLoading={usageLoading}
-              usageQuotas={usageQuotas}
-            />
+            <div className="flex flex-col gap-8 xl:col-span-8">
+              <PersonalDetailsSection
+                account={account}
+                profile={profile}
+                updateSection={updateSection}
+              />
+              <BillingSection
+                billingPortalState={billingPortalState}
+                currentPlanId={currentPlanId}
+                currentPlanName={currentPlanName}
+                hasBillingPortalAccess={hasBillingPortalAccess}
+                onManageBilling={handleManageBilling}
+                onRefreshUsage={() => refreshUsage().catch(() => undefined)}
+                scrapeopsPolicy={scrapeopsPolicy}
+                subscriptionDetails={subscriptionDetails}
+                usageError={usageError}
+                usageLoading={usageLoading}
+                usageQuotas={usageQuotas}
+              />
 
-            <div className="sticky bottom-8 self-end rounded-xl border border-outline-variant/20 bg-surface-container-lowest/80 p-4 shadow-soft backdrop-blur-[20px]">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <span className="mr-auto text-sm text-on-surface-variant sm:pl-2">
-                  {saveState.error
-                    ? saveState.error
-                    : saveState.message || (isDirty ? "You have unsaved changes" : "Everything is saved")}
-                </span>
-                <button
-                  className="rounded px-5 py-2.5 text-sm font-medium text-on-surface-variant transition-colors hover:text-on-surface active:scale-[0.98]"
-                  onClick={handleDiscard}
-                  type="button"
-                >
-                  Discard Changes
-                </button>
-                <button
-                  className="flex items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-primary to-primary-container px-6 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:saturate-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={!isDirty}
-                  onClick={handleSave}
-                  type="button"
-                >
-                  <span className="material-symbols-outlined text-[18px]">save</span>
-                  Save Account
-                </button>
+              <div className="sticky bottom-8 self-end rounded-xl border border-outline-variant/20 bg-surface-container-lowest/80 p-4 shadow-soft backdrop-blur-[20px]">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <span className="mr-auto text-sm text-on-surface-variant sm:pl-2">
+                    {saveState.error
+                      ? saveState.error
+                      : saveState.message || (isDirty ? "You have unsaved changes" : "Everything is saved")}
+                  </span>
+                  <button
+                    className="rounded px-5 py-2.5 text-sm font-medium text-on-surface-variant transition-colors hover:text-on-surface active:scale-[0.98]"
+                    onClick={handleDiscard}
+                    type="button"
+                  >
+                    Discard Changes
+                  </button>
+                  <button
+                    className="flex items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-primary to-primary-container px-6 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:saturate-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isDirty}
+                    onClick={handleSave}
+                    type="button"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">save</span>
+                    Save Account
+                  </button>
+                </div>
               </div>
             </div>
           </div>
+
+          <DeleteAccountSection
+            accountEmail={account.email || ""}
+            confirmation={deleteConfirmation}
+            deleteState={deleteState}
+            onConfirmationChange={setDeleteConfirmation}
+            onDelete={handleDeleteAccount}
+          />
         </div>
       ) : null}
     </div>
