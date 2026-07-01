@@ -34,6 +34,12 @@ class DatabaseMigrationTests(unittest.TestCase):
             {"TURSO_DATABASE_URL": "", "TURSO_AUTH_TOKEN": ""},
         )
 
+    def _migration_index(self, migration_id: str) -> int:
+        for index, migration in enumerate(MIGRATIONS):
+            if migration.migration_id == migration_id:
+                return index
+        raise AssertionError(f"Unknown migration id: {migration_id}")
+
     def test_runner_applies_migrations_once_and_reports_checksums(self):
         db_path = self._db_path("database_migrations_repeatable")
         calls: list[str] = []
@@ -129,7 +135,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual([row[0] for row in rows], [migration.migration_id for migration in MIGRATIONS])
         self.assertTrue(all(len(str(row[1])) == 64 for row in rows))
 
-    def test_committed_registry_preserves_migration_ids_001_through_014(self):
+    def test_committed_registry_preserves_migration_ids_001_through_015(self):
         self.assertEqual(
             [migration.migration_id for migration in MIGRATIONS],
             [
@@ -147,6 +153,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "012_creem_billing",
                 "013_candidate_document_normalization",
                 "014_workspace_ownership",
+                "015_email_sync_start_date",
             ],
         )
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))
@@ -162,7 +169,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
                 [
                     (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
-                    for migration in MIGRATIONS[:-1]
+                    for migration in MIGRATIONS[: self._migration_index("014_workspace_ownership")]
                 ],
             )
             connection.execute(
@@ -301,7 +308,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "INSERT INTO schema_migrations (migration_id, applied_at, checksum) VALUES (?, ?, ?)",
                 [
                     (migration.migration_id, "2026-01-01T00:00:00+00:00", migration.checksum)
-                    for migration in MIGRATIONS[:-2]
+                    for migration in MIGRATIONS[: self._migration_index("013_candidate_document_normalization")]
                 ],
             )
             connection.execute(

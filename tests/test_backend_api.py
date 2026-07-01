@@ -2446,10 +2446,13 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(fetched["domain_policies"][0]["domain_pattern"], "*.myworkdayjobs.com")
 
     def test_admin_scrapeops_dashboard_returns_trends_policy_and_alerts(self):
+        usage_occurred_at = (
+            datetime.now(timezone.utc) - timedelta(days=1)
+        ).replace(hour=12, minute=10, second=0, microsecond=0).isoformat()
         self.app.repositories.analytics_store.emit_event(
             event_id="evt_scrapeops_admin_usage_1",
             event_name="scrapeops_request",
-            occurred_at="2026-05-25T12:10:00+00:00",
+            occurred_at=usage_occurred_at,
             user_id=self.user.user_id,
             workspace_id="api_workspace",
             run_id="run_usage_admin",
@@ -4817,9 +4820,9 @@ class BackendApiTests(unittest.TestCase):
             def probe(self):
                 return {"status": "connected", "folder": self.kwargs.get("folder")}
 
-            def fetch_recent_messages(self, *, limit, scan_window="last_1_month"):
-                assert limit == 25
-                assert scan_window == "last_1_month"
+            def fetch_all_messages(self, *, start_date="", processed_ids=None):
+                assert start_date == ""
+                assert processed_ids == set()
                 return [
                     TrackerMailboxMessage(
                         message_id="msg-confirm-1",
@@ -4865,6 +4868,7 @@ class BackendApiTests(unittest.TestCase):
                 "/tracker/email-integration",
                 {
                     "provider_id": "gmail",
+                    "auth_strategy": "legacy_imap_password",
                     "email_address": email_address,
                     "folder": "INBOX",
                     "max_messages": 25,

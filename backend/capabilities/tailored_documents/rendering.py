@@ -1201,7 +1201,7 @@ def create_cv_document(
             render_bar_experience()
         if initiatives:
             begin_bar_section(section_labels["projects"])
-            render_plain_projects()
+            render_projects(doc, compact=True)
         if education_items:
             begin_bar_section(section_labels["education"])
             render_bar_education()
