@@ -1,6 +1,10 @@
 import textwrap
 import unittest
+from tempfile import TemporaryDirectory
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+import json
 
 from backend.capabilities.tailored_documents.manual_urls import (
     extract_public_posted_age,
@@ -9,6 +13,7 @@ from backend.capabilities.tailored_documents.manual_urls import (
     load_manual_urls,
     normalize_manual_urls,
 )
+from backend.capabilities.tailored_documents.workflow import run_manual_pipeline
 
 
 class ManualUrlIngestionTests(unittest.TestCase):
@@ -83,6 +88,40 @@ class ManualUrlIngestionTests(unittest.TestCase):
         )
         self.assertEqual(len(invalid_entries), 1)
         self.assertEqual(invalid_entries[0]["url"], "invalid-url")
+
+    def test_run_manual_pipeline_accepts_string_output_paths_for_inline_urls(self):
+        with TemporaryDirectory() as temp_dir:
+            output_path = str(Path(temp_dir) / "manual_jobs.json")
+            failures_path = str(Path(temp_dir) / "manual_failures.json")
+            cli_args = SimpleNamespace(
+                manual_urls_inline=["https://example.com/jobs/alpha"],
+                manual_url_seed_list=[],
+                debug_enrich_blocks=False,
+                use_proxy_fallback=False,
+                manual_request_timeout_seconds=15,
+                manual_output_json=output_path,
+                manual_failures_json=failures_path,
+            )
+            fetched_job = {
+                "job_id": "manual_alpha",
+                "title": "Operations Analyst",
+                "company": "Example Co",
+                "source_url": "https://example.com/jobs/alpha",
+                "apply_link": "https://example.com/jobs/alpha",
+                "full_description": "Coordinate operations and improve internal workflows.",
+            }
+
+            with patch(
+                "backend.capabilities.tailored_documents.workflow.fetch_manual_jobs_from_urls",
+                return_value=([fetched_job], []),
+            ):
+                jobs, failures = run_manual_pipeline(cli_args)
+
+            self.assertEqual(failures, [])
+            self.assertEqual(jobs[0]["job_id"], "manual_alpha")
+            self.assertTrue(Path(output_path).exists())
+            self.assertTrue(Path(failures_path).exists())
+            self.assertEqual(json.loads(Path(output_path).read_text(encoding="utf-8"))[0]["manual_approved"], True)
 
 
 if __name__ == "__main__":

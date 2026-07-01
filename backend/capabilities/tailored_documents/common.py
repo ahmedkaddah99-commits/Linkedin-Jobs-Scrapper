@@ -7,13 +7,15 @@ def compact_whitespace(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "")).strip()
 
 
-def load_json_file(path: Path):
-    with path.open("r", encoding="utf-8") as file:
+def load_json_file(path: str | Path):
+    file_path = Path(path).expanduser()
+    with file_path.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
-def save_json_file(path: Path, payload) -> None:
-    with path.open("w", encoding="utf-8") as file:
+def save_json_file(path: str | Path, payload) -> None:
+    file_path = Path(path).expanduser()
+    with file_path.open("w", encoding="utf-8") as file:
         json.dump(payload, file, indent=4, ensure_ascii=False)
 
 

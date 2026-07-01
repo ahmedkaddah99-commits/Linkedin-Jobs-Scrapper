@@ -130,17 +130,347 @@ function buildTrackerBundleLabel(item) {
 function parseTrackerNumber(value) { const p = Number(value); return Number.isFinite(p) ? p : null; }
 function trackerAtsStopReasonLabel(stopReason) { const n = String(stopReason || "").trim().toLowerCase(); if (n === "target_reached") return "Target reached"; if (n === "max_attempts_reached") return "Pass limit reached"; if (n === "score_stalled") return "Score stalled"; return n ? n.replace(/_/g, " ") : ""; }
 function normalizeTrackerAtsAttemptHistory(gate = {}) { const m = gate.metadata && typeof gate.metadata === "object" ? gate.metadata : {}; return Array.isArray(m.attempt_history) ? m.attempt_history.map((a, i) => ({ attempt: parseTrackerNumber(a?.attempt) ?? i + 1, score: parseTrackerNumber(a?.score), changedSections: Array.isArray(a?.changed_sections) ? a.changed_sections.map((s) => String(s || "").trim()).filter(Boolean) : [], changeSummary: String(a?.change_summary || "").trim(), missingRequirements: Array.isArray(a?.missing_requirements) ? a.missing_requirements.map((r) => String(r || "").trim()).filter(Boolean) : [], improvementActions: Array.isArray(a?.improvement_actions) ? a.improvement_actions.map((r) => String(r || "").trim()).filter(Boolean) : [], rationale: String(a?.rationale || "").trim() })) : []; }
-function summarizeTrackerAtsState(documents = []) { /* unchanged - too long */ return null; }
+function summarizeTrackerAtsState(documents = []) {
+  const document = (Array.isArray(documents) ? documents : []).find((entry) => {
+    const gate = entry?.ats_export_gate;
+    return entry?.final_export_blocked || (gate && typeof gate === "object");
+  });
+  if (!document) return null;
+  const gate = document.ats_export_gate && typeof document.ats_export_gate === "object" ? document.ats_export_gate : {};
+  const gateState = String(gate.gate_state || "").trim().toLowerCase();
+  const bestScore = parseTrackerNumber(gate.best_score ?? document.ats_best_score ?? document.ats_score);
+  const targetScore = parseTrackerNumber(gate.target_score ?? document.ats_target_score);
+  const stopReason = trackerAtsStopReasonLabel(gate.metadata?.stop_reason || document.ats_stop_reason);
+  const attemptHistory = normalizeTrackerAtsAttemptHistory(gate);
+  if (document.final_export_blocked || gateState === "blocked") {
+    return { label: "ATS blocked", badgeClass: "bg-error/10 text-error", bestScore, targetScore, stopReason, attemptHistory };
+  }
+  if (gateState === "passed") {
+    return { label: "ATS cleared", badgeClass: "bg-teal-500/10 text-teal-600", bestScore, targetScore, stopReason, attemptHistory };
+  }
+  if (gateState === "exported_anyway") {
+    return { label: "ATS override", badgeClass: "bg-amber-500/10 text-amber-600", bestScore, targetScore, stopReason, attemptHistory };
+  }
+  return { label: "ATS checked", badgeClass: "bg-primary/10 text-primary", bestScore, targetScore, stopReason, attemptHistory };
+}
 function trackerAtsGateLabel(gateState) { const n = String(gateState || "").trim().toLowerCase(); if (n === "blocked") return "Blocked"; if (n === "passed") return "Cleared"; if (n === "exported_anyway") return "Override"; return "Preflight"; }
-function trackerDocumentExtension(document = {}) { /* unchanged */ return ""; }
-function isTrackerApplicationCv(document = {}) { /* unchanged */ return false; }
-function trackerDocumentExportRank(document = {}) { /* unchanged */ return 0; }
-function canExportTrackerDocument(document = {}) { /* unchanged */ return false; }
-function selectTrackerExportDocuments(documents = []) { /* unchanged */ return []; }
-function TrackerResourceCell({ item, request }) { /* unchanged */ return null; }
-function TrackerNotesCell({ item, onUpdate, updating }) { /* unchanged */ return null; }
-function TrackerTable({ filters, items, onFiltersChange, onUpdate, updating, request }) { /* unchanged */ return null; }
-function KanbanColumn({ colDef, cards, onDelete, onUpdate, updating }) { /* unchanged */ return null; }
+function trackerDocumentExtension(document = {}) {
+  const candidates = [document.file_extension, document.path, document.file_name, document.label, document.download_url, document.document_id];
+  for (const candidate of candidates) {
+    const text = String(candidate || "").trim().toLowerCase();
+    if (text === "pdf" || text.endsWith(".pdf")) return "pdf";
+    if (text === "docx" || text.endsWith(".docx")) return "docx";
+    if (text === "txt" || text.endsWith(".txt")) return "txt";
+  }
+  const contentType = String(document.content_type || "").trim().toLowerCase();
+  if (contentType === "application/pdf") return "pdf";
+  if (contentType.includes("wordprocessingml")) return "docx";
+  if (contentType.startsWith("text/")) return "txt";
+  return "";
+}
+function isTrackerApplicationCv(document = {}) {
+  const assetKind = String(document.asset_kind || "").trim().toLowerCase();
+  const documentType = String(document.document_type || "").trim().toLowerCase();
+  const hasJobReference = Boolean(String(document.run_id || "").trim() && String(document.job_id || "").trim());
+  return hasJobReference && (["generated_cv", "applied_cv"].includes(assetKind) || ["tailored cv", "applied cv"].includes(documentType));
+}
+function trackerDocumentExportRank(document = {}) {
+  const extension = trackerDocumentExtension(document);
+  if (extension === "pdf") return 0;
+  if (extension === "docx") return 1;
+  if (extension === "txt") return 2;
+  return 3;
+}
+function canExportTrackerDocument(document = {}) {
+  if (!String(document.document_id || "").trim()) return false;
+  if (!document.final_export_blocked) return true;
+  const gate = document.ats_export_gate && typeof document.ats_export_gate === "object" ? document.ats_export_gate : {};
+  return Boolean(gate.export_anyway_allowed);
+}
+function selectTrackerExportDocuments(documents = []) {
+  const candidates = (Array.isArray(documents) ? documents : []).filter(canExportTrackerDocument);
+  const preferred = new Map();
+  for (const document of candidates) {
+    if (!isTrackerApplicationCv(document)) continue;
+    const key = [document.run_id || "", document.job_id || "", document.asset_kind || "", document.document_type || ""].join("::");
+    const current = preferred.get(key);
+    if (!current || trackerDocumentExportRank(document) < trackerDocumentExportRank(current)) preferred.set(key, document);
+  }
+  const selected = [];
+  const emitted = new Set();
+  for (const document of candidates) {
+    if (!isTrackerApplicationCv(document)) {
+      selected.push(document);
+      continue;
+    }
+    const key = [document.run_id || "", document.job_id || "", document.asset_kind || "", document.document_type || ""].join("::");
+    if (emitted.has(key)) continue;
+    if (preferred.get(key)?.document_id === document.document_id) {
+      selected.push(document);
+      emitted.add(key);
+    }
+  }
+  return selected;
+}
+function sourceTypeForItem(item) {
+  return item.tracker_source_type || (item.external_application ? "external" : item.is_test_run ? "test_run" : "standard_run");
+}
+function sourceLabelForItem(item) {
+  const sourceType = sourceTypeForItem(item);
+  const match = TRACKER_SOURCE_FILTERS.find((entry) => entry.value === sourceType);
+  return match?.label || "Standard run";
+}
+function TrackerResourceCell({ item, request }) {
+  const navigate = useNavigate();
+  const [exporting, setExporting] = useState(false);
+  const [feedback, setFeedback] = useState({ message: "", error: "" });
+  const description = trackerDescriptionForItem(item);
+  const atsSummary = summarizeTrackerAtsState(item.documents);
+  const exportableDocuments = selectTrackerExportDocuments(item.documents);
+  const canEditGeneratedCv = Boolean(item.cv_studio_seed?.profile);
+
+  function openGeneratedCvEditor() {
+    if (!canEditGeneratedCv) return;
+    stashCvStudioSeed({
+      ...item.cv_studio_seed,
+      returnTo: "/tracker",
+      sourceLabel: [item.title, item.company].filter(Boolean).join(" at ") || "Generated application CV",
+    });
+    navigate(CV_STUDIO_ROUTE);
+  }
+
+  async function downloadBundle() {
+    if (!exportableDocuments.length) return;
+    setExporting(true);
+    setFeedback({ message: "", error: "" });
+    try {
+      const bundle = await request("/documents/bulk-export", {
+        method: "POST",
+        body: {
+          label: buildTrackerBundleLabel(item),
+          document_ids: exportableDocuments.map((document) => document.document_id),
+          export_anyway: true,
+        },
+      });
+      const blob = await request(bundle.download_url, { responseType: "blob" });
+      triggerDownload(blob, bundle.file_name || "application_documents.zip");
+      setFeedback({ message: "Documents ready.", error: "" });
+    } catch (error) {
+      setFeedback({ message: "", error: error.message || "Unable to export application documents." });
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div className="min-w-60 max-w-80 space-y-2">
+      <div className="flex flex-wrap gap-2">
+        <TrackerLink href={item.apply_link || item.tracker_table_row?.apply_link}>Apply</TrackerLink>
+        {description ? (
+          <Link className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`} to={`/tracker/job-descriptions/${encodeURIComponent(item.review_id)}`}>
+            <span className="material-symbols-outlined text-[13px]">article</span>
+            Read post
+          </Link>
+        ) : (
+          <span className={`${TRACKER_RESOURCE_BUTTON_CLASS} cursor-not-allowed bg-surface-container-low text-on-surface-variant/60`}>
+            <span className="material-symbols-outlined text-[13px]">article</span>
+            No post text
+          </span>
+        )}
+        <button
+          className={[TRACKER_RESOURCE_BUTTON_CLASS, exportableDocuments.length ? "bg-primary/10 text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60" : "cursor-not-allowed bg-surface-container-low text-on-surface-variant/60"].join(" ")}
+          disabled={!exportableDocuments.length || exporting}
+          onClick={downloadBundle}
+          type="button"
+        >
+          <span className="material-symbols-outlined text-[13px]">{exporting ? "progress_activity" : "folder_zip"}</span>
+          {exporting ? "Preparing..." : "Documents ZIP"}
+        </button>
+        {canEditGeneratedCv ? (
+          <button className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`} onClick={openGeneratedCvEditor} type="button">
+            <span className="material-symbols-outlined text-[13px]">edit_document</span>
+            Edit CV
+          </button>
+        ) : null}
+        {item.review_id ? (
+          <Link className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`} to={`/tracker/${encodeURIComponent(item.review_id)}/ats?return=${encodeURIComponent("/tracker")}`}>
+            <span className="material-symbols-outlined text-[13px]">fact_check</span>
+            ATS
+          </Link>
+        ) : null}
+      </div>
+      {atsSummary ? (
+        <div className="rounded-xl border border-outline-variant/15 bg-surface-container-low px-3 py-2 text-[11px] leading-5 text-on-surface-variant">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={["rounded-full px-2.5 py-0.5 font-semibold", atsSummary.badgeClass].join(" ")}>{atsSummary.label}</span>
+            {atsSummary.bestScore !== null && atsSummary.targetScore !== null ? <span>{atsSummary.bestScore}% / {atsSummary.targetScore}%</span> : null}
+          </div>
+          {atsSummary.stopReason ? <div className="mt-1">Result: {atsSummary.stopReason}</div> : null}
+        </div>
+      ) : null}
+      <ApplicationWarnings compact warnings={item.application_warnings} />
+      {feedback.message ? <div className="text-xs text-primary">{feedback.message}</div> : null}
+      {feedback.error ? <div className="text-xs text-error">{feedback.error}</div> : null}
+    </div>
+  );
+}
+function TrackerNotesCell({ item, onUpdate, updating }) {
+  const [note, setNote] = useState(item.notes || "");
+  const [editing, setEditing] = useState(false);
+  const isBusy = updating === item.review_id;
+  const isDirty = note !== (item.notes || "");
+
+  useEffect(() => { setNote(item.notes || ""); }, [item.notes]);
+
+  async function saveNote() {
+    if (!isDirty) return;
+    await onUpdate(item.review_id, { notes: note });
+    setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <div className="min-w-44 max-w-64">
+        <p className="line-clamp-2 text-xs leading-5 text-on-surface-variant">{item.notes || "No notes yet."}</p>
+        <button className="mt-2 rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/10" disabled={isBusy} onClick={() => setEditing(true)} type="button">
+          {item.notes ? "Edit note" : "Add note"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-w-56 space-y-2">
+      <textarea className="min-h-20 w-full rounded-xl border border-outline-variant/20 bg-surface px-3 py-2 text-xs text-on-surface" disabled={isBusy} onChange={(event) => setNote(event.target.value)} placeholder="Add notes" value={note} />
+      <div className="flex flex-wrap gap-2">
+        <button className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50" disabled={!isDirty || isBusy} onClick={saveNote} type="button">
+          {isBusy ? "Saving..." : "Save"}
+        </button>
+        <button className="rounded-full bg-surface-container-low px-3 py-1.5 text-xs font-semibold text-on-surface-variant transition-colors hover:bg-surface-container" onClick={() => { setNote(item.notes || ""); setEditing(false); }} type="button">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+function TrackerTable({ filters, items, allItems, workspaceOptions, onFiltersChange, onUpdate, onDelete, updating, request }) {
+  const hasActiveFilters = Object.values(filters).some((value) => value && value !== "all");
+  function updateFilter(field, value) { onFiltersChange((current) => ({ ...current, [field]: value })); }
+  function clearFilters() { onFiltersChange(EMPTY_TRACKER_FILTERS); }
+
+  if (!allItems.length) {
+    return (
+      <div className="rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-8 text-center">
+        <span className="material-symbols-outlined text-3xl text-on-surface-variant">table</span>
+        <p className="mt-3 text-sm font-semibold text-on-surface">No tracker rows yet.</p>
+        <p className="mt-1 text-xs text-on-surface-variant">Applications and imported Gmail matches will appear here.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-outline-variant/20 bg-surface-container-lowest shadow-sm">
+      <div className="border-b border-outline-variant/10 bg-surface-container-low px-5 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-on-surface">Tracker table</h2>
+            <p className="mt-1 text-xs leading-5 text-on-surface-variant">Filter applications without hiding the underlying tracker rows.</p>
+          </div>
+          <div className="text-xs font-semibold text-on-surface-variant">Showing {items.length} of {allItems.length}</div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(220px,1.5fr)_repeat(3,minmax(150px,1fr))_auto]">
+          <label className="relative">
+            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-lg text-on-surface-variant">search</span>
+            <input aria-label="Search tracker" className="w-full rounded-xl border border-outline-variant/20 bg-surface px-10 py-2.5 text-sm text-on-surface" onChange={(event) => updateFilter("query", event.target.value)} placeholder="Search role, company, location..." type="search" value={filters.query} />
+          </label>
+          <select aria-label="Filter tracker by status" className="w-full rounded-xl border border-outline-variant/20 bg-surface px-3 py-2.5 text-sm text-on-surface" onChange={(event) => updateFilter("status", event.target.value)} value={filters.status}>
+            <option value="all">All statuses</option>
+            {COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}
+          </select>
+          <select aria-label="Filter tracker by workspace" className="w-full rounded-xl border border-outline-variant/20 bg-surface px-3 py-2.5 text-sm text-on-surface" onChange={(event) => updateFilter("workspace", event.target.value)} value={filters.workspace}>
+            <option value="all">All workspaces</option>
+            {workspaceOptions.map((workspace) => <option key={workspace} value={workspace}>{workspace}</option>)}
+          </select>
+          <select aria-label="Filter tracker by source" className="w-full rounded-xl border border-outline-variant/20 bg-surface px-3 py-2.5 text-sm text-on-surface" onChange={(event) => updateFilter("source", event.target.value)} value={filters.source}>
+            {TRACKER_SOURCE_FILTERS.map((source) => <option key={source.value} value={source.value}>{source.label}</option>)}
+          </select>
+          <button className="rounded-xl border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm font-semibold text-on-surface-variant transition-colors hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-40" disabled={!hasActiveFilters} onClick={clearFilters} type="button">
+            Clear
+          </button>
+        </div>
+      </div>
+      {items.length ? (
+        <div className="overflow-x-auto">
+          <table className="tracker-table min-w-[1180px] w-full table-fixed border-collapse text-left text-sm">
+            <thead className="bg-surface-container-low text-[11px] uppercase tracking-[0.14em] text-on-surface-variant">
+              <tr>
+                <th className="w-36 px-4 py-3">Status</th>
+                <th className="w-56 px-4 py-3">Company</th>
+                <th className="w-72 px-4 py-3">Role</th>
+                <th className="w-44 px-4 py-3">Location</th>
+                <th className="w-36 px-4 py-3">Applied</th>
+                <th className="w-72 px-4 py-3">Resources</th>
+                <th className="w-28 px-4 py-3">Priority</th>
+                <th className="w-64 px-4 py-3">Notes</th>
+                <th className="w-24 px-4 py-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant/10">
+              {items.map((item) => {
+                const row = item.tracker_table_row || {};
+                return (
+                  <tr className="tracker-table__row align-top transition-colors hover:bg-surface-container-low/70" id={`review-${item.review_id}`} key={item.review_id}>
+                    <td className="px-4 py-4"><StatusDropdown current={statusKeyFromItem(item)} disabled={updating === item.review_id} onSelect={(nextStatus) => onUpdate(item.review_id, { tracker_status: nextStatus })} /></td>
+                    <td className="max-w-56 px-4 py-4">
+                      <div className="font-semibold text-on-surface">{item.company || row.company || "Unknown company"}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-on-surface-variant">
+                        <span>{item.workspace_name || "Tracker"}</span>
+                        <span className="rounded-full bg-surface-container px-2 py-0.5 font-semibold">{sourceLabelForItem(item)}</span>
+                      </div>
+                    </td>
+                    <td className="max-w-72 px-4 py-4">
+                      <div className="font-medium text-on-surface">{item.title || row.title || "Untitled role"}</div>
+                      {row.keyword ? <div className="mt-1 text-xs text-on-surface-variant">Keyword: {row.keyword}</div> : null}
+                    </td>
+                    <td className="max-w-52 px-4 py-4 text-on-surface-variant">{item.location || row.location_raw || "Not set"}</td>
+                    <td className="px-4 py-4 text-on-surface-variant">{formatDate(item.application_date || row.application_date || item.run_finished_at) || "Not set"}</td>
+                    <td className="px-4 py-4"><TrackerResourceCell item={item} request={request} /></td>
+                    <td className="px-4 py-4 text-on-surface-variant">{item.priority_rank || row.priority_rank || row.priority_tier || "Not set"}</td>
+                    <td className="px-4 py-4"><TrackerNotesCell item={item} onUpdate={onUpdate} updating={updating} /></td>
+                    <td className="px-4 py-4">
+                      <button className="rounded-full bg-error/10 px-3 py-1.5 text-xs font-semibold text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-50" disabled={updating === item.review_id} onClick={() => onDelete(item)} type="button">
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="p-8 text-center">
+          <span className="material-symbols-outlined text-3xl text-on-surface-variant">filter_alt_off</span>
+          <p className="mt-3 text-sm font-semibold text-on-surface">No tracker rows match these filters.</p>
+          <button className="mt-3 rounded-full bg-primary/10 px-4 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/20" onClick={clearFilters} type="button">Clear filters</button>
+        </div>
+      )}
+    </div>
+  );
+}
+function KanbanColumn({ colDef, cards, onDelete, onUpdate, updating }) {
+  return (
+    <div className="flex min-w-[280px] flex-1 flex-col">
+      <div className={["mb-4 flex items-center justify-between rounded-xl border px-4 py-3", colDef.border].join(" ")}>
+        <div className="flex items-center gap-2"><span className={["material-symbols-outlined text-xl", colDef.accent].join(" ")}>{colDef.icon}</span><span className="font-semibold text-on-surface">{colDef.label}</span></div>
+        <span className={["min-w-[24px] rounded-full px-2 py-0.5 text-center text-xs font-bold", colDef.badge].join(" ")}>{cards.length}</span>
+      </div>
+      <div className="flex flex-col gap-3">
+        {cards.length === 0 ? <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-outline-variant/20 py-10 text-center text-sm text-on-surface-variant/50"><span className="material-symbols-outlined mb-2 text-3xl opacity-30">{colDef.icon}</span>No jobs here yet</div> : cards.map((item) => <TrackerCard item={item} key={item.review_id} onDelete={onDelete} onUpdate={onUpdate} updating={updating} />)}
+      </div>
+    </div>
+  );
+}
 
 function buildEmailFormState(integration) {
   const config = integration?.config || {};
@@ -335,6 +665,8 @@ export default function TrackerPage() {
   const [trackerFilters, setTrackerFilters] = useState(() => trackerFiltersFromSearchParams(searchParams));
   const { items, loading, error, refresh, updating, updateCard, deleteCard, emailIntegration, integrationBusy, lastSyncResult, refreshEmailIntegration, startGoogleEmailIntegration, updateEmailIntegrationSettings, syncEmailIntegration, approveEmailDetections, dismissEmailDetections, deleteEmailIntegration } = useTracker();
   const totalCards = items.length;
+  const filteredTrackerItems = useMemo(() => items.filter((item) => trackerItemMatchesFilters(item, trackerFilters)), [items, trackerFilters]);
+  const workspaceOptions = useMemo(() => [...new Set(items.map((item) => item.workspace_name).filter(Boolean))].sort(), [items]);
   const statusCounts = useMemo(() => { const visible = items.filter((i) => trackerItemMatchesFilters(i, trackerFilters, { ignoreStatus: true })); return Object.fromEntries(COLUMNS.map((c) => [c.key, visible.filter((i) => statusKeyFromItem(i) === c.key).length])); }, [items, trackerFilters]);
 
   useEffect(() => { const next = new URLSearchParams(); Object.entries(trackerFilters).forEach(([k, v]) => { if (v && v !== "all") next.set(k, v); }); if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true }); }, [searchParams, setSearchParams, trackerFilters]);
@@ -354,8 +686,7 @@ export default function TrackerPage() {
       {!loading && !error && (<InboxSyncControl busy={integrationBusy} integration={emailIntegration} lastSyncResult={lastSyncResult} onDelete={deleteEmailIntegration} onDismissDetections={dismissEmailDetections} onRefreshIntegration={refreshEmailIntegration} onSaveSettings={updateEmailIntegrationSettings} onApproveDetections={approveEmailDetections} onStartGoogle={startGoogleEmailIntegration} onSync={syncEmailIntegration} />)}
       {!loading && !error && (<div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">{COLUMNS.map((column) => { const selected = trackerFilters.status === column.key; return (<button aria-pressed={selected} className={["rounded-2xl border px-4 py-3 text-left transition-colors", selected ? `${column.border} bg-surface-container-low shadow-sm` : "border-outline-variant/20 bg-surface-container-lowest hover:bg-surface-container-low"].join(" ")} key={column.key} onClick={() => { setTrackerFilters((current) => ({ ...current, status: current.status === column.key ? "all" : column.key })); }} type="button"><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-on-surface-variant">{column.label}</span><span className={["rounded-full px-2 py-0.5 text-xs font-bold", column.badge].join(" ")}>{statusCounts[column.key] || 0}</span></div></button>); })}</div>)}
 
-      {/* Note: TrackerTable, discoveryModal etc are simplified for this write - full versions preserved in original */}
-      {!loading && !error && (<div className="rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-8 text-center"><span className="material-symbols-outlined text-3xl text-on-surface-variant">table</span><p className="mt-3 text-sm font-semibold text-on-surface">Tracker table</p><p className="mt-1 text-xs text-on-surface-variant">{items.length} application{items.length === 1 ? "" : "s"} tracked. The table view is being restored.</p></div>)}
+      {!loading && !error && (<TrackerTable allItems={items} filters={trackerFilters} items={filteredTrackerItems} onDelete={handleDeleteCard} onFiltersChange={setTrackerFilters} onUpdate={updateCard} request={request} updating={updating} workspaceOptions={workspaceOptions} />)}
     </div>
   );
 }
