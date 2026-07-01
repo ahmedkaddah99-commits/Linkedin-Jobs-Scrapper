@@ -183,10 +183,17 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments[:1] == ["runs"] and len(segments) == 2:
                         run = application.get_run(segments[1])
                         self._require_run_access(run=run, required_scope=TOKEN_SCOPE_RUNS_READ)
-                        payload = run.to_dict()
-                        payload["capped_sites"] = list(
-                            application.repositories.job_store.load_blob(run.id, "capped_sites", []) or []
+                        workflow_snapshot = (
+                            dict(run.run_plan.workflow_snapshot)
+                            if run.run_plan and isinstance(run.run_plan.workflow_snapshot, dict)
+                            else {}
                         )
+                        run = _run_with_inferred_terminal_status(run, workflow_snapshot)
+                        payload = run.to_dict()
+                        if _parse_bool_param(query, "include_capped_sites", default=True):
+                            payload["capped_sites"] = list(
+                                application.repositories.job_store.load_blob(run.id, "capped_sites", []) or []
+                            )
                         self._send_json(payload)
                         return
 

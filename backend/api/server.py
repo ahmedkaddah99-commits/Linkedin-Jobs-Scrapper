@@ -110,9 +110,16 @@ from backend.domain.models import (
     JobSource,
     ProfileRef,
     ROLE_ADMIN,
+    RUN_STATUS_CANCEL_REQUESTED,
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_COMPLETED,
     RUN_STATUS_FAILED,
+    RUN_STATUS_PLANNED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
+    STAGE_STATUS_COMPLETED,
+    STAGE_STATUS_FAILED,
+    STAGE_STATUS_SKIPPED,
     TOKEN_SCOPE_ADMIN,
     TOKEN_SCOPE_ARTIFACTS_READ,
     TOKEN_SCOPE_ARTIFACTS_WRITE,
@@ -182,6 +189,13 @@ _EXPANDED_ARTIFACT_SUFFIXES = {".csv", ".docx", ".json", ".md", ".pdf", ".txt", 
 _PROMO_CODE_PATTERN = re.compile(r"^[A-Z0-9]{3,256}$")
 _CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 _MAX_CV_UPLOAD_REQUEST_BYTES = 10 * 1024 * 1024
+_ACTIVE_RUN_STATUSES = {
+    RUN_STATUS_PLANNED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+    RUN_STATUS_CANCEL_REQUESTED,
+}
+_TERMINAL_STAGE_STATUSES = {STAGE_STATUS_COMPLETED, STAGE_STATUS_SKIPPED}
 
 
 class AtsExportBlockedError(ValueError):
@@ -1452,6 +1466,74 @@ def _workflow_snapshot_for_run(application, run) -> dict:
     return workflow.to_dict()
 
 
+def _workspace_snapshot_for_run(run) -> WorkspaceDefinition | None:
+    if run.run_plan and isinstance(run.run_plan.workspace_snapshot, dict) and run.run_plan.workspace_snapshot:
+        return WorkspaceDefinition.from_dict(run.run_plan.workspace_snapshot)
+    return None
+
+
+def _enabled_workflow_stage_ids(workflow_snapshot: Mapping[str, Any] | None) -> list[str]:
+    stage_ids: list[str] = []
+    for stage in (workflow_snapshot or {}).get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        if stage.get("enabled") is False:
+            continue
+        stage_id = str(stage.get("stage_id") or "").strip()
+        if stage_id:
+            stage_ids.append(stage_id)
+    return stage_ids
+
+
+def _infer_terminal_run_status(run, workflow_snapshot: Mapping[str, Any] | None = None) -> str:
+    current_status = str(getattr(run, "status", "") or "").strip()
+    if current_status not in _ACTIVE_RUN_STATUSES:
+        return current_status
+    stage_results = list(getattr(run, "stage_results", []) or [])
+    if not stage_results:
+        return current_status
+    if any(str(getattr(result, "status", "") or "") == STAGE_STATUS_FAILED for result in stage_results):
+        return RUN_STATUS_FAILED
+
+    enabled_stage_ids = _enabled_workflow_stage_ids(workflow_snapshot)
+    if not enabled_stage_ids:
+        return current_status
+    results_by_stage = {
+        str(getattr(result, "stage_id", "") or ""): str(getattr(result, "status", "") or "")
+        for result in stage_results
+    }
+    if all(results_by_stage.get(stage_id) in _TERMINAL_STAGE_STATUSES for stage_id in enabled_stage_ids):
+        return RUN_STATUS_COMPLETED
+    return current_status
+
+
+def _latest_stage_finished_at(run) -> str:
+    return max(
+        (
+            str(getattr(result, "finished_at", "") or "")
+            for result in getattr(run, "stage_results", []) or []
+            if str(getattr(result, "finished_at", "") or "").strip()
+        ),
+        default="",
+    )
+
+
+def _run_with_inferred_terminal_status(run, workflow_snapshot: Mapping[str, Any] | None = None):
+    inferred_status = _infer_terminal_run_status(run, workflow_snapshot)
+    if inferred_status == str(getattr(run, "status", "") or ""):
+        return run
+    readable_run = deepcopy(run)
+    readable_run.status = inferred_status
+    readable_run.metadata = dict(getattr(readable_run, "metadata", {}) or {})
+    if inferred_status == RUN_STATUS_COMPLETED:
+        readable_run.current_stage_id = ""
+        readable_run.last_error = ""
+        readable_run.finished_at = readable_run.finished_at or _latest_stage_finished_at(readable_run)
+        readable_run.updated_at = readable_run.finished_at or readable_run.updated_at
+        readable_run.metadata.pop("progress", None)
+    return readable_run
+
+
 def _job_workspace_url(
     run_id: str,
     job_id: str,
@@ -1793,6 +1875,12 @@ def _collect_run_customer_view(application, user, run) -> dict:
         payload_timings_ms[name] = round((perf_counter() - started_at) * 1000, 2)
 
     phase_started = perf_counter()
+    workflow_snapshot = _workflow_snapshot_for_run(application, run)
+    run = _run_with_inferred_terminal_status(run, workflow_snapshot)
+    run_is_active = str(run.status or "") in _ACTIVE_RUN_STATUSES
+    record_phase("workflow_snapshot", phase_started)
+
+    phase_started = perf_counter()
     progress = _run_progress_payload(run)
     record_phase("progress", phase_started)
 
@@ -1813,10 +1901,6 @@ def _collect_run_customer_view(application, user, run) -> dict:
     record_phase("capped_sites", phase_started)
 
     phase_started = perf_counter()
-    workflow_snapshot = _workflow_snapshot_for_run(application, run)
-    record_phase("workflow_snapshot", phase_started)
-
-    phase_started = perf_counter()
     workflow_stages = [
         dict(stage)
         for stage in workflow_snapshot.get("stages") or []
@@ -1825,18 +1909,23 @@ def _collect_run_customer_view(application, user, run) -> dict:
     record_phase("workflow_stages", phase_started)
 
     phase_started = perf_counter()
-    historical_runs = [
-        candidate
-        for candidate in application.list_runs(limit=200, offset=0, status="completed")
-        if candidate.id != run.id
-        and candidate.workflow_template_id == run.workflow_template_id
-        and application.user_can_access_run(user, candidate)
-    ]
-    eta = build_run_eta(run, workflow_stages, historical_runs)
+    if run_is_active:
+        historical_runs = [
+            candidate
+            for candidate in application.list_runs(limit=200, offset=0, status="completed")
+            if candidate.id != run.id
+            and candidate.workflow_template_id == run.workflow_template_id
+            and application.user_can_access_run(user, candidate)
+        ]
+        eta = build_run_eta(run, workflow_stages, historical_runs)
+    else:
+        eta = {"state": "unavailable", "calculated_at": datetime.now(timezone.utc).isoformat()}
     record_phase("eta", phase_started)
 
     phase_started = perf_counter()
-    workspace = application.get_workspace(run.workspace_id)
+    workspace = _workspace_snapshot_for_run(run)
+    if workspace is None:
+        workspace = application.get_workspace(run.workspace_id)
     record_phase("workspace", phase_started)
 
     phase_started = perf_counter()
@@ -1857,6 +1946,7 @@ def _collect_run_customer_view(application, user, run) -> dict:
         workspace_record=workspace,
         run_jobs=_ordered_run_jobs_for_document_lookup(run, job_sets),
         artifacts_by_run=run_snapshot["artifacts"],
+        access_checked=True,
     )
     record_phase("documents", phase_started)
 
@@ -1877,6 +1967,7 @@ def _collect_run_customer_view(application, user, run) -> dict:
         workspace_record=workspace,
         review_records=reviews,
         run_blobs=run_blobs,
+        access_checked=True,
     )
     record_phase("rejected_entries", phase_started)
 
@@ -4258,6 +4349,7 @@ def _collect_artifact_entries(
     workspace_records: dict[str, object] | None = None,
     job_sets_by_run: dict[str, dict[str, list[object]]] | None = None,
     artifacts_by_run: dict[str, list[object]] | None = None,
+    access_checked: bool = False,
 ) -> list[dict]:
     if run_id:
         run = run_record if str(getattr(run_record, "id", "") or "") == run_id else None
@@ -4268,7 +4360,7 @@ def _collect_artifact_entries(
                 return []
         if workspace_id and run.workspace_id != workspace_id:
             return []
-        if not application.user_can_access_run(user, run):
+        if not access_checked and not application.user_can_access_run(user, run):
             return []
         workspace = (
             workspace_record
@@ -5247,6 +5339,7 @@ def _collect_document_entries(
     workspace_records: dict[str, object] | None = None,
     job_sets_by_run: dict[str, dict[str, list[object]]] | None = None,
     artifacts_by_run: dict[str, list[object]] | None = None,
+    access_checked: bool = False,
 ) -> list[dict]:
     asset_kind_filter = str(asset_kind or "").strip().lower()
     raw_profile = dict((user.metadata or {}).get("profile") or {})
@@ -5288,6 +5381,7 @@ def _collect_document_entries(
                 workspace_records=workspace_records,
                 job_sets_by_run=job_sets_by_run,
                 artifacts_by_run=artifacts_by_run,
+                access_checked=access_checked,
             )
             if _artifact_entry_is_user_facing_document(entry)
         ]
@@ -5613,6 +5707,7 @@ def _collect_rejected_job_entries(
     workspace_record=None,
     review_records: list[object] | None = None,
     run_blobs: dict[str, object] | None = None,
+    access_checked: bool = False,
 ) -> list[dict]:
     if run_id:
         run = run_record if str(getattr(run_record, "id", "") or "") == run_id else None
@@ -5623,7 +5718,7 @@ def _collect_rejected_job_entries(
                 return []
         if workspace_id and run.workspace_id != workspace_id:
             return []
-        if not application.user_can_access_run(user, run):
+        if not access_checked and not application.user_can_access_run(user, run):
             return []
         workspace = (
             workspace_record

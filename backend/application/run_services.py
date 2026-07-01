@@ -14,6 +14,9 @@ from backend.domain.models import (
     RUN_STATUS_PLANNED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
+    STAGE_STATUS_COMPLETED,
+    STAGE_STATUS_FAILED,
+    STAGE_STATUS_SKIPPED,
     WORKER_STATUS_IDLE,
     WORKER_STATUS_RUNNING,
     WORKER_STATUS_STALE,
@@ -373,6 +376,44 @@ class RunLifecycleService:
         self.repositories.worker_store.upsert_worker(worker)
         return self.repositories.worker_store.get_worker(worker_id)
 
+    @staticmethod
+    def _enabled_workflow_stage_ids(workflow: WorkflowTemplate) -> list[str]:
+        return [
+            str(stage.stage_id or "").strip()
+            for stage in workflow.stages
+            if stage.enabled and str(stage.stage_id or "").strip()
+        ]
+
+    def _completed_from_stage_results(self, run: RunRecord) -> bool:
+        if any(result.status == STAGE_STATUS_FAILED for result in run.stage_results):
+            return False
+        enabled_stage_ids = self._enabled_workflow_stage_ids(self.workflow_from_run_snapshot(run))
+        if not enabled_stage_ids:
+            return False
+        results_by_stage = {result.stage_id: result.status for result in run.stage_results}
+        return all(
+            results_by_stage.get(stage_id) in {STAGE_STATUS_COMPLETED, STAGE_STATUS_SKIPPED}
+            for stage_id in enabled_stage_ids
+        )
+
+    def _finalize_completed_stage_result_run(self, run: RunRecord, *, now: str) -> RunRecord:
+        run.status = RUN_STATUS_COMPLETED
+        run.final_job_set_keys = sorted(self.repositories.job_store.list_job_set_keys(run.id))
+        run.current_stage_id = ""
+        run.last_error = ""
+        run.finished_at = run.finished_at or max(
+            (
+                str(result.finished_at or "")
+                for result in run.stage_results
+                if str(result.finished_at or "").strip()
+            ),
+            default=now,
+        )
+        run.updated_at = now
+        run.metadata.pop("progress", None)
+        self.repositories.run_repository.save(run)
+        return self.repositories.run_repository.get(run.id)
+
     def recover_stale_workers(self) -> list[WorkerRecord]:
         now = utc_now_iso()
         stale_workers = self.repositories.worker_store.list_expired_workers(expires_before=now)
@@ -384,12 +425,15 @@ class RunLifecycleService:
                 except KeyError:
                     run = None
                 if run is not None and run.status in {RUN_STATUS_RUNNING, RUN_STATUS_CANCEL_REQUESTED}:
-                    run.status = RUN_STATUS_QUEUED
-                    run.current_stage_id = ""
-                    run.updated_at = now
-                    run.last_error = "Recovered from expired worker lease."
-                    run.metadata.pop("progress", None)
-                    self.repositories.run_repository.save(run)
+                    if self._completed_from_stage_results(run):
+                        self._finalize_completed_stage_result_run(run, now=now)
+                    else:
+                        run.status = RUN_STATUS_QUEUED
+                        run.current_stage_id = ""
+                        run.updated_at = now
+                        run.last_error = "Recovered from expired worker lease."
+                        run.metadata.pop("progress", None)
+                        self.repositories.run_repository.save(run)
             worker.status = WORKER_STATUS_STALE
             worker.current_run_id = ""
             worker.last_heartbeat_at = now

@@ -922,6 +922,50 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(len(matching_runs), 1)
         self.assertEqual(matching_runs[0]["progress"]["message"], "Scanning Example Company")
 
+    def test_run_detail_infers_completed_status_for_stale_running_row(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+
+        status, worker_payload = self._request("POST", "/workers/process-next", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(worker_payload["run"]["status"], "completed")
+
+        stale_run = self.app.get_run(run_id)
+        stale_run.status = "running"
+        stale_run.current_stage_id = stale_run.stage_results[-1].stage_id
+        stale_run.finished_at = ""
+        stale_run.metadata["progress"] = {"message": "stale progress"}
+        self.app.repositories.run_repository.save(stale_run)
+        self.app.repositories.job_store.save_blob(run_id, "capped_sites", [{"url": "https://slow.example/jobs"}])
+
+        with patch.object(
+            self.app.repositories.job_store,
+            "load_blob",
+            side_effect=AssertionError("lightweight run status must not load capped_sites"),
+        ):
+            status, run_detail = self._request("GET", f"/runs/{run_id}?include_capped_sites=0")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(run_detail["status"], "completed")
+        self.assertEqual(run_detail["current_stage_id"], "")
+        self.assertNotIn("capped_sites", run_detail)
+
+        with patch(
+            "backend.api.server.build_run_eta",
+            side_effect=AssertionError("completed run detail must not scan historical runs for ETA"),
+        ):
+            status, customer_view = self._request("GET", f"/runs/{run_id}/customer-view")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(customer_view["run"]["status"], "completed")
+        self.assertEqual(customer_view["run"]["current_stage_id"], "")
+        self.assertEqual(customer_view["run"]["eta"]["state"], "unavailable")
+
     def test_job_workspace_people_discovery_endpoints_persist_selected_people(self):
         status, run_payload = self._request(
             "POST",

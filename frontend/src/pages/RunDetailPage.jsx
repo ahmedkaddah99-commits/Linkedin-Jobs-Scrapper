@@ -451,7 +451,7 @@ export default function RunDetailPage() {
     error: runStatusError,
     refresh: refreshRunStatus,
   } = useApiResource(
-    () => request(`/runs/${runId}`, { timeoutMs: 8000 }),
+    () => request(`/runs/${runId}?include_capped_sites=0`, { timeoutMs: 15000 }),
     [request, runId],
     {
       cacheKey: `run-status:${runId}`,

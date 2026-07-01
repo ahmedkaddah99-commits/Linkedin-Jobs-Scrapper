@@ -158,6 +158,39 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(recovered_run.status, "queued")
         self.assertEqual(recovered_run.current_stage_id, "")
 
+    def test_stale_worker_recovery_finalizes_run_with_completed_stage_results(self):
+        app = self._create_app("worker_service_completed_stage_recovery")
+        run = app.enqueue_run("worker_workspace", requested_by="test-stale-completed")
+        worker_id = "stale_completed_worker"
+
+        claimed = app.claim_next_queued_run(worker_id=worker_id, lease_seconds=5)
+        self.assertIsNotNone(claimed)
+        completed = app.execute_claimed_run(claimed.id)
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(len(completed.stage_results), 1)
+
+        stale_run = app.get_run(run.id)
+        stale_run.status = "running"
+        stale_run.current_stage_id = stale_run.stage_results[-1].stage_id
+        stale_run.finished_at = ""
+        stale_run.metadata["progress"] = {"message": "final save did not stick"}
+        app.repositories.run_repository.save(stale_run)
+
+        worker = app.get_worker(worker_id)
+        worker.current_run_id = run.id
+        worker.status = "running"
+        worker.lease_expires_at = "2000-01-01T00:00:00+00:00"
+        app.repositories.worker_store.upsert_worker(worker)
+
+        recovered = app.recover_stale_workers()
+
+        self.assertEqual(len(recovered), 1)
+        recovered_run = app.get_run(run.id)
+        self.assertEqual(recovered_run.status, "completed")
+        self.assertEqual(recovered_run.current_stage_id, "")
+        self.assertTrue(recovered_run.finished_at)
+        self.assertNotIn("progress", recovered_run.metadata)
+
     def test_worker_service_enqueues_and_processes_due_scheduled_runs(self):
         app = self._create_app("worker_service_schedule")
         workspace_payload = app.get_workspace("worker_workspace").to_dict()
