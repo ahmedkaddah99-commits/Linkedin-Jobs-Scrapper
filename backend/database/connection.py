@@ -71,6 +71,7 @@ _TRANSIENT_ERROR_MARKERS = (
     ("network", "network"),
     ("transport", "network"),
     ("server disconnected", "network"),
+    ("stream not found", "stale_stream"),
 )
 
 
@@ -125,7 +126,12 @@ def is_transient_database_error(exc: BaseException) -> bool:
     return transient_database_error_category(exc) is not None
 
 
-def _retry_libsql_operation(operation: str, callback: Callable[[], ResultT]) -> ResultT:
+def _retry_libsql_operation(
+    operation: str,
+    callback: Callable[[], ResultT],
+    *,
+    before_retry: Callable[[str], None] | None = None,
+) -> ResultT:
     for attempt in range(1, _LIBSQL_RETRY_ATTEMPTS + 1):
         try:
             return callback()
@@ -138,6 +144,8 @@ def _retry_libsql_operation(operation: str, callback: Callable[[], ResultT]) -> 
                 _LIBSQL_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
             )
             delay = backoff + random.uniform(0.0, _LIBSQL_RETRY_JITTER_SECONDS)
+            if before_retry is not None:
+                before_retry(category)
             _LOGGER.warning(
                 "database_operation_retry",
                 extra={
@@ -261,13 +269,33 @@ def _statement_changes_rows(sql: str) -> bool:
 class DatabaseConnection:
     """Synchronous sqlite3-compatible facade over sqlite3 or libSQL."""
 
-    def __init__(self, connection: Any, *, backend: str):
+    def __init__(
+        self,
+        connection: Any,
+        *,
+        backend: str,
+        reconnect: Callable[[], Any] | None = None,
+    ):
         self._connection = connection
         self.backend = backend
+        self._reconnect = reconnect
+
+    def _refresh_connection_for_retry(self, category: str) -> None:
+        if self.backend != "libsql" or category != "stale_stream" or self._reconnect is None:
+            return
+        try:
+            self._connection.close()
+        except Exception as exc:
+            _log_cleanup_failure("stale_stream_close", exc)
+        self._connection = self._reconnect()
 
     def _run(self, operation: str, callback: Callable[[], ResultT]) -> ResultT:
         if self.backend == "libsql":
-            return _retry_libsql_operation(operation, callback)
+            return _retry_libsql_operation(
+                operation,
+                callback,
+                before_retry=self._refresh_connection_for_retry,
+            )
         return callback()
 
     def _changes(self) -> int:
@@ -413,11 +441,14 @@ def connect_database(local_path: str | Path) -> DatabaseConnection:
             raise DatabaseConfigurationError(
                 "The 'libsql' package is required when TURSO_DATABASE_URL is configured."
             ) from exc
-        raw_connection = _retry_libsql_operation(
-            "connect",
-            lambda: libsql.connect(database=remote_url, auth_token=auth_token),
-        )
-        connection = DatabaseConnection(raw_connection, backend="libsql")
+        def reconnect():
+            return _retry_libsql_operation(
+                "connect",
+                lambda: libsql.connect(database=remote_url, auth_token=auth_token),
+            )
+
+        raw_connection = reconnect()
+        connection = DatabaseConnection(raw_connection, backend="libsql", reconnect=reconnect)
     else:
         path = Path(local_path)
         path.parent.mkdir(parents=True, exist_ok=True)

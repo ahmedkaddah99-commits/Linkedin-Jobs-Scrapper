@@ -1410,6 +1410,72 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertFalse(app.list_reviews(run_id=run.id))
         self.assertEqual(run.stage_results[-1].status, "failed")
 
+    def test_transient_database_failure_after_document_output_requeues_without_failed_stage(self):
+        temp_dir = self._workspace_tempdir("document_generation_transient_persistence_requeues")
+        app = create_backend(temp_dir)
+        app.registries.stage_registry.register("test.seed_jobs", _SeedJobsStage())
+        app.registries.stage_registry.register("applications.generate.documents", _DocumentGenerationStage())
+        app.upsert_workflow_template(
+            {
+                "id": "transient_documents_template",
+                "name": "Transient Documents Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="seed_jobs",
+                        stage_type="test.seed_jobs",
+                        name="Seed Jobs",
+                        output_key="accepted_jobs",
+                    ).to_dict(),
+                    StageDefinition(
+                        stage_id="generate_documents",
+                        stage_type="applications.generate.documents",
+                        name="Generate Documents",
+                        input_keys=["accepted_jobs"],
+                        output_key="generated_jobs",
+                    ).to_dict(),
+                ],
+                "default_run_settings": {"automation_flow": "tailored_documents"},
+            }
+        )
+        app.upsert_workspace(
+            {
+                "id": "transient_documents_workspace",
+                "name": "Transient Documents Workspace",
+                "workflow_template_id": "transient_documents_template",
+                "settings": {"automation_flow": "tailored_documents"},
+                "sources": [],
+            }
+        )
+        run = app.enqueue_run("transient_documents_workspace", requested_by="test")
+        original_save = app.repositories.run_repository.save
+        failed_once = False
+
+        def flaky_save(candidate_run):
+            nonlocal failed_once
+            if (
+                not failed_once
+                and candidate_run.stage_results
+                and candidate_run.stage_results[-1].stage_id == "generate_documents"
+                and candidate_run.stage_results[-1].status == "completed"
+            ):
+                failed_once = True
+                raise RuntimeError(
+                    'Hrana: `api error: `status=404 Not Found, body={"error":"stream not found: abc:def"}``'
+                )
+            return original_save(candidate_run)
+
+        with patch.object(app.repositories.run_repository, "save", side_effect=flaky_save):
+            first_result = app.process_next_queued_run(auto_retry_failed=True)
+            second_result = app.process_next_queued_run(auto_retry_failed=True)
+
+        self.assertEqual(first_result.status, "queued")
+        self.assertEqual(second_result.status, "completed")
+        final_run = app.get_run(run.id)
+        self.assertEqual(final_run.status, "completed")
+        self.assertFalse([result for result in final_run.stage_results if result.status == "failed"])
+        self.assertTrue(app.get_job_set(run.id, "generated_jobs"))
+        self.assertTrue(app.list_artifacts(run.id))
+
     def test_test_run_selects_one_surviving_job_and_adds_it_to_tracker(self):
         temp_dir = self._workspace_tempdir("test_run_single_survivor")
         app = create_backend(temp_dir)

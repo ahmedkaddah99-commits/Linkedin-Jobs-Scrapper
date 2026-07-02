@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
+from backend.database.connection import transient_database_error_category
 from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_CANCELLED,
@@ -711,7 +712,15 @@ class RunLifecycleService:
         )
         try:
             self.stage_engine.execute(context)
-        except Exception:
+        except Exception as exc:
+            if transient_database_error_category(exc) is not None:
+                run = self.repositories.run_repository.get(run.id)
+                if self._completed_from_stage_results(run):
+                    return self._finalize_completed_stage_result_run(run, now=utc_now_iso())
+                if auto_retry_failed:
+                    self.trim_to_resumable_prefix(run)
+                    return self.queue_run(run)
+                raise
             run = self.repositories.run_repository.get(run.id)
             if auto_retry_failed and run.status == RUN_STATUS_FAILED and run.attempt_count < run.max_attempts:
                 self.trim_to_resumable_prefix(run)

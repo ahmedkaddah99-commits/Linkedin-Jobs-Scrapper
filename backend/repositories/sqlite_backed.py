@@ -454,6 +454,11 @@ class SqliteRunRepository(_SqliteStore):
                         "run_id, sequence_no, stage_id, stage_type, status, started_at, finished_at, error, "
                         "metrics_json, output_keys_json, artifact_ids_json"
                         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        " ON CONFLICT(run_id, sequence_no) DO UPDATE SET "
+                        "stage_id=excluded.stage_id, stage_type=excluded.stage_type, status=excluded.status, "
+                        "started_at=excluded.started_at, finished_at=excluded.finished_at, error=excluded.error, "
+                        "metrics_json=excluded.metrics_json, output_keys_json=excluded.output_keys_json, "
+                        "artifact_ids_json=excluded.artifact_ids_json"
                     ),
                     [
                         (
@@ -672,6 +677,15 @@ class SqliteJobStore(_SqliteStore):
                         "link, source_url, apply_link, portal, description_text, manual_approved, role_category_id, "
                         "role_category_name, priority_rank, payload_json, updated_at"
                         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        " ON CONFLICT(run_id, set_key, ordinal) DO UPDATE SET "
+                        "job_id=excluded.job_id, title=excluded.title, company=excluded.company, "
+                        "source_type=excluded.source_type, filter_status=excluded.filter_status, "
+                        "location_raw=excluded.location_raw, link=excluded.link, source_url=excluded.source_url, "
+                        "apply_link=excluded.apply_link, portal=excluded.portal, "
+                        "description_text=excluded.description_text, manual_approved=excluded.manual_approved, "
+                        "role_category_id=excluded.role_category_id, role_category_name=excluded.role_category_name, "
+                        "priority_rank=excluded.priority_rank, payload_json=excluded.payload_json, "
+                        "updated_at=excluded.updated_at"
                     ),
                     [
                         (
@@ -929,7 +943,13 @@ class SqliteArtifactStore(_SqliteStore):
         with self._connect() as connection:
             connection.execute("DELETE FROM artifacts WHERE run_id = ?", (run_id,))
             connection.executemany(
-                "INSERT INTO artifacts (run_id, artifact_id, artifact_type, path, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "INSERT INTO artifacts (run_id, artifact_id, artifact_type, path, metadata_json, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(run_id, artifact_id) DO UPDATE SET "
+                    "artifact_type=excluded.artifact_type, path=excluded.path, "
+                    "metadata_json=excluded.metadata_json, created_at=excluded.created_at"
+                ),
                 [
                     (
                         run_id,

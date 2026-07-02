@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping
 
+from backend.database.connection import transient_database_error_category
 from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_CANCELLED,
@@ -255,6 +256,8 @@ class StageEngine:
                 )
                 completed_stage_ids.add(definition.stage_id)
             except Exception as exc:
+                if transient_database_error_category(exc) is not None:
+                    raise
                 failed_artifact_ids = [
                     artifact.artifact_id
                     for artifact in list(getattr(outcome, "artifacts", []) or [])

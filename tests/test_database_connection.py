@@ -197,6 +197,7 @@ class DatabaseConnectionTests(unittest.TestCase):
         for error in (
             TimeoutError("request timed out"),
             OSError("temporary network failure"),
+            RuntimeError('Hrana: `api error: `status=404 Not Found, body={"error":"stream not found: abc:def"}``'),
         ):
             with self.subTest(error=type(error).__name__):
                 raw_cursor = Mock(rowcount=-1, lastrowid=None, description=None)
@@ -212,6 +213,28 @@ class DatabaseConnectionTests(unittest.TestCase):
 
                 self.assertEqual(raw_connection.execute.call_count, 2)
                 sleep.assert_called_once()
+
+    def test_libsql_operation_reconnects_before_retrying_stale_stream(self):
+        stale_connection = Mock()
+        fresh_cursor = Mock(rowcount=-1, lastrowid=None, description=None)
+        fresh_connection = Mock()
+        stale_connection.execute.side_effect = RuntimeError(
+            'Hrana: `api error: `status=404 Not Found, body={"error":"stream not found: abc:def"}``'
+        )
+        fresh_connection.execute.return_value = fresh_cursor
+        reconnect = Mock(return_value=fresh_connection)
+        connection = DatabaseConnection(stale_connection, backend="libsql", reconnect=reconnect)
+
+        with (
+            patch("backend.database.connection.time.sleep") as sleep,
+            patch("backend.database.connection.random.uniform", return_value=0.0),
+        ):
+            connection.execute("SELECT 1")
+
+        stale_connection.close.assert_called_once()
+        reconnect.assert_called_once()
+        fresh_connection.execute.assert_called_once_with("SELECT 1", ())
+        sleep.assert_called_once()
 
     def test_libsql_operation_does_not_retry_non_retryable_errors(self):
         for error in (
