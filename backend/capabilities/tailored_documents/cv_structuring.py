@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .common import compact_whitespace
 from .generation import split_bullets
@@ -235,13 +235,30 @@ def _is_trustworthy_generated_display(item: Dict) -> bool:
     return bool(str(item.get("company") or "").strip() or _ROLE_TITLE_HINT_RE.search(role_title))
 
 
+def _normalize_bullet_value(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("text") or value.get("value") or value.get("label") or "").strip()
+    return str(value or "").strip()
+
+
+def _normalize_bullet_item(value: Any) -> Any:
+    text = _normalize_bullet_value(value)
+    if not text:
+        return ""
+    if isinstance(value, dict):
+        clone = dict(value)
+        clone["text"] = text
+        return clone
+    return text
+
+
 def _repair_generated_experience_item(item: Dict) -> Dict:
     clone = {
         "role_title": str(item.get("role_title") or item.get("title") or "").strip(),
         "company": str(item.get("company") or "").strip(),
         "location": str(item.get("location") or "").strip(),
         "period": str(item.get("period") or "").strip(),
-        "bullets": [str(b).strip() for b in item.get("bullets", []) if str(b).strip()],
+        "bullets": [normalized for bullet in item.get("bullets", []) if (normalized := _normalize_bullet_item(bullet))],
     }
     period_header = clone["period"]
     if "|" not in period_header:
@@ -265,7 +282,7 @@ def _repair_generated_experience_item(item: Dict) -> Dict:
         "company": str(parsed_header.get("company") or clone.get("company") or "").strip(),
         "location": str(parsed_header.get("location") or clone.get("location") or "").strip(),
         "period": str(parsed_header.get("period") or "").strip(),
-        "bullets": merge_unique_bullets(promoted_bullets, clone["bullets"]),
+        "bullets": merge_unique_bullets(promoted_bullets, [_normalize_bullet_value(bullet) for bullet in clone["bullets"]]),
     }
 
 
@@ -404,13 +421,15 @@ def dedupe_experiences(experiences: List[Dict]) -> List[Dict]:
         )
         if key in seen:
             existing = seen[key]
-            existing_bullets = [str(b).strip() for b in existing.get("bullets", []) if str(b).strip()]
-            existing_keys = {normalize_compare_token(text) for text in existing_bullets}
+            existing_bullets = [
+                bullet for bullet in existing.get("bullets", []) if _normalize_bullet_value(bullet)
+            ]
+            existing_keys = {normalize_compare_token(_normalize_bullet_value(bullet)) for bullet in existing_bullets}
             for bullet in item.get("bullets", []):
-                cleaned = str(bullet).strip()
+                cleaned = _normalize_bullet_item(bullet)
                 if not cleaned:
                     continue
-                bullet_key = normalize_compare_token(cleaned)
+                bullet_key = normalize_compare_token(_normalize_bullet_value(cleaned))
                 if bullet_key and bullet_key not in existing_keys:
                     existing_bullets.append(cleaned)
                     existing_keys.add(bullet_key)
@@ -422,12 +441,30 @@ def dedupe_experiences(experiences: List[Dict]) -> List[Dict]:
             "company": str(item.get("company") or "").strip(),
             "location": str(item.get("location") or "").strip(),
             "period": str(item.get("period") or "").strip(),
-            "bullets": [str(b).strip() for b in item.get("bullets", []) if str(b).strip()],
+            "bullets": [normalized for bullet in item.get("bullets", []) if (normalized := _normalize_bullet_item(bullet))],
         }
         seen[key] = clone
         ordered.append(clone)
 
     return ordered
+
+
+def normalize_cv_experience_items(items: Any) -> List[Dict]:
+    if not isinstance(items, list):
+        return []
+
+    normalized_items: List[Dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        repaired = _repair_generated_experience_item(item)
+        if not any(
+            str(repaired.get(field) or "").strip()
+            for field in ("role_title", "company", "location", "period")
+        ) and not repaired.get("bullets"):
+            continue
+        normalized_items.append(repaired)
+    return dedupe_experiences(normalized_items)
 
 
 def extract_cv_strategic_initiatives(cv_text: str) -> List[Dict]:
@@ -748,18 +785,15 @@ def ensure_structured_cv_fields(
     experience_display_by_key: Dict[tuple, Dict] = {}
     experiences = record.get("cv_professional_experience", [])
     generated_experiences: List[Dict] = []
-    if isinstance(experiences, list):
-        generated_experiences.extend([_repair_generated_experience_item(item) for item in experiences if isinstance(item, dict)])
-    generated_experiences.extend(
-        [_repair_generated_experience_item(item) for item in extract_cv_professional_experiences(str(record.get("tailored_cv") or ""))]
-    )
+    generated_experiences.extend(normalize_cv_experience_items(experiences))
+    generated_experiences.extend(normalize_cv_experience_items(extract_cv_professional_experiences(str(record.get("tailored_cv") or ""))))
     generated_bullets_by_index: List[List[str]] = []
     for generated_item in generated_experiences:
         generated_bullets_by_index.append(
             [
-                str(bullet).strip()
+                _normalize_bullet_value(bullet)
                 for bullet in generated_item.get("bullets", [])
-                if str(bullet).strip()
+                if _normalize_bullet_value(bullet)
             ]
         )
 
@@ -772,7 +806,7 @@ def ensure_structured_cv_fields(
                 continue
             bullets_raw = item.get("bullets", [])
             if isinstance(bullets_raw, list):
-                bullets = [str(b).strip() for b in bullets_raw if str(b).strip()]
+                bullets = [_normalize_bullet_value(b) for b in bullets_raw if _normalize_bullet_value(b)]
             else:
                 bullets = split_bullets(str(bullets_raw))
             key = _experience_key(matched_cv_experience)
@@ -820,19 +854,7 @@ def ensure_structured_cv_fields(
                 }
             )
     else:
-        normalized_experiences = dedupe_experiences(
-            [
-                {
-                    "role_title": str(item.get("role_title", "")).strip(),
-                    "company": str(item.get("company", "")).strip(),
-                    "location": str(item.get("location", "")).strip(),
-                    "period": str(item.get("period", "")).strip(),
-                    "bullets": [str(b).strip() for b in item.get("bullets", []) if str(b).strip()],
-                }
-                for item in generated_experiences
-                if isinstance(item, dict)
-            ]
-        )
+        normalized_experiences = normalize_cv_experience_items(generated_experiences)
 
     record["cv_professional_experience"] = normalized_experiences
 

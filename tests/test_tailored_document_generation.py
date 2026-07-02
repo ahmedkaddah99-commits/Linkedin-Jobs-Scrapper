@@ -78,6 +78,109 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
             ]
         )
 
+    def test_render_payload_repairs_malformed_experience_and_preserves_identity(self):
+        malformed_record = {
+            "job_id": "job_roxy",
+            "title": "Consultant",
+            "company": "Example Client",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Secured financing for 7 transporter vehicles without traditional bank support.",
+                    "company": "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+                    "period": "Operations Lead and Co-Founder | Roxy Mobility GmbH | Dec 2020 - Oct 2024 (fulltime)",
+                    "bullets": [
+                        "Directed operations in Freiburg.",
+                        "Reduced operational costs.",
+                    ],
+                }
+            ],
+            "cv_skills": ["Operations"],
+            "cv_education": [],
+        }
+
+        payload = build_cv_html_export_payload(
+            malformed_record,
+            candidate_name="Ahmed Kaddah",
+            candidate_email="ahmed@example.com",
+            cv_font_name="Calibri",
+            cv_template_id="plain",
+            cv_color_scheme="classic_navy",
+            languages=["English - C1"],
+            profile_image_path=None,
+            include_profile_image=True,
+            profile_links=[],
+        )
+
+        experience = payload["profile"]["recent_experience"][0]
+        self.assertEqual(payload["profile"]["name"], "Ahmed Kaddah")
+        self.assertEqual(experience["title"], "Operations Lead and Co-Founder")
+        self.assertEqual(experience["company"], "Roxy Mobility GmbH")
+        self.assertEqual(experience["period"], "Dec 2020 - Oct 2024 (fulltime)")
+        self.assertNotIn("photo_path", payload)
+        self.assertEqual(
+            experience["bullets"][:2],
+            [
+                "Secured financing for 7 transporter vehicles without traditional bank support.",
+                "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+            ],
+        )
+
+    def test_word_cv_templates_repair_malformed_experience_before_rendering(self):
+        malformed_record = {
+            "job_id": "job_roxy",
+            "title": "Consultant",
+            "company": "Example Client",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Secured financing for 7 transporter vehicles without traditional bank support.",
+                    "company": "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+                    "period": "Operations Lead and Co-Founder | Roxy Mobility GmbH | Dec 2020 - Oct 2024 (fulltime)",
+                    "bullets": ["Directed operations in Freiburg."],
+                }
+            ],
+            "cv_strategic_initiatives": [],
+            "cv_skills": [],
+            "cv_education": [],
+        }
+
+        with TemporaryDirectory() as tmp:
+            docs_dir = Path(tmp)
+            for template_id in ("plain", "section_bars", "modern_minimal"):
+                output_path = docs_dir / f"{template_id}.docx"
+                create_cv_document(
+                    malformed_record,
+                    docs_dir,
+                    "2026-07-02",
+                    "Ahmed Kaddah",
+                    "ahmed@example.com",
+                    "Calibri",
+                    template_id,
+                    "classic_navy",
+                    ["English - C1"],
+                    None,
+                    False,
+                    [],
+                    output_path=output_path,
+                )
+
+                document = Document(output_path)
+                paragraph_text = [paragraph.text for paragraph in document.paragraphs]
+                table_text = [
+                    paragraph.text
+                    for table in document.tables
+                    for row in table.rows
+                    for cell in row.cells
+                    for paragraph in cell.paragraphs
+                ]
+                text = "\n".join(paragraph_text + table_text)
+                self.assertIn("operations lead and co-founder", text.lower())
+                self.assertIn("roxy mobility gmbh", text.lower())
+                self.assertIn("Secured financing for 7 transporter vehicles", text)
+                self.assertIn("Ahmed Kaddah", text)
+                self.assertNotIn("Kaddah Ahmed", text)
+
     def test_language_rules_do_not_treat_german_umlauts_as_french(self):
         reasons = detect_reasons(
             {
@@ -1156,7 +1259,7 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         self.assertIn("PROFESSIONAL EXPERIENCE", paragraph_texts)
         self.assertIn("EDUCATION", paragraph_texts)
         self.assertIn("SKILLS", paragraph_texts)
-        self.assertIn("ROY J. WEATHERSPOON", table_texts[0])
+        self.assertIn("Roy J. Weatherspoon", table_texts[0])
         self.assertIn("Analyst", table_texts)
         self.assertIn("2023 - Present", table_texts)
 

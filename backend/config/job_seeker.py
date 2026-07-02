@@ -18,7 +18,7 @@ DEV_ENV_PATH = Path("dev.env")
 
 DEFAULT_JOB_SEEKER_CONFIG = {
     "candidate": {
-        "name": "Kaddah Ahmed",
+        "name": "Ahmed Kaddah",
         "email": "ahmed.kaddah@tutamail.com",
         "cv_path": "user_config/cv_master.txt",
         "cv_docx_path": "Ahmed Kaddah CV.docx",

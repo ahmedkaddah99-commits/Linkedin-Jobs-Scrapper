@@ -4850,6 +4850,83 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(any(item["review_id"] == review_id for item in tracker_payload3.get("items", [])))
 
+    def test_tracker_bulk_delete_only_removes_not_applied_jobs(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+        run_id = run_payload["id"]
+        self._request("POST", "/workers/process-next", {})
+
+        self.app.upsert_job_set(
+            run_id,
+            "accepted_jobs",
+            [
+                JobRecord(job_id="bulk_job_1", title="Bulk One", company="Bulk Co"),
+                JobRecord(job_id="bulk_job_2", title="Bulk Two", company="Bulk Co"),
+                JobRecord(job_id="bulk_job_3", title="Bulk Three", company="Keep Co"),
+            ],
+        )
+        review_ids = []
+        for job_id in ["bulk_job_1", "bulk_job_2", "bulk_job_3"]:
+            status, review_payload = self._request(
+                "POST",
+                f"/runs/{run_id}/reviews",
+                {"job_id": job_id, "decision": "approved", "status": "approved", "reviewer": "tester"},
+            )
+            self.assertEqual(status, 201)
+            review_ids.append(review_payload["review_id"])
+
+        status, applied_payload = self._request(
+            "PUT",
+            f"/tracker/{review_ids[2]}",
+            {"tracker_status": "applied"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(applied_payload["tracker_status"], "applied")
+
+        status, mixed_delete_payload = self._request(
+            "DELETE",
+            "/tracker/bulk",
+            {"review_ids": [review_ids[0], review_ids[2]]},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("Not Applied", mixed_delete_payload["error"]["message"])
+
+        status, tracker_payload = self._request("GET", "/tracker")
+        self.assertEqual(status, 200)
+        self.assertTrue(any(item["review_id"] == review_ids[0] for item in tracker_payload["items"]))
+
+        status, delete_payload = self._request(
+            "DELETE",
+            "/tracker/bulk",
+            {"review_ids": [review_ids[0], review_ids[1]]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(delete_payload["deleted_count"], 2)
+        self.assertEqual(
+            sorted(item["job_id"] for item in delete_payload["deleted"]),
+            ["bulk_job_1", "bulk_job_2"],
+        )
+
+        status, refreshed_tracker_payload = self._request("GET", "/tracker")
+        self.assertEqual(status, 200)
+        refreshed_review_ids = {item["review_id"] for item in refreshed_tracker_payload["items"]}
+        self.assertNotIn(review_ids[0], refreshed_review_ids)
+        self.assertNotIn(review_ids[1], refreshed_review_ids)
+        self.assertIn(review_ids[2], refreshed_review_ids)
+
+        status, jobs_payload = self._request("GET", f"/runs/{run_id}/jobs")
+        self.assertEqual(status, 200)
+        remaining_jobs = [
+            job["job_id"]
+            for jobs in jobs_payload["job_sets"].values()
+            for job in jobs
+        ]
+        self.assertEqual(remaining_jobs, ["bulk_job_3"])
+
     def test_tracker_orders_newest_placement_first_after_older_job_updates(self):
         status, run_payload = self._request(
             "POST",

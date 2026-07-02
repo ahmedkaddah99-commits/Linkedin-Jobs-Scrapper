@@ -1070,6 +1070,88 @@ def _handle_delete(context: ApiRouteContext) -> bool | None:
                         )
                         return
 
+    if segments == ["tracker", "bulk"]:
+                        user, _ = self._require_identity()
+                        payload = self._read_json_body()
+                        if not isinstance(payload, dict):
+                            raise ValueError("bulk tracker delete requires a JSON object")
+                        requested_review_ids = [
+                            str(review_id or "").strip()
+                            for review_id in (payload.get("review_ids") or [])
+                            if str(review_id or "").strip()
+                        ]
+                        # De-duplicate while preserving the client-visible order used in confirmations.
+                        requested_review_ids = list(dict.fromkeys(requested_review_ids))
+                        if not requested_review_ids:
+                            raise ValueError("review_ids is required")
+                        if len(requested_review_ids) > 500:
+                            raise ValueError("bulk tracker delete is limited to 500 jobs at a time")
+
+                        tracker_entries = {
+                            str(entry.get("review_id") or ""): entry
+                            for entry in _collect_tracker_entries(application, user)
+                        }
+                        missing_review_ids = [
+                            review_id
+                            for review_id in requested_review_ids
+                            if review_id not in tracker_entries
+                        ]
+                        if missing_review_ids:
+                            raise KeyError(f"Tracker review '{missing_review_ids[0]}' not found.")
+
+                        blocked_entries = [
+                            entry
+                            for review_id, entry in (
+                                (review_id, tracker_entries[review_id])
+                                for review_id in requested_review_ids
+                            )
+                            if str(entry.get("tracker_status") or "").strip().lower() != "not_applied"
+                        ]
+                        if blocked_entries:
+                            raise ValueError("Bulk delete only supports Not Applied tracker jobs.")
+
+                        deleted: list[dict] = []
+                        for review_id in requested_review_ids:
+                            entry = tracker_entries[review_id]
+                            if entry.get("external_application"):
+                                refreshed_user, deleted_external = _delete_external_tracker_application(
+                                    application,
+                                    user,
+                                    str(entry.get("application_id") or entry.get("review_id") or ""),
+                                )
+                                user = refreshed_user
+                                deleted.append(
+                                    {
+                                        "review_id": str(deleted_external.get("review_id") or review_id),
+                                        "application_id": str(deleted_external.get("application_id") or ""),
+                                        "external_application": True,
+                                    }
+                                )
+                                continue
+
+                            review = application.get_review(review_id)
+                            run = application.get_run(review.run_id)
+                            if not application.user_can_access_run(user, run):
+                                raise PermissionError(f"Workspace access denied for '{run.workspace_id}'.")
+                            application.delete_job(review.run_id, review.job_id)
+                            deleted.append(
+                                {
+                                    "review_id": review.review_id,
+                                    "run_id": review.run_id,
+                                    "job_id": review.job_id,
+                                    "external_application": False,
+                                }
+                            )
+
+                        self._send_json(
+                            {
+                                "deleted_count": len(deleted),
+                                "deleted": deleted,
+                            },
+                            status=HTTPStatus.OK,
+                        )
+                        return
+
     if segments[:1] == ["tracker"] and len(segments) == 2:
                         user, _ = self._require_identity()
                         if segments[1].startswith("external_"):

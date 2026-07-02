@@ -23,6 +23,11 @@ const TRACKER_SOURCE_FILTERS = [
   { value: "external", label: "External applications" },
 ];
 const EMPTY_TRACKER_FILTERS = { query: "", status: "all", workspace: "all", source: "all" };
+const BULK_DELETE_MODES = [
+  { value: "all", label: "All matching" },
+  { value: "date", label: "Added date" },
+  { value: "company", label: "Company" },
+];
 
 function trackerFiltersFromSearchParams(searchParams) {
   return {
@@ -37,6 +42,19 @@ function formatDate(iso) {
   if (!iso) return "";
   try { return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); }
   catch { return iso.slice(0, 10); }
+}
+
+function dateKeyFromIso(iso) {
+  const text = String(iso || "").trim();
+  return text ? text.slice(0, 10) : "";
+}
+
+function trackerAddedDateKey(item) {
+  return dateKeyFromIso(item.placed_in_tracker_at || item.created_at || item.updated_at || item.run_finished_at);
+}
+
+function normalizeCompanyName(value) {
+  return String(value || "").trim().toLocaleLowerCase();
 }
 
 function formatDateTime(iso) {
@@ -353,10 +371,40 @@ function TrackerNotesCell({ item, onUpdate, updating }) {
     </div>
   );
 }
-function TrackerTable({ filters, items, allItems, workspaceOptions, onFiltersChange, onUpdate, onDelete, updating, request }) {
+function TrackerTable({ filters, items, allItems, workspaceOptions, onFiltersChange, onUpdate, onDelete, onBulkDelete, updating, request }) {
+  const [bulkMode, setBulkMode] = useState("all");
+  const [bulkDate, setBulkDate] = useState("");
+  const [bulkCompany, setBulkCompany] = useState("");
   const hasActiveFilters = Object.values(filters).some((value) => value && value !== "all");
+  const bulkBusy = updating === "bulk-delete";
+  const notAppliedItems = useMemo(() => items.filter((item) => statusKeyFromItem(item) === "not_applied"), [items]);
+  const bulkDateOptions = useMemo(() => [...new Set(notAppliedItems.map(trackerAddedDateKey).filter(Boolean))].sort().reverse(), [notAppliedItems]);
+  const bulkCompanyOptions = useMemo(() => [...new Set(notAppliedItems.map((item) => item.company || item.tracker_table_row?.company || "").filter(Boolean))].sort((a, b) => a.localeCompare(b)), [notAppliedItems]);
+  const bulkCandidates = useMemo(() => {
+    if (bulkMode === "date") {
+      return bulkDate ? notAppliedItems.filter((item) => trackerAddedDateKey(item) === bulkDate) : [];
+    }
+    if (bulkMode === "company") {
+      const company = normalizeCompanyName(bulkCompany);
+      return company
+        ? notAppliedItems.filter((item) => normalizeCompanyName(item.company || item.tracker_table_row?.company) === company)
+        : [];
+    }
+    return notAppliedItems;
+  }, [bulkCompany, bulkDate, bulkMode, notAppliedItems]);
   function updateFilter(field, value) { onFiltersChange((current) => ({ ...current, [field]: value })); }
   function clearFilters() { onFiltersChange(EMPTY_TRACKER_FILTERS); }
+  async function deleteBulkCandidates() {
+    if (!bulkCandidates.length || bulkBusy) return;
+    const scopeLabel = bulkMode === "date" && bulkDate
+      ? `added on ${formatDate(bulkDate)}`
+      : bulkMode === "company" && bulkCompany.trim()
+        ? `at ${bulkCompany.trim()}`
+        : "matching the current filters";
+    const confirmed = window.confirm(`Delete ${bulkCandidates.length} Not Applied job${bulkCandidates.length === 1 ? "" : "s"} ${scopeLabel}? This removes linked generated job data and cannot be undone.`);
+    if (!confirmed) return;
+    await onBulkDelete(bulkCandidates);
+  }
 
   if (!allItems.length) {
     return (
@@ -398,6 +446,34 @@ function TrackerTable({ filters, items, allItems, workspaceOptions, onFiltersCha
             Clear
           </button>
         </div>
+        {notAppliedItems.length ? (
+          <div className="mt-4 flex flex-col gap-3 rounded-xl border border-error/15 bg-error/5 p-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+              <span className="text-xs font-bold uppercase tracking-[0.14em] text-error">Bulk delete</span>
+              <select aria-label="Bulk delete scope" className="rounded-lg border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface" disabled={bulkBusy} onChange={(event) => setBulkMode(event.target.value)} value={bulkMode}>
+                {BULK_DELETE_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+              </select>
+              {bulkMode === "date" ? (
+                <select aria-label="Bulk delete added date" className="rounded-lg border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface" disabled={bulkBusy} onChange={(event) => setBulkDate(event.target.value)} value={bulkDate}>
+                  <option value="">Select date</option>
+                  {bulkDateOptions.map((date) => <option key={date} value={date}>{formatDate(date)}</option>)}
+                </select>
+              ) : null}
+              {bulkMode === "company" ? (
+                <>
+                  <input aria-label="Bulk delete company name" className="min-w-0 rounded-lg border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface sm:w-64" disabled={bulkBusy} list="tracker-bulk-company-options" onChange={(event) => setBulkCompany(event.target.value)} placeholder="Exact company name" type="text" value={bulkCompany} />
+                  <datalist id="tracker-bulk-company-options">
+                    {bulkCompanyOptions.map((company) => <option key={company} value={company} />)}
+                  </datalist>
+                </>
+              ) : null}
+            </div>
+            <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-error px-4 py-2 text-sm font-semibold text-on-error transition-colors hover:bg-error/90 disabled:cursor-not-allowed disabled:opacity-50" disabled={!bulkCandidates.length || bulkBusy} onClick={deleteBulkCandidates} type="button">
+              <span className="material-symbols-outlined text-base">{bulkBusy ? "progress_activity" : "delete"}</span>
+              {bulkBusy ? "Deleting..." : `Delete ${bulkCandidates.length}`}
+            </button>
+          </div>
+        ) : null}
       </div>
       {items.length ? (
         <div className="overflow-x-auto">
@@ -663,7 +739,7 @@ export default function TrackerPage() {
   const [discoveryModal, setDiscoveryModal] = useState(EMPTY_DISCOVERY_MODAL);
   const [discoveryFeedback, setDiscoveryFeedback] = useState(EMPTY_DISCOVERY_FEEDBACK);
   const [trackerFilters, setTrackerFilters] = useState(() => trackerFiltersFromSearchParams(searchParams));
-  const { items, loading, error, refresh, updating, updateCard, deleteCard, emailIntegration, integrationBusy, lastSyncResult, refreshEmailIntegration, startGoogleEmailIntegration, updateEmailIntegrationSettings, syncEmailIntegration, approveEmailDetections, dismissEmailDetections, deleteEmailIntegration } = useTracker();
+  const { items, loading, error, refresh, updating, updateCard, deleteCard, bulkDeleteCards, emailIntegration, integrationBusy, lastSyncResult, refreshEmailIntegration, startGoogleEmailIntegration, updateEmailIntegrationSettings, syncEmailIntegration, approveEmailDetections, dismissEmailDetections, deleteEmailIntegration } = useTracker();
   const totalCards = items.length;
   const filteredTrackerItems = useMemo(() => items.filter((item) => trackerItemMatchesFilters(item, trackerFilters)), [items, trackerFilters]);
   const workspaceOptions = useMemo(() => [...new Set(items.map((item) => item.workspace_name).filter(Boolean))].sort(), [items]);
@@ -673,6 +749,7 @@ export default function TrackerPage() {
   useEffect(() => { if (loading || !location.hash) return; const target = document.getElementById(decodeURIComponent(location.hash.slice(1))); target?.scrollIntoView({ block: "center" }); }, [items, loading, location.hash]);
 
   async function handleDeleteCard(item) { const confirmed = window.confirm(`Delete ${item.title || "this job"}? This removes it from the tracker${item.external_application ? "" : " and linked generated job data"}.`); if (!confirmed) return; setDeleteFeedback({ message: "", error: "" }); try { await deleteCard(item); setDeleteFeedback({ message: "Deleted job.", error: "" }); } catch (e) { setDeleteFeedback({ message: "", error: e.message || "Unable to delete this job." }); } }
+  async function handleBulkDeleteCards(itemsToDelete) { setDeleteFeedback({ message: "", error: "" }); try { const result = await bulkDeleteCards(itemsToDelete); setDeleteFeedback({ message: `Deleted ${result.deleted_count || 0} job${result.deleted_count === 1 ? "" : "s"}.`, error: "" }); } catch (e) { setDeleteFeedback({ message: "", error: e.message || "Unable to delete these jobs." }); } }
   function closeDiscoveryModal() { setDiscoveryModal(EMPTY_DISCOVERY_MODAL); setDiscoveryFeedback(EMPTY_DISCOVERY_FEEDBACK); }
   async function handleDiscoverContacts(item) { if (!item?.run_id || !item?.job_id) { setDeleteFeedback({ message: "", error: "This tracker row is missing the run or job reference needed for contact discovery." }); return; } setDeleteFeedback({ message: "", error: "" }); setDiscoveringId(item.review_id || item.job_id || `${item.run_id}:${item.job_id}`); try { const payload = await request("/outreach/target-contact-discovery", { method: "POST", body: { run_id: item.run_id, job_id: item.job_id } }); setDiscoveryModal({ open: true, item, payload }); setDiscoveryFeedback(EMPTY_DISCOVERY_FEEDBACK); } catch (e) { setDeleteFeedback({ message: "", error: e.message || "Unable to generate target contact discovery right now." }); } finally { setDiscoveringId(""); } }
   async function copyDiscoveryText(text, successMessage) { try { await navigator.clipboard.writeText(String(text || "")); setDiscoveryFeedback({ message: successMessage, error: "" }); } catch (e) { setDiscoveryFeedback({ message: "", error: e.message || "Unable to copy this text." }); } }
@@ -686,7 +763,7 @@ export default function TrackerPage() {
       {!loading && !error && (<InboxSyncControl busy={integrationBusy} integration={emailIntegration} lastSyncResult={lastSyncResult} onDelete={deleteEmailIntegration} onDismissDetections={dismissEmailDetections} onRefreshIntegration={refreshEmailIntegration} onSaveSettings={updateEmailIntegrationSettings} onApproveDetections={approveEmailDetections} onStartGoogle={startGoogleEmailIntegration} onSync={syncEmailIntegration} />)}
       {!loading && !error && (<div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">{COLUMNS.map((column) => { const selected = trackerFilters.status === column.key; return (<button aria-pressed={selected} className={["rounded-2xl border px-4 py-3 text-left transition-colors", selected ? `${column.border} bg-surface-container-low shadow-sm` : "border-outline-variant/20 bg-surface-container-lowest hover:bg-surface-container-low"].join(" ")} key={column.key} onClick={() => { setTrackerFilters((current) => ({ ...current, status: current.status === column.key ? "all" : column.key })); }} type="button"><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-on-surface-variant">{column.label}</span><span className={["rounded-full px-2 py-0.5 text-xs font-bold", column.badge].join(" ")}>{statusCounts[column.key] || 0}</span></div></button>); })}</div>)}
 
-      {!loading && !error && (<TrackerTable allItems={items} filters={trackerFilters} items={filteredTrackerItems} onDelete={handleDeleteCard} onFiltersChange={setTrackerFilters} onUpdate={updateCard} request={request} updating={updating} workspaceOptions={workspaceOptions} />)}
+      {!loading && !error && (<TrackerTable allItems={items} filters={trackerFilters} items={filteredTrackerItems} onBulkDelete={handleBulkDeleteCards} onDelete={handleDeleteCard} onFiltersChange={setTrackerFilters} onUpdate={updateCard} request={request} updating={updating} workspaceOptions={workspaceOptions} />)}
     </div>
   );
 }

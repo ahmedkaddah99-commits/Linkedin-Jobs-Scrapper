@@ -12,6 +12,7 @@ from backend.config.job_seeker import cfg_str, load_job_seeker_config, normalize
 from backend.profiles.cv_text import resolve_runtime_cv_docx_path
 
 from .common import sanitize_filename
+from .cv_structuring import normalize_cv_experience_items
 from .generation import format_header_location, normalize_output_language
 
 
@@ -78,7 +79,7 @@ CV_TEMPLATE_PRESETS = {
     "plain": {
         "id": "plain",
         "label": "Plain",
-        "description": "Single-column resume with a name rule, classic headings, compact skills, and optional photo.",
+        "description": "Single-column resume with a name rule, classic headings, compact skills, and profile photo support.",
         "layout": "plain_resume",
         "heading_case": "title",
         "base_font_size": 10.5,
@@ -92,7 +93,7 @@ CV_TEMPLATE_PRESETS = {
     "section_bars": {
         "id": "section_bars",
         "label": "Section Bars",
-        "description": "Centered resume with light section bars, compact contact line, and optional photo.",
+        "description": "Centered resume with light section bars, compact contact line, and profile photo support.",
         "layout": "section_bar_resume",
         "heading_case": "upper",
         "base_font_size": 10.0,
@@ -443,7 +444,9 @@ def create_cv_document(
         contact_parts.append(language_line)
     contact_line = " | ".join([part for part in contact_parts if part])
     summary_text = str(record.get("cv_professional_summary") or "").strip()
-    experiences = [item for item in (record.get("cv_professional_experience") or []) if isinstance(item, dict)]
+    experiences = normalize_cv_experience_items(
+        record.get("cv_professional_experience") or record.get("cv_professional_experiences") or []
+    )
     initiatives = [item for item in (record.get("cv_strategic_initiatives") or []) if isinstance(item, dict)]
     skills = [str(skill).strip() for skill in (record.get("cv_skills") or []) if str(skill).strip()]
     education_items = [item for item in (record.get("cv_education") or []) if isinstance(item, dict)]
@@ -1091,7 +1094,7 @@ def create_cv_document(
         name_paragraph = header_cell.paragraphs[0]
         configure_paragraph(name_paragraph, before_pt=0, after_pt=2)
         name_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        name_run = name_paragraph.add_run(candidate_name.upper())
+        name_run = name_paragraph.add_run(candidate_name)
         style_run(name_run, size_pt=float(template["header_font_size"]), bold=True)
 
         rule_paragraph = header_cell.add_paragraph()
@@ -1258,6 +1261,9 @@ def build_cv_html_export_payload(
 ) -> dict:
     link_urls = _profile_link_urls(profile_links)
     cv_output_language = normalize_output_language(record.get("cv_output_language") or "English")
+    experiences = normalize_cv_experience_items(
+        record.get("cv_professional_experience") or record.get("cv_professional_experiences") or []
+    )
     profile = {
         "name": str(candidate_name or "").strip(),
         "role_title": str(record.get("title") or "").strip(),
@@ -1284,8 +1290,7 @@ def build_cv_html_export_payload(
                     or (not isinstance(bullet, Mapping) and str(bullet).strip())
                 ],
             }
-            for item in (record.get("cv_professional_experience") or [])
-            if isinstance(item, dict)
+            for item in experiences
         ],
         "projects": [
             {

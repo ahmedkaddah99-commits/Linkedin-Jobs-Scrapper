@@ -111,3 +111,30 @@ test("maps and renders uploaded reference-inspired PDF templates", () => {
     assert.match(html, /Candidate profile photo/);
   }
 });
+
+test("photo mode without resolved image omits the photo slot", () => {
+  const html = buildCvStudioHtml({
+    templateId: "plain",
+    name: "Ahmed Kaddah",
+    headline: "Operations Leader",
+    email: "ahmed@example.com",
+    summary: "Builds reliable teams and measurable operating systems.",
+    skillsText: "Operations\nAnalytics",
+    educationText: "MSc Management",
+    experience: [
+      {
+        id: "experience-1",
+        title: "Operations Manager",
+        company: "Example Co",
+        period: "2023 - Present",
+        bullets: [{ id: "bullet-1", text: "Improved throughput.", level: 0 }],
+      },
+    ],
+    showPhoto: true,
+  });
+
+  assert.doesNotMatch(html, /Optional photo|Optionales Foto|cv-photo-placeholder/);
+  assert.doesNotMatch(html, /<div class="[^"]*photo[^"]*">/);
+  assert.match(html, /Ahmed Kaddah/);
+  assert.doesNotMatch(html, /Kaddah Ahmed/);
+});

@@ -131,6 +131,37 @@ export function useTracker() {
     }
   }
 
+  async function bulkDeleteCards(itemsToDelete) {
+    const reviewIds = Array.from(
+      new Set(
+        (itemsToDelete || [])
+          .map((item) => String(item?.review_id || item || "").trim())
+          .filter(Boolean),
+      ),
+    );
+    if (!reviewIds.length) {
+      throw new Error("Select at least one tracker job to delete.");
+    }
+    setUpdating("bulk-delete");
+    try {
+      const result = await request("/tracker/bulk", {
+        method: "DELETE",
+        body: { review_ids: reviewIds },
+      });
+      const deletedIds = new Set((result.deleted || []).map((entry) => String(entry.review_id || "").trim()));
+      setTrackerData((prev) => {
+        const currentTracker = prev || { items: [] };
+        return {
+          ...currentTracker,
+          items: (currentTracker.items || []).filter((entry) => !deletedIds.has(String(entry.review_id || "").trim())),
+        };
+      });
+      return result;
+    } finally {
+      setUpdating("");
+    }
+  }
+
   async function startGoogleEmailIntegration(fields) {
     setIntegrationBusy("authorize");
     try {
@@ -230,6 +261,7 @@ export function useTracker() {
     updating,
     updateCard,
     deleteCard,
+    bulkDeleteCards,
     COLUMN_ORDER,
     emailIntegration,
     integrationBusy,

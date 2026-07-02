@@ -196,7 +196,7 @@ def _photo_markup(photo_src: str, *, img_class: str = "profile-photo", shell_cla
         )
     return (
         f'<div class="{escape(shell_class)} photo-shell-placeholder">'
-        '<div class="photo-placeholder-copy">Optional photo</div>'
+        '<div class="photo-placeholder-copy">Profile photo</div>'
         "</div>"
     )
 
@@ -1396,7 +1396,7 @@ def _gallery_html() -> str:
                 <h2>{escape(template['title'])}</h2>
                 <p class="subtitle">{escape(template['subtitle'])}</p>
                 <p>{escape(template['source_summary'])}</p>
-                <p class="photo-note">Optional photo slot included.</p>
+                <p class="photo-note">Profile photo slot included.</p>
                 <div class="actions">
                   <a class="primary" href="{escape(template['slug'])}.html">With photo</a>
                   <a class="secondary" href="{escape(template['slug'])}_no_photo.html">No photo</a>
@@ -1591,7 +1591,7 @@ Implemented templates:
 
 Photo support:
 
-- Every template includes an optional profile photo slot.
+- Every template includes profile photo support.
 - If a candidate photo exists in the configured repo path, it is copied into `_assets/` and rendered automatically.
 - If no photo exists, the layout still renders with a clean placeholder so the slot remains easy to use.
 

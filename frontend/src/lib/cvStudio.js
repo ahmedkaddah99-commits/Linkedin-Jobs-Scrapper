@@ -102,7 +102,7 @@ export const WEB_CV_TEMPLATES = [
     id: "plain",
     label: "Plain",
     shortLabel: "Plain",
-    description: "Classic resume with a configurable name rule, compact skills, and optional profile photo.",
+    description: "Classic resume with a configurable name rule, compact skills, and profile photo support.",
     mood: "Classic, polished, approachable",
     supportsPhoto: true,
   },
@@ -142,7 +142,7 @@ export const WEB_CV_TEMPLATES = [
     id: "europass_lite",
     label: "Europass",
     shortLabel: "Europass",
-    description: "Clean Europass-inspired layout with optional profile photo. Grid-based, structured, and widely recognized in Europe.",
+    description: "Clean Europass-inspired layout with profile photo support. Grid-based, structured, and widely recognized in Europe.",
     mood: "Structured, professional, European",
     supportsPhoto: true,
   },
@@ -231,7 +231,6 @@ const CV_EXPORT_LABELS = {
     experienceItem: "Experience Item",
     inBrowserEditableCv: "In-browser editable CV",
     languages: "Languages",
-    optionalPhoto: "Optional photo",
     profile: "Profile",
     projects: "Projects",
     skills: "Skills",
@@ -251,7 +250,6 @@ const CV_EXPORT_LABELS = {
     experienceItem: "Berufserfahrung",
     inBrowserEditableCv: "Editierbarer CV",
     languages: "Sprachen",
-    optionalPhoto: "Optionales Foto",
     profile: "Profil",
     projects: "Projekte",
     skills: "Kompetenzen",
@@ -728,11 +726,8 @@ function buildContactLinks(model, className = "contact-list") {
 }
 
 function buildPhotoMarkup(model, photoClass = "cv-photo-shell") {
-  if (!model.showPhoto) return "";
-  if (model.photoDataUrl) {
-    return `<div class="${photoClass}"><img class="cv-photo" src="${escapeHtml(model.photoDataUrl)}" alt="Candidate profile photo"></div>`;
-  }
-  return `<div class="${photoClass} cv-photo-placeholder"><span>${escapeHtml(labelFor(model, "optionalPhoto"))}</span></div>`;
+  if (!model.showPhoto || !model.photoDataUrl) return "";
+  return `<div class="${photoClass}"><img class="cv-photo" src="${escapeHtml(model.photoDataUrl)}" alt="Candidate profile photo"></div>`;
 }
 
 function buildSection(title, content, subtitle = "") {
@@ -1451,16 +1446,6 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       height: 100%;
       object-fit: cover;
       display: block;
-    }
-    .cv-photo-placeholder {
-      border-style: dashed;
-      color: var(--cv-muted);
-      font-size: 0.72rem;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      text-align: center;
-      padding: 12px;
     }
     .rounded-photo,
     .signal-photo,

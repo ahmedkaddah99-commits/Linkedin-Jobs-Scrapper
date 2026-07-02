@@ -44,7 +44,7 @@ from .rendering import (
 from .tracker_export import save_to_excel
 
 
-DEFAULT_CANDIDATE_NAME = "Kaddah Ahmed"
+DEFAULT_CANDIDATE_NAME = "Ahmed Kaddah"
 DEFAULT_CANDIDATE_EMAIL = "ahmed.kaddah@tutamail.com"
 DEFAULT_CV_FONT = "Calibri"
 GENERATED_CV_ASSET_KIND = "generated_cv"
