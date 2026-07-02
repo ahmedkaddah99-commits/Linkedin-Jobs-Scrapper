@@ -138,3 +138,32 @@ test("photo mode without resolved image omits the photo slot", () => {
   assert.match(html, /Ahmed Kaddah/);
   assert.doesNotMatch(html, /Kaddah Ahmed/);
 });
+
+test("plain resume preview keeps resolved photo in the right header column", () => {
+  const html = buildCvStudioHtml({
+    templateId: "plain",
+    name: "Ahmed Kaddah",
+    headline: "Operations Leader",
+    email: "ahmed@example.com",
+    location: "Erlangen, Germany",
+    summary: "Builds reliable teams and measurable operating systems.",
+    skillsText: "Operations\nAnalytics",
+    educationText: "MSc Management",
+    experience: [
+      {
+        id: "experience-1",
+        title: "Operations Manager",
+        company: "Example Co",
+        period: "2023 - Present",
+        bullets: [{ id: "bullet-1", text: "Improved throughput.", level: 0 }],
+      },
+    ],
+    showPhoto: true,
+    photoDataUrl: "data:image/png;base64,abc",
+  });
+
+  assert.match(
+    html,
+    /<header class="plain-resume-head has-photo">\s*<div class="plain-resume-identity">[\s\S]*?<div class="plain-resume-contact">[\s\S]*?<\/div>\s*<\/div>\s*<div class="cv-photo-shell plain-resume-photo">/,
+  );
+});

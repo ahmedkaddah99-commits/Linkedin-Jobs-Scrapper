@@ -903,15 +903,16 @@ function templatePlainResume(model) {
     })
     .join("");
   const additional = buildLanguagesMarkup(model);
+  const photoMarkup = buildPhotoMarkup(model, "cv-photo-shell plain-resume-photo");
   return `
     <main class="cv-sheet template-plain-resume">
-      <header class="plain-resume-head">
-        <div>
+      <header class="plain-resume-head${photoMarkup ? " has-photo" : ""}">
+        <div class="plain-resume-identity">
           <h1>${escapeHtml(model.name)}</h1>
+          ${buildContactLinks(model, "plain-resume-contact")}
         </div>
-        ${buildPhotoMarkup(model, "cv-photo-shell plain-resume-photo")}
+        ${photoMarkup}
       </header>
-      ${buildContactLinks(model, "plain-resume-contact")}
       <section class="plain-resume-section">
         <h2>${escapeHtml(labelFor(model, "profile"))}</h2>
         ${buildSummaryMarkup(model)}
@@ -1663,12 +1664,18 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       line-height: 1.15;
     }
     .plain-resume-head {
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
       gap: 14pt;
       align-items: flex-start;
       padding-bottom: 1.5mm;
       border-bottom: 1.5pt solid var(--cv-accent);
+    }
+    .plain-resume-head.has-photo {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .plain-resume-identity {
+      min-width: 0;
     }
     .plain-resume-head h1 {
       color: var(--cv-primary);
@@ -1682,6 +1689,7 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       min-width: 26mm;
       height: 31mm;
       border-radius: 6px;
+      justify-self: end;
     }
     .plain-resume-contact {
       display: flex;
@@ -2197,8 +2205,7 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       .hero-row,
       .ledger-head,
       .europass-head,
-      .mono-hero,
-      .plain-resume-head {
+      .mono-hero {
         flex-direction: column;
       }
       .bar-resume-head {
