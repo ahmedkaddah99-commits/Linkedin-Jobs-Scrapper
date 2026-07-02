@@ -220,8 +220,7 @@ const DOCX_COLOR_SCHEME_TO_WEB_PALETTE = {
 
 const CV_EXPORT_LABELS = {
   English: {
-    additional: "Additional",
-    availability: "Availability",
+    additional: "Languages",
     browserCvStudio: "Browser CV Studio",
     contact: "Contact",
     coreSkills: "Core Skills",
@@ -241,8 +240,7 @@ const CV_EXPORT_LABELS = {
     tailoredRole: "Tailored role",
   },
   German: {
-    additional: "Weitere Informationen",
-    availability: "Verfuegbarkeit",
+    additional: "Sprachen",
     browserCvStudio: "Browser CV Studio",
     contact: "Kontakt",
     coreSkills: "Kernkompetenzen",
@@ -363,13 +361,14 @@ function educationItemToLine(item) {
     .map((value) => String(value || "").trim())
     .filter(Boolean)
     .join(" | ");
+  const thesisTitle = String(item.thesis_title || "").trim();
   const details = Array.isArray(item.details)
     ? item.details.map((value) => String(value || "").trim()).filter(Boolean)
     : String(item.detailsText || "")
         .split(/\r?\n/)
         .map((value) => value.trim())
         .filter(Boolean);
-  return [head, details[0]].filter(Boolean).join(" - ");
+  return [head, thesisTitle || details[0]].filter(Boolean).join(" - ");
 }
 
 function safeJsonParse(rawValue, fallback) {
@@ -516,7 +515,7 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
     summary: String(profile.summary || ""),
     skillsText: Array.isArray(profile.competencies) ? profile.competencies.join("\n") : "",
     languagesText: Array.isArray(profile.languages) ? profile.languages.join("\n") : "",
-    availability: "Available immediately for tailored roles.",
+    availability: "",
     educationText: Array.isArray(profile.education)
       ? profile.education
           .map((item) => educationItemToLine(item))
@@ -546,6 +545,7 @@ export function buildCvStudioState(profile = {}, documents = {}, sessionDraft = 
       : false,
     palette: normalizePalette(normalizedSession.palette || baseState.palette),
     outputLanguage: normalizeOutputLanguage(normalizedSession.outputLanguage || baseState.outputLanguage),
+    availability: "",
     experience: normalizeExperienceItems(normalizedSession.experience || baseState.experience),
     projects: normalizeProjectItems(normalizedSession.projects || baseState.projects),
   };
@@ -694,7 +694,7 @@ function normalizeModel(state) {
     summary: String(state.summary || ""),
     skills: toList(state.skillsText),
     languages: toList(state.languagesText),
-    availability: String(state.availability || ""),
+    availability: "",
     educationLines: String(state.educationText || "")
       .split(/\r?\n/)
       .map((entry) => entry.trim())
@@ -856,14 +856,6 @@ function buildSummaryMarkup(model) {
 
 function buildFooterMeta(model) {
   const parts = [];
-  if (model.availability) {
-    parts.push(`
-      <div class="meta-stack">
-        <div class="mini-label">${escapeHtml(labelFor(model, "availability"))}</div>
-        <p>${escapeHtml(model.availability)}</p>
-      </div>
-    `);
-  }
   const languagesBlock = buildLanguagesMarkup(model);
   if (languagesBlock) parts.push(languagesBlock);
   return parts.join("");
@@ -887,7 +879,7 @@ function templateAtsSingleColumn(model) {
       ${buildSection(labelFor(model, "experience"), buildExperienceMarkup(model))}
       <div class="two-up">
         ${buildSection(labelFor(model, "education"), buildEducationMarkup(model))}
-        ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
+        ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages.</p>`)}
       </div>
     </main>
   `;
@@ -1173,7 +1165,7 @@ function templateEditorialSidebar(model) {
         ${buildTargetBanner(model)}
         ${buildContactLinks(model, "contact-list contact-list-column")}
         ${buildSection(labelFor(model, "skills"), buildSkillsMarkup(model, "pill rail-pill"))}
-        ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
+        ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages.</p>`)}
       </aside>
       <section class="editorial-main">
         ${buildSection(labelFor(model, "summary"), buildSummaryMarkup(model))}
@@ -1239,7 +1231,7 @@ function templateEuropassLite(model) {
         <div class="label-col">${escapeHtml(labelFor(model, "education"))}</div>
         <div>${buildEducationMarkup(model)}</div>
         <div class="label-col">${escapeHtml(labelFor(model, "additional"))}</div>
-        <div>${buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`}</div>
+        <div>${buildFooterMeta(model) || `<p class="empty-note">Add languages.</p>`}</div>
       </div>
     </main>
   `;
@@ -1268,7 +1260,7 @@ function templateSignalHeader(model) {
         </div>
         <div>
           ${buildSection(labelFor(model, "experience"), buildExperienceMarkup(model))}
-          ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
+          ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages.</p>`)}
         </div>
       </div>
     </main>
@@ -1294,7 +1286,7 @@ function templateLedgerSplit(model) {
         <div>
           ${buildSection(labelFor(model, "summary"), buildSummaryMarkup(model))}
           ${buildSection(labelFor(model, "skills"), buildSkillsMarkup(model))}
-          ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages or availability.</p>`)}
+          ${buildSection(labelFor(model, "additional"), buildFooterMeta(model) || `<p class="empty-note">Add languages.</p>`)}
         </div>
         <div>
           ${buildSection(labelFor(model, "experience"), buildExperienceMarkup(model))}

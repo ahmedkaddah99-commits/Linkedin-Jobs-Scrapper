@@ -19,12 +19,14 @@ _TAILORED_CV_TEXT_LABELS = {
     "English": {
         "professional_summary": "Professional Summary",
         "professional_experience": "Professional Experience",
+        "projects": "Projects",
         "skills": "Skills",
         "education": "Education",
     },
     "German": {
         "professional_summary": "Profil",
         "professional_experience": "Berufserfahrung",
+        "projects": "Projekte",
         "skills": "Kompetenzen",
         "education": "Ausbildung",
     },
@@ -93,6 +95,12 @@ def _structured_cv_json_schema() -> str:
       "role_title": "text",
       "company": "text",
       "period": "text",
+      "bullets": ["text", "text"]
+    }
+  ],
+  "projects": [
+    {
+      "title": "text",
       "bullets": ["text", "text"]
     }
   ],
@@ -179,6 +187,9 @@ Light Customization rules:
 - professional_experience:
   - copy only roles that already exist in the candidate CV
   - keep role titles, companies, periods, bullet wording, bullet ordering, and role ordering unchanged
+- projects:
+  - copy only projects/initiatives that already exist in the candidate CV
+  - keep project titles, bullet wording, bullet ordering, and project ordering unchanged
 - education:
   - keep degree titles, thesis titles, thesis bullets, and item ordering unchanged
 - do not invent companies, dates, projects, certifications, or achievements
@@ -200,6 +211,11 @@ Aggressive Customization rules:
   - keep the evidence truthful to the source CV and do not invent tools, scope, or outcomes
   - if Allianz Technology appears in the CV, include it explicitly
   - never include projects/initiatives in this section
+- projects:
+  - use only projects/initiatives that already exist in the candidate CV
+  - keep project titles and project order exactly as written in the candidate CV
+  - you may rewrite project bullet wording only
+  - do not invent project outcomes, URLs, technologies, dates, or responsibilities
 - skills:
   - 16 to 25 ATS-friendly skills relevant to the job description
   - include realistic adjacent skills when useful
@@ -295,7 +311,7 @@ Language requirements:
 Rules:
 - stay truthful to the source CV
 - only improve professional_summary and skills
-- keep professional_experience, education, titles, companies, dates, bullet wording, and ordering unchanged
+- keep professional_experience, projects, education, titles, companies, dates, bullet wording, and ordering unchanged
 - if a missing requirement is not supported by the source CV, do not fabricate it
 - keep the result concise, ATS-friendly, and role-specific
 """.strip()
@@ -305,7 +321,7 @@ Rules:
 - stay truthful to the source CV
 - never invent experience, tools, certifications, companies, dates, titles, or achievements
 - keep role titles, companies, periods, education titles, and ordering exactly as written in the source CV
-- you may improve professional_summary, skills, and professional_experience bullet wording only
+- you may improve professional_summary, skills, professional_experience bullet wording, and project bullet wording only
 - keep education bullet wording unchanged
 - improve keyword coverage, evidence wording, and prioritization when the source CV supports it
 - if a missing requirement is not supported by the source CV, do not fabricate it
@@ -411,6 +427,30 @@ def _normalize_experiences(experiences_raw: Any) -> list[dict[str, Any]]:
     return experiences
 
 
+def _normalize_projects(projects_raw: Any) -> list[dict[str, Any]]:
+    projects = []
+    if not isinstance(projects_raw, list):
+        return projects
+    for item in projects_raw:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("name") or "").strip()
+        bullets_raw = item.get("bullets", [])
+        bullets = (
+            [str(b).strip() for b in bullets_raw if str(b).strip()]
+            if isinstance(bullets_raw, list)
+            else split_bullets(str(bullets_raw))
+        )
+        if title or bullets:
+            projects.append(
+                {
+                    "title": title,
+                    "bullets": bullets,
+                }
+            )
+    return projects
+
+
 def _normalize_education(education_raw: Any) -> list[dict[str, Any]]:
     education_entries = []
     if not isinstance(education_raw, list):
@@ -451,6 +491,15 @@ def _render_tailored_cv_text(payload: Dict[str, Any], *, output_language: str = 
             tailored_cv_lines.append(line)
         for bullet in exp.get("bullets", []):
             tailored_cv_lines.append(f"- {bullet}")
+    if payload.get("cv_strategic_initiatives"):
+        tailored_cv_lines.append("")
+        tailored_cv_lines.append(f"{labels['projects']}:")
+        for project in payload["cv_strategic_initiatives"]:
+            title = str(project.get("title") or "").strip()
+            if title:
+                tailored_cv_lines.append(title)
+            for bullet in project.get("bullets", []):
+                tailored_cv_lines.append(f"- {bullet}")
     tailored_cv_lines.append("")
     tailored_cv_lines.append(f"{labels['skills']}:")
     tailored_cv_lines.extend([f"- {skill}" for skill in payload["cv_skills"]])
@@ -471,6 +520,7 @@ def _parse_structured_cv_payload(parsed: Dict[str, Any], *, output_language: str
     professional_summary = str(parsed.get("professional_summary", "")).strip()
     skills = _normalize_skills(parsed.get("skills", []))
     experiences = _normalize_experiences(parsed.get("professional_experience", []))
+    projects = _normalize_projects(parsed.get("projects", []))
     education_entries = _normalize_education(parsed.get("education", []))
 
     if not professional_summary or not skills:
@@ -479,6 +529,7 @@ def _parse_structured_cv_payload(parsed: Dict[str, Any], *, output_language: str
     payload = {
         "cv_professional_summary": professional_summary,
         "cv_professional_experience": experiences,
+        "cv_strategic_initiatives": projects,
         "cv_education": education_entries,
         "cv_skills": skills,
     }
@@ -506,6 +557,7 @@ def _structured_cv_for_prompt(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "professional_summary": payload.get("cv_professional_summary", ""),
         "professional_experience": payload.get("cv_professional_experience", []),
+        "projects": payload.get("cv_strategic_initiatives", []),
         "education": payload.get("cv_education", []),
         "skills": payload.get("cv_skills", []),
     }
@@ -588,6 +640,7 @@ def _ats_changed_sections(previous_payload: Dict[str, Any] | None, current_paylo
     section_fields = (
         ("summary", "cv_professional_summary"),
         ("experience", "cv_professional_experience"),
+        ("projects", "cv_strategic_initiatives"),
         ("education", "cv_education"),
         ("skills", "cv_skills"),
     )

@@ -49,7 +49,8 @@ DEFAULT_CANDIDATE_EMAIL = "ahmed.kaddah@tutamail.com"
 DEFAULT_CV_FONT = "Calibri"
 GENERATED_CV_ASSET_KIND = "generated_cv"
 GENERATED_CV_DISPLAY_NAME = "Tailored CV"
-CV_RENDERER_VERSION = "2026-06-24-cv-identity-and-plain-layout"
+CV_GENERATION_PIPELINE_VERSION = "2026-07-02-aggressive-project-tailoring"
+CV_RENDERER_VERSION = "2026-07-02-cv-layout-normalization"
 
 
 def _looks_like_internal_candidate_name(value: str) -> bool:
@@ -126,6 +127,7 @@ def _stage4_generation_fingerprint(
         ).strip(),
     }
     payload = {
+        "generation_pipeline_version": CV_GENERATION_PIPELINE_VERSION,
         "cv_generation_mode": str(cv_generation_mode or "").strip(),
         "extra_prompt": str(extra_prompt or "").strip(),
         "prompt_override": str(prompt_override or "").strip(),

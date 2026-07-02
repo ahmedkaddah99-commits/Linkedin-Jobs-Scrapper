@@ -971,13 +971,6 @@ export default function CvStudioPage() {
                 />
               </Field>
 
-              <Field label="Availability">
-                <Input
-                  onChange={(event) => updateState({ availability: event.target.value })}
-                  value={studioState.availability || ""}
-                />
-              </Field>
-
               <div>
                 <div className="mb-3 text-sm font-semibold text-on-surface">Experience Blocks</div>
                 <ExperienceEditor

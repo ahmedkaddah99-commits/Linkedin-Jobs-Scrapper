@@ -815,11 +815,6 @@ def create_cv_document(
                 thesis_paragraph = new_paragraph(target)
                 configure_paragraph(thesis_paragraph, before_pt=0, after_pt=0 if compact else 1)
                 thesis_paragraph.add_run(thesis_title)
-            for bullet in item.get("thesis_bullets", []):
-                bullet_text = str(bullet).strip()
-                if not bullet_text:
-                    continue
-                write_bullet_paragraph(target, bullet_text, compact=compact)
             if index < len(education_items) - 1:
                 spacer = new_paragraph(target)
                 configure_paragraph(spacer, before_pt=0, after_pt=1 if compact else 2)
@@ -1066,8 +1061,6 @@ def create_cv_document(
                     style_run(run, size_pt=12.0, bold=True)
                 if thesis_title:
                     write_text_paragraph(doc, thesis_title, after_pt=1)
-                for bullet in item.get("thesis_bullets", []):
-                    write_bullet_paragraph(doc, str(bullet).strip(), compact=True)
 
         def render_plain_skills() -> None:
             paragraph = doc.add_paragraph()
@@ -1190,8 +1183,6 @@ def create_cv_document(
                 thesis_title = str(item.get("thesis_title") or "").strip()
                 if thesis_title:
                     write_text_paragraph(doc, thesis_title, after_pt=1, size_pt=9.0)
-                for bullet in item.get("thesis_bullets", []):
-                    write_bullet_paragraph(doc, str(bullet).strip(), compact=True)
 
         if summary_text:
             begin_bar_section("Summary" if output_language == "English" else section_labels["profile"])

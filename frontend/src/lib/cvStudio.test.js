@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildCvStudioHtml,
+  buildWorkspacePreviewState,
   buildWorkspacePreviewDocuments,
   buildStructuredListMarkup,
   formatCvExperiencePeriod,
@@ -32,6 +33,37 @@ test("migrates legacy experience aliases and line bullets without losing fields"
       { text: "Reduced handling time", level: 0 },
     ],
   );
+});
+
+test("workspace PDF preview omits availability and keeps education concise", () => {
+  const state = buildWorkspacePreviewState(
+    {
+      name: "Ahmed Kaddah",
+      role_title: "Product Owner",
+      email: "ahmed@example.com",
+      summary: "Builds structured product workflows.",
+      competencies: ["Product Ownership", "AI Workflow Design"],
+      languages: ["English - C1"],
+      education: [
+        {
+          degree_title: "M.A. Entrepreneurship and Innovation",
+          institution: "Katholische Universitaet Eichstaett-Ingolstadt",
+          thesis_title: "Master Thesis: Strategic Opportunity Discovery Framework",
+          thesis_bullets: [
+            "This detailed thesis method should stay out of the compact rendered education section.",
+          ],
+        },
+      ],
+    },
+    { cv_template: "plain", include_photo: false },
+  );
+
+  const html = buildCvStudioHtml(state);
+
+  assert.doesNotMatch(html, /Available immediately|Availability|Verfuegbarkeit/);
+  assert.match(html, /M\.A\. Entrepreneurship and Innovation/);
+  assert.match(html, /Master Thesis: Strategic Opportunity Discovery Framework/);
+  assert.doesNotMatch(html, /detailed thesis method/);
 });
 
 test("renders structured nested lists and escapes bullet text", () => {

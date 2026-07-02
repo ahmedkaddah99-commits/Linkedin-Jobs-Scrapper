@@ -235,6 +235,40 @@ def _is_trustworthy_generated_display(item: Dict) -> bool:
     return bool(str(item.get("company") or "").strip() or _ROLE_TITLE_HINT_RE.search(role_title))
 
 
+def _repair_generated_experience_item(item: Dict) -> Dict:
+    clone = {
+        "role_title": str(item.get("role_title") or item.get("title") or "").strip(),
+        "company": str(item.get("company") or "").strip(),
+        "location": str(item.get("location") or "").strip(),
+        "period": str(item.get("period") or "").strip(),
+        "bullets": [str(b).strip() for b in item.get("bullets", []) if str(b).strip()],
+    }
+    period_header = clone["period"]
+    if "|" not in period_header:
+        return clone
+
+    promoted_bullets = []
+    for field_name in ("role_title", "company"):
+        value = clone[field_name]
+        if value and _looks_like_promoted_bullet_title(value):
+            promoted_bullets.append(value)
+
+    if not promoted_bullets:
+        return clone
+
+    parsed_header = parse_cv_role_header(period_header)
+    if not str(parsed_header.get("role_title") or "").strip():
+        return clone
+
+    return {
+        "role_title": str(parsed_header.get("role_title") or "").strip(),
+        "company": str(parsed_header.get("company") or clone.get("company") or "").strip(),
+        "location": str(parsed_header.get("location") or clone.get("location") or "").strip(),
+        "period": str(parsed_header.get("period") or "").strip(),
+        "bullets": merge_unique_bullets(promoted_bullets, clone["bullets"]),
+    }
+
+
 def _tokens_overlap(left: str, right: str) -> bool:
     if not left or not right:
         return False
@@ -426,9 +460,16 @@ def extract_cv_strategic_initiatives(cv_text: str) -> List[Dict]:
                 current["bullets"].append(bullet)
             continue
 
-        if current is not None:
+        if current is not None and "|" in line:
             initiatives.append(current)
-        current = {"title": compact_whitespace(line), "bullets": []}
+            current = {"title": compact_whitespace(line), "bullets": []}
+            continue
+
+        if current is None:
+            current = {"title": compact_whitespace(line), "bullets": []}
+            continue
+
+        current["bullets"].append(compact_whitespace(line))
 
     if current is not None:
         initiatives.append(current)
@@ -448,6 +489,24 @@ def merge_unique_bullets(existing: List[str], additions: List[str]) -> List[str]
             merged.append(cleaned)
             seen.add(key)
     return merged
+
+
+def match_to_cv_initiative(item: Dict, cv_initiatives: List[Dict]) -> Optional[Dict]:
+    title_key = normalize_compare_token(str(item.get("title") or ""))
+    if not title_key:
+        return None
+
+    best_score = 0
+    best_match = None
+    for candidate in cv_initiatives:
+        candidate_key = normalize_compare_token(str(candidate.get("title") or ""))
+        score = 0
+        if _tokens_overlap(title_key, candidate_key):
+            score += 5
+        if score > best_score:
+            best_score = score
+            best_match = candidate
+    return best_match if best_score >= 5 else None
 
 
 def extract_cv_education(cv_text: str) -> List[Dict]:
@@ -524,10 +583,8 @@ def extract_cv_education(cv_text: str) -> List[Dict]:
                 current_item["thesis_bullets"] = merge_unique_bullets(current_item.get("thesis_bullets", []), [line])
             continue
 
-        if in_thesis and current_item is not None and current_item.get("thesis_bullets"):
-            current_item["thesis_bullets"][-1] = compact_whitespace(
-                f"{current_item['thesis_bullets'][-1]} {line}"
-            )
+        if in_thesis and current_item is not None:
+            current_item["thesis_bullets"] = merge_unique_bullets(current_item.get("thesis_bullets", []), [line])
             continue
 
         if current_item is not None:
@@ -692,8 +749,10 @@ def ensure_structured_cv_fields(
     experiences = record.get("cv_professional_experience", [])
     generated_experiences: List[Dict] = []
     if isinstance(experiences, list):
-        generated_experiences.extend([item for item in experiences if isinstance(item, dict)])
-    generated_experiences.extend(extract_cv_professional_experiences(str(record.get("tailored_cv") or "")))
+        generated_experiences.extend([_repair_generated_experience_item(item) for item in experiences if isinstance(item, dict)])
+    generated_experiences.extend(
+        [_repair_generated_experience_item(item) for item in extract_cv_professional_experiences(str(record.get("tailored_cv") or ""))]
+    )
     generated_bullets_by_index: List[List[str]] = []
     for generated_item in generated_experiences:
         generated_bullets_by_index.append(
@@ -836,7 +895,27 @@ def ensure_structured_cv_fields(
                 if item_title:
                     normalized_generated_initiatives.append({"title": item_title, "bullets": []})
 
-    if baseline_initiatives and not (use_generated_language_content and normalized_generated_initiatives):
+    if baseline_initiatives and normalized_mode == CV_GENERATION_MODE_AGGRESSIVE:
+        final_initiatives = []
+        for index, base_item in enumerate(baseline_initiatives):
+            base_title = compact_whitespace(str(base_item.get("title", "")))
+            base_bullets = [str(b).strip() for b in base_item.get("bullets", []) if str(b).strip()]
+            generated_match = match_to_cv_initiative(base_item, normalized_generated_initiatives)
+            if not generated_match and index < len(normalized_generated_initiatives):
+                generated_match = normalized_generated_initiatives[index]
+            generated_bullets = (
+                [str(b).strip() for b in generated_match.get("bullets", []) if str(b).strip()]
+                if generated_match
+                else []
+            )
+            final_initiatives.append(
+                {
+                    "title": base_title,
+                    "bullets": _clamp_rewritten_bullets(generated_bullets, base_bullets),
+                }
+            )
+        record["cv_strategic_initiatives"] = final_initiatives
+    elif baseline_initiatives and not (use_generated_language_content and normalized_generated_initiatives):
         final_initiatives = []
         for base_item in baseline_initiatives:
             base_title = compact_whitespace(str(base_item.get("title", "")))

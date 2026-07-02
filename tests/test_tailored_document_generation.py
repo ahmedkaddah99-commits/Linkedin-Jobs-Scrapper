@@ -9,6 +9,7 @@ from docx import Document
 
 from backend.capabilities.tailored_documents.application_requirements import detect_application_requirements
 from backend.capabilities.tailored_documents.cv_structuring import ensure_structured_cv_fields
+from backend.capabilities.tailored_documents.cv_structuring import extract_cv_strategic_initiatives
 from backend.capabilities.tailored_documents.documents import (
     _resolve_candidate_identity,
     _resolve_profile_link_url,
@@ -804,6 +805,122 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
         self.assertNotIn(
             "Produced structured analyses",
             record["cv_professional_experience"][1]["role_title"],
+        )
+
+    def test_repairs_generated_experience_when_role_header_is_trapped_in_period(self):
+        record = {
+            "title": "Product Owner",
+            "company": "Siemens Energy",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Secured financing for 7 transporter vehicles without traditional bank support.",
+                    "company": "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+                    "period": "Operations Lead and Co-Founder | Roxy Mobility GmbH | Dec 2020 - Oct 2024 (fulltime)",
+                    "bullets": [
+                        "Directed operations in Freiburg.",
+                        "Negotiated partner agreements.",
+                    ],
+                }
+            ],
+            "cv_skills": ["Product Ownership"],
+        }
+
+        ensure_structured_cv_fields(
+            record,
+            candidate_name="Ahmed",
+            cv_text="",
+            cv_generation_mode="aggressive_customization",
+        )
+
+        [experience] = record["cv_professional_experience"]
+        self.assertEqual(experience["role_title"], "Operations Lead and Co-Founder")
+        self.assertEqual(experience["company"], "Roxy Mobility GmbH")
+        self.assertEqual(experience["period"], "Dec 2020 - Oct 2024 (fulltime)")
+        self.assertEqual(
+            experience["bullets"][:2],
+            [
+                "Secured financing for 7 transporter vehicles without traditional bank support.",
+                "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+            ],
+        )
+
+    def test_project_outcome_lines_stay_under_project_titles(self):
+        cv_text = "\n".join(
+            [
+                "Projects",
+                "AI-Driven Job Application Automation Pipeline | 2026",
+                "Designed an end-to-end automation system for LinkedIn job discovery.",
+                "Developed automated finding referrals and CV personalization.",
+                "ERP Growth Strategy for Odoo Implementation Partner | 2026",
+                "Built a client acquisition framework.",
+                "Skills",
+                "Python",
+            ]
+        )
+
+        initiatives = extract_cv_strategic_initiatives(cv_text)
+
+        self.assertEqual(len(initiatives), 2)
+        self.assertEqual(initiatives[0]["title"], "AI-Driven Job Application Automation Pipeline | 2026")
+        self.assertEqual(
+            initiatives[0]["bullets"],
+            [
+                "Designed an end-to-end automation system for LinkedIn job discovery.",
+                "Developed automated finding referrals and CV personalization.",
+            ],
+        )
+        self.assertEqual(initiatives[1]["title"], "ERP Growth Strategy for Odoo Implementation Partner | 2026")
+        self.assertEqual(initiatives[1]["bullets"], ["Built a client acquisition framework."])
+
+    def test_aggressive_rewrites_project_bullets_but_light_keeps_baseline_projects(self):
+        cv_text = "\n".join(
+            [
+                "Projects",
+                "AI-Driven Job Application Automation Pipeline | 2026",
+                "- Built baseline automation.",
+                "- Generated baseline documents.",
+                "Skills",
+                "Python",
+            ]
+        )
+        generated_project = {
+            "title": "AI-Driven Job Application Automation Pipeline | 2026",
+            "bullets": [
+                "Reframed automation around product-owner workflow orchestration.",
+                "Connected document generation to stakeholder-ready delivery outputs.",
+            ],
+        }
+        aggressive_record = {
+            "title": "Product Owner",
+            "company": "Siemens Energy",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [],
+            "cv_strategic_initiatives": [generated_project],
+            "cv_skills": ["Product Ownership"],
+        }
+        light_record = {**aggressive_record, "cv_strategic_initiatives": [generated_project]}
+
+        ensure_structured_cv_fields(
+            aggressive_record,
+            candidate_name="Ahmed",
+            cv_text=cv_text,
+            cv_generation_mode="aggressive_customization",
+        )
+        ensure_structured_cv_fields(
+            light_record,
+            candidate_name="Ahmed",
+            cv_text=cv_text,
+            cv_generation_mode="light_customization",
+        )
+
+        self.assertEqual(
+            aggressive_record["cv_strategic_initiatives"][0]["bullets"],
+            generated_project["bullets"],
+        )
+        self.assertEqual(
+            light_record["cv_strategic_initiatives"][0]["bullets"],
+            ["Built baseline automation.", "Generated baseline documents."],
         )
 
     def test_candidate_identity_falls_back_to_cv_text_for_clerk_placeholders(self):
