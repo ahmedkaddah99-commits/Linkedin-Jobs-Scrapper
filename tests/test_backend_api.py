@@ -13,12 +13,14 @@ from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 from unittest.mock import MagicMock, patch
 
 from backend import create_backend
 from backend.api.server import (
     _build_workspace_cv_preview_profile,
+    _clear_auth_context_cache,
     _collect_authorized_runs,
     _customer_excluded_reason,
     _resolve_auth_context,
@@ -106,12 +108,35 @@ class _ApiCuratedSourceStage(BaseStage):
 
 
 class BackendApiTests(unittest.TestCase):
+    @staticmethod
+    def _clerk_jwt_token(*, subject: str = "user_test", session_id: str = "sess_test") -> str:
+        def jwt_segment(payload):
+            raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+
+        return ".".join(
+            [
+                jwt_segment({"alg": "RS256", "kid": "test-key"}),
+                jwt_segment(
+                    {
+                        "iss": "https://resolved-lobster-79.clerk.accounts.dev",
+                        "sub": subject,
+                        "sid": session_id,
+                        "exp": int(time.time()) + 3600,
+                    }
+                ),
+                "signature",
+            ]
+        )
+
     def setUp(self):
         self.temp_dir = Path.cwd() / ".backend_test_tmp" / f"api_tests_{self._testMethodName}"
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir, ignore_errors=True)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.addCleanup(lambda: shutil.rmtree(self.temp_dir, ignore_errors=True))
+        _clear_auth_context_cache()
+        self.addCleanup(_clear_auth_context_cache)
         self.deepseek_env_patch = patch.dict(
             os.environ,
             {
@@ -445,24 +470,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "unauthorized")
 
     def test_clerk_like_jwt_failure_does_not_try_legacy_token_lookup(self):
-        def jwt_segment(payload):
-            raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-            return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
-
-        token = ".".join(
-            [
-                jwt_segment({"alg": "RS256", "kid": "test-key"}),
-                jwt_segment(
-                    {
-                        "iss": "https://resolved-lobster-79.clerk.accounts.dev",
-                        "sub": "user_test",
-                        "sid": "sess_test",
-                        "exp": int(time.time()) + 3600,
-                    }
-                ),
-                "signature",
-            ]
-        )
+        token = self._clerk_jwt_token()
 
         class LegacyAuthTrap:
             def __init__(self):
@@ -477,6 +485,55 @@ class BackendApiTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 _resolve_auth_context(app, token)
         self.assertFalse(app.called)
+
+    def test_clerk_auth_context_uses_jwt_plan_without_subscription_lookup(self):
+        clerk_user_id = "user_clerk_no_subscription_lookup"
+        self.app.repositories.auth_repository.set_user_clerk_user_id(self.user.user_id, clerk_user_id)
+        token = self._clerk_jwt_token(subject=clerk_user_id)
+        claims = SimpleNamespace(
+            clerk_user_id=clerk_user_id,
+            session_id="sess_no_subscription_lookup",
+            role="user",
+            plan_id="scale",
+            quota_overrides={},
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            raw_claims={},
+        )
+
+        subscription_lookup = MagicMock(side_effect=AssertionError("subscription lookup should not run for route auth"))
+        with patch.object(
+            self.app.repositories.auth_repository,
+            "get_current_subscription_by_user_id",
+            subscription_lookup,
+        ), patch("backend.api.server.verify_session_token", return_value=claims):
+            context = _resolve_auth_context(self.app, token)
+
+        self.assertEqual(context.user.user_id, self.user.user_id)
+        self.assertEqual(context.plan_id, "scale")
+        subscription_lookup.assert_not_called()
+
+    def test_clerk_auth_context_cache_reuses_resolved_context_for_same_token(self):
+        clerk_user_id = "user_clerk_cached"
+        self.app.repositories.auth_repository.set_user_clerk_user_id(self.user.user_id, clerk_user_id)
+        token = self._clerk_jwt_token(subject=clerk_user_id, session_id="sess_cached")
+        claims = SimpleNamespace(
+            clerk_user_id=clerk_user_id,
+            session_id="sess_cached",
+            role="user",
+            plan_id="scale",
+            quota_overrides={},
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            raw_claims={},
+        )
+
+        verify = MagicMock(return_value=claims)
+        with patch("backend.api.server.verify_session_token", verify):
+            first_context = _resolve_auth_context(self.app, token)
+            second_context = _resolve_auth_context(self.app, token)
+
+        self.assertEqual(first_context.user.user_id, self.user.user_id)
+        self.assertEqual(second_context.user.user_id, self.user.user_id)
+        self.assertEqual(verify.call_count, 1)
 
     def test_api_allows_loopback_cors_origin(self):
         status, headers, payload = self._request_with_headers(

@@ -7,6 +7,8 @@ import logging
 import mimetypes
 import os
 import re
+import time
+from threading import RLock
 import zipfile
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -196,6 +198,10 @@ _ACTIVE_RUN_STATUSES = {
     RUN_STATUS_CANCEL_REQUESTED,
 }
 _TERMINAL_STAGE_STATUSES = {STAGE_STATUS_COMPLETED, STAGE_STATUS_SKIPPED}
+_AUTH_CONTEXT_CACHE_TTL_SECONDS = 60
+_AUTH_CONTEXT_CACHE_MAX_ENTRIES = 256
+_AUTH_CONTEXT_CACHE_LOCK = RLock()
+_AUTH_CONTEXT_CACHE: dict[str, tuple[float, SimpleNamespace]] = {}
 
 
 class AtsExportBlockedError(ValueError):
@@ -7234,8 +7240,7 @@ def _lookup_user_by_clerk_subject(application, clerk_user_id: str, *, claims=Non
 def _build_clerk_auth_context(application, token_value: str):
     claims = verify_session_token(token_value)
     user = _lookup_user_by_clerk_subject(application, claims.clerk_user_id, claims=claims)
-    subscription_record = _lookup_subscription_record(application, user.user_id) or {}
-    plan_id = normalize_plan_id(subscription_record.get("plan_id") or claims.plan_id or DEFAULT_PLAN_ID)
+    plan_id = normalize_plan_id(claims.plan_id or DEFAULT_PLAN_ID)
     role = normalize_clerk_role(claims.role or user.role)
     user.role = role
     synthetic_token = build_synthetic_token(
@@ -7306,6 +7311,69 @@ def _token_looks_like_clerk_jwt(token_value: str) -> bool:
     )
 
 
+def _auth_context_cache_key(token_value: str) -> str:
+    return sha256(str(token_value or "").encode("utf-8")).hexdigest()
+
+
+def _auth_context_cache_expiry(token_value: str, *, now: float | None = None) -> float:
+    timestamp = time.time() if now is None else float(now)
+    expires_at = 0.0
+    claims = _decode_jwt_payload_unverified(token_value)
+    try:
+        expires_at = float(claims.get("exp") or 0.0)
+    except (TypeError, ValueError):
+        expires_at = 0.0
+    ttl_expiry = timestamp + _AUTH_CONTEXT_CACHE_TTL_SECONDS
+    if expires_at:
+        return max(timestamp, min(ttl_expiry, expires_at - 5))
+    return ttl_expiry
+
+
+def _prune_auth_context_cache(now: float) -> None:
+    expired_keys = [
+        cache_key
+        for cache_key, (expires_at, _context) in _AUTH_CONTEXT_CACHE.items()
+        if expires_at <= now
+    ]
+    for cache_key in expired_keys:
+        _AUTH_CONTEXT_CACHE.pop(cache_key, None)
+    overflow_count = len(_AUTH_CONTEXT_CACHE) - _AUTH_CONTEXT_CACHE_MAX_ENTRIES
+    if overflow_count <= 0:
+        return
+    for cache_key, _value in sorted(_AUTH_CONTEXT_CACHE.items(), key=lambda item: item[1][0])[:overflow_count]:
+        _AUTH_CONTEXT_CACHE.pop(cache_key, None)
+
+
+def _get_cached_auth_context(token_value: str) -> SimpleNamespace | None:
+    now = time.time()
+    cache_key = _auth_context_cache_key(token_value)
+    with _AUTH_CONTEXT_CACHE_LOCK:
+        cached = _AUTH_CONTEXT_CACHE.get(cache_key)
+        if cached is None:
+            return None
+        expires_at, context = cached
+        if expires_at <= now:
+            _AUTH_CONTEXT_CACHE.pop(cache_key, None)
+            return None
+        return deepcopy(context)
+
+
+def _store_cached_auth_context(token_value: str, context: SimpleNamespace) -> None:
+    now = time.time()
+    expires_at = _auth_context_cache_expiry(token_value, now=now)
+    if expires_at <= now:
+        return
+    cache_key = _auth_context_cache_key(token_value)
+    with _AUTH_CONTEXT_CACHE_LOCK:
+        _prune_auth_context_cache(now)
+        _AUTH_CONTEXT_CACHE[cache_key] = (expires_at, deepcopy(context))
+
+
+def _clear_auth_context_cache() -> None:
+    with _AUTH_CONTEXT_CACHE_LOCK:
+        _AUTH_CONTEXT_CACHE.clear()
+
+
 def _log_auth_resolution_timing(
     *,
     token_shape: str,
@@ -7314,6 +7382,7 @@ def _log_auth_resolution_timing(
     duration_ms: float,
     fallback_attempted: bool = False,
     error_type: str = "",
+    cache_hit: bool = False,
 ) -> None:
     logging.getLogger("backend.auth").info(
         json.dumps(
@@ -7325,6 +7394,7 @@ def _log_auth_resolution_timing(
                 "duration_ms": round(float(duration_ms or 0), 2),
                 "fallback_attempted": bool(fallback_attempted),
                 "error_type": str(error_type or ""),
+                "cache_hit": bool(cache_hit),
             },
             separators=(",", ":"),
         )
@@ -7339,8 +7409,21 @@ def _resolve_auth_context(application, token_value: str):
     if normalized_token.count(".") == 2:
         started_at = perf_counter()
         clerk_like_jwt = _token_looks_like_clerk_jwt(normalized_token)
+        if clerk_like_jwt:
+            cached_context = _get_cached_auth_context(normalized_token)
+            if cached_context is not None:
+                _log_auth_resolution_timing(
+                    token_shape="jwt",
+                    outcome="success",
+                    auth_method="clerk_jwt",
+                    duration_ms=(perf_counter() - started_at) * 1000,
+                    cache_hit=True,
+                )
+                return cached_context
         try:
             context = _build_clerk_auth_context(application, normalized_token)
+            if clerk_like_jwt:
+                _store_cached_auth_context(normalized_token, context)
             _log_auth_resolution_timing(
                 token_shape="jwt",
                 outcome="success",
