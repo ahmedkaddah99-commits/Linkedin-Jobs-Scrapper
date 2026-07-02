@@ -43,6 +43,7 @@ from backend.connectors.company_career_sites import (
     REGULAR_COMPANY_SITE_FILES,
     load_discovered_company_site_entries,
     parse_company_site_entries,
+    plan_company_site_scope,
     scrape_company_career_sites,
 )
 from backend.domain.job_identity import canonicalize_url
@@ -68,11 +69,13 @@ DEFAULT_COMPANY_SITE_MAX_JOB_LINKS_PER_SITE = 25
 LOGGER = logging.getLogger(__name__)
 
 
-def _positive_int(value: Any, *, default: int = 0) -> int:
+def _runtime_limit_int(value: Any, *, default: int = 0, allow_unlimited: bool = False) -> int:
     try:
         normalized = int(value)
     except (TypeError, ValueError):
         return int(default)
+    if allow_unlimited and normalized == -1:
+        return -1
     return normalized if normalized > 0 else int(default)
 
 
@@ -88,10 +91,18 @@ def _safe_plan_limit(plan_id: str, limit_type: str, fallback: int) -> int:
 
 def _resolve_company_site_stage_limits(cli_args: Any, *, logger=None) -> dict[str, int]:
     plan_id = str(getattr(cli_args, "run_user_plan_id", "") or DEFAULT_PLAN_ID)
-    explicit_site_limit = _positive_int(getattr(cli_args, "company_site_max_sites_per_run", 0), default=0)
-    explicit_credit_budget = _positive_int(getattr(cli_args, "company_site_runner_credit_budget", 0), default=0)
-    explicit_link_limit = _positive_int(getattr(cli_args, "company_site_max_job_links_per_site", 0), default=0)
-    deprecated_link_limit = _positive_int(
+    explicit_site_limit = _runtime_limit_int(
+        getattr(cli_args, "company_site_max_sites_per_run", 0),
+        default=0,
+        allow_unlimited=True,
+    )
+    explicit_credit_budget = _runtime_limit_int(
+        getattr(cli_args, "company_site_runner_credit_budget", 0),
+        default=0,
+        allow_unlimited=True,
+    )
+    explicit_link_limit = _runtime_limit_int(getattr(cli_args, "company_site_max_job_links_per_site", 0), default=0)
+    deprecated_link_limit = _runtime_limit_int(
         getattr(cli_args, "company_site_emergency_max_job_links_per_site", 0), default=0
     )
     if not explicit_link_limit and deprecated_link_limit:
@@ -448,6 +459,31 @@ def _merge_company_site_entries(*raw_sources: Any) -> list[dict[str, str]]:
     return merged
 
 
+def _filter_discovered_academic_sites_for_target_countries(
+    settings: dict[str, Any],
+    discovered_sites: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    country_codes = settings.get("country_codes") or []
+    if not country_codes:
+        return list(discovered_sites)
+    scope_plan = plan_company_site_scope(
+        company_sites=discovered_sites,
+        target_country_codes=country_codes,
+        target_cities=settings.get("cities") or [],
+        locality_mode=str(settings.get("company_site_locality_mode") or "local_preferred"),
+        max_sites_per_run=-1,
+        domain_policies=settings.get("scrapeops_domain_policies") or [],
+    )
+    return [
+        {
+            "company_name": str(site.get("company_name") or "").strip(),
+            "url": str(site.get("url") or "").strip(),
+        }
+        for site in scope_plan.selected_sites
+        if str(site.get("locality_signal") or "") == "local" and not list(site.get("matched_foreign_countries") or [])
+    ]
+
+
 def _prepare_company_site_source_settings(settings: dict[str, Any], definition: StageDefinition) -> dict[str, Any]:
     normalized = dict(settings)
     config = dict(definition.config or {})
@@ -470,11 +506,19 @@ def _prepare_company_site_source_settings(settings: dict[str, Any], definition: 
     configured_sites = normalized.get(site_settings_key)
     configured_site_entries = _merge_company_site_entries(configured_sites)
     discovered_company_sites = load_discovered_company_site_entries(discovered_site_paths)
+    if site_settings_key == "academic_career_sites":
+        discovered_company_sites = _filter_discovered_academic_sites_for_target_countries(
+            normalized,
+            discovered_company_sites,
+        )
     merged_company_sites = _merge_company_site_entries(configured_sites, discovered_company_sites)
     if merged_company_sites:
         normalized["company_career_sites"] = merged_company_sites
+    selected_scope_entries = (
+        merged_company_sites if site_settings_key == "academic_career_sites" else configured_site_entries
+    )
     normalized["company_site_selected_scope_urls"] = [
-        str(item.get("url") or "") for item in configured_site_entries if str(item.get("url") or "")
+        str(item.get("url") or "") for item in selected_scope_entries if str(item.get("url") or "")
     ]
     normalized["company_site_source_type"] = "academic" if site_settings_key == "academic_career_sites" else "company"
     if (

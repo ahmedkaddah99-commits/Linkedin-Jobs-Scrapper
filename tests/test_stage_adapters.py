@@ -68,6 +68,19 @@ class StageAdapterTests(unittest.TestCase):
         self.assertEqual(limits["max_job_links_per_site"], 12)
         self.assertIn("deprecated", "\n".join(logs.output).lower())
 
+    def test_company_site_stage_limits_preserve_unlimited_runtime_overrides(self):
+        limits = _resolve_company_site_stage_limits(
+            SimpleNamespace(
+                company_site_max_sites_per_run=-1,
+                company_site_runner_credit_budget=-1,
+                company_site_max_job_links_per_site=25,
+            ),
+        )
+
+        self.assertEqual(limits["max_sites_per_run"], -1)
+        self.assertEqual(limits["runner_credit_budget"], -1)
+        self.assertEqual(limits["max_job_links_per_site"], 25)
+
     def test_linkedin_acquire_stage_persists_stage1_exclusions_as_run_data(self):
         with TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "stage1_output.json"
@@ -291,6 +304,46 @@ class StageAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_prepare_academic_source_settings_selects_saved_sites_for_target_country(self):
+        definition = StageDefinition(
+            stage_id="source_academic_career_sites",
+            stage_type="jobs.acquire.company_sites",
+            name="Acquire Academic Career Site Jobs",
+            config={"site_settings_key": "academic_career_sites", "discovered_site_paths": ["dummy.txt"]},
+        )
+        settings = {
+            "country_codes": ["DE"],
+            "academic_career_sites": [
+                {"company_name": "Manual Uni", "url": "https://manual-uni.example/jobs"},
+            ],
+        }
+
+        with patch(
+            "backend.adapters.stage_adapters.load_discovered_company_site_entries",
+            return_value=[
+                {"company_name": "German Uni", "url": "https://jobs.uni-heidelberg.de/"},
+                {"company_name": "Austrian Uni", "url": "https://jobs.uni-graz.at/"},
+                {"company_name": "Austrian German Page", "url": "https://akbild.ac.at/de/jobs"},
+                {"company_name": "Unknown Uni", "url": "https://university.example/jobs"},
+            ],
+        ):
+            normalized = _prepare_company_site_source_settings(settings, definition)
+
+        self.assertEqual(
+            normalized["company_career_sites"],
+            [
+                {"company_name": "Manual Uni", "url": "https://manual-uni.example/jobs"},
+                {"company_name": "German Uni", "url": "https://jobs.uni-heidelberg.de/"},
+            ],
+        )
+        self.assertEqual(
+            normalized["company_site_selected_scope_urls"],
+            [
+                "https://manual-uni.example/jobs",
+                "https://jobs.uni-heidelberg.de/",
+            ],
+        )
+
     def test_company_career_site_stage_passes_proxy_fallback_flag(self):
         context = SimpleNamespace(
             run=SimpleNamespace(id="run_1"),
@@ -326,6 +379,94 @@ class StageAdapterTests(unittest.TestCase):
         self.assertEqual(mock_scrape.call_args.kwargs["max_sites_per_run"], 10)
         self.assertEqual(mock_scrape.call_args.kwargs["run_credit_budget"], 150)
         self.assertEqual(mock_scrape.call_args.kwargs["max_job_links_per_site"], 25)
+
+    def test_company_career_site_stage_marks_saved_academic_scope_as_selected_before_policy_filter(self):
+        class FakeSourcePolicyStore:
+            def __init__(self):
+                self.site_states = {}
+
+            def ensure_sites(self, sites, *, site_type):
+                for site in sites:
+                    self.site_states.setdefault(str(site.get("url") or ""), "pending")
+
+            def mark_workspace_selected(self, site_urls, *, site_type):
+                transitions = {}
+                for site_url in site_urls:
+                    previous = self.site_states.get(site_url, "pending")
+                    self.site_states[site_url] = "selected"
+                    transitions[site_url] = f"{previous}->selected"
+                return transitions
+
+            def filter_crawlable_sites(self, sites, *, explicitly_triggered_urls=()):
+                explicit_urls = set(explicitly_triggered_urls)
+                eligible = []
+                skipped = []
+                for site in sites:
+                    item = dict(site)
+                    site_url = str(item.get("url") or "")
+                    state = self.site_states.get(site_url, "pending")
+                    item["site_state"] = state
+                    if state in {"hot", "selected"} or site_url in explicit_urls:
+                        eligible.append(item)
+                    else:
+                        skipped.append(item)
+                return eligible, skipped
+
+            def record_site_yield(self, site_url, *, jobs_found):
+                return {
+                    "site_url": site_url,
+                    "jobs_found": jobs_found,
+                    "site_state": self.site_states.get(site_url, "pending"),
+                    "consecutive_zero_yield_runs": 0,
+                }
+
+        context = SimpleNamespace(
+            run=SimpleNamespace(id="run_academic", normalized_user_id="", user_id=""),
+            logger=None,
+            data={},
+            registries=SimpleNamespace(connector_registry=SimpleNamespace(get=lambda _connector_id: None)),
+            repositories=SimpleNamespace(source_policy_store=FakeSourcePolicyStore(), analytics_store=None),
+            workspace=SimpleNamespace(id="workspace_academic"),
+            update_run_progress=lambda **_kwargs: None,
+        )
+        definition = StageDefinition(
+            stage_id="source_academic_career_sites",
+            stage_type="jobs.acquire.company_sites",
+            name="Acquire Academic Career Site Jobs",
+            output_key="source_academic_career_jobs",
+            config={"connector_id": "academic_career_sites"},
+        )
+        cli_args = SimpleNamespace(
+            company_career_sites=[
+                {"company_name": "German Uni", "url": "https://jobs.uni-heidelberg.de/"},
+                {"company_name": "Foreign Uni", "url": "https://jobs.uni-graz.at/"},
+            ],
+            company_site_selected_scope_urls=["https://jobs.uni-heidelberg.de/"],
+            company_site_source_type="academic",
+            keywords=[],
+            company_site_request_timeout_seconds=30,
+            company_site_max_jobs_per_site=0,
+            company_site_max_sites_per_run=0,
+            company_site_max_job_links_per_site=25,
+            company_site_runner_credit_budget=0,
+            posted_within_days=0,
+            use_proxy_fallback=False,
+            country_codes=["DE"],
+            cities=[],
+            company_site_locality_mode="local_preferred",
+            scrapeops_domain_policies=[],
+        )
+
+        with (
+            patch("backend.adapters.stage_adapters._build_root_cli_args", return_value=({}, cli_args)),
+            patch("backend.adapters.stage_adapters.scrape_company_career_sites", return_value=([], [])) as mock_scrape,
+        ):
+            CompanyCareerSiteAcquisitionStage().execute(context, definition)
+
+        self.assertEqual(
+            mock_scrape.call_args.kwargs["company_sites"],
+            [{"company_name": "German Uni", "url": "https://jobs.uni-heidelberg.de/", "site_state": "selected"}],
+        )
 
     def test_company_career_site_stage_persists_capped_sites_from_run_result(self):
         context = SimpleNamespace(

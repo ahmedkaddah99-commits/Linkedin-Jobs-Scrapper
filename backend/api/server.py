@@ -2567,32 +2567,40 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
     documents = dict((user.metadata or {}).get("documents") or {})
     candidate_config = load_job_seeker_config()
     overrides = dict(payload.get("run_input_overrides") or {})
+    workspace_settings = dict(workspace_settings or {})
     requested_run_mode = str(payload.get("run_mode") or overrides.get("run_mode") or "normal").strip().lower()
     if requested_run_mode not in {"normal", "test"}:
         raise ValueError("run_mode must be one of: normal, test")
     if requested_run_mode == "test":
-        overrides.update(
-            {
-                "run_mode": "test",
-                "test_run_job_limit": 1,
-                "stage4_max_jobs": 1,
-                "stage4_retries": 1,
-                "stage4_retry_sleep": 0,
-                "stage4_sleep_seconds": 0,
-                "stage4_ats_max_attempts": 1,
-                "max_jobs_total": 1,
-                "linkedin_max_pages": 1,
-                "max_enrich_jobs": 1,
-                "ai_batch_size": 1,
-                "company_site_max_sites_per_run": 1,
-                "company_site_max_jobs_per_site": 1,
-                "academic_site_max_jobs_per_site": 1,
-                "company_site_max_job_links_per_site": 1,
-            }
+        source_ids = {
+            str(item or "").strip()
+            for item in workspace_settings.get("_source_ids", workspace_settings.get("source_ids", []))
+            if str(item or "").strip()
+        }
+        uses_academic_sources = "academic_career_sites" in source_ids or bool(
+            workspace_settings.get("academic_career_sites")
         )
+        test_overrides = {
+            "run_mode": "test",
+            "test_run_job_limit": 1,
+            "stage4_max_jobs": 1,
+            "stage4_retries": 1,
+            "stage4_retry_sleep": 0,
+            "stage4_sleep_seconds": 0,
+            "stage4_ats_max_attempts": 1,
+            "max_jobs_total": 1,
+            "linkedin_max_pages": 1,
+            "max_enrich_jobs": 1,
+            "ai_batch_size": 1,
+            "company_site_max_jobs_per_site": 1,
+            "academic_site_max_jobs_per_site": 1,
+            "company_site_max_job_links_per_site": 1,
+        }
+        if not uses_academic_sources:
+            test_overrides["company_site_max_sites_per_run"] = 1
+        overrides.update(test_overrides)
     else:
         overrides["run_mode"] = "normal"
-    workspace_settings = dict(workspace_settings or {})
     personalization_scope = str(
         workspace_settings.get("personalization_scope") or PERSONALIZATION_SCOPE_BASELINE
     ).strip()

@@ -610,7 +610,10 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         run_input_overrides = _build_run_input_overrides(
                             user,
                             payload,
-                            workspace_settings=workspace.settings,
+                            workspace_settings={
+                                **dict(workspace.settings or {}),
+                                "_source_ids": _builder_workspace_source_ids(workspace),
+                            },
                         )
                         if _builder_workspace_flow_id(workspace):
                             validation = application.validate_workspace_builder_sources(

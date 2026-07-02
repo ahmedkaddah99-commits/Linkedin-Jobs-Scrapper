@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from backend import create_backend
 from backend.api.server import (
+    _build_run_input_overrides,
     _build_workspace_cv_preview_profile,
     _clear_auth_context_cache,
     _collect_authorized_runs,
@@ -633,6 +634,26 @@ class BackendApiTests(unittest.TestCase):
         listed_run = next(item for item in runs_payload["runs"] if item["id"] == run_payload["id"])
         self.assertTrue(listed_run["is_test_run"])
         self.assertEqual(listed_run["run_mode"], "test")
+
+    def test_academic_test_run_overrides_do_not_force_one_site_scope(self):
+        user = SimpleNamespace(metadata={})
+
+        with patch("backend.api.server.load_job_seeker_config", return_value={}):
+            overrides = _build_run_input_overrides(
+                user,
+                {
+                    "run_mode": "test",
+                    "run_input_overrides": {
+                        "company_site_max_sites_per_run": -1,
+                    },
+                },
+                workspace_settings={"_source_ids": ["academic_career_sites"]},
+            )
+
+        self.assertEqual(overrides["run_mode"], "test")
+        self.assertEqual(overrides["test_run_job_limit"], 1)
+        self.assertEqual(overrides["company_site_max_sites_per_run"], -1)
+        self.assertEqual(overrides["stage4_max_jobs"], 1)
 
     def test_tracker_reads_persisted_test_run_review_without_backfilling(self):
         self.app.upsert_workflow_template(
