@@ -146,10 +146,20 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Public frontend origin used for external checkout success redirects, for example https://app.userunr.com.",
     },
+    "RENDER_FRONTEND_EXTERNAL_HOSTNAME": {
+        "required": False,
+        "scope": "backend",
+        "description": "Render-provided frontend hostname allowed by the API for Blueprint preview environments.",
+    },
     "VITE_CLERK_PUBLISHABLE_KEY": {
         "required": True,
         "scope": "frontend",
         "description": "Frontend Clerk publishable key exposed to Vite.",
+    },
+    "VITE_API_EXTERNAL_HOSTNAME": {
+        "required": False,
+        "scope": "frontend",
+        "description": "Render-provided API hostname used by the frontend to derive preview API URLs.",
     },
     "RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": {
         "required": False,

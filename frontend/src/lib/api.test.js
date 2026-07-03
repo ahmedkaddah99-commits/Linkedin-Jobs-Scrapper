@@ -1,7 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { apiRequest, diagnosticPathShape, resolveApiUrl } from "./api.js";
+import { apiRequest, diagnosticPathShape, resolveApiUrl, resolveDefaultApiBaseUrl } from "./api.js";
+
+test("uses explicit API base URL before Render-generated hostnames", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({
+      VITE_API_BASE_URL: "https://api.example.com/v1/",
+      VITE_API_EXTERNAL_HOSTNAME: "preview-api.onrender.com",
+    }),
+    "https://api.example.com/v1",
+  );
+});
+
+test("derives the API base URL from Render preview hostnames", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({
+      VITE_API_EXTERNAL_HOSTNAME: "preview-api.onrender.com",
+    }),
+    "https://preview-api.onrender.com/v1",
+  );
+});
 
 test("preserves an absolute API base path for a leading-slash request path", () => {
   assert.equal(

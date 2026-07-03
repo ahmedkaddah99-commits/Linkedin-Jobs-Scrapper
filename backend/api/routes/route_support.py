@@ -89,6 +89,16 @@ def _normalize_origin_value(value: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
 
 
+def _normalize_hostname_origin(value: str) -> str:
+    hostname = str(value or "").strip()
+    if not hostname:
+        return ""
+    if "://" in hostname:
+        return _normalize_origin_value(hostname)
+    hostname = hostname.split("/", 1)[0].strip()
+    return _normalize_origin_value(f"https://{hostname}")
+
+
 def _origin_is_loopback(origin: str) -> bool:
     normalized = _normalize_origin_value(origin)
     if not normalized:

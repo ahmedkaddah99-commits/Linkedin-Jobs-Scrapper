@@ -11,8 +11,23 @@ export const QUOTA_EXCEEDED_EVENT = "runr:quota-exceeded";
 const SLOW_REQUEST_THRESHOLD_MS = 5000;
 const REQUEST_DIAGNOSTIC_SOURCE = "frontend_api_request_diagnostic";
 
+export function resolveDefaultApiBaseUrl(env = import.meta.env || {}) {
+  const configuredBaseUrl = String(env.VITE_API_BASE_URL || "").trim();
+  if (configuredBaseUrl) {
+    return configuredBaseUrl.replace(/\/$/, "");
+  }
+  const apiExternalHostname = String(env.VITE_API_EXTERNAL_HOSTNAME || "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "");
+  if (apiExternalHostname) {
+    return `https://${apiExternalHostname}/v1`;
+  }
+  return "/v1";
+}
+
 export function getDefaultApiBaseUrl() {
-  return String(import.meta.env.VITE_API_BASE_URL || "/v1").replace(/\/$/, "");
+  return resolveDefaultApiBaseUrl();
 }
 
 export function loadStoredConnection() {
