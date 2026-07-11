@@ -403,6 +403,40 @@ class SqliteRepositoryTests(unittest.TestCase):
         self.assertIn("008_site_source_policy", migrations)
         self.assertIn("009_site_job_url_history", migrations)
 
+    def test_mark_workspace_selected_batches_urls_in_one_connection(self):
+        db_path = self._db_path("sqlite_site_source_policy_batch")
+        store = SqliteSourcePolicyStore(db_path)
+        pending_url = "https://careers.example.com/jobs"
+        paused_url = "https://jobs.example.edu/openings"
+        hot_url = "https://hot.example.org/jobs"
+        missing_url = "https://new.example.net/careers"
+        store.ensure_sites(
+            [{"url": pending_url}, {"url": paused_url}, {"url": hot_url}],
+            site_type="academic",
+        )
+        store.set_site_state(paused_url, "paused", site_type="academic")
+        store.set_site_state(hot_url, "hot", site_type="academic")
+
+        with patch.object(store, "_run_transaction", wraps=store._run_transaction) as transaction:
+            transitions = store.mark_workspace_selected(
+                [pending_url, paused_url, hot_url, missing_url, pending_url],
+                site_type="academic",
+            )
+
+        self.assertEqual(transaction.call_count, 1)
+        self.assertEqual(
+            transitions,
+            {
+                missing_url: "pending->selected",
+                paused_url: "paused->selected",
+                pending_url: "pending->selected",
+            },
+        )
+        self.assertEqual(store.get_site_policy(pending_url)["site_state"], "selected")
+        self.assertEqual(store.get_site_policy(paused_url)["site_state"], "selected")
+        self.assertEqual(store.get_site_policy(missing_url)["site_state"], "selected")
+        self.assertEqual(store.get_site_policy(hot_url)["site_state"], "hot")
+
     def test_site_job_url_history_records_seen_urls(self):
         db_path = self._db_path("sqlite_site_job_url_history")
         store = SqliteSourcePolicyStore(db_path)

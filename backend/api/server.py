@@ -145,6 +145,7 @@ from backend.domain.models import (
     utc_plus_seconds,
 )
 from backend.domain.job_identity import canonical_posting_url
+from backend.connectors.company_career_sites import ACADEMIC_MIN_JOB_LINKS_PER_SITE
 from backend.domain.tracker import (
     ensure_review_placed_in_tracker_at,
     review_is_actionable_tracker_item,
@@ -2599,6 +2600,8 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
         }
         if not uses_academic_sources:
             test_overrides["company_site_max_sites_per_run"] = 1
+        else:
+            test_overrides["company_site_max_job_links_per_site"] = ACADEMIC_MIN_JOB_LINKS_PER_SITE
         overrides.update(test_overrides)
     else:
         overrides["run_mode"] = "normal"

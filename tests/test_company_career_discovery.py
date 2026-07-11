@@ -10,6 +10,7 @@ from backend.connectors.company_career_discovery import (
     domain_from_url,
 )
 from backend.connectors.company_career_sites import (
+    ACADEMIC_MIN_JOB_LINKS_PER_SITE,
     ACADEMIC_CAREER_SITE_FILES,
     PageFetchResult,
     REGULAR_COMPANY_SITE_FILES,
@@ -18,6 +19,8 @@ from backend.connectors.company_career_sites import (
     parse_company_site_entries,
     scrape_company_career_sites,
 )
+from backend.adapters.stage_adapters import _prepare_company_site_source_settings
+from backend.domain.models import StageDefinition
 from backend.tools.discover_company_careers import (
     default_output_paths,
     load_targets_from_csv,
@@ -531,6 +534,104 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
         self.assertEqual(fetch_calls, [root_url, listing_url])
         self.assertEqual(mock_normalize.call_count, 1)
         self.assertEqual(jobs[0]["apply_link"], job_url)
+
+    def test_academic_source_traverses_empty_landing_page_with_bounded_job_budget(self):
+        root_url = "https://uni.example.edu/welcome"
+        listing_url = "https://uni.example.edu/stellenangebote"
+        about_url = "https://uni.example.edu/department/about"
+        pdf_url = "https://uni.example.edu/files/ausschreibung-phd-2026.pdf"
+        html_job_urls = [
+            f"https://uni.example.edu/jobs/research-role-{index}"
+            for index in range(1, 10)
+        ]
+        all_posting_urls = [pdf_url, *html_job_urls]
+        fetch_calls = []
+        normalize_calls = []
+
+        definition = StageDefinition(
+            stage_id="source_academic_career_sites",
+            stage_type="jobs.acquire.company_sites",
+            name="Acquire Academic Career Site Jobs",
+            config={"site_settings_key": "academic_career_sites"},
+        )
+        with patch(
+            "backend.adapters.stage_adapters.load_discovered_company_site_entries",
+            return_value=[],
+        ):
+            settings = _prepare_company_site_source_settings(
+                {
+                    "academic_career_sites": [{"company_name": "Example University", "url": root_url}],
+                    "company_site_max_job_links_per_site": 1,
+                },
+                definition,
+            )
+
+        def fake_fetch(url, **_kwargs):
+            fetch_calls.append(url)
+            if url == root_url:
+                return PageFetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text=(
+                        "<h1>Welcome to the department</h1>"
+                        f'<a href="{about_url}">About our department</a>'
+                        f'<a href="{listing_url}">Stellenangebote und Karriere</a>'
+                    ),
+                )
+            if url == listing_url:
+                posting_links = f'<a href="{pdf_url}">Ausschreibung PhD PDF</a>'
+                posting_links += "".join(
+                    f'<a href="{job_url}">Research role {index}</a>'
+                    for index, job_url in enumerate(html_job_urls, start=1)
+                )
+                return PageFetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text=posting_links,
+                )
+            raise AssertionError(f"Unexpected fetch URL: {url}")
+
+        def normalize_candidate(url, **_kwargs):
+            normalize_calls.append(url)
+            return {
+                "job_id": f"job_{len(normalize_calls)}",
+                "title": "Doctoral Researcher",
+                "company": "Example University",
+                "full_description": "Doctoral research position in Germany.",
+                "apply_link": url,
+                "source_url": url,
+                "link": url,
+            }
+
+        with (
+            patch("backend.connectors.company_career_sites._fetch_page_content", side_effect=fake_fetch),
+            patch(
+                "backend.connectors.company_career_sites.fetch_and_normalize_manual_job",
+                side_effect=normalize_candidate,
+            ),
+        ):
+            jobs, failures = scrape_company_career_sites(
+                company_sites=settings["company_career_sites"],
+                max_job_links_per_site=settings["company_site_max_job_links_per_site"],
+            )
+
+        self.assertEqual(settings["company_site_source_type"], "academic")
+        self.assertEqual(
+            settings["company_site_max_job_links_per_site"],
+            ACADEMIC_MIN_JOB_LINKS_PER_SITE,
+        )
+        self.assertEqual(fetch_calls, [root_url, listing_url])
+        self.assertEqual(len(jobs), ACADEMIC_MIN_JOB_LINKS_PER_SITE)
+        self.assertLessEqual(len(normalize_calls), ACADEMIC_MIN_JOB_LINKS_PER_SITE)
+        self.assertIn(pdf_url, normalize_calls)
+        self.assertNotIn(about_url, normalize_calls)
+        self.assertNotIn(listing_url, normalize_calls)
+        self.assertTrue(set(normalize_calls).issubset(all_posting_urls))
+        self.assertTrue(
+            any(item["error"] == "company_site_max_job_links_per_site" for item in failures)
+        )
 
     def test_company_site_posted_window_filters_known_old_jobs_and_keeps_unknown_dates(self):
         root_url = "https://careers.example.com/jobs"

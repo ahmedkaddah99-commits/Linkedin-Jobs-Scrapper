@@ -21,6 +21,10 @@ from backend.domain.models import (
 )
 
 
+def _is_handled_worker_failure(exc: BaseException) -> bool:
+    return isinstance(exc, Exception) or transient_database_error_category(exc) is not None
+
+
 @dataclass(slots=True)
 class WorkerService:
     application: BackendApplication
@@ -29,6 +33,7 @@ class WorkerService:
     process_id: int = field(default_factory=os.getpid)
     lease_seconds: int = 60
     poll_interval_seconds: float = 5.0
+    scheduled_run_check_interval_seconds: float = 60.0
     slow_task_warning_seconds: float = 300.0
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("backend.worker.service"))
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -111,7 +116,12 @@ class WorkerService:
     def stop(self) -> None:
         self._stop_event.set()
 
-    def process_next(self, *, auto_retry_failed: bool = True):
+    def process_next(
+        self,
+        *,
+        auto_retry_failed: bool = True,
+        enqueue_scheduled_runs: bool = True,
+    ):
         try:
             recovered_workers = self.application.recover_stale_workers()
         except Exception:
@@ -135,6 +145,8 @@ class WorkerService:
                 host_name=self.host_name,
                 process_id=self.process_id,
                 lease_seconds=self.lease_seconds,
+                recover_stale_workers=False,
+                enqueue_scheduled_runs=enqueue_scheduled_runs,
             )
         except Exception:
             self.logger.exception(
@@ -143,14 +155,6 @@ class WorkerService:
             )
             raise
         if claimed_run is None:
-            try:
-                self.heartbeat(status=WORKER_STATUS_IDLE, current_run_id="")
-            except Exception:
-                self.logger.exception(
-                    "worker_idle_heartbeat_failed",
-                    extra=self._log_extra(task_name="heartbeat_idle"),
-                )
-                raise
             return None
 
         heartbeat_stop = threading.Event()
@@ -210,6 +214,7 @@ class WorkerService:
     def run_loop(self, *, max_runs: int = 0, auto_retry_failed: bool = True) -> int:
         processed = 0
         last_maintenance_check = 0.0
+        last_scheduled_run_check = 0.0
         loop_started_at = time.perf_counter()
         self.logger.info(
             "worker_loop_start",
@@ -270,9 +275,20 @@ class WorkerService:
                         ),
                     )
                     break
+                should_check_scheduled_runs = (
+                    now - last_scheduled_run_check
+                    >= max(0.1, float(self.scheduled_run_check_interval_seconds))
+                )
+                if should_check_scheduled_runs:
+                    last_scheduled_run_check = now
                 try:
-                    run = self.process_next(auto_retry_failed=auto_retry_failed)
-                except Exception as exc:
+                    run = self.process_next(
+                        auto_retry_failed=auto_retry_failed,
+                        enqueue_scheduled_runs=should_check_scheduled_runs,
+                    )
+                except BaseException as exc:
+                    if not _is_handled_worker_failure(exc):
+                        raise
                     error_category = transient_database_error_category(exc)
                     if error_category is None:
                         raise

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -48,6 +49,22 @@ TrackerDuplicateGuard = Callable[..., dict[str, str]]
 TrackerReviewPredicate = Callable[[ReviewRecord], bool]
 AutoApproveGeneratedReviews = Callable[..., None]
 ScheduledRunEnqueuer = Callable[[], list[RunRecord]]
+ORPHANED_RUNNING_RUN_RECOVERY_SECONDS = 600
+
+
+def _is_handled_runtime_failure(exc: BaseException) -> bool:
+    return isinstance(exc, Exception) or transient_database_error_category(exc) is not None
+
+
+def _utc_seconds_ago(now: str, seconds: int | float) -> str:
+    normalized_now = str(now or "").strip().replace("Z", "+00:00")
+    try:
+        reference = datetime.fromisoformat(normalized_now)
+    except ValueError:
+        reference = datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return (reference - timedelta(seconds=max(0.0, float(seconds)))).isoformat()
 
 
 @dataclass(slots=True)
@@ -441,7 +458,28 @@ class RunLifecycleService:
             worker.lease_expires_at = now
             self.repositories.worker_store.upsert_worker(worker)
             recovered.append(worker)
+        self._recover_orphaned_running_runs(now=now)
         return recovered
+
+    def _recover_orphaned_running_runs(self, *, now: str) -> None:
+        active_run_ids = {
+            worker.current_run_id
+            for worker in self.repositories.worker_store.list_workers(limit=1000, offset=0, status=WORKER_STATUS_RUNNING)
+            if worker.current_run_id and (not worker.lease_expires_at or worker.lease_expires_at > now)
+        }
+        stale_before = _utc_seconds_ago(now, ORPHANED_RUNNING_RUN_RECOVERY_SECONDS)
+        for run in self.repositories.run_repository.list_runs(limit=1000, offset=0, status=RUN_STATUS_RUNNING):
+            if not run.queued_at or run.id in active_run_ids:
+                continue
+            stale_marker = run.updated_at or run.started_at or run.queued_at or run.created_at
+            if stale_marker and stale_marker > stale_before:
+                continue
+            if self._completed_from_stage_results(run):
+                self._finalize_completed_stage_result_run(run, now=now)
+                continue
+            self.trim_to_resumable_prefix(run)
+            run.last_error = "Recovered from orphaned running run."
+            self.queue_run(run)
 
     def fail_run_preflight(self, run: RunRecord, exc: Exception) -> RunRecord:
         now = utc_now_iso()
@@ -544,10 +582,13 @@ class RunLifecycleService:
         host_name: str = "",
         process_id: int = 0,
         lease_seconds: int = 60,
+        recover_stale_workers: bool = True,
+        enqueue_scheduled_runs: bool = True,
     ) -> RunRecord | None:
-        if worker_id:
+        if worker_id and recover_stale_workers:
             self.recover_stale_workers()
-        self.enqueue_due_scheduled_runs()
+        if enqueue_scheduled_runs:
+            self.enqueue_due_scheduled_runs()
         run = self.repositories.run_repository.claim_next_queued()
         if run is None:
             if worker_id:
@@ -712,7 +753,9 @@ class RunLifecycleService:
         )
         try:
             self.stage_engine.execute(context)
-        except Exception as exc:
+        except BaseException as exc:
+            if not _is_handled_runtime_failure(exc):
+                raise
             if transient_database_error_category(exc) is not None:
                 run = self.repositories.run_repository.get(run.id)
                 if self._completed_from_stage_results(run):

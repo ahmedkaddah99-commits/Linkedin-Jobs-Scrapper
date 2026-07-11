@@ -1953,9 +1953,14 @@ class SqliteSourcePolicyStore(_SqliteStore):
             )
 
     def mark_workspace_selected(self, site_urls: Iterable[str], *, site_type: str) -> dict[str, str]:
-        transitions: dict[str, str] = {}
-        for site_url in {str(item or "").strip() for item in site_urls if str(item or "").strip()}:
-            with self._connect() as connection:
+        normalized_urls = sorted({str(item or "").strip() for item in site_urls if str(item or "").strip()})
+        if not normalized_urls:
+            return {}
+        normalized_site_type = str(site_type or "company").strip() or "company"
+
+        def mark_selected(connection) -> dict[str, str]:
+            transitions: dict[str, str] = {}
+            for site_url in normalized_urls:
                 row = connection.execute(
                     "SELECT site_state FROM site_source_policy WHERE site_url = ?",
                     (site_url,),
@@ -1969,10 +1974,12 @@ class SqliteSourcePolicyStore(_SqliteStore):
                         "VALUES (?, ?, 'selected', ?) ON CONFLICT(site_url) DO UPDATE SET "
                         "site_state='selected', updated_at=excluded.updated_at"
                     ),
-                    (site_url, str(site_type or "company").strip(), utc_now_iso()),
+                    (site_url, normalized_site_type, utc_now_iso()),
                 )
-            transitions[site_url] = f"{previous_state}->selected"
-        return transitions
+                transitions[site_url] = f"{previous_state}->selected"
+            return transitions
+
+        return self._run_transaction(mark_selected)
 
     def filter_crawlable_sites(
         self,

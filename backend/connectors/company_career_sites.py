@@ -66,10 +66,14 @@ LISTING_LINK_HINTS = (
     "/careers",
     "/jobs",
     "/karriere",
+    "/ausschreibungen",
+    "/bewerbung",
     "/jobangebote",
     "/stellenangebote",
     "/stellenanzeigen",
+    "/vacancies",
     "all jobs",
+    "ausschreibungen",
     "open positions",
     "job search",
     "stellenanzeigen",
@@ -113,8 +117,12 @@ LOCALITY_MODE_STRICT_LOCAL_ONLY = "strict_local_only"
 DEFAULT_SITE_REQUEST_MODES = ("basic", "render_js_cheap")
 DEFAULT_JOB_DETAIL_REQUEST_MODES = ("basic",)
 DEFAULT_MAX_JOB_LINKS_PER_SITE = 25
+ACADEMIC_MIN_JOB_LINKS_PER_SITE = 8
 RUN_CREDIT_BUDGET_EXHAUSTED_MESSAGE = "This run reached its runner-credit budget before the next company-site request."
 JOB_HINT_WORDS = {
+    "ausschreibung",
+    "ausschreibungen",
+    "doctoral",
     "job",
     "jobs",
     "karriere",
@@ -126,8 +134,18 @@ JOB_HINT_WORDS = {
     "openings",
     "position",
     "positions",
+    "professur",
+    "promotion",
+    "phd",
     "role",
     "roles",
+    "stelle",
+    "stellen",
+    "stellenangebot",
+    "stellenangebote",
+    "vacancy",
+    "wissenschaft",
+    "wissenschaftlich",
     "bewerbung",
     "bewerben",
 }
@@ -658,7 +676,33 @@ def _looks_like_direct_job_link(url: str, label: str = "") -> bool:
     if _has_any_hint(haystack, DIRECT_JOB_LINK_HINTS):
         return True
     path = (urlparse(url).path or "").lower()
+    if path.endswith(".pdf") and any(
+        hint in haystack
+        for hint in (
+            "ausschreibung",
+            "doctoral",
+            "job",
+            "phd",
+            "professur",
+            "promotion",
+            "stelle",
+            "vacancy",
+            "wissenschaft",
+        )
+    ):
+        return True
     path_segments = [segment for segment in re.split(r"/+", path) if segment]
+    if path_segments and path_segments[-1] in {
+        "ausschreibungen",
+        "career",
+        "careers",
+        "jobs",
+        "karriere",
+        "stellenangebote",
+        "stellenanzeigen",
+        "vacancies",
+    }:
+        return False
     if len(path_segments) >= 2:
         parent_segment = path_segments[-2]
         leaf_segment = path_segments[-1]
@@ -677,11 +721,25 @@ def _looks_like_direct_job_link(url: str, label: str = "") -> bool:
             "stellen",
             "posting",
             "postings",
+            "application",
+            "applications",
+            "apply",
+            "ausschreibung",
+            "ausschreibungen",
+            "bewerbung",
+            "professur",
+            "stellenangebote",
+            "stellenanzeigen",
             "vacancy",
             "vacancies",
         } and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,}", leaf_segment):
             return True
-    return bool(re.search(r"(?:^|[-_/])(job|req|position|offer|stelle|posting)[-_]?[a-z0-9]{2,}", path))
+    return bool(
+        re.search(
+            r"(?:^|[-_/])(ausschreibung|doctoral|job|phd|position|professur|promotion|req|offer|stelle|posting)[-_]?[a-z0-9]{2,}",
+            path,
+        )
+    )
 
 
 def _looks_like_non_job_career_content(url: str, label: str = "") -> bool:
@@ -2073,6 +2131,7 @@ def scrape_company_career_sites(
 
 __all__ = [
     "ACADEMIC_CAREER_SITE_FILES",
+    "ACADEMIC_MIN_JOB_LINKS_PER_SITE",
     "CompanySiteScopePlan",
     "DEFAULT_MAX_JOB_LINKS_PER_SITE",
     "DEFAULT_JOB_DETAIL_REQUEST_MODES",

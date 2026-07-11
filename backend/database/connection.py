@@ -74,6 +74,9 @@ _TRANSIENT_ERROR_MARKERS = (
     ("stream not found", "stale_stream"),
 )
 
+_DATABASE_DRIVER_PANIC_CLASS_NAMES = {"PanicException"}
+_DATABASE_DRIVER_PANIC_MODULE_MARKERS = ("pyo3", "libsql")
+
 
 class DatabaseConfigurationError(RuntimeError):
     """Raised when the selected database backend is not configured correctly."""
@@ -92,6 +95,8 @@ def transient_database_error_category(exc: BaseException) -> str | None:
     """Return a safe category for retryable Turso/libSQL transport failures."""
 
     chain = tuple(_exception_chain(exc))
+    if any(_is_database_driver_panic(error) for error in chain):
+        return "driver_panic"
     if any(
         isinstance(
             error,
@@ -122,6 +127,15 @@ def transient_database_error_category(exc: BaseException) -> str | None:
     return None
 
 
+def _is_database_driver_panic(exc: BaseException) -> bool:
+    exc_type = type(exc)
+    type_name = exc_type.__name__
+    module_name = exc_type.__module__.lower()
+    if type_name not in _DATABASE_DRIVER_PANIC_CLASS_NAMES:
+        return False
+    return any(marker in module_name for marker in _DATABASE_DRIVER_PANIC_MODULE_MARKERS)
+
+
 def is_transient_database_error(exc: BaseException) -> bool:
     return transient_database_error_category(exc) is not None
 
@@ -135,7 +149,7 @@ def _retry_libsql_operation(
     for attempt in range(1, _LIBSQL_RETRY_ATTEMPTS + 1):
         try:
             return callback()
-        except Exception as exc:
+        except BaseException as exc:
             category = transient_database_error_category(exc)
             if category is None or attempt >= _LIBSQL_RETRY_ATTEMPTS:
                 raise
@@ -279,24 +293,61 @@ class DatabaseConnection:
         self._connection = connection
         self.backend = backend
         self._reconnect = reconnect
+        self._transaction_depth = 0
 
     def _refresh_connection_for_retry(self, category: str) -> None:
-        if self.backend != "libsql" or category != "stale_stream" or self._reconnect is None:
+        if self.backend != "libsql" or category not in {"stale_stream", "driver_panic"} or self._reconnect is None:
             return
         try:
             self._connection.close()
-        except Exception as exc:
+        except BaseException as exc:
+            if not isinstance(exc, Exception) and transient_database_error_category(exc) is None:
+                raise
             _log_cleanup_failure("stale_stream_close", exc)
         self._connection = self._reconnect()
 
     def _run(self, operation: str, callback: Callable[[], ResultT]) -> ResultT:
-        if self.backend == "libsql":
+        if self.backend == "libsql" and self._transaction_depth == 0:
             return _retry_libsql_operation(
                 operation,
                 callback,
                 before_retry=self._refresh_connection_for_retry,
             )
         return callback()
+
+    def transaction(self, callback: Callable[[DatabaseConnection], ResultT]) -> ResultT:
+        """Run and, for libSQL, replay a complete transaction after a transient driver failure."""
+
+        if self._transaction_depth:
+            return callback(self)
+
+        def attempt() -> ResultT:
+            self._transaction_depth += 1
+            try:
+                result = callback(self)
+                self._connection.commit()
+                return result
+            except BaseException:
+                try:
+                    self._connection.rollback()
+                except BaseException as cleanup_error:
+                    if (
+                        not isinstance(cleanup_error, Exception)
+                        and transient_database_error_category(cleanup_error) is None
+                    ):
+                        raise
+                    _log_cleanup_failure("transaction_rollback", cleanup_error)
+                raise
+            finally:
+                self._transaction_depth -= 1
+
+        if self.backend == "libsql":
+            return _retry_libsql_operation(
+                "transaction",
+                attempt,
+                before_retry=self._refresh_connection_for_retry,
+            )
+        return attempt()
 
     def _changes(self) -> int:
         cursor = self._run("changes", lambda: self._connection.execute("SELECT changes()"))
@@ -341,7 +392,13 @@ class DatabaseConnection:
         return last_cursor
 
     def commit(self) -> None:
-        self._run("commit", self._connection.commit)
+        try:
+            self._connection.commit()
+        except BaseException as exc:
+            category = transient_database_error_category(exc)
+            if category is not None:
+                self._refresh_connection_for_retry(category)
+            raise
 
     def rollback(self) -> None:
         self._run("rollback", self._connection.rollback)

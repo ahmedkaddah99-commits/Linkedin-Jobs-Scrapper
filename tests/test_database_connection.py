@@ -13,7 +13,15 @@ from backend.database.connection import (
     connect_database,
     database_session,
     database_target_info,
+    transient_database_error_category,
 )
+
+
+class PanicException(BaseException):
+    pass
+
+
+PanicException.__module__ = "pyo3_runtime"
 
 
 class DatabaseConnectionTests(unittest.TestCase):
@@ -235,6 +243,86 @@ class DatabaseConnectionTests(unittest.TestCase):
         reconnect.assert_called_once()
         fresh_connection.execute.assert_called_once_with("SELECT 1", ())
         sleep.assert_called_once()
+
+    def test_libsql_operation_reconnects_before_retrying_driver_panic(self):
+        stale_connection = Mock()
+        fresh_cursor = Mock(rowcount=-1, lastrowid=None, description=None)
+        fresh_connection = Mock()
+        stale_connection.execute.side_effect = PanicException(
+            "called `Option::unwrap()` on a `None` value"
+        )
+        fresh_connection.execute.return_value = fresh_cursor
+        reconnect = Mock(return_value=fresh_connection)
+        connection = DatabaseConnection(stale_connection, backend="libsql", reconnect=reconnect)
+
+        with (
+            patch("backend.database.connection.time.sleep") as sleep,
+            patch("backend.database.connection.random.uniform", return_value=0.0),
+        ):
+            connection.execute("SELECT 1")
+
+        self.assertEqual(transient_database_error_category(PanicException("panic")), "driver_panic")
+        stale_connection.close.assert_called_once()
+        reconnect.assert_called_once()
+        fresh_connection.execute.assert_called_once_with("SELECT 1", ())
+        sleep.assert_called_once()
+
+    def test_libsql_transaction_replays_statements_after_commit_driver_panic(self):
+        stale_cursor = Mock(rowcount=1, lastrowid=None, description=None)
+        stale_connection = Mock()
+        stale_connection.execute.return_value = stale_cursor
+        stale_connection.commit.side_effect = PanicException(
+            "called `Option::unwrap()` on a `None` value"
+        )
+        fresh_cursor = Mock(rowcount=1, lastrowid=None, description=None)
+        fresh_connection = Mock()
+        fresh_connection.execute.return_value = fresh_cursor
+        reconnect = Mock(return_value=fresh_connection)
+        connection = DatabaseConnection(stale_connection, backend="libsql", reconnect=reconnect)
+        attempts = []
+
+        def operation(active_connection):
+            attempts.append(active_connection)
+            active_connection.execute("UPDATE site_source_policy SET site_state = ?", ("selected",))
+            return "selected"
+
+        with (
+            patch("backend.database.connection.time.sleep") as sleep,
+            patch("backend.database.connection.random.uniform", return_value=0.0),
+        ):
+            result = connection.transaction(operation)
+
+        self.assertEqual(result, "selected")
+        self.assertEqual(attempts, [connection, connection])
+        stale_connection.execute.assert_called_once()
+        stale_connection.commit.assert_called_once()
+        stale_connection.rollback.assert_called_once()
+        stale_connection.close.assert_called_once()
+        reconnect.assert_called_once()
+        fresh_connection.execute.assert_called_once()
+        fresh_connection.commit.assert_called_once()
+        sleep.assert_called_once()
+
+    def test_libsql_transaction_does_not_swallow_unrelated_base_exception(self):
+        for fatal_error in (KeyboardInterrupt(), SystemExit(2)):
+            with self.subTest(error=type(fatal_error).__name__):
+                raw_connection = Mock()
+                reconnect = Mock()
+                connection = DatabaseConnection(raw_connection, backend="libsql", reconnect=reconnect)
+
+                def raise_fatal(_connection):
+                    raise fatal_error
+
+                with (
+                    patch("backend.database.connection.time.sleep") as sleep,
+                    self.assertRaises(type(fatal_error)),
+                ):
+                    connection.transaction(raise_fatal)
+
+                raw_connection.rollback.assert_called_once()
+                raw_connection.commit.assert_not_called()
+                reconnect.assert_not_called()
+                sleep.assert_not_called()
 
     def test_libsql_operation_does_not_retry_non_retryable_errors(self):
         for error in (

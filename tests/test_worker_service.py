@@ -138,6 +138,81 @@ class WorkerServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "primary upstream"):
             worker.process_next()
 
+    def test_process_next_can_skip_scheduled_run_scan_without_duplicate_idle_heartbeat(self):
+        application = Mock()
+        application.recover_stale_workers.return_value = []
+        application.claim_next_queued_run.return_value = None
+        worker = WorkerService(
+            application=application,
+            worker_id="worker_service_idle_poll",
+            lease_seconds=1,
+            logger=Mock(),
+        )
+
+        run = worker.process_next(enqueue_scheduled_runs=False)
+
+        self.assertIsNone(run)
+        application.claim_next_queued_run.assert_called_once_with(
+            worker_id="worker_service_idle_poll",
+            host_name=worker.host_name,
+            process_id=worker.process_id,
+            lease_seconds=1,
+            recover_stale_workers=False,
+            enqueue_scheduled_runs=False,
+        )
+        application.heartbeat_worker.assert_not_called()
+
+    def test_worker_loop_throttles_scheduled_run_scan_while_idle(self):
+        application = Mock()
+        worker = WorkerService(
+            application=application,
+            worker_id="worker_service_idle_schedule_throttle",
+            poll_interval_seconds=0.01,
+            scheduled_run_check_interval_seconds=999,
+            logger=Mock(),
+        )
+        scheduled_scan_flags = []
+
+        def _idle_claim_next_queued_run(**kwargs):
+            scheduled_scan_flags.append(kwargs.get("enqueue_scheduled_runs"))
+            if len(scheduled_scan_flags) >= 2:
+                worker.stop()
+            return None
+
+        application.recover_stale_workers.return_value = []
+        application.claim_next_queued_run.side_effect = _idle_claim_next_queued_run
+
+        processed = worker.run_loop(auto_retry_failed=True)
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(scheduled_scan_flags, [True, False])
+        application.stop_worker.assert_called_once_with(worker.worker_id)
+
+    def test_worker_loop_checks_scheduled_runs_again_after_interval(self):
+        application = Mock()
+        worker = WorkerService(
+            application=application,
+            worker_id="worker_service_idle_schedule_recheck",
+            poll_interval_seconds=0.02,
+            scheduled_run_check_interval_seconds=0.01,
+            logger=Mock(),
+        )
+        scheduled_scan_flags = []
+
+        def _idle_claim_next_queued_run(**kwargs):
+            scheduled_scan_flags.append(kwargs.get("enqueue_scheduled_runs"))
+            if len(scheduled_scan_flags) >= 2:
+                worker.stop()
+            return None
+
+        application.recover_stale_workers.return_value = []
+        application.claim_next_queued_run.side_effect = _idle_claim_next_queued_run
+        processed = worker.run_loop(auto_retry_failed=True)
+
+        self.assertEqual(processed, 0)
+        self.assertEqual(scheduled_scan_flags, [True, True])
+        application.stop_worker.assert_called_once_with(worker.worker_id)
+
     def test_stale_worker_recovery_requeues_running_run(self):
         app = self._create_app("worker_service_recovery")
         run = app.enqueue_run("worker_workspace", requested_by="test-stale")
@@ -157,6 +232,45 @@ class WorkerServiceTests(unittest.TestCase):
         recovered_run = app.get_run(run.id)
         self.assertEqual(recovered_run.status, "queued")
         self.assertEqual(recovered_run.current_stage_id, "")
+
+    def test_stale_recovery_requeues_orphaned_running_queued_run(self):
+        app = self._create_app("worker_service_orphaned_running")
+        run = app.enqueue_run("worker_workspace", requested_by="test-orphaned-running")
+
+        claimed = app.claim_next_queued_run(worker_id="orphaned_worker", lease_seconds=60)
+        self.assertIsNotNone(claimed)
+        orphaned_run = app.get_run(run.id)
+        orphaned_run.updated_at = "2000-01-01T00:00:00+00:00"
+        app.repositories.run_repository.save(orphaned_run)
+        worker = app.get_worker("orphaned_worker")
+        worker.current_run_id = ""
+        worker.status = "idle"
+        app.repositories.worker_store.upsert_worker(worker)
+
+        recovered_workers = app.recover_stale_workers()
+
+        self.assertEqual(recovered_workers, [])
+        recovered_run = app.get_run(run.id)
+        self.assertEqual(recovered_run.status, "queued")
+        self.assertEqual(recovered_run.current_stage_id, "")
+        self.assertEqual(recovered_run.last_error, "Recovered from orphaned running run.")
+
+    def test_stale_recovery_does_not_requeue_run_owned_by_live_worker(self):
+        app = self._create_app("worker_service_live_owned_running")
+        run = app.enqueue_run("worker_workspace", requested_by="test-live-owned-running")
+
+        claimed = app.claim_next_queued_run(worker_id="live_worker", lease_seconds=3600)
+        self.assertIsNotNone(claimed)
+        owned_run = app.get_run(run.id)
+        owned_run.updated_at = "2000-01-01T00:00:00+00:00"
+        app.repositories.run_repository.save(owned_run)
+
+        recovered_workers = app.recover_stale_workers()
+
+        self.assertEqual(recovered_workers, [])
+        untouched_run = app.get_run(run.id)
+        self.assertEqual(untouched_run.status, "running")
+        self.assertNotEqual(untouched_run.last_error, "Recovered from orphaned running run.")
 
     def test_stale_worker_recovery_finalizes_run_with_completed_stage_results(self):
         app = self._create_app("worker_service_completed_stage_recovery")

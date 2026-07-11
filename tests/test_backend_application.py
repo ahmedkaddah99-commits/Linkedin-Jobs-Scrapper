@@ -46,6 +46,21 @@ class _FlakyStage(BaseStage):
         return StageOutcome(data={definition.output_key or "flaky_data": {"status": "ok"}}, metrics={"retried": True})
 
 
+class PanicException(BaseException):
+    pass
+
+
+PanicException.__module__ = "pyo3_runtime"
+
+
+class _DriverPanicStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        return True
+
+    def execute(self, context, definition) -> StageOutcome:
+        raise PanicException("called `Option::unwrap()` on a `None` value")
+
+
 class _CanRunExplodesStage(BaseStage):
     def can_run(self, context, definition) -> bool:
         raise RuntimeError("can_run exploded")
@@ -173,6 +188,7 @@ class BackendApplicationTests(unittest.TestCase):
         app = create_backend(temp_dir)
         app.registries.stage_registry.register("test.seed_jobs", _SeedJobsStage())
         app.registries.stage_registry.register("test.flaky", _FlakyStage())
+        app.registries.stage_registry.register("test.driver_panic", _DriverPanicStage())
         app.registries.stage_registry.register("test.can_run_explodes", _CanRunExplodesStage())
         app.registries.stage_registry.register("applications.generate.documents", _DocumentGenerationStage())
         app.upsert_workflow_template(
@@ -968,6 +984,45 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(len(run.stage_results), 1)
         self.assertEqual(run.stage_results[0].status, "failed")
         self.assertEqual(run.stage_results[0].error, "can_run exploded")
+
+    def test_driver_panic_requeues_claimed_run_instead_of_leaving_it_running(self):
+        app, _ = self._create_app_with_test_workflow("driver_panic_requeue")
+        app.upsert_workflow_template(
+            {
+                "id": "driver_panic_template_v1",
+                "name": "Driver Panic Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="driver_panic",
+                        stage_type="test.driver_panic",
+                        name="Driver Panic",
+                        output_key="driver_panic_output",
+                    ).to_dict()
+                ],
+            }
+        )
+        app.upsert_workspace(
+            {
+                "id": "driver_panic_workspace",
+                "name": "Driver Panic Workspace",
+                "workflow_template_id": "driver_panic_template_v1",
+                "workspace_type": "custom",
+                "sources": [],
+            }
+        )
+
+        run = app.enqueue_run("driver_panic_workspace", requested_by="test-driver-panic")
+        claimed = app.claim_next_queued_run(worker_id="driver_panic_worker", lease_seconds=60)
+
+        self.assertIsNotNone(claimed)
+        self.assertEqual(app.get_run(run.id).status, "running")
+        result = app.execute_claimed_run(claimed.id, auto_retry_failed=True)
+
+        self.assertEqual(result.status, "queued")
+        self.assertEqual(result.current_stage_id, "")
+        self.assertEqual(result.stage_results, [])
+        self.assertNotIn("progress", result.metadata)
+        self.assertEqual(result.last_error, "")
 
     def test_referral_contacts_and_outreach_drafts(self):
         app, _ = self._create_app_with_test_workflow("referrals_and_outreach")
