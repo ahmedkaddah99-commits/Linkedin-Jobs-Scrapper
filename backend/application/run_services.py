@@ -50,6 +50,11 @@ TrackerReviewPredicate = Callable[[ReviewRecord], bool]
 AutoApproveGeneratedReviews = Callable[..., None]
 ScheduledRunEnqueuer = Callable[[], list[RunRecord]]
 ORPHANED_RUNNING_RUN_RECOVERY_SECONDS = 600
+RUN_ATTEMPT_METADATA_KEY = "run_attempt_count"
+
+
+class WorkerLeaseLostError(RuntimeError):
+    pass
 
 
 def _is_handled_runtime_failure(exc: BaseException) -> bool:
@@ -385,6 +390,43 @@ class RunLifecycleService:
         self.repositories.worker_store.upsert_worker(worker)
         return self.repositories.worker_store.get_worker(worker.worker_id)
 
+    def renew_worker_lease(
+        self,
+        *,
+        worker_id: str,
+        current_run_id: str,
+        run_attempt_count: int,
+        host_name: str = "",
+        process_id: int = 0,
+        lease_seconds: int = 60,
+    ) -> WorkerRecord:
+        expected_attempt_count = max(1, int(run_attempt_count))
+        observed = self.repositories.worker_store.get_worker(worker_id)
+        observed_attempt_count = int(observed.metadata.get(RUN_ATTEMPT_METADATA_KEY) or 0)
+        if (
+            observed.status != WORKER_STATUS_RUNNING
+            or observed.current_run_id != str(current_run_id or "")
+            or observed_attempt_count != expected_attempt_count
+        ):
+            raise WorkerLeaseLostError(
+                f"Worker '{worker_id}' no longer owns run '{current_run_id}' attempt {expected_attempt_count}."
+            )
+        renewed = WorkerRecord.from_dict(observed.to_dict())
+        renewed.host_name = str(host_name or renewed.host_name)
+        renewed.process_id = int(process_id or renewed.process_id or 0)
+        renewed.last_heartbeat_at = utc_now_iso()
+        renewed.lease_expires_at = utc_plus_seconds(lease_seconds)
+        renewed.metadata[RUN_ATTEMPT_METADATA_KEY] = expected_attempt_count
+        if not self.repositories.worker_store.renew_worker_lease_if_owned(
+            observed,
+            renewed,
+            run_attempt_count=expected_attempt_count,
+        ):
+            raise WorkerLeaseLostError(
+                f"Worker '{worker_id}' lost run '{current_run_id}' attempt {expected_attempt_count}."
+            )
+        return self.repositories.worker_store.get_worker(worker_id)
+
     def stop_worker(self, worker_id: str) -> WorkerRecord:
         worker = self.repositories.worker_store.get_worker(worker_id)
         worker.status = WORKER_STATUS_STOPPED
@@ -414,7 +456,7 @@ class RunLifecycleService:
             for stage_id in enabled_stage_ids
         )
 
-    def _finalize_completed_stage_result_run(self, run: RunRecord, *, now: str) -> RunRecord:
+    def _prepare_completed_stage_result_run(self, run: RunRecord, *, now: str) -> None:
         run.status = RUN_STATUS_COMPLETED
         run.final_job_set_keys = sorted(self.repositories.job_store.list_job_set_keys(run.id))
         run.current_stage_id = ""
@@ -429,57 +471,127 @@ class RunLifecycleService:
         )
         run.updated_at = now
         run.metadata.pop("progress", None)
+
+    def _finalize_completed_stage_result_run(self, run: RunRecord, *, now: str) -> RunRecord:
+        self._prepare_completed_stage_result_run(run, now=now)
         self.repositories.run_repository.save(run)
         return self.repositories.run_repository.get(run.id)
 
+    def _prepare_cancelled_recovery(self, run: RunRecord, *, now: str) -> None:
+        self.trim_to_resumable_prefix(run)
+        run.status = RUN_STATUS_CANCELLED
+        run.current_stage_id = ""
+        run.last_error = ""
+        run.finished_at = now
+        run.updated_at = now
+        run.metadata.pop("last_error_category", None)
+        run.metadata.pop("progress", None)
+
     def recover_stale_workers(self) -> list[WorkerRecord]:
         now = utc_now_iso()
+        live_owned_run_ids = self._live_owned_run_ids(now=now)
         stale_workers = self.repositories.worker_store.list_expired_workers(expires_before=now)
         recovered: list[WorkerRecord] = []
         for worker in stale_workers:
-            if worker.current_run_id:
-                try:
-                    run = self.repositories.run_repository.get(worker.current_run_id)
-                except KeyError:
-                    run = None
-                if run is not None and run.status in {RUN_STATUS_RUNNING, RUN_STATUS_CANCEL_REQUESTED}:
-                    if self._completed_from_stage_results(run):
-                        self._finalize_completed_stage_result_run(run, now=now)
-                    else:
-                        run.status = RUN_STATUS_QUEUED
-                        run.current_stage_id = ""
-                        run.updated_at = now
-                        run.last_error = "Recovered from expired worker lease."
-                        run.metadata.pop("progress", None)
-                        self.repositories.run_repository.save(run)
+            expired_run_id = worker.current_run_id
+            if not self.repositories.worker_store.mark_stale_if_expired(
+                worker,
+                expires_before=now,
+                stale_at=now,
+            ):
+                continue
             worker.status = WORKER_STATUS_STALE
             worker.current_run_id = ""
             worker.last_heartbeat_at = now
             worker.lease_expires_at = now
-            self.repositories.worker_store.upsert_worker(worker)
             recovered.append(worker)
-        self._recover_orphaned_running_runs(now=now)
+            if expired_run_id and expired_run_id not in live_owned_run_ids:
+                try:
+                    run = self.repositories.run_repository.get(expired_run_id)
+                except KeyError:
+                    run = None
+                if run is not None and run.status in {RUN_STATUS_RUNNING, RUN_STATUS_CANCEL_REQUESTED}:
+                    expected_status = run.status
+                    expected_updated_at = run.updated_at
+                    if run.status == RUN_STATUS_CANCEL_REQUESTED:
+                        self._prepare_cancelled_recovery(run, now=now)
+                    elif self._completed_from_stage_results(run):
+                        self._prepare_completed_stage_result_run(run, now=now)
+                    else:
+                        self.trim_to_resumable_prefix(run)
+                        run.last_error = "Recovered from expired worker lease."
+                        self._prepare_run_for_queue(run, now=now)
+                    self.repositories.run_repository.save_recovery_transition_if_stale(
+                        run,
+                        expected_status=expected_status,
+                        expected_updated_at=expected_updated_at,
+                        active_lease_after=now,
+                    )
+        live_owned_run_ids = self._live_owned_run_ids(now=now)
+        self._recover_orphaned_running_runs(now=now, live_owned_run_ids=live_owned_run_ids)
         return recovered
 
-    def _recover_orphaned_running_runs(self, *, now: str) -> None:
-        active_run_ids = {
-            worker.current_run_id
-            for worker in self.repositories.worker_store.list_workers(limit=1000, offset=0, status=WORKER_STATUS_RUNNING)
-            if worker.current_run_id and (not worker.lease_expires_at or worker.lease_expires_at > now)
-        }
+    def _live_owned_run_ids(self, *, now: str) -> set[str]:
+        live_owned_run_ids: set[str] = set()
+        offset = 0
+        page_size = 1000
+        while True:
+            workers = self.repositories.worker_store.list_workers(
+                limit=page_size,
+                offset=offset,
+                status="",
+            )
+            live_owned_run_ids.update(
+                worker.current_run_id
+                for worker in workers
+                if worker.current_run_id
+                and worker.status not in {WORKER_STATUS_STALE, WORKER_STATUS_STOPPED}
+                and (not worker.lease_expires_at or worker.lease_expires_at > now)
+            )
+            if len(workers) < page_size:
+                break
+            offset += len(workers)
+        return live_owned_run_ids
+
+    def _recover_orphaned_running_runs(self, *, now: str, live_owned_run_ids: set[str]) -> None:
         stale_before = _utc_seconds_ago(now, ORPHANED_RUNNING_RUN_RECOVERY_SECONDS)
-        for run in self.repositories.run_repository.list_runs(limit=1000, offset=0, status=RUN_STATUS_RUNNING):
-            if not run.queued_at or run.id in active_run_ids:
+        recoverable_runs: dict[str, RunRecord] = {}
+        page_size = 1000
+        for status in (RUN_STATUS_RUNNING, RUN_STATUS_CANCEL_REQUESTED):
+            offset = 0
+            while True:
+                page = self.repositories.run_repository.list_runs(
+                    limit=page_size,
+                    offset=offset,
+                    status=status,
+                )
+                recoverable_runs.update((run.id, run) for run in page)
+                if len(page) < page_size:
+                    break
+                offset += len(page)
+
+        for run in recoverable_runs.values():
+            if not run.queued_at or run.id in live_owned_run_ids:
                 continue
             stale_marker = run.updated_at or run.started_at or run.queued_at or run.created_at
             if stale_marker and stale_marker > stale_before:
                 continue
-            if self._completed_from_stage_results(run):
-                self._finalize_completed_stage_result_run(run, now=now)
-                continue
-            self.trim_to_resumable_prefix(run)
-            run.last_error = "Recovered from orphaned running run."
-            self.queue_run(run)
+            expected_status = run.status
+            expected_updated_at = run.updated_at
+            if run.status == RUN_STATUS_CANCEL_REQUESTED:
+                self._prepare_cancelled_recovery(run, now=now)
+            elif self._completed_from_stage_results(run):
+                self._prepare_completed_stage_result_run(run, now=now)
+            else:
+                self.trim_to_resumable_prefix(run)
+                run.last_error = "Recovered from orphaned running run."
+                self._prepare_run_for_queue(run)
+            self.repositories.run_repository.save_recovery_transition_if_stale(
+                run,
+                expected_status=expected_status,
+                expected_updated_at=expected_updated_at,
+                active_lease_after=now,
+            )
 
     def fail_run_preflight(self, run: RunRecord, exc: Exception) -> RunRecord:
         now = utc_now_iso()
@@ -609,6 +721,7 @@ class RunLifecycleService:
                 host_name=host_name,
                 process_id=process_id,
                 lease_seconds=lease_seconds,
+                metadata={RUN_ATTEMPT_METADATA_KEY: run.attempt_count},
             )
         return run
 
@@ -756,14 +869,28 @@ class RunLifecycleService:
         except BaseException as exc:
             if not _is_handled_runtime_failure(exc):
                 raise
-            if transient_database_error_category(exc) is not None:
+            error_category = transient_database_error_category(exc)
+            if error_category is not None:
                 run = self.repositories.run_repository.get(run.id)
                 if self._completed_from_stage_results(run):
                     return self._finalize_completed_stage_result_run(run, now=utc_now_iso())
-                if auto_retry_failed:
+                if auto_retry_failed and run.attempt_count < run.max_attempts:
                     self.trim_to_resumable_prefix(run)
                     return self.queue_run(run)
-                raise
+                now = utc_now_iso()
+                failure_reason = (
+                    "retry attempts exhausted"
+                    if run.attempt_count >= run.max_attempts
+                    else "automatic retry disabled"
+                )
+                run.status = RUN_STATUS_FAILED
+                run.last_error = f"Transient database failure ({error_category}); {failure_reason}."
+                run.finished_at = now
+                run.updated_at = now
+                run.metadata["last_error_category"] = error_category
+                run.metadata.pop("progress", None)
+                self.repositories.run_repository.save(run)
+                return self.repositories.run_repository.get(run.id)
             run = self.repositories.run_repository.get(run.id)
             if auto_retry_failed and run.status == RUN_STATUS_FAILED and run.attempt_count < run.max_attempts:
                 self.trim_to_resumable_prefix(run)
@@ -776,16 +903,21 @@ class RunLifecycleService:
         return self.repositories.run_repository.get(run.id)
 
     def queue_run(self, run: RunRecord) -> RunRecord:
-        now = utc_now_iso()
+        self._prepare_run_for_queue(run)
+        self.repositories.run_repository.save(run)
+        return self.repositories.run_repository.get(run.id)
+
+    @staticmethod
+    def _prepare_run_for_queue(run: RunRecord, *, now: str = "") -> None:
+        now = now or utc_now_iso()
         run.status = RUN_STATUS_QUEUED
         run.queued_at = now
         run.current_stage_id = ""
         run.started_at = ""
         run.finished_at = ""
         run.updated_at = now
+        run.metadata.pop("last_error_category", None)
         run.metadata.pop("progress", None)
-        self.repositories.run_repository.save(run)
-        return self.repositories.run_repository.get(run.id)
 
     def trim_to_resumable_prefix(self, run: RunRecord) -> None:
         kept_results = []

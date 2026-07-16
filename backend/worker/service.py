@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from backend.application import BackendApplication
+from backend.application.run_services import WorkerLeaseLostError
 from backend.database.connection import transient_database_error_category
 from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
@@ -23,6 +24,24 @@ from backend.domain.models import (
 
 def _is_handled_worker_failure(exc: BaseException) -> bool:
     return isinstance(exc, Exception) or transient_database_error_category(exc) is not None
+
+
+def _direct_database_error_category(exc: BaseException) -> str | None:
+    """Classify cleanup itself without a primary exception from its implicit context."""
+
+    cause = exc.__cause__
+    context = exc.__context__
+    try:
+        exc.__cause__ = None
+        exc.__context__ = None
+        return transient_database_error_category(exc)
+    finally:
+        exc.__cause__ = cause
+        exc.__context__ = context
+
+
+def _is_handled_worker_cleanup_failure(exc: BaseException) -> bool:
+    return isinstance(exc, Exception) or _direct_database_error_category(exc) is not None
 
 
 @dataclass(slots=True)
@@ -113,6 +132,16 @@ class WorkerService:
             lease_seconds=self.lease_seconds,
         )
 
+    def renew_run_lease(self, run: RunRecord):
+        return self.application.renew_worker_lease(
+            worker_id=self.worker_id,
+            current_run_id=run.id,
+            run_attempt_count=run.attempt_count,
+            host_name=self.host_name,
+            process_id=self.process_id,
+            lease_seconds=self.lease_seconds,
+        )
+
     def stop(self) -> None:
         self._stop_event.set()
 
@@ -124,7 +153,9 @@ class WorkerService:
     ):
         try:
             recovered_workers = self.application.recover_stale_workers()
-        except Exception:
+        except BaseException as exc:
+            if not _is_handled_worker_failure(exc):
+                raise
             self.logger.exception(
                 "worker_recover_stale_failed",
                 extra=self._log_extra(task_name="recover_stale_workers"),
@@ -148,7 +179,9 @@ class WorkerService:
                 recover_stale_workers=False,
                 enqueue_scheduled_runs=enqueue_scheduled_runs,
             )
-        except Exception:
+        except BaseException as exc:
+            if not _is_handled_worker_failure(exc):
+                raise
             self.logger.exception(
                 "worker_claim_failed",
                 extra=self._log_extra(task_name="claim_next_queued_run"),
@@ -163,17 +196,29 @@ class WorkerService:
             interval = max(1.0, float(self.lease_seconds) / 3.0)
             while not heartbeat_stop.wait(interval):
                 try:
-                    self.heartbeat(status=WORKER_STATUS_RUNNING, current_run_id=claimed_run.id)
-                except Exception:
+                    self.renew_run_lease(claimed_run)
+                except WorkerLeaseLostError:
+                    self.logger.exception(
+                        "worker_lease_lost",
+                        extra=self._log_extra(task_name="heartbeat_running", run=claimed_run),
+                    )
+                    return
+                except BaseException as exc:
+                    if not _is_handled_worker_failure(exc):
+                        raise
                     self.logger.exception(
                         "worker_heartbeat_failed",
-                        extra=self._log_extra(task_name="heartbeat_running", run=claimed_run),
+                        extra=self._log_extra(
+                            task_name="heartbeat_running",
+                            run=claimed_run,
+                            error_category=transient_database_error_category(exc) or "non_transient",
+                        ),
                     )
 
         thread = threading.Thread(target=_heartbeat_loop, daemon=True, name=f"worker-heartbeat-{self.worker_id}")
         thread.start()
         started_at = time.perf_counter()
-        task_error: Exception | None = None
+        task_error: BaseException | None = None
         try:
             if claimed_run.attempt_count > 1:
                 self.logger.warning(
@@ -185,8 +230,10 @@ class WorkerService:
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             self._log_run_completion(claimed_run=claimed_run, result=result, duration_ms=duration_ms)
             return result
-        except Exception as exc:
+        except BaseException as exc:
             task_error = exc
+            if not _is_handled_worker_failure(exc):
+                raise
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             self.logger.exception(
                 "worker_task_exception",
@@ -203,7 +250,9 @@ class WorkerService:
             thread.join(timeout=max(1.0, float(self.lease_seconds)))
             try:
                 self.application.release_worker(self.worker_id)
-            except Exception:
+            except BaseException as exc:
+                if not _is_handled_worker_cleanup_failure(exc):
+                    raise
                 self.logger.exception(
                     "worker_release_failed",
                     extra=self._log_extra(task_name="release_worker", run=claimed_run),
@@ -214,7 +263,7 @@ class WorkerService:
     def run_loop(self, *, max_runs: int = 0, auto_retry_failed: bool = True) -> int:
         processed = 0
         last_maintenance_check = 0.0
-        last_scheduled_run_check = 0.0
+        last_scheduled_run_check: float | None = None
         loop_started_at = time.perf_counter()
         self.logger.info(
             "worker_loop_start",
@@ -226,7 +275,9 @@ class WorkerService:
         )
         try:
             self.heartbeat(status=WORKER_STATUS_IDLE, current_run_id="")
-        except Exception as exc:
+        except BaseException as exc:
+            if not _is_handled_worker_failure(exc):
+                raise
             error_category = transient_database_error_category(exc)
             if error_category is None:
                 self.logger.exception(
@@ -242,6 +293,7 @@ class WorkerService:
                     error_category=error_category,
                 ),
             )
+        loop_error: BaseException | None = None
         try:
             while not self._stop_event.is_set():
                 now = time.monotonic()
@@ -276,7 +328,8 @@ class WorkerService:
                     )
                     break
                 should_check_scheduled_runs = (
-                    now - last_scheduled_run_check
+                    last_scheduled_run_check is None
+                    or now - last_scheduled_run_check
                     >= max(0.1, float(self.scheduled_run_check_interval_seconds))
                 )
                 if should_check_scheduled_runs:
@@ -306,11 +359,16 @@ class WorkerService:
                     self._stop_event.wait(max(0.1, float(self.poll_interval_seconds)))
                     continue
                 processed += 1
+        except BaseException as exc:
+            loop_error = exc
+            raise
         finally:
             duration_ms = int((time.perf_counter() - loop_started_at) * 1000)
             try:
                 self.application.stop_worker(self.worker_id)
-            except Exception:
+            except BaseException as exc:
+                if not _is_handled_worker_cleanup_failure(exc):
+                    raise
                 self.logger.exception(
                     "worker_stop_failed",
                     extra=self._log_extra(
@@ -319,6 +377,8 @@ class WorkerService:
                         duration_ms=duration_ms,
                     ),
                 )
+                if loop_error is None and not isinstance(exc, Exception):
+                    raise
             else:
                 self.logger.info(
                     "worker_loop_stop",

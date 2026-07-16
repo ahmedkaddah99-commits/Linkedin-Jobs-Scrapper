@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Iterator, TypeVar
 
 from backend.database import DatabaseConnection, connect_database, database_session, initialize_database
+from backend.database.connection import _handle_cleanup_failure
 
 
 TransactionResultT = TypeVar("TransactionResultT")
@@ -25,7 +26,18 @@ class _SqliteStore:
         callback: Callable[[DatabaseConnection], TransactionResultT],
     ) -> TransactionResultT:
         connection = connect_database(self.db_path)
+        primary_error: BaseException | None = None
         try:
             return connection.transaction(callback)
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            connection.close()
+            try:
+                connection.close()
+            except BaseException as cleanup_error:
+                _handle_cleanup_failure(
+                    "transaction_close",
+                    cleanup_error,
+                    primary_error=primary_error,
+                )

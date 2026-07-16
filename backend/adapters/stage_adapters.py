@@ -805,6 +805,7 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
 
         jobs, failures = scrape_company_career_sites(
             company_sites=crawlable_company_sites,
+            source_type=site_type,
             keywords=getattr(cli_args, "keywords", []),
             request_timeout_seconds=int(getattr(cli_args, "company_site_request_timeout_seconds", 30)),
             max_jobs_per_site=int(getattr(cli_args, "company_site_max_jobs_per_site", 0)),

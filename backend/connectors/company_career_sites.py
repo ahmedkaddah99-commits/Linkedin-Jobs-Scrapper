@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import logging
+import ipaddress
 import json
+import logging
 import os
 import re
 import time
@@ -9,7 +10,7 @@ from fnmatch import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -79,6 +80,11 @@ LISTING_LINK_HINTS = (
     "stellenanzeigen",
     "stellenangebote",
 )
+ACADEMIC_LISTING_LINK_HINTS = (
+    "/open-positions",
+    "/openings",
+    "open jobs",
+)
 IGNORED_LINK_HINTS = (
     "mailto:",
     "javascript:",
@@ -143,11 +149,77 @@ JOB_HINT_WORDS = {
     "stellen",
     "stellenangebot",
     "stellenangebote",
-    "vacancy",
     "wissenschaft",
     "wissenschaftlich",
     "bewerbung",
     "bewerben",
+}
+ACADEMIC_JOB_HINT_WORDS = {
+    "application",
+    "apply",
+    "ausschreibung",
+    "ausschreibungen",
+    "doctoral",
+    "phd",
+    "professur",
+    "promotion",
+    "stelle",
+    "stellen",
+    "stellenangebot",
+    "stellenangebote",
+    "wissenschaft",
+    "wissenschaftlich",
+    "wissenschaftliche",
+}
+ACADEMIC_PRIORITY_WEIGHTS = {
+    "doctoral": 6,
+    "phd": 6,
+    "professur": 5,
+    "professor": 5,
+    "promotion": 5,
+    "ausschreibung": 4,
+    "ausschreibungen": 4,
+    "wissenschaft": 4,
+    "wissenschaftlich": 4,
+    "wissenschaftliche": 4,
+    "application": 3,
+    "apply": 3,
+    "bewerbung": 3,
+}
+ACADEMIC_PROGRAM_WORDS = {
+    "admission",
+    "admissions",
+    "course",
+    "courses",
+    "curriculum",
+    "degree",
+    "program",
+    "programme",
+    "school",
+    "studies",
+    "study",
+    "studium",
+}
+ACADEMIC_POSTING_WORDS = {
+    "application",
+    "apply",
+    "assistant",
+    "associate",
+    "ausschreibung",
+    "bewerbung",
+    "candidate",
+    "fellow",
+    "job",
+    "jobs",
+    "mitarbeiter",
+    "mitarbeiterin",
+    "opening",
+    "position",
+    "postdoc",
+    "professur",
+    "researcher",
+    "stelle",
+    "vacancy",
 }
 JOB_HINT_PHRASES = (
     "job search",
@@ -350,11 +422,62 @@ def _word_token_set(value: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", sanitize_scrapeops_text(value).casefold()))
 
 
-def _has_job_link_hint(value: str) -> bool:
+def _has_job_link_hint(value: str, *, academic_mode: bool = False) -> bool:
     haystack = sanitize_scrapeops_text(value).casefold()
     if any(phrase in haystack for phrase in JOB_HINT_PHRASES):
         return True
-    return bool(_word_token_set(haystack).intersection(JOB_HINT_WORDS))
+    hint_words = JOB_HINT_WORDS | (ACADEMIC_JOB_HINT_WORDS if academic_mode else set())
+    return bool(_word_token_set(haystack).intersection(hint_words))
+
+
+def _looks_like_generic_academic_program_content(url: str, label: str = "") -> bool:
+    path_segments = [segment for segment in re.split(r"/+", (urlparse(url).path or "").casefold()) if segment]
+    leaf_segment = path_segments[-1] if path_segments else ""
+    tokens = _word_token_set(f"{label} {leaf_segment}")
+    academic_markers = {"doctoral", "phd", "promotion"}
+    generic_navigation = (
+        leaf_segment in {"about", "department", "departments", "overview", "welcome"}
+        or bool(tokens.intersection({"about", "overview", "welcome"}))
+    )
+    has_posting_signal = bool(tokens.intersection(ACADEMIC_POSTING_WORDS))
+    return bool(
+        not has_posting_signal
+        and (
+            generic_navigation
+            or (
+                tokens.intersection(academic_markers)
+                and tokens.intersection(ACADEMIC_PROGRAM_WORDS)
+            )
+        )
+    )
+
+
+def _academic_link_priority_score(text: str, href: str) -> int:
+    if _looks_like_generic_academic_program_content(href, text):
+        return 0
+    parsed = urlparse(href)
+    tokens = _word_token_set(f"{text} {parsed.path} {parsed.query}")
+    return max((weight for word, weight in ACADEMIC_PRIORITY_WEIGHTS.items() if word in tokens), default=0)
+
+
+def _is_public_https_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "https" or parsed.username or parsed.password:
+        return False
+    host = str(parsed.hostname or "").strip().lower().rstrip(".")
+    if not host or host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_unspecified
+    )
 
 
 def _country_tokens(country_codes: list[str]) -> dict[str, set[str]]:
@@ -671,28 +794,35 @@ def estimate_company_site_runner_credit_range(
     return estimate
 
 
-def _looks_like_direct_job_link(url: str, label: str = "") -> bool:
+def _looks_like_academic_posting_path(url: str, label: str = "") -> bool:
+    if _looks_like_generic_academic_program_content(url, label):
+        return False
+    parsed = urlparse(url)
+    path_segments = [segment for segment in re.split(r"/+", (parsed.path or "").casefold()) if segment]
+    if not path_segments:
+        return False
+    tokens = _word_token_set(f"{label} {parsed.path}")
+    leaf_tokens = _word_token_set(path_segments[-1])
+    academic_markers = {"doctoral", "phd", "promotion"}
+    has_posting_signal = bool(tokens.intersection(ACADEMIC_POSTING_WORDS))
+    has_identifier = any(token.isdigit() and len(token) >= 2 for token in leaf_tokens)
+    if len(path_segments) >= 2 and path_segments[-2] in academic_markers:
+        return has_posting_signal or has_identifier
+    return bool(tokens.intersection(academic_markers) and has_posting_signal)
+
+
+def _looks_like_direct_job_link(url: str, label: str = "", *, academic_mode: bool = False) -> bool:
     haystack = f"{label} {url}".lower()
+    parsed = urlparse(url)
+    path = (parsed.path or "").lower()
+    if path.endswith(".pdf"):
+        return False
+    if academic_mode and _looks_like_generic_academic_program_content(url, label):
+        return False
     if _has_any_hint(haystack, DIRECT_JOB_LINK_HINTS):
         return True
-    path = (urlparse(url).path or "").lower()
-    if path.endswith(".pdf") and any(
-        hint in haystack
-        for hint in (
-            "ausschreibung",
-            "doctoral",
-            "job",
-            "phd",
-            "professur",
-            "promotion",
-            "stelle",
-            "vacancy",
-            "wissenschaft",
-        )
-    ):
-        return True
     path_segments = [segment for segment in re.split(r"/+", path) if segment]
-    if path_segments and path_segments[-1] in {
+    listing_leaf_segments = {
         "ausschreibungen",
         "career",
         "careers",
@@ -701,12 +831,28 @@ def _looks_like_direct_job_link(url: str, label: str = "") -> bool:
         "stellenangebote",
         "stellenanzeigen",
         "vacancies",
-    }:
+    }
+    query_keys = {
+        re.sub(r"[^a-z0-9]", "", key.casefold())
+        for key, value in parse_qsl(parsed.query, keep_blank_values=False)
+        if str(value or "").strip()
+    }
+    if academic_mode and path_segments and path_segments[-1] in listing_leaf_segments and query_keys.intersection(
+        {"id", "job", "jobid", "position", "reference", "ref", "reqid", "vacancy"}
+    ):
+        return True
+    if path_segments and path_segments[-1] in listing_leaf_segments:
         return False
     if len(path_segments) >= 2:
         parent_segment = path_segments[-2]
         leaf_segment = path_segments[-1]
-        if parent_segment in {
+        direct_parent_segments = {
+            "application",
+            "applications",
+            "apply",
+            "ausschreibung",
+            "ausschreibungen",
+            "bewerbung",
             "job",
             "jobs",
             "position",
@@ -721,41 +867,41 @@ def _looks_like_direct_job_link(url: str, label: str = "") -> bool:
             "stellen",
             "posting",
             "postings",
-            "application",
-            "applications",
-            "apply",
-            "ausschreibung",
-            "ausschreibungen",
-            "bewerbung",
             "professur",
             "stellenangebote",
             "stellenanzeigen",
             "vacancy",
             "vacancies",
-        } and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,}", leaf_segment):
+        }
+        if parent_segment in direct_parent_segments and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,}", leaf_segment):
             return True
+    if academic_mode and _looks_like_academic_posting_path(url, label):
+        return True
     return bool(
         re.search(
-            r"(?:^|[-_/])(ausschreibung|doctoral|job|phd|position|professur|promotion|req|offer|stelle|posting)[-_]?[a-z0-9]{2,}",
+            r"(?:^|[-_/])(ausschreibung|job|position|professur|req|offer|stelle|posting)[-_]?[a-z0-9]{2,}",
             path,
         )
     )
 
 
-def _looks_like_non_job_career_content(url: str, label: str = "") -> bool:
-    if _looks_like_direct_job_link(url, label):
+def _looks_like_non_job_career_content(url: str, label: str = "", *, academic_mode: bool = False) -> bool:
+    if _looks_like_direct_job_link(url, label, academic_mode=academic_mode):
         return False
+    if academic_mode and _looks_like_generic_academic_program_content(url, label):
+        return True
     haystack = f"{label} {url}".lower()
     return any(token in haystack for token in NON_JOB_CAREER_PAGE_HINTS)
 
 
-def _looks_like_listing_link(url: str, label: str = "") -> bool:
-    if _looks_like_direct_job_link(url, label):
+def _looks_like_listing_link(url: str, label: str = "", *, academic_mode: bool = False) -> bool:
+    if _looks_like_direct_job_link(url, label, academic_mode=academic_mode):
         return False
-    if _looks_like_non_job_career_content(url, label):
+    if _looks_like_non_job_career_content(url, label, academic_mode=academic_mode):
         return False
     haystack = f"{label} {url}".lower()
-    if _has_any_hint(haystack, LISTING_LINK_HINTS):
+    listing_hints = LISTING_LINK_HINTS + (ACADEMIC_LISTING_LINK_HINTS if academic_mode else ())
+    if _has_any_hint(haystack, listing_hints):
         return True
     if not detect_ats_type(url):
         return False
@@ -763,20 +909,26 @@ def _looks_like_listing_link(url: str, label: str = "") -> bool:
     return normalized_path.count("/") <= 2
 
 
-def _job_like_link_score(text: str, href: str) -> int:
+def _job_like_link_score(text: str, href: str, *, academic_mode: bool = False) -> int:
     haystack = f"{text} {href}".lower()
     score = 0
-    if _looks_like_non_job_career_content(href, text):
+    if _looks_like_non_job_career_content(href, text, academic_mode=academic_mode):
         return 0
-    if _has_job_link_hint(haystack):
+    if _has_job_link_hint(haystack, academic_mode=academic_mode):
         score += 1
     if detect_ats_type(href):
         score += 2
-    if _looks_like_listing_link(href, text):
+    if _looks_like_listing_link(href, text, academic_mode=academic_mode):
         score += 1
-    if _looks_like_direct_job_link(href, text):
+    if _looks_like_direct_job_link(href, text, academic_mode=academic_mode):
         score += 4
+    if academic_mode:
+        score += _academic_link_priority_score(text, href)
     return score
+
+
+def _is_safe_academic_external_listing_portal(url: str, label: str = "") -> bool:
+    return _is_public_https_url(url) and _looks_like_listing_link(url, label, academic_mode=True)
 
 
 def parse_company_site_entries(raw_value: Any, *, limit: int | None = None) -> list[dict[str, str]]:
@@ -892,6 +1044,7 @@ def extract_company_job_links_from_html(
     homepage_url: str = "",
     html: str,
     max_links: int = 20,
+    academic_mode: bool = False,
 ) -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
     candidates: list[tuple[int, dict[str, Any]]] = []
@@ -912,15 +1065,23 @@ def extract_company_job_links_from_html(
         normalized_href = canonicalize_url(href) or href
         if normalized_href == normalized_page_url:
             continue
-        if not detect_ats_type(normalized_href) and not _same_host_family(normalized_href, base_homepage_url):
-            continue
         if normalized_href in seen:
             continue
 
         text = compact_whitespace(anchor.get_text(" ", strip=True))
-        if _looks_like_non_job_career_content(normalized_href, text):
+        if (urlparse(normalized_href).path or "").casefold().endswith(".pdf"):
             continue
-        score = _job_like_link_score(text, normalized_href)
+        same_host_or_known_ats = detect_ats_type(normalized_href) or _same_host_family(
+            normalized_href,
+            base_homepage_url,
+        )
+        if not same_host_or_known_ats and not (
+            academic_mode and _is_safe_academic_external_listing_portal(normalized_href, text)
+        ):
+            continue
+        if _looks_like_non_job_career_content(normalized_href, text, academic_mode=academic_mode):
+            continue
+        score = _job_like_link_score(text, normalized_href, academic_mode=academic_mode)
         if score <= 0:
             continue
 
@@ -931,7 +1092,11 @@ def extract_company_job_links_from_html(
                 {
                     "url": normalized_href,
                     "label": text or normalized_href,
-                    "is_listing_page": _looks_like_listing_link(normalized_href, text),
+                    "is_listing_page": _looks_like_listing_link(
+                        normalized_href,
+                        text,
+                        academic_mode=academic_mode,
+                    ),
                 },
             )
         )
@@ -1112,6 +1277,7 @@ def _collect_candidate_links_for_page(
     request_mode: str,
     country_code: str,
     company_name: str,
+    academic_mode: bool = False,
     usage_callback=None,
     proxy_health_check=None,
 ) -> list[dict[str, Any]]:
@@ -1131,6 +1297,7 @@ def _collect_candidate_links_for_page(
         homepage_url=homepage_url,
         html=fetch_result.text,
         max_links=max_links,
+        academic_mode=academic_mode,
     )
     return links
 
@@ -1156,23 +1323,30 @@ def _expand_listing_page_candidates(
     request_mode: str,
     country_code: str,
     company_name: str,
+    academic_mode: bool = False,
     usage_callback=None,
     proxy_health_check=None,
 ) -> list[dict[str, Any]]:
+    listing_url = str(candidate.get("url") or "")
     nested_links = _collect_candidate_links_for_page(
-        str(candidate.get("url") or ""),
-        homepage_url=homepage_url,
+        listing_url,
+        homepage_url=(listing_url or homepage_url) if academic_mode else homepage_url,
         request_timeout_seconds=request_timeout_seconds,
         max_links=max_links,
         request_mode=request_mode,
         country_code=country_code,
         company_name=company_name,
+        academic_mode=academic_mode,
         usage_callback=usage_callback,
         proxy_health_check=proxy_health_check,
     )
     direct_links = [
         item for item in nested_links
-        if _looks_like_direct_job_link(str(item.get("url") or ""), str(item.get("label") or ""))
+        if _looks_like_direct_job_link(
+            str(item.get("url") or ""),
+            str(item.get("label") or ""),
+            academic_mode=academic_mode,
+        )
     ]
     return direct_links
 
@@ -1188,6 +1362,7 @@ def _collect_job_candidates_for_site(
     target_country_codes: list[str],
     target_cities: list[str],
     max_job_links_per_site: int,
+    academic_mode: bool = False,
     usage_callback=None,
     should_spend_request_mode=None,
     proxy_health_check=None,
@@ -1210,6 +1385,7 @@ def _collect_job_candidates_for_site(
                 request_mode=request_mode,
                 country_code=country_code,
                 company_name=company_name,
+                academic_mode=academic_mode,
                 usage_callback=usage_callback,
                 proxy_health_check=proxy_health_check,
             )
@@ -1218,6 +1394,17 @@ def _collect_job_candidates_for_site(
                 raise
             last_error = exc
             continue
+        if academic_mode:
+            initial_candidates = [
+                candidate
+                for candidate in initial_candidates
+                if bool(candidate.get("is_listing_page"))
+                or _looks_like_direct_job_link(
+                    str(candidate.get("url") or ""),
+                    str(candidate.get("label") or ""),
+                    academic_mode=True,
+                )
+            ]
         if initial_candidates:
             break
     if not initial_request_attempted and initial_budget_blocked:
@@ -1236,7 +1423,11 @@ def _collect_job_candidates_for_site(
     direct_candidates = [
         candidate for candidate in initial_candidates
         if not bool(candidate.get("is_listing_page"))
-        and _looks_like_direct_job_link(str(candidate.get("url") or ""), str(candidate.get("label") or ""))
+        and _looks_like_direct_job_link(
+            str(candidate.get("url") or ""),
+            str(candidate.get("label") or ""),
+            academic_mode=academic_mode,
+        )
     ]
     listing_candidates = [candidate for candidate in initial_candidates if bool(candidate.get("is_listing_page"))]
     collected_candidates = _dedupe_candidate_links(direct_candidates)
@@ -1262,6 +1453,7 @@ def _collect_job_candidates_for_site(
                     request_mode=request_mode,
                     country_code=country_code,
                     company_name=company_name,
+                    academic_mode=academic_mode,
                     usage_callback=usage_callback,
                     proxy_health_check=proxy_health_check,
                 )
@@ -1400,6 +1592,7 @@ def _job_is_within_public_posting_window(job: dict[str, Any], posted_within_days
 def scrape_company_career_sites(
     *,
     company_sites: Any,
+    source_type: str = "company",
     keywords: Any = None,
     request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     max_jobs_per_site: int = 0,
@@ -1437,6 +1630,7 @@ def scrape_company_career_sites(
     normalized_country_codes = _normalize_country_codes(target_country_codes)
     normalized_target_cities = _normalize_city_names(target_cities)
     normalized_locality_mode = _normalize_locality_mode(locality_mode)
+    academic_mode = str(source_type or "company").strip().casefold() == "academic"
     normalized_domain_policies = _normalize_domain_policies(domain_policies)
     base_site_request_modes = _normalize_request_modes(site_request_modes, DEFAULT_SITE_REQUEST_MODES)
     base_job_detail_request_modes = _normalize_request_modes(job_detail_request_modes, DEFAULT_JOB_DETAIL_REQUEST_MODES)
@@ -1738,6 +1932,7 @@ def scrape_company_career_sites(
                 target_country_codes=site_target_country_codes,
                 target_cities=normalized_target_cities,
                 max_job_links_per_site=max_job_links_per_site,
+                academic_mode=academic_mode,
                 usage_callback=on_site_usage_event,
                 should_spend_request_mode=should_spend_request_mode,
                 proxy_health_check=ensure_proxy_health,

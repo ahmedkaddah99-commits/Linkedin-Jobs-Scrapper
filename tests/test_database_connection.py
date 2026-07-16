@@ -24,6 +24,10 @@ class PanicException(BaseException):
 PanicException.__module__ = "pyo3_runtime"
 
 
+class UnrelatedBaseException(BaseException):
+    pass
+
+
 class DatabaseConnectionTests(unittest.TestCase):
     def _db_path(self, name: str) -> Path:
         path = Path.cwd() / ".backend_test_tmp" / name / "backend.sqlite3"
@@ -104,6 +108,41 @@ class DatabaseConnectionTests(unittest.TestCase):
         ):
             with database_session(Path("unused.sqlite3")):
                 raise RuntimeError("primary failure")
+
+    def test_database_session_cleanup_panic_does_not_mask_fatal_primary_error(self):
+        for fatal_error in (KeyboardInterrupt("stop"), SystemExit(2)):
+            with self.subTest(error=type(fatal_error).__name__):
+                raw_connection = Mock()
+                raw_connection.rollback.side_effect = PanicException("rollback panic")
+                raw_connection.close.side_effect = PanicException("close panic")
+                connection = DatabaseConnection(raw_connection, backend="sqlite")
+
+                with (
+                    patch("backend.database.connection.connect_database", return_value=connection),
+                    self.assertRaises(type(fatal_error)) as raised,
+                ):
+                    with database_session(Path("unused.sqlite3")):
+                        raise fatal_error
+
+                self.assertIs(raised.exception, fatal_error)
+                raw_connection.rollback.assert_called_once()
+                raw_connection.close.assert_called_once()
+
+    def test_connection_context_cleanup_panic_does_not_mask_fatal_primary_error(self):
+        for fatal_error in (KeyboardInterrupt("stop"), SystemExit(2)):
+            with self.subTest(error=type(fatal_error).__name__):
+                raw_connection = Mock()
+                raw_connection.rollback.side_effect = PanicException("rollback panic")
+                raw_connection.close.side_effect = PanicException("close panic")
+                connection = DatabaseConnection(raw_connection, backend="sqlite")
+
+                with self.assertRaises(type(fatal_error)) as raised:
+                    with connection:
+                        raise fatal_error
+
+                self.assertIs(raised.exception, fatal_error)
+                raw_connection.rollback.assert_called_once()
+                raw_connection.close.assert_called_once()
 
     def test_remote_turso_connection_uses_libsql_environment_contract(self):
         db_path = self._db_path("database_connection_remote")
@@ -267,6 +306,45 @@ class DatabaseConnectionTests(unittest.TestCase):
         fresh_connection.execute.assert_called_once_with("SELECT 1", ())
         sleep.assert_called_once()
 
+    def test_libsql_rollback_retries_on_refreshed_connection(self):
+        stale_connection = Mock()
+        stale_connection.rollback.side_effect = PanicException("rollback panic")
+        fresh_connection = Mock()
+        reconnect = Mock(return_value=fresh_connection)
+        connection = DatabaseConnection(stale_connection, backend="libsql", reconnect=reconnect)
+
+        with (
+            patch("backend.database.connection.time.sleep") as sleep,
+            patch("backend.database.connection.random.uniform", return_value=0.0),
+        ):
+            connection.rollback()
+
+        stale_connection.rollback.assert_called_once()
+        stale_connection.close.assert_called_once()
+        reconnect.assert_called_once()
+        fresh_connection.rollback.assert_called_once()
+        sleep.assert_called_once()
+
+    def test_driver_panic_classification_requires_matching_class_and_module(self):
+        libsql_panic_type = type(
+            "PanicException",
+            (BaseException,),
+            {"__module__": "libsql._internal"},
+        )
+        lookalike_panic_type = type(
+            "PanicException",
+            (BaseException,),
+            {"__module__": "runr.pyo3_adapter"},
+        )
+
+        self.assertEqual(transient_database_error_category(PanicException("panic")), "driver_panic")
+        self.assertEqual(
+            transient_database_error_category(libsql_panic_type("panic")),
+            "driver_panic",
+        )
+        self.assertIsNone(transient_database_error_category(lookalike_panic_type("network timeout")))
+        self.assertIsNone(transient_database_error_category(UnrelatedBaseException("HTTP 503 timeout")))
+
     def test_libsql_transaction_replays_statements_after_commit_driver_panic(self):
         stale_cursor = Mock(rowcount=1, lastrowid=None, description=None)
         stale_connection = Mock()
@@ -304,7 +382,11 @@ class DatabaseConnectionTests(unittest.TestCase):
         sleep.assert_called_once()
 
     def test_libsql_transaction_does_not_swallow_unrelated_base_exception(self):
-        for fatal_error in (KeyboardInterrupt(), SystemExit(2)):
+        for fatal_error in (
+            KeyboardInterrupt("network timeout"),
+            SystemExit("HTTP 503 service unavailable"),
+            UnrelatedBaseException("HTTP 502 upstream forward timeout"),
+        ):
             with self.subTest(error=type(fatal_error).__name__):
                 raw_connection = Mock()
                 reconnect = Mock()
@@ -323,6 +405,7 @@ class DatabaseConnectionTests(unittest.TestCase):
                 raw_connection.commit.assert_not_called()
                 reconnect.assert_not_called()
                 sleep.assert_not_called()
+                self.assertIsNone(transient_database_error_category(fatal_error))
 
     def test_libsql_operation_does_not_retry_non_retryable_errors(self):
         for error in (

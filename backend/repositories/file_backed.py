@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Iterable
 
 from backend.domain.models import (
+    RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
+    WORKER_STATUS_RUNNING,
+    WORKER_STATUS_STALE,
+    WORKER_STATUS_STOPPED,
     ApiTokenRecord,
     ArtifactRecord,
     JobRecord,
@@ -24,6 +29,7 @@ from backend.repositories.contracts import BackendRepositories
 from backend.security.auth import API_TOKEN_PREFIX_LENGTH
 
 _APPLICATION_STATUS_HISTORY_SOURCES = {"manual", "gmail_sync", "auto_default"}
+_FILE_BACKEND_LOCK = threading.RLock()
 
 
 def _read_json(path: Path, default: Any):
@@ -111,12 +117,40 @@ class FileRunRepository:
         self.base_dir = Path(base_dir)
         self.runs_dir = self.base_dir / "runs"
         self.runs_dir.mkdir(parents=True, exist_ok=True)
+        self._recovery_lock = _FILE_BACKEND_LOCK
 
     def _run_path(self, run_id: str) -> Path:
         return self.runs_dir / f"{run_id}.json"
 
     def save(self, run: RunRecord) -> None:
         _write_json(self._run_path(run.id), run.to_dict())
+
+    def save_recovery_transition_if_stale(
+        self,
+        run: RunRecord,
+        *,
+        expected_status: str,
+        expected_updated_at: str,
+        active_lease_after: str,
+    ) -> bool:
+        with self._recovery_lock:
+            current_payload = _read_json(self._run_path(run.id), {})
+            if not current_payload:
+                return False
+            current = RunRecord.from_dict(current_payload)
+            if current.status != expected_status or current.updated_at != expected_updated_at:
+                return False
+            worker_payload = _read_json(self.base_dir / "workers.json", [])
+            workers = [WorkerRecord.from_dict(item) for item in worker_payload if isinstance(item, dict)]
+            if any(
+                worker.current_run_id == run.id
+                and worker.status not in {WORKER_STATUS_STALE, WORKER_STATUS_STOPPED}
+                and (not worker.lease_expires_at or worker.lease_expires_at > active_lease_after)
+                for worker in workers
+            ):
+                return False
+            self.save(run)
+            return True
 
     def get(self, run_id: str) -> RunRecord:
         payload = _read_json(self._run_path(run_id), {})
@@ -533,27 +567,30 @@ class FileWorkerStore:
     def __init__(self, base_dir: Path):
         self.base_dir = Path(base_dir)
         self.workers_path = self.base_dir / "workers.json"
+        self._worker_lock = _FILE_BACKEND_LOCK
         if not self.workers_path.exists():
             _write_json(self.workers_path, [])
 
     def list_workers(self, *, limit: int = 50, offset: int = 0, status: str = "") -> list[WorkerRecord]:
-        payload = _read_json(self.workers_path, [])
-        workers = [WorkerRecord.from_dict(item) for item in payload if isinstance(item, dict)]
-        workers.sort(key=lambda item: item.last_heartbeat_at, reverse=True)
-        if status:
-            workers = [worker for worker in workers if worker.status == status]
-        normalized_offset = max(0, int(offset))
-        normalized_limit = max(1, int(limit))
-        return workers[normalized_offset : normalized_offset + normalized_limit]
+        with self._worker_lock:
+            payload = _read_json(self.workers_path, [])
+            workers = [WorkerRecord.from_dict(item) for item in payload if isinstance(item, dict)]
+            workers.sort(key=lambda item: item.last_heartbeat_at, reverse=True)
+            if status:
+                workers = [worker for worker in workers if worker.status == status]
+            normalized_offset = max(0, int(offset))
+            normalized_limit = max(1, int(limit))
+            return workers[normalized_offset : normalized_offset + normalized_limit]
 
     def list_expired_workers(self, *, expires_before: str) -> list[WorkerRecord]:
-        payload = _read_json(self.workers_path, [])
-        workers = [WorkerRecord.from_dict(item) for item in payload if isinstance(item, dict)]
-        return [
-            worker
-            for worker in workers
-            if worker.lease_expires_at and worker.lease_expires_at <= expires_before and worker.current_run_id
-        ]
+        with self._worker_lock:
+            payload = _read_json(self.workers_path, [])
+            workers = [WorkerRecord.from_dict(item) for item in payload if isinstance(item, dict)]
+            return [
+                worker
+                for worker in workers
+                if worker.lease_expires_at and worker.lease_expires_at <= expires_before and worker.current_run_id
+            ]
 
     def get_worker(self, worker_id: str) -> WorkerRecord:
         for worker in self.list_workers(limit=100000):
@@ -562,16 +599,79 @@ class FileWorkerStore:
         raise KeyError(f"Worker '{worker_id}' not found.")
 
     def upsert_worker(self, worker: WorkerRecord) -> None:
-        workers = {item.worker_id: item for item in self.list_workers(limit=100000)}
-        workers[worker.worker_id] = worker
-        _write_json(self.workers_path, [item.to_dict() for item in workers.values()])
+        with self._worker_lock:
+            workers = {item.worker_id: item for item in self.list_workers(limit=100000)}
+            workers[worker.worker_id] = worker
+            _write_json(self.workers_path, [item.to_dict() for item in workers.values()])
+
+    def renew_worker_lease_if_owned(
+        self,
+        observed: WorkerRecord,
+        renewed: WorkerRecord,
+        *,
+        run_attempt_count: int,
+    ) -> bool:
+        with self._worker_lock:
+            workers = {item.worker_id: item for item in self.list_workers(limit=100000)}
+            current = workers.get(observed.worker_id)
+            if current is None:
+                return False
+            if (
+                current.status != WORKER_STATUS_RUNNING
+                or current.current_run_id != observed.current_run_id
+                or current.last_heartbeat_at != observed.last_heartbeat_at
+                or current.lease_expires_at != observed.lease_expires_at
+            ):
+                return False
+            run_payload = _read_json(self.base_dir / "runs" / f"{observed.current_run_id}.json", {})
+            if not run_payload:
+                return False
+            run = RunRecord.from_dict(run_payload)
+            if run.status not in {RUN_STATUS_RUNNING, RUN_STATUS_CANCEL_REQUESTED} or run.attempt_count != max(
+                1,
+                int(run_attempt_count),
+            ):
+                return False
+            workers[renewed.worker_id] = renewed
+            _write_json(self.workers_path, [item.to_dict() for item in workers.values()])
+            return True
+
+    def mark_stale_if_expired(
+        self,
+        worker: WorkerRecord,
+        *,
+        expires_before: str,
+        stale_at: str,
+    ) -> bool:
+        with self._worker_lock:
+            workers = {item.worker_id: item for item in self.list_workers(limit=100000)}
+            current = workers.get(worker.worker_id)
+            if current is None:
+                return False
+            if (
+                current.status != worker.status
+                or current.current_run_id != worker.current_run_id
+                or current.last_heartbeat_at != worker.last_heartbeat_at
+                or current.lease_expires_at != worker.lease_expires_at
+                or not current.lease_expires_at
+                or current.lease_expires_at > expires_before
+            ):
+                return False
+            current.status = WORKER_STATUS_STALE
+            current.current_run_id = ""
+            current.last_heartbeat_at = stale_at
+            current.lease_expires_at = stale_at
+            workers[current.worker_id] = current
+            _write_json(self.workers_path, [item.to_dict() for item in workers.values()])
+            return True
 
     def delete_worker(self, worker_id: str) -> None:
-        workers = {item.worker_id: item for item in self.list_workers(limit=100000)}
-        if worker_id not in workers:
-            raise KeyError(f"Worker '{worker_id}' not found.")
-        del workers[worker_id]
-        _write_json(self.workers_path, [item.to_dict() for item in workers.values()])
+        with self._worker_lock:
+            workers = {item.worker_id: item for item in self.list_workers(limit=100000)}
+            if worker_id not in workers:
+                raise KeyError(f"Worker '{worker_id}' not found.")
+            del workers[worker_id]
+            _write_json(self.workers_path, [item.to_dict() for item in workers.values()])
 
 
 class FileAnalyticsStore:

@@ -75,7 +75,7 @@ _TRANSIENT_ERROR_MARKERS = (
 )
 
 _DATABASE_DRIVER_PANIC_CLASS_NAMES = {"PanicException"}
-_DATABASE_DRIVER_PANIC_MODULE_MARKERS = ("pyo3", "libsql")
+_DATABASE_DRIVER_PANIC_MODULE_PREFIXES = ("pyo3_runtime", "libsql")
 
 
 class DatabaseConfigurationError(RuntimeError):
@@ -95,8 +95,12 @@ def transient_database_error_category(exc: BaseException) -> str | None:
     """Return a safe category for retryable Turso/libSQL transport failures."""
 
     chain = tuple(_exception_chain(exc))
+    if any(isinstance(error, (KeyboardInterrupt, SystemExit)) for error in chain):
+        return None
     if any(_is_database_driver_panic(error) for error in chain):
         return "driver_panic"
+    if any(not isinstance(error, Exception) for error in chain):
+        return None
     if any(
         isinstance(
             error,
@@ -133,7 +137,10 @@ def _is_database_driver_panic(exc: BaseException) -> bool:
     module_name = exc_type.__module__.lower()
     if type_name not in _DATABASE_DRIVER_PANIC_CLASS_NAMES:
         return False
-    return any(marker in module_name for marker in _DATABASE_DRIVER_PANIC_MODULE_MARKERS)
+    return any(
+        module_name == prefix or module_name.startswith(f"{prefix}.")
+        for prefix in _DATABASE_DRIVER_PANIC_MODULE_PREFIXES
+    )
 
 
 def is_transient_database_error(exc: BaseException) -> bool:
@@ -149,6 +156,8 @@ def _retry_libsql_operation(
     for attempt in range(1, _LIBSQL_RETRY_ATTEMPTS + 1):
         try:
             return callback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except BaseException as exc:
             category = transient_database_error_category(exc)
             if category is None or attempt >= _LIBSQL_RETRY_ATTEMPTS:
@@ -181,6 +190,29 @@ def _log_cleanup_failure(operation: str, exc: BaseException) -> None:
             "error_category": transient_database_error_category(exc) or "non_retryable",
         },
     )
+
+
+def _handle_cleanup_failure(
+    operation: str,
+    cleanup_error: BaseException,
+    *,
+    primary_error: BaseException | None,
+) -> None:
+    """Preserve a primary failure without swallowing a new fatal cleanup signal."""
+
+    if primary_error is None:
+        raise cleanup_error
+    cleanup_category = transient_database_error_category(cleanup_error)
+    primary_is_fatal = not isinstance(primary_error, Exception)
+    cleanup_is_fatal = not isinstance(cleanup_error, Exception)
+    if cleanup_is_fatal and cleanup_category is None and not primary_is_fatal:
+        raise cleanup_error
+    if (
+        isinstance(cleanup_error, (KeyboardInterrupt, SystemExit))
+        and not isinstance(primary_error, (KeyboardInterrupt, SystemExit))
+    ):
+        raise cleanup_error
+    _log_cleanup_failure(operation, cleanup_error)
 
 
 class DatabaseRow(Mapping[str, Any]):
@@ -401,7 +433,7 @@ class DatabaseConnection:
             raise
 
     def rollback(self) -> None:
-        self._run("rollback", self._connection.rollback)
+        self._run("rollback", lambda: self._connection.rollback())
 
     def close(self) -> None:
         self._connection.close()
@@ -411,14 +443,23 @@ class DatabaseConnection:
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
         if exc_type is not None:
+            primary_error = exc if isinstance(exc, BaseException) else None
             try:
                 self.rollback()
-            except Exception as cleanup_error:
-                _log_cleanup_failure("rollback", cleanup_error)
+            except BaseException as cleanup_error:
+                _handle_cleanup_failure(
+                    "rollback",
+                    cleanup_error,
+                    primary_error=primary_error,
+                )
             try:
                 self.close()
-            except Exception as cleanup_error:
-                _log_cleanup_failure("close", cleanup_error)
+            except BaseException as cleanup_error:
+                _handle_cleanup_failure(
+                    "close",
+                    cleanup_error,
+                    primary_error=primary_error,
+                )
             return False
 
         commit_error: BaseException | None = None
@@ -430,10 +471,12 @@ class DatabaseConnection:
         finally:
             try:
                 self.close()
-            except Exception as cleanup_error:
-                if commit_error is None:
-                    raise
-                _log_cleanup_failure("close", cleanup_error)
+            except BaseException as cleanup_error:
+                _handle_cleanup_failure(
+                    "close",
+                    cleanup_error,
+                    primary_error=commit_error,
+                )
         return False
 
 
@@ -527,13 +570,19 @@ def database_session(local_path: str | Path) -> Iterator[DatabaseConnection]:
         original_error = error
         try:
             connection.rollback()
-        except Exception as cleanup_error:
-            _log_cleanup_failure("rollback", cleanup_error)
+        except BaseException as cleanup_error:
+            _handle_cleanup_failure(
+                "rollback",
+                cleanup_error,
+                primary_error=original_error,
+            )
         raise
     finally:
         try:
             connection.close()
-        except Exception as cleanup_error:
-            if original_error is None:
-                raise
-            _log_cleanup_failure("close", cleanup_error)
+        except BaseException as cleanup_error:
+            _handle_cleanup_failure(
+                "close",
+                cleanup_error,
+                primary_error=original_error,
+            )

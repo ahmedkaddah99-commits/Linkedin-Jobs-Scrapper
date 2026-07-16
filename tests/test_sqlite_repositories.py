@@ -4,7 +4,7 @@ import unittest
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from backend.domain.models import (
     ApiTokenRecord,
@@ -30,6 +30,13 @@ from backend.repositories.sqlite_backed import (
     SqliteWorkerStore,
     SqliteWorkspaceRepository,
 )
+
+
+class PanicException(BaseException):
+    pass
+
+
+PanicException.__module__ = "pyo3_runtime"
 
 
 class SqliteRepositoryTests(unittest.TestCase):
@@ -410,32 +417,78 @@ class SqliteRepositoryTests(unittest.TestCase):
         paused_url = "https://jobs.example.edu/openings"
         hot_url = "https://hot.example.org/jobs"
         missing_url = "https://new.example.net/careers"
+        bulk_urls = [f"https://bulk.example.net/jobs/{index:02d}" for index in range(25)]
         store.ensure_sites(
             [{"url": pending_url}, {"url": paused_url}, {"url": hot_url}],
             site_type="academic",
         )
         store.set_site_state(paused_url, "paused", site_type="academic")
         store.set_site_state(hot_url, "hot", site_type="academic")
+        hot_updated_at = store.get_site_policy(hot_url)["updated_at"]
+        selected_at = "2026-07-15T12:34:56+00:00"
 
-        with patch.object(store, "_run_transaction", wraps=store._run_transaction) as transaction:
+        with (
+            patch.object(store, "_run_transaction", wraps=store._run_transaction) as transaction,
+            patch("backend.repositories.sqlite_backed.utc_now_iso", return_value=selected_at) as now,
+        ):
             transitions = store.mark_workspace_selected(
-                [pending_url, paused_url, hot_url, missing_url, pending_url],
+                [pending_url, paused_url, hot_url, missing_url, *reversed(bulk_urls), pending_url],
                 site_type="academic",
             )
 
+        expected_selected_urls = sorted([pending_url, paused_url, missing_url, *bulk_urls])
         self.assertEqual(transaction.call_count, 1)
+        self.assertEqual(now.call_count, len(expected_selected_urls))
+        self.assertEqual(list(transitions), expected_selected_urls)
         self.assertEqual(
-            transitions,
+            {url: transitions[url] for url in (missing_url, paused_url, pending_url)},
             {
                 missing_url: "pending->selected",
                 paused_url: "paused->selected",
                 pending_url: "pending->selected",
             },
         )
+        self.assertTrue(all(transitions[url] == "pending->selected" for url in bulk_urls))
         self.assertEqual(store.get_site_policy(pending_url)["site_state"], "selected")
         self.assertEqual(store.get_site_policy(paused_url)["site_state"], "selected")
         self.assertEqual(store.get_site_policy(missing_url)["site_state"], "selected")
         self.assertEqual(store.get_site_policy(hot_url)["site_state"], "hot")
+        self.assertEqual(store.get_site_policy(pending_url)["updated_at"], selected_at)
+        self.assertEqual(store.get_site_policy(paused_url)["updated_at"], selected_at)
+        self.assertEqual(store.get_site_policy(missing_url)["updated_at"], selected_at)
+        self.assertEqual(store.get_site_policy(hot_url)["updated_at"], hot_updated_at)
+        with closing(sqlite3.connect(db_path)) as connection:
+            bulk_rows = connection.execute(
+                "SELECT site_url, site_state, updated_at FROM site_source_policy "
+                f"WHERE site_url IN ({','.join('?' for _ in bulk_urls)})",
+                bulk_urls,
+            ).fetchall()
+        self.assertEqual(
+            {(row[0], row[1], row[2]) for row in bulk_rows},
+            {(url, "selected", selected_at) for url in bulk_urls},
+        )
+
+    def test_mark_workspace_selected_close_panic_does_not_mask_fatal_transaction_error(self):
+        db_path = self._db_path("sqlite_source_policy_cleanup")
+        store = SqliteSourcePolicyStore(db_path)
+        fatal_error = KeyboardInterrupt("stop")
+        connection = Mock()
+        connection.execute.side_effect = fatal_error
+        connection.transaction.side_effect = lambda callback: callback(connection)
+        connection.close.side_effect = PanicException("close panic")
+
+        with (
+            patch("backend.repositories.sqlite_core.connect_database", return_value=connection),
+            self.assertRaises(KeyboardInterrupt) as raised,
+        ):
+            store.mark_workspace_selected(
+                ["https://jobs.example.edu/openings"],
+                site_type="academic",
+            )
+
+        self.assertIs(raised.exception, fatal_error)
+        connection.transaction.assert_called_once()
+        connection.close.assert_called_once()
 
     def test_site_job_url_history_records_seen_urls(self):
         db_path = self._db_path("sqlite_site_job_url_history")

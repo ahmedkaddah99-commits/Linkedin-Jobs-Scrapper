@@ -666,7 +666,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(overrides["run_mode"], "test")
         self.assertEqual(overrides["test_run_job_limit"], 1)
         self.assertEqual(overrides["company_site_max_sites_per_run"], -1)
-        self.assertEqual(overrides["company_site_max_job_links_per_site"], 8)
+        self.assertEqual(overrides["company_site_max_job_links_per_site"], 1)
         self.assertEqual(overrides["stage4_max_jobs"], 1)
 
     def test_tracker_reads_persisted_test_run_review_without_backfilling(self):
