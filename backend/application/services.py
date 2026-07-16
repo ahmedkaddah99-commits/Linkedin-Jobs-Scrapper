@@ -2704,6 +2704,25 @@ class BackendApplication:
             metadata=metadata,
         )
 
+    def renew_worker_lease(
+        self,
+        *,
+        worker_id: str,
+        current_run_id: str,
+        run_attempt_count: int,
+        host_name: str = "",
+        process_id: int = 0,
+        lease_seconds: int = 60,
+    ) -> WorkerRecord:
+        return self._run_lifecycle_service.renew_worker_lease(
+            worker_id=worker_id,
+            current_run_id=current_run_id,
+            run_attempt_count=run_attempt_count,
+            host_name=host_name,
+            process_id=process_id,
+            lease_seconds=lease_seconds,
+        )
+
     def stop_worker(self, worker_id: str) -> WorkerRecord:
         return self._run_lifecycle_service.stop_worker(worker_id)
 
@@ -2758,12 +2777,16 @@ class BackendApplication:
         host_name: str = "",
         process_id: int = 0,
         lease_seconds: int = 60,
+        recover_stale_workers: bool = True,
+        enqueue_scheduled_runs: bool = True,
     ) -> RunRecord | None:
         return self._run_lifecycle_service.claim_next_queued_run(
             worker_id=worker_id,
             host_name=host_name,
             process_id=process_id,
             lease_seconds=lease_seconds,
+            recover_stale_workers=recover_stale_workers,
+            enqueue_scheduled_runs=enqueue_scheduled_runs,
         )
 
     def execute_claimed_run(self, run_id: str, *, auto_retry_failed: bool = True) -> RunRecord:

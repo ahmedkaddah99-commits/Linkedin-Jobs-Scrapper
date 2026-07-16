@@ -16,8 +16,9 @@ from backend.adapters.stage_adapters import (
     _resolve_company_site_stage_limits,
     _tailored_document_artifacts,
 )
-from backend.storage import LocalObjectStorage
+from backend.connectors.company_career_sites import ACADEMIC_MIN_JOB_LINKS_PER_SITE
 from backend.domain.models import StageDefinition
+from backend.storage import LocalObjectStorage
 
 
 class StageAdapterTests(unittest.TestCase):
@@ -344,6 +345,38 @@ class StageAdapterTests(unittest.TestCase):
             ],
         )
 
+    def test_academic_link_floor_does_not_expand_regular_company_source_budget(self):
+        company_definition = StageDefinition(
+            stage_id="source_company_career_sites",
+            stage_type="jobs.acquire.company_sites",
+            name="Acquire Company Career Site Jobs",
+            config={"site_settings_key": "company_career_sites", "discovered_site_paths": ["dummy.txt"]},
+        )
+        academic_definition = StageDefinition(
+            stage_id="source_academic_career_sites",
+            stage_type="jobs.acquire.company_sites",
+            name="Acquire Academic Career Site Jobs",
+            config={"site_settings_key": "academic_career_sites", "discovered_site_paths": ["dummy.txt"]},
+        )
+        settings = {
+            "company_career_sites": [{"company_name": "Acme", "url": "https://acme.example/jobs"}],
+            "academic_career_sites": [{"company_name": "Example Uni", "url": "https://uni.example/jobs"}],
+            "company_site_max_job_links_per_site": 1,
+        }
+
+        with patch(
+            "backend.adapters.stage_adapters.load_discovered_company_site_entries",
+            return_value=[],
+        ):
+            company_settings = _prepare_company_site_source_settings(settings, company_definition)
+            academic_settings = _prepare_company_site_source_settings(settings, academic_definition)
+
+        self.assertEqual(company_settings["company_site_max_job_links_per_site"], 1)
+        self.assertEqual(
+            academic_settings["company_site_max_job_links_per_site"],
+            ACADEMIC_MIN_JOB_LINKS_PER_SITE,
+        )
+
     def test_company_career_site_stage_passes_proxy_fallback_flag(self):
         context = SimpleNamespace(
             run=SimpleNamespace(id="run_1"),
@@ -379,6 +412,7 @@ class StageAdapterTests(unittest.TestCase):
         self.assertEqual(mock_scrape.call_args.kwargs["max_sites_per_run"], 10)
         self.assertEqual(mock_scrape.call_args.kwargs["run_credit_budget"], 150)
         self.assertEqual(mock_scrape.call_args.kwargs["max_job_links_per_site"], 25)
+        self.assertEqual(mock_scrape.call_args.kwargs["source_type"], "company")
 
     def test_company_career_site_stage_marks_saved_academic_scope_as_selected_before_policy_filter(self):
         class FakeSourcePolicyStore:
@@ -467,6 +501,7 @@ class StageAdapterTests(unittest.TestCase):
             mock_scrape.call_args.kwargs["company_sites"],
             [{"company_name": "German Uni", "url": "https://jobs.uni-heidelberg.de/", "site_state": "selected"}],
         )
+        self.assertEqual(mock_scrape.call_args.kwargs["source_type"], "academic")
 
     def test_company_career_site_stage_persists_capped_sites_from_run_result(self):
         context = SimpleNamespace(

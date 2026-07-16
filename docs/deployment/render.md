@@ -37,6 +37,46 @@ configured for both backend services.
 
 Render is configured with `autoDeployTrigger: commit`, so production deploys automatically on every commit pushed to the linked Render branch.
 
+## Codex PR deployment workflow
+
+The production deployment branch is `deployment/render-turso-r2`. Do not commit
+routine app changes directly to that branch when you want to verify them first.
+Use this workflow instead:
+
+1. Codex creates a feature branch from `deployment/render-turso-r2`.
+2. Codex makes the code changes, runs the relevant checks, commits, and pushes
+   the branch to GitHub.
+3. Codex opens a pull request back into `deployment/render-turso-r2`.
+4. Render creates a preview environment for the pull request.
+5. Open the PR's Render deployment status and click **View deployment** for
+   `runr-frontend`. That generated `onrender.com` URL is the temporary URL to
+   test the work.
+6. After the preview is verified, tell Codex to merge the PR. The merge commit
+   lands on `deployment/render-turso-r2`, and Render deploys production from
+   that branch automatically.
+
+Codex can run the git/GitHub steps itself from this checkout when the GitHub CLI
+is authenticated: create/switch branch, `git commit`, `git push`, open a PR, and
+merge it after approval. No editor sync button is required for those steps.
+
+Preview environments are enabled in `render.yaml` with `previews.generation:
+automatic`. Render posts preview deployment statuses on pull requests against
+the Blueprint's linked branch. Preview environments are updated on every commit
+to the PR branch and are deleted when the PR is merged or closed.
+
+The frontend keeps using `VITE_API_BASE_URL` in production. In previews, Render
+does not copy `sync: false` values, so `render.yaml` also provides
+`VITE_API_EXTERNAL_HOSTNAME` from the preview API service. The frontend derives
+`https://<preview-api-host>/v1` from that value. The API also receives
+`RENDER_FRONTEND_EXTERNAL_HOSTNAME` from the preview frontend service so CORS
+allows the matching preview frontend origin.
+
+Secrets marked `sync: false` are not copied to preview environments. Any preview
+that needs Clerk, Turso, R2, Creem, ScrapeOps, DeepSeek, or Google OAuth must
+receive non-production/test credentials through a Render environment group or
+manual preview configuration in the Render Dashboard. Do not reuse production
+secrets in untrusted preview testing unless that is an explicit reviewed choice.
+
 ## Required values
 
 Frontend:

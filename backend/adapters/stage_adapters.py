@@ -39,6 +39,7 @@ from backend.capabilities.tailored_documents.screening import run_stage2_pipelin
 from backend.capabilities.tailored_documents.workflow import run_manual_pipeline
 from backend.config.plans import DEFAULT_PLAN_ID, get_limit, normalize_plan_id
 from backend.connectors.company_career_sites import (
+    ACADEMIC_MIN_JOB_LINKS_PER_SITE,
     ACADEMIC_CAREER_SITE_FILES,
     REGULAR_COMPANY_SITE_FILES,
     load_discovered_company_site_entries,
@@ -530,6 +531,13 @@ def _prepare_company_site_source_settings(settings: dict[str, Any], definition: 
             "use company_site_max_job_links_per_site instead."
         )
         normalized["company_site_max_job_links_per_site"] = normalized["company_site_emergency_max_job_links_per_site"]
+    if site_settings_key == "academic_career_sites":
+        configured_link_limit = _runtime_limit_int(
+            normalized.get("company_site_max_job_links_per_site"),
+            default=0,
+        )
+        if 0 < configured_link_limit < ACADEMIC_MIN_JOB_LINKS_PER_SITE:
+            normalized["company_site_max_job_links_per_site"] = ACADEMIC_MIN_JOB_LINKS_PER_SITE
     if timeout_setting_key in normalized and "company_site_request_timeout_seconds" not in normalized:
         normalized["company_site_request_timeout_seconds"] = normalized[timeout_setting_key]
     if max_jobs_setting_key in normalized and "company_site_max_jobs_per_site" not in normalized:
@@ -797,6 +805,7 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
 
         jobs, failures = scrape_company_career_sites(
             company_sites=crawlable_company_sites,
+            source_type=site_type,
             keywords=getattr(cli_args, "keywords", []),
             request_timeout_seconds=int(getattr(cli_args, "company_site_request_timeout_seconds", 30)),
             max_jobs_per_site=int(getattr(cli_args, "company_site_max_jobs_per_site", 0)),

@@ -1,3 +1,7 @@
+previews:
+  generation: automatic
+  expireAfterDays: 3
+
 services:
   - type: web
     name: runr-frontend
@@ -9,6 +13,11 @@ services:
     envVars:
       - key: VITE_API_BASE_URL
         sync: false
+      - key: VITE_API_EXTERNAL_HOSTNAME
+        fromService:
+          type: web
+          name: runr-api
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
       - key: VITE_CLERK_PUBLISHABLE_KEY
         sync: false
     routes:
@@ -38,6 +47,11 @@ services:
         value: .backend_data
       - key: BACKEND_ALLOWED_ORIGINS
         value: https://runr-frontend.onrender.com,https://app.userunr.com
+      - key: RENDER_FRONTEND_EXTERNAL_HOSTNAME
+        fromService:
+          type: web
+          name: runr-frontend
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
@@ -89,6 +103,8 @@ services:
     dockerfilePath: ./Dockerfile
     dockerCommand: ./deploy/start.sh worker
     autoDeployTrigger: commit
+    previews:
+      plan: starter
     maxShutdownDelaySeconds: 300
     envVars:
       - key: RUNR_ENV

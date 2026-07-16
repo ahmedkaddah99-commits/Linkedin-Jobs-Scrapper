@@ -74,6 +74,9 @@ _TRANSIENT_ERROR_MARKERS = (
     ("stream not found", "stale_stream"),
 )
 
+_DATABASE_DRIVER_PANIC_CLASS_NAMES = {"PanicException"}
+_DATABASE_DRIVER_PANIC_MODULE_PREFIXES = ("pyo3_runtime", "libsql")
+
 
 class DatabaseConfigurationError(RuntimeError):
     """Raised when the selected database backend is not configured correctly."""
@@ -92,6 +95,12 @@ def transient_database_error_category(exc: BaseException) -> str | None:
     """Return a safe category for retryable Turso/libSQL transport failures."""
 
     chain = tuple(_exception_chain(exc))
+    if any(isinstance(error, (KeyboardInterrupt, SystemExit)) for error in chain):
+        return None
+    if any(_is_database_driver_panic(error) for error in chain):
+        return "driver_panic"
+    if any(not isinstance(error, Exception) for error in chain):
+        return None
     if any(
         isinstance(
             error,
@@ -122,6 +131,18 @@ def transient_database_error_category(exc: BaseException) -> str | None:
     return None
 
 
+def _is_database_driver_panic(exc: BaseException) -> bool:
+    exc_type = type(exc)
+    type_name = exc_type.__name__
+    module_name = exc_type.__module__.lower()
+    if type_name not in _DATABASE_DRIVER_PANIC_CLASS_NAMES:
+        return False
+    return any(
+        module_name == prefix or module_name.startswith(f"{prefix}.")
+        for prefix in _DATABASE_DRIVER_PANIC_MODULE_PREFIXES
+    )
+
+
 def is_transient_database_error(exc: BaseException) -> bool:
     return transient_database_error_category(exc) is not None
 
@@ -135,7 +156,9 @@ def _retry_libsql_operation(
     for attempt in range(1, _LIBSQL_RETRY_ATTEMPTS + 1):
         try:
             return callback()
-        except Exception as exc:
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as exc:
             category = transient_database_error_category(exc)
             if category is None or attempt >= _LIBSQL_RETRY_ATTEMPTS:
                 raise
@@ -167,6 +190,29 @@ def _log_cleanup_failure(operation: str, exc: BaseException) -> None:
             "error_category": transient_database_error_category(exc) or "non_retryable",
         },
     )
+
+
+def _handle_cleanup_failure(
+    operation: str,
+    cleanup_error: BaseException,
+    *,
+    primary_error: BaseException | None,
+) -> None:
+    """Preserve a primary failure without swallowing a new fatal cleanup signal."""
+
+    if primary_error is None:
+        raise cleanup_error
+    cleanup_category = transient_database_error_category(cleanup_error)
+    primary_is_fatal = not isinstance(primary_error, Exception)
+    cleanup_is_fatal = not isinstance(cleanup_error, Exception)
+    if cleanup_is_fatal and cleanup_category is None and not primary_is_fatal:
+        raise cleanup_error
+    if (
+        isinstance(cleanup_error, (KeyboardInterrupt, SystemExit))
+        and not isinstance(primary_error, (KeyboardInterrupt, SystemExit))
+    ):
+        raise cleanup_error
+    _log_cleanup_failure(operation, cleanup_error)
 
 
 class DatabaseRow(Mapping[str, Any]):
@@ -279,24 +325,61 @@ class DatabaseConnection:
         self._connection = connection
         self.backend = backend
         self._reconnect = reconnect
+        self._transaction_depth = 0
 
     def _refresh_connection_for_retry(self, category: str) -> None:
-        if self.backend != "libsql" or category != "stale_stream" or self._reconnect is None:
+        if self.backend != "libsql" or category not in {"stale_stream", "driver_panic"} or self._reconnect is None:
             return
         try:
             self._connection.close()
-        except Exception as exc:
+        except BaseException as exc:
+            if not isinstance(exc, Exception) and transient_database_error_category(exc) is None:
+                raise
             _log_cleanup_failure("stale_stream_close", exc)
         self._connection = self._reconnect()
 
     def _run(self, operation: str, callback: Callable[[], ResultT]) -> ResultT:
-        if self.backend == "libsql":
+        if self.backend == "libsql" and self._transaction_depth == 0:
             return _retry_libsql_operation(
                 operation,
                 callback,
                 before_retry=self._refresh_connection_for_retry,
             )
         return callback()
+
+    def transaction(self, callback: Callable[[DatabaseConnection], ResultT]) -> ResultT:
+        """Run and, for libSQL, replay a complete transaction after a transient driver failure."""
+
+        if self._transaction_depth:
+            return callback(self)
+
+        def attempt() -> ResultT:
+            self._transaction_depth += 1
+            try:
+                result = callback(self)
+                self._connection.commit()
+                return result
+            except BaseException:
+                try:
+                    self._connection.rollback()
+                except BaseException as cleanup_error:
+                    if (
+                        not isinstance(cleanup_error, Exception)
+                        and transient_database_error_category(cleanup_error) is None
+                    ):
+                        raise
+                    _log_cleanup_failure("transaction_rollback", cleanup_error)
+                raise
+            finally:
+                self._transaction_depth -= 1
+
+        if self.backend == "libsql":
+            return _retry_libsql_operation(
+                "transaction",
+                attempt,
+                before_retry=self._refresh_connection_for_retry,
+            )
+        return attempt()
 
     def _changes(self) -> int:
         cursor = self._run("changes", lambda: self._connection.execute("SELECT changes()"))
@@ -341,10 +424,16 @@ class DatabaseConnection:
         return last_cursor
 
     def commit(self) -> None:
-        self._run("commit", self._connection.commit)
+        try:
+            self._connection.commit()
+        except BaseException as exc:
+            category = transient_database_error_category(exc)
+            if category is not None:
+                self._refresh_connection_for_retry(category)
+            raise
 
     def rollback(self) -> None:
-        self._run("rollback", self._connection.rollback)
+        self._run("rollback", lambda: self._connection.rollback())
 
     def close(self) -> None:
         self._connection.close()
@@ -354,14 +443,23 @@ class DatabaseConnection:
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
         if exc_type is not None:
+            primary_error = exc if isinstance(exc, BaseException) else None
             try:
                 self.rollback()
-            except Exception as cleanup_error:
-                _log_cleanup_failure("rollback", cleanup_error)
+            except BaseException as cleanup_error:
+                _handle_cleanup_failure(
+                    "rollback",
+                    cleanup_error,
+                    primary_error=primary_error,
+                )
             try:
                 self.close()
-            except Exception as cleanup_error:
-                _log_cleanup_failure("close", cleanup_error)
+            except BaseException as cleanup_error:
+                _handle_cleanup_failure(
+                    "close",
+                    cleanup_error,
+                    primary_error=primary_error,
+                )
             return False
 
         commit_error: BaseException | None = None
@@ -373,10 +471,12 @@ class DatabaseConnection:
         finally:
             try:
                 self.close()
-            except Exception as cleanup_error:
-                if commit_error is None:
-                    raise
-                _log_cleanup_failure("close", cleanup_error)
+            except BaseException as cleanup_error:
+                _handle_cleanup_failure(
+                    "close",
+                    cleanup_error,
+                    primary_error=commit_error,
+                )
         return False
 
 
@@ -470,13 +570,19 @@ def database_session(local_path: str | Path) -> Iterator[DatabaseConnection]:
         original_error = error
         try:
             connection.rollback()
-        except Exception as cleanup_error:
-            _log_cleanup_failure("rollback", cleanup_error)
+        except BaseException as cleanup_error:
+            _handle_cleanup_failure(
+                "rollback",
+                cleanup_error,
+                primary_error=original_error,
+            )
         raise
     finally:
         try:
             connection.close()
-        except Exception as cleanup_error:
-            if original_error is None:
-                raise
-            _log_cleanup_failure("close", cleanup_error)
+        except BaseException as cleanup_error:
+            _handle_cleanup_failure(
+                "close",
+                cleanup_error,
+                primary_error=original_error,
+            )

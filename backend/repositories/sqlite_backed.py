@@ -10,6 +10,8 @@ from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
+    WORKER_STATUS_RUNNING,
+    WORKER_STATUS_STALE,
     ApiTokenRecord,
     ArtifactRecord,
     JobRecord,
@@ -477,6 +479,78 @@ class SqliteRunRepository(_SqliteStore):
                         for index, result in enumerate(run.stage_results)
                     ],
                 )
+
+    def save_recovery_transition_if_stale(
+        self,
+        run: RunRecord,
+        *,
+        expected_status: str,
+        expected_updated_at: str,
+        active_lease_after: str,
+    ) -> bool:
+        run.user_id = run.normalized_user_id
+        payload, _document = prepare_run_payload(run.to_dict())
+
+        def transition(connection) -> bool:
+            row_count = connection.execute(
+                (
+                    "UPDATE runs SET status = ?, updated_at = ?, queued_at = ?, started_at = ?, "
+                    "finished_at = ?, current_stage_id = ?, last_error = ?, metadata_json = ?, payload_json = ? "
+                    "WHERE id = ? AND status = ? AND updated_at = ? "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM workers "
+                    "WHERE current_run_id = runs.id "
+                    "AND status NOT IN ('stale', 'stopped') "
+                    "AND (COALESCE(lease_expires_at, '') = '' OR lease_expires_at > ?)"
+                    ")"
+                ),
+                (
+                    run.status,
+                    run.updated_at,
+                    run.queued_at,
+                    run.started_at,
+                    run.finished_at,
+                    run.current_stage_id,
+                    run.last_error,
+                    _serialize(payload.get("metadata") or {}),
+                    _serialize(payload),
+                    run.id,
+                    expected_status,
+                    expected_updated_at,
+                    active_lease_after,
+                ),
+            ).rowcount
+            if row_count != 1:
+                return False
+            connection.execute("DELETE FROM run_stage_results WHERE run_id = ?", (run.id,))
+            if run.stage_results:
+                connection.executemany(
+                    (
+                        "INSERT INTO run_stage_results ("
+                        "run_id, sequence_no, stage_id, stage_type, status, started_at, finished_at, error, "
+                        "metrics_json, output_keys_json, artifact_ids_json"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
+                    [
+                        (
+                            run.id,
+                            index,
+                            result.stage_id,
+                            result.stage_type,
+                            result.status,
+                            result.started_at,
+                            result.finished_at,
+                            result.error,
+                            _serialize(result.metrics),
+                            _serialize(result.output_keys),
+                            _serialize(result.artifact_ids),
+                        )
+                        for index, result in enumerate(run.stage_results)
+                    ],
+                )
+            return True
+
+        return self._run_transaction(transition)
 
     def _run_from_row(
         self,
@@ -1714,6 +1788,84 @@ class SqliteWorkerStore(_SqliteStore):
                 ),
             )
 
+    def renew_worker_lease_if_owned(
+        self,
+        observed: WorkerRecord,
+        renewed: WorkerRecord,
+        *,
+        run_attempt_count: int,
+    ) -> bool:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                (
+                    "UPDATE workers SET status = ?, host_name = ?, process_id = ?, current_run_id = ?, "
+                    "last_heartbeat_at = ?, lease_expires_at = ?, metadata_json = ?, payload_json = ? "
+                    "WHERE worker_id = ? AND status = ? AND current_run_id = ? "
+                    "AND last_heartbeat_at = ? AND lease_expires_at = ? "
+                    "AND EXISTS ("
+                    "SELECT 1 FROM runs WHERE id = ? AND status IN (?, ?) AND attempt_count = ?"
+                    ")"
+                ),
+                (
+                    renewed.status,
+                    renewed.host_name,
+                    int(renewed.process_id),
+                    renewed.current_run_id,
+                    renewed.last_heartbeat_at,
+                    renewed.lease_expires_at,
+                    _serialize(renewed.metadata),
+                    _serialize(renewed.to_dict()),
+                    observed.worker_id,
+                    WORKER_STATUS_RUNNING,
+                    observed.current_run_id,
+                    observed.last_heartbeat_at,
+                    observed.lease_expires_at,
+                    observed.current_run_id,
+                    RUN_STATUS_RUNNING,
+                    RUN_STATUS_CANCEL_REQUESTED,
+                    max(1, int(run_attempt_count)),
+                ),
+            ).rowcount
+        return row_count == 1
+
+    def mark_stale_if_expired(
+        self,
+        worker: WorkerRecord,
+        *,
+        expires_before: str,
+        stale_at: str,
+    ) -> bool:
+        stale_worker = WorkerRecord.from_dict(worker.to_dict())
+        stale_worker.status = WORKER_STATUS_STALE
+        stale_worker.current_run_id = ""
+        stale_worker.last_heartbeat_at = stale_at
+        stale_worker.lease_expires_at = stale_at
+        with self._connect() as connection:
+            row_count = connection.execute(
+                (
+                    "UPDATE workers SET status = ?, current_run_id = ?, last_heartbeat_at = ?, "
+                    "lease_expires_at = ?, metadata_json = ?, payload_json = ? "
+                    "WHERE worker_id = ? AND status = ? AND current_run_id = ? "
+                    "AND last_heartbeat_at = ? AND lease_expires_at = ? "
+                    "AND lease_expires_at != '' AND lease_expires_at <= ?"
+                ),
+                (
+                    stale_worker.status,
+                    stale_worker.current_run_id,
+                    stale_worker.last_heartbeat_at,
+                    stale_worker.lease_expires_at,
+                    _serialize(stale_worker.metadata),
+                    _serialize(stale_worker.to_dict()),
+                    worker.worker_id,
+                    worker.status,
+                    worker.current_run_id,
+                    worker.last_heartbeat_at,
+                    worker.lease_expires_at,
+                    expires_before,
+                ),
+            ).rowcount
+        return row_count == 1
+
     def delete_worker(self, worker_id: str) -> None:
         with self._connect() as connection:
             row_count = connection.execute("DELETE FROM workers WHERE worker_id = ?", (worker_id,)).rowcount
@@ -1953,9 +2105,14 @@ class SqliteSourcePolicyStore(_SqliteStore):
             )
 
     def mark_workspace_selected(self, site_urls: Iterable[str], *, site_type: str) -> dict[str, str]:
-        transitions: dict[str, str] = {}
-        for site_url in {str(item or "").strip() for item in site_urls if str(item or "").strip()}:
-            with self._connect() as connection:
+        normalized_urls = sorted({str(item or "").strip() for item in site_urls if str(item or "").strip()})
+        if not normalized_urls:
+            return {}
+        normalized_site_type = str(site_type or "company").strip() or "company"
+
+        def mark_selected(connection) -> dict[str, str]:
+            transitions: dict[str, str] = {}
+            for site_url in normalized_urls:
                 row = connection.execute(
                     "SELECT site_state FROM site_source_policy WHERE site_url = ?",
                     (site_url,),
@@ -1969,10 +2126,12 @@ class SqliteSourcePolicyStore(_SqliteStore):
                         "VALUES (?, ?, 'selected', ?) ON CONFLICT(site_url) DO UPDATE SET "
                         "site_state='selected', updated_at=excluded.updated_at"
                     ),
-                    (site_url, str(site_type or "company").strip(), utc_now_iso()),
+                    (site_url, normalized_site_type, utc_now_iso()),
                 )
-            transitions[site_url] = f"{previous_state}->selected"
-        return transitions
+                transitions[site_url] = f"{previous_state}->selected"
+            return transitions
+
+        return self._run_transaction(mark_selected)
 
     def filter_crawlable_sites(
         self,

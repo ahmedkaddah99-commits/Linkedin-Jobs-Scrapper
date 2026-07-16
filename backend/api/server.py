@@ -32,6 +32,7 @@ from backend.api.routes.route_support import (
     _file_timestamp_iso,
     _is_unauthorized_permission_error,
     _json_bytes,
+    _normalize_hostname_origin,
     _normalize_origin_value,
     _normalize_segments,
     _origin_is_loopback,
@@ -8838,6 +8839,9 @@ def _build_admin_user_health_snapshot(application) -> dict[str, object]:
 def build_handler(application, *, allowed_origins: set[str] | None = None, allow_all_origins: bool = False):
     normalized_allowed_origins = {_normalize_origin_value(item) for item in (allowed_origins or set())}
     normalized_allowed_origins.discard("")
+    render_frontend_origin = _normalize_hostname_origin(os.getenv("RENDER_FRONTEND_EXTERNAL_HOSTNAME", ""))
+    if render_frontend_origin:
+        normalized_allowed_origins.add(render_frontend_origin)
     route_registry = build_route_registry()
 
     class BackendApiHandler(BaseHTTPRequestHandler):

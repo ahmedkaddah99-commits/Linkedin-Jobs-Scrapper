@@ -546,6 +546,19 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:4173")
 
+    def test_api_allows_render_frontend_hostname_origin(self):
+        with patch.dict(
+            os.environ,
+            {"RENDER_FRONTEND_EXTERNAL_HOSTNAME": "runr-frontend-pr-42.onrender.com"},
+            clear=False,
+        ):
+            handler_class = build_handler(self.app)
+
+        handler = object.__new__(handler_class)
+        handler.headers = {"Origin": "https://runr-frontend-pr-42.onrender.com"}
+
+        self.assertEqual(handler._cors_origin(), "https://runr-frontend-pr-42.onrender.com")
+
     def test_api_rejects_disallowed_cors_origin(self):
         status, headers, payload = self._request_with_headers(
             "OPTIONS",
@@ -653,6 +666,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(overrides["run_mode"], "test")
         self.assertEqual(overrides["test_run_job_limit"], 1)
         self.assertEqual(overrides["company_site_max_sites_per_run"], -1)
+        self.assertEqual(overrides["company_site_max_job_links_per_site"], 1)
         self.assertEqual(overrides["stage4_max_jobs"], 1)
 
     def test_tracker_reads_persisted_test_run_review_without_backfilling(self):
