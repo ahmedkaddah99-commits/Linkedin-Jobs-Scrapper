@@ -28,6 +28,17 @@ class _WorkerSeedStage(BaseStage):
         )
 
 
+class _CancellationAwareStage(BaseStage):
+    def can_run(self, context, definition) -> bool:
+        return True
+
+    def execute(self, context, definition) -> StageOutcome:
+        persisted_run = context.repositories.run_repository.get(context.run.id)
+        persisted_run.status = "cancel_requested"
+        context.repositories.run_repository.save(persisted_run)
+        raise RuntimeError("Run cancellation requested.")
+
+
 class PanicException(BaseException):
     pass
 
@@ -473,6 +484,57 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertTrue(cancelled.finished_at)
         self.assertNotIn("progress", cancelled.metadata)
         self.assertEqual(app.get_worker(worker_id).status, "stale")
+
+    def test_orphan_recovery_terminally_cancels_legacy_run_without_queued_at(self):
+        app = self._create_app("worker_service_legacy_cancel_requested_recovery")
+        run = app.start_run("worker_workspace", execute=False, requested_by="legacy-sync-run")
+        legacy_run = app.get_run(run.id)
+        legacy_run.status = "cancel_requested"
+        legacy_run.queued_at = ""
+        legacy_run.started_at = "2000-01-01T00:00:00+00:00"
+        legacy_run.updated_at = "2000-01-01T00:00:00+00:00"
+        legacy_run.current_stage_id = "seed_worker_jobs"
+        legacy_run.metadata["progress"] = {"message": "stopping"}
+        app.repositories.run_repository.save(legacy_run)
+
+        recovered_workers = app.recover_stale_workers()
+
+        self.assertEqual(recovered_workers, [])
+        cancelled = app.get_run(run.id)
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertEqual(cancelled.current_stage_id, "")
+        self.assertTrue(cancelled.finished_at)
+        self.assertNotIn("progress", cancelled.metadata)
+
+    def test_stage_cancellation_exception_finishes_as_cancelled_not_failed(self):
+        app = self._create_app("worker_service_cooperative_cancellation")
+        app.registries.stage_registry.register("test.cancellation_aware", _CancellationAwareStage())
+        app.upsert_workflow_template(
+            {
+                "id": "cancellation_template_v1",
+                "name": "Cancellation Template",
+                "stages": [
+                    StageDefinition(
+                        stage_id="wait_for_cancellation",
+                        stage_type="test.cancellation_aware",
+                        name="Wait for Cancellation",
+                    ).to_dict()
+                ],
+            }
+        )
+        workspace = app.get_workspace("worker_workspace")
+        workspace.workflow_template_id = "cancellation_template_v1"
+        app.upsert_workspace(workspace)
+        run = app.enqueue_run("worker_workspace", requested_by="test-cooperative-cancellation")
+
+        result = app.process_next_queued_run(auto_retry_failed=False)
+
+        self.assertEqual(result.id, run.id)
+        self.assertEqual(result.status, "cancelled")
+        self.assertEqual(result.last_error, "")
+        self.assertTrue(result.finished_at)
+        self.assertEqual(result.stage_results[-1].status, "cancelled")
+        self.assertEqual(result.stage_results[-1].metrics, {"reason": "cancel_requested"})
 
     def test_stale_recovery_requeues_orphaned_running_run_from_beginning(self):
         app = self._create_app("worker_service_orphaned_running")

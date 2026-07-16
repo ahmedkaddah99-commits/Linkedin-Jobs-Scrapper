@@ -164,6 +164,9 @@ class StageEngine:
                 outcome = stage.execute(context, definition)
                 self._limit_test_run_output(context, definition, outcome)
             except Exception as exc:
+                if self._cancel_requested(run.id):
+                    self._cancel_run(context, definition=definition)
+                    return context.run
                 self._append_stage_result(
                     context=context,
                     definition=definition,

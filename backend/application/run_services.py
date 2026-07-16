@@ -571,7 +571,13 @@ class RunLifecycleService:
                 offset += len(page)
 
         for run in recoverable_runs.values():
-            if not run.queued_at or run.id in live_owned_run_ids:
+            if run.id in live_owned_run_ids:
+                continue
+            # Legacy synchronous runs were never assigned queued_at. They can
+            # still be terminally cancelled once their execution is orphaned.
+            # Keep the queued_at guard for running runs so a long synchronous
+            # request is not requeued behind the request that is executing it.
+            if run.status == RUN_STATUS_RUNNING and not run.queued_at:
                 continue
             stale_marker = run.updated_at or run.started_at or run.queued_at or run.created_at
             if stale_marker and stale_marker > stale_before:

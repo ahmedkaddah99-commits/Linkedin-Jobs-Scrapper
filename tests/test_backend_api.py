@@ -648,7 +648,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(listed_run["is_test_run"])
         self.assertEqual(listed_run["run_mode"], "test")
 
-    def test_academic_test_run_overrides_do_not_force_one_site_scope(self):
+    def test_academic_test_run_uses_bounded_multi_site_scope(self):
         user = SimpleNamespace(metadata={})
 
         with patch("backend.api.server.load_job_seeker_config", return_value={}):
@@ -665,7 +665,8 @@ class BackendApiTests(unittest.TestCase):
 
         self.assertEqual(overrides["run_mode"], "test")
         self.assertEqual(overrides["test_run_job_limit"], 1)
-        self.assertEqual(overrides["company_site_max_sites_per_run"], -1)
+        self.assertEqual(overrides["company_site_max_sites_per_run"], 10)
+        self.assertEqual(overrides["company_site_runner_credit_budget"], 150)
         self.assertEqual(overrides["company_site_max_job_links_per_site"], 1)
         self.assertEqual(overrides["stage4_max_jobs"], 1)
 
@@ -861,6 +862,26 @@ class BackendApiTests(unittest.TestCase):
             {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
         )
         self.assertEqual(status, 201)
+
+        status, delete_payload = self._request("DELETE", f"/runs/{run_payload['id']}")
+        self.assertEqual(status, 200)
+        self.assertEqual(delete_payload["deleted"], run_payload["id"])
+
+        status, missing_payload = self._request("GET", f"/runs/{run_payload['id']}")
+        self.assertEqual(status, 404)
+        self.assertEqual(missing_payload["error"]["code"], "not_found")
+
+    def test_api_supports_stopping_then_deleting_queued_run(self):
+        status, run_payload = self._request(
+            "POST",
+            "/runs",
+            {"workspace_id": "api_workspace", "execution_mode": "queued", "max_attempts": 1},
+        )
+        self.assertEqual(status, 201)
+
+        status, stopped_payload = self._request("POST", f"/runs/{run_payload['id']}/cancel")
+        self.assertEqual(status, 200)
+        self.assertEqual(stopped_payload["status"], "cancelled")
 
         status, delete_payload = self._request("DELETE", f"/runs/{run_payload['id']}")
         self.assertEqual(status, 200)

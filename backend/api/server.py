@@ -2596,9 +2596,9 @@ def _build_run_input_overrides(user, payload: dict, *, workspace_settings: dict 
             "company_site_max_jobs_per_site": 1,
             "academic_site_max_jobs_per_site": 1,
             "company_site_max_job_links_per_site": 1,
+            "company_site_runner_credit_budget": 150,
         }
-        if not uses_academic_sources:
-            test_overrides["company_site_max_sites_per_run"] = 1
+        test_overrides["company_site_max_sites_per_run"] = 10 if uses_academic_sources else 1
         overrides.update(test_overrides)
     else:
         overrides["run_mode"] = "normal"

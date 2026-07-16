@@ -1,6 +1,8 @@
 import argparse
 import json
 import logging
+import os
+import socket
 from uuid import uuid4
 
 from backend.config import load_project_dotenv, validate_environment
@@ -33,6 +35,30 @@ def parse_key_value(items: list[str]) -> dict[str, str]:
 
 def _print_json(payload) -> None:
     print(json.dumps(redact_sensitive_data(payload), indent=2, ensure_ascii=True))
+
+
+def _runtime_worker_id(
+    configured_worker_id: str,
+    *,
+    default_prefix: str,
+    runtime_environment: str | None = None,
+    host_name: str | None = None,
+) -> str:
+    requested_worker_id = str(configured_worker_id or "").strip()
+    if not requested_worker_id:
+        return f"{default_prefix}_{uuid4().hex[:8]}"
+    environment = str(
+        runtime_environment if runtime_environment is not None else os.getenv("RUNR_ENV", "")
+    ).strip().casefold()
+    if environment not in {"prod", "production"}:
+        return requested_worker_id
+    instance_host = str(host_name if host_name is not None else socket.gethostname()).strip()
+    if not instance_host:
+        return requested_worker_id
+    instance_suffix = f"_{instance_host}"
+    if requested_worker_id.endswith(instance_suffix):
+        return requested_worker_id
+    return f"{requested_worker_id}{instance_suffix}"
 
 
 def main() -> int:
@@ -313,7 +339,7 @@ def main() -> int:
 
     if args.command == "process-next":
         configure_worker_logging(level=args.log_level)
-        worker_id = str(args.worker_id or f"cli_worker_{uuid4().hex[:8]}")
+        worker_id = _runtime_worker_id(args.worker_id, default_prefix="cli_worker")
         worker = WorkerService(
             application=application,
             worker_id=worker_id,
@@ -331,7 +357,7 @@ def main() -> int:
         configure_worker_logging(level=args.log_level)
         worker = WorkerService(
             application=application,
-            worker_id=str(args.worker_id or f"cli_worker_{uuid4().hex[:8]}"),
+            worker_id=_runtime_worker_id(args.worker_id, default_prefix="cli_worker"),
             lease_seconds=args.lease_seconds,
             poll_interval_seconds=args.sleep_seconds,
             logger=logging.getLogger("backend.worker.cli"),

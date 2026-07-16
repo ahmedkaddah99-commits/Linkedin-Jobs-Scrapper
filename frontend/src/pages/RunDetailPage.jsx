@@ -12,6 +12,7 @@ import {
 
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
+const STOPPABLE_RUN_STATUSES = ["planned", "queued", "running"];
 const CHECKLIST_STAGE_LABELS = {
   source_search: "Searching jobs",
   source_linkedin_search: "Searching job listings",
@@ -441,6 +442,7 @@ export default function RunDetailPage() {
   const focusedRunIdsRef = useRef(new Set());
   const [actionState, setActionState] = useState({
     deletingRun: false,
+    stoppingRun: false,
     message: String(location.state?.runStartedMessage || ""),
     error: "",
   });
@@ -594,6 +596,43 @@ export default function RunDetailPage() {
     }
   }
 
+  async function stopRun() {
+    if (!run) {
+      return;
+    }
+    const runName = run.workspace_name || "this run";
+    const confirmed = window.confirm(`Stop ${runName}? Work already completed by this run will be kept.`);
+    if (!confirmed) {
+      return;
+    }
+    setActionState((currentValue) => ({
+      ...currentValue,
+      stoppingRun: true,
+      message: "",
+      error: "",
+    }));
+    try {
+      const stoppedRun = await request(`/runs/${runId}/cancel`, { method: "POST" });
+      const stopped = String(stoppedRun.status || "").trim() === "cancelled";
+      setActionState((currentValue) => ({
+        ...currentValue,
+        stoppingRun: false,
+        message: stopped
+          ? `${runName} was stopped. You can now delete it.`
+          : `Stop requested for ${runName}. Delete will become available when the current task exits.`,
+        error: "",
+      }));
+      refreshRunResources({ showLoading: false }).catch(() => undefined);
+    } catch (actionError) {
+      setActionState((currentValue) => ({
+        ...currentValue,
+        stoppingRun: false,
+        message: "",
+        error: actionError.message || "Unable to stop this run.",
+      }));
+    }
+  }
+
   return (
     <div className="space-y-8">
       <header className="relative overflow-hidden rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
@@ -628,6 +667,28 @@ export default function RunDetailPage() {
               >
                 Refresh
               </button>
+              {ACTIVE_RUN_STATUSES.includes(String(run?.status || "").trim()) ? (
+                <button
+                  className="rounded-full border border-error/25 bg-error/5 px-4 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    actionState.stoppingRun
+                    || !STOPPABLE_RUN_STATUSES.includes(String(run?.status || "").trim())
+                  }
+                  onClick={stopRun}
+                  title={
+                    String(run?.status || "").trim() === "cancel_requested"
+                      ? "Waiting for the current task to stop"
+                      : "Stop this run"
+                  }
+                  type="button"
+                >
+                  {actionState.stoppingRun
+                    ? "Stopping..."
+                    : String(run?.status || "").trim() === "cancel_requested"
+                      ? "Stop Requested"
+                      : "Stop Run"}
+                </button>
+              ) : null}
               <button
                 className="rounded-full border border-error/25 bg-error/5 px-4 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={

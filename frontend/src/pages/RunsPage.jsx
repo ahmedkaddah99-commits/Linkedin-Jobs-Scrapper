@@ -7,6 +7,7 @@ import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
 const ACTIVE_RUN_STATUSES = ["planned", "queued", "running", "cancel_requested"];
 const DELETABLE_RUN_STATUSES = ["planned", "queued", "completed", "failed", "cancelled"];
+const STOPPABLE_RUN_STATUSES = ["planned", "queued", "running"];
 
 function formatDuration(seconds) {
   const total = Math.max(0, Number.parseInt(seconds || 0, 10) || 0);
@@ -43,6 +44,7 @@ export default function RunsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [actionState, setActionState] = useState({
     pendingRunId: "",
+    pendingAction: "",
     message: String(location.state?.runActionMessage || ""),
     error: "",
   });
@@ -88,11 +90,12 @@ export default function RunsPage() {
     if (!confirmed) {
       return;
     }
-    setActionState({ pendingRunId: run.id, message: "", error: "" });
+    setActionState({ pendingRunId: run.id, pendingAction: "delete", message: "", error: "" });
     try {
       await request(`/runs/${run.id}`, { method: "DELETE" });
       setActionState({
         pendingRunId: "",
+        pendingAction: "",
         message: `${runName} was deleted.`,
         error: "",
       });
@@ -100,8 +103,38 @@ export default function RunsPage() {
     } catch (actionError) {
       setActionState({
         pendingRunId: "",
+        pendingAction: "",
         message: "",
         error: actionError.message || "Unable to delete this run.",
+      });
+    }
+  }
+
+  async function stopRun(run) {
+    const runName = run.workspace_name || run.workspace_id || "this run";
+    const confirmed = window.confirm(`Stop ${runName}? Work already completed by this run will be kept.`);
+    if (!confirmed) {
+      return;
+    }
+    setActionState({ pendingRunId: run.id, pendingAction: "stop", message: "", error: "" });
+    try {
+      const stoppedRun = await request(`/runs/${run.id}/cancel`, { method: "POST" });
+      const stopped = String(stoppedRun.status || "").trim() === "cancelled";
+      setActionState({
+        pendingRunId: "",
+        pendingAction: "",
+        message: stopped
+          ? `${runName} was stopped. You can now delete it.`
+          : `Stop requested for ${runName}. Delete will become available when the current task exits.`,
+        error: "",
+      });
+      refresh().catch(() => undefined);
+    } catch (actionError) {
+      setActionState({
+        pendingRunId: "",
+        pendingAction: "",
+        message: "",
+        error: actionError.message || "Unable to stop this run.",
       });
     }
   }
@@ -271,6 +304,28 @@ export default function RunsPage() {
                   >
                     Open Run Review
                   </Link>
+                  {ACTIVE_RUN_STATUSES.includes(String(run.status || "").trim()) ? (
+                    <button
+                      className="rounded-full border border-error/25 bg-error/5 px-5 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={
+                        actionState.pendingRunId === run.id
+                        || !STOPPABLE_RUN_STATUSES.includes(String(run.status || "").trim())
+                      }
+                      onClick={() => stopRun(run)}
+                      title={
+                        String(run.status || "").trim() === "cancel_requested"
+                          ? "Waiting for the current task to stop"
+                          : "Stop this run"
+                      }
+                      type="button"
+                    >
+                      {actionState.pendingRunId === run.id && actionState.pendingAction === "stop"
+                        ? "Stopping..."
+                        : String(run.status || "").trim() === "cancel_requested"
+                          ? "Stop Requested"
+                          : "Stop Run"}
+                    </button>
+                  ) : null}
                   <button
                     className="rounded-full border border-error/25 bg-error/5 px-5 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={
@@ -285,7 +340,9 @@ export default function RunsPage() {
                     }
                     type="button"
                   >
-                    {actionState.pendingRunId === run.id ? "Deleting..." : "Delete Run"}
+                    {actionState.pendingRunId === run.id && actionState.pendingAction === "delete"
+                      ? "Deleting..."
+                      : "Delete Run"}
                   </button>
                 </div>
               </div>
