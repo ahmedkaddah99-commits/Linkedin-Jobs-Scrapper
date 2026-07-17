@@ -827,10 +827,25 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
             cached_job_lookup=_cached_job_lookup,
             job_url_history_callback=_record_job_url_history,
         )
+        coverage_limit_reasons = {
+            "company_site_max_job_links_per_site",
+            "explicit_jobs_per_site_cap",
+        }
+        coverage_skips = [
+            item
+            for item in failures
+            if str(item.get("error") or "").strip() in coverage_limit_reasons
+        ]
+        operational_failures = [
+            item
+            for item in failures
+            if str(item.get("error") or "").strip() not in coverage_limit_reasons
+        ]
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(jobs)},
             data={
-                "company_site_failures": failures,
+                "company_site_failures": operational_failures,
+                "company_site_coverage_skips": coverage_skips,
                 "company_site_state_skips": skipped_by_site_state,
                 "capped_sites": [*list(getattr(context, "data", {}).get("capped_sites") or []), *capped_sites],
                 "company_site_policy": {
@@ -843,13 +858,18 @@ class CompanyCareerSiteAcquisitionStage(BaseStage):
             },
             metrics={
                 "jobs_found": len(jobs),
-                "failures": len(failures),
+                "failures": len(operational_failures),
+                "coverage_skips": len(coverage_skips),
                 "incremental_skipped_job_urls": int(last_company_site_counters.get("incremental_skipped_job_urls") or 0),
                 "public_index_reused_job_urls": int(last_company_site_counters.get("public_index_reused_job_urls") or 0),
                 "candidate_jobs_discovered": int(last_company_site_counters.get("candidate_jobs_discovered") or 0),
                 "candidate_jobs_followed": int(last_company_site_counters.get("candidate_jobs_followed") or 0),
                 "candidate_jobs_skipped": int(last_company_site_counters.get("candidate_jobs_skipped") or 0),
                 "link_cap_hits": int(last_company_site_counters.get("link_cap_hits") or 0),
+                "runner_credits_consumed": int(last_company_site_counters.get("runner_credits_consumed") or 0),
+                "scrapeops_credits_consumed": int(last_company_site_counters.get("native_credits_consumed") or 0),
+                "billed_request_count": int(last_company_site_counters.get("billed_request_count") or 0),
+                "request_count": int(last_company_site_counters.get("request_count") or 0),
             },
         )
 

@@ -227,11 +227,15 @@ class WorkerService:
                 )
             self.logger.info("worker_task_start", extra=self._log_extra(task_name="execute_run", run=claimed_run))
             result = self.application.execute_claimed_run(claimed_run.id, auto_retry_failed=auto_retry_failed)
+            heartbeat_stop.set()
+            thread.join(timeout=max(1.0, float(self.lease_seconds)))
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             self._log_run_completion(claimed_run=claimed_run, result=result, duration_ms=duration_ms)
             return result
         except BaseException as exc:
             task_error = exc
+            heartbeat_stop.set()
+            thread.join(timeout=max(1.0, float(self.lease_seconds)))
             if not _is_handled_worker_failure(exc):
                 raise
             duration_ms = int((time.perf_counter() - started_at) * 1000)

@@ -2147,12 +2147,17 @@ class SqliteSourcePolicyStore(_SqliteStore):
                 item = dict(site or {})
                 site_url = str(item.get("url") or "").strip()
                 row = connection.execute(
-                    "SELECT site_state, consecutive_zero_yield_runs FROM site_source_policy WHERE site_url = ?",
+                    (
+                        "SELECT site_state, consecutive_zero_yield_runs, last_jobs_found, last_crawled_at "
+                        "FROM site_source_policy WHERE site_url = ?"
+                    ),
                     (site_url,),
                 ).fetchone()
                 site_state = str(row["site_state"] or "pending") if row else "pending"
                 item["site_state"] = site_state
                 item["consecutive_zero_yield_runs"] = int(row["consecutive_zero_yield_runs"] or 0) if row else 0
+                item["last_jobs_found"] = int(row["last_jobs_found"] or 0) if row else 0
+                item["last_crawled_at"] = str(row["last_crawled_at"] or "") if row else ""
                 if site_state in {"hot", "selected"} or site_url in explicit_urls:
                     eligible.append(item)
                 else:

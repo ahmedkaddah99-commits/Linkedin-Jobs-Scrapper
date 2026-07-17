@@ -392,6 +392,10 @@ class SqliteRepositoryTests(unittest.TestCase):
         low_yield_policy = store.get_site_policy(site_url)
         self.assertEqual(low_yield_policy["site_state"], "low_yield")
         self.assertEqual(low_yield_policy["consecutive_zero_yield_runs"], 3)
+        eligible, _ = store.filter_crawlable_sites([{"url": site_url}], explicitly_triggered_urls=[site_url])
+        self.assertEqual(eligible[0]["last_jobs_found"], 0)
+        self.assertEqual(eligible[0]["consecutive_zero_yield_runs"], 3)
+        self.assertTrue(eligible[0]["last_crawled_at"])
 
         store.record_site_yield(site_url, jobs_found=2)
         recovered_policy = store.get_site_policy(site_url)

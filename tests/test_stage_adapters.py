@@ -535,11 +535,24 @@ class StageAdapterTests(unittest.TestCase):
                     "counters": {
                         "capped_sites": [
                             {"url": "https://careers.acme.example", "links_fetched": 2, "cap_value": 2}
-                        ]
+                        ],
+                        "runner_credits_consumed": 7,
+                        "native_credits_consumed": 6,
+                        "billed_request_count": 3,
+                        "request_count": 4,
                     },
                 }
             )
-            return [], []
+            return [], [
+                {
+                    "url": "https://careers.acme.example/jobs/overflow",
+                    "error": "company_site_max_job_links_per_site",
+                },
+                {
+                    "url": "https://careers.acme.example",
+                    "error": "No job posting links discovered from the career site entry point.",
+                },
+            ]
 
         with (
             patch("backend.adapters.stage_adapters._build_root_cli_args", return_value=({}, cli_args)),
@@ -551,6 +564,14 @@ class StageAdapterTests(unittest.TestCase):
             outcome.data["capped_sites"],
             [{"url": "https://careers.acme.example", "links_fetched": 2, "cap_value": 2}],
         )
+        self.assertEqual(outcome.metrics["failures"], 1)
+        self.assertEqual(outcome.metrics["coverage_skips"], 1)
+        self.assertEqual(outcome.metrics["runner_credits_consumed"], 7)
+        self.assertEqual(outcome.metrics["scrapeops_credits_consumed"], 6)
+        self.assertEqual(outcome.metrics["billed_request_count"], 3)
+        self.assertEqual(outcome.metrics["request_count"], 4)
+        self.assertEqual(len(outcome.data["company_site_failures"]), 1)
+        self.assertEqual(len(outcome.data["company_site_coverage_skips"]), 1)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import json
 import logging
 import shutil
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -273,6 +274,55 @@ class WorkerServiceTests(unittest.TestCase):
             any(call.args == ("worker_heartbeat_failed",) for call in logger.exception.call_args_list)
         )
         application.release_worker.assert_called_once_with(worker.worker_id)
+
+    def test_worker_stops_run_heartbeat_before_slow_completion_logging(self):
+        application = Mock()
+        application.recover_stale_workers.return_value = []
+        claimed_run = Mock(
+            id="run_complete_heartbeat",
+            workspace_id="workspace",
+            status="running",
+            attempt_count=1,
+            max_attempts=1,
+            queued_at="",
+            started_at="",
+            finished_at="",
+            last_error="",
+            stage_results=[],
+            final_job_set_keys=[],
+        )
+        completed_run = Mock(
+            id=claimed_run.id,
+            workspace_id="workspace",
+            status="completed",
+            attempt_count=1,
+            max_attempts=1,
+            queued_at="",
+            started_at="",
+            finished_at="2000-01-01T00:00:02+00:00",
+            last_error="",
+            stage_results=[],
+            final_job_set_keys=[],
+        )
+        application.claim_next_queued_run.return_value = claimed_run
+        application.execute_claimed_run.return_value = completed_run
+        application.renew_worker_lease.side_effect = WorkerLeaseLostError("run already completed")
+        logger = Mock()
+        worker = WorkerService(
+            application=application,
+            worker_id="worker_completion_heartbeat",
+            lease_seconds=1,
+            logger=logger,
+        )
+
+        with patch.object(WorkerService, "_log_run_completion", side_effect=lambda **_kwargs: time.sleep(1.2)):
+            result = worker.process_next()
+
+        self.assertIs(result, completed_run)
+        application.renew_worker_lease.assert_not_called()
+        self.assertFalse(
+            any(call.args == ("worker_lease_lost",) for call in logger.exception.call_args_list)
+        )
 
     def test_worker_reraises_unrelated_base_exceptions_without_logging_them_as_failures(self):
         for failure in (KeyboardInterrupt(), SystemExit(2)):

@@ -197,8 +197,13 @@ ACADEMIC_PROGRAM_WORDS = {
     "programme",
     "school",
     "studies",
+    "studienangebot",
+    "studienangebote",
     "study",
     "studium",
+    "aufnahmeverfahren",
+    "bewerbungstermine",
+    "beratung",
 }
 ACADEMIC_POSTING_WORDS = {
     "application",
@@ -372,6 +377,19 @@ def _normalize_keywords(raw_keywords: Any) -> list[str]:
     return deduped
 
 
+def _matches_search_keywords(searchable: str, keywords: list[str]) -> bool:
+    normalized_searchable = sanitize_scrapeops_text(searchable).casefold()
+    searchable_tokens = _word_token_set(normalized_searchable)
+    geographic_qualifiers = {"de", "deutschland", "german", "germany"}
+    for keyword in keywords:
+        if keyword in normalized_searchable:
+            return True
+        role_tokens = _word_token_set(keyword) - geographic_qualifiers
+        if role_tokens and role_tokens.issubset(searchable_tokens):
+            return True
+    return False
+
+
 def _has_any_hint(haystack: str, hints: tuple[str, ...]) -> bool:
     lowered = haystack.lower()
     return any(token in lowered for token in hints)
@@ -434,19 +452,55 @@ def _looks_like_generic_academic_program_content(url: str, label: str = "") -> b
     path_segments = [segment for segment in re.split(r"/+", (urlparse(url).path or "").casefold()) if segment]
     leaf_segment = path_segments[-1] if path_segments else ""
     tokens = _word_token_set(f"{label} {leaf_segment}")
-    academic_markers = {"doctoral", "phd", "promotion"}
+    normalized_haystack = _normalized_text_tokens(f"{label} {url}")
+    strong_posting_markers = {
+        "assistant",
+        "associate",
+        "ausschreibung",
+        "candidate",
+        "fellow",
+        "job",
+        "mitarbeiter",
+        "mitarbeiterin",
+        "opening",
+        "position",
+        "postdoc",
+        "researcher",
+        "stelle",
+        "vacancy",
+    }
     generic_navigation = (
         leaf_segment in {"about", "department", "departments", "overview", "welcome"}
         or bool(tokens.intersection({"about", "overview", "welcome"}))
     )
-    has_posting_signal = bool(tokens.intersection(ACADEMIC_POSTING_WORDS))
+    generic_employer_content = any(
+        phrase in normalized_haystack
+        for phrase in (
+            "-als-arbeitgeber-",
+            "-als-arbeitgeberin-",
+            "-as-an-employer-",
+            "-working-at-",
+            "-working-with-us-",
+        )
+    )
+    generic_profile_content = any(
+        phrase in normalized_haystack
+        for phrase in (
+            "-inhaber-der-professur-",
+            "-inhaberin-der-professur-",
+            "-holder-of-the-chair-",
+            "-prof-dr-",
+        )
+    )
+    has_strong_posting_signal = bool(tokens.intersection(strong_posting_markers))
     return bool(
-        not has_posting_signal
-        and (
-            generic_navigation
-            or (
-                tokens.intersection(academic_markers)
-                and tokens.intersection(ACADEMIC_PROGRAM_WORDS)
+        generic_employer_content
+        or generic_profile_content
+        or (
+            not has_strong_posting_signal
+            and (
+                generic_navigation
+                or bool(tokens.intersection(ACADEMIC_PROGRAM_WORDS))
             )
         )
     )
@@ -671,7 +725,7 @@ def plan_company_site_scope(
     normalized_target_cities = _normalize_city_names(target_cities)
     normalized_locality_mode = _normalize_locality_mode(locality_mode)
     normalized_domain_policies = _normalize_domain_policies(domain_policies)
-    ranked_sites: list[tuple[int, dict[str, Any]]] = []
+    ranked_sites: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     skipped_sites: list[dict[str, Any]] = []
     foreign_skipped = 0
     for entry in parsed_sites:
@@ -706,18 +760,58 @@ def plan_company_site_scope(
             )
             foreign_skipped += 1
             continue
-        score = {
+        locality_score = {
             "local": 0,
             "global": 1,
             "unknown": 2,
         }.get(signal["signal"], 3)
         if site_locality_mode == LOCALITY_MODE_STRICT_LOCAL_ONLY and signal["signal"] == "unknown":
-            score = 2
-        ranked_sites.append((score, enriched_entry))
+            locality_score = 2
+        site_state = str(entry.get("site_state") or "pending").strip().casefold()
+        state_score = {"hot": 0, "selected": 1, "pending": 2, "low_yield": 3}.get(site_state, 2)
+        try:
+            last_jobs_found = max(0, int(entry.get("last_jobs_found") or 0))
+        except (TypeError, ValueError):
+            last_jobs_found = 0
+        try:
+            zero_yield_runs = max(0, int(entry.get("consecutive_zero_yield_runs") or 0))
+        except (TypeError, ValueError):
+            zero_yield_runs = 0
+        url_tokens = _word_token_set(str(entry.get("url") or ""))
+        url_quality_score = sum(
+            weight
+            for token, weight in {
+                "jobs": 6,
+                "stellenangebote": 6,
+                "stellenanzeigen": 6,
+                "vacancies": 6,
+                "ausschreibungen": 5,
+                "openings": 5,
+                "career": 3,
+                "careers": 3,
+                "karriere": 3,
+            }.items()
+            if token in url_tokens
+        )
+        last_crawled_at = str(entry.get("last_crawled_at") or "").strip()
+        ranked_sites.append(
+            (
+                (
+                    locality_score,
+                    -last_jobs_found,
+                    state_score,
+                    zero_yield_runs,
+                    -url_quality_score,
+                    1 if last_crawled_at else 0,
+                    last_crawled_at,
+                ),
+                enriched_entry,
+            )
+        )
 
     ranked_sites.sort(
         key=lambda item: (
-            item[0],
+            *item[0],
             str(item[1].get("company_name") or "").casefold(),
             str(item[1].get("url") or "").casefold(),
         )
@@ -931,7 +1025,7 @@ def _is_safe_academic_external_listing_portal(url: str, label: str = "") -> bool
     return _is_public_https_url(url) and _looks_like_listing_link(url, label, academic_mode=True)
 
 
-def parse_company_site_entries(raw_value: Any, *, limit: int | None = None) -> list[dict[str, str]]:
+def parse_company_site_entries(raw_value: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
     if isinstance(raw_value, str):
         raw_entries = [
             line.strip()
@@ -956,6 +1050,7 @@ def parse_company_site_entries(raw_value: Any, *, limit: int | None = None) -> l
     for entry in raw_entries:
         company_name = ""
         url = ""
+        policy_metadata: dict[str, Any] = {}
         if isinstance(entry, dict):
             company_name = compact_whitespace(
                 str(
@@ -975,6 +1070,16 @@ def parse_company_site_entries(raw_value: Any, *, limit: int | None = None) -> l
                     or ""
                 )
             )
+            policy_metadata = {
+                key: entry[key]
+                for key in (
+                    "site_state",
+                    "consecutive_zero_yield_runs",
+                    "last_jobs_found",
+                    "last_crawled_at",
+                )
+                if key in entry
+            }
         else:
             text = compact_whitespace(str(entry))
             if not text:
@@ -997,6 +1102,7 @@ def parse_company_site_entries(raw_value: Any, *, limit: int | None = None) -> l
         seen_urls.add(normalized_url)
         parsed_entries.append(
             {
+                **policy_metadata,
                 "company_name": company_name,
                 "url": normalized_url,
             }
@@ -1855,7 +1961,7 @@ def scrape_company_career_sites(
                         compact_whitespace(str(candidate.get("full_description") or ""))[:1200],
                     ]
                 ).lower()
-                if normalized_keywords and not any(keyword in searchable for keyword in normalized_keywords):
+                if normalized_keywords and not _matches_search_keywords(searchable, normalized_keywords):
                     keyword_filtered_jobs += 1
                     record_job_url_history(
                         site_url,
@@ -2026,21 +2132,6 @@ def scrape_company_career_sites(
             )
 
         candidate_links = list(candidate_collection.candidates)
-        if explicit_job_cap > 0 and len(candidate_links) > explicit_job_cap:
-            skipped_candidates_total += len(candidate_links) - explicit_job_cap
-            failures.extend(
-                [
-                    {
-                        "company_name": company_name,
-                        "url": str(item.get("url") or site_url),
-                        "error": "explicit_jobs_per_site_cap",
-                        "stage": "company_site_candidate_filter",
-                    }
-                    for item in candidate_links[explicit_job_cap:]
-                ]
-            )
-            candidate_links = candidate_links[:explicit_job_cap]
-
         candidate_links_before_index_reuse = len(candidate_links)
         cached_postings = cached_job_postings_for_site(
             site_url,
@@ -2077,7 +2168,7 @@ def scrape_company_career_sites(
                         candidate_label,
                     ]
                 ).lower()
-                if normalized_keywords and not any(keyword in searchable for keyword in normalized_keywords):
+                if normalized_keywords and not _matches_search_keywords(searchable, normalized_keywords):
                     keyword_filtered_jobs += 1
                     record_job_url_history(
                         site_url,
@@ -2106,6 +2197,17 @@ def scrape_company_career_sites(
                                 "payload": cached_job,
                             }
                         ],
+                    )
+                    continue
+                if explicit_job_cap > 0 and site_jobs_found >= explicit_job_cap:
+                    skipped_candidates_total += 1
+                    failures.append(
+                        {
+                            "company_name": company_name,
+                            "url": candidate_url,
+                            "error": "explicit_jobs_per_site_cap",
+                            "stage": "company_site_candidate_filter",
+                        }
                     )
                     continue
                 collected_jobs.append(cached_job)
@@ -2154,9 +2256,24 @@ def scrape_company_career_sites(
             )
             continue
 
-        for candidate in candidate_links:
+        for candidate_index, candidate in enumerate(candidate_links):
             if callable(should_cancel) and should_cancel():
                 raise RuntimeError("Run cancellation requested.")
+            if explicit_job_cap > 0 and site_jobs_found >= explicit_job_cap:
+                capped_candidates = candidate_links[candidate_index:]
+                skipped_candidates_total += len(capped_candidates)
+                failures.extend(
+                    [
+                        {
+                            "company_name": company_name,
+                            "url": str(item.get("url") or site_url),
+                            "error": "explicit_jobs_per_site_cap",
+                            "stage": "company_site_candidate_filter",
+                        }
+                        for item in capped_candidates
+                    ]
+                )
+                break
             candidate_url = str(candidate.get("url") or "")
             candidate_label = str(candidate.get("label") or "")
             try:
@@ -2229,7 +2346,6 @@ def scrape_company_career_sites(
                 )
                 continue
 
-            site_jobs_found += 1
             searchable = " ".join(
                 [
                     compact_whitespace(str(job.get("title") or "")),
@@ -2238,7 +2354,7 @@ def scrape_company_career_sites(
                     candidate_label,
                 ]
             ).lower()
-            if normalized_keywords and not any(keyword in searchable for keyword in normalized_keywords):
+            if normalized_keywords and not _matches_search_keywords(searchable, normalized_keywords):
                 keyword_filtered_jobs += 1
                 record_job_url_history(
                     site_url,
@@ -2283,6 +2399,7 @@ def scrape_company_career_sites(
             if site_policy_id:
                 job["company_site_domain_policy_id"] = site_policy_id
             collected_jobs.append(job)
+            site_jobs_found += 1
             record_job_url_history(
                 site_url,
                 [

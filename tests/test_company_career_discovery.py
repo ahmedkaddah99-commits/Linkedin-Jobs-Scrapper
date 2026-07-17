@@ -12,6 +12,7 @@ from backend.connectors.company_career_discovery import (
 from backend.connectors.company_career_sites import (
     ACADEMIC_MIN_JOB_LINKS_PER_SITE,
     ACADEMIC_CAREER_SITE_FILES,
+    extract_company_job_links_from_html,
     PageFetchResult,
     REGULAR_COMPANY_SITE_FILES,
     plan_company_site_scope,
@@ -364,6 +365,70 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
         )
         self.assertTrue(any(item["job_url"] == new_url and item["status"] == "accepted" for item in history_records))
 
+    def test_jobs_per_site_cap_applies_after_keyword_filtering(self):
+        root_url = "https://uni.example.de/jobs"
+        unrelated_url = "https://uni.example.de/jobs/administrative-role"
+        matching_url = "https://uni.example.de/jobs/doctoral-fellow"
+        capped_url = "https://uni.example.de/jobs/doctoral-researcher"
+        history_records = []
+        cached_jobs = {
+            unrelated_url: {
+                "job_id": "job_admin",
+                "title": "Administrative Role",
+                "company": "Example University",
+                "full_description": "General university administration.",
+                "apply_link": unrelated_url,
+            },
+            matching_url: {
+                "job_id": "job_fellow",
+                "title": "Doctoral Fellow",
+                "company": "Example University",
+                "full_description": "Funded doctoral research position.",
+                "apply_link": matching_url,
+            },
+            capped_url: {
+                "job_id": "job_researcher",
+                "title": "Doctoral Fellow in Physics",
+                "company": "Example University",
+                "full_description": "Doctoral research position.",
+                "apply_link": capped_url,
+            },
+        }
+
+        with patch(
+            "backend.connectors.company_career_sites._fetch_page_content",
+            return_value=PageFetchResult(
+                requested_url=root_url,
+                final_url=root_url,
+                status_code=200,
+                text=(
+                    f'<a href="{unrelated_url}">Administrative Role</a>'
+                    f'<a href="{matching_url}">Doctoral Fellow</a>'
+                    f'<a href="{capped_url}">Doctoral Fellow in Physics</a>'
+                ),
+            ),
+        ):
+            jobs, failures = scrape_company_career_sites(
+                company_sites=[{"company_name": "Example University", "url": root_url}],
+                source_type="academic",
+                keywords=["doctoral fellow germany"],
+                max_jobs_per_site=1,
+                cached_job_lookup=lambda _site_url, urls: {url: cached_jobs[url] for url in urls},
+                job_url_history_callback=lambda _site_url, attempts: history_records.extend(attempts),
+            )
+
+        self.assertEqual([job["job_id"] for job in jobs], ["job_fellow"])
+        self.assertTrue(
+            any(item["job_url"] == unrelated_url and item["status"] == "keyword_filtered" for item in history_records)
+        )
+        self.assertTrue(
+            any(item["job_url"] == matching_url and item["status"] == "cache_reused" for item in history_records)
+        )
+        self.assertEqual(
+            [item["url"] for item in failures if item["error"] == "explicit_jobs_per_site_cap"],
+            [capped_url],
+        )
+
     def test_company_site_scope_prefers_local_market_and_skips_foreign_sites(self):
         scope = plan_company_site_scope(
             company_sites=[
@@ -379,6 +444,63 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
         self.assertEqual([item["company_name"] for item in scope.selected_sites], ["Local", "Global"])
         self.assertEqual(scope.stats["selected_site_count"], 2)
         self.assertEqual(scope.stats["foreign_site_skipped_count"], 1)
+
+    def test_company_site_scope_prioritizes_productive_and_job_specific_sources(self):
+        scope = plan_company_site_scope(
+            company_sites=[
+                {
+                    "company_name": "Alphabetical Low Yield",
+                    "url": "https://alpha.example.de/karriere",
+                    "site_state": "low_yield",
+                    "consecutive_zero_yield_runs": 4,
+                    "last_jobs_found": 0,
+                },
+                {
+                    "company_name": "Known Productive",
+                    "url": "https://productive.example.de/career",
+                    "site_state": "hot",
+                    "consecutive_zero_yield_runs": 0,
+                    "last_jobs_found": 2,
+                },
+                {
+                    "company_name": "Specific Untried Board",
+                    "url": "https://untried.example.de/stellenangebote",
+                    "site_state": "selected",
+                    "consecutive_zero_yield_runs": 0,
+                    "last_jobs_found": 0,
+                },
+            ],
+            target_country_codes=["DE"],
+            max_sites_per_run=2,
+        )
+
+        self.assertEqual(
+            [item["company_name"] for item in scope.selected_sites],
+            ["Known Productive", "Specific Untried Board"],
+        )
+
+    def test_academic_link_extraction_rejects_program_employer_and_professor_profile_pages(self):
+        page_url = "https://uni.example.de/jobs"
+        genuine_job_url = "https://uni.example.de/jobs/doctoral-researcher-42"
+        generic_urls = {
+            "https://uni.example.de/bewerbung/studienangebot-und-beratung",
+            "https://uni.example.de/bewerbung/bewerbungstermine",
+            "https://uni.example.de/hochschule/job-karriere/die-uni-als-arbeitgeberin",
+            "https://uni.example.de/forschung/inhaberin-der-professur/prof-dr-example",
+        }
+        html = (
+            f'<a href="{genuine_job_url}">Doctoral Researcher</a>'
+            + "".join(f'<a href="{url}">More information</a>' for url in generic_urls)
+        )
+
+        links = extract_company_job_links_from_html(
+            page_url=page_url,
+            homepage_url=page_url,
+            html=html,
+            academic_mode=True,
+        )
+
+        self.assertEqual([item["url"] for item in links], [genuine_job_url])
 
     def test_company_site_scraper_no_longer_defaults_to_ten_followed_jobs(self):
         root_url = "https://example.com/careers"
