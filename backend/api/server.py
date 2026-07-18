@@ -35,7 +35,9 @@ from backend.api.routes.route_support import (
     _normalize_hostname_origin,
     _normalize_origin_value,
     _normalize_segments,
+    _origin_is_chrome_extension,
     _origin_is_loopback,
+    _parse_allowed_extension_origins,
     _parse_allowed_origins,
     _parse_bool_param,
     _parse_int_param,
@@ -7272,6 +7274,7 @@ def _build_clerk_auth_context(application, token_value: str):
         plan_id=plan_id,
         quota_overrides=dict(claims.quota_overrides or {}),
         session_id=claims.session_id,
+        authorized_party=str(getattr(claims, "authorized_party", "") or ""),
     )
 
 
@@ -8836,9 +8839,21 @@ def _build_admin_user_health_snapshot(application) -> dict[str, object]:
     return snapshot
 
 
-def build_handler(application, *, allowed_origins: set[str] | None = None, allow_all_origins: bool = False):
+def build_handler(
+    application,
+    *,
+    allowed_origins: set[str] | None = None,
+    allowed_extension_origins: set[str] | None = None,
+    allow_all_origins: bool = False,
+):
     normalized_allowed_origins = {_normalize_origin_value(item) for item in (allowed_origins or set())}
     normalized_allowed_origins.discard("")
+    normalized_allowed_extension_origins = {
+        _normalize_origin_value(item) for item in (allowed_extension_origins or set())
+    }
+    normalized_allowed_extension_origins = {
+        item for item in normalized_allowed_extension_origins if _origin_is_chrome_extension(item)
+    }
     render_frontend_origin = _normalize_hostname_origin(os.getenv("RENDER_FRONTEND_EXTERNAL_HOSTNAME", ""))
     if render_frontend_origin:
         normalized_allowed_origins.add(render_frontend_origin)
@@ -8925,9 +8940,22 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
             origin = _normalize_origin_value(str(self.headers.get("Origin") or ""))
             if not origin:
                 return ""
+            if _origin_is_chrome_extension(origin):
+                if (
+                    self._is_assisted_apply_extension_path()
+                    and origin in normalized_allowed_extension_origins
+                ):
+                    return origin
+                return ""
             if allow_all_origins or origin in normalized_allowed_origins or _origin_is_loopback(origin):
                 return origin
             return ""
+
+        def _is_assisted_apply_extension_path(self) -> bool:
+            segments = [item for item in (urlparse(self.path).path or "/").split("/") if item]
+            if segments[:1] == ["v1"]:
+                segments = segments[1:]
+            return segments[:2] == ["assisted-apply", "extension"]
 
         def _cors_headers(self) -> dict[str, str]:
             headers = {
@@ -8963,6 +8991,27 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                     self.send_header(key, value)
                 self.end_headers()
                 self.wfile.write(body)
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
+
+        def _send_no_content(
+            self,
+            status: int = HTTPStatus.NO_CONTENT,
+            *,
+            headers: dict[str, str] | None = None,
+        ) -> None:
+            if getattr(self, "_client_disconnected", False) or getattr(self, "_response_started", False):
+                return
+            self._response_started = True
+            self._response_status = int(status)
+            self._response_bytes = 0
+            try:
+                self.send_response(status)
+                merged_headers = self._cors_headers()
+                merged_headers.update(headers or {})
+                for key, value in merged_headers.items():
+                    self.send_header(key, value)
+                self.end_headers()
             except _CLIENT_DISCONNECT_ERRORS as exc:
                 self._handle_client_disconnect(exc)
 
@@ -9091,6 +9140,12 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
                 host = f"{self.server.server_name}:{self.server.server_port}"
             return f"{proto}://{host}"
 
+        def _request_client_origin(self) -> str:
+            return _normalize_origin_value(str(self.headers.get("Origin") or ""))
+
+        def _bearer_token(self) -> str:
+            return _extract_bearer_token(self.headers.get("Authorization", ""))
+
         def _frontend_origin(self) -> str:
             configured_origin = str(os.getenv("APP_FRONTEND_ORIGIN") or os.getenv("FRONTEND_ORIGIN") or "").strip()
             if configured_origin:
@@ -9160,6 +9215,17 @@ def build_handler(application, *, allowed_origins: set[str] | None = None, allow
 
         def _require_identity(self):
             context = self._auth_context()
+            return context.user, context.token
+
+        def _require_clerk_identity(self):
+            context = self._auth_context()
+            if getattr(context, "auth_method", "") != "clerk_jwt":
+                raise PermissionError("A current Runr web session is required.")
+            authorized_party = _normalize_origin_value(
+                str(getattr(context, "authorized_party", "") or "")
+            )
+            if not authorized_party or authorized_party not in normalized_allowed_origins:
+                raise PermissionError("The Clerk session authorized party is not allowed.")
             return context.user, context.token
 
         def _require_scope(self, required_scope: str):
@@ -9383,9 +9449,17 @@ def serve_api(
     validate_environment()
     application = create_backend(data_dir, storage_backend=storage_backend)
     allowed_origins, allow_all_origins = _parse_allowed_origins(os.getenv("BACKEND_ALLOWED_ORIGINS", ""))
+    allowed_extension_origins = _parse_allowed_extension_origins(
+        os.getenv("RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS", "")
+    )
     server = ThreadingHTTPServer(
         (host, int(port)),
-        build_handler(application, allowed_origins=allowed_origins, allow_all_origins=allow_all_origins),
+        build_handler(
+            application,
+            allowed_origins=allowed_origins,
+            allowed_extension_origins=allowed_extension_origins,
+            allow_all_origins=allow_all_origins,
+        ),
     )
     print(f"Unified backend API listening on http://{host}:{port}")
     server.serve_forever()

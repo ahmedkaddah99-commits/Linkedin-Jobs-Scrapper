@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+from backend.application.assisted_apply_service import AssistedApplyConnectionService
 from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
 from backend.application.domain_services import IdentityAccessService, WorkspaceCatalogService
 from backend.application.quota import get_usage_snapshot
@@ -31,6 +32,7 @@ from backend.connectors.company_career_sites import (
     parse_company_site_entries,
     plan_company_site_scope,
 )
+from backend.domain.assisted_apply import AssistedApplyConnectionRecord, AssistedApplyPreferences
 from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_CANCELLED,
@@ -877,6 +879,7 @@ class BackendApplication:
     object_storage: Any
     _workspace_catalog_service: WorkspaceCatalogService = field(init=False, repr=False)
     _identity_access_service: IdentityAccessService = field(init=False, repr=False)
+    _assisted_apply_connection_service: AssistedApplyConnectionService = field(init=False, repr=False)
     _tracker_application_service: TrackerApplicationService = field(init=False, repr=False)
     _run_lifecycle_service: RunLifecycleService = field(init=False, repr=False)
 
@@ -887,6 +890,9 @@ class BackendApplication:
             validate_workspace=self._validate_workspace_definition,
         )
         self._identity_access_service = IdentityAccessService(repositories=self.repositories)
+        self._assisted_apply_connection_service = AssistedApplyConnectionService(
+            repositories=self.repositories
+        )
         self._tracker_application_service = TrackerApplicationService(
             repositories=self.repositories,
             build_relevant_people_discovery=lambda **kwargs: build_relevant_people_discovery(**kwargs),
@@ -2509,6 +2515,120 @@ class BackendApplication:
             include_inactive=include_inactive,
             limit=limit,
             offset=offset,
+        )
+
+    def create_assisted_apply_connection_request(
+        self,
+        *,
+        extension_origin: str,
+        state: str,
+        challenge: str,
+        installation_id: str,
+        version: str,
+    ) -> AssistedApplyConnectionRecord:
+        return self._assisted_apply_connection_service.create_request(
+            extension_origin=extension_origin,
+            state=state,
+            challenge=challenge,
+            installation_id=installation_id,
+            version=version,
+        )
+
+    def get_assisted_apply_connection_dashboard(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._assisted_apply_connection_service.dashboard(
+            user_id=user_id,
+            request_id=request_id,
+        )
+
+    def authorize_assisted_apply_connection(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+        preferences: Mapping[str, Any] | None = None,
+    ) -> str:
+        return self._assisted_apply_connection_service.authorize(
+            user_id=user_id,
+            request_id=request_id,
+            preferences=preferences,
+        )
+
+    def reject_assisted_apply_connection(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+    ) -> AssistedApplyConnectionRecord:
+        return self._assisted_apply_connection_service.reject(
+            user_id=user_id,
+            request_id=request_id,
+        )
+
+    def exchange_assisted_apply_authorization(
+        self,
+        *,
+        extension_origin: str,
+        request_id: str,
+        code: str,
+        verifier: str,
+    ) -> tuple[AssistedApplyConnectionRecord, str]:
+        return self._assisted_apply_connection_service.exchange(
+            extension_origin=extension_origin,
+            request_id=request_id,
+            code=code,
+            verifier=verifier,
+        )
+
+    def authenticate_assisted_apply_session(
+        self,
+        *,
+        raw_session: str,
+        extension_origin: str,
+    ) -> tuple[UserRecord, AssistedApplyConnectionRecord]:
+        return self._assisted_apply_connection_service.authenticate_session(
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def get_assisted_apply_preferences(self, user_id: str) -> AssistedApplyPreferences:
+        return self._assisted_apply_connection_service.get_preferences(user_id)
+
+    def update_assisted_apply_preferences(
+        self,
+        *,
+        user_id: str,
+        preferences: Mapping[str, Any] | None,
+    ) -> AssistedApplyPreferences:
+        return self._assisted_apply_connection_service.update_preferences(
+            user_id,
+            preferences,
+        )
+
+    def revoke_current_assisted_apply_session(
+        self,
+        *,
+        raw_session: str,
+        extension_origin: str,
+    ) -> AssistedApplyConnectionRecord:
+        return self._assisted_apply_connection_service.revoke_current(
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def revoke_owned_assisted_apply_connection(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+    ) -> AssistedApplyConnectionRecord:
+        return self._assisted_apply_connection_service.revoke_owned(
+            user_id=user_id,
+            request_id=request_id,
         )
 
     def issue_api_token(

@@ -9,6 +9,13 @@ class ApiHandler(Protocol):
 
     def _send_html(self, body: str, status: int = 200, *, headers: dict[str, str] | None = None) -> None: ...
 
+    def _send_no_content(
+        self,
+        status: int = 204,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None: ...
+
     def _send_error(
         self,
         status: int,
@@ -27,6 +34,8 @@ class ApiHandler(Protocol):
 
     def _require_identity(self): ...
 
+    def _require_clerk_identity(self): ...
+
     def _require_scope(self, required_scope: str): ...
 
     def _require_admin(self): ...
@@ -36,6 +45,10 @@ class ApiHandler(Protocol):
     def _require_run_access(self, *, run, required_scope: str): ...
 
     def _request_origin(self) -> str: ...
+
+    def _request_client_origin(self) -> str: ...
+
+    def _bearer_token(self) -> str: ...
 
     def _request_api_prefix(self) -> str: ...
 
@@ -53,6 +66,14 @@ class ApiRouteContext:
 
     def send_html(self, body: str, status: int = 200, *, headers: dict[str, str] | None = None) -> None:
         self.handler._send_html(body, status=status, headers=headers)
+
+    def send_no_content(
+        self,
+        status: int = 204,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.handler._send_no_content(status=status, headers=headers)
 
     def send_error(
         self,
@@ -77,6 +98,9 @@ class ApiRouteContext:
     def require_identity(self):
         return self.handler._require_identity()
 
+    def require_clerk_identity(self):
+        return self.handler._require_clerk_identity()
+
     def require_scope(self, required_scope: str):
         return self.handler._require_scope(required_scope)
 
@@ -88,6 +112,12 @@ class ApiRouteContext:
 
     def request_origin(self) -> str:
         return self.handler._request_origin()
+
+    def request_client_origin(self) -> str:
+        return self.handler._request_client_origin()
+
+    def bearer_token(self) -> str:
+        return self.handler._bearer_token()
 
     def request_api_prefix(self) -> str:
         return self.handler._request_api_prefix()

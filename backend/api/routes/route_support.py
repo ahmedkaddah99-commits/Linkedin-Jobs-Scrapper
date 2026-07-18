@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 
 _LOOPBACK_ORIGIN_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_CHROME_EXTENSION_ID_PATTERN = re.compile(r"^[a-p]{32}$")
 
 
 def _json_bytes(payload) -> bytes:
@@ -47,6 +49,7 @@ def _is_unauthorized_permission_error(exc: PermissionError) -> bool:
         for fragment in (
             "missing bearer token",
             "invalid or expired access token",
+            "assisted apply session",
             "session token",
             "jwt",
             "authorized party",
@@ -84,6 +87,16 @@ def _normalize_origin_value(value: str) -> str:
     if not origin:
         return ""
     parsed = urlparse(origin)
+    if parsed.scheme == "chrome-extension":
+        extension_id = str(parsed.netloc or "").strip().lower()
+        if (
+            not _CHROME_EXTENSION_ID_PATTERN.fullmatch(extension_id)
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            return ""
+        return f"chrome-extension://{extension_id}"
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
     return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
@@ -107,12 +120,33 @@ def _origin_is_loopback(origin: str) -> bool:
     return str(parsed.hostname or "").strip().lower() in _LOOPBACK_ORIGIN_HOSTS
 
 
+def _origin_is_chrome_extension(origin: str) -> bool:
+    normalized = _normalize_origin_value(origin)
+    return normalized.startswith("chrome-extension://")
+
+
 def _parse_allowed_origins(raw_value: str) -> tuple[set[str], bool]:
     values = {str(item).strip() for item in str(raw_value or "").split(",") if str(item).strip()}
     allow_all = "*" in values
-    normalized = {_normalize_origin_value(item) for item in values if item != "*"}
+    normalized = {
+        _normalize_origin_value(item)
+        for item in values
+        if item != "*" and not _origin_is_chrome_extension(item)
+    }
     normalized.discard("")
     return normalized, allow_all
+
+
+def _parse_allowed_extension_origins(raw_value: str) -> set[str]:
+    values = [str(item).strip() for item in str(raw_value or "").split(",") if str(item).strip()]
+    if any(item == "*" for item in values):
+        raise ValueError("Assisted Apply extension origins must never contain a wildcard.")
+    invalid = [item for item in values if not _origin_is_chrome_extension(item)]
+    if invalid:
+        raise ValueError(
+            "Invalid Assisted Apply extension origin(s): " + ", ".join(sorted(invalid))
+        )
+    return {_normalize_origin_value(item) for item in values}
 
 
 def bind_server_globals(module_globals: dict) -> None:

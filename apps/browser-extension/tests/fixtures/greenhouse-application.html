@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en" data-runr-assisted-apply-fixture="greenhouse">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Runr Greenhouse fixture</title>
+    <style>
+      body { max-width: 640px; margin: 32px auto; font-family: sans-serif; }
+      form { display: grid; gap: 16px; }
+      label { display: grid; gap: 5px; }
+      input, textarea, button { padding: 8px; }
+    </style>
+  </head>
+  <body data-submit-clicks="0" data-email-events="">
+    <h1>Example Greenhouse application</h1>
+    <form id="application-form">
+      <label for="first-name">First name</label>
+      <input id="first-name" name="first_name" type="text" value="Existing Candidate" required />
+
+      <label for="email">Email address</label>
+      <input id="email" name="email" type="email" autocomplete="email" required />
+
+      <label for="disabled-field">Disabled field</label>
+      <input id="disabled-field" name="disabled_field" type="text" disabled />
+
+      <input id="hidden-field" name="hidden_field" type="hidden" value="portal-state" />
+
+      <label for="captcha-response">CAPTCHA response</label>
+      <input id="captcha-response" name="g-recaptcha-response" type="text" />
+
+      <label for="signature">Signature</label>
+      <input id="signature" name="signature" type="text" />
+
+      <label for="declaration">I certify this declaration is accurate</label>
+      <input id="declaration" name="declaration" type="checkbox" />
+
+      <label for="terms">Accept terms and conditions</label>
+      <input id="terms" name="terms" type="checkbox" />
+
+      <label for="assessment">Coding assessment</label>
+      <textarea id="assessment" name="assessment"></textarea>
+
+      <button id="final-submit" type="submit">Submit application</button>
+    </form>
+
+    <script>
+      const body = document.body;
+      const email = document.getElementById("email");
+      for (const eventName of ["focus", "input", "change", "blur"]) {
+        email.addEventListener(eventName, () => {
+          body.dataset.emailEvents = [body.dataset.emailEvents, eventName].filter(Boolean).join(",");
+        });
+      }
+      document.getElementById("application-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        body.dataset.submitClicks = String(Number(body.dataset.submitClicks || "0") + 1);
+      });
+    </script>
+  </body>
+</html>

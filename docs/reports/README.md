@@ -10,8 +10,9 @@ This folder is the index for dated reports, PRDs, implementation notes, and hist
 1. [Current System Architecture](../architecture/current_system.md)
 2. [Source-Control Artifact Policy](../architecture/source_control_artifact_policy.md)
 3. [AI Document Catalog - 2026-05-27](./ai_document_catalog_2026-05-27.md)
-4. [Runr Scraping P1 Work And Efficiency Report - 2026-05-27](./runr_scraping_p1_work_and_efficiency_report_2026-05-27.md)
-5. [Worker Architecture & Reliability Audit - 2026-05-27](./worker_architecture_reliability_audit_2026-05-27.md)
+4. [Runr Assisted Apply Ticket Plan - 2026-07-17](./runr_assisted_apply_ticket_plan_2026-07-17.md)
+5. [Runr Scraping P1 Work And Efficiency Report - 2026-05-27](./runr_scraping_p1_work_and_efficiency_report_2026-05-27.md)
+6. [Worker Architecture & Reliability Audit - 2026-05-27](./worker_architecture_reliability_audit_2026-05-27.md)
 
 ## Folder Rules
 

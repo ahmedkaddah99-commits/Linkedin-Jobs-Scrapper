@@ -18,6 +18,7 @@ export function resolveRouteParent({ pathname = "", search = "" } = {}) {
   if (/^\/tracker\/[^/]+\/ats$/.test(normalizedPath)) {
     return safeTrackerReturnPath(params.get("return"));
   }
+  if (normalizedPath === "/settings/assisted-apply") return "/settings";
   if (/^\/job-workspaces\/[^/]+\/[^/]+$/.test(normalizedPath)) return "/workspaces";
   if (/^\/runs\/[^/]+$/.test(normalizedPath)) return "/runs";
   return "";

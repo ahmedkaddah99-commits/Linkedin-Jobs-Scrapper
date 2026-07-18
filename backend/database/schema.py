@@ -139,6 +139,34 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     updated_at TEXT NOT NULL,
     payload_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS assisted_apply_connections (
+    request_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT '',
+    extension_id TEXT NOT NULL,
+    extension_origin TEXT NOT NULL,
+    callback_url TEXT NOT NULL,
+    client_state TEXT NOT NULL,
+    pkce_challenge TEXT NOT NULL,
+    installation_id TEXT NOT NULL,
+    extension_version TEXT NOT NULL,
+    request_expires_at TEXT NOT NULL,
+    authorization_code_prefix TEXT NOT NULL DEFAULT '',
+    authorization_code_hash TEXT NOT NULL DEFAULT '',
+    authorization_code_expires_at TEXT NOT NULL DEFAULT '',
+    authorized_at TEXT NOT NULL DEFAULT '',
+    code_consumed_at TEXT NOT NULL DEFAULT '',
+    session_token_prefix TEXT NOT NULL DEFAULT '',
+    session_token_hash TEXT NOT NULL DEFAULT '',
+    session_expires_at TEXT NOT NULL DEFAULT '',
+    activated_at TEXT NOT NULL DEFAULT '',
+    last_used_at TEXT NOT NULL DEFAULT '',
+    rejected_at TEXT NOT NULL DEFAULT '',
+    revoked_at TEXT NOT NULL DEFAULT '',
+    expired_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS secrets (
     secret_id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
@@ -171,5 +199,11 @@ CREATE INDEX IF NOT EXISTS idx_run_document_bindings_document
 CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix_active
     ON api_tokens(token_prefix, is_active, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assisted_apply_connections_user_updated
+    ON assisted_apply_connections(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assisted_apply_connections_status_updated
+    ON assisted_apply_connections(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assisted_apply_connections_session_prefix
+    ON assisted_apply_connections(session_token_prefix, status);
 CREATE INDEX IF NOT EXISTS idx_secrets_workspace_id ON secrets(workspace_id, updated_at DESC);
 """

@@ -1,0 +1,45 @@
+{
+  "name": "@runr/browser-extension",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "wxt",
+    "generate:icons": "node scripts/generate-icons.mjs",
+    "postinstall": "wxt prepare",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "test:unit": "vitest run",
+    "build": "wxt build",
+    "build:test": "wxt build --mode testing",
+    "verify:manifest": "node scripts/verify-manifest.mjs",
+    "test:e2e": "npm run build:test && playwright test",
+    "check": "npm run typecheck && npm run test:unit && npm run build && npm run verify:manifest",
+    "check:all": "npm run check && npm run test:e2e"
+  },
+  "dependencies": {
+    "@runr/ats-core": "file:../../packages/ats-core",
+    "@runr/extension-messages": "file:../../packages/extension-messages",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^22.20.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@wxt-dev/module-react": "^1.2.2",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "wxt": "^0.20.27"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "shell-quote": "1.10.0",
+    "tmp": "0.2.7",
+    "uuid": "11.1.1"
+  }
+}

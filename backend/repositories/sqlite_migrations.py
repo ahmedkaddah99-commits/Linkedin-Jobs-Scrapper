@@ -818,6 +818,47 @@ def _apply_email_sync_start_date_migration(connection: DatabaseConnection) -> No
     )
 
 
+def _apply_assisted_apply_connections_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS assisted_apply_connections (
+            request_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT '',
+            extension_id TEXT NOT NULL,
+            extension_origin TEXT NOT NULL,
+            callback_url TEXT NOT NULL,
+            client_state TEXT NOT NULL,
+            pkce_challenge TEXT NOT NULL,
+            installation_id TEXT NOT NULL,
+            extension_version TEXT NOT NULL,
+            request_expires_at TEXT NOT NULL,
+            authorization_code_prefix TEXT NOT NULL DEFAULT '',
+            authorization_code_hash TEXT NOT NULL DEFAULT '',
+            authorization_code_expires_at TEXT NOT NULL DEFAULT '',
+            authorized_at TEXT NOT NULL DEFAULT '',
+            code_consumed_at TEXT NOT NULL DEFAULT '',
+            session_token_prefix TEXT NOT NULL DEFAULT '',
+            session_token_hash TEXT NOT NULL DEFAULT '',
+            session_expires_at TEXT NOT NULL DEFAULT '',
+            activated_at TEXT NOT NULL DEFAULT '',
+            last_used_at TEXT NOT NULL DEFAULT '',
+            rejected_at TEXT NOT NULL DEFAULT '',
+            revoked_at TEXT NOT NULL DEFAULT '',
+            expired_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_connections_user_updated
+            ON assisted_apply_connections(user_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_connections_status_updated
+            ON assisted_apply_connections(status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_connections_session_prefix
+            ON assisted_apply_connections(session_token_prefix, status);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -907,5 +948,10 @@ MIGRATIONS = (
         "Add email sync start date, status, and scheduling columns. Remove scan_depth.",
         _apply_email_sync_start_date_migration,
         dependencies=(_table_columns, _ensure_user_column),
+    ),
+    Migration.from_callable(
+        "016_assisted_apply_connections",
+        "Create one-time Assisted Apply connection and extension session storage.",
+        _apply_assisted_apply_connections_migration,
     ),
 )

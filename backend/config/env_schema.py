@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -151,6 +152,11 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Render-provided frontend hostname allowed by the API for Blueprint preview environments.",
     },
+    "RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS": {
+        "required": False,
+        "scope": "backend",
+        "description": "Comma-separated exact chrome-extension:// origins allowed only on Assisted Apply extension routes; wildcards are forbidden.",
+    },
     "VITE_CLERK_PUBLISHABLE_KEY": {
         "required": True,
         "scope": "frontend",
@@ -272,6 +278,7 @@ def read_environment_settings(environ: Mapping[str, str] | None = None) -> Envir
 def get_environment_validation_errors(
     environ: Mapping[str, str] | None = None,
 ) -> list[str]:
+    source = os.environ if environ is None else environ
     settings = read_environment_settings(environ)
     errors: list[str] = []
 
@@ -308,6 +315,25 @@ def get_environment_validation_errors(
             errors.append("Production requires DATABASE_BACKEND=turso")
         if settings.object_storage_backend not in {"s3", "r2"}:
             errors.append("Production requires OBJECT_STORAGE_BACKEND=s3 or r2")
+        if "*" in {
+            item.strip() for item in _mapping_value(source, "BACKEND_ALLOWED_ORIGINS").split(",")
+        }:
+            errors.append("Production BACKEND_ALLOWED_ORIGINS must not contain a wildcard")
+
+    extension_origins = [
+        item.strip()
+        for item in _mapping_value(source, "RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS").split(",")
+        if item.strip()
+    ]
+    extension_origin_pattern = re.compile(r"^chrome-extension://[a-p]{32}$")
+    if settings.is_production and not extension_origins:
+        errors.append(
+            "Production requires RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS with the exact Web Store extension origin"
+        )
+    if any(not extension_origin_pattern.fullmatch(item) for item in extension_origins):
+        errors.append(
+            "RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS must contain only exact Chrome extension origins"
+        )
 
     return errors
 

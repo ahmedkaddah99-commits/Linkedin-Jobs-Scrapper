@@ -10,6 +10,7 @@ test("resolves explicit nested route parents including query-sensitive Career Me
   assert.equal(resolveRouteParent({ pathname: "/tracker/job-descriptions/review_1" }), "/tracker");
   assert.equal(resolveRouteParent({ pathname: "/job-workspaces/run_1/job_1" }), "/workspaces");
   assert.equal(resolveRouteParent({ pathname: "/runs/run_1" }), "/runs");
+  assert.equal(resolveRouteParent({ pathname: "/settings/assisted-apply" }), "/settings");
 });
 
 test("uses a safe tracker return target for ATS details and stops at section roots", () => {
@@ -29,4 +30,5 @@ test("uses a safe tracker return target for ATS details and stops at section roo
   );
   assert.equal(resolveRouteParent({ pathname: "/tracker" }), "");
   assert.equal(resolveRouteParent({ pathname: "/documents" }), "");
+  assert.equal(resolveRouteParent({ pathname: "/settings" }), "");
 });

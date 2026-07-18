@@ -135,7 +135,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual([row[0] for row in rows], [migration.migration_id for migration in MIGRATIONS])
         self.assertTrue(all(len(str(row[1])) == 64 for row in rows))
 
-    def test_committed_registry_preserves_migration_ids_001_through_015(self):
+    def test_committed_registry_preserves_migration_ids_001_through_016(self):
         self.assertEqual(
             [migration.migration_id for migration in MIGRATIONS],
             [
@@ -154,6 +154,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "013_candidate_document_normalization",
                 "014_workspace_ownership",
                 "015_email_sync_start_date",
+                "016_assisted_apply_connections",
             ],
         )
         self.assertTrue(all(len(migration.checksum) == 64 for migration in MIGRATIONS))

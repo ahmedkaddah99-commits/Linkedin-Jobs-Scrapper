@@ -9,6 +9,10 @@ __pycache__/
 node_modules/
 frontend/node_modules/
 frontend/dist/
+apps/browser-extension/.output/
+apps/browser-extension/.wxt/
+apps/browser-extension/playwright-report/
+apps/browser-extension/test-results/
 
 # Local secrets and editor state
 .env

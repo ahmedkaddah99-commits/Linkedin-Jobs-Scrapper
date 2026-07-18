@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Protocol
 
+from backend.domain.assisted_apply import AssistedApplyConnectionRecord, AssistedApplyPreferences
 from backend.domain.models import (
     ApiTokenRecord,
     ArtifactRecord,
@@ -90,6 +91,73 @@ class AuthRepositoryProtocol(Protocol):
     def get_api_token(self, token_id: str) -> ApiTokenRecord: ...
     def upsert_api_token(self, token: ApiTokenRecord) -> None: ...
     def delete_api_token(self, token_id: str) -> None: ...
+    def create_assisted_apply_connection(self, record: AssistedApplyConnectionRecord) -> None: ...
+    def get_assisted_apply_connection(self, request_id: str) -> AssistedApplyConnectionRecord: ...
+    def list_assisted_apply_connections(
+        self,
+        *,
+        user_id: str = "",
+        status: str = "",
+    ) -> list[AssistedApplyConnectionRecord]: ...
+    def list_assisted_apply_connections_for_session_prefix(
+        self,
+        session_token_prefix: str,
+    ) -> list[AssistedApplyConnectionRecord]: ...
+    def authorize_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        authorization_code_prefix: str,
+        authorization_code_hash: str,
+        authorization_code_expires_at: str,
+        authorized_at: str,
+    ) -> AssistedApplyConnectionRecord | None: ...
+    def reject_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        rejected_at: str,
+    ) -> AssistedApplyConnectionRecord | None: ...
+    def activate_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        extension_origin: str,
+        session_token_prefix: str,
+        session_token_hash: str,
+        session_expires_at: str,
+        activated_at: str,
+    ) -> AssistedApplyConnectionRecord | None: ...
+    def expire_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        expected_status: str,
+        expired_at: str,
+    ) -> AssistedApplyConnectionRecord | None: ...
+    def touch_assisted_apply_session(
+        self,
+        request_id: str,
+        *,
+        last_used_at: str,
+    ) -> AssistedApplyConnectionRecord | None: ...
+    def revoke_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        revoked_at: str,
+    ) -> AssistedApplyConnectionRecord | None: ...
+    def update_assisted_apply_preferences_metadata(
+        self,
+        user_id: str,
+        *,
+        expected_revision: int,
+        preferences: AssistedApplyPreferences,
+        updated_at: str,
+    ) -> bool: ...
 
 
 class SecretStoreProtocol(Protocol):

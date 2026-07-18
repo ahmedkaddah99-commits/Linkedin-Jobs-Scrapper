@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "check": "eslint src --max-warnings=0 && vite build",
+    "test": "node --test",
+    "check": "npm run test && eslint src --max-warnings=0 && vite build",
     "build": "vite build",
     "preview": "vite preview"
   },

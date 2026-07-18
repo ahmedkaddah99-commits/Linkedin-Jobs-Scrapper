@@ -525,6 +525,33 @@ function DeleteAccountSection({
   );
 }
 
+function AssistedApplyConnectionCard() {
+  return (
+    <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-primary/80">
+            Connected apps
+          </p>
+          <h2 className="mt-2 font-headline text-xl font-bold text-on-surface">
+            Assisted Apply browser connection
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-on-surface-variant">
+            Review extension sessions, privacy preferences, and the actions that always remain manual.
+          </p>
+        </div>
+        <Link
+          className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-primary/10 px-4 py-2.5 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
+          to="/settings/assisted-apply"
+        >
+          <span className="material-symbols-outlined text-[18px]" aria-hidden="true">extension</span>
+          Manage connection
+        </Link>
+      </div>
+    </section>
+  );
+}
+
 export default function SettingsPage() {
   const { disconnect, getAccessToken, request, resolvePath } = useSession();
   const { user: clerkUser } = useUser();
@@ -779,6 +806,7 @@ export default function SettingsPage() {
                 usageLoading={usageLoading}
                 usageQuotas={usageQuotas}
               />
+              <AssistedApplyConnectionCard />
 
               <div className="sticky bottom-8 self-end rounded-xl border border-outline-variant/20 bg-surface-container-lowest/80 p-4 shadow-soft backdrop-blur-[20px]">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center">

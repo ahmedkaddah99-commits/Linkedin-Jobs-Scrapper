@@ -94,6 +94,10 @@ class EnvironmentConfigTests(unittest.TestCase):
         self.assertIn("Production requires OBJECT_STORAGE_BACKEND=s3 or r2", errors)
         self.assertIn("TURSO_DATABASE_URL is required for Turso and production", errors)
         self.assertIn("S3_BUCKET is required for S3-compatible and production object storage", errors)
+        self.assertIn(
+            "Production requires RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS with the exact Web Store extension origin",
+            errors,
+        )
 
         with self.assertRaises(EnvironmentValidationError):
             validate_environment({"RUNR_ENV": "production"})
@@ -115,6 +119,7 @@ class EnvironmentConfigTests(unittest.TestCase):
             "S3_BUCKET": "runr-production",
             "S3_REGION": "auto",
             "S3_SIGNED_URL_TTL_SECONDS": "600",
+            "RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS": "chrome-extension://" + ("a" * 32),
         }
 
         settings = validate_environment(environ)
@@ -122,6 +127,49 @@ class EnvironmentConfigTests(unittest.TestCase):
         self.assertTrue(settings.is_production)
         self.assertEqual(settings.s3_signed_url_ttl_seconds, 600)
         self.assertEqual(read_environment_settings(environ), settings)
+
+    def test_production_rejects_wildcard_web_origins(self):
+        errors = get_environment_validation_errors(
+            {
+                "RUNR_ENV": "production",
+                "BACKEND_ALLOWED_ORIGINS": "*",
+            }
+        )
+
+        self.assertIn("Production BACKEND_ALLOWED_ORIGINS must not contain a wildcard", errors)
+
+    def test_assisted_apply_extension_origins_must_be_exact_chrome_origins(self):
+        extension_id = "a" * 32
+        exact_origin = f"chrome-extension://{extension_id}"
+
+        self.assertNotIn(
+            "RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS must contain only exact Chrome extension origins",
+            get_environment_validation_errors(
+                {"RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS": exact_origin}
+            ),
+        )
+
+        for invalid_origin in (
+            "*",
+            "https://app.userunr.com",
+            exact_origin + "/path",
+            "chrome-extension://" + ("z" * 32),
+        ):
+            with self.subTest(origin=invalid_origin):
+                self.assertIn(
+                    "RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS must contain only exact Chrome extension origins",
+                    get_environment_validation_errors(
+                        {"RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS": invalid_origin}
+                    ),
+                )
+
+    def test_production_requires_an_assisted_apply_extension_origin(self):
+        errors = get_environment_validation_errors({"RUNR_ENV": "production"})
+
+        self.assertIn(
+            "Production requires RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS with the exact Web Store extension origin",
+            errors,
+        )
 
 
 if __name__ == "__main__":

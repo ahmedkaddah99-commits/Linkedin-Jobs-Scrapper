@@ -40,6 +40,14 @@ cd frontend
 npm install
 ```
 
+Assisted Apply browser extension (independent lockfile):
+
+```powershell
+cd apps/browser-extension
+npm install
+npx playwright install chromium
+```
+
 Create `frontend/.env.local` for the Vite client:
 
 ```env
@@ -177,6 +185,8 @@ Fast checks from the repo root:
 npm run check
 npm run check:backend
 npm run check:frontend
+npm run check:extension
+npm run check:assisted-apply
 ```
 
-`check:backend` runs Ruff plus a documented fast pytest subset. Use `npm run check:backend:api` for the slower API sweep and `npm run check:backend:full` before larger merges. `check:frontend` currently uses the Vite production build as the frontend check.
+`check:backend` runs Ruff plus a documented fast pytest subset. Use `npm run check:backend:api` for the slower API sweep and `npm run check:backend:full` before larger merges. `check:frontend` currently uses the Vite production build as the frontend check. `check:extension` runs type, unit, production-build, and manifest checks; `check:assisted-apply` also launches the packaged MV3 extension in Playwright Chromium.

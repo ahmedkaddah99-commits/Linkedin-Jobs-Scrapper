@@ -42,6 +42,13 @@ jobs:
           tests/test_worker_service.py
           tests/test_phase0_contracts.py
           tests/test_job_dedupe.py
+          tests/test_assisted_apply_connection_service.py
+          tests/test_env_config.py
+
+      - name: Run Assisted Apply API boundary checks
+        run: >-
+          python -m pytest -q tests/test_backend_api.py
+          -k "assisted_apply or extension_cors or extension_origin or clerk_only_identity"
 
   frontend:
     name: Frontend checks
@@ -58,11 +65,43 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --prefix frontend
 
-      - name: Test API URL resolution
-        run: node --test frontend/src/lib/api.test.js
+      - name: Run frontend unit tests
+        run: npm --prefix frontend run test
 
       - name: Lint and build frontend
         run: npm --prefix frontend run check
+
+  assisted-apply-extension:
+    name: Assisted Apply extension checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/browser-extension/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci --prefix apps/browser-extension
+
+      - name: Install Playwright Chromium
+        working-directory: apps/browser-extension
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Assisted Apply extension gate
+        run: npm --prefix apps/browser-extension run check:all
+
+      - name: Upload extension browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assisted-apply-playwright-diagnostics
+          path: |
+            apps/browser-extension/playwright-report
+            apps/browser-extension/test-results
+          if-no-files-found: ignore
 
   docker:
     name: Docker build
@@ -70,6 +109,7 @@ jobs:
     needs:
       - backend
       - frontend
+      - assisted-apply-extension
     steps:
       - uses: actions/checkout@v4
 

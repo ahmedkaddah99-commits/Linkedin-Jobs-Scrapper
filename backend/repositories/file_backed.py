@@ -2,9 +2,21 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from backend.domain.assisted_apply import (
+    ASSISTED_APPLY_PREFERENCES_METADATA_KEY,
+    ASSISTED_APPLY_STATUS_ACTIVE,
+    ASSISTED_APPLY_STATUS_AUTHORIZED,
+    ASSISTED_APPLY_STATUS_EXPIRED,
+    ASSISTED_APPLY_STATUS_PENDING,
+    ASSISTED_APPLY_STATUS_REJECTED,
+    ASSISTED_APPLY_STATUS_REVOKED,
+    AssistedApplyConnectionRecord,
+    AssistedApplyPreferences,
+)
 from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_QUEUED,
@@ -44,6 +56,19 @@ def _read_json(path: Path, default: Any):
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _timestamp_is_after(value: str, threshold: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").strip())
+        comparison = datetime.fromisoformat(str(threshold or "").strip())
+    except (TypeError, ValueError):
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    if comparison.tzinfo is None:
+        comparison = comparison.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc) > comparison.astimezone(timezone.utc)
 
 
 class FileWorkspaceRepository:
@@ -455,10 +480,13 @@ class FileAuthRepository:
         self.base_dir = Path(base_dir)
         self.users_path = self.base_dir / "users.json"
         self.tokens_path = self.base_dir / "api_tokens.json"
+        self.assisted_apply_connections_path = self.base_dir / "assisted_apply_connections.json"
         if not self.users_path.exists():
             _write_json(self.users_path, [])
         if not self.tokens_path.exists():
             _write_json(self.tokens_path, [])
+        if not self.assisted_apply_connections_path.exists():
+            _write_json(self.assisted_apply_connections_path, [])
 
     def list_users(self) -> list[UserRecord]:
         payload = _read_json(self.users_path, [])
@@ -483,13 +511,20 @@ class FileAuthRepository:
         _write_json(self.users_path, [item.to_dict() for item in users.values()])
 
     def delete_user(self, user_id: str) -> None:
-        users = {item.user_id: item for item in self.list_users()}
-        if user_id not in users:
-            raise KeyError(f"User '{user_id}' not found.")
-        del users[user_id]
-        _write_json(self.users_path, [item.to_dict() for item in users.values()])
-        tokens = [token for token in self.list_api_tokens() if token.user_id != user_id]
-        _write_json(self.tokens_path, [token.to_storage_dict() for token in tokens])
+        with _FILE_BACKEND_LOCK:
+            users = {item.user_id: item for item in self.list_users()}
+            if user_id not in users:
+                raise KeyError(f"User '{user_id}' not found.")
+            del users[user_id]
+            _write_json(self.users_path, [item.to_dict() for item in users.values()])
+            tokens = [token for token in self.list_api_tokens() if token.user_id != user_id]
+            _write_json(self.tokens_path, [token.to_storage_dict() for token in tokens])
+            connections = [
+                record
+                for record in self.list_assisted_apply_connections()
+                if record.user_id != user_id
+            ]
+            self._write_assisted_apply_connections(connections)
 
     def list_api_tokens(self, *, user_id: str = "", active_only: bool = False) -> list[ApiTokenRecord]:
         payload = _read_json(self.tokens_path, [])
@@ -528,6 +563,256 @@ class FileAuthRepository:
             raise KeyError(f"API token '{token_id}' not found.")
         del tokens[token_id]
         _write_json(self.tokens_path, [item.to_storage_dict() for item in tokens.values()])
+
+    def _read_assisted_apply_connections(self) -> list[AssistedApplyConnectionRecord]:
+        payload = _read_json(self.assisted_apply_connections_path, [])
+        return [
+            AssistedApplyConnectionRecord.from_dict(item)
+            for item in payload
+            if isinstance(item, dict)
+        ]
+
+    def _write_assisted_apply_connections(
+        self,
+        records: Iterable[AssistedApplyConnectionRecord],
+    ) -> None:
+        _write_json(
+            self.assisted_apply_connections_path,
+            [record.to_dict() for record in records],
+        )
+
+    def create_assisted_apply_connection(self, record: AssistedApplyConnectionRecord) -> None:
+        with _FILE_BACKEND_LOCK:
+            records = {item.request_id: item for item in self._read_assisted_apply_connections()}
+            if record.request_id in records:
+                raise ValueError(f"Assisted Apply connection '{record.request_id}' already exists.")
+            records[record.request_id] = record
+            self._write_assisted_apply_connections(records.values())
+
+    def get_assisted_apply_connection(self, request_id: str) -> AssistedApplyConnectionRecord:
+        normalized_request_id = str(request_id or "").strip()
+        with _FILE_BACKEND_LOCK:
+            for record in self._read_assisted_apply_connections():
+                if record.request_id == normalized_request_id:
+                    return record
+        raise KeyError(f"Assisted Apply connection '{normalized_request_id}' not found.")
+
+    def list_assisted_apply_connections(
+        self,
+        *,
+        user_id: str = "",
+        status: str = "",
+    ) -> list[AssistedApplyConnectionRecord]:
+        with _FILE_BACKEND_LOCK:
+            records = self._read_assisted_apply_connections()
+        if user_id:
+            records = [record for record in records if record.user_id == user_id]
+        if status:
+            records = [record for record in records if record.status == status]
+        return sorted(records, key=lambda record: (record.updated_at, record.request_id), reverse=True)
+
+    def list_assisted_apply_connections_for_session_prefix(
+        self,
+        session_token_prefix: str,
+    ) -> list[AssistedApplyConnectionRecord]:
+        normalized_prefix = str(session_token_prefix or "").strip()
+        if not normalized_prefix:
+            return []
+        return [
+            record
+            for record in self.list_assisted_apply_connections(status=ASSISTED_APPLY_STATUS_ACTIVE)
+            if record.session_token_prefix == normalized_prefix
+        ]
+
+    def authorize_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        authorization_code_prefix: str,
+        authorization_code_hash: str,
+        authorization_code_expires_at: str,
+        authorized_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with _FILE_BACKEND_LOCK:
+            records = {item.request_id: item for item in self._read_assisted_apply_connections()}
+            record = records.get(str(request_id or "").strip())
+            if (
+                record is None
+                or record.status != ASSISTED_APPLY_STATUS_PENDING
+                or bool(record.user_id)
+                or not _timestamp_is_after(record.request_expires_at, authorized_at)
+            ):
+                return None
+            record.status = ASSISTED_APPLY_STATUS_AUTHORIZED
+            record.user_id = str(user_id or "").strip()
+            record.authorization_code_prefix = str(authorization_code_prefix or "").strip()
+            record.authorization_code_hash = str(authorization_code_hash or "").strip()
+            record.authorization_code_expires_at = str(authorization_code_expires_at or "").strip()
+            record.authorized_at = str(authorized_at or "").strip()
+            record.updated_at = record.authorized_at
+            self._write_assisted_apply_connections(records.values())
+            return record
+
+    def reject_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        rejected_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with _FILE_BACKEND_LOCK:
+            records = {item.request_id: item for item in self._read_assisted_apply_connections()}
+            record = records.get(str(request_id or "").strip())
+            if (
+                record is None
+                or record.status != ASSISTED_APPLY_STATUS_PENDING
+                or bool(record.user_id)
+                or not _timestamp_is_after(record.request_expires_at, rejected_at)
+            ):
+                return None
+            record.status = ASSISTED_APPLY_STATUS_REJECTED
+            record.user_id = str(user_id or "").strip()
+            record.rejected_at = str(rejected_at or "").strip()
+            record.updated_at = record.rejected_at
+            self._write_assisted_apply_connections(records.values())
+            return record
+
+    def activate_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        extension_origin: str,
+        session_token_prefix: str,
+        session_token_hash: str,
+        session_expires_at: str,
+        activated_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with _FILE_BACKEND_LOCK:
+            records = {item.request_id: item for item in self._read_assisted_apply_connections()}
+            record = records.get(str(request_id or "").strip())
+            if (
+                record is None
+                or record.status != ASSISTED_APPLY_STATUS_AUTHORIZED
+                or bool(record.code_consumed_at)
+                or record.extension_origin != str(extension_origin or "").strip()
+                or not _timestamp_is_after(record.authorization_code_expires_at, activated_at)
+            ):
+                return None
+            record.status = ASSISTED_APPLY_STATUS_ACTIVE
+            record.code_consumed_at = str(activated_at or "").strip()
+            record.authorization_code_prefix = ""
+            record.authorization_code_hash = ""
+            record.session_token_prefix = str(session_token_prefix or "").strip()
+            record.session_token_hash = str(session_token_hash or "").strip()
+            record.session_expires_at = str(session_expires_at or "").strip()
+            record.activated_at = str(activated_at or "").strip()
+            record.last_used_at = record.activated_at
+            record.updated_at = record.activated_at
+            self._write_assisted_apply_connections(records.values())
+            return record
+
+    def expire_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        expected_status: str,
+        expired_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with _FILE_BACKEND_LOCK:
+            records = {item.request_id: item for item in self._read_assisted_apply_connections()}
+            record = records.get(str(request_id or "").strip())
+            if record is None or record.status != str(expected_status or "").strip():
+                return None
+            record.status = ASSISTED_APPLY_STATUS_EXPIRED
+            record.expired_at = str(expired_at or "").strip()
+            record.updated_at = record.expired_at
+            record.authorization_code_prefix = ""
+            record.authorization_code_hash = ""
+            record.session_token_prefix = ""
+            record.session_token_hash = ""
+            self._write_assisted_apply_connections(records.values())
+            return record
+
+    def touch_assisted_apply_session(
+        self,
+        request_id: str,
+        *,
+        last_used_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with _FILE_BACKEND_LOCK:
+            records = {item.request_id: item for item in self._read_assisted_apply_connections()}
+            record = records.get(str(request_id or "").strip())
+            if (
+                record is None
+                or record.status != ASSISTED_APPLY_STATUS_ACTIVE
+                or not _timestamp_is_after(record.session_expires_at, last_used_at)
+            ):
+                return None
+            record.last_used_at = str(last_used_at or "").strip()
+            record.updated_at = record.last_used_at
+            self._write_assisted_apply_connections(records.values())
+            return record
+
+    def revoke_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        revoked_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with _FILE_BACKEND_LOCK:
+            records = {item.request_id: item for item in self._read_assisted_apply_connections()}
+            record = records.get(str(request_id or "").strip())
+            if (
+                record is None
+                or record.user_id != str(user_id or "").strip()
+                or record.status not in {ASSISTED_APPLY_STATUS_AUTHORIZED, ASSISTED_APPLY_STATUS_ACTIVE}
+            ):
+                return None
+            record.status = ASSISTED_APPLY_STATUS_REVOKED
+            record.revoked_at = str(revoked_at or "").strip()
+            record.updated_at = record.revoked_at
+            record.authorization_code_prefix = ""
+            record.authorization_code_hash = ""
+            record.session_token_prefix = ""
+            record.session_token_hash = ""
+            self._write_assisted_apply_connections(records.values())
+            return record
+
+    def update_assisted_apply_preferences_metadata(
+        self,
+        user_id: str,
+        *,
+        expected_revision: int,
+        preferences: AssistedApplyPreferences,
+        updated_at: str,
+    ) -> bool:
+        if (
+            preferences.schema_version != 1
+            or preferences.revision != int(expected_revision) + 1
+            or not preferences.require_legal_answer_confirmation
+        ):
+            raise ValueError("Invalid server-owned Assisted Apply preference revision.")
+        normalized_user_id = str(user_id or "").strip()
+        with _FILE_BACKEND_LOCK:
+            users = {item.user_id: item for item in self.list_users()}
+            user = users.get(normalized_user_id)
+            if user is None:
+                raise KeyError(f"User '{normalized_user_id}' not found.")
+            metadata = dict(user.metadata or {})
+            stored = metadata.get(ASSISTED_APPLY_PREFERENCES_METADATA_KEY)
+            current = AssistedApplyPreferences.from_stored(
+                stored if isinstance(stored, dict) else None
+            )
+            if current.revision != int(expected_revision):
+                return False
+            metadata[ASSISTED_APPLY_PREFERENCES_METADATA_KEY] = preferences.to_dict()
+            user.metadata = metadata
+            user.updated_at = str(updated_at or "").strip()
+            users[user.user_id] = user
+            _write_json(self.users_path, [item.to_dict() for item in users.values()])
+            return True
 
 
 class FileSecretStore:

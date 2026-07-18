@@ -14,7 +14,7 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 from unittest.mock import MagicMock, patch
 
 from backend import create_backend
@@ -28,6 +28,8 @@ from backend.api.server import (
     _store_candidate_asset_upload,
     build_handler,
 )
+from backend.api.routes.route_support import _parse_allowed_extension_origins
+from backend.application.assisted_apply_service import pkce_s256_challenge
 from backend.capabilities.networking import build_empty_relevant_people_discovery
 from backend.capabilities.tracker.email_integration import TrackerMailboxMessage
 from backend.domain.models import ArtifactRecord, JobRecord, ReviewRecord, StageDefinition
@@ -109,6 +111,10 @@ class _ApiCuratedSourceStage(BaseStage):
 
 
 class BackendApiTests(unittest.TestCase):
+    extension_origin = "chrome-extension://" + ("a" * 32)
+    second_extension_origin = "chrome-extension://" + ("b" * 32)
+    frontend_origin = "http://127.0.0.1:4173"
+
     @staticmethod
     def _clerk_jwt_token(*, subject: str = "user_test", session_id: str = "sess_test") -> str:
         def jwt_segment(payload):
@@ -206,7 +212,17 @@ class BackendApiTests(unittest.TestCase):
         self.app.upsert_workspace(api_workspace)
         _, self.access_token = self.app.issue_api_token(user_id=self.user.user_id, name="api-test")
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(self.app))
+        self.server = ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            build_handler(
+                self.app,
+                allowed_origins={self.frontend_origin},
+                allowed_extension_origins={
+                    self.extension_origin,
+                    self.second_extension_origin,
+                },
+            ),
+        )
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -571,6 +587,297 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(payload["error"]["code"], "forbidden")
         self.assertNotIn("Access-Control-Allow-Origin", headers)
+
+    def test_extension_cors_is_exact_and_limited_to_assisted_apply_extension_routes(self):
+        extension_origin = "chrome-extension://" + ("a" * 32)
+        handler_class = build_handler(
+            self.app,
+            allowed_extension_origins={extension_origin},
+            allow_all_origins=True,
+        )
+        handler = object.__new__(handler_class)
+        handler.headers = {"Origin": extension_origin}
+
+        handler.path = "/v1/assisted-apply/extension/session"
+        self.assertEqual(handler._cors_origin(), extension_origin)
+
+        handler.path = "/v1/workspaces"
+        self.assertEqual(handler._cors_origin(), "")
+
+        handler.path = "/v1/assisted-apply/extension/session"
+        handler.headers = {"Origin": "chrome-extension://" + ("b" * 32)}
+        self.assertEqual(handler._cors_origin(), "")
+
+    def test_extension_origin_configuration_rejects_wildcards_and_non_exact_origins(self):
+        exact_origin = "chrome-extension://" + ("a" * 32)
+        self.assertEqual(_parse_allowed_extension_origins(exact_origin), {exact_origin})
+
+        for invalid_origin in (
+            "*",
+            "https://app.userunr.com",
+            exact_origin + "/path",
+            "chrome-extension://" + ("z" * 32),
+        ):
+            with self.subTest(origin=invalid_origin), self.assertRaises(ValueError):
+                _parse_allowed_extension_origins(invalid_origin)
+
+    def test_clerk_only_identity_rejects_legacy_tokens_and_untrusted_authorized_parties(self):
+        allowed_origin = "https://app.userunr.com"
+        handler_class = build_handler(self.app, allowed_origins={allowed_origin})
+        handler = object.__new__(handler_class)
+
+        for auth_method, authorized_party in (
+            ("legacy_token", allowed_origin),
+            ("clerk_jwt", ""),
+            ("clerk_jwt", "https://evil.example"),
+        ):
+            with self.subTest(auth_method=auth_method, authorized_party=authorized_party):
+                handler._auth_context = MagicMock(
+                    return_value=SimpleNamespace(
+                        auth_method=auth_method,
+                        authorized_party=authorized_party,
+                        user=self.user,
+                        token=SimpleNamespace(),
+                    )
+                )
+                with self.assertRaises(PermissionError):
+                    handler._require_clerk_identity()
+
+        handler._auth_context = MagicMock(
+            return_value=SimpleNamespace(
+                auth_method="clerk_jwt",
+                authorized_party=allowed_origin,
+                user=self.user,
+                token=SimpleNamespace(),
+            )
+        )
+        user, _ = handler._require_clerk_identity()
+        self.assertEqual(user.user_id, self.user.user_id)
+
+    def test_assisted_apply_connection_exchange_is_one_time_origin_bound_and_revocable(self):
+        verifier = "v" * 64
+        state = "state_" + ("s" * 32)
+        create_status, create_headers, created = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/connection-requests",
+            headers={"Origin": self.extension_origin},
+            payload={
+                "code_challenge": pkce_s256_challenge(verifier),
+                "state": state,
+                "installation_id": "installation_" + ("i" * 24),
+                "extension_version": "0.1.0",
+            },
+        )
+        self.assertEqual(create_status, 201)
+        self.assertEqual(
+            create_headers.get("Access-Control-Allow-Origin"),
+            self.extension_origin,
+        )
+        request_id = created["request_id"]
+        self.assertTrue(request_id.startswith("aareq_"))
+
+        clerk_user_id = "user_assisted_apply_owner"
+        self.app.repositories.auth_repository.set_user_clerk_user_id(
+            self.user.user_id,
+            clerk_user_id,
+        )
+        clerk_token = self._clerk_jwt_token(
+            subject=clerk_user_id,
+            session_id="sess_assisted_apply_owner",
+        )
+        clerk_claims = SimpleNamespace(
+            clerk_user_id=clerk_user_id,
+            session_id="sess_assisted_apply_owner",
+            role="user",
+            plan_id="scale",
+            quota_overrides={},
+            expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            raw_claims={},
+            authorized_party=self.frontend_origin,
+        )
+        web_headers = {
+            "Authorization": f"Bearer {clerk_token}",
+            "Origin": self.frontend_origin,
+        }
+
+        with patch("backend.api.server.verify_session_token", return_value=clerk_claims):
+            dashboard_status, _, dashboard = self._request_with_headers(
+                "GET",
+                f"/v1/assisted-apply/connection?request_id={quote(request_id)}",
+                headers=web_headers,
+            )
+            self.assertEqual(dashboard_status, 200)
+            self.assertEqual(dashboard["status"], "pending")
+            self.assertNotIn("pkce_challenge", dashboard)
+            self.assertNotIn("client_state", dashboard)
+
+            approve_status, _, approved = self._request_with_headers(
+                "POST",
+                f"/v1/assisted-apply/connection-requests/{quote(request_id)}/approve",
+                headers=web_headers,
+                payload={
+                    "preferences": {
+                        "permit_sensitive_autofill": True,
+                        "permit_demographic_autofill": False,
+                        "require_legal_answer_confirmation": True,
+                    }
+                },
+            )
+            self.assertEqual(approve_status, 200)
+
+            replay_approve_status, _, _ = self._request_with_headers(
+                "POST",
+                f"/v1/assisted-apply/connection-requests/{quote(request_id)}/approve",
+                headers=web_headers,
+                payload={
+                    "preferences": {
+                        "permit_sensitive_autofill": True,
+                        "permit_demographic_autofill": False,
+                        "require_legal_answer_confirmation": True,
+                    }
+                },
+            )
+            self.assertEqual(replay_approve_status, 400)
+
+        completion = urlparse(approved["completion_url"])
+        self.assertEqual(
+            f"{completion.scheme}://{completion.netloc}{completion.path}",
+            f"https://{'a' * 32}.chromiumapp.org/runr/connect",
+        )
+        completion_query = parse_qs(completion.query)
+        self.assertEqual(completion_query["request_id"], [request_id])
+        self.assertEqual(completion_query["state"], [state])
+        authorization_code = completion_query["code"][0]
+
+        persisted_authorized = self.app.repositories.auth_repository.get_assisted_apply_connection(
+            request_id
+        )
+        self.assertNotEqual(persisted_authorized.authorization_code_hash, authorization_code)
+        self.assertNotIn(
+            authorization_code,
+            json.dumps(persisted_authorized.to_dict()),
+        )
+
+        exchange_payload = {
+            "request_id": request_id,
+            "authorization_code": authorization_code,
+            "code_verifier": verifier,
+        }
+        wrong_origin_status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/token",
+            headers={"Origin": self.second_extension_origin},
+            payload=exchange_payload,
+        )
+        self.assertEqual(wrong_origin_status, 403)
+
+        exchange_status, _, exchanged = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/token",
+            headers={"Origin": self.extension_origin},
+            payload=exchange_payload,
+        )
+        self.assertEqual(exchange_status, 200)
+        session_token = exchanged["session_token"]
+        self.assertTrue(session_token.startswith("aases_"))
+        self.assertEqual(exchanged["session"]["user_id"], self.user.user_id)
+        self.assertEqual(exchanged["preferences"]["schema_version"], 1)
+        self.assertTrue(exchanged["preferences"]["permit_sensitive_autofill"])
+        self.assertTrue(exchanged["preferences"]["require_legal_answer_confirmation"])
+
+        persisted_active = self.app.repositories.auth_repository.get_assisted_apply_connection(
+            request_id
+        )
+        self.assertNotEqual(persisted_active.session_token_hash, session_token)
+        self.assertNotIn(session_token, json.dumps(persisted_active.to_dict()))
+
+        replay_exchange_status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/token",
+            headers={"Origin": self.extension_origin},
+            payload=exchange_payload,
+        )
+        self.assertEqual(replay_exchange_status, 400)
+
+        session_headers = {
+            "Authorization": f"Bearer {session_token}",
+            "Origin": self.extension_origin,
+        }
+        originless_status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/session/verify",
+            headers={"Authorization": f"Bearer {session_token}"},
+            payload={},
+        )
+        self.assertEqual(originless_status, 400)
+
+        legacy_get_status, _, _ = self._request_with_headers(
+            "GET",
+            "/v1/assisted-apply/extension/session",
+            headers=session_headers,
+        )
+        self.assertEqual(legacy_get_status, 404)
+
+        session_status, _, session_payload = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/session/verify",
+            headers=session_headers,
+            payload={},
+        )
+        self.assertEqual(session_status, 200)
+        self.assertEqual(session_payload["session"]["session_id"], request_id)
+
+        wrong_session_status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/session/verify",
+            headers={
+                "Authorization": f"Bearer {session_token}",
+                "Origin": self.second_extension_origin,
+            },
+            payload={},
+        )
+        self.assertEqual(wrong_session_status, 401)
+
+        preference_status, _, preference_payload = self._request_with_headers(
+            "PUT",
+            "/v1/assisted-apply/extension/preferences",
+            headers=session_headers,
+            payload={
+                "permit_sensitive_autofill": False,
+                "permit_demographic_autofill": True,
+            },
+        )
+        self.assertEqual(preference_status, 200)
+        self.assertFalse(
+            preference_payload["preferences"]["permit_sensitive_autofill"]
+        )
+        self.assertTrue(
+            preference_payload["preferences"]["permit_demographic_autofill"]
+        )
+        self.assertGreaterEqual(preference_payload["preferences"]["revision"], 2)
+
+        generic_status, _, _ = self._request_with_headers(
+            "GET",
+            "/workspaces",
+            headers={"Authorization": f"Bearer {session_token}"},
+        )
+        self.assertEqual(generic_status, 401)
+
+        disconnect_status, _, disconnect_payload = self._request_with_headers(
+            "DELETE",
+            "/v1/assisted-apply/extension/session",
+            headers=session_headers,
+        )
+        self.assertEqual(disconnect_status, 204)
+        self.assertEqual(disconnect_payload, {})
+
+        revoked_status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/session/verify",
+            headers=session_headers,
+            payload={},
+        )
+        self.assertEqual(revoked_status, 401)
 
     def test_api_supports_run_queue_and_resource_endpoints(self):
         status, run_payload = self._request(

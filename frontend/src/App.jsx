@@ -13,6 +13,7 @@ import { hasAuthenticatedSession } from "./lib/sessionState";
 const AdminPage = lazy(() => import("./pages/AdminPage"));
 const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
 const AdminScrapeOpsPage = lazy(() => import("./pages/AdminScrapeOpsPage"));
+const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
 const DocumentsPage = lazy(() => import("./pages/ArtifactsPage"));
@@ -209,6 +210,7 @@ function AuthenticatedApp() {
               <Route path="/referrals" element={<ReferralsPage />} />
               <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/settings/assisted-apply" element={<AssistedApplyConnectionPage />} />
               <Route path="/pricing" element={<PricingPage />} />
               <Route
                 path="/admin"

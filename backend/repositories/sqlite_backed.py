@@ -6,6 +6,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from backend.domain.assisted_apply import (
+    ASSISTED_APPLY_PREFERENCES_METADATA_KEY,
+    ASSISTED_APPLY_STATUS_ACTIVE,
+    ASSISTED_APPLY_STATUS_AUTHORIZED,
+    ASSISTED_APPLY_STATUS_EXPIRED,
+    ASSISTED_APPLY_STATUS_PENDING,
+    ASSISTED_APPLY_STATUS_REJECTED,
+    ASSISTED_APPLY_STATUS_REVOKED,
+    AssistedApplyConnectionRecord,
+    AssistedApplyPreferences,
+)
 from backend.domain.models import (
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_QUEUED,
@@ -56,6 +67,10 @@ def _deserialize(payload: str | bytes | None, default: Any):
         return json.loads(payload)
     except Exception:
         return default
+
+
+def _assisted_apply_connection_from_row(row) -> AssistedApplyConnectionRecord:
+    return AssistedApplyConnectionRecord.from_dict({key: row[key] for key in row.keys()})
 
 
 def _document_text(
@@ -1383,6 +1398,7 @@ class SqliteAuthRepository(_SqliteStore):
     def delete_user(self, user_id: str) -> None:
         with self._connect() as connection:
             connection.execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,))
+            connection.execute("DELETE FROM assisted_apply_connections WHERE user_id = ?", (user_id,))
             connection.execute("DELETE FROM candidate_assets WHERE user_id = ?", (user_id,))
             connection.execute("DELETE FROM candidate_documents WHERE user_id = ?", (user_id,))
             row_count = connection.execute("DELETE FROM users WHERE user_id = ?", (user_id,)).rowcount
@@ -1469,6 +1485,367 @@ class SqliteAuthRepository(_SqliteStore):
             row_count = connection.execute("DELETE FROM api_tokens WHERE token_id = ?", (token_id,)).rowcount
         if row_count == 0:
             raise KeyError(f"API token '{token_id}' not found.")
+
+    def create_assisted_apply_connection(self, record: AssistedApplyConnectionRecord) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO assisted_apply_connections (
+                        request_id, status, user_id, extension_id, extension_origin,
+                        callback_url, client_state, pkce_challenge, installation_id,
+                        extension_version, request_expires_at,
+                        authorization_code_prefix, authorization_code_hash,
+                        authorization_code_expires_at, authorized_at, code_consumed_at,
+                        session_token_prefix, session_token_hash, session_expires_at,
+                        activated_at, last_used_at, rejected_at, revoked_at, expired_at,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.request_id,
+                        record.status,
+                        record.user_id,
+                        record.extension_id,
+                        record.extension_origin,
+                        record.callback_url,
+                        record.client_state,
+                        record.pkce_challenge,
+                        record.installation_id,
+                        record.extension_version,
+                        record.request_expires_at,
+                        record.authorization_code_prefix,
+                        record.authorization_code_hash,
+                        record.authorization_code_expires_at,
+                        record.authorized_at,
+                        record.code_consumed_at,
+                        record.session_token_prefix,
+                        record.session_token_hash,
+                        record.session_expires_at,
+                        record.activated_at,
+                        record.last_used_at,
+                        record.rejected_at,
+                        record.revoked_at,
+                        record.expired_at,
+                        record.created_at,
+                        record.updated_at,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(
+                f"Assisted Apply connection '{record.request_id}' already exists."
+            ) from exc
+
+    def get_assisted_apply_connection(self, request_id: str) -> AssistedApplyConnectionRecord:
+        normalized_request_id = str(request_id or "").strip()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM assisted_apply_connections WHERE request_id = ?",
+                (normalized_request_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Assisted Apply connection '{normalized_request_id}' not found.")
+        return _assisted_apply_connection_from_row(row)
+
+    def list_assisted_apply_connections(
+        self,
+        *,
+        user_id: str = "",
+        status: str = "",
+    ) -> list[AssistedApplyConnectionRecord]:
+        query = "SELECT * FROM assisted_apply_connections"
+        where_parts: list[str] = []
+        params: list[Any] = []
+        if user_id:
+            where_parts.append("user_id = ?")
+            params.append(str(user_id).strip())
+        if status:
+            where_parts.append("status = ?")
+            params.append(str(status).strip())
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
+        query += " ORDER BY updated_at DESC, request_id DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [_assisted_apply_connection_from_row(row) for row in rows]
+
+    def list_assisted_apply_connections_for_session_prefix(
+        self,
+        session_token_prefix: str,
+    ) -> list[AssistedApplyConnectionRecord]:
+        normalized_prefix = str(session_token_prefix or "").strip()
+        if not normalized_prefix:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM assisted_apply_connections "
+                "WHERE session_token_prefix = ? AND status = ? ORDER BY updated_at DESC",
+                (normalized_prefix, ASSISTED_APPLY_STATUS_ACTIVE),
+            ).fetchall()
+        return [_assisted_apply_connection_from_row(row) for row in rows]
+
+    def authorize_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        authorization_code_prefix: str,
+        authorization_code_hash: str,
+        authorization_code_expires_at: str,
+        authorized_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                """
+                UPDATE assisted_apply_connections
+                SET status = ?, user_id = ?, authorization_code_prefix = ?,
+                    authorization_code_hash = ?, authorization_code_expires_at = ?,
+                    authorized_at = ?, updated_at = ?
+                WHERE request_id = ? AND status = ? AND user_id = ''
+                    AND request_expires_at > ?
+                """,
+                (
+                    ASSISTED_APPLY_STATUS_AUTHORIZED,
+                    str(user_id or "").strip(),
+                    str(authorization_code_prefix or "").strip(),
+                    str(authorization_code_hash or "").strip(),
+                    str(authorization_code_expires_at or "").strip(),
+                    str(authorized_at or "").strip(),
+                    str(authorized_at or "").strip(),
+                    str(request_id or "").strip(),
+                    ASSISTED_APPLY_STATUS_PENDING,
+                    str(authorized_at or "").strip(),
+                ),
+            ).rowcount
+            if row_count != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM assisted_apply_connections WHERE request_id = ?",
+                (str(request_id or "").strip(),),
+            ).fetchone()
+        return _assisted_apply_connection_from_row(row) if row is not None else None
+
+    def reject_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        rejected_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                """
+                UPDATE assisted_apply_connections
+                SET status = ?, user_id = ?, rejected_at = ?, updated_at = ?
+                WHERE request_id = ? AND status = ? AND user_id = ''
+                    AND request_expires_at > ?
+                """,
+                (
+                    ASSISTED_APPLY_STATUS_REJECTED,
+                    str(user_id or "").strip(),
+                    str(rejected_at or "").strip(),
+                    str(rejected_at or "").strip(),
+                    str(request_id or "").strip(),
+                    ASSISTED_APPLY_STATUS_PENDING,
+                    str(rejected_at or "").strip(),
+                ),
+            ).rowcount
+            if row_count != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM assisted_apply_connections WHERE request_id = ?",
+                (str(request_id or "").strip(),),
+            ).fetchone()
+        return _assisted_apply_connection_from_row(row) if row is not None else None
+
+    def activate_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        extension_origin: str,
+        session_token_prefix: str,
+        session_token_hash: str,
+        session_expires_at: str,
+        activated_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                """
+                UPDATE assisted_apply_connections
+                SET status = ?, code_consumed_at = ?,
+                    authorization_code_prefix = '', authorization_code_hash = '',
+                    session_token_prefix = ?, session_token_hash = ?, session_expires_at = ?,
+                    activated_at = ?, last_used_at = ?, updated_at = ?
+                WHERE request_id = ? AND status = ? AND code_consumed_at = ''
+                    AND extension_origin = ? AND authorization_code_expires_at > ?
+                """,
+                (
+                    ASSISTED_APPLY_STATUS_ACTIVE,
+                    str(activated_at or "").strip(),
+                    str(session_token_prefix or "").strip(),
+                    str(session_token_hash or "").strip(),
+                    str(session_expires_at or "").strip(),
+                    str(activated_at or "").strip(),
+                    str(activated_at or "").strip(),
+                    str(activated_at or "").strip(),
+                    str(request_id or "").strip(),
+                    ASSISTED_APPLY_STATUS_AUTHORIZED,
+                    str(extension_origin or "").strip(),
+                    str(activated_at or "").strip(),
+                ),
+            ).rowcount
+            if row_count != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM assisted_apply_connections WHERE request_id = ?",
+                (str(request_id or "").strip(),),
+            ).fetchone()
+        return _assisted_apply_connection_from_row(row) if row is not None else None
+
+    def expire_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        expected_status: str,
+        expired_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                """
+                UPDATE assisted_apply_connections
+                SET status = ?, expired_at = ?, updated_at = ?,
+                    authorization_code_prefix = '', authorization_code_hash = '',
+                    session_token_prefix = '', session_token_hash = ''
+                WHERE request_id = ? AND status = ?
+                """,
+                (
+                    ASSISTED_APPLY_STATUS_EXPIRED,
+                    str(expired_at or "").strip(),
+                    str(expired_at or "").strip(),
+                    str(request_id or "").strip(),
+                    str(expected_status or "").strip(),
+                ),
+            ).rowcount
+            if row_count != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM assisted_apply_connections WHERE request_id = ?",
+                (str(request_id or "").strip(),),
+            ).fetchone()
+        return _assisted_apply_connection_from_row(row) if row is not None else None
+
+    def touch_assisted_apply_session(
+        self,
+        request_id: str,
+        *,
+        last_used_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                """
+                UPDATE assisted_apply_connections
+                SET last_used_at = ?, updated_at = ?
+                WHERE request_id = ? AND status = ? AND session_expires_at > ?
+                """,
+                (
+                    str(last_used_at or "").strip(),
+                    str(last_used_at or "").strip(),
+                    str(request_id or "").strip(),
+                    ASSISTED_APPLY_STATUS_ACTIVE,
+                    str(last_used_at or "").strip(),
+                ),
+            ).rowcount
+            if row_count != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM assisted_apply_connections WHERE request_id = ?",
+                (str(request_id or "").strip(),),
+            ).fetchone()
+        return _assisted_apply_connection_from_row(row) if row is not None else None
+
+    def revoke_assisted_apply_connection(
+        self,
+        request_id: str,
+        *,
+        user_id: str,
+        revoked_at: str,
+    ) -> AssistedApplyConnectionRecord | None:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                """
+                UPDATE assisted_apply_connections
+                SET status = ?, revoked_at = ?, updated_at = ?,
+                    authorization_code_prefix = '', authorization_code_hash = '',
+                    session_token_prefix = '', session_token_hash = ''
+                WHERE request_id = ? AND user_id = ? AND status IN (?, ?)
+                """,
+                (
+                    ASSISTED_APPLY_STATUS_REVOKED,
+                    str(revoked_at or "").strip(),
+                    str(revoked_at or "").strip(),
+                    str(request_id or "").strip(),
+                    str(user_id or "").strip(),
+                    ASSISTED_APPLY_STATUS_AUTHORIZED,
+                    ASSISTED_APPLY_STATUS_ACTIVE,
+                ),
+            ).rowcount
+            if row_count != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM assisted_apply_connections WHERE request_id = ?",
+                (str(request_id or "").strip(),),
+            ).fetchone()
+        return _assisted_apply_connection_from_row(row) if row is not None else None
+
+    def update_assisted_apply_preferences_metadata(
+        self,
+        user_id: str,
+        *,
+        expected_revision: int,
+        preferences: AssistedApplyPreferences,
+        updated_at: str,
+    ) -> bool:
+        if (
+            preferences.schema_version != 1
+            or preferences.revision != int(expected_revision) + 1
+            or not preferences.require_legal_answer_confirmation
+        ):
+            raise ValueError("Invalid server-owned Assisted Apply preference revision.")
+        normalized_user_id = str(user_id or "").strip()
+        normalized_updated_at = str(updated_at or "").strip()
+
+        def update(connection) -> bool:
+            row = connection.execute(
+                "SELECT payload_json FROM users WHERE user_id = ?",
+                (normalized_user_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"User '{normalized_user_id}' not found.")
+            previous_payload_json = str(row["payload_json"] or "{}")
+            payload = _deserialize(previous_payload_json, {})
+            metadata = dict(payload.get("metadata") or {})
+            stored = metadata.get(ASSISTED_APPLY_PREFERENCES_METADATA_KEY)
+            current = AssistedApplyPreferences.from_stored(
+                stored if isinstance(stored, Mapping) else None
+            )
+            if current.revision != int(expected_revision):
+                return False
+            metadata[ASSISTED_APPLY_PREFERENCES_METADATA_KEY] = preferences.to_dict()
+            payload["metadata"] = metadata
+            payload["updated_at"] = normalized_updated_at
+            row_count = connection.execute(
+                "UPDATE users SET updated_at = ?, payload_json = ? "
+                "WHERE user_id = ? AND payload_json = ?",
+                (
+                    normalized_updated_at,
+                    _serialize(payload),
+                    normalized_user_id,
+                    previous_payload_json,
+                ),
+            ).rowcount
+            return row_count == 1
+
+        return self._run_transaction(update)
 
     def get_subscription(self, subscription_id: str) -> dict[str, Any]:
         with self._connect() as connection:

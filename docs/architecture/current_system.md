@@ -12,6 +12,8 @@ This is the first stop for current code navigation. Dated reports under `docs/re
 - JSON API: `backend/api/server.py`, with extracted route modules under `backend/api/routes/`.
 - Background worker: `backend/worker/service.py`.
 - React app routes: `frontend/src/App.jsx`.
+- Assisted Apply extension shell: `apps/browser-extension/` (WXT, Manifest V3,
+  TypeScript, React). Portable adapter/message contracts start under `packages/`.
 - Main workspace UI: `frontend/src/pages/WorkspacesPage.jsx`.
 - Local stack scripts: root `package.json`.
 
@@ -27,6 +29,8 @@ npm run check:backend
 npm run check:backend:api
 npm run check:backend:full
 npm run check:frontend
+npm run check:extension
+npm run check:assisted-apply
 ```
 
 Install development verification tools with:
@@ -60,6 +64,20 @@ pip install -r requirements-dev.txt
 - `frontend/src/pages/` owns page-level workflows. Large pages should be split into local hooks/components before broad feature work.
 - `frontend/src/styles.css` is the main style surface.
 
+## Browser Extension Shape
+
+- `apps/browser-extension/entrypoints/background.ts` owns privileged browser APIs,
+  tab coordination, and reconstructable session state.
+- `apps/browser-extension/entrypoints/application-form.ts` is an isolated page
+  runner injected after user action; it does not call Runr APIs directly.
+- `apps/browser-extension/entrypoints/sidepanel/` owns the review-only React UI.
+- `packages/ats-core/` owns portable portal detection/adapter contracts and the
+  compile-time no-submit guard.
+- `packages/extension-messages/` owns runtime message/state contracts.
+- AA-01 is a guarded Greenhouse fixture tracer bullet only. Follow the active ticket
+  ledger in `docs/reports/runr_assisted_apply_ticket_plan_2026-07-17.md`; do not treat
+  fixture data as a production application package.
+
 ## Data And Artifacts
 
 - Default local persisted backend state lives under `.backend_data/`.
@@ -82,6 +100,9 @@ See `docs/architecture/source_control_artifact_policy.md` and `docs/architecture
 - Worker behavior: change `backend/worker/service.py` and focused worker tests.
 - Frontend route/page behavior: change `frontend/src/pages/*`, shared hooks under `frontend/src/hooks/`, and shared helpers under `frontend/src/lib/`.
 - Frontend build configuration: change `frontend/vite.config.js`.
+- Browser extension shell, page execution, side panel, or manifest: change
+  `apps/browser-extension/`; keep portable adapter/message contracts under
+  `packages/` and preserve the no-submit boundary.
 - Verification commands: change root `package.json`, `frontend/package.json`, and this document.
 
 ## Verification Baseline
@@ -91,6 +112,10 @@ See `docs/architecture/source_control_artifact_policy.md` and `docs/architecture
 - `npm run check:backend:api` runs the slower backend API sweep.
 - `npm run check:backend:full` runs the full pytest suite and is the pre-merge sweep.
 - `npm run check:frontend` runs the Vite production build. There is no separate frontend lint command yet.
+- `npm run check:extension` runs extension type checks, unit tests, a production WXT
+  build, and the manifest/source audit.
+- `npm run check:assisted-apply` also launches the packaged MV3 extension in a
+  Playwright persistent Chromium context.
 - Full pytest can touch broader connector and document-generation tests and should be treated as slower than the fast local check.
 
 ## Durable References

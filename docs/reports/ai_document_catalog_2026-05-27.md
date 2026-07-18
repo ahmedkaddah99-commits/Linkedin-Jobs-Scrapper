@@ -12,6 +12,7 @@ This catalog intentionally leaves the original files in place. Moving source PRD
 |---|---|---|---|
 | Runr Reports Hub - 2026-05-27 | Hub README | [README.md](./README.md) | Entry point and folder rules. |
 | AI Document Catalog - 2026-05-27 | Catalog | [ai_document_catalog_2026-05-27.md](./ai_document_catalog_2026-05-27.md) | This file. |
+| Runr Assisted Apply Ticket Plan - 2026-07-17 | Evidence-gated implementation ticket ledger | [runr_assisted_apply_ticket_plan_2026-07-17.md](./runr_assisted_apply_ticket_plan_2026-07-17.md) | Dependency-ordered tracer bullets for the visible Assisted Apply delivery plan; records the source truncation and completion evidence. |
 | Runr Scraping P1 Work And Efficiency Report - 2026-05-27 | Implementation and efficiency report | [runr_scraping_p1_work_and_efficiency_report_2026-05-27.md](./runr_scraping_p1_work_and_efficiency_report_2026-05-27.md) | Summary of the scraping work completed in the 2026-05-27 Codex session. |
 | Worker Architecture & Reliability Audit - 2026-05-27 | Technical audit and implementation report | [worker_architecture_reliability_audit_2026-05-27.md](./worker_architecture_reliability_audit_2026-05-27.md) | Worker architecture, failure analysis, scale/database assessment, and structured worker logging implementation. |
 
