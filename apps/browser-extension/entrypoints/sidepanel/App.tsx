@@ -336,7 +336,7 @@ export default function App() {
               disabled={connectionBusy}
               data-testid="disconnect-runr"
             >
-              {connectionBusy ? "DisConnecting…€¦" : "Disconnect from Runr"}
+              {connectionBusy ? "DisConnectingï¿½ï¿½ï¿½" : "Disconnect from Runr"}
             </button>
           </>
         ) : (
@@ -346,7 +346,7 @@ export default function App() {
             disabled={connectionBusy}
             data-testid="connect-runr"
           >
-            {connectionBusy ? "Connecting…€¦" : "Connect to Runr"}
+            {connectionBusy ? "Connectingï¿½ï¿½ï¿½" : "Connect to Runr"}
           </button>
         )}
       </section>
@@ -373,7 +373,7 @@ export default function App() {
           {applicationPackage.job.portal === "greenhouse" || applicationPackage.job.portal === "lever" ? (
             <button type="button" data-testid="fill-package" disabled={packageBusy}
               onClick={() => void fillApplicationPackage()}>
-              {packageBusy ? "Filling and verifying…€¦" : "Fill verified standard facts"}
+              {packageBusy ? "Filling and verifyingï¿½ï¿½ï¿½" : "Fill verified standard facts"}
             </button>
           ) : null}
         </section>
@@ -449,7 +449,7 @@ export default function App() {
                       onClick={() => void uploadSelectedDocument(document.documentId)}
                       onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void uploadSelectedDocument(document.documentId); } }}>
                       {document.uploadStatus === "uploading"
-                        ? "Uploading and verifying…"
+                        ? "Uploading and verifyingï¿½"
                         : document.uploadStatus === "uploaded"
                           ? "Uploaded"
                           : `Upload selected ${document.documentKind.replaceAll("_", " ")}`}
@@ -494,7 +494,7 @@ export default function App() {
         <div className="status-heading">
           <div>
             <p className="eyebrow">Current page</p>
-            <h2 data-testid="ats-name">{state ? atsLabel(state.ats) : "Inspecting…€¦"}</h2>
+            <h2 data-testid="ats-name">{state ? atsLabel(state.ats) : "Inspectingï¿½ï¿½ï¿½"}</h2>
           </div>
           <span className={`status-chip status-${state?.status || "loading"}`}>
             {state?.status.replaceAll("_", " ") || "loading"}
@@ -513,7 +513,7 @@ export default function App() {
               disabled={busy}
               data-testid="run-fixture"
             >
-              {busy ? "Checking…€¦" : "Fill and verify fixture email"}
+              {busy ? "Checkingï¿½ï¿½ï¿½" : "Fill and verify fixture email"}
             </button>
           </div>
         ) : (
@@ -664,14 +664,14 @@ function EvidenceRow({
                 .finally(() => setSaving(false));
             }}
           >
-            {saving ? "Applying…" : "Apply correction"}
+            {saving ? "Applyingï¿½" : "Apply correction"}
           </button>
         </div>
       ) : null}
       {saved ? <p className="correction-saved" role="status">{saved}</p> : null}
     </li>
   );
-}}
+}
 
 
 

@@ -79,9 +79,9 @@ describe("review panel model", () => {
 
   it("sets liveAcceptance correctly per section", () => {
     const model = buildReviewPanelModel(pkg, state);
-    expect(model.rows.ready[0].liveAcceptance).toBe("not_attempted");
-    expect(model.rows.review[0].liveAcceptance).toBe("needs_review");
-    expect(model.rows.manual[0].liveAcceptance).toBe("manual");
+    expect(model.rows.ready[0]!.liveAcceptance).toBe("not_attempted");
+    expect(model.rows.review[0]!.liveAcceptance).toBe("needs_review");
+    expect(model.rows.manual[0]!.liveAcceptance).toBe("manual");
   });
 
   it("marks as accepted when a matching execution exists", () => {
@@ -90,7 +90,7 @@ describe("review panel model", () => {
       execution: { fieldLabel: "Email", status: "filled", reasons: [], acceptedValue: "a@example.com" },
     };
     const model = buildReviewPanelModel(pkg, executedState);
-    expect(model.rows.ready[0].liveAcceptance).toBe("accepted");
+    expect(model.rows.ready[0]!.liveAcceptance).toBe("accepted");
     expect(model.counts.verified).toBe(1);
   });
 
