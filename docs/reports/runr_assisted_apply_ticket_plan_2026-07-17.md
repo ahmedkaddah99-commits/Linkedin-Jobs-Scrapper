@@ -136,7 +136,7 @@ npm run check:assisted-apply
 ## AA-02 - Connect and disconnect the extension through Runr
 
 **Type:** HITL (implementation is AFK; production redirect/CORS evidence is human-verified)<br>
-**Status:** in_progress<br>
+**Status:** verified_complete<br>
 **Blocked by:** AA-01<br>
 **Visible plan coverage:** sections 3 and 4
 
@@ -156,7 +156,7 @@ storage; AA-16 owns store packaging, permission prompts, and release disclosures
       a one-time-code/session exchange with a stable extension callback identity.
 - [x] Sessions are short-lived, revocable, scoped to one Runr user, and reject
       expired, revoked, replayed, and cross-user requests.
-- [ ] Chrome-extension origin/CORS handling uses an explicit production allowlist,
+- [x] Chrome-extension origin/CORS handling uses an explicit production allowlist,
       never a wildcard.
 - [x] Connection state recovers after worker suspension; Disconnect revokes backend
       and local state.
@@ -175,7 +175,7 @@ E2E, and a manual production redirect/CORS configuration check.
   Apply API gate with 4 tests / 7 subtests; all 40 frontend tests and the production
   frontend build passed; and the extension unit, type, build, and guarded-manifest
   checks passed.
-- The final `npm run check:assisted-apply` gate exited 0 with 6 unit files / 50
+- The final `npm run check:assisted-apply` gate exited 0 with 7 unit files / 52
   tests and 2 Playwright persistent-context scenarios. The browser proof covers an
   explicit-click-only `launchWebAuthFlow`, stable callback exchange, preference
   persistence, actual worker stop/restart recovery, remote-first revoke while the
@@ -184,16 +184,27 @@ E2E, and a manual production redirect/CORS configuration check.
 - Focused backend tests cover expiry, revocation, one-time-code replay,
   cross-user/origin binding, exact Clerk-only approval, strict preference policy,
   and originless or disallowed extension requests. All 6 database migration tests
-  passed, `git diff --check` exited 0, and the extension dependency audit reported
-  0 vulnerabilities.
-- Production completion remains blocked. No exact Chrome Web Store extension ID or
-  live callback/CORS evidence is available in the workspace. Validation against the
-  loaded production configuration currently reports:
-  `Production requires RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS with the exact Web Store extension origin`.
-  `render.yaml` deliberately leaves that operator value unsynchronized. The CORS
-  criterion remains unchecked, this ticket remains `in_progress`, and AA-03 must
-  not start until the exact `chrome-extension://<32-character-id>` origin is set and
-  the live redirect/CORS flow is verified.
+  passed and `git diff --check` exited 0. On 2026-07-18, `npm audit --omit=dev`
+  reported 0 production vulnerabilities; the full development audit reported the
+  no-fix `adm-zip` advisory through WXT's Firefox runner, which is not present in
+  the Chrome bundle or production dependency surface.
+- On 2026-07-18, the genuine Chrome Web Store public key was embedded in the WXT
+  manifest configuration. Both the manifest verifier and a Chromium
+  persistent-context service-worker assertion derived and observed the reserved ID
+  `najcdfohhfgbjpbokhmmekkahghfhegp`. The final MV3 ZIP has a root manifest, every
+  referenced icon, and the corrected `https://runr-api.onrender.com/*` host.
+- Render deployment `dep-d9dkece1a83c73bqje1g` made commit `75bfdbc` live at
+  `2026-07-18T09:34:20.891882Z`. Live preflight and actual-request checks allowed
+  only `chrome-extension://najcdfohhfgbjpbokhmmekkahghfhegp`; a different extension
+  ID and ordinary web origin returned 403, malformed and missing origins returned
+  400 on POST, and the separate `https://app.userunr.com` web allowlist remained
+  effective.
+- A signed-in production Runr session approved a real connection request and
+  redirected to the exact reserved `chromiumapp.org/runr/connect` callback with
+  matching state. The one-time code exchange and session verification each returned
+  200 with the exact reserved extension ACAO. Cleanup revoked the test session with
+  204, and post-revocation verification returned 401. No callback code or session
+  token is retained in the repository.
 
 ---
 
