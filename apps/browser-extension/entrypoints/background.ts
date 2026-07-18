@@ -3,7 +3,6 @@ import {
   isExactGreenhouseFixtureUrl,
   isExactLeverFixtureUrl,
   isFixtureInspectionMessage,
-  isFixtureProofMessage,
   isPackageExecutionMessage,
   isDocumentUploadMessage,
   isContentRuntimeEvent,
@@ -40,7 +39,6 @@ import {
   writeTabState,
 } from "../src/state/tab-state";
 
-const FIXTURE_EMAIL = "candidate@example.com";
 const runtimeConfig = assistedApplyRuntimeConfig();
 const authStorage = new BrowserAuthStorage();
 const connectionService = new ExtensionConnectionService({
@@ -150,52 +148,6 @@ async function getState(refresh: boolean): Promise<AssistedApplyTabState> {
     if (stored && stored.url === (tab.url || "")) return stored;
   }
   return refreshTabState(tab);
-}
-
-async function runFixtureProof(): Promise<AssistedApplyTabState> {
-  if (import.meta.env.MODE !== "testing") {
-    throw new Error("Fixture execution is not included in production builds.");
-  }
-  const tab = await resolveTargetTab();
-  if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
-  const current = await readTabState(tab.id) ?? (await refreshTabState(tab));
-  const liveUrl = tab.url || "";
-  if (
-    !isLocalFixtureUrl(liveUrl) ||
-    current.url !== liveUrl ||
-    !current.fixtureAvailable
-  ) {
-    throw new Error("Fixture execution is allowed only on the explicit local Greenhouse fixture.");
-  }
-
-  await injectPageRunner(tab.id);
-  const command: ContentRequest = {
-    type: "CONTENT_RUN_GREENHOUSE_FIXTURE_PROOF",
-    proposedEmail: FIXTURE_EMAIL,
-  };
-  const result: unknown = await browser.tabs.sendMessage(tab.id, command);
-  if (!isFixtureProofMessage(result) || !result.execution) {
-    throw new Error("No verified email match was executable on the fixture.");
-  }
-
-  const state: AssistedApplyTabState = {
-    ...current,
-    ats: result.ats,
-    status: "fixture_verified",
-    fixtureAvailable: result.fixtureAvailable,
-    fieldCount: result.fieldCount,
-    manualReasons: result.manualReasons,
-    execution: {
-      fieldLabel: result.execution.fieldLabel,
-      status: result.execution.status,
-      acceptedValue: result.execution.acceptedValue,
-      reasons: result.execution.reasons,
-    },
-    errorCode: undefined,
-    updatedAt: now(),
-  };
-  await writeTabState(state);
-  return state;
 }
 
 async function runGreenhousePackage(applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
@@ -580,7 +532,17 @@ export default defineBackground(() => {
       }
       const state =
         message.type === "RUN_GREENHOUSE_FIXTURE_PROOF"
-          ? await runFixtureProof()
+          ? await (async () => {
+              const mod = await import("../src/fixture-runner");
+              return mod.runFixtureProof({
+                resolveTargetTab,
+                refreshTabState,
+                readTabState,
+                writeTabState,
+                injectPageRunner,
+                now,
+              });
+            })()
           : await getState(message.type === "REFRESH_ACTIVE_TAB_STATE");
       return { ok: true, state };
     } catch (error) {

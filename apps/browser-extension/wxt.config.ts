@@ -24,7 +24,7 @@ export default defineConfig({
         128: "icons/runr-128.png",
       },
     },
-    permissions: ["activeTab", "identity", "scripting", "storage"],
+    permissions: ["activeTab", "identity", "scripting", "sidePanel", "storage"],
     host_permissions:
       mode === "testing" ? ["http://127.0.0.1/*"] : ["https://runr-api.onrender.com/*"],
   }),
