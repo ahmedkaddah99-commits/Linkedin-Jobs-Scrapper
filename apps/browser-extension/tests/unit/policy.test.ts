@@ -1,4 +1,4 @@
-/**
+﻿/**
  * AA-06: Policy decision engine TypeScript tests.
  *
  * Must produce **identical** results to ``tests/test_application_policy.py``
@@ -8,11 +8,13 @@
 import { describe, expect, it } from "vitest";
 import {
   decideFieldAction,
+  validateProfileValue,
+
   type ProfileValue,
   type PolicySettings,
 } from "@runr/ats-core/policy";
 
-// Load fixtures — vitest resolves from project root
+// Load fixtures â€” vitest resolves from project root
 // The fixture path is relative to the repo root since vitest runs from apps/browser-extension.
 // We read it via a raw fs import or inline the fixtures for portability.
 // For maximum compatibility, we import the JSON directly.
@@ -50,7 +52,7 @@ function toPolicySettings(raw: PolicyFixture["policy"]): PolicySettings {
 }
 
 function toProfileValue(raw: Record<string, unknown>): ProfileValue {
-  return {
+  const value: ProfileValue = {
     fieldIntent: (raw.field_intent as string) ?? "",
     label: (raw.label as string) ?? "",
     value: (raw.value as string) ?? "",
@@ -64,16 +66,18 @@ function toProfileValue(raw: Record<string, unknown>): ProfileValue {
     jurisdiction: (raw.jurisdiction as string) ?? "",
     provenance: (raw.provenance as string) ?? "",
   };
+  validateProfileValue(value);
+  return value;
 }
 
 const typedFixtures = fixtures as PolicyFixture[];
 
-describe("AA-06 Policy decision engine — cross-language parity", () => {
+describe("AA-06 Policy decision engine â€” cross-language parity", () => {
   for (const fixture of typedFixtures) {
     const fixtureId = fixture.id;
     const description = fixture.description ?? fixtureId;
 
-    it(`fixture: ${fixtureId} — ${description}`, () => {
+    it(`fixture: ${fixtureId} â€” ${description}`, () => {
       const expected = fixture.expected;
 
       // Handle validation error cases

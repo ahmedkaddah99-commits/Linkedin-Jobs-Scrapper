@@ -85,6 +85,24 @@ export interface ProfileValue {
   provenance: string;
 }
 
+/**
+ * Validate a ProfileValue's source/sensitivity pair at runtime.
+ *
+ * Throws `Error` for invalid combinations (e.g., demographic + ai_suggestion)
+ * to match Python's ``ProfileValue._validate_source_sensitivity_pair()``.
+ */
+export function validateProfileValue(value: ProfileValue): void {
+  if (
+    value.sensitivity === SENSITIVITY_DEMOGRAPHIC &&
+    value.source === SOURCE_AI_SUGGESTION
+  ) {
+    throw new Error(
+      "Demographic answers cannot be sourced from AI suggestions.",
+    );
+  }
+}
+
+
 // ---------------------------------------------------------------------------
 // Policy interface — mirrors ApplicationPackagePolicy fields used by engine
 // ---------------------------------------------------------------------------
@@ -200,7 +218,7 @@ export function decideFieldAction(
     if (!policy.permitDemographicAutofill) {
       reasons.push(
         "Demographic answers are not permitted for auto-fill. " +
-          "Enable 'permitDemographicAutofill' in settings.",
+          "Enable 'permit_demographic_autofill' in settings.",
       );
       return { action: "manual", reasons };
     }
@@ -235,7 +253,7 @@ export function decideFieldAction(
     if (src === SOURCE_SCOPED_PREFERENCE && !policy.permitSensitiveAutofill) {
       reasons.push(
         "Scoped preferences for personal data require " +
-          "'permitSensitiveAutofill' to be enabled.",
+          "'permit_sensitive_autofill' to be enabled.",
       );
       return { action: "review", reasons };
     }
