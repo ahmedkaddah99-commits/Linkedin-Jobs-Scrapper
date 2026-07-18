@@ -5,11 +5,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
-const fixturePath = join(currentDirectory, "fixtures", "greenhouse-application.html");
+const fixturePaths = new Map([
+  ["/greenhouse-application.html", join(currentDirectory, "fixtures", "greenhouse-application.html")],
+  ["/lever-application.html", join(currentDirectory, "fixtures", "lever-application.html")],
+]);
 const extensionOriginPattern = /^chrome-extension:\/\/([a-p]{32})$/u;
 
 const connections = new Map();
 const sessions = new Map();
+const documentGrants = new Map();
+const fixtureCvBytes = Buffer.from("%PDF-1.4\n% Runr AA11 fixture CV\n%%EOF\n", "utf8");
 const counters = {
   connectionRequests: 0,
   authorizationVisits: 0,
@@ -19,6 +24,8 @@ const counters = {
   revocationRequests: 0,
   revocationInFlight: false,
   revocations: 0,
+  documentGrants: 0,
+  documentDownloads: 0,
 };
 
 function futureIso(milliseconds) {
@@ -28,7 +35,7 @@ function futureIso(milliseconds) {
 function json(response, status, payload, origin = "") {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
-    "access-control-allow-headers": "Authorization, Content-Type",
+    "access-control-allow-headers": "Authorization, Content-Type, X-Runr-Document-Grant",
     "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
     ...(origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {}),
     "cache-control": "no-store",
@@ -40,7 +47,7 @@ function json(response, status, payload, origin = "") {
 
 function noContent(response, origin = "") {
   response.writeHead(204, {
-    "access-control-allow-headers": "Authorization, Content-Type",
+    "access-control-allow-headers": "Authorization, Content-Type, X-Runr-Document-Grant",
     "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
     ...(origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {}),
     "cache-control": "no-store",
@@ -110,9 +117,9 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === "GET" && url.pathname === "/greenhouse-application.html") {
+    if (request.method === "GET" && fixturePaths.has(url.pathname)) {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      createReadStream(fixturePath).pipe(response);
+      createReadStream(fixturePaths.get(url.pathname)).pipe(response);
       return;
     }
 
@@ -241,6 +248,56 @@ const server = createServer(async (request, response) => {
       record.preferenceRevision += 1;
       record.preferenceUpdatedAt = new Date().toISOString();
       json(response, 200, { preferences: preferences(record) }, origin);
+      return;
+    }
+
+    if (url.pathname === "/assisted-apply/extension/document-grants" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      const payload = await readJson(request);
+      if (payload.package_id !== "aapkg_fixture_aa11" || payload.document_id !== "cv_version_7") {
+        json(response, 400, { error: { code: "bad_request", message: "Unknown fixed document." } }, origin);
+        return;
+      }
+      counters.documentGrants += 1;
+      const grantToken = `aadoc_fixture_${String(counters.documentGrants).padStart(8, "0")}`;
+      documentGrants.set(grantToken, { sessionToken: record.sessionToken, consumed: false });
+      json(response, 201, {
+        grantToken,
+        expiresAt: futureIso(60 * 1000),
+        file: {
+          documentId: "cv_version_7",
+          documentVersion: 7,
+          fileName: "Candidate CV.pdf",
+          mimeType: "application/pdf",
+          size: fixtureCvBytes.length,
+          sha256Hex: createHash("sha256").update(fixtureCvBytes).digest("hex"),
+        },
+      }, origin);
+      return;
+    }
+
+    if (url.pathname === "/assisted-apply/extension/document-grants/download" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      await readJson(request);
+      const grantToken = String(request.headers["x-runr-document-grant"] || "");
+      const grant = documentGrants.get(grantToken);
+      if (!grant || grant.consumed || grant.sessionToken !== record.sessionToken) {
+        json(response, 403, { error: { code: "forbidden", message: "Grant rejected." } }, origin);
+        return;
+      }
+      grant.consumed = true;
+      counters.documentDownloads += 1;
+      response.writeHead(200, {
+        "access-control-allow-origin": origin,
+        vary: "Origin",
+        "cache-control": "no-store",
+        "content-disposition": 'attachment; filename="Candidate CV.pdf"',
+        "content-length": fixtureCvBytes.length,
+        "content-type": "application/pdf",
+      });
+      response.end(fixtureCvBytes);
       return;
     }
 

@@ -95,4 +95,30 @@ describe("fixed Runr Assisted Apply API client", () => {
       expect.objectContaining({ method: "DELETE" }),
     );
   });
+
+  it("downloads a document only through the fixed no-store endpoint and grant header", async () => {
+    const bytes = new TextEncoder().encode("%PDF-fixture");
+    const fetchPort = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(bytes, {
+      status: 200,
+      headers: { "content-type": "application/pdf", "cache-control": "no-store" },
+    }));
+    const api = new RunrAssistedApplyApi("https://api.userunr.com/v1", fetchPort);
+
+    const downloaded = await api.downloadDocument("session-secret", "aadoc-secret");
+    expect(Array.from(downloaded)).toEqual(Array.from(bytes));
+    const [url, init] = fetchPort.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.userunr.com/v1/assisted-apply/extension/document-grants/download");
+    expect(init).toMatchObject({ method: "POST", body: "{}", cache: "no-store", credentials: "omit", redirect: "error" });
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer session-secret");
+    expect(headers.get("X-Runr-Document-Grant")).toBe("aadoc-secret");
+    expect(String(url)).not.toContain("aadoc-secret");
+  });
+
+  it("rejects non-PDF document responses before exposing bytes", async () => {
+    const api = new RunrAssistedApplyApi("https://api.userunr.com/v1", async () =>
+      new Response("secret", { status: 200, headers: { "content-type": "text/plain" } }),
+    );
+    await expect(api.downloadDocument("session-secret", "aadoc-secret")).rejects.toThrow("MIME");
+  });
 });

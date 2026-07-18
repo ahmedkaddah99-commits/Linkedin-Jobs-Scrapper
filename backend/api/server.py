@@ -8959,7 +8959,7 @@ def build_handler(
 
         def _cors_headers(self) -> dict[str, str]:
             headers = {
-                "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Runr-Document-Grant",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
                 "Access-Control-Max-Age": "600",
                 "Vary": "Origin",
@@ -9187,6 +9187,25 @@ def build_handler(
                     "Content-Disposition",
                     f'attachment; filename="{download_name or target.name}"',
                 )
+                for key, value in self._cors_headers().items():
+                    self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(body)
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
+
+        def _send_bytes(self, body: bytes, *, content_type: str, download_name: str) -> None:
+            if getattr(self, "_client_disconnected", False) or getattr(self, "_response_started", False):
+                return
+            self._response_started = True
+            self._response_status = int(HTTPStatus.OK)
+            self._response_bytes = len(body)
+            try:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
                 for key, value in self._cors_headers().items():
                     self.send_header(key, value)
                 self.end_headers()

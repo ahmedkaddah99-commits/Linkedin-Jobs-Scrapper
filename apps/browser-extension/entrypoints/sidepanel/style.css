@@ -45,6 +45,7 @@ h2 { font-size: 16px; }
 
 .boundary,
 .connection-card,
+.package-card,
 .status-card,
 .result-card,
 .manual-card {
@@ -142,3 +143,38 @@ button.danger { color: #8b241c; background: #fce5e2; }
 .result-card dd { margin: 0; text-align: right; font-size: 12px; font-weight: 650; }
 .manual-card ul { margin: 9px 0 0; padding-left: 18px; color: #58635b; font-size: 12px; }
 footer { border-top: 1px solid #d8e0d8; padding-top: 12px; }
+
+.package-card dl, .field-evidence { display: grid; gap: 6px; margin: 12px 0 0; }
+.package-card dl div, .field-evidence div { display: flex; justify-content: space-between; gap: 12px; }
+.package-card dt, .field-evidence dt { color: #657268; font-size: 11px; }
+.package-card dd, .field-evidence dd { margin: 0; text-align: right; font-size: 11px; font-weight: 650; }
+.review-workspace { display: grid; gap: 12px; }
+.progress-summary { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+.progress-summary div { display: grid; gap: 2px; padding: 8px 3px; border: 1px solid #d8e0d8; border-radius: 9px; background: white; text-align: center; }
+.progress-summary strong { font-size: 16px; }
+.progress-summary span { color: #657268; font-size: 9px; text-transform: capitalize; }
+.review-section { border: 1px solid #d8e0d8; border-radius: 14px; background: white; padding: 12px; }
+.section-review { border-left: 4px solid #d18a2d; }
+.section-missing { border-left: 4px solid #b8473d; }
+.section-manual { border-left: 4px solid #657268; }
+.section-documents { border-left: 4px solid #3976a8; }
+.section-title, .field-heading, .document-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.section-title > span { min-width: 22px; border-radius: 999px; padding: 3px 6px; background: #edf1ed; text-align: center; font-size: 11px; }
+.review-section > ul { display: grid; gap: 9px; margin: 10px 0 0; padding: 0; list-style: none; }
+.evidence-row { border-top: 1px solid #e4e9e4; padding-top: 10px; }
+.acceptance { border-radius: 999px; padding: 3px 6px; color: #58635b; background: #edf1ed; font-size: 9px; text-transform: capitalize; }
+.acceptance-accepted { color: #15592d; background: #dff3e5; }
+.acceptance-needs_review { color: #70420f; background: #fff0d8; }
+.proposed-answer { margin-top: 6px; overflow-wrap: anywhere; font-size: 13px; }
+.field-reason { margin-top: 8px; color: #657268; font-size: 11px; line-height: 1.4; }
+.field-actions { display: flex; gap: 8px; margin-top: 10px; }
+.field-actions button { flex: 1; padding: 8px; font-size: 11px; }
+.field-actions button.secondary { margin-top: 0; }
+.correction-editor { display: grid; gap: 9px; margin-top: 9px; padding: 10px; border-radius: 10px; background: #f3f6f3; }
+.correction-editor label { display: grid; gap: 4px; color: #58635b; font-size: 11px; }
+.correction-editor input, .correction-editor select { width: 100%; box-sizing: border-box; border: 1px solid #c9d2ca; border-radius: 8px; padding: 8px; background: white; color: #172019; }
+.correction-saved { margin-top: 8px; color: #15592d; font-size: 11px; }
+.manual-controls { color: #58635b; font-size: 12px; }
+.document-row { font-size: 12px; }
+.document-row span { color: #657268; overflow-wrap: anywhere; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #7bb28a; outline-offset: 2px; }

@@ -28,6 +28,8 @@ class ApiHandler(Protocol):
 
     def _send_file(self, file_path: str, *, download_name: str = "") -> None: ...
 
+    def _send_bytes(self, body: bytes, *, content_type: str, download_name: str) -> None: ...
+
     def _read_raw_body(self) -> bytes: ...
 
     def _read_json_body(self): ...
@@ -88,6 +90,9 @@ class ApiRouteContext:
 
     def send_file(self, file_path: str, *, download_name: str = "") -> None:
         self.handler._send_file(file_path, download_name=download_name)
+
+    def send_bytes(self, body: bytes, *, content_type: str, download_name: str) -> None:
+        self.handler._send_bytes(body, content_type=content_type, download_name=download_name)
 
     def read_raw_body(self) -> bytes:
         return self.handler._read_raw_body()

@@ -3,8 +3,12 @@ import {
   ADAPTER_SUBMISSION_CAPABILITY_FORBIDDEN,
   ATS_ADAPTER_CAPABILITIES,
   GreenhouseAdapter,
+  LeverAdapter,
   detectAtsFromUrl,
+  runGreenhouseStandardFacts,
   runGreenhouseFixtureProof,
+  runLeverFixtureProof,
+  runLeverStandardFacts,
   type ApprovedFieldMatch,
 } from "@runr/ats-core";
 
@@ -47,6 +51,171 @@ describe("ATS detection and submission guardrail", () => {
     expect(ADAPTER_SUBMISSION_CAPABILITY_FORBIDDEN).toBe(true);
     expect(ATS_ADAPTER_CAPABILITIES).not.toContain("submit");
     expect(ATS_ADAPTER_CAPABILITIES).not.toContain("submitApplication");
+  });
+});
+
+describe.each([
+  ["greenhouse", GreenhouseAdapter, runGreenhouseStandardFacts],
+  ["lever", LeverAdapter, runLeverStandardFacts],
+] as const)("AA-07 %s native controls", (ats, Adapter, runPackage) => {
+  beforeEach(() => {
+    document.documentElement.dataset.runrAssistedApplyFixture = ats;
+    document.body.innerHTML = `
+      <form>
+        <label for="headline">Headline</label>
+        <input id="headline" name="headline" type="text" required>
+        <label for="contact-email">Email</label>
+        <input id="contact-email" name="email" type="email" required>
+        <label for="contact-phone">Phone</label>
+        <input id="contact-phone" name="phone" type="tel">
+        <label for="about">About you</label>
+        <textarea id="about" name="about" required></textarea>
+        <label for="country">Country</label>
+        <select id="country" name="country" required>
+          <option value="">Choose</option><option value="DE">Germany</option><option value="GB">United Kingdom</option>
+        </select>
+        <fieldset><legend>Work authorization</legend>
+          <label for="work-yes">Yes</label><input id="work-yes" name="work_auth" type="radio" value="yes" required>
+          <label for="work-no">No</label><input id="work-no" name="work_auth" type="radio" value="no">
+        </fieldset>
+        <label for="remote">Open to remote work</label>
+        <input id="remote" name="remote" type="checkbox" value="yes">
+        <label for="start-date">Start date</label>
+        <input id="start-date" name="start_date" type="date" required>
+        <label for="rejected">Employee code</label>
+        <input id="rejected" name="employee_code" pattern="[A-Z]{3}" required>
+        <label for="disabled-native">Disabled answer</label>
+        <input id="disabled-native" name="disabled_answer" disabled>
+        <div hidden><label for="hidden-native">Hidden answer</label><input id="hidden-native" name="hidden_answer"></div>
+        <button type="submit">Submit application</button>
+      </form>`;
+  });
+
+  it("inspects metadata and fills every V1 native control with native events and readback", async () => {
+    const adapter = new Adapter();
+    const form = await adapter.inspect({ document, url: `http://127.0.0.1:4174/${ats}-application.html` });
+    const country = form.fields.find((field) => field.locator.stableAttributes.id === "country")!;
+    const workYes = form.fields.find((field) => field.locator.stableAttributes.id === "work-yes")!;
+    const disabled = form.fields.find((field) => field.locator.stableAttributes.id === "disabled-native")!;
+    const hidden = form.fields.find((field) => field.locator.stableAttributes.id === "hidden-native")!;
+
+    expect(country).toMatchObject({
+      stepId: "primary", label: "Country", normalizedLabel: "country", type: "select",
+      required: true, disabled: false, hidden: false, existingValue: "",
+      locator: { adapterStrategy: `${ats}-semantic-control`, stableAttributes: { id: "country", name: "country" } },
+    });
+    expect(country.options).toEqual([
+      { label: "Choose", value: "" }, { label: "Germany", value: "DE" },
+      { label: "United Kingdom", value: "GB" },
+    ]);
+    expect(workYes).toMatchObject({
+      label: "Work authorization", normalizedLabel: "work authorization", type: "radio",
+      required: true, existingValue: false, options: [
+        { label: "Yes", value: "yes" }, { label: "No", value: "no" },
+      ],
+    });
+    expect(disabled.disabled).toBe(true);
+    expect(hidden.hidden).toBe(true);
+
+    const eventLog: string[] = [];
+    for (const id of ["headline", "contact-email", "contact-phone", "about", "country", "work-yes", "remote", "start-date"]) {
+      const control = document.getElementById(id)!;
+      for (const eventName of ["focus", "input", "change", "blur"]) {
+        control.addEventListener(eventName, () => eventLog.push(`${id}:${eventName}`));
+      }
+    }
+    const answers = [
+      { fieldIntent: "application.headline", label: "Headline", proposedValue: "Computing pioneer" },
+      { fieldIntent: "application.about", label: "About you", proposedValue: "I build reliable systems." },
+      { fieldIntent: "application.country", label: "Country", proposedValue: "Germany" },
+      { fieldIntent: "application.work_authorization", label: "Work authorization", proposedValue: "Yes" },
+      { fieldIntent: "application.remote", label: "Open to remote work", proposedValue: "true" },
+      { fieldIntent: "application.start_date", label: "Start date", proposedValue: "2026-08-03" },
+      { fieldIntent: "application.employee_code", label: "Employee code", proposedValue: "invalid" },
+      { fieldIntent: "application.disabled", label: "Disabled answer", proposedValue: "blocked" },
+      { fieldIntent: "application.hidden", label: "Hidden answer", proposedValue: "blocked" },
+    ];
+
+    const result = await runPackage(
+      document,
+      `http://127.0.0.1:4174/${ats}-application.html`,
+      `aa07-${ats}`,
+      1,
+      { email: "ada@example.com", phone: "+49 30 123456" },
+      answers,
+    );
+
+    expect(result.executions.map((item) => item.status)).toEqual([
+      "filled", "filled", "filled", "filled", "filled", "filled", "filled", "filled", "rejected",
+    ]);
+    expect(document.querySelector<HTMLInputElement>("#headline")!.value).toBe("Computing pioneer");
+    expect(document.querySelector<HTMLInputElement>("#contact-email")!.value).toBe("ada@example.com");
+    expect(document.querySelector<HTMLInputElement>("#contact-phone")!.value).toBe("+49 30 123456");
+    expect(document.querySelector<HTMLTextAreaElement>("#about")!.value).toBe("I build reliable systems.");
+    expect(document.querySelector<HTMLSelectElement>("#country")!.value).toBe("DE");
+    expect(document.querySelector<HTMLInputElement>("#work-yes")!.checked).toBe(true);
+    expect(document.querySelector<HTMLInputElement>("#remote")!.checked).toBe(true);
+    expect(document.querySelector<HTMLInputElement>("#start-date")!.value).toBe("2026-08-03");
+    expect(document.querySelector<HTMLInputElement>("#disabled-native")!.value).toBe("");
+    expect(document.querySelector<HTMLInputElement>("#hidden-native")!.value).toBe("");
+    expect(eventLog).toHaveLength(8 * 4);
+    for (const id of ["headline", "contact-email", "contact-phone", "about", "country", "work-yes", "remote", "start-date"]) {
+      expect(eventLog).toEqual(expect.arrayContaining([
+        `${id}:focus`, `${id}:input`, `${id}:change`, `${id}:blur`,
+      ]));
+    }
+  });
+});
+
+describe("Lever standard-facts adapter", () => {
+  beforeEach(() => {
+    document.documentElement.dataset.runrAssistedApplyFixture = "lever";
+    document.body.innerHTML = `
+      <form class="application-form">
+        <label>Full name<input name="name" autocomplete="name" required></label>
+        <label>Email<input name="email" type="email" required></label>
+        <label>Phone<input name="phone" type="tel" required></label>
+        <button type="submit">Submit application</button>
+      </form>`;
+  });
+
+  it("implements the common contract and fills verified name, email, and phone", async () => {
+    const adapter = new LeverAdapter();
+    expect(await adapter.detect({ document, url: "http://127.0.0.1:4174/lever-application.html" })).toMatchObject({ detected: true, ats: "lever" });
+    const events: string[] = [];
+    document.querySelector<HTMLInputElement>('input[name="email"]')!.addEventListener("input", () => events.push("input"));
+    let submissions = 0;
+    document.querySelector("form")!.addEventListener("submit", (event) => { event.preventDefault(); submissions += 1; });
+
+    const result = await runLeverFixtureProof(document, "http://127.0.0.1:4174/lever-application.html", {
+      fullName: "Ada Lovelace",
+      email: "ada@example.com",
+      phone: "+44 20 7946 0958",
+    });
+
+    expect(result.executions.map((execution) => execution.status)).toEqual(["filled", "filled", "filled"]);
+    expect(document.querySelector<HTMLInputElement>('input[name="name"]')!.value).toBe("Ada Lovelace");
+    expect(document.querySelector<HTMLInputElement>('input[name="email"]')!.value).toBe("ada@example.com");
+    expect(document.querySelector<HTMLInputElement>('input[name="phone"]')!.value).toBe("+44 20 7946 0958");
+    expect(events).toEqual(["input"]);
+    expect(submissions).toBe(0);
+    expect(result.inspection.manualReasons).toContain("final_submission");
+  });
+
+  it("preserves existing values and reports validation rejection separately from readback", async () => {
+    const name = document.querySelector<HTMLInputElement>('input[name="name"]')!;
+    name.value = "Existing Person";
+    const email = document.querySelector<HTMLInputElement>('input[name="email"]')!;
+    email.setCustomValidity("Portal rejected this email");
+
+    const result = await runLeverFixtureProof(document, "http://127.0.0.1:4174/lever-application.html", {
+      fullName: "Ada Lovelace",
+      email: "ada@example.com",
+      phone: "+44 20 7946 0958",
+    });
+
+    expect(result.executions[0]).toMatchObject({ status: "preserved_existing", acceptedValue: "Existing Person" });
+    expect(result.executions[1]).toMatchObject({ status: "rejected", acceptedValue: "ada@example.com", validationMessage: "Portal rejected this email" });
   });
 });
 
@@ -392,5 +561,56 @@ describe("Greenhouse fixture proof", () => {
     );
     expect(result.fixtureAvailable).toBe(false);
     expect(result.execution).toBeNull();
+  });
+});
+
+describe("AA-04 Greenhouse package-backed standard facts", () => {
+  it("fills and verifies empty name, email, and phone fields while preserving an existing value", async () => {
+    document.documentElement.dataset.runrAssistedApplyFixture = "greenhouse";
+    document.body.innerHTML = `
+      <form>
+        <label for="first">Legal first name</label><input id="first" name="first_name" required>
+        <label for="last">Legal last name</label><input id="last" name="last_name" value="Portal Restored" required>
+        <label for="email-aa04">Email</label><input id="email-aa04" name="email" type="email" required>
+        <label for="phone">Phone number</label><input id="phone" name="phone" type="tel" required>
+        <button id="submit-aa04" type="submit">Submit application</button>
+      </form>`;
+    const eventLog: string[] = [];
+    for (const id of ["first", "email-aa04", "phone"]) {
+      const control = document.getElementById(id)!;
+      for (const eventName of ["focus", "input", "change", "blur"]) {
+        control.addEventListener(eventName, () => eventLog.push(`${id}:${eventName}`));
+      }
+    }
+    let submissions = 0;
+    document.querySelector("form")!.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submissions += 1;
+    });
+
+    const result = await runGreenhouseStandardFacts(
+      document,
+      "http://127.0.0.1:4174/greenhouse-application.html",
+      "aapkg_owned_aa04",
+      2,
+      { firstName: "Ada", lastName: "Lovelace", email: "ada@example.com", phone: "+49 30 123456" },
+    );
+
+    expect(result.executions.map((item) => [item.fieldLabel, item.status])).toEqual([
+      ["Legal first name", "filled"],
+      ["Legal last name", "preserved_existing"],
+      ["Email", "filled"],
+      ["Phone number", "filled"],
+    ]);
+    expect(document.querySelector<HTMLInputElement>("#first")!.value).toBe("Ada");
+    expect(document.querySelector<HTMLInputElement>("#last")!.value).toBe("Portal Restored");
+    expect(document.querySelector<HTMLInputElement>("#email-aa04")!.value).toBe("ada@example.com");
+    expect(document.querySelector<HTMLInputElement>("#phone")!.value).toBe("+49 30 123456");
+    expect(eventLog).toEqual([
+      "first:focus", "first:input", "first:change", "first:blur",
+      "email-aa04:focus", "email-aa04:input", "email-aa04:change", "email-aa04:blur",
+      "phone:focus", "phone:input", "phone:change", "phone:blur",
+    ]);
+    expect(submissions).toBe(0);
   });
 });

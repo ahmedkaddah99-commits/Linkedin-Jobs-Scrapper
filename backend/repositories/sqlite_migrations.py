@@ -859,6 +859,106 @@ def _apply_assisted_apply_connections_migration(connection: DatabaseConnection) 
     )
 
 
+def _apply_application_packages_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS application_packages (
+            package_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            launch_tab_binding_id TEXT NOT NULL DEFAULT '',
+            launch_tab_binding_expires_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            launched_at TEXT NOT NULL DEFAULT '',
+            bound_at TEXT NOT NULL DEFAULT '',
+            expired_at TEXT NOT NULL DEFAULT '',
+            consumed_at TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_application_packages_user_job
+            ON application_packages(user_id, job_id, version DESC);
+        CREATE INDEX IF NOT EXISTS idx_application_packages_status_created
+            ON application_packages(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_application_packages_binding
+            ON application_packages(launch_tab_binding_id)
+            WHERE launch_tab_binding_id != '';
+        """
+    )
+
+
+def _apply_assisted_apply_corrections_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS assisted_apply_corrections (
+            correction_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            source_package_id TEXT NOT NULL,
+            source_job_id TEXT NOT NULL,
+            field_intent TEXT NOT NULL,
+            corrected_value TEXT NOT NULL,
+            scope TEXT NOT NULL CHECK (scope IN ('country', 'role', 'company', 'global')),
+            scope_key TEXT NOT NULL,
+            provenance TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            superseded_at TEXT NOT NULL DEFAULT '',
+            superseded_by TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_corrections_match
+            ON assisted_apply_corrections(user_id, field_intent, scope, scope_key, expires_at)
+            WHERE superseded_at = '';
+        CREATE TABLE IF NOT EXISTS assisted_apply_correction_audit (
+            audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            correction_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            details_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_correction_audit_owner
+            ON assisted_apply_correction_audit(user_id, occurred_at DESC);
+        """
+    )
+
+
+def _apply_assisted_apply_document_grants_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS assisted_apply_document_grants (
+            grant_id TEXT PRIMARY KEY,
+            grant_token_prefix TEXT NOT NULL,
+            grant_token_hash TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            connection_request_id TEXT NOT NULL,
+            extension_origin TEXT NOT NULL,
+            package_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            document_version INTEGER NOT NULL DEFAULT 1,
+            asset_id TEXT NOT NULL,
+            object_key TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            expected_size INTEGER NOT NULL,
+            expected_sha256_hex TEXT NOT NULL,
+            status TEXT NOT NULL,
+            failure_reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_document_grants_token
+            ON assisted_apply_document_grants(grant_token_prefix, status);
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_document_grants_package
+            ON assisted_apply_document_grants(package_id, document_id, created_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -953,5 +1053,20 @@ MIGRATIONS = (
         "016_assisted_apply_connections",
         "Create one-time Assisted Apply connection and extension session storage.",
         _apply_assisted_apply_connections_migration,
+    ),
+    Migration.from_callable(
+        "017_application_packages",
+        "Create immutable application package storage for Assisted Apply.",
+        _apply_application_packages_migration,
+    ),
+    Migration.from_callable(
+        "018_assisted_apply_corrections",
+        "Create scoped, auditable Assisted Apply correction storage.",
+        _apply_assisted_apply_corrections_migration,
+    ),
+    Migration.from_callable(
+        "019_assisted_apply_document_grants",
+        "Create one-time, session-bound Assisted Apply document grants and audit records.",
+        _apply_assisted_apply_document_grants_migration,
     ),
 )

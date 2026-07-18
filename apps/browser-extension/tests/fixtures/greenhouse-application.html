@@ -17,13 +17,48 @@
       <label for="first-name">First name</label>
       <input id="first-name" name="first_name" type="text" value="Existing Candidate" required />
 
+      <label for="last-name">Legal last name</label>
+      <input id="last-name" name="last_name" type="text" autocomplete="family-name" required />
+
       <label for="email">Email address</label>
       <input id="email" name="email" type="email" autocomplete="email" required />
+
+      <label for="phone">Phone number</label>
+      <input id="phone" name="phone" type="tel" autocomplete="tel" required />
+
+      <label for="summary">Professional summary</label>
+      <textarea id="summary" name="summary" required></textarea>
+
+      <label for="country">Country</label>
+      <select id="country" name="country" required>
+        <option value="">Choose</option>
+        <option value="DE">Germany</option>
+        <option value="GB">United Kingdom</option>
+      </select>
+
+      <fieldset>
+        <legend>Work authorization</legend>
+        <label for="work-yes">Yes</label><input id="work-yes" name="work_authorization" type="radio" value="yes" required />
+        <label for="work-no">No</label><input id="work-no" name="work_authorization" type="radio" value="no" />
+      </fieldset>
+
+      <label for="remote">Open to remote work</label>
+      <input id="remote" name="remote" type="checkbox" value="yes" />
+
+      <label for="start-date">Start date</label>
+      <input id="start-date" name="start_date" type="date" required />
+
+      <label for="employee-code">Employee code</label>
+      <input id="employee-code" name="employee_code" type="text" pattern="[A-Z]{3}" required />
 
       <label for="disabled-field">Disabled field</label>
       <input id="disabled-field" name="disabled_field" type="text" disabled />
 
       <input id="hidden-field" name="hidden_field" type="hidden" value="portal-state" />
+
+      <label for="resume">CV / Resume</label>
+      <input id="resume" name="resume" type="file" accept="application/pdf,.pdf" required />
+      <p id="resume-status" data-runr-upload-status>Waiting for CV</p>
 
       <label for="captcha-response">CAPTCHA response</label>
       <input id="captcha-response" name="g-recaptcha-response" type="text" />
@@ -45,15 +80,24 @@
 
     <script>
       const body = document.body;
-      const email = document.getElementById("email");
-      for (const eventName of ["focus", "input", "change", "blur"]) {
-        email.addEventListener(eventName, () => {
-          body.dataset.emailEvents = [body.dataset.emailEvents, eventName].filter(Boolean).join(",");
-        });
+      for (const controlId of ["email", "summary", "country", "work-yes", "remote", "start-date"]) {
+        const control = document.getElementById(controlId);
+        for (const eventName of ["focus", "input", "change", "blur"]) {
+          control.addEventListener(eventName, () => {
+            if (controlId === "email") {
+              body.dataset.emailEvents = [body.dataset.emailEvents, eventName].filter(Boolean).join(",");
+            }
+            body.dataset.nativeEvents = [body.dataset.nativeEvents, `${controlId}:${eventName}`].filter(Boolean).join(",");
+          });
+        }
       }
       document.getElementById("application-form").addEventListener("submit", (event) => {
         event.preventDefault();
         body.dataset.submitClicks = String(Number(body.dataset.submitClicks || "0") + 1);
+      });
+      document.getElementById("resume").addEventListener("change", (event) => {
+        document.getElementById("resume-status").textContent = event.currentTarget.files[0]?.name || "Rejected";
+        body.dataset.uploadedCv = event.currentTarget.files[0]?.name || "";
       });
     </script>
   </body>

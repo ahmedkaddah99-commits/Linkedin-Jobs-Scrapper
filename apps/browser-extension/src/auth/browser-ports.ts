@@ -75,7 +75,7 @@ export class RunrAssistedApplyApi implements AssistedApplyApiPort {
     return `${this.apiBase}${path}`;
   }
 
-  private async request(
+  async request(
     path: string,
     method: "GET" | "POST" | "PUT" | "DELETE",
     body?: unknown,
@@ -139,6 +139,30 @@ export class RunrAssistedApplyApi implements AssistedApplyApiPort {
 
   updatePreferences(sessionToken: string, input: UpdatePreferencesInput): Promise<unknown> {
     return this.request(PREFERENCES_PATH, "PUT", input, sessionToken);
+  }
+
+  async downloadDocument(sessionToken: string, grantToken: string): Promise<Uint8Array> {
+    const response = await this.fetchPort(this.url("/assisted-apply/extension/document-grants/download"), {
+      method: "POST",
+      headers: new Headers({
+        Accept: "application/pdf",
+        Authorization: `Bearer ${sessionToken}`,
+        "Content-Type": "application/json",
+        "X-Runr-Document-Grant": grantToken,
+      }),
+      body: "{}",
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    if (!response.ok) {
+      throw new RunrApiError("Runr rejected the one-time document download.", response.status);
+    }
+    if ((response.headers.get("content-type") || "").split(";", 1)[0]?.trim() !== "application/pdf") {
+      throw new RunrApiError("Runr returned an invalid document MIME type.", response.status);
+    }
+    return new Uint8Array(await response.arrayBuffer());
   }
 }
 

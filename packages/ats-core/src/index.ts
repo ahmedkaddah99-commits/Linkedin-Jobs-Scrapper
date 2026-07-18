@@ -58,13 +58,24 @@ export interface InspectedApplicationForm {
 }
 
 export interface ApplicationPackageCandidate {
+  firstName?: string;
+  lastName?: string;
+  fullName?: string;
   email?: string;
+  phone?: string;
+}
+
+export interface ApplicationPackageAnswer {
+  fieldIntent: string;
+  label: string;
+  proposedValue: string;
 }
 
 export interface ApplicationPackage {
   id: string;
   version: number;
   candidate: ApplicationPackageCandidate;
+  answers?: ApplicationPackageAnswer[];
 }
 
 export interface FieldMatch {
@@ -97,6 +108,7 @@ export interface FieldExecutionResult {
   detectedFieldId: string;
   fieldLabel: string;
   status: FieldExecutionStatus;
+  existingValue?: string;
   acceptedValue?: string;
   validationMessage?: string;
   reasons: string[];
@@ -104,11 +116,14 @@ export interface FieldExecutionResult {
 
 export interface DocumentUploadRequest {
   detectedFieldId: string;
-  fileName: string;
+  file: File;
+  documentId: string;
+  documentVersion: number;
 }
 
 export interface DocumentUploadResult {
-  status: "unsupported";
+  status: "uploaded" | "rejected" | "mismatch" | "preserved_existing" | "unsupported";
+  fileName?: string;
   reasons: string[];
 }
 
@@ -211,6 +226,10 @@ function normalizeLabel(value: string): string {
 }
 
 function controlLabel(control: Element, document: Document): string {
+  if (control instanceof HTMLInputElement && control.type === "radio") {
+    const legend = control.closest("fieldset")?.querySelector(":scope > legend")?.textContent?.trim();
+    if (legend) return legend;
+  }
   const id = control.getAttribute("id");
   const explicit = id
     ? Array.from(document.querySelectorAll("label")).find((label) => label.htmlFor === id) ?? null
@@ -281,7 +300,7 @@ function isHidden(control: Element): boolean {
 }
 
 function stableAttributes(control: Element): Record<string, string> {
-  const allowed = ["id", "name", "type", "autocomplete", "aria-label"];
+  const allowed = ["id", "name", "type", "value", "autocomplete", "aria-label"];
   return Object.fromEntries(
     allowed
       .map((name) => [name, control.getAttribute(name) || ""] as const)
@@ -300,12 +319,74 @@ function existingValue(control: Element): unknown {
   return undefined;
 }
 
+function inputOption(control: HTMLInputElement): { label: string; value: string } {
+  return {
+    label: control.labels?.[0]?.textContent?.trim() || control.value,
+    value: control.value,
+  };
+}
+
+function controlOptions(control: Element): Array<{ label: string; value: string }> | undefined {
+  if (control instanceof HTMLSelectElement) {
+    return Array.from(control.options).map((option) => ({
+      label: option.textContent?.trim() || option.label,
+      value: option.value,
+    }));
+  }
+  if (!(control instanceof HTMLInputElement) || !["radio", "checkbox"].includes(control.type)) {
+    return undefined;
+  }
+  if (control.type === "checkbox" || !control.name) return [inputOption(control)];
+  return Array.from(control.ownerDocument.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+    .filter((candidate) => candidate.name === control.name)
+    .map(inputOption);
+}
+
 function setNativeTextValue(control: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   const prototype =
     control instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
   if (!setter) throw new Error("The control does not expose a native value setter.");
   setter.call(control, value);
+}
+
+function setNativeSelectValue(control: HTMLSelectElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  if (!setter) throw new Error("The select does not expose a native value setter.");
+  setter.call(control, value);
+}
+
+function setNativeChecked(control: HTMLInputElement, value: boolean): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked")?.set;
+  if (!setter) throw new Error("The control does not expose a native checked setter.");
+  setter.call(control, value);
+}
+
+function booleanValue(value: string): boolean | null {
+  const normalized = normalizeLabel(value);
+  if (["true", "yes", "1", "checked"].includes(normalized)) return true;
+  if (["false", "no", "0", "unchecked"].includes(normalized)) return false;
+  return null;
+}
+
+function answerValueForField(field: DetectedField, answer: ApplicationPackageAnswer): string | null {
+  if (!answer.label || normalizeLabel(answer.label) !== field.normalizedLabel) return null;
+  const proposed = answer.proposedValue;
+  if (field.type === "select") {
+    const option = field.options?.find((item) =>
+      item.value === proposed || normalizeLabel(item.label) === normalizeLabel(proposed));
+    return option?.value ?? null;
+  }
+  if (field.type === "radio") {
+    const ownValue = field.locator.stableAttributes.value || "on";
+    const ownOption = field.options?.find((item) => item.value === ownValue);
+    return ownValue === proposed || normalizeLabel(ownOption?.label || "") === normalizeLabel(proposed)
+      ? ownValue
+      : null;
+  }
+  if (field.type === "checkbox") return booleanValue(proposed) == null ? null : proposed;
+  if (field.type === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(proposed)) return null;
+  return ["text", "email", "tel", "textarea", "date"].includes(field.type) ? proposed : null;
 }
 
 function isEmailCompatibleField(field: DetectedField): boolean {
@@ -317,23 +398,57 @@ function isEmailCompatibleField(field: DetectedField): boolean {
   );
 }
 
-export class GreenhouseAdapter implements AtsAdapter {
-  readonly id = "greenhouse" as const;
-  readonly version = "0.1.0";
-  private readonly controls = new Map<
+type StandardCandidateIntent =
+  | "candidate.first_name"
+  | "candidate.last_name"
+  | "candidate.full_name"
+  | "candidate.email"
+  | "candidate.phone";
+
+function standardCandidateMatch(
+  field: DetectedField,
+  candidate: ApplicationPackageCandidate,
+): { intent: StandardCandidateIntent; value: string } | null {
+  const autocomplete = field.locator.stableAttributes.autocomplete?.toLowerCase();
+  const label = field.normalizedLabel;
+  const textLike = field.type === "text";
+  if (isEmailCompatibleField(field) && candidate.email) {
+    return { intent: "candidate.email", value: candidate.email };
+  }
+  if ((field.type === "tel" || (textLike && /(^|\b)(phone|telephone|mobile)(\b|$)/.test(label)) || autocomplete === "tel") && candidate.phone) {
+    return { intent: "candidate.phone", value: candidate.phone };
+  }
+  if ((textLike && /(^|\b)(first|given) name(\b|$)/.test(label) || autocomplete === "given-name") && candidate.firstName) {
+    return { intent: "candidate.first_name", value: candidate.firstName };
+  }
+  if ((textLike && /(^|\b)(last|family|sur)\s*name(\b|$)/.test(label) || autocomplete === "family-name") && candidate.lastName) {
+    return { intent: "candidate.last_name", value: candidate.lastName };
+  }
+  if ((textLike && /^(full )?name$/.test(label) || autocomplete === "name") && candidate.fullName) {
+    return { intent: "candidate.full_name", value: candidate.fullName };
+  }
+  return null;
+}
+
+class StandardFactsAdapter implements AtsAdapter {
+  readonly version = "0.2.0";
+  protected readonly controls = new Map<
     string,
     { element: Element; field: DetectedField }
   >();
+  private readonly approvedMatches = new Map<string, ApprovedFieldMatch>();
+
+  constructor(readonly id: AtsType) {}
 
   async detect(context: PageContext): Promise<DetectionResult> {
     const urlDetection = detectAtsFromUrl(context.url);
-    if (urlDetection.ats === "greenhouse") return urlDetection;
-    if (context.document.documentElement.dataset.runrAssistedApplyFixture === "greenhouse") {
+    if (urlDetection.ats === this.id) return urlDetection;
+    if (context.document.documentElement.dataset.runrAssistedApplyFixture === this.id) {
       return {
         detected: true,
-        ats: "greenhouse",
+        ats: this.id,
         confidence: 1,
-        reasons: ["The document is an explicit local Greenhouse test fixture."],
+        reasons: [`The document is an explicit local ${this.id} test fixture.`],
       };
     }
     return urlDetection;
@@ -341,11 +456,12 @@ export class GreenhouseAdapter implements AtsAdapter {
 
   async inspect(context: PageContext): Promise<InspectedApplicationForm> {
     this.controls.clear();
+    this.approvedMatches.clear();
     const controls = Array.from(
       context.document.querySelectorAll("input, textarea, select, button"),
     );
     const fields = controls.map((control, index): DetectedField => {
-      const id = `greenhouse-field-${index + 1}`;
+      const id = `${this.id}-field-${index + 1}`;
       const label = controlLabel(control, context.document);
       const normalizedLabel = normalizeLabel(label);
       const reason = manualReason(control, normalizedLabel);
@@ -365,50 +481,69 @@ export class GreenhouseAdapter implements AtsAdapter {
             control instanceof HTMLButtonElement) &&
           control.disabled,
         hidden: isHidden(control),
-        options:
-          control instanceof HTMLSelectElement
-            ? Array.from(control.options).map((option) => ({
-                label: option.textContent?.trim() || option.label,
-                value: option.value,
-              }))
-            : undefined,
+        options: controlOptions(control),
         existingValue: existingValue(control),
         classification,
         manualReason: reason || (type === "unknown" ? "unsupported_control" : undefined),
         locator: {
-          adapterStrategy: "greenhouse-semantic-control",
+          adapterStrategy: `${this.id}-semantic-control`,
           stableAttributes: stableAttributes(control),
         },
       };
       this.controls.set(id, { element: control, field });
       return field;
     });
-    return { ats: "greenhouse", fields };
+    return { ats: this.id, fields };
   }
 
   async match(
     form: InspectedApplicationForm,
     applicationPackage: ApplicationPackage,
   ): Promise<FieldMatch[]> {
+    this.approvedMatches.clear();
     return form.fields.map((field): FieldMatch => {
+      const standardMatch = standardCandidateMatch(field, applicationPackage.candidate);
       if (
-        isEmailCompatibleField(field) &&
+        standardMatch &&
         field.classification === "fillable" &&
         !field.disabled &&
-        !field.hidden &&
-        applicationPackage.candidate.email
+        !field.hidden
       ) {
-        return {
+        const match: ApprovedFieldMatch = {
           detectedFieldId: field.id,
           fieldLabel: field.label,
-          fieldIntent: "candidate.email",
-          proposedValue: applicationPackage.candidate.email,
+          fieldIntent: standardMatch.intent,
+          proposedValue: standardMatch.value,
           confidence: 1,
           source: "profile_verified",
           sensitivity: "personal",
           action: "fill",
-          reasons: ["Verified candidate email matched a semantic email control."],
+          reasons: ["A verified standard candidate fact matched a semantic control."],
         };
+        this.approvedMatches.set(field.id, match);
+        return match;
+      }
+      const packageAnswer = applicationPackage.answers?.find(
+        (answer) => answerValueForField(field, answer) !== null,
+      );
+      const packageValue = packageAnswer ? answerValueForField(field, packageAnswer) : null;
+      if (
+        packageAnswer && packageValue !== null &&
+        field.classification === "fillable" && !field.disabled && !field.hidden
+      ) {
+        const match: ApprovedFieldMatch = {
+          detectedFieldId: field.id,
+          fieldLabel: field.label,
+          fieldIntent: packageAnswer.fieldIntent,
+          proposedValue: packageValue,
+          confidence: 1,
+          source: "profile_verified",
+          sensitivity: "standard",
+          action: "fill",
+          reasons: ["A verified package answer matched a native control and its options."],
+        };
+        this.approvedMatches.set(field.id, match);
+        return match;
       }
       return {
         detectedFieldId: field.id,
@@ -439,6 +574,15 @@ export class GreenhouseAdapter implements AtsAdapter {
     }
 
     const { element: control, field } = registered;
+    const approved = this.approvedMatches.get(match.detectedFieldId);
+    if (!approved || approved.fieldIntent !== match.fieldIntent || approved.proposedValue !== match.proposedValue) {
+      return {
+        detectedFieldId: match.detectedFieldId,
+        fieldLabel: match.fieldLabel,
+        status: "rejected",
+        reasons: ["The field match was not approved by the current inspection and package match pass."],
+      };
+    }
     if (field.classification !== "fillable" || field.manualReason) {
       return {
         detectedFieldId: match.detectedFieldId,
@@ -461,16 +605,9 @@ export class GreenhouseAdapter implements AtsAdapter {
     const liveType = fieldType(control);
     const liveNormalizedLabel = normalizeLabel(controlLabel(control, control.ownerDocument));
     const liveManualReason = manualReason(control, liveNormalizedLabel);
-    const liveEmailCompatible =
-      liveType === "email" ||
-      (liveType === "text" &&
-        (/(^|\b)e-?mail(\b|$)/.test(liveNormalizedLabel) ||
-          control.getAttribute("autocomplete") === "email"));
     if (
-      match.fieldIntent !== "candidate.email" ||
-      !isEmailCompatibleField(field) ||
       liveType !== field.type ||
-      !liveEmailCompatible ||
+      liveNormalizedLabel !== field.normalizedLabel ||
       liveManualReason
     ) {
       return {
@@ -480,16 +617,16 @@ export class GreenhouseAdapter implements AtsAdapter {
         reasons: [
           liveManualReason
             ? `The live control became manual-only: ${liveManualReason}.`
-            : "AA-01 executes only the unchanged, semantically verified text/email control.",
+            : "Only an unchanged, semantically verified standard-fact control can execute.",
         ],
       };
     }
-    if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement)) {
+    if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement)) {
       return {
         detectedFieldId: match.detectedFieldId,
         fieldLabel: match.fieldLabel,
         status: "rejected",
-        reasons: ["The matched control is not a supported text input."],
+        reasons: ["The matched control is not a supported native input."],
       };
     }
     if (isHidden(control)) {
@@ -508,13 +645,22 @@ export class GreenhouseAdapter implements AtsAdapter {
         reasons: ["Disabled controls are never filled."],
       };
     }
+    const currentValue = control instanceof HTMLInputElement && ["checkbox", "radio"].includes(control.type)
+      ? String(control.checked)
+      : control.value;
+    const desiredValue = control instanceof HTMLInputElement && control.type === "checkbox"
+      ? String(booleanValue(match.proposedValue))
+      : control instanceof HTMLInputElement && control.type === "radio"
+        ? "true"
+        : match.proposedValue;
     if (control.dataset.runrAssistedApplyFilled === "true") {
-      const alreadyFilled = control.value === match.proposedValue;
+      const alreadyFilled = currentValue === desiredValue;
       return {
         detectedFieldId: match.detectedFieldId,
         fieldLabel: match.fieldLabel,
         status: alreadyFilled ? "already_filled" : "preserved_existing",
-        acceptedValue: control.value,
+        existingValue: field.existingValue == null ? "" : String(field.existingValue),
+        acceptedValue: currentValue,
         reasons: [
           alreadyFilled
             ? "The verified Runr value is already present; no events were repeated."
@@ -522,28 +668,58 @@ export class GreenhouseAdapter implements AtsAdapter {
         ],
       };
     }
-    if (control.value) {
+    const radioSelection = control instanceof HTMLInputElement && control.type === "radio" && control.name
+      ? Array.from(control.ownerDocument.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find(
+          (item) => item.name === control.name && item.checked,
+        )
+      : null;
+    const hasExistingValue = control instanceof HTMLInputElement && control.type === "checkbox"
+      ? control.checked && desiredValue !== "true"
+      : control instanceof HTMLInputElement && control.type === "radio"
+        ? Boolean(radioSelection && radioSelection !== control)
+        : Boolean(control.value);
+    if (hasExistingValue) {
       return {
         detectedFieldId: match.detectedFieldId,
         fieldLabel: match.fieldLabel,
         status: "preserved_existing",
-        acceptedValue: control.value,
+        existingValue: String(field.existingValue ?? currentValue),
+        acceptedValue: radioSelection?.value ?? currentValue,
         reasons: ["An existing page, browser, ATS, or user value was preserved."],
       };
     }
 
+    if (currentValue === desiredValue) {
+      return {
+        detectedFieldId: match.detectedFieldId,
+        fieldLabel: match.fieldLabel,
+        status: "already_filled",
+        existingValue: String(field.existingValue ?? currentValue),
+        acceptedValue: currentValue,
+        reasons: ["The verified answer is already present; no events were emitted."],
+      };
+    }
+
     control.focus();
-    setNativeTextValue(control, match.proposedValue);
+    if (control instanceof HTMLSelectElement) setNativeSelectValue(control, match.proposedValue);
+    else if (control instanceof HTMLInputElement && control.type === "checkbox") {
+      setNativeChecked(control, booleanValue(match.proposedValue) === true);
+    } else if (control instanceof HTMLInputElement && control.type === "radio") {
+      setNativeChecked(control, true);
+    } else setNativeTextValue(control, match.proposedValue);
     control.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     control.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     control.blur();
 
-    const acceptedValue = control.value;
-    if (acceptedValue !== match.proposedValue) {
+    const acceptedValue = control instanceof HTMLInputElement && ["checkbox", "radio"].includes(control.type)
+      ? String(control.checked)
+      : control.value;
+    if (acceptedValue !== desiredValue) {
       return {
         detectedFieldId: match.detectedFieldId,
         fieldLabel: match.fieldLabel,
         status: "mismatch",
+        existingValue: field.existingValue == null ? "" : String(field.existingValue),
         acceptedValue,
         reasons: ["The live value did not match the proposed value after readback."],
       };
@@ -553,6 +729,7 @@ export class GreenhouseAdapter implements AtsAdapter {
         detectedFieldId: match.detectedFieldId,
         fieldLabel: match.fieldLabel,
         status: "rejected",
+        existingValue: field.existingValue == null ? "" : String(field.existingValue),
         acceptedValue,
         validationMessage: control.validationMessage,
         reasons: ["The live control rejected the value during local validation."],
@@ -563,6 +740,7 @@ export class GreenhouseAdapter implements AtsAdapter {
       detectedFieldId: match.detectedFieldId,
       fieldLabel: match.fieldLabel,
       status: "filled",
+      existingValue: field.existingValue == null ? "" : String(field.existingValue),
       acceptedValue,
       reasons: ["The live control accepted the verified value on readback."],
     };
@@ -593,6 +771,76 @@ export class GreenhouseAdapter implements AtsAdapter {
   ): Promise<SubmissionEvidence | null> {
     return null;
   }
+}
+
+export class GreenhouseAdapter extends StandardFactsAdapter {
+  constructor() { super("greenhouse"); }
+
+  override async upload(request: DocumentUploadRequest): Promise<DocumentUploadResult> {
+    const registered = this.controls.get(request.detectedFieldId);
+    if (!registered || !(registered.element instanceof HTMLInputElement) || registered.element.type !== "file") {
+      return { status: "rejected", reasons: ["The inspected CV upload control is unavailable."] };
+    }
+    const input = registered.element;
+    if (input.disabled || isHidden(input)) {
+      return { status: "rejected", reasons: ["The CV upload control is disabled or hidden."] };
+    }
+    if (input.files?.length) {
+      return {
+        status: "preserved_existing",
+        fileName: input.files[0]?.name,
+        reasons: ["An existing portal or user-selected document was preserved."],
+      };
+    }
+    if (request.file.type !== "application/pdf" || !request.file.name.toLowerCase().endsWith(".pdf")) {
+      return { status: "rejected", reasons: ["AA-11 accepts a selected PDF CV only."] };
+    }
+    const accepted = input.accept.toLowerCase();
+    if (accepted && !accepted.includes("application/pdf") && !accepted.includes(".pdf")) {
+      return { status: "rejected", reasons: ["The portal control does not accept PDF documents."] };
+    }
+    const transfer = new DataTransfer();
+    transfer.items.add(request.file);
+    input.focus();
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    input.blur();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const acceptedFile = input.files?.[0];
+    if (!acceptedFile || acceptedFile.name !== request.file.name || acceptedFile.type !== request.file.type) {
+      return { status: "mismatch", fileName: acceptedFile?.name, reasons: ["The portal did not retain the selected PDF CV."] };
+    }
+    return {
+      status: "uploaded",
+      fileName: acceptedFile.name,
+      reasons: [`The portal retained document version ${request.documentVersion} in its CV control.`],
+    };
+  }
+}
+
+export class LeverAdapter extends StandardFactsAdapter {
+  constructor() { super("lever"); }
+}
+
+export async function uploadGreenhousePdf(
+  document: Document,
+  url: string,
+  request: Omit<DocumentUploadRequest, "detectedFieldId">,
+): Promise<DocumentUploadResult> {
+  const adapter = new GreenhouseAdapter();
+  const detection = await adapter.detect({ document, url });
+  if (detection.ats !== "greenhouse") {
+    return { status: "rejected", reasons: ["The current page is not a supported Greenhouse application."] };
+  }
+  const form = await adapter.inspect({ document, url });
+  const cvField = form.fields.find((field) =>
+    field.type === "file" && /(^|\b)(cv|resume|résumé)(\b|$)/iu.test(field.normalizedLabel),
+  );
+  if (!cvField) {
+    return { status: "rejected", reasons: ["No verified Greenhouse CV upload control was found."] };
+  }
+  return adapter.upload({ ...request, detectedFieldId: cvField.id });
 }
 
 export interface FixtureInspectionResult {
@@ -672,5 +920,105 @@ export async function runGreenhouseFixtureProof(
       ),
     ),
     execution,
+  };
+}
+
+export async function runGreenhouseStandardFacts(
+  document: Document,
+  url: string,
+  packageId: string,
+  version: number,
+  candidate: ApplicationPackageCandidate,
+  answers: ApplicationPackageAnswer[] = [],
+): Promise<{ inspection: FixtureInspectionResult; executions: FieldExecutionResult[] }> {
+  const adapter = new GreenhouseAdapter();
+  const detection = await adapter.detect({ document, url });
+  if (detection.ats !== "greenhouse") {
+    return {
+      inspection: { ats: detection.ats, fixtureAvailable: false, fieldCount: 0, manualReasons: [] },
+      executions: [],
+    };
+  }
+  const form = await adapter.inspect({ document, url });
+  const matches = await adapter.match(form, { id: packageId, version, candidate, answers });
+  const executions: FieldExecutionResult[] = [];
+  for (const match of matches) {
+    if (match.action === "fill") executions.push(await adapter.fill(match as ApprovedFieldMatch));
+  }
+  return {
+    inspection: {
+      ats: "greenhouse",
+      fixtureAvailable: document.documentElement.dataset.runrAssistedApplyFixture === "greenhouse",
+      fieldCount: form.fields.length,
+      manualReasons: Array.from(new Set(form.fields.flatMap((field) => field.manualReason ? [field.manualReason] : []))),
+    },
+    executions,
+  };
+}
+
+export async function inspectLeverFixture(
+  document: Document,
+  url: string,
+): Promise<FixtureInspectionResult> {
+  const adapter = new LeverAdapter();
+  const detection = await adapter.detect({ document, url });
+  if (detection.ats !== "lever") {
+    return { ats: detection.ats, fixtureAvailable: false, fieldCount: 0, manualReasons: [] };
+  }
+  const form = await adapter.inspect({ document, url });
+  return {
+    ats: "lever",
+    fixtureAvailable: document.documentElement.dataset.runrAssistedApplyFixture === "lever",
+    fieldCount: form.fields.length,
+    manualReasons: Array.from(new Set(form.fields.map((field) => field.manualReason).filter((reason): reason is ManualReason => Boolean(reason)))),
+  };
+}
+
+export async function runLeverFixtureProof(
+  document: Document,
+  url: string,
+  candidate: ApplicationPackageCandidate,
+): Promise<{ inspection: FixtureInspectionResult; executions: FieldExecutionResult[] }> {
+  const adapter = new LeverAdapter();
+  const inspection = await inspectLeverFixture(document, url);
+  if (!inspection.fixtureAvailable) return { inspection, executions: [] };
+  const form = await adapter.inspect({ document, url });
+  const matches = await adapter.match(form, { id: "aa-05-local-fixture", version: 1, candidate });
+  const executions: FieldExecutionResult[] = [];
+  for (const match of matches) {
+    if (match.action === "fill" && typeof match.proposedValue === "string") {
+      executions.push(await adapter.fill(match as ApprovedFieldMatch));
+    }
+  }
+  return { inspection, executions };
+}
+
+export async function runLeverStandardFacts(
+  document: Document,
+  url: string,
+  packageId: string,
+  version: number,
+  candidate: ApplicationPackageCandidate,
+  answers: ApplicationPackageAnswer[] = [],
+): Promise<{ inspection: FixtureInspectionResult; executions: FieldExecutionResult[] }> {
+  const adapter = new LeverAdapter();
+  const detection = await adapter.detect({ document, url });
+  if (detection.ats !== "lever") {
+    return { inspection: { ats: detection.ats, fixtureAvailable: false, fieldCount: 0, manualReasons: [] }, executions: [] };
+  }
+  const form = await adapter.inspect({ document, url });
+  const matches = await adapter.match(form, { id: packageId, version, candidate, answers });
+  const executions: FieldExecutionResult[] = [];
+  for (const match of matches) {
+    if (match.action === "fill" && typeof match.proposedValue === "string") executions.push(await adapter.fill(match as ApprovedFieldMatch));
+  }
+  return {
+    inspection: {
+      ats: "lever",
+      fixtureAvailable: document.documentElement.dataset.runrAssistedApplyFixture === "lever",
+      fieldCount: form.fields.length,
+      manualReasons: Array.from(new Set(form.fields.flatMap((field) => field.manualReason ? [field.manualReason] : []))),
+    },
+    executions,
   };
 }

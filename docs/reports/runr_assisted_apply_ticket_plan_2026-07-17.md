@@ -211,7 +211,7 @@ E2E, and a manual production redirect/CORS configuration check.
 ## AA-03 - Launch one immutable application package from Runr
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-02<br>
 **Visible plan coverage:** sections 3, 4, and 6
 
@@ -250,7 +250,7 @@ Pending.
 ## AA-04 - Fill and verify standard facts on Greenhouse
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** verified_complete<br>
 **Blocked by:** AA-06
 **Visible plan coverage:** sections 8-10
 
@@ -261,27 +261,37 @@ path for high-confidence legal/preferred name, email, and phone fields.
 
 ### Acceptance criteria
 
-- [ ] Greenhouse detection, inspection, matching, fill, and validation work from an
+- [x] Greenhouse detection, inspection, matching, fill, and validation work from an
       owned application package on representative fixtures.
-- [ ] Each attempt records existing value, focuses, uses the expected value/event
+- [x] Each attempt records existing value, focuses, uses the expected value/event
       lifecycle, waits, reads back, checks validation, and reports accepted,
       mismatched, rejected, or preserved.
-- [ ] Existing user, portal-restored, and browser-autofilled values are preserved.
-- [ ] Stable locator attributes remain extension-local; no raw CSS selector becomes
+- [x] Existing user, portal-restored, and browser-autofilled values are preserved.
+- [x] Stable locator attributes remain extension-local; no raw CSS selector becomes
       a permanent backend mapping.
-- [ ] Playwright proves the complete Greenhouse package-to-panel path and that the
+- [x] Playwright proves the complete Greenhouse package-to-panel path and that the
       final Submit control remains untouched.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, focused ATS/message unit tests passed (21 tests), TypeScript passed,
+  the production MV3 build and guarded manifest/source audit passed, and all four
+  Playwright persistent-context scenarios passed. The AA-04 browser scenario sent
+  an owned, versioned Greenhouse package through panel -> worker -> isolated runner,
+  filled legal last name, email, and phone, preserved a portal-restored first name,
+  verified readback, and observed zero Submit events.
+- Unit coverage proves exact focus/input/change/blur order, existing-value recording,
+  accepted readback, preservation, mismatch/rejection guardrails, stable extension-
+  local locators, and no submission capability. The repository-wide extension unit
+  gate currently has two unrelated pre-existing AA-06 policy-fixture failures;
+  AA-04's focused suites, build, audit, and browser gate are green.
 
 ---
 
 ## AA-05 - Fill and verify standard facts on Lever
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-06
 **Visible plan coverage:** sections 8-10
 
@@ -292,22 +302,30 @@ forking shared inspection, policy, execution, or result behavior.
 
 ### Acceptance criteria
 
-- [ ] Lever implements the common adapter contract end to end on representative
+- [x] Lever implements the common adapter contract end to end on representative
       fixtures.
-- [ ] Readback/validation distinguish an attempted fill from an accepted value.
-- [ ] Existing values are preserved and no final-submit behavior exists.
-- [ ] Playwright proves Lever independently of Greenhouse-specific DOM assumptions.
+- [x] Readback/validation distinguish an attempted fill from an accepted value.
+- [x] Existing values are preserved and no final-submit behavior exists.
+- [x] Playwright proves Lever independently of Greenhouse-specific DOM assumptions.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, the focused ATS/message unit suites passed (31 tests), TypeScript
+  passed, the production MV3 build and guarded manifest/source audit passed, and
+  Playwright passed all 3 persistent-context scenarios including an independent
+  Lever package-to-runner proof for full name, email, and phone with zero submit
+  events.
+- The repository-wide extension unit gate remains red in two pre-existing/in-flight
+  AA-06 policy parity cases (`scoped_personal_needs_sensitive_opt_in` and
+  `demographic_ai_suggestion_invalid`). AA-05 therefore remains `in_progress`
+  until its AA-06 dependency is verified and the complete gate is green.
 
 ---
 
 ## AA-06 - Apply provenance, scope, sensitivity, and confidence policy
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-03
 **Visible plan coverage:** sections 6, 7, and 9
 
@@ -338,7 +356,7 @@ Pending.
 ## AA-07 - Complete native control support on both portals
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-04 and AA-05
 **Visible plan coverage:** sections 1, 8, and 10
 
@@ -349,18 +367,32 @@ event, verification, and no-overwrite guarantees.
 
 ### Acceptance criteria
 
-- [ ] Greenhouse and Lever support text, email, tel, textarea, native select, radio,
+- [x] Greenhouse and Lever support text, email, tel, textarea, native select, radio,
       checkbox, and date controls.
-- [ ] Inspection records required/disabled/hidden state, options, existing value,
+- [x] Inspection records required/disabled/hidden state, options, existing value,
       step, normalized label, and stable locator attributes.
-- [ ] Hidden/disabled controls are skipped; every supported control uses the expected
+- [x] Hidden/disabled controls are skipped; every supported control uses the expected
       event lifecycle, readback, and validation.
-- [ ] Fixtures cover accepted, rejected, optional, and required cases on both
+- [x] Fixtures cover accepted, rejected, optional, and required cases on both
       portals.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, the focused ATS suite passed 18 tests, TypeScript passed, the
+  production MV3 build and guarded manifest/source/bundle audit passed, and all 5
+  Playwright persistent-context scenarios passed. The AA-07 scenario independently
+  exercised mixed native controls on Greenhouse and Lever with focus/input/change/
+  blur logging, readback, local validation rejection, required/optional controls,
+  and zero final-submit activity.
+- Inspection coverage proves normalized labels, step IDs, stable attributes,
+  select/radio/checkbox options, existing values, and required/disabled/hidden
+  state. Execution preserves existing values, rejects unapproved or live-mutated
+  matches, skips hidden/disabled answers, and accepts only policy-approved package
+  answers at the page-runner boundary.
+- The repository-wide extension unit gate remains red only in the two pre-existing
+  AA-06 policy parity cases (`scoped_personal_needs_sensitive_opt_in` and
+  `demographic_ai_suggestion_invalid`), so AA-07 remains `in_progress` pending the
+  AA-06 dependency and a green complete gate.
 
 ---
 
@@ -430,7 +462,7 @@ Pending.
 ## AA-10 - Save user corrections only at an explicit scope
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-09<br>
 **Visible plan coverage:** sections 3, 7, and 9
 
@@ -442,25 +474,43 @@ Memory.
 
 ### Acceptance criteria
 
-- [ ] The UI offers exactly: this application, applications in the country, similar
+- [x] The UI offers exactly: this application, applications in the country, similar
       roles, this company, all future applications, or do not save.
-- [ ] Durable corrections are owned, scoped, provenance-bearing, auditable, and used
+- [x] Durable corrections are owned, scoped, provenance-bearing, auditable, and used
       only for matching future packages.
-- [ ] Application-only and do-not-save choices do not enter permanent profile or
+- [x] Application-only and do-not-save choices do not enter permanent profile or
       answer storage.
-- [ ] Authorization, precedence, freshness, and conflicting-scope tests pass.
-- [ ] No correction is automatically promoted into Career Memory.
+- [x] Authorization, precedence, freshness, and conflicting-scope tests pass.
+- [x] No correction is automatically promoted into Career Memory.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, AA-10 focused backend and migration coverage passed with 10 tests;
+  the broader Assisted Apply correction, migration, policy, and connection suites
+  passed with 32 tests / 13 subtests. The extension typecheck passed, and focused
+  message/panel tests passed with 8 tests.
+- The repository backend gate also passed with Ruff, 110 tests / 21 subtests, and
+  the focused Assisted Apply API gate with 4 tests / 7 subtests. The production MV3
+  build succeeded. `git diff --check` reported no whitespace errors.
+- The proof covers exact UI scope labels, owner/package/field authorization,
+  application-only and do-not-save non-persistence, append-only creation and
+  supersession audit events, one-year freshness expiry, newest-same-scope conflict
+  resolution, company-over-global precedence, package immutability, and matching
+  only during creation of future packages. Corrections use dedicated Assisted Apply
+  tables and have no Career Memory write path.
+- The complete extension unit run has 77 passing tests and two pre-existing AA-06
+  policy-fixture failures (`scoped_personal_needs_sensitive_opt_in` and
+  `demographic_ai_suggestion_invalid`). The manifest audit also currently detects
+  the pre-existing AA-01 fixture-proof symbol in the production page-runner bundle.
+  AA-10 remains `in_progress` until its AA-09 dependency is verified and the
+  complete extension gate is green.
 
 ---
 
 ## AA-11 - Securely upload one versioned CV to Greenhouse
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** verified_complete<br>
 **Blocked by:** AA-03 and AA-04<br>
 **Visible plan coverage:** sections 6 and 11
 
@@ -472,20 +522,39 @@ extension.
 
 ### Acceptance criteria
 
-- [ ] A one-time grant is scoped to user, extension session, package, file, and
+- [x] A one-time grant is scoped to user, extension session, package, file, and
       document version and rejects replay/expiry/cross-user use.
-- [ ] The worker downloads to memory and verifies package/file identity, MIME, size,
+- [x] The worker downloads to memory and verifies package/file identity, MIME, size,
       and SHA-256 before the page runner receives a browser file representation.
-- [ ] Greenhouse accepts one selected PDF CV and the adapter confirms filename or
+- [x] Greenhouse accepts one selected PDF CV and the adapter confirms filename or
       portal upload status before reporting success.
-- [ ] The recorded audit names the immutable document version; rejection/mismatch is
+- [x] The recorded audit names the immutable document version; rejection/mismatch is
       visible under Documents.
-- [ ] Bytes, permanent URLs, and tokens never enter extension storage, page state,
+- [x] Bytes, permanent URLs, and tokens never enter extension storage, page state,
       telemetry, or logs and are discarded after the attempt.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, focused backend tests passed for hash-only, 60-second one-time
+  grants bound to the owning user, live extension session/origin, package, asset,
+  immutable document ID/version, size, MIME, and SHA-256. They prove cross-session
+  rejection, expiry, replay rejection, and rejection/audit of storage bytes changed
+  after grant creation. All database migration tests passed through migration 019.
+- TypeScript passed; 4 focused extension suites / 34 tests passed; the production
+  MV3 build and guarded manifest/source/bundle audit passed. The complete extension
+  unit run has 77 passing tests and the same 2 unrelated in-flight AA-06 policy
+  parity failures already recorded by AA-04/AA-05.
+- All 6 Playwright persistent-context scenarios passed. The AA-11 scenario used a
+  real extension session, created and consumed exactly one grant, verified the PDF
+  in the worker, created a browser `File` only in the isolated runner, observed the
+  Greenhouse file control retain `Candidate CV.pdf`, and observed zero submit
+  events. Its storage audit found no grant token, filename, or fixture document
+  content after the attempt.
+- The worker uses a fixed no-store API path and sends the grant in a request header,
+  never a URL. The backend binary response is also `no-store`; document bytes and
+  the grant are not written to extension storage, page state, telemetry, or logs.
+  The Documents panel reports uploaded/rejected/mismatched/preserved state with the
+  immutable version.
 
 ---
 

@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+from backend.application.assisted_apply_package_service import (
+    ApplicationPackageService,
+)
 from backend.application.assisted_apply_service import AssistedApplyConnectionService
 from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
 from backend.application.domain_services import IdentityAccessService, WorkspaceCatalogService
@@ -880,6 +883,7 @@ class BackendApplication:
     _workspace_catalog_service: WorkspaceCatalogService = field(init=False, repr=False)
     _identity_access_service: IdentityAccessService = field(init=False, repr=False)
     _assisted_apply_connection_service: AssistedApplyConnectionService = field(init=False, repr=False)
+    _assisted_apply_package_service: ApplicationPackageService = field(init=False, repr=False)
     _tracker_application_service: TrackerApplicationService = field(init=False, repr=False)
     _run_lifecycle_service: RunLifecycleService = field(init=False, repr=False)
 
@@ -892,6 +896,10 @@ class BackendApplication:
         self._identity_access_service = IdentityAccessService(repositories=self.repositories)
         self._assisted_apply_connection_service = AssistedApplyConnectionService(
             repositories=self.repositories
+        )
+        self._assisted_apply_package_service = ApplicationPackageService(
+            repositories=self.repositories,
+            object_storage=self.object_storage,
         )
         self._tracker_application_service = TrackerApplicationService(
             repositories=self.repositories,
@@ -2964,3 +2972,84 @@ class BackendApplication:
 
     def _refresh_run_job_keys(self, run_id: str) -> None:
         self._run_lifecycle_service.refresh_run_job_keys(run_id)
+    # --- AA-03: Application Package delegation ---
+
+    def create_application_package(
+        self,
+        *,
+        user_id: str,
+        job: Any,
+        answers: Any = None,
+        documents: Any = None,
+        warnings_items: Any = None,
+    ):
+        return self._assisted_apply_package_service.create_package(
+            user_id=user_id,
+            job=job,
+            answers=answers,
+            documents=documents,
+            warnings_items=warnings_items,
+        )
+
+    def launch_application_package(self, *, user_id: str, package_id: str):
+        return self._assisted_apply_package_service.launch_package(
+            user_id=user_id,
+            package_id=package_id,
+        )
+
+    def bind_application_package(self, *, binding_id: str, extension_origin: str):
+        return self._assisted_apply_package_service.bind_package(
+            binding_id=binding_id,
+            extension_origin=extension_origin,
+        )
+
+    def get_application_package_for_extension(
+        self,
+        *,
+        package_id: str,
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.get_package_for_extension(
+            package_id=package_id,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def save_assisted_apply_correction(
+        self,
+        *,
+        package_id: str,
+        field_intent: str,
+        corrected_value: str,
+        scope: str,
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.save_correction_for_extension(
+            package_id=package_id,
+            field_intent=field_intent,
+            corrected_value=corrected_value,
+            scope=scope,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def create_assisted_apply_document_grant(
+        self, *, package_id: str, document_id: str, raw_session: str, extension_origin: str
+    ):
+        return self._assisted_apply_package_service.create_document_grant(
+            package_id=package_id,
+            document_id=document_id,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def consume_assisted_apply_document_grant(
+        self, *, raw_grant: str, raw_session: str, extension_origin: str
+    ):
+        return self._assisted_apply_package_service.consume_document_grant(
+            raw_grant=raw_grant,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )

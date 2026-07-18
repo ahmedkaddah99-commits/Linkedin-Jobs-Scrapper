@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  ApplicationCorrectionScope,
+  ApplicationPackagePayload,
   AssistedApplyTabState,
   ExtensionConnectionState,
+  DocumentUploadMessage,
+  PackageExecutionMessage,
   PanelRequest,
 } from "@runr/extension-messages";
-import { isPanelResponse } from "@runr/extension-messages";
+import { APPLICATION_CORRECTION_SCOPE_OPTIONS, isPanelResponse } from "@runr/extension-messages";
 import { browser } from "wxt/browser";
+import { buildReviewPanelModel, type ReviewFieldRow } from "../../src/review/panel-model";
 
 async function send(message: PanelRequest) {
   const response: unknown = await browser.runtime.sendMessage(message);
@@ -28,6 +33,24 @@ async function requestConnection(message: PanelRequest): Promise<ExtensionConnec
   return response.connection;
 }
 
+async function requestPackage(message: PanelRequest): Promise<ApplicationPackagePayload> {
+  const response = await send(message);
+  if (!response.package) throw new Error("Runr returned an invalid application package.");
+  return response.package;
+}
+
+async function executePackage(message: PanelRequest): Promise<PackageExecutionMessage> {
+  const response = await send(message);
+  if (!response.packageExecution) throw new Error("Runr returned an invalid fill result.");
+  return response.packageExecution;
+}
+
+async function uploadDocument(message: PanelRequest): Promise<DocumentUploadMessage> {
+  const response = await send(message);
+  if (!response.documentUpload) throw new Error("Runr returned an invalid document result.");
+  return response.documentUpload;
+}
+
 function atsLabel(ats: AssistedApplyTabState["ats"]): string {
   if (ats === "greenhouse") return "Greenhouse";
   if (ats === "lever") return "Lever";
@@ -42,6 +65,14 @@ export default function App() {
   const [connectionError, setConnectionError] = useState("");
   const [busy, setBusy] = useState(false);
   const [connectionBusy, setConnectionBusy] = useState(false);
+  const [applicationPackage, setApplicationPackage] = useState<ApplicationPackagePayload | null>(null);
+  const [packageBusy, setPackageBusy] = useState(false);
+  const [packageExecution, setPackageExecution] = useState<PackageExecutionMessage | null>(null);
+  const [documentUpload, setDocumentUpload] = useState<DocumentUploadMessage | null>(null);
+  const reviewModel = useMemo(
+    () => buildReviewPanelModel(applicationPackage, state),
+    [applicationPackage, state],
+  );
 
   const load = useCallback(async (refresh = false) => {
     setBusy(true);
@@ -66,6 +97,11 @@ export default function App() {
         setConnectionError(nextError instanceof Error ? nextError.message : String(nextError));
       })
       .finally(() => setConnectionBusy(false));
+    setPackageBusy(true);
+    void requestPackage({ type: "GET_BOUND_APPLICATION_PACKAGE" })
+      .then(setApplicationPackage)
+      .catch(() => setApplicationPackage(null))
+      .finally(() => setPackageBusy(false));
   }, [load]);
 
   async function updateConnection(message: PanelRequest): Promise<void> {
@@ -100,6 +136,40 @@ export default function App() {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function fillApplicationPackage(): Promise<void> {
+    if (!applicationPackage) return;
+    setPackageBusy(true);
+    setError("");
+    try {
+      setPackageExecution(await executePackage({
+        type: "RUN_GREENHOUSE_APPLICATION_PACKAGE",
+        package: applicationPackage,
+      }));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setPackageBusy(false);
+    }
+  }
+
+  async function uploadCv(documentId: string): Promise<void> {
+    if (!applicationPackage) return;
+    setPackageBusy(true);
+    setError("");
+    setDocumentUpload(null);
+    try {
+      setDocumentUpload(await uploadDocument({
+        type: "UPLOAD_GREENHOUSE_CV",
+        package: applicationPackage,
+        documentId,
+      }));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setPackageBusy(false);
     }
   }
 
@@ -215,6 +285,130 @@ export default function App() {
         )}
       </section>
 
+      {connection?.status === "connected" && applicationPackage ? (
+        <section className="package-card">
+          <div className="status-heading">
+            <div>
+              <p className="eyebrow">Application package</p>
+              <h2>{applicationPackage.job.title || "Untitled role"}</h2>
+            </div>
+            <span className="status-chip status-recognized">v{applicationPackage.version}</span>
+          </div>
+          <dl>
+            <div><dt>Company</dt><dd data-testid="package-company">{applicationPackage.job.company || "Unknown"}</dd></div>
+            <div><dt>ATS</dt><dd data-testid="package-portal">{applicationPackage.job.portal || "Unknown"}</dd></div>
+            <div><dt>Location</dt><dd>{applicationPackage.job.location || "Not specified"}</dd></div>
+            <div><dt>Answers</dt><dd>{applicationPackage.answers.length} ready</dd></div>
+            <div><dt>Documents</dt><dd>{applicationPackage.documents.length} available</dd></div>
+            {applicationPackage.warnings.length > 0 ? (
+              <div><dt>Warnings</dt><dd>{applicationPackage.warnings.join(", ")}</dd></div>
+            ) : null}
+          </dl>
+          {applicationPackage.job.portal === "greenhouse" ? (
+            <button type="button" data-testid="fill-package" disabled={packageBusy}
+              onClick={() => void fillApplicationPackage()}>
+              {packageBusy ? "Filling and verifying…" : "Fill verified standard facts"}
+            </button>
+          ) : null}
+        </section>
+      ) : connection?.status === "connected" && !applicationPackage ? (
+        <section className="package-card muted">
+          <p className="eyebrow">Application package</p>
+          <p>Launch a job from Runr to review and fill this application.</p>
+        </section>
+      ) : null}
+
+      {connection?.status === "connected" && applicationPackage ? (
+        <section className="review-workspace" aria-label="Application review">
+          <div className="progress-summary" aria-label="Application progress">
+            {(["verified", "review", "missing", "manual", "documents"] as const).map((key) => (
+              <div key={key}><strong>{reviewModel.counts[key]}</strong><span>{key}</span></div>
+            ))}
+          </div>
+          {!reviewModel.enabled ? (
+            <p className="warning" role="status" data-testid="review-disabled">
+              This package does not match the active supported application tab. Review controls are disabled.
+            </p>
+          ) : null}
+          {(["ready", "review", "missing", "manual"] as const).map((section) => (
+            <section className={`review-section section-${section}`} key={section}>
+              <div className="section-title">
+                <h2>{section.charAt(0).toUpperCase() + section.slice(1)}</h2>
+                <span>{reviewModel.rows[section].length}</span>
+              </div>
+              {reviewModel.rows[section].length ? (
+                <ul>{reviewModel.rows[section].map((row) => (
+                  <EvidenceRow
+                    row={row}
+                    key={row.id}
+                    onSave={async (correctedValue, scope) => {
+                      if (!applicationPackage) return;
+                      setPackageBusy(true);
+                      setError("");
+                      try {
+                        setApplicationPackage(await requestPackage({
+                          type: "SAVE_APPLICATION_CORRECTION",
+                          package: applicationPackage,
+                          fieldIntent: row.fieldIntent,
+                          correctedValue,
+                          scope,
+                        }));
+                      } catch (nextError) {
+                        setError(nextError instanceof Error ? nextError.message : String(nextError));
+                        throw nextError;
+                      } finally {
+                        setPackageBusy(false);
+                      }
+                    }}
+                  />
+                ))}</ul>
+              ) : <p className="muted">No fields in this section.</p>}
+              {section === "manual" && reviewModel.manualControls.length ? (
+                <ul className="manual-controls">
+                  {reviewModel.manualControls.map((reason) => <li key={reason}>{reason.replaceAll("_", " ")}</li>)}
+                </ul>
+              ) : null}
+            </section>
+          ))}
+          <section className="review-section section-documents">
+            <div className="section-title"><h2>Documents</h2><span>{applicationPackage.documents.length}</span></div>
+            {applicationPackage.documents.length ? (
+              <ul>{applicationPackage.documents.map((document, index) => (
+                <li className="document-row" key={document.documentId || `${document.documentKind}:${index}`}>
+                  <strong>{document.documentKind}</strong>
+                  <span>{document.fileName || document.mimeType} · v{document.documentVersion}</span>
+                  {applicationPackage.job.portal === "greenhouse" && document.documentKind === "cv" &&
+                    document.mimeType === "application/pdf" ? (
+                    <button type="button" disabled={packageBusy}
+                      data-testid="upload-cv"
+                      onClick={() => void uploadCv(document.documentId)}>
+                      {packageBusy ? "Uploading and verifying…" : "Upload selected CV"}
+                    </button>
+                  ) : null}
+                  {documentUpload?.documentId === document.documentId ? (
+                    <p role="status" data-testid="document-upload-status">
+                      {documentUpload.status}: {documentUpload.reasons.join(" ")}
+                    </p>
+                  ) : null}
+                </li>
+              ))}</ul>
+            ) : <p className="muted">No documents selected.</p>}
+          </section>
+        </section>
+      ) : null}
+
+      {packageExecution ? (
+        <section className="result-card" data-testid="package-execution-result">
+          <p className="eyebrow">Verified package results</p>
+          <h2>{packageExecution.executions.length} fields checked</h2>
+          <ul>{packageExecution.executions.map((result, index) => (
+            <li key={`${result.fieldLabel}-${index}`}>
+              <strong>{result.fieldLabel}</strong>: {result.status}
+            </li>
+          ))}</ul>
+        </section>
+      ) : null}
+
       {error ? <p className="error" role="alert">{error}</p> : null}
 
       <section className="status-card" aria-busy={busy}>
@@ -289,5 +483,87 @@ export default function App() {
         or final submission capability exists in this build.
       </footer>
     </main>
+  );
+}
+
+function EvidenceRow({
+  row,
+  onSave,
+}: {
+  row: ReviewFieldRow;
+  onSave: (correctedValue: string, scope: ApplicationCorrectionScope) => Promise<void>;
+}) {
+  const [reviewed, setReviewed] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [correctedValue, setCorrectedValue] = useState(row.proposedValue);
+  const [scope, setScope] = useState<ApplicationCorrectionScope>("application");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState("");
+  return (
+    <li className="evidence-row" data-testid={`field-${row.section}`}>
+      <div className="field-heading">
+        <strong>{row.label || row.fieldIntent}</strong>
+        <span className={`acceptance acceptance-${row.liveAcceptance}`}>
+          {row.liveAcceptance.replaceAll("_", " ")}
+        </span>
+      </div>
+      <p className="proposed-answer">{row.proposedValue || "No answer available"}</p>
+      <dl className="field-evidence">
+        <div><dt>Source</dt><dd>{row.source.replaceAll("_", " ")}</dd></div>
+        <div><dt>Scope</dt><dd>{row.scope.replaceAll("_", " ")}</dd></div>
+        <div><dt>Confidence</dt><dd>{Math.round(row.confidence * 100)}%</dd></div>
+        <div><dt>Review</dt><dd>{row.requiresReview ? "Required" : "Not required"}</dd></div>
+      </dl>
+      {row.reasons.length ? <p className="field-reason">{row.reasons.join(" ")}</p> : null}
+      {row.section === "review" ? (
+        <div className="field-actions">
+          <button type="button" onClick={() => setReviewed(true)} aria-pressed={reviewed}>
+            {reviewed ? "Reviewed" : "Review answer"}
+          </button>
+          <button className="secondary" type="button" onClick={() => setReviewed(false)} disabled={!reviewed}>
+            Clear review
+          </button>
+        </div>
+      ) : null}
+      <div className="field-actions correction-actions">
+        <button className="secondary" type="button" onClick={() => setEditing((value) => !value)}>
+          {editing ? "Cancel correction" : "Correct answer"}
+        </button>
+      </div>
+      {editing ? (
+        <div className="correction-editor">
+          <label>
+            <span>Corrected answer</span>
+            <input value={correctedValue} onChange={(event) => setCorrectedValue(event.currentTarget.value)} />
+          </label>
+          <label>
+            <span>Use this correction for</span>
+            <select value={scope} onChange={(event) => setScope(event.currentTarget.value as ApplicationCorrectionScope)}>
+              {APPLICATION_CORRECTION_SCOPE_OPTIONS.map((option) => (
+                <option value={option.value} key={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={saving || !correctedValue.trim()}
+            onClick={() => {
+              setSaving(true);
+              setSaved("");
+              void onSave(correctedValue, scope)
+                .then(() => {
+                  setSaved(scope === "do_not_save" ? "Applied without saving." : "Correction applied at the selected scope.");
+                  setEditing(false);
+                })
+                .catch(() => undefined)
+                .finally(() => setSaving(false));
+            }}
+          >
+            {saving ? "Applying…" : "Apply correction"}
+          </button>
+        </div>
+      ) : null}
+      {saved ? <p className="correction-saved" role="status">{saved}</p> : null}
+    </li>
   );
 }
