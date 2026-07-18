@@ -179,3 +179,12 @@ footer { border-top: 1px solid #d8e0d8; padding-top: 12px; }
 .document-row span { color: #657268; overflow-wrap: anywhere; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #7bb28a; outline-offset: 2px; }
 .replace-answer { display: block; margin: 6px 0 10px; padding: 7px 9px; font-size: 11px; }
+.upload-mismatch { color: #8b4d13; }
+.upload-status { margin-top: 4px; font-size: 11px; }
+.upload-rejected { color: #8b241c; }
+.required-badge { display: inline-block; margin-left: 6px; border-radius: 4px; padding: 2px 5px; background: #fce5e2; color: #8b241c; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.upload-uploaded { color: #15592d; }
+.evidence-row.required-empty { border-left: 3px solid #b8473d; padding-left: 7px; }
+.empty-answer { color: #8b241c; font-style: italic; }
+.upload-preserved_existing { color: #657268; }
+.field-actions[role='group'] { margin-top: 10px; }

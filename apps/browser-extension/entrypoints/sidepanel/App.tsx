@@ -12,7 +12,7 @@ import type {
 } from "@runr/extension-messages";
 import { APPLICATION_CORRECTION_SCOPE_OPTIONS, isPanelResponse } from "@runr/extension-messages";
 import { browser } from "wxt/browser";
-import { buildReviewPanelModel, type ReviewFieldRow } from "../../src/review/panel-model";
+import { buildReviewPanelModel, type ReviewFieldRow, type DocumentRow } from "../../src/review/panel-model";
 
 async function send(message: PanelRequest) {
   const response: unknown = await browser.runtime.sendMessage(message);
@@ -82,8 +82,8 @@ export default function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingApplicationConfirmation | null>(null);
   const [trackerConfirmation, setTrackerConfirmation] = useState<TrackerConfirmationResult | null>(null);
   const reviewModel = useMemo(
-    () => buildReviewPanelModel(applicationPackage, state),
-    [applicationPackage, state],
+    () => buildReviewPanelModel(applicationPackage, state, documentUpload),
+    [applicationPackage, state, documentUpload],
   );
 
   const load = useCallback(async (refresh = false) => {
@@ -336,7 +336,7 @@ export default function App() {
               disabled={connectionBusy}
               data-testid="disconnect-runr"
             >
-              {connectionBusy ? "Disconnectingâ€¦" : "Disconnect from Runr"}
+              {connectionBusy ? "DisConnecting…€¦" : "Disconnect from Runr"}
             </button>
           </>
         ) : (
@@ -346,7 +346,7 @@ export default function App() {
             disabled={connectionBusy}
             data-testid="connect-runr"
           >
-            {connectionBusy ? "Connectingâ€¦" : "Connect to Runr"}
+            {connectionBusy ? "Connecting…€¦" : "Connect to Runr"}
           </button>
         )}
       </section>
@@ -373,7 +373,7 @@ export default function App() {
           {applicationPackage.job.portal === "greenhouse" || applicationPackage.job.portal === "lever" ? (
             <button type="button" data-testid="fill-package" disabled={packageBusy}
               onClick={() => void fillApplicationPackage()}>
-              {packageBusy ? "Filling and verifyingâ€¦" : "Fill verified standard facts"}
+              {packageBusy ? "Filling and verifying…€¦" : "Fill verified standard facts"}
             </button>
           ) : null}
         </section>
@@ -436,23 +436,29 @@ export default function App() {
               ) : null}
             </section>
           ))}
-          <section className="review-section section-documents">
-            <div className="section-title"><h2>Documents</h2><span>{applicationPackage.documents.length}</span></div>
-            {applicationPackage.documents.length ? (
-              <ul>{applicationPackage.documents.map((document, index) => (
-                <li className="document-row" key={document.documentId || `${document.documentKind}:${index}`}>
-                  <strong>{document.documentKind}</strong>
-                  <span>{document.fileName || document.mimeType} Â· v{document.documentVersion}</span>
-                  {(["cv", "cover_letter", "supporting_document"] as const).includes(document.documentKind) ? (
-                    <button type="button" disabled={packageBusy}
+          <section className="review-section section-documents" aria-label="Documents review">
+            <div className="section-title"><h2>Documents</h2><span>{reviewModel.documents.length}</span></div>
+            {reviewModel.documents.length ? (
+              <ul>{reviewModel.documents.map((document) => (
+                <li className="document-row" key={document.documentId || document.documentKind}>
+                  <strong>{document.documentKind.replaceAll("_", " ")}</strong>
+                  <span>{document.fileName || document.mimeType} &middot; v{document.documentVersion}</span>
+                  {(["cv", "cover_letter", "supporting_document"] as const).includes(document.documentKind as any) ? (
+                    <button type="button" disabled={packageBusy || document.uploadStatus === "uploaded"}
                       data-testid={`upload-${document.documentKind}`}
-                      onClick={() => void uploadSelectedDocument(document.documentId)}>
-                      {packageBusy ? "Uploading and verifyingâ€¦" : `Upload selected ${document.documentKind.replaceAll("_", " ")}`}
+                      onClick={() => void uploadSelectedDocument(document.documentId)}
+                      onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void uploadSelectedDocument(document.documentId); } }}>
+                      {document.uploadStatus === "uploading"
+                        ? "Uploading and verifying…"
+                        : document.uploadStatus === "uploaded"
+                          ? "Uploaded"
+                          : `Upload selected ${document.documentKind.replaceAll("_", " ")}`}
                     </button>
                   ) : null}
-                  {documentUpload?.documentId === document.documentId ? (
-                    <p role="status" data-testid="document-upload-status">
-                      {documentUpload.status}: {documentUpload.reasons.join(" ")}
+                  {document.uploadStatus !== "idle" && document.uploadStatus !== "uploading" ? (
+                    <p role="status" data-testid={`document-upload-status-${document.documentKind}`} className={`upload-status upload-${document.uploadStatus}`}>
+                      {document.uploadStatus.replaceAll("_", " ")}
+                      {document.reasons.length ? `: ${document.reasons.join(" ")}` : ""}
                     </p>
                   ) : null}
                 </li>
@@ -488,7 +494,7 @@ export default function App() {
         <div className="status-heading">
           <div>
             <p className="eyebrow">Current page</p>
-            <h2 data-testid="ats-name">{state ? atsLabel(state.ats) : "Inspectingâ€¦"}</h2>
+            <h2 data-testid="ats-name">{state ? atsLabel(state.ats) : "Inspecting…€¦"}</h2>
           </div>
           <span className={`status-chip status-${state?.status || "loading"}`}>
             {state?.status.replaceAll("_", " ") || "loading"}
@@ -507,7 +513,7 @@ export default function App() {
               disabled={busy}
               data-testid="run-fixture"
             >
-              {busy ? "Checkingâ€¦" : "Fill and verify fixture email"}
+              {busy ? "Checking…€¦" : "Fill and verify fixture email"}
             </button>
           </div>
         ) : (
@@ -572,15 +578,26 @@ function EvidenceRow({
   const [scope, setScope] = useState<ApplicationCorrectionScope>("application");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState("");
+
+  function handleReviewKeyDown(event: React.KeyboardEvent, action: () => void) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      action();
+    }
+  }
+
   return (
-    <li className="evidence-row" data-testid={`field-${row.section}`}>
+    <li className={`evidence-row ${row.requiredAndEmpty ? "required-empty" : ""}`} data-testid={`field-${row.section}`}>
       <div className="field-heading">
         <strong>{row.label || row.fieldIntent}</strong>
         <span className={`acceptance acceptance-${row.liveAcceptance}`}>
           {row.liveAcceptance.replaceAll("_", " ")}
         </span>
       </div>
-      <p className="proposed-answer">{row.proposedValue || "No answer available"}</p>
+      <p className="proposed-answer">
+        {row.proposedValue || <em className="empty-answer">No answer available</em>}
+        {row.requiredAndEmpty ? <span className="required-badge">Required</span> : null}
+      </p>
       <dl className="field-evidence">
         <div><dt>Source</dt><dd>{row.source.replaceAll("_", " ")}</dd></div>
         <div><dt>Scope</dt><dd>{row.scope.replaceAll("_", " ")}</dd></div>
@@ -589,22 +606,37 @@ function EvidenceRow({
       </dl>
       {row.reasons.length ? <p className="field-reason">{row.reasons.join(" ")}</p> : null}
       {row.section === "review" ? (
-        <div className="field-actions">
-          <button type="button" onClick={() => setReviewed(true)} aria-pressed={reviewed}>
+        <div className="field-actions" role="group" aria-label={`Review actions for ${row.label || row.fieldIntent}`}>
+          <button
+            type="button"
+            aria-pressed={reviewed}
+            aria-label={reviewed ? "Marked as reviewed" : "Mark answer as reviewed"}
+            onClick={() => setReviewed(true)}
+            onKeyDown={(event) => handleReviewKeyDown(event, () => setReviewed(true))}
+            disabled={reviewed}
+          >
             {reviewed ? "Reviewed" : "Review answer"}
           </button>
-          <button className="secondary" type="button" onClick={() => setReviewed(false)} disabled={!reviewed}>
+          <button
+            className="secondary"
+            type="button"
+            aria-label="Clear review status"
+            onClick={() => setReviewed(false)}
+            onKeyDown={(event) => handleReviewKeyDown(event, () => setReviewed(false))}
+            disabled={!reviewed}
+          >
             Clear review
           </button>
         </div>
       ) : null}
       <div className="field-actions correction-actions">
-        <button className="secondary" type="button" onClick={() => setEditing((value) => !value)}>
+        <button className="secondary" type="button" onClick={() => setEditing((value) => !value)}
+          aria-expanded={editing} aria-label={editing ? "Cancel correction" : "Correct answer"}>
           {editing ? "Cancel correction" : "Correct answer"}
         </button>
       </div>
       {editing ? (
-        <div className="correction-editor">
+        <div className="correction-editor" role="form" aria-label="Answer correction">
           <label>
             <span>Corrected answer</span>
             <input value={correctedValue} onChange={(event) => setCorrectedValue(event.currentTarget.value)} />
@@ -632,11 +664,17 @@ function EvidenceRow({
                 .finally(() => setSaving(false));
             }}
           >
-            {saving ? "Applyingâ€¦" : "Apply correction"}
+            {saving ? "Applying…" : "Apply correction"}
           </button>
         </div>
       ) : null}
       {saved ? <p className="correction-saved" role="status">{saved}</p> : null}
     </li>
   );
-}
+}}
+
+
+
+
+
+

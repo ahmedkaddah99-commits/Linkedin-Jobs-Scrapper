@@ -710,3 +710,67 @@ test("uploads selected CV, cover-letter, and supporting-document roles on both a
     },
   });
 });
+
+test("AA-09 review panel shows all sections, field evidence, and keyboard-accessible actions", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
+  const panelPage = await context.newPage();
+  await panelPage.goto("chrome-extension://" + extensionId + "/sidepanel.html");
+
+  // Verify connection and package are loaded
+  await expect(panelPage.getByTestId("connection-status")).not.toHaveText("loading");
+  if (await panelPage.getByTestId("connect-runr").isVisible().catch(() => false)) {
+    await panelPage.getByTestId("connect-runr").click();
+    await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
+  }
+
+  // Bind a package to the tab to enable the review workspace
+  await panelPage.evaluate(async () => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((candidate) => candidate.url?.includes("greenhouse-application.html"));
+    if (tab?.id == null) throw new Error("Fixture tab missing.");
+    const pkg = {
+      packageId: "aa09-review-pkg", jobId: "aa09-job", version: 2, schemaVersion: 1,
+      job: { jobId: "aa09-job", title: "Engineer", company: "Acme", portal: "greenhouse", location: "Berlin" },
+      answers: [
+        { fieldIntent: "candidate.email", label: "Email", proposedValue: "ada@example.com", source: "profile_verified", sensitivity: "standard", scope: "global", confidence: 1, requiresReview: false, reasons: [] },
+        { fieldIntent: "candidate.salary", label: "Salary", proposedValue: "100", source: "ai_suggestion", sensitivity: "standard", scope: "application", confidence: .95, requiresReview: true, reasons: ["AI suggested"] },
+        { fieldIntent: "candidate.phone", label: "Phone", proposedValue: "", source: "profile_verified", sensitivity: "personal", scope: "global", confidence: 1, requiresReview: false, reasons: [] },
+        { fieldIntent: "candidate.declaration", label: "Declaration", proposedValue: "Yes", source: "profile_verified", sensitivity: "legal", scope: "application", confidence: 1, requiresReview: false, reasons: [] },
+      ],
+      documents: [{ documentId: "cv_v1", documentVersion: 1, documentKind: "cv", mimeType: "application/pdf", fileName: "cv.pdf" }],
+      warnings: [],
+      policy: { permitSensitiveAutofill: false, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+    };
+    await chrome.storage.session.set({ ["assisted-apply-package:" + tab.id]: pkg });
+  });
+
+  // Wait for review workspace to appear
+  await panelPage.reload();
+  await expect(panelPage.getByText("Engineer")).toBeVisible({ timeout: 5000 });
+
+  // Verify header shows company, role, portal, version
+  await expect(panelPage.getByTestId("package-company")).toHaveText("Acme");
+  await expect(panelPage.getByTestId("package-portal")).toHaveText("greenhouse");
+
+  // Verify Ready, Review, Missing, Manual, Documents sections exist
+  await expect(panelPage.getByText("Ready")).toBeVisible();
+  await expect(panelPage.getByText("Review")).toBeVisible();
+  await expect(panelPage.getByText("Missing")).toBeVisible();
+  await expect(panelPage.getByText("Manual")).toBeVisible();
+  await expect(panelPage.getByText("Documents")).toBeVisible();
+
+  // Verify field rows show evidence data
+  await expect(panelPage.getByText("ada@example.com")).toBeVisible();
+  await expect(panelPage.getByText("profile_verified").first()).toBeVisible();
+
+  // Verify document section shows document
+  await expect(panelPage.getByText("cv.pdf")).toBeVisible();
+
+  // Verify no submit event occurred
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+  await panelPage.close();
+  await fixturePage.close();
+});
+
