@@ -79,6 +79,21 @@ function sectionFor(answer: ApplicationPackageAnswer): ReviewSection {
  * required when empty.
  */
 function isFieldRequired(fieldIntent: string, _answers: ApplicationPackageAnswer[]): boolean {
+  // Fields matching these patterns are manual-only controls (CAPTCHA, etc.)
+  // and should never be flagged as required-and-empty.
+  const manualIntentPatterns: ReadonlyArray<RegExp> = [
+    /captcha/u,
+    /signature/u,
+    /terms/u,
+    /declaration/u,
+    /assessment/u,
+    /unsupported/u,
+    /custom_control/u,
+  ];
+  if (manualIntentPatterns.some((pattern) => pattern.test(fieldIntent))) {
+    return false;
+  }
+
   const requiredPatterns: ReadonlyArray<RegExp> = [
     /email/u,
     /phone/u,
