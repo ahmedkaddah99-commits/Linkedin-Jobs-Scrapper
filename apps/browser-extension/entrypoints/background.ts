@@ -1,4 +1,4 @@
-import { detectAtsFromUrl } from "@runr/ats-core";
+﻿import { detectAtsFromUrl } from "@runr/ats-core";
 import {
   isExactGreenhouseFixtureUrl,
   isExactLeverFixtureUrl,
@@ -26,6 +26,13 @@ import {
 import { ExtensionConnectionService } from "../src/auth/connection-service";
 import { assistedApplyRuntimeConfig } from "../src/auth/config";
 import { isExactSidePanelSender } from "../src/auth/trusted-sender";
+import {
+  hasAllOptionalHostPermissions,
+  hasPortalPermission,
+  requestPortalPermission,
+  requestAllOptionalHostPermissions,
+  missingPortalPermissions,
+} from "../src/permissions/host-permissions";
 import {
   clearPendingConfirmation,
   readPendingConfirmation,
@@ -202,7 +209,7 @@ async function fetchPackageFromApi(
   const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
   const sessionToken = await currentSessionToken();
   const response = await api.request(
-    `/assisted-apply/extension/packages?package_id=${encodeURIComponent(packageId)}`,
+    /assisted-apply/extension/packages?package_id=,
     "GET",
     undefined,
     sessionToken,
@@ -424,6 +431,24 @@ export default defineBackground(() => {
           }),
         };
       }
+      if (message.type === "CHECK_PORTAL_PERMISSION") {
+        const granted = await hasPortalPermission(message.portal);
+        return { ok: true, permissionGranted: granted };
+      }
+      if (message.type === "REQUEST_PORTAL_PERMISSION") {
+        const granted = await requestPortalPermission(message.portal);
+        return { ok: true, permissionGranted: granted };
+      }
+      if (message.type === "CHECK_ALL_OPTIONAL_PERMISSIONS") {
+        const allGranted = await hasAllOptionalHostPermissions();
+        const missing = allGranted ? [] : await missingPortalPermissions();
+        return { ok: true, permissionGranted: allGranted, missingPortalPermissions: missing };
+      }
+      if (message.type === "REQUEST_ALL_OPTIONAL_PERMISSIONS") {
+        const granted = await requestAllOptionalHostPermissions();
+        const missing = granted ? [] : await missingPortalPermissions();
+        return { ok: true, permissionGranted: granted, missingPortalPermissions: missing };
+      }
       if (message.type === "BIND_APPLICATION_PACKAGE") {
         const tab = await resolveTargetTab();
         if (tab?.id == null) throw new Error("No application tab is available for package binding.");
@@ -509,7 +534,7 @@ export default defineBackground(() => {
                 proposedValue: message.correctedValue.trim(),
                 source: "scoped_preference",
                 scope: message.scope,
-                reasons: [...answer.reasons, `explicit_user_correction:${message.scope}`],
+                reasons: [...answer.reasons, explicit_user_correction:],
               }
             : answer),
         };

@@ -1,4 +1,4 @@
-import { defineConfig } from "wxt";
+﻿import { defineConfig } from "wxt";
 
 export default defineConfig({
   manifestVersion: 3,
@@ -7,6 +7,7 @@ export default defineConfig({
     name: "Runr Assisted Apply",
     description:
       "Review-first assistance for supported job applications. Runr never submits an application for you.",
+    version: "0.2.0",
     ...(browser === "chrome"
       ? {
           key: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA9vfcDQbZcLIkeK0Y9Ddx89ViTTdSQIOvRIprwztytepFOdyw6AZdGK9wpR3Fo47XiP+0F6OZshp4JQXXPDLWCU1VKPs6CXl7Sh8j7VrdEn9ptLHbFYRPOUjgriR3ZxM5Ad+sEMuF84lMDb8YFDHeqUFjRsit37f97sQuL+1Tl+tGv1uK2CqA3h+t6+MSWj658BVIYWRla9bwhpoGQFgLxIeh4/pbBfaXS8AvcZ9R8UQnieDg6kIqyXZd+JV62UyxagQaLaLiZAmNcKznqMwvDKMxZ24bmQ1A8VKGKFWHGw7bM46SBFQ4yisTkb/xwDbXbyHhLpddlyQULifvr3z3wwIDAQAB",
@@ -33,5 +34,9 @@ export default defineConfig({
     permissions: ["activeTab", "identity", "scripting", "sidePanel", "storage"],
     host_permissions:
       mode === "testing" ? ["http://127.0.0.1/*"] : ["https://runr-api.onrender.com/*"],
+    optional_host_permissions:
+      mode === "testing"
+        ? ["http://127.0.0.1/*"]
+        : ["https://boards.greenhouse.io/*", "https://*.lever.co/*"],
   }),
 });

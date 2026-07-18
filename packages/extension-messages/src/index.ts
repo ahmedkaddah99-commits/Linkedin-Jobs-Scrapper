@@ -1,4 +1,4 @@
-export type SupportedAts = "greenhouse" | "lever";
+﻿export type SupportedAts = "greenhouse" | "lever";
 
 export type FixtureExecutionStatus =
   | "filled"
@@ -101,7 +101,11 @@ export type PanelRequest =
       type: "RESPOND_TO_APPLICATION_CONFIRMATION";
       decision: "confirmed" | "declined";
       evidence: PendingApplicationConfirmation;
-    };
+    }
+  | { type: "CHECK_PORTAL_PERMISSION"; portal: "greenhouse" | "lever" }
+  | { type: "REQUEST_PORTAL_PERMISSION"; portal: "greenhouse" | "lever" }
+  | { type: "CHECK_ALL_OPTIONAL_PERMISSIONS" }
+  | { type: "REQUEST_ALL_OPTIONAL_PERMISSIONS" };
 
 export interface ApplicationPackageJob {
   jobId: string;
@@ -298,6 +302,8 @@ export interface PanelResponse {
   documentUpload?: DocumentUploadMessage;
   pendingConfirmation?: PendingApplicationConfirmation | null;
   trackerConfirmation?: TrackerConfirmationResult;
+  permissionGranted?: boolean;
+  missingPortalPermissions?: Array<{ portal: "greenhouse" | "lever"; origin: string }>;
   error?: string;
 }
 
@@ -647,9 +653,17 @@ export function isPanelResponse(value: unknown): value is PanelResponse {
     const hasPendingConfirmation = "pendingConfirmation" in value &&
       (value.pendingConfirmation === null || isPendingApplicationConfirmation(value.pendingConfirmation));
     const hasTrackerConfirmation = isTrackerConfirmationResult(value.trackerConfirmation);
-    return [hasTabState, hasConnection, hasPackage, hasPackageExecution, hasDocumentUpload,
-      hasPendingConfirmation, hasTrackerConfirmation]
-      .filter(Boolean).length === 1;
+    const hasPermissionGranted = "permissionGranted" in value && typeof value.permissionGranted === "boolean";
+    const hasMissingPermissions = "missingPortalPermissions" in value &&
+      (value.missingPortalPermissions === undefined ||
+        (Array.isArray(value.missingPortalPermissions) &&
+          value.missingPortalPermissions.every((perm: unknown) => isRecord(perm) &&
+            (perm.portal === "greenhouse" || perm.portal === "lever") &&
+            typeof perm.origin === "string")));
+    const nonErrorFields = [hasTabState, hasConnection, hasPackage, hasPackageExecution, hasDocumentUpload,
+      hasPendingConfirmation, hasTrackerConfirmation, hasPermissionGranted, hasMissingPermissions]
+      .filter(Boolean).length;
+    return nonErrorFields >= 1;
   }
   return value.error === undefined || typeof value.error === "string";
 }
@@ -686,6 +700,9 @@ export function isPanelRequest(value: unknown): value is PanelRequest {
     return (value.decision === "confirmed" || value.decision === "declined") &&
       isPendingApplicationConfirmation(value.evidence);
   }
+  if (type === "CHECK_PORTAL_PERMISSION" || type === "REQUEST_PORTAL_PERMISSION") {
+    return value.portal === "greenhouse" || value.portal === "lever";
+  }
   return (
     type === "GET_ACTIVE_TAB_STATE" ||
     type === "REFRESH_ACTIVE_TAB_STATE" ||
@@ -694,7 +711,9 @@ export function isPanelRequest(value: unknown): value is PanelRequest {
     type === "GET_BOUND_APPLICATION_PACKAGE" ||
     type === "CONNECT_RUNR" ||
     type === "DISCONNECT_RUNR" ||
-    type === "GET_PENDING_APPLICATION_CONFIRMATION"
+    type === "GET_PENDING_APPLICATION_CONFIRMATION" ||
+    type === "CHECK_ALL_OPTIONAL_PERMISSIONS" ||
+    type === "REQUEST_ALL_OPTIONAL_PERMISSIONS"
   );
 }
 
