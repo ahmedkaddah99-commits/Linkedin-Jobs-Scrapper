@@ -103,6 +103,41 @@ jobs:
             apps/browser-extension/test-results
           if-no-files-found: ignore
 
+  assisted-apply-extension-edge:
+    name: Assisted Apply extension checks (Edge)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/browser-extension/package-lock.json
+
+      - name: Install extension dependencies
+        run: npm ci --prefix apps/browser-extension
+
+      - name: Install Playwright Edge (msedge)
+        working-directory: apps/browser-extension
+        run: npx playwright install --with-deps msedge
+
+      - name: Build and verify Edge package
+        run: npm --prefix apps/browser-extension run check:edge
+
+      - name: Run Edge E2E tests
+        run: npm --prefix apps/browser-extension run test:e2e:edge
+
+      - name: Upload Edge browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assisted-apply-edge-playwright-diagnostics
+          path: |
+            apps/browser-extension/playwright-report
+            apps/browser-extension/test-results
+          if-no-files-found: ignore
+
   docker:
     name: Docker build
     runs-on: ubuntu-24.04
@@ -110,6 +145,7 @@ jobs:
       - backend
       - frontend
       - assisted-apply-extension
+      - assisted-apply-extension-edge
     steps:
       - uses: actions/checkout@v4
 

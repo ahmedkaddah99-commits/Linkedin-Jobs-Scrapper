@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-const outputDirectory = resolve(".output/chrome-mv3");
+const targetBrowser = process.argv[2] || "chrome";
+const outputDirectory = resolve(`.output/${targetBrowser}-mv3`);
 const manifest = JSON.parse(await readFile(join(outputDirectory, "manifest.json"), "utf8"));
 const reservedExtensionId = "najcdfohhfgbjpbokhmmekkahghfhegp";
 
@@ -15,16 +16,31 @@ assert(typeof manifest.background?.service_worker === "string", "Expected an MV3
 assert(manifest.side_panel?.default_path === "sidepanel.html", "Expected the Runr side panel entrypoint.");
 assert(manifest.action, "Expected an explicit toolbar action.");
 
-const publicKeyBytes = Buffer.from(String(manifest.key || ""), "base64");
-const publicKeyDigest = createHash("sha256").update(publicKeyBytes).digest().subarray(0, 16);
-const derivedExtensionId = Array.from(publicKeyDigest)
-  .flatMap((byte) => [byte >> 4, byte & 0x0f])
-  .map((nibble) => String.fromCharCode("a".charCodeAt(0) + nibble))
-  .join("");
-assert(
-  derivedExtensionId === reservedExtensionId,
-  `Manifest public key resolves to ${derivedExtensionId}, expected ${reservedExtensionId}.`,
-);
+if (targetBrowser === "chrome") {
+  const publicKeyBytes = Buffer.from(String(manifest.key || ""), "base64");
+  const publicKeyDigest = createHash("sha256").update(publicKeyBytes).digest().subarray(0, 16);
+  const derivedExtensionId = Array.from(publicKeyDigest)
+    .flatMap((byte) => [byte >> 4, byte & 0x0f])
+    .map((nibble) => String.fromCharCode("a".charCodeAt(0) + nibble))
+    .join("");
+  assert(
+    derivedExtensionId === reservedExtensionId,
+    `Manifest public key resolves to ${derivedExtensionId}, expected ${reservedExtensionId}.`,
+  );
+  assert(
+    manifest.minimum_chrome_version === "116",
+    "Expected minimum_chrome_version: 116 for Chrome builds.",
+  );
+} else if (targetBrowser === "edge") {
+  assert(
+    !manifest.key,
+    "Edge build must not include the Chrome `key` field.",
+  );
+  assert(
+    manifest.minimum_edge_version === "120",
+    "Expected minimum_edge_version: 120 for Edge builds.",
+  );
+}
 
 const expectedIcons = {
   16: "icons/runr-16.png",
@@ -130,4 +146,4 @@ for (const file of productionBundles) {
   }
 }
 
-console.log("Verified guarded Chrome MV3 manifest and source boundary.");
+console.log(`Verified guarded ${targetBrowser === "chrome" ? "Chrome" : "Edge"} MV3 manifest and source boundary.`);

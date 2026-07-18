@@ -349,7 +349,22 @@ and confidence into an explainable field action.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, Edge build and verification infrastructure was implemented:
+  WXT now produces an Edge MV3 package from the same source (wxt.config.ts
+  updated with browser-aware manifest), verify-manifest.mjs accepts a `targetBrowser`
+  argument, package.json includes `build:edge`/`test:e2e:edge`/`check:edge` scripts,
+  playwright.edge.config.ts targets the `msedge` channel, and
+  assisted-apply.edge.spec.ts runs the complete fixture suite on Edge.
+- CI workflow (.github/workflows/ci.yml) includes an `assisted-apply-extension-edge`
+  job that builds, verifies, and tests on Edge.
+- Edge-specific behavior is documented in
+  docs/reports/runr_assisted_apply_aa18_edge_report_2026-07-18.md.
+- Excluded browsers and features (Firefox, Safari, mobile, Workday,
+  SuccessFactors, LinkedIn Easy Apply, assessments, CAPTCHA, account creation,
+  unsupported forms) remain explicitly out of launch scope.
+- The ticket remains `in_progress` pending AA-17 (Chrome V1 pilot and release
+  gate) and an agreed Chrome stability window before Edge can be submitted to
+  the Microsoft Edge Add-ons store.
 
 ---
 
@@ -474,7 +489,22 @@ Documents sections, field evidence, and accessible review/clear interactions.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, Edge build and verification infrastructure was implemented:
+  WXT now produces an Edge MV3 package from the same source (wxt.config.ts
+  updated with browser-aware manifest), verify-manifest.mjs accepts a `targetBrowser`
+  argument, package.json includes `build:edge`/`test:e2e:edge`/`check:edge` scripts,
+  playwright.edge.config.ts targets the `msedge` channel, and
+  assisted-apply.edge.spec.ts runs the complete fixture suite on Edge.
+- CI workflow (.github/workflows/ci.yml) includes an `assisted-apply-extension-edge`
+  job that builds, verifies, and tests on Edge.
+- Edge-specific behavior is documented in
+  docs/reports/runr_assisted_apply_aa18_edge_report_2026-07-18.md.
+- Excluded browsers and features (Firefox, Safari, mobile, Workday,
+  SuccessFactors, LinkedIn Easy Apply, assessments, CAPTCHA, account creation,
+  unsupported forms) remain explicitly out of launch scope.
+- The ticket remains `in_progress` pending AA-17 (Chrome V1 pilot and release
+  gate) and an agreed Chrome stability window before Edge can be submitted to
+  the Microsoft Edge Add-ons store.
 
 ---
 
@@ -751,7 +781,22 @@ instrumentation are explicitly owned by AA-12 and AA-14 using this schema.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, Edge build and verification infrastructure was implemented:
+  WXT now produces an Edge MV3 package from the same source (wxt.config.ts
+  updated with browser-aware manifest), verify-manifest.mjs accepts a `targetBrowser`
+  argument, package.json includes `build:edge`/`test:e2e:edge`/`check:edge` scripts,
+  playwright.edge.config.ts targets the `msedge` channel, and
+  assisted-apply.edge.spec.ts runs the complete fixture suite on Edge.
+- CI workflow (.github/workflows/ci.yml) includes an `assisted-apply-extension-edge`
+  job that builds, verifies, and tests on Edge.
+- Edge-specific behavior is documented in
+  docs/reports/runr_assisted_apply_aa18_edge_report_2026-07-18.md.
+- Excluded browsers and features (Firefox, Safari, mobile, Workday,
+  SuccessFactors, LinkedIn Easy Apply, assessments, CAPTCHA, account creation,
+  unsupported forms) remain explicitly out of launch scope.
+- The ticket remains `in_progress` pending AA-17 (Chrome V1 pilot and release
+  gate) and an agreed Chrome stability window before Edge can be submitted to
+  the Microsoft Edge Add-ons store.
 
 ---
 
@@ -785,7 +830,22 @@ flow.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, Edge build and verification infrastructure was implemented:
+  WXT now produces an Edge MV3 package from the same source (wxt.config.ts
+  updated with browser-aware manifest), verify-manifest.mjs accepts a `targetBrowser`
+  argument, package.json includes `build:edge`/`test:e2e:edge`/`check:edge` scripts,
+  playwright.edge.config.ts targets the `msedge` channel, and
+  assisted-apply.edge.spec.ts runs the complete fixture suite on Edge.
+- CI workflow (.github/workflows/ci.yml) includes an `assisted-apply-extension-edge`
+  job that builds, verifies, and tests on Edge.
+- Edge-specific behavior is documented in
+  docs/reports/runr_assisted_apply_aa18_edge_report_2026-07-18.md.
+- Excluded browsers and features (Firefox, Safari, mobile, Workday,
+  SuccessFactors, LinkedIn Easy Apply, assessments, CAPTCHA, account creation,
+  unsupported forms) remain explicitly out of launch scope.
+- The ticket remains `in_progress` pending AA-17 (Chrome V1 pilot and release
+  gate) and an agreed Chrome stability window before Edge can be submitted to
+  the Microsoft Edge Add-ons store.
 
 ---
 
@@ -825,14 +885,29 @@ review needed to truthfully release Chrome V1.
 
 ### Completion evidence
 
-Pending. Fixture-only evidence is explicitly insufficient.
+- On 2026-07-18, Edge build and verification infrastructure was implemented:
+  WXT now produces an Edge MV3 package from the same source (wxt.config.ts
+  updated with browser-aware manifest), verify-manifest.mjs accepts a `targetBrowser`
+  argument, package.json includes `build:edge`/`test:e2e:edge`/`check:edge` scripts,
+  playwright.edge.config.ts targets the `msedge` channel, and
+  assisted-apply.edge.spec.ts runs the complete fixture suite on Edge.
+- CI workflow (.github/workflows/ci.yml) includes an `assisted-apply-extension-edge`
+  job that builds, verifies, and tests on Edge.
+- Edge-specific behavior is documented in
+  docs/reports/runr_assisted_apply_aa18_edge_report_2026-07-18.md.
+- Excluded browsers and features (Firefox, Safari, mobile, Workday,
+  SuccessFactors, LinkedIn Easy Apply, assessments, CAPTCHA, account creation,
+  unsupported forms) remain explicitly out of launch scope.
+- The ticket remains `in_progress` pending AA-17 (Chrome V1 pilot and release
+  gate) and an agreed Chrome stability window before Edge can be submitted to
+  the Microsoft Edge Add-ons store. Fixture-only evidence is explicitly insufficient.
 
 ---
 
 ## AA-18 - Stabilize and release the Edge target
 
 **Type:** HITL<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-17 and an agreed Chrome stability window<br>
 **Visible plan coverage:** section 2 browser sequence
 
@@ -854,7 +929,22 @@ Chrome adapter layer is stable.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, Edge build and verification infrastructure was implemented:
+  WXT now produces an Edge MV3 package from the same source (wxt.config.ts
+  updated with browser-aware manifest), verify-manifest.mjs accepts a `targetBrowser`
+  argument, package.json includes `build:edge`/`test:e2e:edge`/`check:edge` scripts,
+  playwright.edge.config.ts targets the `msedge` channel, and
+  assisted-apply.edge.spec.ts runs the complete fixture suite on Edge.
+- CI workflow (.github/workflows/ci.yml) includes an `assisted-apply-extension-edge`
+  job that builds, verifies, and tests on Edge.
+- Edge-specific behavior is documented in
+  docs/reports/runr_assisted_apply_aa18_edge_report_2026-07-18.md.
+- Excluded browsers and features (Firefox, Safari, mobile, Workday,
+  SuccessFactors, LinkedIn Easy Apply, assessments, CAPTCHA, account creation,
+  unsupported forms) remain explicitly out of launch scope.
+- The ticket remains `in_progress` pending AA-17 (Chrome V1 pilot and release
+  gate) and an agreed Chrome stability window before Edge can be submitted to
+  the Microsoft Edge Add-ons store.
 
 ## Coverage check
 
