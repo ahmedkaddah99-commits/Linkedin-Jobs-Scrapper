@@ -320,7 +320,7 @@ const server = createServer(async (request, response) => {
       const record = activeRecord(request, response, origin);
       if (!record) return;
       const payload = await readJson(request);
-      const expectedKeys = ["adapter", "adapter_version", "aggregate_outcome", "document_role", "error_category", "lifecycle_stage", "schema_version"];
+      const expectedKeys = ["adapter", "adapterVersion", "aggregateOutcome", "errorCategory", "lifecycleStage", "schemaVersion"];
       if (JSON.stringify(Object.keys(payload).sort()) !== JSON.stringify(expectedKeys)) {
         json(response, 400, { error: { code: "bad_request", message: "Unbounded telemetry." } }, origin);
         return;

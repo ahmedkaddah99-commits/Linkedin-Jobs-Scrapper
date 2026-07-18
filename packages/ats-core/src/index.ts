@@ -1,5 +1,7 @@
 import { requestPageContextSet } from "./page-bridge";
 
+export * from "./telemetry";
+
 export type AtsType = "greenhouse" | "lever";
 
 export interface PageContext {

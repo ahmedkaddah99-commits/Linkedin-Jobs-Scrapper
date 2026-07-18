@@ -100,8 +100,8 @@ describe("review panel model", () => {
       fileName: "cv.pdf", status: "uploaded", reasons: [],
       telemetry: {
         schemaVersion: 1, adapter: "greenhouse", adapterVersion: "1.0.0",
-        lifecycleStage: "upload", aggregateOutcome: "accepted",
-        errorCategory: "none", documentRole: "cv",
+        lifecycleStage: "upload", aggregateOutcome: "success",
+        errorCategory: "none",
       },
     };
     const model = buildReviewPanelModel(pkg, state, upload);

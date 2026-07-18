@@ -334,21 +334,19 @@ async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayl
     if (!isDocumentUploadMessage(result) || result.documentId !== grant.documentId ||
         result.documentVersion !== grant.documentVersion ||
         result.documentKind !== grant.documentKind ||
-        result.telemetry.adapter !== applicationPackage.job.portal ||
-        result.telemetry.documentRole !== grant.documentKind) {
+        result.telemetry.adapter !== applicationPackage.job.portal) {
       throw new Error("The application runner returned an invalid document result.");
     }
     void api.request(
       "/assisted-apply/extension/telemetry",
       "POST",
       {
-        schema_version: result.telemetry.schemaVersion,
+        schemaVersion: result.telemetry.schemaVersion,
         adapter: result.telemetry.adapter,
-        adapter_version: result.telemetry.adapterVersion,
-        lifecycle_stage: result.telemetry.lifecycleStage,
-        aggregate_outcome: result.telemetry.aggregateOutcome,
-        error_category: result.telemetry.errorCategory,
-        document_role: result.telemetry.documentRole,
+        adapterVersion: result.telemetry.adapterVersion,
+        lifecycleStage: result.telemetry.lifecycleStage,
+        aggregateOutcome: result.telemetry.aggregateOutcome,
+        errorCategory: result.telemetry.errorCategory,
       },
       sessionToken,
     ).catch(() => console.warn("Runr Assisted Apply could not record bounded upload health telemetry."));

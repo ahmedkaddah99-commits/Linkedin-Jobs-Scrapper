@@ -179,9 +179,8 @@ describe("extension message boundaries", () => {
       adapter: "lever",
       adapterVersion: "0.3.0",
       lifecycleStage: "upload",
-      aggregateOutcome: "accepted",
+      aggregateOutcome: "success",
       errorCategory: "none",
-      documentRole: "cv",
     } as const;
     const result = {
       documentId: "cv_v7",

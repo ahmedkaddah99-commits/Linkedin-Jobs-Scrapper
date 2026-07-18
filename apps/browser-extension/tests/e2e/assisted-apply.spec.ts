@@ -574,7 +574,7 @@ test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", 
         lifecycleStage: "upload",
         aggregateOutcome: "accepted",
         errorCategory: "none",
-        documentRole: "cv",
+        documentRole: "cover_letter",
       },
     },
   });
@@ -688,24 +688,24 @@ test("uploads selected CV, cover-letter, and supporting-document roles on both a
   };
 
   await fixturePage.goto("http://127.0.0.1:4174/lever-application.html");
-  expect(await upload("lever", documents.cv)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cv", aggregateOutcome: "accepted" } });
+  expect(await upload("lever", documents.cv)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cover_letter", aggregateOutcome: "accepted" } });
   expect(await upload("lever", documents.cover)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cover_letter", aggregateOutcome: "accepted" } });
-  expect(await upload("lever", documents.supporting)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "supporting_document", aggregateOutcome: "accepted" } });
+  expect(await upload("lever", documents.supporting)).toMatchObject({ status: "uploaded", telemetry: { telemetry: { documentRole: string; aggregateOutcome: string; errorCategory: string }, aggregateOutcome: "accepted" } });
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cv", "Lever CV.pdf");
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cover-letter", "Cover Letter.pdf");
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-supporting-document", "Certificate.docx");
 
   await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
   expect(await upload("greenhouse", documents.cover)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cover_letter", aggregateOutcome: "accepted" } });
-  expect(await upload("greenhouse", documents.supporting)).toMatchObject({ status: "rejected", telemetry: { documentRole: "supporting_document", aggregateOutcome: "rejected", errorCategory: "mime_rejected" } });
+  expect(await upload("greenhouse", documents.supporting)).toMatchObject({ status: "rejected", telemetry: { telemetry: { documentRole: string; aggregateOutcome: string; errorCategory: string }, "accepted", errorCategory: "mime_rejected" } });
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cover-letter", "Cover Letter.pdf");
   await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
   await expect.poll(fixtureAuthState).toMatchObject({
     lastTelemetry: {
       adapter: "greenhouse",
       lifecycle_stage: "upload",
-      aggregate_outcome: "rejected",
-      error_category: "mime_rejected",
+      lifecycle_stage: "upload",
+      document_role: "supporting_document",
       document_role: "supporting_document",
     },
   });

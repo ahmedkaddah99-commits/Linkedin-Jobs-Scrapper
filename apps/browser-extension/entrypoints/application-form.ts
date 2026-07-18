@@ -151,10 +151,9 @@ export default defineUnlistedScript(async () => {
             adapter: request.ats,
             adapterVersion: "0.3.0",
             lifecycleStage: "upload",
-            aggregateOutcome: result.status === "uploaded" ? "accepted"
-              : result.status === "mismatch" ? "mismatched"
-                : result.status === "preserved_existing" ? "preserved"
-                  : result.status === "unsupported" ? "unsupported" : "rejected",
+            aggregateOutcome: result.status === "uploaded" ? "success"
+              : (result.status === "mismatch" || result.status === "rejected") ? "failure"
+                : "skipped",
             errorCategory: result.status === "uploaded" ? "none"
               : result.status === "preserved_existing" ? "existing_value"
                 : result.status === "unsupported" ? "unsupported_role"
@@ -162,7 +161,6 @@ export default defineUnlistedScript(async () => {
                     : result.reasons.some((reason) => /disabled|hidden/iu.test(reason)) ? "control_blocked"
                       : result.reasons.some((reason) => /mime|does not accept/iu.test(reason)) ? "mime_rejected"
                         : result.status === "mismatch" ? "portal_rejected" : "unknown",
-            documentRole: request.documentKind,
           },
         }));
       }

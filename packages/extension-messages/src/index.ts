@@ -220,16 +220,57 @@ export type ContentRequest =
       base64Bytes: string;
     };
 
+/** @privateRemarks Bounded lifecycle stages — each maps to an adapter method. */
+export type LifecycleStage =
+  | "detect"
+  | "inspect"
+  | "match"
+  | "fill"
+  | "validate"
+  | "upload";
+
+/** @privateRemarks Aggregate adapter-health outcome — never exposes specific values. */
+export type AggregateOutcome =
+  | "success"
+  | "failure"
+  | "partial"
+  | "skipped";
+
+/** @privateRemarks Bounded error category — never exposes answers, PII, or page content. */
+export type ErrorCategory =
+  | "none"
+  | "detection_failed"
+  | "inspection_failed"
+  | "matching_failed"
+  | "fill_rejected"
+  | "fill_mismatched"
+  | "validation_failed"
+  | "control_unavailable"
+  | "control_blocked"
+  | "mime_rejected"
+  | "portal_rejected"
+  | "existing_value"
+  | "unsupported_role"
+  | "unknown";
+
+/**
+ * Privacy-safe adapter health telemetry payload.
+ *
+ * Contains **only** adapter identity, lifecycle stage, aggregate outcome, and a
+ * bounded error category. Never includes:
+ * - answers, sensitive values, document bytes/URLs/tokens, credentials, filenames
+ * - raw DOM/page markup, selectors, or page content
+ * - extension session tokens, user IDs, or Runr account identifiers
+ */
 export interface AdapterHealthTelemetry {
   schemaVersion: 1;
   adapter: "greenhouse" | "lever";
   adapterVersion: string;
-  lifecycleStage: "upload";
-  aggregateOutcome: "accepted" | "rejected" | "mismatched" | "preserved" | "unsupported";
-  errorCategory: "none" | "control_unavailable" | "control_blocked" | "mime_rejected" |
-    "portal_rejected" | "existing_value" | "unsupported_role" | "unknown";
-  documentRole: ApplicationDocumentKind;
+  lifecycleStage: LifecycleStage;
+  aggregateOutcome: AggregateOutcome;
+  errorCategory: ErrorCategory;
 }
+
 
 export interface DocumentUploadMessage {
   documentId: string;
@@ -523,18 +564,76 @@ export function isDocumentUploadMessage(value: unknown): value is DocumentUpload
     isStringArray(value.reasons) && isAdapterHealthTelemetry(value.telemetry);
 }
 
+const LIFECYCLE_STAGES: LifecycleStage[] = [
+  "detect", "inspect", "match", "fill", "validate", "upload",
+];
+const AGGREGATE_OUTCOMES: AggregateOutcome[] = [
+  "success", "failure", "partial", "skipped",
+];
+const ERROR_CATEGORIES: ErrorCategory[] = [
+  "none", "detection_failed", "inspection_failed", "matching_failed",
+  "fill_rejected", "fill_mismatched", "validation_failed",
+  "control_unavailable", "control_blocked", "mime_rejected",
+  "portal_rejected", "existing_value", "unsupported_role", "unknown",
+];
+
 export function isAdapterHealthTelemetry(value: unknown): value is AdapterHealthTelemetry {
   if (!isRecord(value)) return false;
   return value.schemaVersion === 1 &&
     (value.adapter === "greenhouse" || value.adapter === "lever") &&
     typeof value.adapterVersion === "string" && /^[0-9]+\.[0-9]+\.[0-9]+$/u.test(value.adapterVersion) &&
-    value.lifecycleStage === "upload" &&
-    ["accepted", "rejected", "mismatched", "preserved", "unsupported"].includes(String(value.aggregateOutcome)) &&
-    ["none", "control_unavailable", "control_blocked", "mime_rejected", "portal_rejected",
-      "existing_value", "unsupported_role", "unknown"].includes(String(value.errorCategory)) &&
-    ["cv", "cover_letter", "supporting_document"].includes(String(value.documentRole)) &&
-    Object.keys(value).every((key) => ["schemaVersion", "adapter", "adapterVersion", "lifecycleStage",
-      "aggregateOutcome", "errorCategory", "documentRole"].includes(key));
+    LIFECYCLE_STAGES.includes(value.lifecycleStage as LifecycleStage) &&
+    AGGREGATE_OUTCOMES.includes(value.aggregateOutcome as AggregateOutcome) &&
+    ERROR_CATEGORIES.includes(value.errorCategory as ErrorCategory) &&
+    Object.keys(value).length === 6 &&
+    Object.keys(value).every((key) => ["schemaVersion", "adapter", "adapterVersion",
+      "lifecycleStage", "aggregateOutcome", "errorCategory"].includes(key));
+}
+
+/**
+ * Remote telemetry configuration � strictly data-only.
+ *
+ * Must be and remain exclusively data: thresholds and toggles that cannot:
+ * - change DOM detection, inspection, matching, fill, or validation algorithms
+ * - remove submission protections or manual-only classifications
+ * - execute arbitrary code, load scripts, or evaluate expressions
+ * - enable unsupported adapters or portals
+ *
+ * The only permitted fields are numeric thresholds and boolean toggles that
+ * influence telemetry sampling and batching, never adapter behavior.
+ */
+export interface RemoteTelemetryConfig {
+  schemaVersion: 1;
+  /** Events are batched every N seconds (min 5, max 300). */
+  batchIntervalSeconds: number;
+  /** Probability [0-1] of sending an event. 1 = always. */
+  sampleRate: number;
+  /** Maximum queued events before forced flush. */
+  maxQueueSize: number;
+}
+
+export function isRemoteTelemetryConfig(value: unknown): value is RemoteTelemetryConfig {
+  if (!isRecord(value)) return false;
+  return (
+    Object.keys(value).length === 4 &&
+    value.schemaVersion === 1 &&
+    typeof value.batchIntervalSeconds === "number" &&
+    value.batchIntervalSeconds >= 5 &&
+    value.batchIntervalSeconds <= 300 &&
+    Number.isInteger(value.batchIntervalSeconds) &&
+    typeof value.sampleRate === "number" &&
+    value.sampleRate >= 0 &&
+    value.sampleRate <= 1 &&
+    typeof value.maxQueueSize === "number" &&
+    value.maxQueueSize >= 1 &&
+    value.maxQueueSize <= 1000 &&
+    Number.isInteger(value.maxQueueSize) &&
+    // Proof: all keys are known data-only primitives. No "eval", "fn", "script",
+    // "algorithm", "adapter", "protection", "submit", "command", or similar key
+    // is accepted by this validator.
+    Object.keys(value).every((key) =>
+      ["schemaVersion", "batchIntervalSeconds", "sampleRate", "maxQueueSize"].includes(key))
+  );
 }
 
 export function isPanelResponse(value: unknown): value is PanelResponse {
