@@ -17,6 +17,7 @@ declare const chrome: {
   storage: {
     session: {
       get(keys?: null): Promise<Record<string, unknown>>;
+      set(items: Record<string, unknown>): Promise<void>;
     };
   };
   tabs: {
@@ -46,6 +47,8 @@ interface FixtureAuthState {
   activeSessions: number;
   documentGrants: number;
   documentDownloads: number;
+  trackerConfirmations: number;
+  lastOutcomePayload: Record<string, unknown> | null;
 }
 
 async function fixtureAuthState(): Promise<FixtureAuthState> {
@@ -311,6 +314,124 @@ test("fills and verifies mixed native controls on Greenhouse and Lever", async (
   }
 });
 
+test("fills same-origin frames and open roots while keeping inaccessible/custom boundaries manual", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
+  await expect(fixturePage.frameLocator("#same-origin-frame").locator("#same-frame-portfolio")).toBeVisible();
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const answers = [
+    ["application.portfolio", "Same-frame portfolio", "https://example.test/ada"],
+    ["application.editor", "Open shadow favorite editor", "Neovim"],
+    ["application.cross_origin", "Cross-frame screening answer", "must-not-fill"],
+    ["application.custom", "Custom salary widget", "must-not-fill"],
+  ].map(([fieldIntent, label, proposedValue]) => ({
+    fieldIntent, label, proposedValue, source: "profile_verified", sensitivity: "standard",
+    scope: "application", confidence: 1, requiresReview: false, reasons: ["AA-13 fixture answer."],
+  }));
+  const response = await panelPage.evaluate((answers) => chrome.runtime.sendMessage({
+    type: "RUN_GREENHOUSE_APPLICATION_PACKAGE",
+    package: {
+      packageId: "aa13-boundary-matrix", jobId: "aa13-job", version: 1, schemaVersion: 1,
+      job: { jobId: "aa13-job", title: "Engineer", company: "Acme", portal: "greenhouse", location: "Berlin" },
+      answers, documents: [], warnings: [],
+      policy: { permitSensitiveAutofill: true, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+    },
+  }), answers) as { ok: boolean; packageExecution: { manualReasons: string[]; executions: Array<{ fieldLabel: string; status: string }> } };
+
+  expect(response.ok).toBe(true);
+  expect(response.packageExecution.executions.map((item) => [item.fieldLabel, item.status])).toEqual([
+    ["Open shadow favorite editor", "filled"],
+    ["Same-frame portfolio", "filled"],
+  ]);
+  expect(response.packageExecution.manualReasons).toEqual(expect.arrayContaining([
+    "cross_origin_frame", "closed_shadow_root", "unsupported_custom_control",
+  ]));
+  await expect(fixturePage.frameLocator("#same-origin-frame").locator("#same-frame-portfolio"))
+    .toHaveValue("https://example.test/ada");
+  await expect(fixturePage.locator("#open-shadow-host #open-shadow-editor")).toHaveValue("Neovim");
+  await expect(fixturePage.frameLocator("#cross-origin-frame").locator("#cross-frame-secret")).toHaveValue("");
+  await expect(fixturePage.locator("#custom-salary-widget")).toHaveText("");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+});
+
+test("AA-08 reinspects dynamic controls, preserves user edits, and recovers after worker restart", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
+  await fixturePage.evaluate(() => {
+    const country = document.querySelector<HTMLSelectElement>("#country")!;
+    country.addEventListener("change", () => {
+      if (document.querySelector("#dynamic-city")) return;
+      const label = document.createElement("label");
+      label.htmlFor = "dynamic-city";
+      label.textContent = "Conditional city";
+      const input = document.createElement("input");
+      input.id = "dynamic-city";
+      input.addEventListener("input", () => { document.body.dataset.controlledState = input.value; });
+      document.querySelector("#application-form")!.insertBefore(label, document.querySelector("#final-submit"));
+      label.after(input);
+    });
+  });
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const applicationPackage = {
+    packageId: "aa08-dynamic", jobId: "aa08-job", version: 1, schemaVersion: 1,
+    job: { jobId: "aa08-job", title: "Engineer", company: "Acme", portal: "greenhouse", location: "Berlin" },
+    answers: [
+      ["application.country", "Country", "Germany"],
+      ["application.city", "Conditional city", "Berlin"],
+    ].map(([fieldIntent, label, proposedValue]) => ({
+      fieldIntent, label, proposedValue, source: "profile_verified", sensitivity: "standard",
+      scope: "application", confidence: 1, requiresReview: false, reasons: [],
+    })),
+    documents: [], warnings: [],
+    policy: { permitSensitiveAutofill: true, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+  };
+  const run = (replaceFieldIntents: string[] = []) => panelPage.evaluate(
+    ({ applicationPackage, replaceFieldIntents }) => chrome.runtime.sendMessage({
+      type: "RUN_GREENHOUSE_APPLICATION_PACKAGE", package: applicationPackage, replaceFieldIntents,
+    }), { applicationPackage, replaceFieldIntents },
+  ) as Promise<{ ok: boolean; packageExecution: {
+    formRevision: number; changeReasons: string[];
+    executions: Array<{ fieldIntent?: string; status: string }>;
+  } }>;
+
+  const first = await run();
+  expect(first.ok).toBe(true);
+  expect(first.packageExecution.formRevision).toBeGreaterThan(0);
+  expect(first.packageExecution.changeReasons).toContain("controls_changed");
+  expect(first.packageExecution.executions.map((item) => [item.fieldIntent, item.status])).toEqual([
+    ["application.country", "filled"], ["application.city", "filled"],
+  ]);
+  await expect(fixturePage.locator("#dynamic-city")).toHaveValue("Berlin");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-controlled-state", "Berlin");
+
+  await fixturePage.locator("#dynamic-city").fill("Hamburg");
+  const preserved = await run();
+  expect(preserved.packageExecution.executions.find((item) => item.fieldIntent === "application.city")?.status)
+    .toBe("preserved_existing");
+  await expect(fixturePage.locator("#dynamic-city")).toHaveValue("Hamburg");
+  const replaced = await run(["application.city"]);
+  expect(replaced.packageExecution.executions.find((item) => item.fieldIntent === "application.city")?.status)
+    .toBe("filled");
+  await expect(fixturePage.locator("#dynamic-city")).toHaveValue("Berlin");
+
+  await fixturePage.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("runr-assisted-apply:controlled-field-request", {
+      detail: JSON.stringify({ schemaVersion: 1, operation: "submit", operationId: "page-forged-1234" }),
+    }));
+  });
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+
+  await stopExtensionWorker(fixturePage);
+  const recovered = await run();
+  expect(recovered.packageExecution.executions.every((item) => item.status === "already_filled")).toBe(true);
+  await expect(fixturePage.locator("#dynamic-city")).toHaveValue("Berlin");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+});
+
 test("connects only on explicit action and preserves then revokes the extension session", async () => {
   const panelPage = await context.newPage();
   await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
@@ -422,7 +543,7 @@ test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", 
   }
 
   const response = await panelPage.evaluate(() => chrome.runtime.sendMessage({
-    type: "UPLOAD_GREENHOUSE_CV",
+    type: "UPLOAD_SELECTED_DOCUMENT",
     documentId: "cv_version_7",
     package: {
       packageId: "aapkg_fixture_aa11",
@@ -445,8 +566,16 @@ test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", 
     documentUpload: {
       documentId: "cv_version_7",
       documentVersion: 7,
+      documentKind: "cv",
       fileName: "Candidate CV.pdf",
       status: "uploaded",
+      telemetry: {
+        adapter: "greenhouse",
+        lifecycleStage: "upload",
+        aggregateOutcome: "accepted",
+        errorCategory: "none",
+        documentRole: "cv",
+      },
     },
   });
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cv", "Candidate CV.pdf");
@@ -457,4 +586,127 @@ test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", 
   expect(serialized).not.toContain("aadoc_fixture_");
   expect(serialized).not.toContain("Runr AA11 fixture CV");
   expect(serialized).not.toContain("Candidate CV.pdf");
+});
+
+test("prompts after user-operated success evidence and records only explicit confirmation", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await expect(panelPage.getByTestId("connection-status")).not.toHaveText("loading");
+  if (await panelPage.getByTestId("connect-runr").isVisible().catch(() => false)) {
+    await panelPage.getByTestId("connect-runr").click();
+    await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
+  }
+  const applicationPackage = {
+    packageId: "aapkg_fixture_aa14",
+    jobId: "job_fixture_aa14",
+    version: 4,
+    schemaVersion: 1,
+    job: {
+      jobId: "job_fixture_aa14", title: "Engineer", company: "Acme",
+      portal: "greenhouse", location: "Berlin",
+    },
+    answers: [],
+    documents: [],
+    warnings: [],
+    policy: {
+      permitSensitiveAutofill: false,
+      permitDemographicAutofill: false,
+      requireLegalAnswerConfirmation: true,
+    },
+  };
+  const fillResponse = await panelPage.evaluate(async (pkg) => {
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((candidate) => candidate.url?.includes("greenhouse-application.html"));
+    if (tab?.id == null) throw new Error("Fixture tab missing.");
+    await chrome.storage.session.set({ [`assisted-apply-package:${tab.id}`]: pkg });
+    return chrome.runtime.sendMessage({ type: "RUN_GREENHOUSE_APPLICATION_PACKAGE", package: pkg });
+  }, applicationPackage);
+  expect(fillResponse).toMatchObject({ ok: true, packageExecution: { packageId: "aapkg_fixture_aa14" } });
+
+  const before = await fixtureAuthState();
+  await fixturePage.locator("form").evaluate((form: HTMLFormElement) => { form.noValidate = true; });
+  await fixturePage.locator("#final-submit").click();
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "1");
+  await expect(panelPage.getByTestId("application-confirmation")).toBeVisible();
+  expect((await fixtureAuthState()).trackerConfirmations).toBe(before.trackerConfirmations);
+
+  await panelPage.getByRole("button", { name: "Yes, add to Tracker" }).click();
+  await expect(panelPage.getByTestId("tracker-confirmation-result")).toHaveText("Application added to Tracker.");
+  const after = await fixtureAuthState();
+  expect(after.trackerConfirmations).toBe(before.trackerConfirmations + 1);
+  expect(after.lastOutcomePayload).toMatchObject({
+    package_id: "aapkg_fixture_aa14",
+    package_version: 4,
+    adapter: "greenhouse",
+    adapter_version: "1.0.0",
+    evidence_category: "success_banner",
+    decision: "confirmed",
+    uploaded_documents: [],
+  });
+  expect(JSON.stringify(after.lastOutcomePayload)).not.toMatch(/answers|raw|html|filename|private/iu);
+});
+
+test("uploads selected CV, cover-letter, and supporting-document roles on both adapters", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await expect(panelPage.getByTestId("connection-status")).not.toHaveText("loading");
+  if (await panelPage.getByTestId("connect-runr").isVisible().catch(() => false)) {
+    await panelPage.getByTestId("connect-runr").click();
+    await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
+  }
+
+  const documents = {
+    cv: { documentId: "lever_cv_version_2", documentVersion: 2, documentKind: "cv", mimeType: "application/pdf", fileName: "Lever CV.pdf" },
+    cover: { documentId: "cover_letter_version_3", documentVersion: 3, documentKind: "cover_letter", mimeType: "application/pdf", fileName: "Cover Letter.pdf" },
+    supporting: { documentId: "supporting_version_4", documentVersion: 4, documentKind: "supporting_document", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fileName: "Certificate.docx" },
+  };
+  const upload = async (portal: "greenhouse" | "lever", document: typeof documents.cv | typeof documents.cover | typeof documents.supporting) => {
+    const response = await panelPage.evaluate(({ portal, document }) => chrome.runtime.sendMessage({
+      type: "UPLOAD_SELECTED_DOCUMENT",
+      documentId: document.documentId,
+      package: {
+        packageId: `aapkg_fixture_aa12_${portal}`,
+        jobId: `job_fixture_aa12_${portal}`,
+        version: 1,
+        schemaVersion: 1,
+        job: { jobId: `job_fixture_aa12_${portal}`, title: "Engineer", company: "Acme", portal, location: "Berlin" },
+        answers: [], documents: [document], warnings: [],
+        policy: { permitSensitiveAutofill: false, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+      },
+    }), { portal, document });
+    if (!(response as { ok?: boolean }).ok) throw new Error(JSON.stringify(response));
+    const uploadResult = (response as { documentUpload: { telemetry: Record<string, unknown> } }).documentUpload;
+    for (const forbidden of ["bytes", "url", "token", "fileName", "answer", "markup"]) {
+      expect(JSON.stringify(uploadResult.telemetry)).not.toContain(forbidden);
+    }
+    return uploadResult as { status: string; telemetry: { documentRole: string; aggregateOutcome: string; errorCategory: string } };
+  };
+
+  await fixturePage.goto("http://127.0.0.1:4174/lever-application.html");
+  expect(await upload("lever", documents.cv)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cv", aggregateOutcome: "accepted" } });
+  expect(await upload("lever", documents.cover)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cover_letter", aggregateOutcome: "accepted" } });
+  expect(await upload("lever", documents.supporting)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "supporting_document", aggregateOutcome: "accepted" } });
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cv", "Lever CV.pdf");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cover-letter", "Cover Letter.pdf");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-supporting-document", "Certificate.docx");
+
+  await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
+  expect(await upload("greenhouse", documents.cover)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cover_letter", aggregateOutcome: "accepted" } });
+  expect(await upload("greenhouse", documents.supporting)).toMatchObject({ status: "rejected", telemetry: { documentRole: "supporting_document", aggregateOutcome: "rejected", errorCategory: "mime_rejected" } });
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cover-letter", "Cover Letter.pdf");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+  await expect.poll(fixtureAuthState).toMatchObject({
+    lastTelemetry: {
+      adapter: "greenhouse",
+      lifecycle_stage: "upload",
+      aggregate_outcome: "rejected",
+      error_category: "mime_rejected",
+      document_role: "supporting_document",
+    },
+  });
 });

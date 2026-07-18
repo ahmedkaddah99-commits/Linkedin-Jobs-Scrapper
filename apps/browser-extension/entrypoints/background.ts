@@ -6,8 +6,11 @@ import {
   isFixtureProofMessage,
   isPackageExecutionMessage,
   isDocumentUploadMessage,
+  isContentRuntimeEvent,
   isPanelRequest,
+  isTrackerConfirmationResult,
   type ApplicationPackagePayload,
+  type ApplicationPackageDocumentMeta,
   type AssistedApplyTabState,
   type ContentRequest,
   type FixtureInspectionMessage,
@@ -24,7 +27,18 @@ import {
 import { ExtensionConnectionService } from "../src/auth/connection-service";
 import { assistedApplyRuntimeConfig } from "../src/auth/config";
 import { isExactSidePanelSender } from "../src/auth/trusted-sender";
-import { readTabPackage, readTabState, removeTabState, writeTabPackage, writeTabState } from "../src/state/tab-state";
+import {
+  clearPendingConfirmation,
+  readPendingConfirmation,
+  readTabPackage,
+  readTabState,
+  readUploadedDocuments,
+  recordUploadedDocument,
+  removeTabState,
+  writePendingConfirmation,
+  writeTabPackage,
+  writeTabState,
+} from "../src/state/tab-state";
 
 const FIXTURE_EMAIL = "candidate@example.com";
 const runtimeConfig = assistedApplyRuntimeConfig();
@@ -61,7 +75,14 @@ async function resolveTargetTab(): Promise<Browser.tabs.Tab | null> {
   return active?.id != null ? active : null;
 }
 
-async function injectPageRunner(tabId: number): Promise<FixtureInspectionMessage> {
+async function injectPageRunner(tabId: number, installControlledBridge = false): Promise<FixtureInspectionMessage> {
+  if (installControlledBridge) {
+    await browser.scripting.executeScript({
+      target: { tabId },
+      files: ["/controlled-field-bridge.js"],
+      world: "MAIN",
+    });
+  }
   const results = await browser.scripting.executeScript({
     target: { tabId },
     files: ["/application-form.js"],
@@ -177,7 +198,7 @@ async function runFixtureProof(): Promise<AssistedApplyTabState> {
   return state;
 }
 
-async function runGreenhousePackage(applicationPackage: ApplicationPackagePayload) {
+async function runGreenhousePackage(applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
   const tab = await resolveTargetTab();
   if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
   const detection = detectAtsFromUrl(tab.url || "");
@@ -187,10 +208,11 @@ async function runGreenhousePackage(applicationPackage: ApplicationPackagePayloa
   if (applicationPackage.job.portal && applicationPackage.job.portal !== "greenhouse") {
     throw new Error("The bound application package is not for Greenhouse.");
   }
-  await injectPageRunner(tab.id);
+  await injectPageRunner(tab.id, true);
   const command: ContentRequest = {
     type: "CONTENT_RUN_GREENHOUSE_APPLICATION_PACKAGE",
     package: applicationPackage,
+    replaceFieldIntents,
   };
   const raw: unknown = await browser.tabs.sendMessage(tab.id, command);
   if (!isPackageExecutionMessage(raw) || raw.packageId !== applicationPackage.packageId) {
@@ -199,7 +221,7 @@ async function runGreenhousePackage(applicationPackage: ApplicationPackagePayloa
   return raw;
 }
 
-async function runLeverPackage(applicationPackage: ApplicationPackagePayload) {
+async function runLeverPackage(applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
   const tab = await resolveTargetTab();
   if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
   const detection = detectAtsFromUrl(tab.url || "");
@@ -209,8 +231,8 @@ async function runLeverPackage(applicationPackage: ApplicationPackagePayload) {
   if (applicationPackage.job.portal && applicationPackage.job.portal !== "lever") {
     throw new Error("The bound application package is not for Lever.");
   }
-  await injectPageRunner(tab.id);
-  const command: ContentRequest = { type: "CONTENT_RUN_LEVER_APPLICATION_PACKAGE", package: applicationPackage };
+  await injectPageRunner(tab.id, true);
+  const command: ContentRequest = { type: "CONTENT_RUN_LEVER_APPLICATION_PACKAGE", package: applicationPackage, replaceFieldIntents };
   const raw: unknown = await browser.tabs.sendMessage(tab.id, command);
   if (!isPackageExecutionMessage(raw) || raw.packageId !== applicationPackage.packageId) {
     throw new Error("The Lever runner returned an invalid package result.");
@@ -269,7 +291,7 @@ async function currentSessionToken(): Promise<string> {
   return (value as { sessionToken: string }).sessionToken;
 }
 
-function parseDocumentGrant(value: unknown, expectedDocumentId: string) {
+function parseDocumentGrant(value: unknown, expected: ApplicationPackageDocumentMeta) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Runr returned an invalid document grant.");
   }
@@ -280,10 +302,15 @@ function parseDocumentGrant(value: unknown, expectedDocumentId: string) {
   }
   const metadata = file as Record<string, unknown>;
   if (typeof record.grantToken !== "string" || record.grantToken.length < 20 ||
-      metadata.documentId !== expectedDocumentId ||
+      metadata.documentId !== expected.documentId ||
       !Number.isInteger(metadata.documentVersion) || Number(metadata.documentVersion) < 1 ||
-      typeof metadata.fileName !== "string" || !metadata.fileName.toLowerCase().endsWith(".pdf") ||
-      metadata.mimeType !== "application/pdf" ||
+      metadata.documentVersion !== expected.documentVersion ||
+      metadata.documentKind !== expected.documentKind ||
+      metadata.fileName !== expected.fileName ||
+      metadata.mimeType !== expected.mimeType ||
+      !((metadata.mimeType === "application/pdf" && expected.fileName.toLowerCase().endsWith(".pdf")) ||
+        (metadata.mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
+          expected.fileName.toLowerCase().endsWith(".docx"))) ||
       !Number.isInteger(metadata.size) || Number(metadata.size) < 1 || Number(metadata.size) > 10 * 1024 * 1024 ||
       typeof metadata.sha256Hex !== "string" || !/^[0-9a-f]{64}$/u.test(metadata.sha256Hex)) {
     throw new Error("Runr returned invalid document grant metadata.");
@@ -292,8 +319,9 @@ function parseDocumentGrant(value: unknown, expectedDocumentId: string) {
     grantToken: record.grantToken,
     documentId: metadata.documentId as string,
     documentVersion: metadata.documentVersion as number,
+    documentKind: expected.documentKind,
     fileName: metadata.fileName as string,
-    mimeType: "application/pdf" as const,
+    mimeType: expected.mimeType,
     size: metadata.size as number,
     sha256Hex: metadata.sha256Hex as string,
   };
@@ -308,15 +336,20 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-async function uploadGreenhouseCv(applicationPackage: ApplicationPackagePayload, documentId: string) {
+async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayload, documentId: string) {
   const tab = await resolveTargetTab();
   if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
-  if (applicationPackage.job.portal !== "greenhouse") {
-    throw new Error("The selected CV is not bound to a Greenhouse application.");
+  if (applicationPackage.job.portal !== "greenhouse" && applicationPackage.job.portal !== "lever") {
+    throw new Error("The selected document is not bound to a supported application portal.");
+  }
+  const liveAts = detectAtsFromUrl(tab.url || "").ats ||
+    (isExactGreenhouseFixtureUrl(tab.url) ? "greenhouse" : isExactLeverFixtureUrl(tab.url) ? "lever" : null);
+  if (liveAts !== applicationPackage.job.portal) {
+    throw new Error("The selected document package does not match the active application portal.");
   }
   const selected = applicationPackage.documents.find((item) => item.documentId === documentId);
-  if (!selected || selected.documentKind !== "cv" || selected.mimeType !== "application/pdf") {
-    throw new Error("Select the fixed-version PDF CV from this application package.");
+  if (!selected) {
+    throw new Error("Select a fixed-version document from this application package.");
   }
   const sessionToken = await currentSessionToken();
   const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
@@ -325,28 +358,50 @@ async function uploadGreenhouseCv(applicationPackage: ApplicationPackagePayload,
     "POST",
     { package_id: applicationPackage.packageId, document_id: documentId },
     sessionToken,
-  ), documentId);
-  let bytes = await api.downloadDocument(sessionToken, grant.grantToken);
+  ), selected);
+  let bytes = await api.downloadDocument(sessionToken, grant.grantToken, grant.mimeType);
   try {
-    if (bytes.byteLength !== grant.size) throw new Error("The downloaded CV size did not match its grant.");
+    if (bytes.byteLength !== grant.size) throw new Error("The downloaded document size did not match its grant.");
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.slice().buffer));
     const sha256Hex = Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
     digest.fill(0);
-    if (sha256Hex !== grant.sha256Hex) throw new Error("The downloaded CV hash did not match its grant.");
+    if (sha256Hex !== grant.sha256Hex) throw new Error("The downloaded document hash did not match its grant.");
     await injectPageRunner(tab.id);
     const command: ContentRequest = {
-      type: "CONTENT_UPLOAD_GREENHOUSE_CV",
+      type: "CONTENT_UPLOAD_SELECTED_DOCUMENT",
+      ats: applicationPackage.job.portal,
       packageId: applicationPackage.packageId,
       documentId: grant.documentId,
       documentVersion: grant.documentVersion,
+      documentKind: grant.documentKind,
       fileName: grant.fileName,
       mimeType: grant.mimeType,
       base64Bytes: bytesToBase64(bytes),
     };
     const result: unknown = await browser.tabs.sendMessage(tab.id, command);
     if (!isDocumentUploadMessage(result) || result.documentId !== grant.documentId ||
-        result.documentVersion !== grant.documentVersion) {
-      throw new Error("The Greenhouse runner returned an invalid document result.");
+        result.documentVersion !== grant.documentVersion ||
+        result.documentKind !== grant.documentKind ||
+        result.telemetry.adapter !== applicationPackage.job.portal ||
+        result.telemetry.documentRole !== grant.documentKind) {
+      throw new Error("The application runner returned an invalid document result.");
+    }
+    void api.request(
+      "/assisted-apply/extension/telemetry",
+      "POST",
+      {
+        schema_version: result.telemetry.schemaVersion,
+        adapter: result.telemetry.adapter,
+        adapter_version: result.telemetry.adapterVersion,
+        lifecycle_stage: result.telemetry.lifecycleStage,
+        aggregate_outcome: result.telemetry.aggregateOutcome,
+        error_category: result.telemetry.errorCategory,
+        document_role: result.telemetry.documentRole,
+      },
+      sessionToken,
+    ).catch(() => console.warn("Runr Assisted Apply could not record bounded upload health telemetry."));
+    if (result.status === "uploaded") {
+      await recordUploadedDocument(tab.id, result.documentId, result.documentVersion);
     }
     return result;
   } finally {
@@ -372,6 +427,24 @@ export default defineBackground(() => {
     message: unknown,
     sender,
   ): Promise<PanelResponse | undefined> => {
+    if (isContentRuntimeEvent(message)) {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      const applicationPackage = await readTabPackage(tabId);
+      const liveAdapter = detectAtsFromUrl(sender.tab?.url || sender.url || "").ats;
+      if (!applicationPackage || applicationPackage.packageId !== message.evidence.packageId ||
+          applicationPackage.version !== message.evidence.packageVersion ||
+          applicationPackage.job.portal !== message.evidence.adapter ||
+          (liveAdapter !== message.evidence.adapter && !isLocalFixtureUrl(sender.tab?.url))) {
+        return undefined;
+      }
+      const pending = {
+        ...message.evidence,
+        uploadedDocuments: await readUploadedDocuments(tabId),
+      };
+      await writePendingConfirmation(tabId, pending);
+      return { ok: true, pendingConfirmation: pending };
+    }
     if (
       !isExactSidePanelSender(
         sender,
@@ -419,6 +492,42 @@ export default defineBackground(() => {
         if (!applicationPackage) throw new Error("No application package is bound to this tab.");
         return { ok: true, package: applicationPackage };
       }
+      if (message.type === "GET_PENDING_APPLICATION_CONFIRMATION") {
+        const tab = await resolveTargetTab();
+        if (tab?.id == null) throw new Error("No application tab is active.");
+        return { ok: true, pendingConfirmation: await readPendingConfirmation(tab.id) };
+      }
+      if (message.type === "RESPOND_TO_APPLICATION_CONFIRMATION") {
+        const tab = await resolveTargetTab();
+        if (tab?.id == null) throw new Error("No application tab is active.");
+        const pending = await readPendingConfirmation(tab.id);
+        if (!pending || JSON.stringify(pending) !== JSON.stringify(message.evidence)) {
+          throw new Error("This application confirmation is no longer pending.");
+        }
+        const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
+        const result = await api.request(
+          "/assisted-apply/extension/application-outcomes",
+          "POST",
+          {
+            package_id: pending.packageId,
+            package_version: pending.packageVersion,
+            adapter: pending.adapter,
+            adapter_version: pending.adapterVersion,
+            evidence_category: pending.evidenceCategory,
+            decision: message.decision,
+            uploaded_documents: pending.uploadedDocuments.map((document) => ({
+              document_id: document.documentId,
+              document_version: document.documentVersion,
+            })),
+          },
+          await currentSessionToken(),
+        );
+        if (!isTrackerConfirmationResult(result)) {
+          throw new Error("Runr returned an invalid Tracker confirmation result.");
+        }
+        await clearPendingConfirmation(tab.id);
+        return { ok: true, trackerConfirmation: result };
+      }
       if (message.type === "REFETCH_APPLICATION_PACKAGE") {
         return { ok: true, package: await fetchPackageFromApi(message.packageId) };
       }
@@ -457,17 +566,17 @@ export default defineBackground(() => {
         await writeTabPackage(tab.id, updatedPackage);
         return { ok: true, package: updatedPackage };
       }
-      if (message.type === "UPLOAD_GREENHOUSE_CV") {
+      if (message.type === "UPLOAD_SELECTED_DOCUMENT") {
         return {
           ok: true,
-          documentUpload: await uploadGreenhouseCv(message.package, message.documentId),
+          documentUpload: await uploadSelectedDocument(message.package, message.documentId),
         };
       }
       if (message.type === "RUN_GREENHOUSE_APPLICATION_PACKAGE") {
-        return { ok: true, packageExecution: await runGreenhousePackage(message.package) };
+        return { ok: true, packageExecution: await runGreenhousePackage(message.package, message.replaceFieldIntents) };
       }
       if (message.type === "RUN_LEVER_APPLICATION_PACKAGE") {
-        return { ok: true, packageExecution: await runLeverPackage(message.package) };
+        return { ok: true, packageExecution: await runLeverPackage(message.package, message.replaceFieldIntents) };
       }
       const state =
         message.type === "RUN_GREENHOUSE_FIXTURE_PROOF"

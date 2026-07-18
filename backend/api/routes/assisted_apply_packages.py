@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from http import HTTPStatus
 from typing import Any
 
@@ -13,6 +14,14 @@ _CREATE_PACKAGE_KEYS = {"job", "answers", "documents", "warnings"}
 _BIND_PACKAGE_KEYS = {"binding_id"}
 _DOCUMENT_GRANT_KEYS = {"package_id", "document_id"}
 _CORRECTION_KEYS = {"package_id", "field_intent", "corrected_value", "scope"}
+_TELEMETRY_KEYS = {
+    "schema_version", "adapter", "adapter_version", "lifecycle_stage",
+    "aggregate_outcome", "error_category", "document_role",
+}
+_OUTCOME_KEYS = {
+    "package_id", "package_version", "adapter", "adapter_version",
+    "evidence_category", "decision", "uploaded_documents",
+}
 
 
 def register_routes(registry: RouteRegistry) -> None:
@@ -67,6 +76,20 @@ def register_routes(registry: RouteRegistry) -> None:
         _save_correction,
         auth_required=False,
         name="assisted_apply.extension.corrections.create",
+    )
+    registry.exact(
+        "POST",
+        ("assisted-apply", "extension", "telemetry"),
+        _record_upload_telemetry,
+        auth_required=False,
+        name="assisted_apply.extension.telemetry.create",
+    )
+    registry.exact(
+        "POST",
+        ("assisted-apply", "extension", "application-outcomes"),
+        _respond_to_application_outcome,
+        auth_required=False,
+        name="assisted_apply.extension.application_outcomes.create",
     )
 
 
@@ -181,3 +204,58 @@ def _save_correction(context: ApiRouteContext) -> None:
         extension_origin=context.request_client_origin(),
     )
     context.send_json(result, status=HTTPStatus.CREATED if result["persisted"] else HTTPStatus.OK)
+
+
+def _record_upload_telemetry(context: ApiRouteContext) -> None:
+    _authenticate_extension_session(context)
+    payload = _read_strict_object(
+        context,
+        allowed_keys=_TELEMETRY_KEYS,
+        label="adapter health telemetry",
+    )
+    if payload.get("schema_version") != 1:
+        raise ValueError("Unsupported adapter health telemetry schema.")
+    allowed = {
+        "adapter": {"greenhouse", "lever"},
+        "lifecycle_stage": {"upload"},
+        "aggregate_outcome": {"accepted", "rejected", "mismatched", "preserved", "unsupported"},
+        "error_category": {"none", "control_unavailable", "control_blocked", "mime_rejected", "portal_rejected", "existing_value", "unsupported_role", "unknown"},
+        "document_role": {"cv", "cover_letter", "supporting_document"},
+    }
+    for key, values in allowed.items():
+        if payload.get(key) not in values:
+            raise ValueError(f"Invalid adapter health telemetry {key}.")
+    adapter_version = str(payload.get("adapter_version") or "")
+    if len(adapter_version) > 32 or not all(part.isdigit() for part in adapter_version.split(".")):
+        raise ValueError("Invalid adapter health telemetry adapter_version.")
+    logging.getLogger("backend.api.assisted_apply_telemetry").info(
+        "assisted_apply_adapter_health",
+        extra={f"telemetry_{key}": value for key, value in payload.items()},
+    )
+    context.send_json({"recorded": True}, status=HTTPStatus.ACCEPTED)
+
+
+def _respond_to_application_outcome(context: ApiRouteContext) -> None:
+    payload = _read_strict_object(
+        context,
+        allowed_keys=_OUTCOME_KEYS,
+        label="application outcome",
+    )
+    raw_documents = payload.get("uploaded_documents") or []
+    if not isinstance(raw_documents, list) or not all(
+        isinstance(item, dict) and set(item) == {"document_id", "document_version"}
+        for item in raw_documents
+    ):
+        raise ValueError("uploaded_documents must be an array of document references.")
+    result = context.application.respond_to_assisted_apply_outcome(
+        package_id=str(payload.get("package_id") or "").strip(),
+        package_version=int(payload.get("package_version") or 0),
+        adapter=str(payload.get("adapter") or "").strip(),
+        adapter_version=str(payload.get("adapter_version") or "").strip(),
+        evidence_category=str(payload.get("evidence_category") or "").strip(),
+        decision=str(payload.get("decision") or "").strip(),
+        uploaded_documents=raw_documents,
+        raw_session=context.bearer_token(),
+        extension_origin=context.request_client_origin(),
+    )
+    context.send_json(result, status=HTTPStatus.CREATED if result["created"] else HTTPStatus.OK)

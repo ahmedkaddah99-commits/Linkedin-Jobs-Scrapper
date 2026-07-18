@@ -614,3 +614,53 @@ describe("AA-04 Greenhouse package-backed standard facts", () => {
     expect(submissions).toBe(0);
   });
 });
+
+describe("AA-13 frame, shadow-root, and semantic fallback boundaries", () => {
+  it("fills accessible native controls and reports inaccessible/custom boundaries as manual", async () => {
+    document.documentElement.dataset.runrAssistedApplyFixture = "greenhouse";
+    document.body.innerHTML = `
+      <label for="top-answer">Top answer</label><input id="top-answer">
+      <iframe id="same-frame" title="Same-origin section"></iframe>
+      <iframe id="cross-frame" title="Third-party section"></iframe>
+      <div id="open-host"></div>
+      <closed-question data-runr-shadow-root="closed" aria-label="Closed question"></closed-question>
+      <div role="textbox" aria-label="Custom salary widget"></div>`;
+
+    const sameFrame = document.querySelector<HTMLIFrameElement>("#same-frame")!;
+    const frameDocument = sameFrame.contentDocument!;
+    frameDocument.body.innerHTML = '<label for="frame-answer">Frame answer</label><input id="frame-answer">';
+    const crossFrame = document.querySelector<HTMLIFrameElement>("#cross-frame")!;
+    Object.defineProperty(crossFrame, "contentDocument", { configurable: true, value: null });
+    const openRoot = document.querySelector<HTMLElement>("#open-host")!.attachShadow({ mode: "open" });
+    openRoot.innerHTML = '<label for="shadow-answer">Shadow answer</label><input id="shadow-answer">';
+
+    const adapter = new GreenhouseAdapter();
+    const form = await adapter.inspect({ document, url: "http://127.0.0.1:4174/greenhouse-application.html" });
+    const frameField = form.fields.find((field) => field.label === "Frame answer")!;
+    const shadowField = form.fields.find((field) => field.label === "Shadow answer")!;
+    expect(frameField.stepId).toContain("same-origin-frame");
+    expect(shadowField.stepId).toContain("open-shadow");
+    expect(form.fields.filter((field) => field.classification === "manual").map((field) => field.manualReason))
+      .toEqual(expect.arrayContaining(["cross_origin_frame", "closed_shadow_root", "unsupported_custom_control"]));
+
+    const matches = await adapter.match(form, {
+      id: "aa13-matrix",
+      version: 1,
+      candidate: {},
+      answers: [
+        { fieldIntent: "application.frame", label: "Frame answer", proposedValue: "frame value" },
+        { fieldIntent: "application.shadow", label: "Shadow answer", proposedValue: "shadow value" },
+      ],
+    });
+    for (const match of matches.filter((candidate): candidate is ApprovedFieldMatch => candidate.action === "fill")) {
+      expect((await adapter.fill(match)).status).toBe("filled");
+    }
+    expect(frameDocument.querySelector<HTMLInputElement>("#frame-answer")!.value).toBe("frame value");
+    expect(openRoot.querySelector<HTMLInputElement>("#shadow-answer")!.value).toBe("shadow value");
+    const manualMatches = matches.filter((match) => match.action === "manual_only");
+    expect(manualMatches.find((match) => match.fieldLabel === "Third-party section")?.reasons[0])
+      .toContain("does not request access");
+    expect(manualMatches.find((match) => match.fieldLabel === "Custom salary widget")?.reasons[0])
+      .toContain("does not authorize generic filling");
+  });
+});

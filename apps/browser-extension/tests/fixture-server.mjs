@@ -8,6 +8,8 @@ const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const fixturePaths = new Map([
   ["/greenhouse-application.html", join(currentDirectory, "fixtures", "greenhouse-application.html")],
   ["/lever-application.html", join(currentDirectory, "fixtures", "lever-application.html")],
+  ["/same-origin-frame.html", join(currentDirectory, "fixtures", "same-origin-frame.html")],
+  ["/cross-origin-frame.html", join(currentDirectory, "fixtures", "cross-origin-frame.html")],
 ]);
 const extensionOriginPattern = /^chrome-extension:\/\/([a-p]{32})$/u;
 
@@ -15,6 +17,12 @@ const connections = new Map();
 const sessions = new Map();
 const documentGrants = new Map();
 const fixtureCvBytes = Buffer.from("%PDF-1.4\n% Runr AA11 fixture CV\n%%EOF\n", "utf8");
+const fixtureDocuments = new Map([
+  ["cv_version_7", { documentVersion: 7, documentKind: "cv", fileName: "Candidate CV.pdf", mimeType: "application/pdf", bytes: fixtureCvBytes }],
+  ["lever_cv_version_2", { documentVersion: 2, documentKind: "cv", fileName: "Lever CV.pdf", mimeType: "application/pdf", bytes: Buffer.from("%PDF-1.4\n% Lever CV\n%%EOF\n") }],
+  ["cover_letter_version_3", { documentVersion: 3, documentKind: "cover_letter", fileName: "Cover Letter.pdf", mimeType: "application/pdf", bytes: Buffer.from("%PDF-1.4\n% Cover letter\n%%EOF\n") }],
+  ["supporting_version_4", { documentVersion: 4, documentKind: "supporting_document", fileName: "Certificate.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes: Buffer.from("PK\\x03\\x04 Runr supporting document") }],
+]);
 const counters = {
   connectionRequests: 0,
   authorizationVisits: 0,
@@ -26,6 +34,10 @@ const counters = {
   revocations: 0,
   documentGrants: 0,
   documentDownloads: 0,
+  telemetryEvents: 0,
+  lastTelemetry: null,
+  trackerConfirmations: 0,
+  lastOutcomePayload: null,
 };
 
 function futureIso(milliseconds) {
@@ -255,23 +267,25 @@ const server = createServer(async (request, response) => {
       const record = activeRecord(request, response, origin);
       if (!record) return;
       const payload = await readJson(request);
-      if (payload.package_id !== "aapkg_fixture_aa11" || payload.document_id !== "cv_version_7") {
+      const fixtureDocument = fixtureDocuments.get(String(payload.document_id || ""));
+      if (!String(payload.package_id || "").startsWith("aapkg_fixture_") || !fixtureDocument) {
         json(response, 400, { error: { code: "bad_request", message: "Unknown fixed document." } }, origin);
         return;
       }
       counters.documentGrants += 1;
       const grantToken = `aadoc_fixture_${String(counters.documentGrants).padStart(8, "0")}`;
-      documentGrants.set(grantToken, { sessionToken: record.sessionToken, consumed: false });
+      documentGrants.set(grantToken, { sessionToken: record.sessionToken, consumed: false, document: fixtureDocument });
       json(response, 201, {
         grantToken,
         expiresAt: futureIso(60 * 1000),
         file: {
-          documentId: "cv_version_7",
-          documentVersion: 7,
-          fileName: "Candidate CV.pdf",
-          mimeType: "application/pdf",
-          size: fixtureCvBytes.length,
-          sha256Hex: createHash("sha256").update(fixtureCvBytes).digest("hex"),
+          documentId: payload.document_id,
+          documentVersion: fixtureDocument.documentVersion,
+          documentKind: fixtureDocument.documentKind,
+          fileName: fixtureDocument.fileName,
+          mimeType: fixtureDocument.mimeType,
+          size: fixtureDocument.bytes.length,
+          sha256Hex: createHash("sha256").update(fixtureDocument.bytes).digest("hex"),
         },
       }, origin);
       return;
@@ -289,15 +303,46 @@ const server = createServer(async (request, response) => {
       }
       grant.consumed = true;
       counters.documentDownloads += 1;
+      const fixtureDocument = grant.document;
       response.writeHead(200, {
         "access-control-allow-origin": origin,
         vary: "Origin",
         "cache-control": "no-store",
-        "content-disposition": 'attachment; filename="Candidate CV.pdf"',
-        "content-length": fixtureCvBytes.length,
-        "content-type": "application/pdf",
+        "content-disposition": `attachment; filename="${fixtureDocument.fileName}"`,
+        "content-length": fixtureDocument.bytes.length,
+        "content-type": fixtureDocument.mimeType,
       });
-      response.end(fixtureCvBytes);
+      response.end(fixtureDocument.bytes);
+      return;
+    }
+
+    if (url.pathname === "/assisted-apply/extension/telemetry" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      const payload = await readJson(request);
+      const expectedKeys = ["adapter", "adapter_version", "aggregate_outcome", "document_role", "error_category", "lifecycle_stage", "schema_version"];
+      if (JSON.stringify(Object.keys(payload).sort()) !== JSON.stringify(expectedKeys)) {
+        json(response, 400, { error: { code: "bad_request", message: "Unbounded telemetry." } }, origin);
+        return;
+      }
+      counters.telemetryEvents += 1;
+      counters.lastTelemetry = payload;
+      json(response, 202, { recorded: true }, origin);
+      return;
+    }
+
+    if (url.pathname === "/assisted-apply/extension/application-outcomes" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      const payload = await readJson(request);
+      counters.trackerConfirmations += payload.decision === "confirmed" ? 1 : 0;
+      counters.lastOutcomePayload = payload;
+      json(response, payload.decision === "confirmed" ? 201 : 200, {
+        decision: payload.decision,
+        created: payload.decision === "confirmed",
+        duplicate: false,
+        ...(payload.decision === "confirmed" ? { trackerRecordId: "aatrk_fixture_aa14" } : {}),
+      }, origin);
       return;
     }
 

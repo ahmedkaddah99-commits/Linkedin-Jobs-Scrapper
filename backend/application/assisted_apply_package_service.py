@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -38,7 +39,17 @@ from backend.security.auth import hash_token_value, verify_token_value
 ASSISTED_APPLY_DOCUMENT_GRANT_TTL_SECONDS = 60
 ASSISTED_APPLY_DOCUMENT_GRANT_TOKEN_PREFIX = "aadoc_"
 ASSISTED_APPLY_DOCUMENT_GRANT_LOOKUP_PREFIX_LENGTH = 20
-ASSISTED_APPLY_MAX_CV_BYTES = 10 * 1024 * 1024
+ASSISTED_APPLY_MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
+# Kept as a compatibility alias for callers/tests introduced with AA-11.
+ASSISTED_APPLY_MAX_CV_BYTES = ASSISTED_APPLY_MAX_DOCUMENT_BYTES
+ASSISTED_APPLY_DOCUMENT_KINDS = {"cv", "cover_letter", "supporting_document"}
+ASSISTED_APPLY_DOCUMENT_MIME_TYPES = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+}
+ASSISTED_APPLY_OUTCOME_EVIDENCE = {"success_banner", "confirmation_page", "url_transition"}
+ASSISTED_APPLY_ADAPTERS = {"greenhouse", "lever"}
+ASSISTED_APPLY_ADAPTER_VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 class ApplicationPackageStateError(ValueError):
@@ -239,6 +250,18 @@ class ApplicationPackageService:
         user = self._get_active_user(user_id)
         preferences = self._preferences_for_user(user)
         now = self._now()
+        selected_documents = [
+            ApplicationPackageDocumentRef.from_payload(item)
+            for item in (documents or [])
+            if isinstance(item, Mapping)
+        ]
+        if sum(item.document_kind == "cover_letter" for item in selected_documents) > 1:
+            raise ValueError("Select at most one cover letter for an application package.")
+        if sum(item.document_kind == "cv" for item in selected_documents) > 1:
+            raise ValueError("Select one primary CV for an application package.")
+        document_ids = [item.document_id for item in selected_documents]
+        if len(document_ids) != len(set(document_ids)):
+            raise ValueError("Application package document selections must be unique.")
 
         package = new_application_package(
             user_id=user.user_id,
@@ -248,11 +271,7 @@ class ApplicationPackageService:
                 for item in (answers or [])
                 if isinstance(item, Mapping)
             ],
-            documents=[
-                ApplicationPackageDocumentRef.from_payload(item)
-                for item in (documents or [])
-                if isinstance(item, Mapping)
-            ],
+            documents=selected_documents,
             warnings=(
                 ApplicationPackageWarnings(items=list(warnings_items or []))
                 if warnings_items
@@ -431,14 +450,17 @@ class ApplicationPackageService:
         )
         if selected is None:
             raise ValueError("The selected document is not in this application package.")
-        if selected.document_kind != "cv" or selected.mime_type != "application/pdf":
-            raise ValueError("AA-11 supports one selected PDF CV only.")
+        if selected.document_kind not in ASSISTED_APPLY_DOCUMENT_KINDS:
+            raise ValueError("The selected document has an unsupported application role.")
+        expected_suffix = ASSISTED_APPLY_DOCUMENT_MIME_TYPES.get(selected.mime_type)
+        if expected_suffix is None or not selected.file_name.lower().endswith(expected_suffix):
+            raise ValueError("The selected document has an unsupported MIME type or filename.")
 
         file_bytes = self.object_storage.get(selected.object_key)
         actual_size = len(file_bytes)
         actual_sha256 = hashlib.sha256(file_bytes).hexdigest()
-        if actual_size <= 0 or actual_size > ASSISTED_APPLY_MAX_CV_BYTES:
-            raise ValueError("The selected CV has an unsupported size.")
+        if actual_size <= 0 or actual_size > ASSISTED_APPLY_MAX_DOCUMENT_BYTES:
+            raise ValueError("The selected document has an unsupported size.")
         if selected.sha256_hex and not hmac.compare_digest(
             selected.sha256_hex.lower(), actual_sha256
         ):
@@ -485,6 +507,7 @@ class ApplicationPackageService:
             "file": {
                 "documentId": selected.document_id,
                 "documentVersion": selected.document_version,
+                "documentKind": selected.document_kind,
                 "fileName": selected.file_name,
                 "mimeType": selected.mime_type,
                 "size": actual_size,
@@ -565,4 +588,161 @@ class ApplicationPackageService:
             "mimeType": str(row["mime_type"]),
             "size": int(row["expected_size"]),
             "sha256Hex": str(row["expected_sha256_hex"]),
+        }
+
+    def respond_to_application_outcome(
+        self,
+        *,
+        package_id: str,
+        package_version: int,
+        adapter: str,
+        adapter_version: str,
+        evidence_category: str,
+        decision: str,
+        uploaded_documents: list[Mapping[str, Any]],
+        raw_session: str,
+        extension_origin: str,
+    ) -> dict[str, Any]:
+        """Record bounded outcome evidence and explicitly confirmed Tracker state."""
+        user, _connection = self._connection_service.authenticate_session(
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+        package = self._store.get(package_id)
+        if package is None:
+            raise ValueError("Application package not found.")
+        if package.user_id != user.user_id:
+            raise PermissionError("Application package belongs to another user.")
+        if package.status != APPLICATION_PACKAGE_STATUS_BOUND:
+            raise ApplicationPackageStateError("Only a bound application package can be confirmed.")
+        if int(package_version) != package.version:
+            raise ValueError("Application package version does not match the bound package.")
+
+        normalized_adapter = str(adapter or "").strip().lower()
+        normalized_adapter_version = str(adapter_version or "").strip()
+        normalized_evidence = str(evidence_category or "").strip().lower()
+        normalized_decision = str(decision or "").strip().lower()
+        if normalized_adapter not in ASSISTED_APPLY_ADAPTERS or normalized_adapter != package.job.portal:
+            raise ValueError("Adapter does not match the bound application package.")
+        if not ASSISTED_APPLY_ADAPTER_VERSION_PATTERN.fullmatch(normalized_adapter_version):
+            raise ValueError("Adapter version must be a bounded semantic version.")
+        if normalized_evidence not in ASSISTED_APPLY_OUTCOME_EVIDENCE:
+            raise ValueError("Possible-success evidence category is not supported.")
+        if normalized_decision not in {"confirmed", "declined"}:
+            raise ValueError("Decision must be confirmed or declined.")
+
+        package_documents = {
+            (document.document_id, document.document_version) for document in package.documents
+        }
+        normalized_documents: list[dict[str, Any]] = []
+        seen_documents: set[tuple[str, int]] = set()
+        for item in uploaded_documents:
+            document_id = str(item.get("document_id") or "").strip()
+            document_version = int(item.get("document_version") or 0)
+            identity = (document_id, document_version)
+            if not document_id or identity not in package_documents:
+                raise ValueError("Uploaded document does not match this application package.")
+            if identity not in seen_documents:
+                normalized_documents.append(
+                    {"document_id": document_id, "document_version": document_version}
+                )
+                seen_documents.add(identity)
+
+        now = self._now().isoformat()
+        with self._store.connection() as connection:
+            for event_type in ("possible_success", f"user_{normalized_decision}"):
+                connection.execute(
+                    """
+                    INSERT INTO assisted_apply_submission_events (
+                        user_id, package_id, package_version, adapter, adapter_version,
+                        event_type, evidence_category, occurred_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user.user_id, package.package_id, package.version, normalized_adapter,
+                        normalized_adapter_version, event_type, normalized_evidence, now,
+                    ),
+                )
+            if normalized_decision == "declined":
+                return {"decision": "declined", "created": False, "duplicate": False}
+
+            idempotency_key = f"{user.user_id}:{package.job_id}"
+            tracker_record_id = f"aatrk_{hashlib.sha256(idempotency_key.encode('utf-8')).hexdigest()[:20]}"
+            inserted = connection.execute(
+                """
+                INSERT OR IGNORE INTO assisted_apply_tracker_records (
+                    tracker_record_id, idempotency_key, user_id, job_id, package_id,
+                    package_version, adapter, adapter_version, document_versions_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tracker_record_id, idempotency_key, user.user_id, package.job_id,
+                    package.package_id, package.version, normalized_adapter,
+                    normalized_adapter_version,
+                    json.dumps(normalized_documents, ensure_ascii=False, sort_keys=True), now,
+                ),
+            )
+            created = getattr(inserted, "rowcount", 0) == 1
+            stored_record = connection.execute(
+                "SELECT * FROM assisted_apply_tracker_records WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+
+        metadata = dict(user.metadata or {})
+        existing_application = next((
+            dict(item) for item in metadata.get("external_tracker_applications") or []
+            if isinstance(item, Mapping) and str(item.get("application_id") or "") == tracker_record_id
+        ), {})
+        if not created and existing_application:
+            return {
+                "decision": "confirmed",
+                "created": False,
+                "duplicate": True,
+                "trackerRecordId": tracker_record_id,
+            }
+        confirmed_package = package
+        if stored_record is not None and str(stored_record["package_id"]) != package.package_id:
+            confirmed_package = self._store.get(str(stored_record["package_id"])) or package
+            normalized_documents = json.loads(str(stored_record["document_versions_json"] or "[]"))
+            normalized_adapter = str(stored_record["adapter"])
+            normalized_adapter_version = str(stored_record["adapter_version"])
+        applications = [
+            dict(item) for item in metadata.get("external_tracker_applications") or []
+            if isinstance(item, Mapping) and str(item.get("application_id") or "") != tracker_record_id
+        ]
+        applications.append(
+            {
+                "application_id": tracker_record_id,
+                "review_id": tracker_record_id,
+                "source": "assisted_apply",
+                "title": confirmed_package.job.title,
+                "company": confirmed_package.job.company,
+                "location": confirmed_package.job.location,
+                "apply_link": confirmed_package.job.url,
+                "tracker_status": "applied",
+                "application_status": "Applied",
+                "email_confirmed": False,
+                "application_date": str(existing_application.get("application_date") or now),
+                "placed_in_tracker_at": str(existing_application.get("placed_in_tracker_at") or now),
+                "created_at": str(existing_application.get("created_at") or now),
+                "updated_at": now,
+                "assisted_apply": {
+                    "job_id": confirmed_package.job_id,
+                    "package_id": confirmed_package.package_id,
+                    "package_version": confirmed_package.version,
+                    "adapter": normalized_adapter,
+                    "adapter_version": normalized_adapter_version,
+                    "document_versions": normalized_documents,
+                },
+            }
+        )
+        metadata["external_tracker_applications"] = applications
+        user.metadata = metadata
+        user.updated_at = now
+        self.repositories.auth_repository.upsert_user(user)
+        return {
+            "decision": "confirmed",
+            "created": created,
+            "duplicate": not created,
+            "trackerRecordId": tracker_record_id,
         }

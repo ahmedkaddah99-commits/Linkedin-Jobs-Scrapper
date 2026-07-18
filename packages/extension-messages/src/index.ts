@@ -10,7 +10,9 @@ export type FixtureExecutionStatus =
   | "mismatch";
 
 export interface FixtureExecutionSummary {
+  detectedFieldId?: string;
   fieldLabel: string;
+  fieldIntent?: string;
   status: FixtureExecutionStatus;
   acceptedValue?: string;
   reasons: string[];
@@ -91,8 +93,15 @@ export type PanelRequest =
   | {
       type: "RUN_GREENHOUSE_APPLICATION_PACKAGE" | "RUN_LEVER_APPLICATION_PACKAGE";
       package: ApplicationPackagePayload;
+      replaceFieldIntents?: string[];
     }
-  | { type: "UPLOAD_GREENHOUSE_CV"; package: ApplicationPackagePayload; documentId: string };
+  | { type: "UPLOAD_SELECTED_DOCUMENT"; package: ApplicationPackagePayload; documentId: string }
+  | { type: "GET_PENDING_APPLICATION_CONFIRMATION" }
+  | {
+      type: "RESPOND_TO_APPLICATION_CONFIRMATION";
+      decision: "confirmed" | "declined";
+      evidence: PendingApplicationConfirmation;
+    };
 
 export interface ApplicationPackageJob {
   jobId: string;
@@ -134,11 +143,16 @@ export const APPLICATION_CORRECTION_SCOPE_OPTIONS: ReadonlyArray<{
   { value: "do_not_save", label: "Do not save" },
 ];
 
+export type ApplicationDocumentKind = "cv" | "cover_letter" | "supporting_document";
+export type ApplicationDocumentMimeType =
+  | "application/pdf"
+  | "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 export interface ApplicationPackageDocumentMeta {
   documentId: string;
   documentVersion: number;
-  documentKind: string;
-  mimeType: string;
+  documentKind: ApplicationDocumentKind;
+  mimeType: ApplicationDocumentMimeType;
   fileName: string;
 }
 
@@ -158,6 +172,31 @@ export interface ApplicationPackagePayload {
   };
 }
 
+export type PossibleSuccessEvidenceCategory =
+  | "success_banner"
+  | "confirmation_page"
+  | "url_transition";
+
+export interface PossibleSuccessEvidence {
+  packageId: string;
+  packageVersion: number;
+  adapter: SupportedAts;
+  adapterVersion: string;
+  evidenceCategory: PossibleSuccessEvidenceCategory;
+  observedAt: string;
+}
+
+export interface PendingApplicationConfirmation extends PossibleSuccessEvidence {
+  uploadedDocuments: Array<{ documentId: string; documentVersion: number }>;
+}
+
+export interface TrackerConfirmationResult {
+  decision: "confirmed" | "declined";
+  created: boolean;
+  duplicate: boolean;
+  trackerRecordId?: string;
+}
+
 export interface PackageLaunchResult {
   packageId: string;
   bindingId: string;
@@ -167,29 +206,46 @@ export interface PackageLaunchResult {
 
 export type ContentRequest =
   | { type: "CONTENT_RUN_GREENHOUSE_FIXTURE_PROOF"; proposedEmail: string }
-  | { type: "CONTENT_RUN_GREENHOUSE_APPLICATION_PACKAGE"; package: ApplicationPackagePayload }
-  | { type: "CONTENT_RUN_LEVER_APPLICATION_PACKAGE"; package: ApplicationPackagePayload }
+  | { type: "CONTENT_RUN_GREENHOUSE_APPLICATION_PACKAGE"; package: ApplicationPackagePayload; replaceFieldIntents?: string[] }
+  | { type: "CONTENT_RUN_LEVER_APPLICATION_PACKAGE"; package: ApplicationPackagePayload; replaceFieldIntents?: string[] }
   | {
-      type: "CONTENT_UPLOAD_GREENHOUSE_CV";
+      type: "CONTENT_UPLOAD_SELECTED_DOCUMENT";
+      ats: "greenhouse" | "lever";
       packageId: string;
       documentId: string;
       documentVersion: number;
+      documentKind: ApplicationDocumentKind;
       fileName: string;
-      mimeType: "application/pdf";
+      mimeType: ApplicationDocumentMimeType;
       base64Bytes: string;
     };
+
+export interface AdapterHealthTelemetry {
+  schemaVersion: 1;
+  adapter: "greenhouse" | "lever";
+  adapterVersion: string;
+  lifecycleStage: "upload";
+  aggregateOutcome: "accepted" | "rejected" | "mismatched" | "preserved" | "unsupported";
+  errorCategory: "none" | "control_unavailable" | "control_blocked" | "mime_rejected" |
+    "portal_rejected" | "existing_value" | "unsupported_role" | "unknown";
+  documentRole: ApplicationDocumentKind;
+}
 
 export interface DocumentUploadMessage {
   documentId: string;
   documentVersion: number;
+  documentKind: ApplicationDocumentKind;
   fileName: string;
   status: "uploaded" | "rejected" | "mismatch" | "preserved_existing";
   reasons: string[];
+  telemetry: AdapterHealthTelemetry;
 }
 
 export interface PackageExecutionMessage extends FixtureInspectionMessage {
   packageId: string;
   executions: FixtureExecutionSummary[];
+  formRevision?: number;
+  changeReasons?: string[];
 }
 
 export interface PanelResponse {
@@ -199,8 +255,15 @@ export interface PanelResponse {
   package?: ApplicationPackagePayload;
   packageExecution?: PackageExecutionMessage;
   documentUpload?: DocumentUploadMessage;
+  pendingConfirmation?: PendingApplicationConfirmation | null;
+  trackerConfirmation?: TrackerConfirmationResult;
   error?: string;
 }
+
+export type ContentRuntimeEvent = {
+  type: "ASSISTED_APPLY_POSSIBLE_SUCCESS";
+  evidence: PossibleSuccessEvidence;
+};
 
 export function isExactGreenhouseFixtureUrl(value: unknown): value is string {
   if (typeof value !== "string") return false;
@@ -236,6 +299,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isBoundedFieldIntentList(value: unknown): value is string[] {
+  return value === undefined || (Array.isArray(value) && value.length <= 50 &&
+    value.every((item) => typeof item === "string" && /^[a-z0-9_.-]{1,160}$/u.test(item)) &&
+    new Set(value).size === value.length);
+}
+
 function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value));
 }
@@ -260,7 +329,9 @@ function isFixtureExecutionSummary(value: unknown): value is FixtureExecutionSum
     "mismatch",
   ];
   return (
+    (value.detectedFieldId === undefined || typeof value.detectedFieldId === "string") &&
     typeof value.fieldLabel === "string" &&
+    (value.fieldIntent === undefined || typeof value.fieldIntent === "string") &&
     statuses.includes(value.status as FixtureExecutionStatus) &&
     (value.acceptedValue === undefined || typeof value.acceptedValue === "string") &&
     isStringArray(value.reasons)
@@ -382,7 +453,9 @@ export function isApplicationPackagePayload(value: unknown): value is Applicatio
     Array.isArray(value.documents) && value.documents.every((document) => isRecord(document) &&
       typeof document.documentId === "string" && document.documentId.length > 0 &&
       Number.isInteger(document.documentVersion) && Number(document.documentVersion) > 0 &&
-      typeof document.documentKind === "string" && typeof document.mimeType === "string" &&
+      ["cv", "cover_letter", "supporting_document"].includes(String(document.documentKind)) &&
+      ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+        .includes(String(document.mimeType)) &&
       typeof document.fileName === "string") &&
     isStringArray(value.warnings) && isRecord(value.policy) &&
     typeof value.policy.permitSensitiveAutofill === "boolean" &&
@@ -391,19 +464,77 @@ export function isApplicationPackagePayload(value: unknown): value is Applicatio
   );
 }
 
+function hasPossibleSuccessEvidenceFields(value: unknown): value is PossibleSuccessEvidence {
+  if (!isRecord(value)) return false;
+  return typeof value.packageId === "string" && value.packageId.length > 0 &&
+    Number.isInteger(value.packageVersion) && Number(value.packageVersion) > 0 &&
+    (value.adapter === "greenhouse" || value.adapter === "lever") &&
+    typeof value.adapterVersion === "string" && /^[0-9]+\.[0-9]+\.[0-9]+$/u.test(value.adapterVersion) &&
+    ["success_banner", "confirmation_page", "url_transition"].includes(String(value.evidenceCategory)) &&
+    isIsoDate(value.observedAt);
+}
+
+export function isPossibleSuccessEvidence(value: unknown): value is PossibleSuccessEvidence {
+  return hasPossibleSuccessEvidenceFields(value) && isRecord(value) &&
+    Object.keys(value).length === 6 && Object.keys(value).every((key) => [
+      "packageId", "packageVersion", "adapter", "adapterVersion", "evidenceCategory", "observedAt",
+    ].includes(key));
+}
+
+export function isPendingApplicationConfirmation(
+  value: unknown,
+): value is PendingApplicationConfirmation {
+  return hasPossibleSuccessEvidenceFields(value) && isRecord(value) && Object.keys(value).length === 7 &&
+    Object.keys(value).every((key) => [
+      "packageId", "packageVersion", "adapter", "adapterVersion", "evidenceCategory", "observedAt",
+      "uploadedDocuments",
+    ].includes(key)) &&
+    Array.isArray(value.uploadedDocuments) && value.uploadedDocuments.every((document) =>
+      isRecord(document) && typeof document.documentId === "string" && document.documentId.length > 0 &&
+      Number.isInteger(document.documentVersion) && Number(document.documentVersion) > 0);
+}
+
+export function isTrackerConfirmationResult(value: unknown): value is TrackerConfirmationResult {
+  return isRecord(value) && (value.decision === "confirmed" || value.decision === "declined") &&
+    typeof value.created === "boolean" && typeof value.duplicate === "boolean" &&
+    (value.trackerRecordId === undefined || typeof value.trackerRecordId === "string");
+}
+
+export function isContentRuntimeEvent(value: unknown): value is ContentRuntimeEvent {
+  return isRecord(value) && value.type === "ASSISTED_APPLY_POSSIBLE_SUCCESS" &&
+    isPossibleSuccessEvidence(value.evidence);
+}
+
 export function isPackageExecutionMessage(value: unknown): value is PackageExecutionMessage {
   return isFixtureInspectionMessage(value) && isRecord(value) &&
     typeof value.packageId === "string" && value.packageId.length > 0 &&
-    Array.isArray(value.executions) && value.executions.every(isFixtureExecutionSummary);
+    Array.isArray(value.executions) && value.executions.every(isFixtureExecutionSummary) &&
+    (value.formRevision === undefined || (Number.isInteger(value.formRevision) && Number(value.formRevision) >= 0)) &&
+    (value.changeReasons === undefined || isStringArray(value.changeReasons));
 }
 
 export function isDocumentUploadMessage(value: unknown): value is DocumentUploadMessage {
   return isRecord(value) &&
     typeof value.documentId === "string" && value.documentId.length > 0 &&
     Number.isInteger(value.documentVersion) && Number(value.documentVersion) > 0 &&
+    ["cv", "cover_letter", "supporting_document"].includes(String(value.documentKind)) &&
     typeof value.fileName === "string" && value.fileName.length > 0 &&
     ["uploaded", "rejected", "mismatch", "preserved_existing"].includes(String(value.status)) &&
-    isStringArray(value.reasons);
+    isStringArray(value.reasons) && isAdapterHealthTelemetry(value.telemetry);
+}
+
+export function isAdapterHealthTelemetry(value: unknown): value is AdapterHealthTelemetry {
+  if (!isRecord(value)) return false;
+  return value.schemaVersion === 1 &&
+    (value.adapter === "greenhouse" || value.adapter === "lever") &&
+    typeof value.adapterVersion === "string" && /^[0-9]+\.[0-9]+\.[0-9]+$/u.test(value.adapterVersion) &&
+    value.lifecycleStage === "upload" &&
+    ["accepted", "rejected", "mismatched", "preserved", "unsupported"].includes(String(value.aggregateOutcome)) &&
+    ["none", "control_unavailable", "control_blocked", "mime_rejected", "portal_rejected",
+      "existing_value", "unsupported_role", "unknown"].includes(String(value.errorCategory)) &&
+    ["cv", "cover_letter", "supporting_document"].includes(String(value.documentRole)) &&
+    Object.keys(value).every((key) => ["schemaVersion", "adapter", "adapterVersion", "lifecycleStage",
+      "aggregateOutcome", "errorCategory", "documentRole"].includes(key));
 }
 
 export function isPanelResponse(value: unknown): value is PanelResponse {
@@ -414,7 +545,11 @@ export function isPanelResponse(value: unknown): value is PanelResponse {
     const hasPackage = isApplicationPackagePayload(value.package);
     const hasPackageExecution = isPackageExecutionMessage(value.packageExecution);
     const hasDocumentUpload = isDocumentUploadMessage(value.documentUpload);
-    return [hasTabState, hasConnection, hasPackage, hasPackageExecution, hasDocumentUpload]
+    const hasPendingConfirmation = "pendingConfirmation" in value &&
+      (value.pendingConfirmation === null || isPendingApplicationConfirmation(value.pendingConfirmation));
+    const hasTrackerConfirmation = isTrackerConfirmationResult(value.trackerConfirmation);
+    return [hasTabState, hasConnection, hasPackage, hasPackageExecution, hasDocumentUpload,
+      hasPendingConfirmation, hasTrackerConfirmation]
       .filter(Boolean).length === 1;
   }
   return value.error === undefined || typeof value.error === "string";
@@ -442,11 +577,15 @@ export function isPanelRequest(value: unknown): value is PanelRequest {
       ["application", "country", "role", "company", "global", "do_not_save"].includes(String(value.scope));
   }
   if (type === "RUN_GREENHOUSE_APPLICATION_PACKAGE" || type === "RUN_LEVER_APPLICATION_PACKAGE") {
-    return isApplicationPackagePayload(value.package);
+    return isApplicationPackagePayload(value.package) && isBoundedFieldIntentList(value.replaceFieldIntents);
   }
-  if (type === "UPLOAD_GREENHOUSE_CV") {
+  if (type === "UPLOAD_SELECTED_DOCUMENT") {
     return isApplicationPackagePayload(value.package) &&
       typeof value.documentId === "string" && value.documentId.length > 0;
+  }
+  if (type === "RESPOND_TO_APPLICATION_CONFIRMATION") {
+    return (value.decision === "confirmed" || value.decision === "declined") &&
+      isPendingApplicationConfirmation(value.evidence);
   }
   return (
     type === "GET_ACTIVE_TAB_STATE" ||
@@ -455,7 +594,8 @@ export function isPanelRequest(value: unknown): value is PanelRequest {
     type === "GET_EXTENSION_CONNECTION" ||
     type === "GET_BOUND_APPLICATION_PACKAGE" ||
     type === "CONNECT_RUNR" ||
-    type === "DISCONNECT_RUNR"
+    type === "DISCONNECT_RUNR" ||
+    type === "GET_PENDING_APPLICATION_CONFIRMATION"
   );
 }
 
@@ -464,13 +604,16 @@ export function isContentRequest(value: unknown): value is ContentRequest {
   return (
     ((value.type === "CONTENT_RUN_GREENHOUSE_APPLICATION_PACKAGE" ||
       value.type === "CONTENT_RUN_LEVER_APPLICATION_PACKAGE") &&
-      isApplicationPackagePayload(value.package)) ||
-    (value.type === "CONTENT_UPLOAD_GREENHOUSE_CV" &&
+      isApplicationPackagePayload(value.package) && isBoundedFieldIntentList(value.replaceFieldIntents)) ||
+    (value.type === "CONTENT_UPLOAD_SELECTED_DOCUMENT" &&
+      (value.ats === "greenhouse" || value.ats === "lever") &&
       typeof value.packageId === "string" && value.packageId.length > 0 &&
       typeof value.documentId === "string" && value.documentId.length > 0 &&
       Number.isInteger(value.documentVersion) && Number(value.documentVersion) > 0 &&
+      ["cv", "cover_letter", "supporting_document"].includes(String(value.documentKind)) &&
       typeof value.fileName === "string" && value.fileName.length > 0 && value.fileName.length <= 255 &&
-      value.mimeType === "application/pdf" &&
+      ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+        .includes(String(value.mimeType)) &&
       typeof value.base64Bytes === "string" && value.base64Bytes.length > 0) ||
     (
     value.type === "CONTENT_RUN_GREENHOUSE_FIXTURE_PROOF" &&
@@ -485,12 +628,15 @@ export function isApplicationPackageContentRequest(
   return isRecord(value) &&
     (((value.type === "CONTENT_RUN_GREENHOUSE_APPLICATION_PACKAGE" ||
       value.type === "CONTENT_RUN_LEVER_APPLICATION_PACKAGE") &&
-      isApplicationPackagePayload(value.package)) ||
-      (value.type === "CONTENT_UPLOAD_GREENHOUSE_CV" &&
+      isApplicationPackagePayload(value.package) && isBoundedFieldIntentList(value.replaceFieldIntents)) ||
+      (value.type === "CONTENT_UPLOAD_SELECTED_DOCUMENT" &&
+        (value.ats === "greenhouse" || value.ats === "lever") &&
         typeof value.packageId === "string" && value.packageId.length > 0 &&
         typeof value.documentId === "string" && value.documentId.length > 0 &&
         Number.isInteger(value.documentVersion) && Number(value.documentVersion) > 0 &&
+        ["cv", "cover_letter", "supporting_document"].includes(String(value.documentKind)) &&
         typeof value.fileName === "string" && value.fileName.length > 0 && value.fileName.length <= 255 &&
-        value.mimeType === "application/pdf" &&
+        ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+          .includes(String(value.mimeType)) &&
         typeof value.base64Bytes === "string" && value.base64Bytes.length > 0));
 }

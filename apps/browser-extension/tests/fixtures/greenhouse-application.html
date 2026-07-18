@@ -13,6 +13,13 @@
   </head>
   <body data-submit-clicks="0" data-email-events="">
     <h1>Example Greenhouse application</h1>
+    <section aria-label="AA-13 accessibility matrix">
+      <iframe id="same-origin-frame" title="Same-origin application section" src="/same-origin-frame.html"></iframe>
+      <iframe id="cross-origin-frame" title="Third-party application section" src="http://localhost:4174/cross-origin-frame.html"></iframe>
+      <div id="open-shadow-host"></div>
+      <runr-closed-field data-runr-shadow-root="closed" aria-label="Closed-root screening question"></runr-closed-field>
+      <div id="custom-salary-widget" role="textbox" aria-label="Custom salary widget"></div>
+    </section>
     <form id="application-form">
       <label for="first-name">First name</label>
       <input id="first-name" name="first_name" type="text" value="Existing Candidate" required />
@@ -60,6 +67,12 @@
       <input id="resume" name="resume" type="file" accept="application/pdf,.pdf" required />
       <p id="resume-status" data-runr-upload-status>Waiting for CV</p>
 
+      <label for="cover-letter">Cover letter</label>
+      <input id="cover-letter" name="cover_letter" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" />
+
+      <label for="supporting-document">Supporting document</label>
+      <input id="supporting-document" name="supporting_document" type="file" accept="application/pdf,.pdf" />
+
       <label for="captcha-response">CAPTCHA response</label>
       <input id="captcha-response" name="g-recaptcha-response" type="text" />
 
@@ -79,6 +92,10 @@
     </form>
 
     <script>
+      const openRoot = document.getElementById("open-shadow-host").attachShadow({ mode: "open" });
+      openRoot.innerHTML = '<label for="open-shadow-editor">Open shadow favorite editor</label><input id="open-shadow-editor" name="favorite_editor">';
+      const closedRoot = document.querySelector("runr-closed-field").attachShadow({ mode: "closed" });
+      closedRoot.innerHTML = '<label>Closed-root answer <input name="closed_answer"></label>';
       const body = document.body;
       for (const controlId of ["email", "summary", "country", "work-yes", "remote", "start-date"]) {
         const control = document.getElementById(controlId);
@@ -94,11 +111,18 @@
       document.getElementById("application-form").addEventListener("submit", (event) => {
         event.preventDefault();
         body.dataset.submitClicks = String(Number(body.dataset.submitClicks || "0") + 1);
+        body.dataset.runrApplicationSuccess = "true";
       });
       document.getElementById("resume").addEventListener("change", (event) => {
         document.getElementById("resume-status").textContent = event.currentTarget.files[0]?.name || "Rejected";
         body.dataset.uploadedCv = event.currentTarget.files[0]?.name || "";
       });
+      for (const controlId of ["cover-letter", "supporting-document"]) {
+        document.getElementById(controlId).addEventListener("change", (event) => {
+          body.dataset[`uploaded${controlId === "cover-letter" ? "CoverLetter" : "SupportingDocument"}`] =
+            event.currentTarget.files[0]?.name || "";
+        });
+      }
     </script>
   </body>
 </html>

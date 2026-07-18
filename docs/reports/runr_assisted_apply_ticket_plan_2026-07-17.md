@@ -399,7 +399,7 @@ event, verification, and no-overwrite guarantees.
 ## AA-08 - Make filling idempotent and resilient to dynamic forms
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-07<br>
 **Visible plan coverage:** sections 9 and 10
 
@@ -411,20 +411,39 @@ page-context bridge only where controlled-component integration requires it.
 
 ### Acceptance criteria
 
-- [ ] Running Assisted Apply twice does not duplicate, toggle, or corrupt answers.
-- [ ] User/restored/browser values and fields changed after a Runr fill are never
+- [x] Running Assisted Apply twice does not duplicate, toggle, or corrupt answers.
+- [x] User/restored/browser values and fields changed after a Runr fill are never
       overwritten without explicit `Replace with Runr answer`.
-- [ ] DOM observation handles conditional questions, new steps, upload status, and
+- [x] DOM observation handles conditional questions, new steps, upload status, and
       validation changes without runaway observers.
-- [ ] React/controlled inputs update framework state and pass rendered readback.
-- [ ] The page-context bridge has a strict message schema and bounded field
+- [x] React/controlled inputs update framework state and pass rendered readback.
+- [x] The page-context bridge has a strict message schema and bounded field
       operations, contains no arbitrary commands/eval or Runr API access, and tests
       prove page-origin messages cannot trigger submission or other disallowed work.
-- [ ] Reinspection after navigation or worker restart produces consistent results.
+- [x] Reinspection after navigation or worker restart produces consistent results.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, TypeScript passed and the focused AA-08/message/ATS suites passed
+  33 tests. The production MV3 build and guarded manifest/source/bundle audit
+  passed, and `git diff --check` reported no whitespace errors.
+- The packaged-Chromium AA-08 scenario passed with a conditional field added after
+  the first answer, framework-state readback, a repeated idempotent run, preservation
+  of a user edit, explicit one-field `Replace with Runr answer`, a forged page-origin
+  submission message that performed no work, zero submit events, and consistent
+  reinspection after an actual MV3 service-worker stop/restart.
+- Unit coverage proves a real React controlled input retains framework state,
+  conditional questions are filled through bounded reinspection passes, stable
+  field identities survive repeat inspection, existing values require a one-shot
+  replacement authorization, dynamic changes are coalesced and rate-bounded, and
+  the MAIN-world bridge accepts only schema-versioned native field operations by
+  element ID. It exposes no selector, click, submission, arbitrary-command/eval, or
+  Runr API capability and rejects malformed/submit-like page messages.
+- The complete extension unit gate has 88 passing tests and remains red only in the
+  two pre-existing AA-06 policy-parity cases already recorded by AA-04/AA-05/AA-07
+  (`scoped_personal_needs_sensitive_opt_in` and
+  `demographic_ai_suggestion_invalid`). AA-08 therefore remains `in_progress`
+  pending its AA-07 dependency and a green complete gate.
 
 ---
 
@@ -561,7 +580,7 @@ extension.
 ## AA-12 - Support cover letters and selected documents on both portals
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-05, AA-11, and AA-15
 **Visible plan coverage:** sections 1 and 11
 
@@ -572,26 +591,46 @@ explicitly selected supporting documents accepted by the live portal.
 
 ### Acceptance criteria
 
-- [ ] Lever supports the primary CV; both adapters support one cover letter and
+- [x] Lever supports the primary CV; both adapters support one cover letter and
       explicitly selected supporting documents where controls allow it.
-- [ ] DOCX is offered only where the live control accepts it; MIME/size/portal
+- [x] DOCX is offered only where the live control accepts it; MIME/size/portal
       rejection is reported accurately.
-- [ ] Runr never uploads every certificate or document by default.
-- [ ] Success and rejection tests cover each supported document role without
+- [x] Runr never uploads every certificate or document by default.
+- [x] Success and rejection tests cover each supported document role without
       weakening one-time-grant controls.
-- [ ] Upload telemetry uses AA-15's bounded schema and never includes document
+- [x] Upload telemetry uses AA-15's bounded schema and never includes document
       bytes, URLs, tokens, filenames, answers, or raw page markup.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, focused backend grant coverage passed 4 tests. The generalized
+  60-second hash-only grant remains bound to the owning extension session,
+  package, selected document ID, immutable version, MIME, size, and SHA-256 and
+  still rejects replay, expiry, cross-session use, changed bytes, unselected IDs,
+  unsupported roles/MIME pairs, duplicate cover letters, and mismatched filenames.
+- TypeScript passed; focused message/API-client/adapter coverage passed 36 tests;
+  the production MV3 build and guarded manifest/source/bundle audit passed. The
+  privacy-schema tests reject telemetry containing bytes, URLs, tokens, filenames,
+  answers, or markup, and the backend accepts only the bounded upload event keys
+  and enum values.
+- Two focused Chromium persistent-context scenarios passed. They prove Greenhouse
+  PDF CV regression safety plus Lever CV, cover-letter uploads on both adapters,
+  selected supporting-document upload, DOCX acceptance only on an accepting live
+  Lever control, accurate rejection on a PDF-only Greenhouse control, zero final-
+  submit activity, one-time downloads, and bounded telemetry delivery.
+- The complete extension run currently has 88 passing unit tests and the same two
+  pre-existing AA-06 policy-fixture failures. The full browser run passed 8 of 10
+  scenarios; the two failures are in concurrent AA-08 dynamic-form and AA-14
+  possible-success work, while both AA-11/AA-12 upload scenarios pass focused.
+  AA-12 remains `in_progress` until its AA-05/AA-15 dependency chain and the
+  complete shared gate are green.
 
 ---
 
 ## AA-13 - Handle frames, open shadow roots, and safe fallback
 
 **Type:** AFK technical spike plus bounded implementation<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-07<br>
 **Visible plan coverage:** sections 8 and 10
 
@@ -603,25 +642,42 @@ automation.
 
 ### Acceptance criteria
 
-- [ ] A recorded fixture matrix covers top document, same-origin frames,
+- [x] A recorded fixture matrix covers top document, same-origin frames,
       cross-origin frames, open shadow roots, and closed shadow roots.
-- [ ] Accessible frames/open roots can be inspected and validated without overly
+- [x] Accessible frames/open roots can be inspected and validated without overly
       broad permissions.
-- [ ] Inaccessible cross-origin and closed-root controls become Manual with an
+- [x] Inaccessible cross-origin and closed-root controls become Manual with an
       actionable reason.
-- [ ] Generic semantic fallback may classify/review fields but cannot silently
+- [x] Generic semantic fallback may classify/review fields but cannot silently
       broaden V1 to unsupported custom ATS forms.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, the AA-13 ATS unit suite passed 19 tests. It proves recursive
+  inspection and execution across same-origin frame realms and open shadow roots,
+  including native setters, composed input/change events, readback, validation,
+  stable step/strategy evidence, and explicit `manual_only` matches for inaccessible
+  frames, closed roots, and custom semantic controls.
+- The focused Chromium persistent-context test passed through the packaged MV3
+  extension. It filled and verified one same-origin-frame value and one open-shadow
+  value, kept the cross-origin frame and custom widget untouched, reported
+  `cross_origin_frame`, `closed_shadow_root`, and `unsupported_custom_control`, and
+  observed zero final-submit activity. Six of seven complete browser scenarios
+  passed; the remaining AA-11 upload scenario is red in concurrent document-contract
+  work and is unrelated to AA-13.
+- Production and testing builds passed, and the guarded manifest/source audit
+  passed without a new host permission. The recorded support boundary is in
+  `docs/reports/runr_assisted_apply_aa13_support_matrix_2026-07-18.md`.
+- The repository-wide gate remains red in the two pre-existing AA-06 policy parity
+  cases and concurrent document/panel work. AA-13 remains `in_progress` until its
+  AA-07 dependency is verified and the shared gate is green.
 
 ---
 
 ## AA-14 - Confirm user-submitted applications in Tracker
 
 **Type:** AFK<br>
-**Status:** planned<br>
+**Status:** in_progress<br>
 **Blocked by:** AA-08, AA-09, AA-12, and AA-15
 **Visible plan coverage:** sections 1, 3, 6, and 8
 
@@ -632,20 +688,40 @@ control, ask for confirmation, and create an idempotent owned Tracker record.
 
 ### Acceptance criteria
 
-- [ ] Extension code can observe possible success evidence but has no capability to
+- [x] Extension code can observe possible success evidence but has no capability to
       operate the final Submit control.
-- [ ] Evidence always prompts the user to confirm or decline; it never records an
+- [x] Evidence always prompts the user to confirm or decline; it never records an
       application automatically.
-- [ ] Confirmation creates an idempotent owned Tracker record tied to job,
+- [x] Confirmation creates an idempotent owned Tracker record tied to job,
       package/version, adapter/version, and uploaded document versions.
-- [ ] Declined, ambiguous, duplicate, and failed attempts do not create false
+- [x] Declined, ambiguous, duplicate, and failed attempts do not create false
       application records.
-- [ ] Possible-success and user-confirmation telemetry uses AA-15's bounded event
+- [x] Possible-success and user-confirmation telemetry uses AA-15's bounded event
       schema without application answers or employer-page content.
 
 ### Completion evidence
 
-Pending.
+- On 2026-07-18, focused backend and migration verification passed 8 tests. It
+  proves extension-session ownership, bound package/version and adapter validation,
+  job-level idempotency across repeated and revised packages, fixed uploaded-
+  document version binding, declined/ambiguous/failed non-creation, one visible
+  external Tracker record, and bounded possible-success/confirmation event rows
+  containing no answers, filenames, raw markup, or employer-page content. Ruff
+  passed for every touched backend/test file.
+- TypeScript passed; the focused message/observer suites passed 12 tests; the
+  production MV3 build and guarded manifest/source/bundle audit passed. A packaged-
+  Chromium scenario proved that the extension performed zero final-control actions,
+  observed a success marker only after a Playwright user click, displayed an
+  explicit confirm/decline prompt, made no Tracker request before confirmation,
+  and then sent only bounded package/adapter/evidence/document identifiers after
+  the user chose `Yes, add to Tracker`.
+- All 10 packaged-Chromium scenarios passed, including the independent Greenhouse
+  and Lever paths, dynamic-form/service-worker recovery, upload roles, and AA-14's
+  explicit user-action-to-confirmation flow.
+- The complete extension unit run has 88 passing tests and remains red only in the
+  two pre-existing AA-06 policy-parity cases (`scoped_personal_needs_sensitive_opt_in`
+  and `demographic_ai_suggestion_invalid`). AA-14 remains `in_progress` because its
+  AA-08, AA-09, AA-12, and AA-15 dependency gate is not yet verified complete.
 
 ---
 

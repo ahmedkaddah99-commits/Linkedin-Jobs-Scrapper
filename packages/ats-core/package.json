@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./policy": "./src/policy.ts"
+    "./policy": "./src/policy.ts",
+    "./dynamic-form": "./src/dynamic-form.ts",
+    "./page-bridge": "./src/page-bridge.ts"
   }
 }

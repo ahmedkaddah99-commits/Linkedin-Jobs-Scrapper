@@ -121,4 +121,15 @@ describe("fixed Runr Assisted Apply API client", () => {
     );
     await expect(api.downloadDocument("session-secret", "aadoc-secret")).rejects.toThrow("MIME");
   });
+
+  it("accepts DOCX only when the fixed grant metadata expects DOCX", async () => {
+    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" as const;
+    const api = new RunrAssistedApplyApi("https://api.userunr.com/v1", async () =>
+      new Response("PK fixture", { status: 200, headers: { "content-type": docxMime } }),
+    );
+    await expect(api.downloadDocument("session-secret", "aadoc-secret", docxMime))
+      .resolves.toBeInstanceOf(Uint8Array);
+    await expect(api.downloadDocument("session-secret", "aadoc-secret"))
+      .rejects.toThrow("MIME");
+  });
 });

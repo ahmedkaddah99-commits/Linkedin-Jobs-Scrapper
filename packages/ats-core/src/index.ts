@@ -1,3 +1,5 @@
+import { requestPageContextSet } from "./page-bridge";
+
 export type AtsType = "greenhouse" | "lever";
 
 export interface PageContext {
@@ -31,6 +33,9 @@ export type ManualReason =
   | "legal_declaration"
   | "legal_terms"
   | "assessment"
+  | "cross_origin_frame"
+  | "closed_shadow_root"
+  | "unsupported_custom_control"
   | "unsupported_control";
 
 export interface DetectedField {
@@ -107,6 +112,7 @@ export type FieldExecutionStatus =
 export interface FieldExecutionResult {
   detectedFieldId: string;
   fieldLabel: string;
+  fieldIntent?: string;
   status: FieldExecutionStatus;
   existingValue?: string;
   acceptedValue?: string;
@@ -119,6 +125,7 @@ export interface DocumentUploadRequest {
   file: File;
   documentId: string;
   documentVersion: number;
+  documentKind: "cv" | "cover_letter" | "supporting_document";
 }
 
 export interface DocumentUploadResult {
@@ -148,6 +155,7 @@ export interface AtsAdapter {
     applicationPackage: ApplicationPackage,
   ): Promise<FieldMatch[]>;
   fill(match: ApprovedFieldMatch): Promise<FieldExecutionResult>;
+  authorizeReplacement(detectedFieldId: string): void;
   upload(request: DocumentUploadRequest): Promise<DocumentUploadResult>;
   validate(form: InspectedApplicationForm): Promise<FormValidationResult>;
   detectPossibleSubmissionSuccess(
@@ -160,6 +168,7 @@ export const ATS_ADAPTER_CAPABILITIES = [
   "inspect",
   "match",
   "fill",
+  "authorizeReplacement",
   "upload",
   "validate",
   "detectPossibleSubmissionSuccess",
@@ -225,14 +234,39 @@ function normalizeLabel(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function controlLabel(control: Element, document: Document): string {
-  if (control instanceof HTMLInputElement && control.type === "radio") {
+function isInput(control: Element | null | undefined): control is HTMLInputElement {
+  return control?.tagName.toLowerCase() === "input";
+}
+
+function isTextarea(control: Element | null | undefined): control is HTMLTextAreaElement {
+  return control?.tagName.toLowerCase() === "textarea";
+}
+
+function isSelect(control: Element | null | undefined): control is HTMLSelectElement {
+  return control?.tagName.toLowerCase() === "select";
+}
+
+function isButton(control: Element | null | undefined): control is HTMLButtonElement {
+  return control?.tagName.toLowerCase() === "button";
+}
+
+function isShadowRoot(root: Node): root is ShadowRoot {
+  return root.nodeType === Node.DOCUMENT_FRAGMENT_NODE && "host" in root;
+}
+
+function queryRoot(control: Element): Document | ShadowRoot {
+  const root = control.getRootNode();
+  return isShadowRoot(root) ? root : control.ownerDocument;
+}
+
+function controlLabel(control: Element, root: Document | ShadowRoot): string {
+  if (isInput(control) && control.type === "radio") {
     const legend = control.closest("fieldset")?.querySelector(":scope > legend")?.textContent?.trim();
     if (legend) return legend;
   }
   const id = control.getAttribute("id");
   const explicit = id
-    ? Array.from(document.querySelectorAll("label")).find((label) => label.htmlFor === id) ?? null
+    ? Array.from(root.querySelectorAll("label")).find((label) => label.htmlFor === id) ?? null
     : null;
   const wrapping = control.closest("label");
   return (
@@ -246,9 +280,9 @@ function controlLabel(control: Element, document: Document): string {
 }
 
 function fieldType(control: Element): DetectedFieldType {
-  if (control instanceof HTMLTextAreaElement) return "textarea";
-  if (control instanceof HTMLSelectElement) return "select";
-  if (!(control instanceof HTMLInputElement)) return "unknown";
+  if (isTextarea(control)) return "textarea";
+  if (isSelect(control)) return "select";
+  if (!isInput(control)) return "unknown";
   const type = control.type.toLowerCase();
   if (["text", "email", "tel", "radio", "checkbox", "date", "file"].includes(type)) {
     return type as DetectedFieldType;
@@ -258,8 +292,8 @@ function fieldType(control: Element): DetectedFieldType {
 
 function manualReason(control: Element, normalized: string): ManualReason | undefined {
   if (
-    (control instanceof HTMLButtonElement && control.type === "submit") ||
-    (control instanceof HTMLInputElement && control.type === "submit")
+    (isButton(control) && control.type === "submit") ||
+    (isInput(control) && control.type === "submit")
   ) {
     return "final_submission";
   }
@@ -282,11 +316,11 @@ function manualReason(control: Element, normalized: string): ManualReason | unde
 }
 
 function isHidden(control: Element): boolean {
-  if (control instanceof HTMLInputElement && control.type === "hidden") return true;
+  if (isInput(control) && control.type === "hidden") return true;
   if (control.closest('[hidden], [aria-hidden="true"]')) return true;
 
   const view = control.ownerDocument.defaultView;
-  for (let current: Element | null = control; current; current = current.parentElement) {
+  for (let current: Element | null = control; current;) {
     const style = view?.getComputedStyle(current);
     if (
       style?.display === "none" ||
@@ -295,6 +329,9 @@ function isHidden(control: Element): boolean {
     ) {
       return true;
     }
+    const parentElement: Element | null = current.parentElement;
+    const root = current.getRootNode();
+    current = parentElement || (isShadowRoot(root) ? root.host : null);
   }
   return false;
 }
@@ -308,15 +345,40 @@ function stableAttributes(control: Element): Record<string, string> {
   );
 }
 
+function stableFieldId(ats: AtsType, control: Element, normalizedLabel: string, index: number): string {
+  const attributes = stableAttributes(control);
+  const identity = attributes.id || attributes.name || attributes.autocomplete || normalizedLabel;
+  const normalized = identity.toLowerCase().replace(/[^a-z0-9_-]+/gu, "-").replace(/^-|-$/gu, "");
+  return `${ats}-field-${normalized || index + 1}`;
+}
+
 function existingValue(control: Element): unknown {
-  if (control instanceof HTMLInputElement) {
+  if (isInput(control)) {
     if (control.type === "checkbox" || control.type === "radio") return control.checked;
     return control.value;
   }
-  if (control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement) {
+  if (isTextarea(control) || isSelect(control)) {
     return control.value;
   }
   return undefined;
+}
+
+interface FilledFieldLedgerEntry {
+  element: Element;
+  acceptedValue: string;
+  userModified: boolean;
+}
+
+const filledFieldLedgers = new WeakMap<Document, Map<string, FilledFieldLedgerEntry>>();
+const ledgerObservedControls = new WeakSet<Element>();
+
+function fillLedger(document: Document): Map<string, FilledFieldLedgerEntry> {
+  let ledger = filledFieldLedgers.get(document);
+  if (!ledger) {
+    ledger = new Map();
+    filledFieldLedgers.set(document, ledger);
+  }
+  return ledger;
 }
 
 function inputOption(control: HTMLInputElement): { label: string; value: string } {
@@ -327,37 +389,37 @@ function inputOption(control: HTMLInputElement): { label: string; value: string 
 }
 
 function controlOptions(control: Element): Array<{ label: string; value: string }> | undefined {
-  if (control instanceof HTMLSelectElement) {
+  if (isSelect(control)) {
     return Array.from(control.options).map((option) => ({
       label: option.textContent?.trim() || option.label,
       value: option.value,
     }));
   }
-  if (!(control instanceof HTMLInputElement) || !["radio", "checkbox"].includes(control.type)) {
+  if (!isInput(control) || !["radio", "checkbox"].includes(control.type)) {
     return undefined;
   }
   if (control.type === "checkbox" || !control.name) return [inputOption(control)];
-  return Array.from(control.ownerDocument.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+  return Array.from(queryRoot(control).querySelectorAll<HTMLInputElement>('input[type="radio"]'))
     .filter((candidate) => candidate.name === control.name)
     .map(inputOption);
 }
 
 function setNativeTextValue(control: HTMLInputElement | HTMLTextAreaElement, value: string): void {
-  const prototype =
-    control instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+  const view = control.ownerDocument.defaultView;
+  const prototype = isInput(control) ? view?.HTMLInputElement.prototype : view?.HTMLTextAreaElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
   if (!setter) throw new Error("The control does not expose a native value setter.");
   setter.call(control, value);
 }
 
 function setNativeSelectValue(control: HTMLSelectElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  const setter = Object.getOwnPropertyDescriptor(control.ownerDocument.defaultView?.HTMLSelectElement.prototype ?? HTMLSelectElement.prototype, "value")?.set;
   if (!setter) throw new Error("The select does not expose a native value setter.");
   setter.call(control, value);
 }
 
 function setNativeChecked(control: HTMLInputElement, value: boolean): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked")?.set;
+  const setter = Object.getOwnPropertyDescriptor(control.ownerDocument.defaultView?.HTMLInputElement.prototype ?? HTMLInputElement.prototype, "checked")?.set;
   if (!setter) throw new Error("The control does not expose a native checked setter.");
   setter.call(control, value);
 }
@@ -430,13 +492,114 @@ function standardCandidateMatch(
   return null;
 }
 
+interface InspectableControl {
+  control: Element;
+  stepId: string;
+  strategy: string;
+}
+
+interface ManualBoundary {
+  label: string;
+  stepId: string;
+  reason: Extract<ManualReason, "cross_origin_frame" | "closed_shadow_root" | "unsupported_custom_control">;
+  stableAttributes: Record<string, string>;
+}
+
+function inspectionTargets(document: Document): {
+  controls: InspectableControl[];
+  boundaries: ManualBoundary[];
+} {
+  const controls: InspectableControl[] = [];
+  const boundaries: ManualBoundary[] = [];
+  const visitedRoots = new Set<Node>();
+  const visitedControls = new Set<Element>();
+
+  const walk = (root: Document | ShadowRoot, stepId: string, strategy: string): void => {
+    if (visitedRoots.has(root)) return;
+    visitedRoots.add(root);
+
+    for (const control of root.querySelectorAll("input, textarea, select, button")) {
+      if (!visitedControls.has(control)) {
+        visitedControls.add(control);
+        controls.push({ control, stepId, strategy });
+      }
+    }
+
+    for (const candidate of root.querySelectorAll<HTMLElement>("*")) {
+      if (candidate.shadowRoot) {
+        walk(candidate.shadowRoot, `${stepId}/open-shadow`, `${strategy}-open-shadow`);
+      } else if (candidate.dataset.runrShadowRoot === "closed") {
+        boundaries.push({
+          label: candidate.getAttribute("aria-label") || "Closed shadow-root application section",
+          stepId: `${stepId}/closed-shadow`,
+          reason: "closed_shadow_root",
+          stableAttributes: stableAttributes(candidate),
+        });
+      }
+    }
+
+    for (const frame of root.querySelectorAll<HTMLIFrameElement>("iframe")) {
+      const label = frame.title || frame.getAttribute("aria-label") || frame.name || "Embedded application section";
+      try {
+        const childDocument = frame.contentDocument;
+        if (childDocument?.documentElement) {
+          walk(childDocument, `${stepId}/same-origin-frame`, `${strategy}-same-origin-frame`);
+        } else {
+          boundaries.push({
+            label,
+            stepId: `${stepId}/cross-origin-frame`,
+            reason: "cross_origin_frame",
+            stableAttributes: stableAttributes(frame),
+          });
+        }
+      } catch {
+        boundaries.push({
+          label,
+          stepId: `${stepId}/cross-origin-frame`,
+          reason: "cross_origin_frame",
+          stableAttributes: stableAttributes(frame),
+        });
+      }
+    }
+
+    for (const custom of root.querySelectorAll<HTMLElement>(
+      '[role="textbox"], [role="combobox"], [role="checkbox"], [role="radio"]',
+    )) {
+      if (visitedControls.has(custom) || custom.shadowRoot) continue;
+      boundaries.push({
+        label: custom.getAttribute("aria-label") || custom.textContent?.trim() || "Custom application control",
+        stepId,
+        reason: "unsupported_custom_control",
+        stableAttributes: stableAttributes(custom),
+      });
+    }
+  };
+
+  walk(document, "primary", "semantic-control");
+  return { controls, boundaries };
+}
+
+function manualActionReason(reason: ManualReason): string {
+  if (reason === "cross_origin_frame") {
+    return "Complete this cross-origin frame manually; Runr does not request access to its origin.";
+  }
+  if (reason === "closed_shadow_root") {
+    return "Complete controls inside this closed shadow root manually because the page does not expose them.";
+  }
+  if (reason === "unsupported_custom_control") {
+    return "Review this custom control manually; semantic classification does not authorize generic filling.";
+  }
+  return `The control is manual-only: ${reason}.`;
+}
+
 class StandardFactsAdapter implements AtsAdapter {
-  readonly version = "0.2.0";
+  readonly version = "0.3.0";
   protected readonly controls = new Map<
     string,
     { element: Element; field: DetectedField }
   >();
   private readonly approvedMatches = new Map<string, ApprovedFieldMatch>();
+  private readonly replacementAuthorizations = new Set<string>();
 
   constructor(readonly id: AtsType) {}
 
@@ -457,28 +620,23 @@ class StandardFactsAdapter implements AtsAdapter {
   async inspect(context: PageContext): Promise<InspectedApplicationForm> {
     this.controls.clear();
     this.approvedMatches.clear();
-    const controls = Array.from(
-      context.document.querySelectorAll("input, textarea, select, button"),
-    );
-    const fields = controls.map((control, index): DetectedField => {
-      const id = `${this.id}-field-${index + 1}`;
-      const label = controlLabel(control, context.document);
+    const targets = inspectionTargets(context.document);
+    const fields = targets.controls.map(({ control, stepId, strategy }, index): DetectedField => {
+      const label = controlLabel(control, queryRoot(control));
       const normalizedLabel = normalizeLabel(label);
+      const id = stableFieldId(this.id, control, normalizedLabel, index);
       const reason = manualReason(control, normalizedLabel);
       const type = fieldType(control);
       const classification = reason || type === "unknown" ? "manual" : "fillable";
       const field: DetectedField = {
         id,
-        stepId: "primary",
+        stepId,
         label,
         normalizedLabel,
         type,
         required: control.hasAttribute("required"),
         disabled:
-          (control instanceof HTMLInputElement ||
-            control instanceof HTMLTextAreaElement ||
-            control instanceof HTMLSelectElement ||
-            control instanceof HTMLButtonElement) &&
+          (isInput(control) || isTextarea(control) || isSelect(control) || isButton(control)) &&
           control.disabled,
         hidden: isHidden(control),
         options: controlOptions(control),
@@ -486,14 +644,36 @@ class StandardFactsAdapter implements AtsAdapter {
         classification,
         manualReason: reason || (type === "unknown" ? "unsupported_control" : undefined),
         locator: {
-          adapterStrategy: `${this.id}-semantic-control`,
+          adapterStrategy: `${this.id}-${strategy}`,
           stableAttributes: stableAttributes(control),
         },
       };
       this.controls.set(id, { element: control, field });
       return field;
     });
+    for (const [index, boundary] of targets.boundaries.entries()) {
+      fields.push({
+        id: `${this.id}-manual-boundary-${index + 1}`,
+        stepId: boundary.stepId,
+        label: boundary.label,
+        normalizedLabel: normalizeLabel(boundary.label),
+        type: "unknown",
+        required: false,
+        disabled: false,
+        hidden: false,
+        classification: "manual",
+        manualReason: boundary.reason,
+        locator: {
+          adapterStrategy: `${this.id}-manual-boundary`,
+          stableAttributes: boundary.stableAttributes,
+        },
+      });
+    }
     return { ats: this.id, fields };
+  }
+
+  authorizeReplacement(detectedFieldId: string): void {
+    this.replacementAuthorizations.add(detectedFieldId);
   }
 
   async match(
@@ -555,7 +735,7 @@ class StandardFactsAdapter implements AtsAdapter {
         action: field.classification === "manual" ? "manual_only" : "leave_empty",
         reasons: [
           field.manualReason
-            ? `The control is manual-only: ${field.manualReason}.`
+            ? manualActionReason(field.manualReason)
             : "No verified fixture value matched this control.",
         ],
       };
@@ -603,7 +783,7 @@ class StandardFactsAdapter implements AtsAdapter {
     }
 
     const liveType = fieldType(control);
-    const liveNormalizedLabel = normalizeLabel(controlLabel(control, control.ownerDocument));
+    const liveNormalizedLabel = normalizeLabel(controlLabel(control, queryRoot(control)));
     const liveManualReason = manualReason(control, liveNormalizedLabel);
     if (
       liveType !== field.type ||
@@ -621,7 +801,7 @@ class StandardFactsAdapter implements AtsAdapter {
         ],
       };
     }
-    if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement)) {
+    if (!(isInput(control) || isTextarea(control) || isSelect(control))) {
       return {
         detectedFieldId: match.detectedFieldId,
         fieldLabel: match.fieldLabel,
@@ -645,15 +825,33 @@ class StandardFactsAdapter implements AtsAdapter {
         reasons: ["Disabled controls are never filled."],
       };
     }
-    const currentValue = control instanceof HTMLInputElement && ["checkbox", "radio"].includes(control.type)
+    const currentValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
       ? String(control.checked)
       : control.value;
-    const desiredValue = control instanceof HTMLInputElement && control.type === "checkbox"
+    const desiredValue = isInput(control) && control.type === "checkbox"
       ? String(booleanValue(match.proposedValue))
-      : control instanceof HTMLInputElement && control.type === "radio"
+      : isInput(control) && control.type === "radio"
         ? "true"
         : match.proposedValue;
-    if (control.dataset.runrAssistedApplyFilled === "true") {
+    const replacementAuthorized = this.replacementAuthorizations.delete(match.detectedFieldId);
+    const ledger = fillLedger(control.ownerDocument);
+    const priorFill = ledger.get(match.detectedFieldId);
+    if (priorFill && !replacementAuthorized) {
+      const alreadyFilled = currentValue === desiredValue;
+      if (alreadyFilled || priorFill.userModified || priorFill.element === control) {
+        return {
+          detectedFieldId: match.detectedFieldId,
+          fieldLabel: match.fieldLabel,
+          status: alreadyFilled ? "already_filled" : "preserved_existing",
+          existingValue: field.existingValue == null ? "" : String(field.existingValue),
+          acceptedValue: currentValue,
+          reasons: [alreadyFilled
+            ? "The verified Runr value is already present; no events were repeated."
+            : "The field changed after Runr filled it, so the current user or portal value was preserved."],
+        };
+      }
+    }
+    if (control.dataset.runrAssistedApplyFilled === "true" && !replacementAuthorized) {
       const alreadyFilled = currentValue === desiredValue;
       return {
         detectedFieldId: match.detectedFieldId,
@@ -668,17 +866,17 @@ class StandardFactsAdapter implements AtsAdapter {
         ],
       };
     }
-    const radioSelection = control instanceof HTMLInputElement && control.type === "radio" && control.name
-      ? Array.from(control.ownerDocument.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find(
+    const radioSelection = isInput(control) && control.type === "radio" && control.name
+      ? Array.from(queryRoot(control).querySelectorAll<HTMLInputElement>('input[type="radio"]')).find(
           (item) => item.name === control.name && item.checked,
         )
       : null;
-    const hasExistingValue = control instanceof HTMLInputElement && control.type === "checkbox"
+    const hasExistingValue = isInput(control) && control.type === "checkbox"
       ? control.checked && desiredValue !== "true"
-      : control instanceof HTMLInputElement && control.type === "radio"
+      : isInput(control) && control.type === "radio"
         ? Boolean(radioSelection && radioSelection !== control)
         : Boolean(control.value);
-    if (hasExistingValue) {
+    if (hasExistingValue && !replacementAuthorized) {
       return {
         detectedFieldId: match.detectedFieldId,
         fieldLabel: match.fieldLabel,
@@ -701,19 +899,29 @@ class StandardFactsAdapter implements AtsAdapter {
     }
 
     control.focus();
-    if (control instanceof HTMLSelectElement) setNativeSelectValue(control, match.proposedValue);
-    else if (control instanceof HTMLInputElement && control.type === "checkbox") {
+    if (isSelect(control)) setNativeSelectValue(control, match.proposedValue);
+    else if (isInput(control) && control.type === "checkbox") {
       setNativeChecked(control, booleanValue(match.proposedValue) === true);
-    } else if (control instanceof HTMLInputElement && control.type === "radio") {
+    } else if (isInput(control) && control.type === "radio") {
       setNativeChecked(control, true);
     } else setNativeTextValue(control, match.proposedValue);
-    control.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-    control.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    const EventConstructor = control.ownerDocument.defaultView?.Event ?? Event;
+    control.dispatchEvent(new EventConstructor("input", { bubbles: true, composed: true }));
+    control.dispatchEvent(new EventConstructor("change", { bubbles: true, composed: true }));
     control.blur();
 
-    const acceptedValue = control instanceof HTMLInputElement && ["checkbox", "radio"].includes(control.type)
-      ? String(control.checked)
-      : control.value;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    let acceptedValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
+      ? String(control.checked) : control.value;
+    if (acceptedValue !== desiredValue) {
+      const bridgeValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
+        ? desiredValue === "true" : match.proposedValue;
+      const bridgeResult = await requestPageContextSet(control, bridgeValue);
+      if (bridgeResult?.status === "applied") await new Promise((resolve) => setTimeout(resolve, 0));
+      acceptedValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
+        ? String(control.checked) : control.value;
+    }
+
     if (acceptedValue !== desiredValue) {
       return {
         detectedFieldId: match.detectedFieldId,
@@ -736,9 +944,23 @@ class StandardFactsAdapter implements AtsAdapter {
       };
     }
     control.dataset.runrAssistedApplyFilled = "true";
+    ledger.set(match.detectedFieldId, { element: control, acceptedValue, userModified: false });
+    if (!ledgerObservedControls.has(control)) {
+      const observeUserChange = () => {
+        const entry = fillLedger(control.ownerDocument).get(match.detectedFieldId);
+        if (!entry || entry.element !== control) return;
+        const liveValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
+          ? String(control.checked) : control.value;
+        if (liveValue !== entry.acceptedValue) entry.userModified = true;
+      };
+      control.addEventListener("input", observeUserChange);
+      control.addEventListener("change", observeUserChange);
+      ledgerObservedControls.add(control);
+    }
     return {
       detectedFieldId: match.detectedFieldId,
       fieldLabel: match.fieldLabel,
+      fieldIntent: match.fieldIntent,
       status: "filled",
       existingValue: field.existingValue == null ? "" : String(field.existingValue),
       acceptedValue,
@@ -746,18 +968,73 @@ class StandardFactsAdapter implements AtsAdapter {
     };
   }
 
-  async upload(_request: DocumentUploadRequest): Promise<DocumentUploadResult> {
-    return { status: "unsupported", reasons: ["Document upload is not part of AA-01."] };
+  canReceiveDocument(fieldId: string): boolean {
+    const control = this.controls.get(fieldId)?.element;
+    return isInput(control) && control.type === "file" &&
+      (!control.files?.length ||
+        (control.multiple && control.dataset.runrAssistedApplyUploaded === "true"));
+  }
+
+  async upload(request: DocumentUploadRequest): Promise<DocumentUploadResult> {
+    const registered = this.controls.get(request.detectedFieldId);
+    const roleLabel = request.documentKind.replaceAll("_", " ");
+    if (!registered || !(registered.element instanceof HTMLInputElement) || registered.element.type !== "file") {
+      return { status: "rejected", reasons: [`The inspected ${roleLabel} upload control is unavailable.`] };
+    }
+    const input = registered.element;
+    if (input.disabled || isHidden(input)) {
+      return { status: "rejected", reasons: [`The ${roleLabel} upload control is disabled or hidden.`] };
+    }
+    const existingFiles = Array.from(input.files || []);
+    const runrOwnedMultiple = input.multiple && input.dataset.runrAssistedApplyUploaded === "true";
+    if (existingFiles.length && !runrOwnedMultiple) {
+      return {
+        status: "preserved_existing",
+        fileName: existingFiles[0]?.name,
+        reasons: ["An existing portal or user-selected document was preserved."],
+      };
+    }
+    const suffix = request.file.type === "application/pdf" ? ".pdf"
+      : request.file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ? ".docx" : "";
+    if (!suffix || !request.file.name.toLowerCase().endsWith(suffix)) {
+      return { status: "rejected", reasons: ["The selected document MIME type and filename are unsupported."] };
+    }
+    const accepted = input.accept.toLowerCase().split(",").map((item) => item.trim()).filter(Boolean);
+    if (accepted.length && !accepted.includes(request.file.type) && !accepted.includes(suffix)) {
+      return { status: "rejected", reasons: [`The portal control does not accept ${suffix.slice(1).toUpperCase()} documents.`] };
+    }
+    const transfer = new DataTransfer();
+    for (const file of existingFiles) transfer.items.add(file);
+    transfer.items.add(request.file);
+    input.focus();
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    input.blur();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const acceptedFile = Array.from(input.files || []).find((file) => file.name === request.file.name);
+    if (!acceptedFile || acceptedFile.type !== request.file.type) {
+      return { status: "mismatch", fileName: acceptedFile?.name, reasons: ["The portal did not retain the selected document."] };
+    }
+    if (!input.checkValidity()) {
+      return { status: "rejected", fileName: acceptedFile.name, reasons: ["The portal rejected the selected document during local validation."] };
+    }
+    input.dataset.runrAssistedApplyUploaded = "true";
+    return {
+      status: "uploaded",
+      fileName: acceptedFile.name,
+      reasons: [`The portal retained ${roleLabel} version ${request.documentVersion}.`],
+    };
   }
 
   async validate(form: InspectedApplicationForm): Promise<FormValidationResult> {
     const invalidFieldIds = form.fields
       .filter((field) => {
         const control = this.controls.get(field.id)?.element;
+        if (!control) return false;
         return (
-          control instanceof HTMLInputElement ||
-          control instanceof HTMLTextAreaElement ||
-          control instanceof HTMLSelectElement
+          isInput(control) || isTextarea(control) || isSelect(control)
         )
           ? !control.checkValidity()
           : false;
@@ -775,72 +1052,48 @@ class StandardFactsAdapter implements AtsAdapter {
 
 export class GreenhouseAdapter extends StandardFactsAdapter {
   constructor() { super("greenhouse"); }
-
-  override async upload(request: DocumentUploadRequest): Promise<DocumentUploadResult> {
-    const registered = this.controls.get(request.detectedFieldId);
-    if (!registered || !(registered.element instanceof HTMLInputElement) || registered.element.type !== "file") {
-      return { status: "rejected", reasons: ["The inspected CV upload control is unavailable."] };
-    }
-    const input = registered.element;
-    if (input.disabled || isHidden(input)) {
-      return { status: "rejected", reasons: ["The CV upload control is disabled or hidden."] };
-    }
-    if (input.files?.length) {
-      return {
-        status: "preserved_existing",
-        fileName: input.files[0]?.name,
-        reasons: ["An existing portal or user-selected document was preserved."],
-      };
-    }
-    if (request.file.type !== "application/pdf" || !request.file.name.toLowerCase().endsWith(".pdf")) {
-      return { status: "rejected", reasons: ["AA-11 accepts a selected PDF CV only."] };
-    }
-    const accepted = input.accept.toLowerCase();
-    if (accepted && !accepted.includes("application/pdf") && !accepted.includes(".pdf")) {
-      return { status: "rejected", reasons: ["The portal control does not accept PDF documents."] };
-    }
-    const transfer = new DataTransfer();
-    transfer.items.add(request.file);
-    input.focus();
-    input.files = transfer.files;
-    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    input.blur();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const acceptedFile = input.files?.[0];
-    if (!acceptedFile || acceptedFile.name !== request.file.name || acceptedFile.type !== request.file.type) {
-      return { status: "mismatch", fileName: acceptedFile?.name, reasons: ["The portal did not retain the selected PDF CV."] };
-    }
-    return {
-      status: "uploaded",
-      fileName: acceptedFile.name,
-      reasons: [`The portal retained document version ${request.documentVersion} in its CV control.`],
-    };
-  }
 }
 
 export class LeverAdapter extends StandardFactsAdapter {
   constructor() { super("lever"); }
 }
 
-export async function uploadGreenhousePdf(
+function documentRolePattern(kind: DocumentUploadRequest["documentKind"]): RegExp {
+  if (kind === "cv") return /(^|\b)(cv|resume|résumé)(\b|$)/iu;
+  if (kind === "cover_letter") return /(^|\b)cover\s+letter(\b|$)/iu;
+  return /(^|\b)(supporting|additional|attachment|certificate|portfolio|work\s+sample)(\b|$)/iu;
+}
+
+export async function uploadApplicationDocument(
   document: Document,
   url: string,
   request: Omit<DocumentUploadRequest, "detectedFieldId">,
 ): Promise<DocumentUploadResult> {
-  const adapter = new GreenhouseAdapter();
+  const fixtureAts = document.documentElement.dataset.runrAssistedApplyFixture;
+  const detectedAts = detectAtsFromUrl(url).ats;
+  const ats = detectedAts || (fixtureAts === "greenhouse" || fixtureAts === "lever" ? fixtureAts : null);
+  const adapter = ats === "greenhouse" ? new GreenhouseAdapter() : ats === "lever" ? new LeverAdapter() : null;
+  if (!adapter) return { status: "rejected", reasons: ["The current page is not a supported application portal."] };
   const detection = await adapter.detect({ document, url });
-  if (detection.ats !== "greenhouse") {
-    return { status: "rejected", reasons: ["The current page is not a supported Greenhouse application."] };
+  if (detection.ats !== adapter.id) {
+    return { status: "rejected", reasons: ["The current page does not match its supported application adapter."] };
   }
   const form = await adapter.inspect({ document, url });
-  const cvField = form.fields.find((field) =>
-    field.type === "file" && /(^|\b)(cv|resume|résumé)(\b|$)/iu.test(field.normalizedLabel),
-  );
-  if (!cvField) {
-    return { status: "rejected", reasons: ["No verified Greenhouse CV upload control was found."] };
+  const roleFields = form.fields.filter((field) =>
+    field.type === "file" && documentRolePattern(request.documentKind).test(field.normalizedLabel));
+  const roleField = roleFields.find((field) => adapter.canReceiveDocument(field.id)) || roleFields[0];
+  if (!roleField) {
+    return { status: "rejected", reasons: [`No verified ${request.documentKind.replaceAll("_", " ")} upload control was found.`] };
   }
-  return adapter.upload({ ...request, detectedFieldId: cvField.id });
+  return adapter.upload({ ...request, detectedFieldId: roleField.id });
+}
+
+export async function uploadGreenhousePdf(
+  document: Document,
+  url: string,
+  request: Omit<DocumentUploadRequest, "detectedFieldId" | "documentKind">,
+): Promise<DocumentUploadResult> {
+  return uploadApplicationDocument(document, url, { ...request, documentKind: "cv" });
 }
 
 export interface FixtureInspectionResult {
@@ -930,6 +1183,7 @@ export async function runGreenhouseStandardFacts(
   version: number,
   candidate: ApplicationPackageCandidate,
   answers: ApplicationPackageAnswer[] = [],
+  replaceFieldIntents: string[] = [],
 ): Promise<{ inspection: FixtureInspectionResult; executions: FieldExecutionResult[] }> {
   const adapter = new GreenhouseAdapter();
   const detection = await adapter.detect({ document, url });
@@ -939,11 +1193,23 @@ export async function runGreenhouseStandardFacts(
       executions: [],
     };
   }
-  const form = await adapter.inspect({ document, url });
-  const matches = await adapter.match(form, { id: packageId, version, candidate, answers });
-  const executions: FieldExecutionResult[] = [];
-  for (const match of matches) {
-    if (match.action === "fill") executions.push(await adapter.fill(match as ApprovedFieldMatch));
+  let form = await adapter.inspect({ document, url });
+  const executions = new Map<string, FieldExecutionResult>();
+  for (let pass = 0; pass < 3; pass += 1) {
+    const signature = form.fields.map((field) => field.id).join("|");
+    const matches = await adapter.match(form, { id: packageId, version, candidate, answers });
+    for (const match of matches) {
+      if (match.action !== "fill") continue;
+      if (replaceFieldIntents.includes(match.fieldIntent)) adapter.authorizeReplacement(match.detectedFieldId);
+      const result = await adapter.fill(match as ApprovedFieldMatch);
+      if (!executions.has(match.detectedFieldId)) {
+        executions.set(match.detectedFieldId, { ...result, fieldIntent: match.fieldIntent });
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const nextForm = await adapter.inspect({ document, url });
+    form = nextForm;
+    if (nextForm.fields.map((field) => field.id).join("|") === signature) break;
   }
   return {
     inspection: {
@@ -952,7 +1218,7 @@ export async function runGreenhouseStandardFacts(
       fieldCount: form.fields.length,
       manualReasons: Array.from(new Set(form.fields.flatMap((field) => field.manualReason ? [field.manualReason] : []))),
     },
-    executions,
+    executions: [...executions.values()],
   };
 }
 
@@ -1000,17 +1266,30 @@ export async function runLeverStandardFacts(
   version: number,
   candidate: ApplicationPackageCandidate,
   answers: ApplicationPackageAnswer[] = [],
+  replaceFieldIntents: string[] = [],
 ): Promise<{ inspection: FixtureInspectionResult; executions: FieldExecutionResult[] }> {
   const adapter = new LeverAdapter();
   const detection = await adapter.detect({ document, url });
   if (detection.ats !== "lever") {
     return { inspection: { ats: detection.ats, fixtureAvailable: false, fieldCount: 0, manualReasons: [] }, executions: [] };
   }
-  const form = await adapter.inspect({ document, url });
-  const matches = await adapter.match(form, { id: packageId, version, candidate, answers });
-  const executions: FieldExecutionResult[] = [];
-  for (const match of matches) {
-    if (match.action === "fill" && typeof match.proposedValue === "string") executions.push(await adapter.fill(match as ApprovedFieldMatch));
+  let form = await adapter.inspect({ document, url });
+  const executions = new Map<string, FieldExecutionResult>();
+  for (let pass = 0; pass < 3; pass += 1) {
+    const signature = form.fields.map((field) => field.id).join("|");
+    const matches = await adapter.match(form, { id: packageId, version, candidate, answers });
+    for (const match of matches) {
+      if (match.action !== "fill" || typeof match.proposedValue !== "string") continue;
+      if (replaceFieldIntents.includes(match.fieldIntent)) adapter.authorizeReplacement(match.detectedFieldId);
+      const result = await adapter.fill(match as ApprovedFieldMatch);
+      if (!executions.has(match.detectedFieldId)) {
+        executions.set(match.detectedFieldId, { ...result, fieldIntent: match.fieldIntent });
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const nextForm = await adapter.inspect({ document, url });
+    form = nextForm;
+    if (nextForm.fields.map((field) => field.id).join("|") === signature) break;
   }
   return {
     inspection: {
@@ -1019,6 +1298,6 @@ export async function runLeverStandardFacts(
       fieldCount: form.fields.length,
       manualReasons: Array.from(new Set(form.fields.flatMap((field) => field.manualReason ? [field.manualReason] : []))),
     },
-    executions,
+    executions: [...executions.values()],
   };
 }

@@ -3633,7 +3633,9 @@ def _collect_tracker_entries(application, user) -> list[dict]:
             "documents": list(standard_documents),
             "updated_at": str(external.get("updated_at") or external.get("created_at") or ""),
             "run_finished_at": "",
-            "source_label": "Gmail",
+            "source_label": (
+                "Assisted Apply" if str(external.get("source") or "") == "assisted_apply" else "Gmail"
+            ),
             "external_application": True,
             "gmail_detection": dict(external.get("gmail_detection") or {}),
             "application_requirements": _application_requirement_status({}, documents=list(standard_documents)),

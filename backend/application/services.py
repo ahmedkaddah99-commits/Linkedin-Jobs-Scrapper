@@ -3053,3 +3053,28 @@ class BackendApplication:
             raw_session=raw_session,
             extension_origin=extension_origin,
         )
+
+    def respond_to_assisted_apply_outcome(
+        self,
+        *,
+        package_id: str,
+        package_version: int,
+        adapter: str,
+        adapter_version: str,
+        evidence_category: str,
+        decision: str,
+        uploaded_documents: list[Mapping[str, Any]],
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.respond_to_application_outcome(
+            package_id=package_id,
+            package_version=package_version,
+            adapter=adapter,
+            adapter_version=adapter_version,
+            evidence_category=evidence_category,
+            decision=decision,
+            uploaded_documents=uploaded_documents,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )

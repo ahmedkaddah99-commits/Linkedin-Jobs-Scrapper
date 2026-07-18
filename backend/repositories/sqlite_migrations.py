@@ -959,6 +959,44 @@ def _apply_assisted_apply_document_grants_migration(connection: DatabaseConnecti
     )
 
 
+def _apply_assisted_apply_tracker_confirmation_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS assisted_apply_submission_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            package_id TEXT NOT NULL,
+            package_version INTEGER NOT NULL,
+            adapter TEXT NOT NULL CHECK (adapter IN ('greenhouse', 'lever')),
+            adapter_version TEXT NOT NULL,
+            event_type TEXT NOT NULL CHECK (
+                event_type IN ('possible_success', 'user_confirmed', 'user_declined')
+            ),
+            evidence_category TEXT NOT NULL CHECK (
+                evidence_category IN ('success_banner', 'confirmation_page', 'url_transition')
+            ),
+            occurred_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_submission_events_owner
+            ON assisted_apply_submission_events(user_id, occurred_at DESC);
+        CREATE TABLE IF NOT EXISTS assisted_apply_tracker_records (
+            tracker_record_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            user_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            package_id TEXT NOT NULL,
+            package_version INTEGER NOT NULL,
+            adapter TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            document_versions_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_tracker_records_owner
+            ON assisted_apply_tracker_records(user_id, created_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -1068,5 +1106,10 @@ MIGRATIONS = (
         "019_assisted_apply_document_grants",
         "Create one-time, session-bound Assisted Apply document grants and audit records.",
         _apply_assisted_apply_document_grants_migration,
+    ),
+    Migration.from_callable(
+        "020_assisted_apply_tracker_confirmation",
+        "Create bounded Assisted Apply outcome events and idempotent Tracker records.",
+        _apply_assisted_apply_tracker_confirmation_migration,
     ),
 )

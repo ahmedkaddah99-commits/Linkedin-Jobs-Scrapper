@@ -6,7 +6,9 @@ import type {
   ExtensionConnectionState,
   DocumentUploadMessage,
   PackageExecutionMessage,
+  PendingApplicationConfirmation,
   PanelRequest,
+  TrackerConfirmationResult,
 } from "@runr/extension-messages";
 import { APPLICATION_CORRECTION_SCOPE_OPTIONS, isPanelResponse } from "@runr/extension-messages";
 import { browser } from "wxt/browser";
@@ -51,6 +53,14 @@ async function uploadDocument(message: PanelRequest): Promise<DocumentUploadMess
   return response.documentUpload;
 }
 
+async function requestPendingConfirmation(): Promise<PendingApplicationConfirmation | null> {
+  const response = await send({ type: "GET_PENDING_APPLICATION_CONFIRMATION" });
+  if (!("pendingConfirmation" in response)) {
+    throw new Error("Runr returned an invalid application confirmation state.");
+  }
+  return response.pendingConfirmation ?? null;
+}
+
 function atsLabel(ats: AssistedApplyTabState["ats"]): string {
   if (ats === "greenhouse") return "Greenhouse";
   if (ats === "lever") return "Lever";
@@ -69,6 +79,8 @@ export default function App() {
   const [packageBusy, setPackageBusy] = useState(false);
   const [packageExecution, setPackageExecution] = useState<PackageExecutionMessage | null>(null);
   const [documentUpload, setDocumentUpload] = useState<DocumentUploadMessage | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingApplicationConfirmation | null>(null);
+  const [trackerConfirmation, setTrackerConfirmation] = useState<TrackerConfirmationResult | null>(null);
   const reviewModel = useMemo(
     () => buildReviewPanelModel(applicationPackage, state),
     [applicationPackage, state],
@@ -103,6 +115,33 @@ export default function App() {
       .catch(() => setApplicationPackage(null))
       .finally(() => setPackageBusy(false));
   }, [load]);
+
+  useEffect(() => {
+    const refresh = () => void requestPendingConfirmation().then(setPendingConfirmation).catch(() => undefined);
+    refresh();
+    const interval = window.setInterval(refresh, 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  async function respondToPossibleSuccess(decision: "confirmed" | "declined"): Promise<void> {
+    if (!pendingConfirmation) return;
+    setPackageBusy(true);
+    setError("");
+    try {
+      const response = await send({
+        type: "RESPOND_TO_APPLICATION_CONFIRMATION",
+        decision,
+        evidence: pendingConfirmation,
+      });
+      if (!response.trackerConfirmation) throw new Error("Runr returned an invalid Tracker result.");
+      setTrackerConfirmation(response.trackerConfirmation);
+      setPendingConfirmation(null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setPackageBusy(false);
+    }
+  }
 
   async function updateConnection(message: PanelRequest): Promise<void> {
     setConnectionBusy(true);
@@ -139,14 +178,16 @@ export default function App() {
     }
   }
 
-  async function fillApplicationPackage(): Promise<void> {
+  async function fillApplicationPackage(replaceFieldIntents: string[] = []): Promise<void> {
     if (!applicationPackage) return;
     setPackageBusy(true);
     setError("");
     try {
       setPackageExecution(await executePackage({
-        type: "RUN_GREENHOUSE_APPLICATION_PACKAGE",
+        type: applicationPackage.job.portal === "lever"
+          ? "RUN_LEVER_APPLICATION_PACKAGE" : "RUN_GREENHOUSE_APPLICATION_PACKAGE",
         package: applicationPackage,
+        replaceFieldIntents,
       }));
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -155,14 +196,14 @@ export default function App() {
     }
   }
 
-  async function uploadCv(documentId: string): Promise<void> {
+  async function uploadSelectedDocument(documentId: string): Promise<void> {
     if (!applicationPackage) return;
     setPackageBusy(true);
     setError("");
     setDocumentUpload(null);
     try {
       setDocumentUpload(await uploadDocument({
-        type: "UPLOAD_GREENHOUSE_CV",
+        type: "UPLOAD_SELECTED_DOCUMENT",
         package: applicationPackage,
         documentId,
       }));
@@ -187,6 +228,31 @@ export default function App() {
         <strong>Review-first by design</strong>
         <p>Runr may fill supported fields. You review the form and submit it yourself.</p>
       </section>
+
+      {pendingConfirmation ? (
+        <section className="connection-card" aria-label="Confirm application outcome" data-testid="application-confirmation">
+          <p className="eyebrow">Possible application success</p>
+          <h2>Did you submit this application?</h2>
+          <p>Runr observed a possible success signal after your action. Confirm before anything is added to Tracker.</p>
+          <div className="button-row">
+            <button type="button" disabled={packageBusy} onClick={() => void respondToPossibleSuccess("confirmed")}>
+              Yes, add to Tracker
+            </button>
+            <button className="secondary" type="button" disabled={packageBusy}
+              onClick={() => void respondToPossibleSuccess("declined")}>
+              No, do not add
+            </button>
+          </div>
+        </section>
+      ) : trackerConfirmation ? (
+        <p className="boundary" role="status" data-testid="tracker-confirmation-result">
+          {trackerConfirmation.decision === "confirmed"
+            ? trackerConfirmation.duplicate
+              ? "This application was already in Tracker."
+              : "Application added to Tracker."
+            : "Application was not added to Tracker."}
+        </p>
+      ) : null}
 
       <section className="connection-card" aria-busy={connectionBusy}>
         <div className="status-heading">
@@ -304,7 +370,7 @@ export default function App() {
               <div><dt>Warnings</dt><dd>{applicationPackage.warnings.join(", ")}</dd></div>
             ) : null}
           </dl>
-          {applicationPackage.job.portal === "greenhouse" ? (
+          {applicationPackage.job.portal === "greenhouse" || applicationPackage.job.portal === "lever" ? (
             <button type="button" data-testid="fill-package" disabled={packageBusy}
               onClick={() => void fillApplicationPackage()}>
               {packageBusy ? "Filling and verifying…" : "Fill verified standard facts"}
@@ -377,12 +443,11 @@ export default function App() {
                 <li className="document-row" key={document.documentId || `${document.documentKind}:${index}`}>
                   <strong>{document.documentKind}</strong>
                   <span>{document.fileName || document.mimeType} · v{document.documentVersion}</span>
-                  {applicationPackage.job.portal === "greenhouse" && document.documentKind === "cv" &&
-                    document.mimeType === "application/pdf" ? (
+                  {(["cv", "cover_letter", "supporting_document"] as const).includes(document.documentKind) ? (
                     <button type="button" disabled={packageBusy}
-                      data-testid="upload-cv"
-                      onClick={() => void uploadCv(document.documentId)}>
-                      {packageBusy ? "Uploading and verifying…" : "Upload selected CV"}
+                      data-testid={`upload-${document.documentKind}`}
+                      onClick={() => void uploadSelectedDocument(document.documentId)}>
+                      {packageBusy ? "Uploading and verifying…" : `Upload selected ${document.documentKind.replaceAll("_", " ")}`}
                     </button>
                   ) : null}
                   {documentUpload?.documentId === document.documentId ? (
@@ -404,6 +469,14 @@ export default function App() {
           <ul>{packageExecution.executions.map((result, index) => (
             <li key={`${result.fieldLabel}-${index}`}>
               <strong>{result.fieldLabel}</strong>: {result.status}
+              {result.status === "preserved_existing" && result.fieldIntent ? (
+                <button type="button" className="secondary replace-answer"
+                  data-testid={`replace-${result.fieldIntent}`}
+                  disabled={packageBusy}
+                  onClick={() => void fillApplicationPackage([result.fieldIntent!])}>
+                  Replace with Runr answer
+                </button>
+              ) : null}
             </li>
           ))}</ul>
         </section>

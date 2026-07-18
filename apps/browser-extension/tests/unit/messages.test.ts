@@ -10,9 +10,50 @@ import {
   isPanelRequest,
   isPanelResponse,
   isDocumentUploadMessage,
+  isContentRuntimeEvent,
+  isPendingApplicationConfirmation,
+  isAdapterHealthTelemetry,
 } from "@runr/extension-messages";
 
 describe("extension message boundaries", () => {
+  it("bounds possible-success evidence and requires an explicit confirmation decision", () => {
+    const evidence = {
+      packageId: "aapkg_14",
+      packageVersion: 2,
+      adapter: "greenhouse",
+      adapterVersion: "1.0.0",
+      evidenceCategory: "success_banner",
+      observedAt: "2026-07-18T12:00:00.000Z",
+      uploadedDocuments: [{ documentId: "cv_v7", documentVersion: 7 }],
+    };
+    expect(isPendingApplicationConfirmation(evidence)).toBe(true);
+    expect(isContentRuntimeEvent({
+      type: "ASSISTED_APPLY_POSSIBLE_SUCCESS",
+      evidence: {
+        packageId: evidence.packageId,
+        packageVersion: evidence.packageVersion,
+        adapter: evidence.adapter,
+        adapterVersion: evidence.adapterVersion,
+        evidenceCategory: evidence.evidenceCategory,
+        observedAt: evidence.observedAt,
+      },
+    })).toBe(true);
+    expect(isPanelRequest({
+      type: "RESPOND_TO_APPLICATION_CONFIRMATION",
+      decision: "confirmed",
+      evidence,
+    })).toBe(true);
+    expect(isPanelRequest({
+      type: "RESPOND_TO_APPLICATION_CONFIRMATION",
+      decision: "automatic",
+      evidence,
+    })).toBe(false);
+    expect(isContentRuntimeEvent({
+      type: "ASSISTED_APPLY_POSSIBLE_SUCCESS",
+      evidence: { ...evidence, evidenceCategory: "page_text", rawHtml: "private" },
+    })).toBe(false);
+    expect(isPanelRequest({ type: "SUBMIT_APPLICATION" })).toBe(false);
+  });
   it("exposes exactly the six explicit correction scopes", () => {
     expect(APPLICATION_CORRECTION_SCOPE_OPTIONS).toEqual([
       { value: "application", label: "This application" },
@@ -46,6 +87,27 @@ describe("extension message boundaries", () => {
     ).toBe(false);
     expect(isPanelRequest({ type: "SUBMIT_APPLICATION" })).toBe(false);
     expect(isPanelRequest(null)).toBe(false);
+  });
+
+  it("bounds explicit replacement commands to unique field intents", () => {
+    const applicationPackage = {
+      packageId: "aa08", jobId: "job-aa08", version: 1, schemaVersion: 1,
+      job: { jobId: "job-aa08", title: "Engineer", company: "Acme", portal: "greenhouse", location: "Berlin" },
+      answers: [], documents: [], warnings: [],
+      policy: { permitSensitiveAutofill: false, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+    };
+    expect(isPanelRequest({
+      type: "RUN_GREENHOUSE_APPLICATION_PACKAGE", package: applicationPackage,
+      replaceFieldIntents: ["application.city"],
+    })).toBe(true);
+    expect(isPanelRequest({
+      type: "RUN_GREENHOUSE_APPLICATION_PACKAGE", package: applicationPackage,
+      replaceFieldIntents: ["application.city", "application.city"],
+    })).toBe(false);
+    expect(isPanelRequest({
+      type: "RUN_GREENHOUSE_APPLICATION_PACKAGE", package: applicationPackage,
+      replaceFieldIntents: ["application.city;submit"],
+    })).toBe(false);
   });
 
   it("validates public connection state without permitting legal confirmation to be disabled", () => {
@@ -91,12 +153,14 @@ describe("extension message boundaries", () => {
     expect(isContentRequest({ type: "SUBMIT_APPLICATION" })).toBe(false);
   });
 
-  it("bounds document upload commands and results to fixed-version PDF metadata", () => {
+  it("bounds selected document uploads and privacy-safe upload telemetry", () => {
     const upload = {
-      type: "CONTENT_UPLOAD_GREENHOUSE_CV",
+      type: "CONTENT_UPLOAD_SELECTED_DOCUMENT",
+      ats: "lever",
       packageId: "aapkg_1",
       documentId: "cv_v7",
       documentVersion: 7,
+      documentKind: "cv",
       fileName: "Candidate.pdf",
       mimeType: "application/pdf",
       base64Bytes: "JVBERg==",
@@ -104,16 +168,37 @@ describe("extension message boundaries", () => {
     expect(isContentRequest(upload)).toBe(true);
     expect(isContentRequest({ ...upload, mimeType: "application/msword" })).toBe(false);
     expect(isContentRequest({ ...upload, base64Bytes: "" })).toBe(false);
+    expect(isContentRequest({
+      ...upload,
+      documentKind: "cover_letter",
+      fileName: "Cover letter.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    })).toBe(true);
+    const telemetry = {
+      schemaVersion: 1,
+      adapter: "lever",
+      adapterVersion: "0.3.0",
+      lifecycleStage: "upload",
+      aggregateOutcome: "accepted",
+      errorCategory: "none",
+      documentRole: "cv",
+    } as const;
     const result = {
       documentId: "cv_v7",
       documentVersion: 7,
+      documentKind: "cv",
       fileName: "Candidate.pdf",
       status: "uploaded",
       reasons: ["Portal retained the file."],
+      telemetry,
     };
     expect(isDocumentUploadMessage(result)).toBe(true);
     expect(isPanelResponse({ ok: true, documentUpload: result })).toBe(true);
     expect(isDocumentUploadMessage({ ...result, status: "submitted" })).toBe(false);
+    expect(isAdapterHealthTelemetry(telemetry)).toBe(true);
+    for (const forbidden of ["bytes", "url", "token", "fileName", "answer", "rawMarkup"]) {
+      expect(isAdapterHealthTelemetry({ ...telemetry, [forbidden]: "secret" })).toBe(false);
+    }
   });
 
   it("accepts only the exact local fixture URL", () => {

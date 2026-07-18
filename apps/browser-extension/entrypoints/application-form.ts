@@ -4,28 +4,61 @@ import {
   runLeverStandardFacts,
   runGreenhouseStandardFacts,
   runGreenhouseFixtureProof,
-  uploadGreenhousePdf,
+  uploadApplicationDocument,
 } from "@runr/ats-core";
+import { observeDynamicForm, type DynamicFormMonitor } from "@runr/ats-core/dynamic-form";
 import {
   isContentRequest,
   isApplicationPackageContentRequest,
   isExactGreenhouseFixtureUrl,
   isExactLeverFixtureUrl,
   type ContentRequest,
+  type PossibleSuccessEvidenceCategory,
 } from "@runr/extension-messages";
 import { browser } from "wxt/browser";
 import { defineUnlistedScript } from "wxt/utils/define-unlisted-script";
+import { observePossibleSuccess } from "../src/success/possible-success-observer";
+
+const ADAPTER_VERSION = "1.0.0";
 
 declare global {
   interface Window {
     __runrAssistedApplyFixtureBridgeInstalled?: boolean;
+    __runrDynamicFormMonitor?: DynamicFormMonitor;
+    __runrPossibleSuccessStop?: () => void;
   }
+}
+
+function armPossibleSuccessObservation(
+  request: Extract<ContentRequest, { package: unknown }>,
+): void {
+  const adapter = request.type === "CONTENT_RUN_LEVER_APPLICATION_PACKAGE" ? "lever" : "greenhouse";
+  window.__runrPossibleSuccessStop?.();
+  window.__runrPossibleSuccessStop = observePossibleSuccess({
+    document,
+    adapter,
+    initialUrl: window.location.href,
+    onEvidence: (evidenceCategory: PossibleSuccessEvidenceCategory) => {
+      void browser.runtime.sendMessage({
+        type: "ASSISTED_APPLY_POSSIBLE_SUCCESS",
+        evidence: {
+          packageId: request.package.packageId,
+          packageVersion: request.package.version,
+          adapter,
+          adapterVersion: ADAPTER_VERSION,
+          evidenceCategory,
+          observedAt: new Date().toISOString(),
+        },
+      });
+    },
+  });
 }
 
 export default defineUnlistedScript(async () => {
   const testingFixturePage =
     import.meta.env.MODE === "testing" &&
     (isExactGreenhouseFixtureUrl(window.location.href) || isExactLeverFixtureUrl(window.location.href));
+  window.__runrDynamicFormMonitor ??= observeDynamicForm(document);
   if (!window.__runrAssistedApplyFixtureBridgeInstalled) {
     browser.runtime.onMessage.addListener((message: unknown) => {
       const validRequest = import.meta.env.MODE === "testing"
@@ -46,6 +79,7 @@ export default defineUnlistedScript(async () => {
         };
       }
       if (request.type === "CONTENT_RUN_GREENHOUSE_APPLICATION_PACKAGE" || request.type === "CONTENT_RUN_LEVER_APPLICATION_PACKAGE") {
+        armPossibleSuccessObservation(request);
         const answer = (intent: string) => request.package.answers.find(
           (item) => item.fieldIntent === intent &&
             (item.source === "profile_verified" || item.source === "scoped_preference") &&
@@ -82,28 +116,54 @@ export default defineUnlistedScript(async () => {
               label: item.label,
               proposedValue: item.proposedValue,
             })),
-        ).then(({ inspection, executions }) => ({
-          ...inspection,
-          packageId: request.package.packageId,
-          executions,
-        }));
+          request.replaceFieldIntents || [],
+        ).then(async ({ inspection, executions }) => {
+          const dynamic = await window.__runrDynamicFormMonitor!.waitForQuiet();
+          return {
+            ...inspection,
+            packageId: request.package.packageId,
+            executions,
+            formRevision: dynamic.revision,
+            changeReasons: dynamic.reasons,
+          };
+        });
       }
-      if (request.type === "CONTENT_UPLOAD_GREENHOUSE_CV") {
+      if (request.type === "CONTENT_UPLOAD_SELECTED_DOCUMENT") {
         const binary = atob(request.base64Bytes);
         const bytes = new Uint8Array(binary.length);
         for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
         const file = new File([bytes], request.fileName, { type: request.mimeType });
         bytes.fill(0);
-        return uploadGreenhousePdf(document, window.location.href, {
+        return uploadApplicationDocument(document, window.location.href, {
           file,
           documentId: request.documentId,
           documentVersion: request.documentVersion,
+          documentKind: request.documentKind,
         }).then((result) => ({
           documentId: request.documentId,
           documentVersion: request.documentVersion,
+          documentKind: request.documentKind,
           fileName: result.fileName || request.fileName,
           status: result.status === "unsupported" ? "rejected" : result.status,
           reasons: result.reasons,
+          telemetry: {
+            schemaVersion: 1,
+            adapter: request.ats,
+            adapterVersion: "0.3.0",
+            lifecycleStage: "upload",
+            aggregateOutcome: result.status === "uploaded" ? "accepted"
+              : result.status === "mismatch" ? "mismatched"
+                : result.status === "preserved_existing" ? "preserved"
+                  : result.status === "unsupported" ? "unsupported" : "rejected",
+            errorCategory: result.status === "uploaded" ? "none"
+              : result.status === "preserved_existing" ? "existing_value"
+                : result.status === "unsupported" ? "unsupported_role"
+                  : result.reasons.some((reason) => /unavailable|no verified/iu.test(reason)) ? "control_unavailable"
+                    : result.reasons.some((reason) => /disabled|hidden/iu.test(reason)) ? "control_blocked"
+                      : result.reasons.some((reason) => /mime|does not accept/iu.test(reason)) ? "mime_rejected"
+                        : result.status === "mismatch" ? "portal_rejected" : "unknown",
+            documentRole: request.documentKind,
+          },
         }));
       }
       if (import.meta.env.MODE === "testing" && request.type === "CONTENT_RUN_GREENHOUSE_FIXTURE_PROOF") {

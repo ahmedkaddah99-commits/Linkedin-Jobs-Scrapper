@@ -16,6 +16,9 @@
     <label for="lever-remote">Open to remote work</label><input id="lever-remote" name="remote" type="checkbox" value="yes">
     <label for="lever-start-date">Start date</label><input id="lever-start-date" name="start_date" type="date" required>
     <label for="lever-employee-code">Employee code</label><input id="lever-employee-code" name="employee_code" pattern="[A-Z]{3}" required>
+    <label for="lever-resume">CV / Resume</label><input id="lever-resume" name="resume" type="file" accept="application/pdf,.pdf" required>
+    <label for="lever-cover-letter">Cover letter</label><input id="lever-cover-letter" name="cover_letter" type="file" accept="application/pdf,.pdf">
+    <label for="lever-supporting-document">Additional supporting document</label><input id="lever-supporting-document" name="supporting_document" type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" multiple>
     <button id="submit" type="submit">Submit application</button>
   </form><script>
     for (const controlId of ["lever-summary", "lever-country", "lever-work-yes", "lever-remote", "lever-start-date"]) {
@@ -30,5 +33,10 @@
       event.preventDefault();
       document.body.dataset.submitClicks = String(Number(document.body.dataset.submitClicks || "0") + 1);
     });
+    for (const [controlId, dataKey] of [["lever-resume", "uploadedCv"], ["lever-cover-letter", "uploadedCoverLetter"], ["lever-supporting-document", "uploadedSupportingDocument"]]) {
+      document.getElementById(controlId).addEventListener("change", (event) => {
+        document.body.dataset[dataKey] = Array.from(event.currentTarget.files).map((file) => file.name).join(",");
+      });
+    }
   </script></body>
 </html>
