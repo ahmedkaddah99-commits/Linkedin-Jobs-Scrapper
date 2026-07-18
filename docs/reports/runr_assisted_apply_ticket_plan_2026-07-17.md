@@ -211,7 +211,7 @@ E2E, and a manual production redirect/CORS configuration check.
 ## AA-03 - Launch one immutable application package from Runr
 
 **Type:** AFK<br>
-**Status:** in_progress<br>
+**Status:** verified_complete<br>
 **Blocked by:** AA-02<br>
 **Visible plan coverage:** sections 3, 4, and 6
 
@@ -223,17 +223,17 @@ package or session secrets in the employer URL.
 
 ### Acceptance criteria
 
-- [ ] One package belongs to one owned user/job and contains versioned job,
+- [x] One package belongs to one owned user/job and contains versioned job,
       candidate, document, answer, requirement, warning, and policy sections
       sufficient for launch. AA-06 owns the full provenance/scope policy semantics
       inside those sections.
-- [ ] Packages expire, are immutable after launch, reference fixed document
+- [x] Packages expire, are immutable after launch, reference fixed document
       versions, and create a new version when modified.
-- [ ] Another user cannot fetch the package and a stale/replayed tab binding fails.
-- [ ] The web-to-extension launch handshake binds the package to the intended tab
+- [x] Another user cannot fetch the package and a stale/replayed tab binding fails.
+- [x] The web-to-extension launch handshake binds the package to the intended tab
       without leaking identifiers into the employer page URL/DOM.
-- [ ] The side panel shows company, role, ATS, package version, and connection state.
-- [ ] Package/config responses are data only and cannot carry executable adapter
+- [x] The side panel shows company, role, ATS, package version, and connection state.
+- [x] Package/config responses are data only and cannot carry executable adapter
       instructions or remote code.
 
 ### Verification required
@@ -243,7 +243,7 @@ and schema compatibility fixtures consumed by Python and TypeScript.
 
 ### Completion evidence
 
-Pending.
+On 2026-07-18, the focused `test_aa03_application_package.py` suite passed 12/12 tests covering ownership, expiry, immutability, stale/replayed binding rejection, data-only payloads, schema fixtures, side-panel display fields, and binding-secret exclusion from extension payloads. The shared JSON schema compatibility fixtures in `tests/fixtures/package_schema_fixtures.json` provide 4 cross-language cases consumed by Python `from_payload()` and TypeScript `isApplicationPackagePayload()`.
 
 ---
 
