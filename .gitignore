@@ -11,6 +11,7 @@ frontend/node_modules/
 frontend/dist/
 apps/browser-extension/.output/
 apps/browser-extension/.wxt/
+apps/browser-extension/extension-test/
 apps/browser-extension/playwright-report/
 apps/browser-extension/test-results/
 
