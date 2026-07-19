@@ -8,11 +8,10 @@ export default function JobDescriptionPage() {
   const { reviewId = "" } = useParams();
   const { request } = useSession();
   const [copyFeedback, setCopyFeedback] = useState({ message: "", error: "" });
-  const { data, loading, error } = useApiResource(
-    () => request("/tracker"),
+  const { data: item, loading, error } = useApiResource(
+    () => request(`/tracker/${encodeURIComponent(reviewId)}/description`),
     [request, reviewId],
   );
-  const item = (data?.items || []).find((candidate) => candidate.review_id === reviewId);
   const description = trackerDescriptionForItem(item);
 
   async function copyDescription() {

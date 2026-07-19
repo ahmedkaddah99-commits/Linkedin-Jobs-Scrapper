@@ -13,6 +13,8 @@ from backend.api.server import (
     _TRACKER_ENTRIES_HARD_LIMIT,
     _collect_authorized_runs,
     _collect_tracker_entries,
+    _tracker_baseline_row,
+    _tracker_description_payload,
 )
 
 
@@ -121,3 +123,26 @@ class BoundedTrackerEntriesTests(unittest.TestCase):
         )
         call_kwargs = self.application.list_runs.call_args[1]
         self.assertLessEqual(call_kwargs["limit"], 500)
+
+    def test_tracker_list_rows_exclude_large_descriptions_by_default(self):
+        job = MagicMock()
+        job.to_dict.return_value = {}
+        job.description_text = "x" * 200_000
+        row = _tracker_baseline_row(
+            job=job,
+            run=None,
+            application_status="Not applied",
+        )
+        self.assertNotIn("full_description", row)
+
+    def test_tracker_description_endpoint_payload_keeps_full_text_on_demand(self):
+        description = "x" * 200_000
+        payload = _tracker_description_payload(
+            {
+                "review_id": "review-1",
+                "title": "Engineer",
+                "full_description": description,
+            }
+        )
+        self.assertEqual(payload["full_description"], description)
+        self.assertEqual(payload["review_id"], "review-1")

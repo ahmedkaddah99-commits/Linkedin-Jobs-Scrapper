@@ -204,7 +204,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         entry = next(
                             (
                                 item
-                                for item in _collect_tracker_entries(application, user)
+                                for item in _collect_tracker_entries(application, user, include_full_details=True)
                                 if str(item.get("review_id") or "") == review_id
                             ),
                             None,
@@ -212,6 +212,26 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         if entry is None:
                             raise KeyError(f"Tracker review '{review_id}' not found.")
                         self._send_json(_tracker_ats_detail_payload(entry), status=HTTPStatus.OK)
+                        return
+
+    if segments[:1] == ["tracker"] and len(segments) == 3 and segments[2] == "description":
+                        user, _ = self._require_identity()
+                        review_id = str(segments[1] or "").strip()
+                        entry = next(
+                            iter(
+                                _collect_tracker_entries(
+                                    application,
+                                    user,
+                                    max_entries=500,
+                                    selected_review_id=review_id,
+                                    include_full_details=True,
+                                )
+                            ),
+                            None,
+                        )
+                        if entry is None:
+                            raise KeyError(f"Tracker review '{review_id}' not found.")
+                        self._send_json(_tracker_description_payload(entry), status=HTTPStatus.OK)
                         return
 
     if segments[:1] == ["tracker"] and len(segments) == 3 and segments[2] == "cv-studio-seed":

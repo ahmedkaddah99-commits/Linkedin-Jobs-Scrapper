@@ -4,7 +4,6 @@ import { useSession } from "../context/SessionContext";
 import { useTracker } from "../hooks/useTracker";
 import { useApiResource } from "../hooks/useApiResource";
 import AssistedApplyLaunchDialog from "../components/AssistedApplyLaunchDialog";
-import { trackerDescriptionForItem } from "../lib/trackerDescription";
 import { assistedApplyTrackerRow } from "../lib/trackerAssistedApply";
 import { CV_STUDIO_ROUTE, stashCvStudioSeed } from "../lib/cvStudio";
 
@@ -247,7 +246,7 @@ function TrackerResourceCell({ item, onAssistedApply, request }) {
   const navigate = useNavigate();
   const [exporting, setExporting] = useState(false);
   const [feedback, setFeedback] = useState({ message: "", error: "" });
-  const description = trackerDescriptionForItem(item);
+  const hasDescription = Boolean(item.has_description);
   const atsSummary = summarizeTrackerAtsState(item.documents);
   const exportableDocuments = selectTrackerExportDocuments(item.documents);
   const canEditGeneratedCv = Boolean(item.has_generated_cv);
@@ -303,7 +302,7 @@ function TrackerResourceCell({ item, onAssistedApply, request }) {
             Review &amp; Apply
           </button>
         ) : null}
-        {description ? (
+        {hasDescription ? (
           <Link className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`} to={`/tracker/job-descriptions/${encodeURIComponent(item.review_id)}`}>
             <span className="material-symbols-outlined text-[13px]">article</span>
             Read post

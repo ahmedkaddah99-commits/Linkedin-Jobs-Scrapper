@@ -105,7 +105,6 @@ from backend.domain.phase0_contracts import (
     normalize_gmail_scan_window,
     normalize_referral_outreach_status,
     normalize_rejected_job_review,
-    normalize_tracker_application,
     phase0_contract_catalog,
 )
 from backend.domain.ats_export_gate import evaluate_ats_export_gate
@@ -3120,6 +3119,7 @@ def _tracker_baseline_row(
     application_status: str,
     documents: list[dict] | None = None,
     external: dict | None = None,
+    include_full_description: bool = False,
 ) -> dict:
     external = dict(external or {})
     review_meta = dict(getattr(review, "metadata", None) or {})
@@ -3145,7 +3145,6 @@ def _tracker_baseline_row(
             "apply_link": row.get("apply_link") or (job.apply_link or job.link or job.source_url if job else external.get("apply_link", "")),
             "linkedin_link": row.get("linkedin_link") or (job_payload.get("linkedin_link") or (job.link if job else "")),
             "link": row.get("link") or (job.link if job else external.get("apply_link", "")),
-            "full_description": row.get("full_description") or (job.description_text if job else external.get("full_description", "")),
             "priority_rank": row.get("priority_rank") or (job.priority_rank if job else external.get("priority_rank", "")),
             "Status": application_status,
             "applied?": application_status,
@@ -3156,6 +3155,14 @@ def _tracker_baseline_row(
             ),
         }
     )
+    if include_full_description:
+        row["full_description"] = row.get("full_description") or (
+            job.description_text if job else external.get("full_description", "")
+        )
+    else:
+        # The table schema contains this export column, but the live tracker
+        # list must never serialize one description per row.
+        row.pop("full_description", None)
     row["application_date"] = str(
         review_meta.get("application_date")
         or review_meta.get("applied_at")
@@ -3462,6 +3469,18 @@ def _is_explicit_tracker_application(*, tracker_status: object = "", email_confi
     return bool(str(tracker_status or "").strip()) or bool(email_confirmed)
 
 
+def _tracker_description_payload(entry: Mapping[str, Any]) -> dict[str, str]:
+    """Return the only large tracker field on demand, for one authorized item."""
+    return {
+        "review_id": str(entry.get("review_id") or ""),
+        "title": str(entry.get("title") or ""),
+        "company": str(entry.get("company") or ""),
+        "location": str(entry.get("location") or ""),
+        "apply_link": str(entry.get("apply_link") or ""),
+        "full_description": str(entry.get("full_description") or ""),
+    }
+
+
 
 _TRACKER_ENTRIES_HARD_LIMIT = 2000
 
@@ -3473,6 +3492,7 @@ def _collect_tracker_entries(
     max_entries: int = _TRACKER_ENTRIES_HARD_LIMIT,
     selected_review_id: str = "",
     include_cv_studio_seed: bool = False,
+    include_full_details: bool = False,
 ) -> list[dict]:
     """Return all reviews that have been approved or have a tracker_status set.
 
@@ -3578,7 +3598,7 @@ def _collect_tracker_entries(
                 "canonical_posting_url": posting_url,
                 "linkedin_link": str(job_extra.get("linkedin_link") or (job.link if job else "") or ""),
                 "location": job.location_raw if job else "",
-                "full_description": description_text,
+                "has_description": bool(description_text.strip()),
                 "tracker_status": tracker_status,
                 "application_status": application_status,
                 "email_confirmed": email_confirmed,
@@ -3615,8 +3635,10 @@ def _collect_tracker_entries(
                 review=review,
                 application_status=application_status,
                 documents=documents,
+                include_full_description=include_full_details,
             )
-            entry["tracker_application"] = normalize_tracker_application({**entry, "metadata": review_meta})
+            if include_full_details:
+                entry["full_description"] = description_text
             if posting_url:
                 entries_by_posting_url[posting_url] = len(entries)
             entries.append(entry)
@@ -3646,7 +3668,7 @@ def _collect_tracker_entries(
             "apply_link": str(external.get("apply_link") or ""),
             "linkedin_link": "",
             "location": str(external.get("location") or ""),
-            "full_description": str(external.get("full_description") or ""),
+            "has_description": bool(str(external.get("full_description") or "").strip()),
             "tracker_status": tracker_status,
             "application_status": application_status,
             "email_confirmed": email_confirmed,
@@ -3690,8 +3712,10 @@ def _collect_tracker_entries(
             application_status=application_status,
             documents=list(standard_documents),
             external=external,
+            include_full_description=include_full_details,
         )
-        entry["tracker_application"] = normalize_tracker_application({**entry, "metadata": dict(external)})
+        if include_full_details:
+            entry["full_description"] = str(external.get("full_description") or "")
         entries.append(entry)
     entries.sort(
         key=lambda item: (
