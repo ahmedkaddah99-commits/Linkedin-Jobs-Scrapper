@@ -11,9 +11,42 @@ export const QUOTA_EXCEEDED_EVENT = "runr:quota-exceeded";
 const SLOW_REQUEST_THRESHOLD_MS = 5000;
 const REQUEST_DIAGNOSTIC_SOURCE = "frontend_api_request_diagnostic";
 
+
+const _API_BASE_URL_SENTINEL_PATTERN = /^\s*\$\{[^}]*\}\s*$/;
+const _API_BASE_URL_INVALID_CHARS = /[<>"'\s]/;
+
+/** Return true when a resolved base URL looks like an unresolved Vite placeholder.
+ *  This guards against bundles that ship with literal `${...}` strings because
+ *  the build-time environment variable was missing. */
+function _isPlaceholderApiBase(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (_API_BASE_URL_SENTINEL_PATTERN.test(trimmed)) {
+    return true;
+  }
+  // A relative base like /v1 is always valid.
+  if (trimmed.startsWith("/")) {
+    return false;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (!parsed.protocol || !parsed.hostname) {
+      return true;
+    }
+    if (_API_BASE_URL_INVALID_CHARS.test(trimmed)) {
+      return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export function resolveDefaultApiBaseUrl(env = import.meta.env || {}) {
   const configuredBaseUrl = String(env.VITE_API_BASE_URL || "").trim();
-  if (configuredBaseUrl) {
+  if (configuredBaseUrl && !_isPlaceholderApiBase(configuredBaseUrl)) {
     return configuredBaseUrl.replace(/\/$/, "");
   }
   const apiExternalHostname = String(env.VITE_API_EXTERNAL_HOSTNAME || "")
@@ -21,7 +54,10 @@ export function resolveDefaultApiBaseUrl(env = import.meta.env || {}) {
     .replace(/^https?:\/\//i, "")
     .replace(/\/.*$/, "");
   if (apiExternalHostname) {
-    return `https://${apiExternalHostname}/v1`;
+    const derived = `https://${apiExternalHostname}/v1`;
+    if (!_isPlaceholderApiBase(derived)) {
+      return derived;
+    }
   }
   return "/v1";
 }
@@ -61,6 +97,50 @@ export function resolveApiUrl(baseUrl, path) {
     return normalizedBase;
   }
   return `${normalizedBase}/${normalizedPath.replace(/^\/+/, "")}`;
+}
+
+// --- AbortController manager (prevents duplicate in-flight requests) ---
+
+const _IN_FLIGHT = new Map();
+
+/** Create or reuse an AbortController keyed by `${method}:${path}`.
+ *  Any previous in-flight request to the same key is cancelled. */
+export function createDedupedAbortController(method, path) {
+  const key = `${String(method || "GET").toUpperCase()}:${String(path || "")}`;
+  const existing = _IN_FLIGHT.get(key);
+  if (existing) {
+    try {
+      existing.abort();
+    } catch {
+      // best-effort
+    }
+  }
+  const controller = new AbortController();
+  controller._dedupKey = key;
+  _IN_FLIGHT.set(key, controller);
+  return controller;
+}
+
+/** Mark a previously created deduped controller as settled. */
+export function settleDedupedAbortController(controller) {
+  if (!controller || !controller._dedupKey) {
+    return;
+  }
+  if (_IN_FLIGHT.get(controller._dedupKey) === controller) {
+    _IN_FLIGHT.delete(controller._dedupKey);
+  }
+}
+
+/** Cancel all tracked in-flight requests (e.g. on page navigation). */
+export function cancelAllDedupedRequests() {
+  for (const [key, controller] of _IN_FLIGHT) {
+    try {
+      controller.abort();
+    } catch {
+      // best-effort
+    }
+    _IN_FLIGHT.delete(key);
+  }
 }
 
 function parseJsonText(text) {
@@ -290,6 +370,60 @@ function buildApiError(response, payload, fallbackText) {
     });
   }
   return error;
+}
+
+// --- Bounded retry with exponential backoff ---
+
+const RETRYABLE_STATUS_CODES = new Set([408, 429, 502, 503, 504]);
+
+/** Maximum total backoff delay across all retries (ms). */
+const MAX_TOTAL_RETRY_DELAY_MS = 30000;
+
+function _isRetryableError(error) {
+  if (!error || error.name === "AbortError") {
+    return false;
+  }
+  const status = Number(error?.status || 0);
+  if (status > 0 && RETRYABLE_STATUS_CODES.has(status)) {
+    return true;
+  }
+  // Network errors (TypeError from fetch when offline/DNS fails)
+  if (error instanceof TypeError && /network|fetch/i.test(String(error.message || ""))) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Wrap apiRequest with bounded retries and exponential backoff.
+ *
+ * Options (on top of apiRequest options):
+ *   maxRetries  – max number of retry attempts (default 2, max 5).
+ *   retryDelayMs – initial backoff in ms (default 1000).
+ */
+export async function apiRequestWithRetry(baseUrl, accessTokenOrResolver, path, options = {}) {
+  const maxRetries = Math.min(5, Math.max(0, Number(options.maxRetries ?? 2)));
+  const initialDelayMs = Math.max(500, Number(options.retryDelayMs ?? 1000));
+  let totalDelay = 0;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await apiRequest(baseUrl, accessTokenOrResolver, path, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxRetries || !_isRetryableError(error)) {
+        throw error;
+      }
+      const delay = Math.min(initialDelayMs * Math.pow(2, attempt), 15000);
+      if (totalDelay + delay > MAX_TOTAL_RETRY_DELAY_MS) {
+        throw error;
+      }
+      totalDelay += delay;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
 }
 
 export async function apiRequest(baseUrl, accessTokenOrResolver, path, options = {}) {

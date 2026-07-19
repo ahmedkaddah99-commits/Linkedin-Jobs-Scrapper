@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { apiRequest, diagnosticPathShape, resolveApiUrl, resolveDefaultApiBaseUrl } from "./api.js";
+import { apiRequest, apiRequestWithRetry, cancelAllDedupedRequests, createDedupedAbortController, diagnosticPathShape, resolveApiUrl, resolveDefaultApiBaseUrl, settleDedupedAbortController } from "./api.js";
 
 test("uses explicit API base URL before Render-generated hostnames", () => {
   assert.equal(
@@ -99,5 +99,109 @@ test("persists failed request diagnostics without using apiRequest recursively",
   } finally {
     globalThis.fetch = originalFetch;
     console.warn = originalConsoleWarn;
+  }
+});
+
+test("rejects placeholder API base URLs", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({ VITE_API_BASE_URL: "${VITE_API_BASE_URL}" }),
+    "/v1",
+  );
+  assert.equal(
+    resolveDefaultApiBaseUrl({ VITE_API_BASE_URL: "  ${VITE_API_BASE_URL}  " }),
+    "/v1",
+  );
+  assert.equal(
+    resolveDefaultApiBaseUrl({ VITE_API_BASE_URL: "" }),
+    "/v1",
+  );
+});
+
+test("accepts a valid relative API base URL", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({ VITE_API_BASE_URL: "/v1" }),
+    "/v1",
+  );
+});
+
+test("accepts a valid absolute API base URL", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({ VITE_API_BASE_URL: "https://api.example.com/v1" }),
+    "https://api.example.com/v1",
+  );
+});
+
+test("deduped abort controller cancels previous in-flight request", () => {
+  const controller1 = createDedupedAbortController("GET", "/tracker");
+  assert.equal(controller1.signal.aborted, false);
+  const controller2 = createDedupedAbortController("GET", "/tracker");
+  assert.equal(controller1.signal.aborted, true);
+  assert.equal(controller2.signal.aborted, false);
+  settleDedupedAbortController(controller2);
+});
+
+test("settleDedupedAbortController removes from in-flight map", () => {
+  const controller = createDedupedAbortController("POST", "/runs");
+  settleDedupedAbortController(controller);
+  const controller2 = createDedupedAbortController("POST", "/runs");
+  assert.equal(controller2.signal.aborted, false);
+  settleDedupedAbortController(controller2);
+});
+
+test("cancelAllDedupedRequests aborts all tracked controllers", () => {
+  const c1 = createDedupedAbortController("GET", "/a");
+  const c2 = createDedupedAbortController("GET", "/b");
+  cancelAllDedupedRequests();
+  assert.equal(c1.signal.aborted, true);
+  assert.equal(c2.signal.aborted, true);
+});
+
+test("apiRequestWithRetry succeeds on first attempt", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    const result = await apiRequestWithRetry(
+      "https://api.example.com/v1",
+      "token",
+      "/test",
+    );
+    assert.deepEqual(result, { ok: true });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("apiRequestWithRetry retries on 503 and succeeds", async () => {
+  const originalFetch = globalThis.fetch;
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount++;
+    if (callCount === 1) {
+      return new Response(JSON.stringify({ error: "unavailable" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  try {
+    const result = await apiRequestWithRetry(
+      "https://api.example.com/v1",
+      "token",
+      "/test",
+      { retryDelayMs: 10 },
+    );
+    assert.ok(callCount >= 2, `expected callCount >= 2, got ${callCount}`);
+    assert.deepEqual(result, { ok: true });
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
