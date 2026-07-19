@@ -165,12 +165,12 @@ export default function DocumentsPage() {
   const {
     data: settingsPayload,
     refresh: refreshSettings,
-  } = useApiResource(() => request("/settings", { timeoutMs: 10000 }), [request], {
+  } = useApiResource(() => request("/settings", { timeoutMs: 60000 }), [request], {
     cacheKey: "settings",
     staleMs: Infinity,
     backgroundRefresh: false,
   });
-  const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100", { timeoutMs: 10000 }), [request], {
+  const { data: workspacesPayload } = useApiResource(() => request("/workspaces?limit=100", { timeoutMs: 60000 }), [request], {
     cacheKey: "workspaces:list",
     staleMs: Infinity,
     backgroundRefresh: false,

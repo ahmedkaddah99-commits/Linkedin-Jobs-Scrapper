@@ -61,7 +61,7 @@ const EMPTY_CANDIDATE_INSIGHTS = {
 };
 
 function loadDashboardPayload(request) {
-  return request("/dashboard", { timeoutMs: 10000 });
+  return request("/dashboard", { timeoutMs: 60000 });
 }
 
 function getNumericValue(value) {
