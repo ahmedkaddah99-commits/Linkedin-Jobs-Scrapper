@@ -216,15 +216,18 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
 
     if segments == ["tracker"]:
                         user, _ = self._require_identity()
+                        limit = _parse_int_param(query, "limit", default=200, maximum=1000)
+                        offset = _parse_int_param(query, "offset", default=0, maximum=100000)
                         entries = _collect_tracker_entries(application, user)
                         if _parse_bool_param(query, "explicit_only"):
                             entries = [item for item in entries if bool(item.get("is_explicit_application"))]
+                        paged_entries = entries[offset : offset + limit]
                         self._send_json(
                             {
-                                "items": entries,
+                                "items": paged_entries,
                                 "columns": TRACKER_TABLE_COLUMNS,
                                 "excel_baseline_columns": TRACKER_EXCEL_BASELINE_COLUMNS,
-                                "meta": self._pagination_meta(limit=len(entries), offset=0, returned=len(entries)),
+                                "meta": self._pagination_meta(limit=limit, offset=offset, returned=len(paged_entries)),
                             }
                         )
                         return

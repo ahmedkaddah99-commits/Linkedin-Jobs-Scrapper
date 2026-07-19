@@ -141,5 +141,103 @@ class ScrapeOpsIntegrationTests(unittest.TestCase):
         self.assertEqual(result["reason"], "insufficient_credits")
 
 
+
+
+class ScrapeOpsBoundedRetryTests(unittest.TestCase):
+    def test_retry_succeeds_on_first_attempt(self):
+        from backend.integrations.scrapeops import scrapeops_request_with_retry
+
+        with patch("backend.integrations.scrapeops.requests.request") as mock_request:
+            mock_request.return_value = _response(200, {"status_code": 200})
+
+            result = scrapeops_request_with_retry(
+                "GET",
+                "https://httpbin.org/get",
+                timeout_seconds=5,
+                max_retries=2,
+            )
+
+            self.assertEqual(result.attempts, 1)
+            self.assertEqual(result.total_backoff_seconds, 0.0)
+            self.assertIsNotNone(result.response)
+            self.assertIsNone(result.last_error)
+            mock_request.assert_called_once()
+
+    def test_retry_on_server_error_then_success(self):
+        from backend.integrations.scrapeops import scrapeops_request_with_retry
+
+        responses_sequence = [
+            _response(502, {"error": "Bad Gateway"}),
+            _response(200, {"status_code": 200}),
+        ]
+
+        with patch("backend.integrations.scrapeops.requests.request") as mock_request:
+            mock_request.side_effect = responses_sequence
+
+            result = scrapeops_request_with_retry(
+                "GET",
+                "https://httpbin.org/get",
+                timeout_seconds=5,
+                max_retries=2,
+                base_backoff_seconds=0.1,
+            )
+
+            self.assertEqual(result.attempts, 2)
+            self.assertGreater(result.total_backoff_seconds, 0.0)
+            self.assertIsNotNone(result.response)
+
+    def test_retry_exhausted_after_max_retries(self):
+        from backend.integrations.scrapeops import scrapeops_request_with_retry
+
+        with patch("backend.integrations.scrapeops.requests.request") as mock_request:
+            mock_request.return_value = _response(503, {"error": "Service Unavailable"})
+
+            result = scrapeops_request_with_retry(
+                "GET",
+                "https://httpbin.org/get",
+                timeout_seconds=5,
+                max_retries=2,
+                base_backoff_seconds=0.1,
+            )
+
+            self.assertEqual(result.attempts, 3)
+            self.assertIsNone(result.response)
+            self.assertIsNotNone(result.last_error)
+
+    def test_does_not_retry_on_client_error(self):
+        from backend.integrations.scrapeops import scrapeops_request_with_retry
+
+        with patch("backend.integrations.scrapeops.requests.request") as mock_request:
+            mock_request.return_value = _response(400, {"error": "Bad Request"})
+
+            result = scrapeops_request_with_retry(
+                "GET",
+                "https://httpbin.org/get",
+                timeout_seconds=5,
+                max_retries=3,
+            )
+
+            self.assertEqual(result.attempts, 1)
+            self.assertIsNotNone(result.response)
+
+    def test_retry_on_connection_error(self):
+        from backend.integrations.scrapeops import scrapeops_request_with_retry
+
+        with patch("backend.integrations.scrapeops.requests.request") as mock_request:
+            mock_request.side_effect = requests.ConnectionError("Connection refused")
+
+            result = scrapeops_request_with_retry(
+                "GET",
+                "https://httpbin.org/get",
+                timeout_seconds=5,
+                max_retries=1,
+                base_backoff_seconds=0.1,
+            )
+
+            self.assertEqual(result.attempts, 2)
+            self.assertIsNone(result.response)
+            self.assertIsInstance(result.last_error, requests.ConnectionError)
+
+
 if __name__ == "__main__":
     unittest.main()

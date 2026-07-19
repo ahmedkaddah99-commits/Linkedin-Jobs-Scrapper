@@ -22,6 +22,44 @@ test("derives the API base URL from Render preview hostnames", () => {
   );
 });
 
+test("rejects an injective placeholder like $ {n} and falls back to external hostname", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({
+      VITE_API_BASE_URL: "${n}",
+      VITE_API_EXTERNAL_HOSTNAME: "runr-api.onrender.com",
+    }),
+    "https://runr-api.onrender.com/v1",
+  );
+});
+
+test("rejects a bare Vite placeholder like $ {VITE_API_BASE_URL} and falls back to /v1", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({
+      VITE_API_BASE_URL: "${VITE_API_BASE_URL}",
+    }),
+    "/v1",
+  );
+});
+
+test("rejects an empty VITE_API_BASE_URL and uses external hostname", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({
+      VITE_API_BASE_URL: "",
+      VITE_API_EXTERNAL_HOSTNAME: "prod-api.onrender.com",
+    }),
+    "https://prod-api.onrender.com/v1",
+  );
+});
+
+test("rejects a whitespace-only VITE_API_BASE_URL as a placeholder", () => {
+  assert.equal(
+    resolveDefaultApiBaseUrl({
+      VITE_API_BASE_URL: "   ",
+    }),
+    "/v1",
+  );
+});
+
 test("preserves an absolute API base path for a leading-slash request path", () => {
   assert.equal(
     resolveApiUrl("https://api.example.com/v1", "/auth/me"),

@@ -187,6 +187,7 @@ from backend.integrations.creem import (
     verify_redirect_signature as verify_creem_redirect_signature,
     verify_webhook_signature as verify_creem_webhook_signature,
 )
+from backend.api.telemetry import RequestTelemetry, new_telemetry
 from backend.worker import WorkerService, configure_worker_logging
 
 _EXPANDED_ARTIFACT_DELIMITER = "__item__"
@@ -8870,6 +8871,8 @@ def build_handler(
             self._response_status = 0
             self._response_bytes = 0
             self._request_error_type = ""
+            self._telemetry = new_telemetry()
+
 
         def _route_shape(self) -> str:
             try:
@@ -8925,6 +8928,15 @@ def build_handler(
             if error_type:
                 payload["error_type"] = error_type
             logging.getLogger("backend.api.http").info(json.dumps(payload, separators=(",", ":")))
+            tel = getattr(self, "_telemetry", None)
+            if tel is not None:
+                tel.route = self._route_shape()
+                tel.route_name = str(getattr(self, "_matched_route_name", "") or "")
+                tel.method = str(getattr(self, "command", "") or "")
+                tel.payload_response_bytes = int(getattr(self, "_response_bytes", 0) or 0)
+                tel.finalise()
+                tel.emit()
+
 
         def _handle_client_disconnect(self, exc: BaseException) -> None:
             self._client_disconnected = True
@@ -9048,6 +9060,30 @@ def build_handler(
             if details is not None:
                 payload["error"]["details"] = details
             self._send_json(payload, status=status, headers=headers)
+        def _send_error(self, status: int, code: str, message: str, *, details=None, headers: dict[str, str] | None = None) -> None:
+            payload = {"error": {"code": code, "message": message}}
+            if details is not None:
+                payload["error"]["details"] = details
+            self._send_json(payload, status=status, headers=headers)
+
+        def _send_unavailable(self, message: str = "The API is temporarily unavailable. Please try again in a few seconds.") -> None:
+            """Send a structured 503 response for API restart / overload."""
+            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, "api_unavailable", message, headers={"Retry-After": "5"})
+
+        def _send_timeout(self, message: str = "The request timed out.") -> None:
+            """Send a structured 408 response."""
+            self._send_error(HTTPStatus.REQUEST_TIMEOUT, "request_timeout", message)
+
+        def _send_auth_error(self, message: str = "Authentication failed.") -> None:
+            """Send a structured 401 response with WWW-Authenticate header."""
+            self._send_error(HTTPStatus.UNAUTHORIZED, "authentication_failed", message, headers={"WWW-Authenticate": "Bearer"})
+
+        def _send_cancelled(self, request_id: str = "") -> None:
+            """Send a structured 499 response for client-cancelled requests."""
+            payload = {"error": {"code": "request_cancelled", "message": "The request was cancelled by the client."}}
+            if request_id:
+                payload["error"]["request_id"] = request_id
+            self._send_json(payload, status=499)
 
         def _send_quota_exceeded(self, exc: QuotaExceededError) -> None:
             self._send_json(

@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, TypedDict
@@ -502,6 +503,152 @@ def raise_for_failure(
     raise ScrapeOpsRequestError(failure)
 
 
+# ---------------------------------------------------------------------------
+# Bounded retry with exponential backoff
+# ---------------------------------------------------------------------------
+
+_SCRAPEOPS_DEFAULT_TIMEOUT_SECONDS = 30
+_SCRAPEOPS_MAX_RETRIES = 3
+_SCRAPEOPS_BASE_BACKOFF_SECONDS = 1.0
+_SCRAPEOPS_MAX_BACKOFF_SECONDS = 15.0
+_SCRAPEOPS_MAX_TOTAL_RETRY_SECONDS = 60.0
+_RETRYABLE_SCRAPEOPS_STATUSES = frozenset({0, 408, 429, 500, 502, 503, 504})
+
+
+def _is_retryable_scrapeops(error: Exception | None = None, status_code: int = 0) -> bool:
+    if isinstance(error, requests.ConnectionError) or isinstance(error, requests.Timeout):
+        return True
+    if status_code in _RETRYABLE_SCRAPEOPS_STATUSES:
+        return True
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class ScrapeOpsRetryResult:
+    response: requests.Response | None
+    attempts: int
+    total_backoff_seconds: float
+    last_error: Exception | None
+
+
+def scrapeops_request_with_retry(
+    method: str,
+    url: str,
+    *,
+    timeout_seconds: int = _SCRAPEOPS_DEFAULT_TIMEOUT_SECONDS,
+    max_retries: int = _SCRAPEOPS_MAX_RETRIES,
+    base_backoff_seconds: float = _SCRAPEOPS_BASE_BACKOFF_SECONDS,
+    max_backoff_seconds: float = _SCRAPEOPS_MAX_BACKOFF_SECONDS,
+    max_total_seconds: float = _SCRAPEOPS_MAX_TOTAL_RETRY_SECONDS,
+    usage_callback: Callable[[dict], None] | None = None,
+    **kwargs: Any,
+) -> ScrapeOpsRetryResult:
+    """Execute a requests call with bounded retries and exponential backoff.
+
+    Retries only on network errors and known-retryable HTTP status codes.
+    The total time spent across all backoff delays is capped, providing
+    a hard upper bound on latency.
+    """
+    effective_timeout = max(3, min(300, int(timeout_seconds)))
+    effective_max_retries = max(0, min(int(max_retries), 5))
+    effective_base_backoff = max(0.5, float(base_backoff_seconds))
+    effective_max_backoff = min(float(max_backoff_seconds), 30.0)
+    effective_max_total = min(float(max_total_seconds), 120.0)
+
+    last_error: Exception | None = None
+    total_backoff = 0.0
+
+    for attempt in range(effective_max_retries + 1):
+        request_started = time.perf_counter()
+        try:
+            response = requests.request(
+                method=method.upper(),
+                url=url,
+                timeout=effective_timeout,
+                **kwargs,
+            )
+            status = int(response.status_code or 0)
+            if status < 500:
+                if callable(usage_callback):
+                    usage_callback({"event": "scrapeops_retry_succeeded", "attempt": attempt, "status": status})
+                return ScrapeOpsRetryResult(
+                    response=response,
+                    attempts=attempt + 1,
+                    total_backoff_seconds=total_backoff,
+                    last_error=None,
+                )
+            last_error = ScrapeOpsRequestError(
+                classify_failure(status_code=status, response_text=str(response.text or ""))
+            )
+        except requests.RequestException as req_exc:
+            last_error = req_exc
+
+        duration_ms = (time.perf_counter() - request_started) * 1000
+
+        if attempt >= effective_max_retries:
+            LOGGER.warning(
+                "ScrapeOps request exhausted retries after %d attempts: url=%s last_error=%s",
+                attempt + 1,
+                sanitize_url_for_logs(url),
+                sanitize_scrapeops_text(str(last_error or "")),
+            )
+            break
+
+        if not _is_retryable_scrapeops(last_error, status_code=int(getattr(getattr(last_error, "failure", None), "status_code", 0) or 0)):
+            LOGGER.debug(
+                "ScrapeOps request not retryable: url=%s error=%s",
+                sanitize_url_for_logs(url),
+                sanitize_scrapeops_text(str(last_error or "")),
+            )
+            break
+
+        backoff = min(effective_base_backoff * (2 ** attempt), effective_max_backoff)
+        if total_backoff + backoff > effective_max_total:
+            LOGGER.warning(
+                "ScrapeOps retry total backoff would exceed cap (%.1fs): url=%s",
+                effective_max_total,
+                sanitize_url_for_logs(url),
+            )
+            break
+
+        LOGGER.info(
+            "ScrapeOps retry attempt %d/%d after %.0f ms (backoff %.1fs): url=%s",
+            attempt + 1,
+            effective_max_retries,
+            duration_ms,
+            backoff,
+            sanitize_url_for_logs(url),
+        )
+        time.sleep(backoff)
+        total_backoff += backoff
+
+    clean_response = None
+    status_code_last = 0
+    if last_error is not None:
+        failure_attr = getattr(last_error, "failure", None)
+        if failure_attr is not None:
+            status_code_last = int(getattr(failure_attr, "status_code", 0) or 0)
+
+    if callable(usage_callback):
+        usage_callback({
+            "event": "scrapeops_retry_exhausted",
+            "attempts": (effective_max_retries + 1),
+            "total_backoff_seconds": total_backoff,
+            "last_status_code": status_code_last,
+            "last_error": sanitize_scrapeops_text(str(last_error or "")),
+        })
+
+    return ScrapeOpsRetryResult(
+        response=clean_response,
+        attempts=effective_max_retries + 1,
+        total_backoff_seconds=total_backoff,
+        last_error=last_error,
+    )
+
+
+
+
+
 def fetch_account_usage(api_key: str, *, timeout_seconds: int = 8) -> dict[str, Any]:
     normalized_api_key = str(api_key or "").strip()
     if not normalized_api_key:
@@ -562,6 +709,10 @@ __all__ = [
     "ScrapeOpsProxyHealthResult",
     "ScrapeOpsProxyUnavailableError",
     "ScrapeOpsRequestError",
+    "ScrapeOpsProxyUnavailableError",
+    "ScrapeOpsRequestError",
+    "ScrapeOpsRetryResult",
+    "scrapeops_request_with_retry",
     "billed_status_code",
     "build_proxy_usage_record",
     "build_proxy_params",
