@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTracker } from "../hooks/useTracker";
+import { useApiResource } from "../hooks/useApiResource";
+import AssistedApplyLaunchDialog from "../components/AssistedApplyLaunchDialog";
 import { trackerDescriptionForItem } from "../lib/trackerDescription";
+import { assistedApplyTrackerRow } from "../lib/trackerAssistedApply";
 import { CV_STUDIO_ROUTE, stashCvStudioSeed } from "../lib/cvStudio";
 
 const COLUMNS = [
@@ -90,12 +93,13 @@ function ApplicationWarnings({ warnings = [], compact = false }) {
   return (<div className={compact ? "space-y-1.5" : "mt-3 space-y-2"}>{visibleWarnings.slice(0, compact ? 2 : 3).map((warning, index) => { const blocking = String(warning.severity || "") === "blocking"; return (<div className={["rounded-xl border px-3 py-2 text-xs leading-5", blocking ? "border-error/25 bg-error/5 text-error" : "border-amber-500/25 bg-amber-500/5 text-amber-700"].join(" ")} key={`${warning.code || "application-warning"}-${index}`}><div className="flex items-start gap-2"><span className="material-symbols-outlined mt-0.5 text-[15px]">{blocking ? "priority_high" : "info"}</span><div><div className="font-semibold">{warning.title || "Application requirement"}</div><div>{warning.message}</div></div></div></div>); })}</div>);
 }
 
-function TrackerCard({ item, onUpdate, onDelete, updating }) {
+function TrackerCard({ item, onAssistedApply, onUpdate, onDelete, updating }) {
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState(item.rejection_note || "");
   const isBusy = updating === item.review_id;
   const currentStatus = item.tracker_status === "email_confirmed" ? "applied" : item.tracker_status || "unknown";
   const isRejected = currentStatus === "rejected";
+  const assistedApplyRow = assistedApplyTrackerRow(item);
   async function handleStatusChange(newStatus) { await onUpdate(item.review_id, { tracker_status: newStatus }); if (newStatus === "rejected") setNoteOpen(true); }
   async function handleEmailToggle() { await onUpdate(item.review_id, { email_confirmed: !item.email_confirmed }); }
   async function saveNote() { await onUpdate(item.review_id, { rejection_note: note }); setNoteOpen(false); }
@@ -111,6 +115,7 @@ function TrackerCard({ item, onUpdate, onDelete, updating }) {
         <div className="flex items-center gap-1.5">
           {onDelete ? (<button className="flex h-7 w-7 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-error/10 hover:text-error" disabled={isBusy} onClick={() => onDelete(item)} title="Delete job" type="button"><span className="material-symbols-outlined text-[16px]">delete</span></button>) : null}
           {isRejected && (<button className="flex h-7 w-7 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary" onClick={() => setNoteOpen((v) => !v)} title="Add rejection note" type="button"><span className="material-symbols-outlined text-[16px]">note_add</span></button>)}
+          {assistedApplyRow ? (<button className="flex h-7 items-center gap-1 rounded-full bg-primary/10 px-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/20" onClick={() => onAssistedApply(assistedApplyRow)} title="Prepare a reviewed Assisted Apply package" type="button"><span className="material-symbols-outlined text-[15px]">auto_awesome</span>Review &amp; Apply</button>) : null}
           {item.apply_link && (<a className="flex h-7 w-7 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary" href={item.apply_link} rel="noreferrer" target="_blank" title="Open job posting"><span className="material-symbols-outlined text-[16px]">open_in_new</span></a>)}
         </div>
       </div>
@@ -238,7 +243,7 @@ function sourceLabelForItem(item) {
   const match = TRACKER_SOURCE_FILTERS.find((entry) => entry.value === sourceType);
   return match?.label || "Standard run";
 }
-function TrackerResourceCell({ item, request }) {
+function TrackerResourceCell({ item, onAssistedApply, request }) {
   const navigate = useNavigate();
   const [exporting, setExporting] = useState(false);
   const [feedback, setFeedback] = useState({ message: "", error: "" });
@@ -246,6 +251,7 @@ function TrackerResourceCell({ item, request }) {
   const atsSummary = summarizeTrackerAtsState(item.documents);
   const exportableDocuments = selectTrackerExportDocuments(item.documents);
   const canEditGeneratedCv = Boolean(item.cv_studio_seed?.profile);
+  const assistedApplyRow = assistedApplyTrackerRow(item);
 
   function openGeneratedCvEditor() {
     if (!canEditGeneratedCv) return;
@@ -284,6 +290,12 @@ function TrackerResourceCell({ item, request }) {
     <div className="min-w-60 max-w-80 space-y-2">
       <div className="flex flex-wrap gap-2">
         <TrackerLink href={item.apply_link || item.tracker_table_row?.apply_link}>Apply</TrackerLink>
+        {assistedApplyRow ? (
+          <button className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-primary text-white hover:bg-primary/90`} onClick={() => onAssistedApply(assistedApplyRow)} type="button">
+            <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
+            Review &amp; Apply
+          </button>
+        ) : null}
         {description ? (
           <Link className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-surface-container-low text-on-surface hover:bg-surface-container-high`} to={`/tracker/job-descriptions/${encodeURIComponent(item.review_id)}`}>
             <span className="material-symbols-outlined text-[13px]">article</span>
@@ -371,7 +383,7 @@ function TrackerNotesCell({ item, onUpdate, updating }) {
     </div>
   );
 }
-function TrackerTable({ filters, items, allItems, workspaceOptions, onFiltersChange, onUpdate, onDelete, onBulkDelete, updating, request }) {
+function TrackerTable({ filters, items, allItems, workspaceOptions, onAssistedApply, onFiltersChange, onUpdate, onDelete, onBulkDelete, updating, request }) {
   const [bulkMode, setBulkMode] = useState("all");
   const [bulkDate, setBulkDate] = useState("");
   const [bulkCompany, setBulkCompany] = useState("");
@@ -510,7 +522,7 @@ function TrackerTable({ filters, items, allItems, workspaceOptions, onFiltersCha
                     </td>
                     <td className="max-w-52 px-4 py-4 text-on-surface-variant">{item.location || row.location_raw || "Not set"}</td>
                     <td className="px-4 py-4 text-on-surface-variant">{formatDate(item.application_date || row.application_date || item.run_finished_at) || "Not set"}</td>
-                    <td className="px-4 py-4"><TrackerResourceCell item={item} request={request} /></td>
+                    <td className="px-4 py-4"><TrackerResourceCell item={item} onAssistedApply={onAssistedApply} request={request} /></td>
                     <td className="px-4 py-4 text-on-surface-variant">{item.priority_rank || row.priority_rank || row.priority_tier || "Not set"}</td>
                     <td className="px-4 py-4"><TrackerNotesCell item={item} onUpdate={onUpdate} updating={updating} /></td>
                     <td className="px-4 py-4">
@@ -534,7 +546,7 @@ function TrackerTable({ filters, items, allItems, workspaceOptions, onFiltersCha
     </div>
   );
 }
-function KanbanColumn({ colDef, cards, onDelete, onUpdate, updating }) {
+function KanbanColumn({ colDef, cards, onAssistedApply, onDelete, onUpdate, updating }) {
   return (
     <div className="flex min-w-[280px] flex-1 flex-col">
       <div className={["mb-4 flex items-center justify-between rounded-xl border px-4 py-3", colDef.border].join(" ")}>
@@ -542,7 +554,7 @@ function KanbanColumn({ colDef, cards, onDelete, onUpdate, updating }) {
         <span className={["min-w-[24px] rounded-full px-2 py-0.5 text-center text-xs font-bold", colDef.badge].join(" ")}>{cards.length}</span>
       </div>
       <div className="flex flex-col gap-3">
-        {cards.length === 0 ? <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-outline-variant/20 py-10 text-center text-sm text-on-surface-variant/50"><span className="material-symbols-outlined mb-2 text-3xl opacity-30">{colDef.icon}</span>No jobs here yet</div> : cards.map((item) => <TrackerCard item={item} key={item.review_id} onDelete={onDelete} onUpdate={onUpdate} updating={updating} />)}
+        {cards.length === 0 ? <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-outline-variant/20 py-10 text-center text-sm text-on-surface-variant/50"><span className="material-symbols-outlined mb-2 text-3xl opacity-30">{colDef.icon}</span>No jobs here yet</div> : cards.map((item) => <TrackerCard item={item} key={item.review_id} onAssistedApply={onAssistedApply} onDelete={onDelete} onUpdate={onUpdate} updating={updating} />)}
       </div>
     </div>
   );
@@ -738,8 +750,10 @@ export default function TrackerPage() {
   const [discoveringId, setDiscoveringId] = useState("");
   const [discoveryModal, setDiscoveryModal] = useState(EMPTY_DISCOVERY_MODAL);
   const [discoveryFeedback, setDiscoveryFeedback] = useState(EMPTY_DISCOVERY_FEEDBACK);
+  const [assistedApplyRow, setAssistedApplyRow] = useState(null);
   const [trackerFilters, setTrackerFilters] = useState(() => trackerFiltersFromSearchParams(searchParams));
   const { items, loading, error, refresh, updating, updateCard, deleteCard, bulkDeleteCards, emailIntegration, integrationBusy, lastSyncResult, refreshEmailIntegration, startGoogleEmailIntegration, updateEmailIntegrationSettings, syncEmailIntegration, approveEmailDetections, dismissEmailDetections, deleteEmailIntegration } = useTracker();
+  const { data: settingsData } = useApiResource(() => request("/settings"), [request]);
   const totalCards = items.length;
   const filteredTrackerItems = useMemo(() => items.filter((item) => trackerItemMatchesFilters(item, trackerFilters)), [items, trackerFilters]);
   const workspaceOptions = useMemo(() => [...new Set(items.map((item) => item.workspace_name).filter(Boolean))].sort(), [items]);
@@ -763,7 +777,16 @@ export default function TrackerPage() {
       {!loading && !error && (<InboxSyncControl busy={integrationBusy} integration={emailIntegration} lastSyncResult={lastSyncResult} onDelete={deleteEmailIntegration} onDismissDetections={dismissEmailDetections} onRefreshIntegration={refreshEmailIntegration} onSaveSettings={updateEmailIntegrationSettings} onApproveDetections={approveEmailDetections} onStartGoogle={startGoogleEmailIntegration} onSync={syncEmailIntegration} />)}
       {!loading && !error && (<div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">{COLUMNS.map((column) => { const selected = trackerFilters.status === column.key; return (<button aria-pressed={selected} className={["rounded-2xl border px-4 py-3 text-left transition-colors", selected ? `${column.border} bg-surface-container-low shadow-sm` : "border-outline-variant/20 bg-surface-container-lowest hover:bg-surface-container-low"].join(" ")} key={column.key} onClick={() => { setTrackerFilters((current) => ({ ...current, status: current.status === column.key ? "all" : column.key })); }} type="button"><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-on-surface-variant">{column.label}</span><span className={["rounded-full px-2 py-0.5 text-xs font-bold", column.badge].join(" ")}>{statusCounts[column.key] || 0}</span></div></button>); })}</div>)}
 
-      {!loading && !error && (<TrackerTable allItems={items} filters={trackerFilters} items={filteredTrackerItems} onBulkDelete={handleBulkDeleteCards} onDelete={handleDeleteCard} onFiltersChange={setTrackerFilters} onUpdate={updateCard} request={request} updating={updating} workspaceOptions={workspaceOptions} />)}
+      {!loading && !error && (<TrackerTable allItems={items} filters={trackerFilters} items={filteredTrackerItems} onAssistedApply={setAssistedApplyRow} onBulkDelete={handleBulkDeleteCards} onDelete={handleDeleteCard} onFiltersChange={setTrackerFilters} onUpdate={updateCard} request={request} updating={updating} workspaceOptions={workspaceOptions} />)}
+      {assistedApplyRow ? (
+        <AssistedApplyLaunchDialog
+          onClose={() => setAssistedApplyRow(null)}
+          onLaunched={() => setDeleteFeedback({ message: "Assisted Apply package prepared. Review it in the employer tab before submitting.", error: "" })}
+          profile={settingsData?.profile}
+          request={request}
+          row={assistedApplyRow}
+        />
+      ) : null}
     </div>
   );
 }
