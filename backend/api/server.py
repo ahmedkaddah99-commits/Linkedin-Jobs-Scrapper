@@ -195,6 +195,11 @@ _EXPANDED_ARTIFACT_SUFFIXES = {".csv", ".docx", ".json", ".md", ".pdf", ".txt", 
 _PROMO_CODE_PATTERN = re.compile(r"^[A-Z0-9]{3,256}$")
 _CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 _MAX_CV_UPLOAD_REQUEST_BYTES = 10 * 1024 * 1024
+# Bounded-collection caps to prevent unbounded memory growth on metadata endpoints.
+_MAX_AUTHORIZED_RUNS = 250
+_MAX_DOCUMENT_ARTIFACT_EXPANSION = 500
+_MAX_CANDIDATE_ASSETS_IN_DOCUMENTS = 100
+_MAX_HISTORY_ROWS_DASHBOARD = 1000
 _ACTIVE_RUN_STATUSES = {
     RUN_STATUS_PLANNED,
     RUN_STATUS_QUEUED,
@@ -362,9 +367,13 @@ def _expand_artifact_entries(run, workspace, artifact) -> list[dict]:
 
     if artifact_path.exists() and artifact_path.is_dir():
         expanded_entries: list[dict] = []
+        expansion_count = 0
         for child_path in sorted(artifact_path.rglob("*"), key=lambda item: str(item).lower()):
+            if expansion_count >= _MAX_DOCUMENT_ARTIFACT_EXPANSION:
+                break
             if not child_path.is_file() or child_path.suffix.lower() not in _EXPANDED_ARTIFACT_SUFFIXES:
                 continue
+            expansion_count += 1
             relative_path = child_path.relative_to(artifact_path).as_posix()
             expanded_entries.append(
                 _build_artifact_entry(
@@ -2879,15 +2888,16 @@ def _user_can_access_run_from_workspace_map(user, run, workspaces: Mapping[str, 
     return str(getattr(run, "workspace_id", "") or "").strip() in workspaces
 
 
-def _collect_authorized_runs(application, user, *, workspace_id: str = "") -> tuple[dict[str, object], list[object]]:
+def _collect_authorized_runs(application, user, *, workspace_id: str = "", run_limit: int | None = None) -> tuple[dict[str, object], list[object]]:
     workspaces = {
         workspace.id: workspace
         for workspace in application.list_workspaces()
         if _user_can_access_workspace_record(user, workspace)
     }
+    effective_limit = min(run_limit if run_limit is not None else _MAX_AUTHORIZED_RUNS, _MAX_AUTHORIZED_RUNS)
     runs = [
         run
-        for run in application.list_runs(limit=1000, offset=0, status="", workspace_id=workspace_id)
+        for run in application.list_runs(limit=effective_limit, offset=0, status="", workspace_id=workspace_id)
         if _user_can_access_run_from_workspace_map(user, run, workspaces)
     ]
     return workspaces, runs
@@ -2912,7 +2922,7 @@ def _load_reviews_by_run(application, runs: list[object]) -> dict[str, list[obje
     return {
         run_id: application.repositories.review_store.list_reviews(
             run_id=run_id,
-            limit=1000,
+            limit=500,
             offset=0,
         )
         for run_id in run_ids
@@ -4432,6 +4442,8 @@ def _collect_artifact_entries(
         )
         artifacts = resolved_artifacts_by_run.get(run.id, [])
         for artifact in artifacts:
+            if len(entries) >= _MAX_DOCUMENT_ARTIFACT_EXPANSION:
+                break
             entries.extend(
                 _enrich_artifact_entry_with_job_context(entry, resolved_run_jobs)
                 for entry in _expand_artifact_entries(run, workspace, artifact)
@@ -5430,10 +5442,14 @@ def _collect_document_entries(
             _load_candidate_assets(user),
             referenced_asset_ids=referenced_asset_ids,
         )
+        asset_count = 0
         for asset in candidate_assets:
+            if asset_count >= _MAX_CANDIDATE_ASSETS_IN_DOCUMENTS:
+                break
             asset_workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
             if workspace_id and asset_workspace_id and asset_workspace_id != workspace_id:
                 continue
+            asset_count += 1
             asset_for_item = deepcopy(asset)
             asset_metadata = dict(asset_for_item.get("metadata") or {})
             processing = dict(asset_metadata.get("cv_processing") or {})
@@ -5474,7 +5490,40 @@ def _resolve_candidate_asset_download(application, user, asset_id: str) -> tuple
 
 
 def _find_document_entry(application, user, document_id: str) -> dict:
+    kind, _, remainder = str(document_id or "").partition("::")
+    if kind == "asset":
+        for asset in _load_candidate_assets(user):
+            if str(asset.get("asset_id") or "") != remainder:
+                continue
+            workspaces = {
+                ws.id: ws.name
+                for ws in application.list_workspaces()
+                if application.user_can_access_workspace(user, ws.id)
+            }
+            shared = dict((user.metadata or {}).get("profile") or {})
+            return _candidate_asset_to_document_item(
+                dict(asset), workspaces, shared,
+            )
+    if kind == "artifact":
+        run_id_part, _, artifact_id = remainder.partition("::")
+        try:
+            run = application.get_run(run_id_part)
+            workspace = application.get_workspace(run.workspace_id)
+            if not application.user_can_access_run(user, run):
+                raise KeyError(f"Run access denied for '{run_id_part}'.")
+            artifact = application.get_artifact(run_id_part, artifact_id)
+            for entry in _expand_artifact_entries(run, workspace, artifact):
+                doc_entry = _artifact_entry_to_document_item(entry)
+                if str(doc_entry.get("document_id") or "") == str(document_id or ""):
+                    return doc_entry
+        except (KeyError, ValueError):
+            pass
+    # Fallback bounded scan
+    count = 0
     for item in _collect_document_entries(application, user):
+        if count >= 500:
+            break
+        count += 1
         if str(item.get("document_id") or "") == str(document_id or ""):
             return item
     raise KeyError(f"Document '{document_id}' not found.")
@@ -6161,7 +6210,7 @@ def _dashboard_job_role_label(job) -> str:
 def _dashboard_tracker_items(application, user, runs: list[object]) -> tuple[list[dict], int]:
     history_rows = application.repositories.review_store.list_application_status_history(
         user_id=user.user_id,
-        limit=10000,
+        limit=_MAX_HISTORY_ROWS_DASHBOARD,
         offset=0,
     )
     history_by_review: dict[str, list[dict]] = {}
@@ -6966,7 +7015,7 @@ def _empty_dashboard_analytics() -> dict:
 
 
 def _dashboard_payload(application, user, *, mode: str = "") -> dict:
-    workspaces, runs = _collect_authorized_runs(application, user)
+    workspaces, runs = _collect_authorized_runs(application, user, run_limit=_MAX_AUTHORIZED_RUNS)
     summary_only = str(mode or "").strip().lower() == "summary"
     analytics = (
         {"waitingReviewCount": 0, **_empty_dashboard_analytics()}
