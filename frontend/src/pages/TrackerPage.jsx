@@ -250,17 +250,24 @@ function TrackerResourceCell({ item, onAssistedApply, request }) {
   const description = trackerDescriptionForItem(item);
   const atsSummary = summarizeTrackerAtsState(item.documents);
   const exportableDocuments = selectTrackerExportDocuments(item.documents);
-  const canEditGeneratedCv = Boolean(item.cv_studio_seed?.profile);
+  const canEditGeneratedCv = Boolean(item.has_generated_cv);
   const assistedApplyRow = assistedApplyTrackerRow(item);
 
-  function openGeneratedCvEditor() {
+  async function openGeneratedCvEditor() {
     if (!canEditGeneratedCv) return;
-    stashCvStudioSeed({
-      ...item.cv_studio_seed,
-      returnTo: "/tracker",
-      sourceLabel: [item.title, item.company].filter(Boolean).join(" at ") || "Generated application CV",
-    });
-    navigate(CV_STUDIO_ROUTE);
+    try {
+      const payload = await request(`/tracker/${encodeURIComponent(item.review_id)}/cv-studio-seed`);
+      const seed = payload?.cv_studio_seed || {};
+      if (!seed.profile) throw new Error("The generated CV source is unavailable.");
+      stashCvStudioSeed({
+        ...seed,
+        returnTo: "/tracker",
+        sourceLabel: [item.title, item.company].filter(Boolean).join(" at ") || "Generated application CV",
+      });
+      navigate(CV_STUDIO_ROUTE);
+    } catch (error) {
+      setFeedback({ message: "", error: error.message || "Unable to load the generated CV." });
+    }
   }
 
   async function downloadBundle() {

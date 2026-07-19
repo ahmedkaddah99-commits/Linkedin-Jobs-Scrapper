@@ -214,6 +214,26 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         self._send_json(_tracker_ats_detail_payload(entry), status=HTTPStatus.OK)
                         return
 
+    if segments[:1] == ["tracker"] and len(segments) == 3 and segments[2] == "cv-studio-seed":
+                        user, _ = self._require_identity()
+                        review_id = str(segments[1] or "").strip()
+                        entry = next(
+                            iter(
+                                _collect_tracker_entries(
+                                    application,
+                                    user,
+                                    max_entries=500,
+                                    selected_review_id=review_id,
+                                    include_cv_studio_seed=True,
+                                )
+                            ),
+                            None,
+                        )
+                        if entry is None:
+                            raise KeyError(f"Tracker review '{review_id}' not found.")
+                        self._send_json({"cv_studio_seed": entry.get("cv_studio_seed") or {}}, status=HTTPStatus.OK)
+                        return
+
     if segments == ["tracker"]:
                         user, _ = self._require_identity()
                         limit = _parse_int_param(query, "limit", default=200, maximum=1000)

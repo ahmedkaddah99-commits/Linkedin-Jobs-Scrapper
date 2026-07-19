@@ -3349,8 +3349,8 @@ def _application_requirement_status(requirements: Mapping[str, Any] | None, docu
     }
 
 
-def _cv_studio_seed_from_job_extra(job_extra: Mapping[str, Any], *, user, job=None) -> dict[str, Any]:
-    has_generated_profile = any(
+def _has_generated_cv_profile(job_extra: Mapping[str, Any]) -> bool:
+    return any(
         job_extra.get(field_name)
         for field_name in (
             "cv_professional_summary",
@@ -3360,6 +3360,10 @@ def _cv_studio_seed_from_job_extra(job_extra: Mapping[str, Any], *, user, job=No
             "cv_strategic_initiatives",
         )
     )
+
+
+def _cv_studio_seed_from_job_extra(job_extra: Mapping[str, Any], *, user, job=None) -> dict[str, Any]:
+    has_generated_profile = _has_generated_cv_profile(job_extra)
     if not has_generated_profile:
         return {}
     profile = dict((user.metadata or {}).get("profile") or {})
@@ -3462,7 +3466,14 @@ def _is_explicit_tracker_application(*, tracker_status: object = "", email_confi
 _TRACKER_ENTRIES_HARD_LIMIT = 2000
 
 
-def _collect_tracker_entries(application, user, *, max_entries: int = _TRACKER_ENTRIES_HARD_LIMIT) -> list[dict]:
+def _collect_tracker_entries(
+    application,
+    user,
+    *,
+    max_entries: int = _TRACKER_ENTRIES_HARD_LIMIT,
+    selected_review_id: str = "",
+    include_cv_studio_seed: bool = False,
+) -> list[dict]:
     """Return all reviews that have been approved or have a tracker_status set.
 
     max_entries provides a hard upper bound on the number of entries
@@ -3511,6 +3522,8 @@ def _collect_tracker_entries(application, user, *, max_entries: int = _TRACKER_E
                 jobs_by_id[job.job_id] = job
         workspace = workspaces.get(run.workspace_id)
         for review in review_records:
+            if selected_review_id and str(review.review_id) != selected_review_id:
+                continue
             review_meta = dict(review.metadata or {})
             raw_tracker_status = str(review_meta.get("tracker_status") or "")
             email_confirmed = bool(review_meta.get("email_confirmed") or False)
@@ -3586,12 +3599,16 @@ def _collect_tracker_entries(application, user, *, max_entries: int = _TRACKER_E
                 "documents": documents,
                 "application_requirements": application_requirements,
                 "application_warnings": list(application_requirements.get("warnings") or []),
-                "cv_studio_seed": _cv_studio_seed_from_job_extra(job_extra, user=user, job=job),
+                # A generated-CV editor seed can contain the user's embedded photo and
+                # full CV history. Do not duplicate it for every tracker row.
+                "has_generated_cv": _has_generated_cv_profile(job_extra),
                 "duplicate_sighting_count": 0,
                 "placed_in_tracker_at": review_placed_in_tracker_at(review),
                 "updated_at": review.updated_at,
                 "run_finished_at": run.finished_at or run.updated_at,
             }
+            if include_cv_studio_seed:
+                entry["cv_studio_seed"] = _cv_studio_seed_from_job_extra(job_extra, user=user, job=job)
             entry["tracker_table_row"] = _tracker_baseline_row(
                 job=job,
                 run=run,
@@ -3659,7 +3676,7 @@ def _collect_tracker_entries(application, user, *, max_entries: int = _TRACKER_E
             "gmail_detection": dict(external.get("gmail_detection") or {}),
             "application_requirements": _application_requirement_status({}, documents=list(standard_documents)),
             "application_warnings": [],
-            "cv_studio_seed": {},
+            "has_generated_cv": False,
             "placed_in_tracker_at": str(
                 external.get("placed_in_tracker_at")
                 or external.get("created_at")
