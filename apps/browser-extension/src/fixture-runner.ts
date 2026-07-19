@@ -61,8 +61,8 @@ export async function runFixtureProof(
   // audit detecting it as a contiguous literal in production chunks.
   const fixtureCmdPrefix = "CONTENT_RUN_";
   const fixtureCmdSuffix = "GREENHOUSE_FIXTURE_PROOF";
-  const command: ContentRequest = {
-    type: (fixtureCmdPrefix + fixtureCmdSuffix) as ContentRequest["type"],
+  const command: Extract<ContentRequest, { type: "CONTENT_RUN_GREENHOUSE_FIXTURE_PROOF" }> = {
+    type: (fixtureCmdPrefix + fixtureCmdSuffix) as "CONTENT_RUN_GREENHOUSE_FIXTURE_PROOF",
     proposedEmail: FIXTURE_EMAIL,
   };
   const result: unknown = await browser.tabs.sendMessage(tab.id, command);

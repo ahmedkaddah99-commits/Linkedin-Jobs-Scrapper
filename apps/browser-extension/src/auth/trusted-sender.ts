@@ -10,3 +10,16 @@ export function isExactSidePanelSender(
 ): boolean {
   return sender.id === runtimeId && sender.url === sidePanelUrl;
 }
+
+/** Only the configured Runr web origin may request a package-tab binding. */
+export function isExactRunrWebSender(
+  sender: RuntimeMessageSender,
+  expectedOrigin: string,
+): boolean {
+  if (!sender.url) return false;
+  try {
+    return new URL(sender.url).origin === expectedOrigin;
+  } catch {
+    return false;
+  }
+}

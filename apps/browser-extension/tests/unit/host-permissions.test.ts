@@ -16,6 +16,8 @@ describe("host permission module", () => {
   beforeEach(() => {
     fakeBrowser.reset();
     vi.restoreAllMocks();
+    vi.spyOn(fakeBrowser.permissions, "contains").mockResolvedValue(false);
+    vi.spyOn(fakeBrowser.permissions, "request").mockResolvedValue(false);
   });
 
   describe("constants", () => {

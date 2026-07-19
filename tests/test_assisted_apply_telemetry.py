@@ -147,6 +147,14 @@ class AdapterHealthTelemetryServiceTests(unittest.TestCase):
                 "errorCategory": "none",
             })
 
+    def test_registers_only_the_canonical_extension_telemetry_endpoint(self):
+        from backend.api.routes import build_route_registry
+
+        routes = build_route_registry()._routes
+        route_names = {route.name for route in routes}
+        self.assertIn("assisted_apply.telemetry.events.receive", route_names)
+        self.assertNotIn("assisted_apply.extension.telemetry.create", route_names)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,10 +13,11 @@ const RESERVED_EXTENSION_ID = "najcdfohhfgbjpbokhmmekkahghfhegp";
 declare const chrome: {
   runtime: {
     sendMessage(message: unknown): Promise<unknown>;
+    sendMessage(extensionId: string, message: unknown): Promise<unknown>;
   };
   storage: {
     session: {
-      get(keys?: null): Promise<Record<string, unknown>>;
+      get(keys?: null | string): Promise<Record<string, unknown>>;
       set(items: Record<string, unknown>): Promise<void>;
     };
   };
@@ -530,6 +531,46 @@ test("connects only on explicit action and preserves then revokes the extension 
   expect(revokedSessionResponse).toBe(401);
 });
 
+test("binds an opaque package from the permitted Runr web origin to the employer tab", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  if (await panelPage.getByTestId("connect-runr").isVisible().catch(() => false)) {
+    await panelPage.getByTestId("connect-runr").click();
+    await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
+  }
+  const runrWebPage = await context.newPage();
+  await runrWebPage.goto("http://127.0.0.1:4174/runr-web-launch.html");
+  const response = await runrWebPage.evaluate(
+    async ({ id, applicationUrl }) => chrome.runtime.sendMessage(id, {
+      type: "RUNR_WEB_BIND_APPLICATION_PACKAGE",
+      bindingId: "aapkg_bind_fixture_web_launch",
+      applicationUrl,
+    }),
+    { id: extensionId, applicationUrl: fixturePage.url() },
+  );
+  expect(response).toEqual({ ok: true, packageId: "aapkg_fixture_web_launch" });
+
+  const fixtureTab = await serviceWorker.evaluate(async () =>
+    (await chrome.tabs.query({})).find((tab) => tab.url?.includes("greenhouse-application.html")),
+  );
+  expect(fixtureTab?.id).toBeDefined();
+  const stored = await serviceWorker.evaluate(
+    async (tabId) => chrome.storage.session.get(`assisted-apply-package:${tabId}`),
+    fixtureTab?.id,
+  );
+  expect(stored[`assisted-apply-package:${fixtureTab?.id}`]).toMatchObject({
+    packageId: "aapkg_fixture_web_launch",
+    job: { portal: "greenhouse" },
+  });
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+  await runrWebPage.close();
+  await panelPage.close();
+  await fixturePage.close();
+});
+
 test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", async () => {
   for (const page of context.pages()) await page.close();
   const fixturePage = await context.newPage();
@@ -572,9 +613,8 @@ test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", 
       telemetry: {
         adapter: "greenhouse",
         lifecycleStage: "upload",
-        aggregateOutcome: "accepted",
+        aggregateOutcome: "success",
         errorCategory: "none",
-        documentRole: "cover_letter",
       },
     },
   });
@@ -684,29 +724,46 @@ test("uploads selected CV, cover-letter, and supporting-document roles on both a
     for (const forbidden of ["bytes", "url", "token", "fileName", "answer", "markup"]) {
       expect(JSON.stringify(uploadResult.telemetry)).not.toContain(forbidden);
     }
-    return uploadResult as { status: string; telemetry: { documentRole: string; aggregateOutcome: string; errorCategory: string } };
+    return uploadResult as {
+      status: string;
+      telemetry: { aggregateOutcome: string; errorCategory: string };
+    };
   };
 
   await fixturePage.goto("http://127.0.0.1:4174/lever-application.html");
-  expect(await upload("lever", documents.cv)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cover_letter", aggregateOutcome: "accepted" } });
-  expect(await upload("lever", documents.cover)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cover_letter", aggregateOutcome: "accepted" } });
-  expect(await upload("lever", documents.supporting)).toMatchObject({ status: "uploaded", telemetry: { telemetry: { documentRole: string; aggregateOutcome: string; errorCategory: string }, aggregateOutcome: "accepted" } });
+  expect(await upload("lever", documents.cv)).toMatchObject({
+    status: "uploaded",
+    telemetry: { aggregateOutcome: "success", errorCategory: "none" },
+  });
+  expect(await upload("lever", documents.cover)).toMatchObject({
+    status: "uploaded",
+    telemetry: { aggregateOutcome: "success", errorCategory: "none" },
+  });
+  expect(await upload("lever", documents.supporting)).toMatchObject({
+    status: "uploaded",
+    telemetry: { aggregateOutcome: "success", errorCategory: "none" },
+  });
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cv", "Lever CV.pdf");
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cover-letter", "Cover Letter.pdf");
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-supporting-document", "Certificate.docx");
 
   await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
-  expect(await upload("greenhouse", documents.cover)).toMatchObject({ status: "uploaded", telemetry: { documentRole: "cover_letter", aggregateOutcome: "accepted" } });
-  expect(await upload("greenhouse", documents.supporting)).toMatchObject({ status: "rejected", telemetry: { telemetry: { documentRole: string; aggregateOutcome: string; errorCategory: string }, "accepted", errorCategory: "mime_rejected" } });
+  expect(await upload("greenhouse", documents.cover)).toMatchObject({
+    status: "uploaded",
+    telemetry: { aggregateOutcome: "success", errorCategory: "none" },
+  });
+  expect(await upload("greenhouse", documents.supporting)).toMatchObject({
+    status: "rejected",
+    telemetry: { aggregateOutcome: "failure", errorCategory: "mime_rejected" },
+  });
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cover-letter", "Cover Letter.pdf");
   await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
   await expect.poll(fixtureAuthState).toMatchObject({
     lastTelemetry: {
       adapter: "greenhouse",
-      lifecycle_stage: "upload",
-      lifecycle_stage: "upload",
-      document_role: "supporting_document",
-      document_role: "supporting_document",
+      lifecycleStage: "upload",
+      aggregateOutcome: "failure",
+      errorCategory: "mime_rejected",
     },
   });
 });
@@ -755,15 +812,15 @@ test("AA-09 review panel shows all sections, field evidence, and keyboard-access
   await expect(panelPage.getByTestId("package-portal")).toHaveText("greenhouse");
 
   // Verify Ready, Review, Missing, Manual, Documents sections exist
-  await expect(panelPage.getByText("Ready")).toBeVisible();
-  await expect(panelPage.getByText("Review")).toBeVisible();
-  await expect(panelPage.getByText("Missing")).toBeVisible();
-  await expect(panelPage.getByText("Manual")).toBeVisible();
-  await expect(panelPage.getByText("Documents")).toBeVisible();
+  await expect(panelPage.getByRole("heading", { name: "Ready" })).toBeVisible();
+  await expect(panelPage.getByRole("heading", { name: "Review" })).toBeVisible();
+  await expect(panelPage.getByRole("heading", { name: "Missing" })).toBeVisible();
+  await expect(panelPage.getByRole("heading", { name: "Manual" })).toBeVisible();
+  await expect(panelPage.getByRole("heading", { name: "Documents" })).toBeVisible();
 
   // Verify field rows show evidence data
   await expect(panelPage.getByText("ada@example.com")).toBeVisible();
-  await expect(panelPage.getByText("profile_verified").first()).toBeVisible();
+  await expect(panelPage.getByText("profile verified", { exact: true }).first()).toBeVisible();
 
   // Verify document section shows document
   await expect(panelPage.getByText("cv.pdf")).toBeVisible();

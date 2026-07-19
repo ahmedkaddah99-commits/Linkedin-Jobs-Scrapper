@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import AssistedApplyLaunchDialog from "../components/AssistedApplyLaunchDialog";
+import { isSupportedAssistedApplyUrl } from "../lib/supportedAssistedApplyUrl";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -87,6 +89,7 @@ export default function ReviewQueuePage() {
   const [selectedReferralContacts, setSelectedReferralContacts] = useState({});
   const [bulkOutreachStatusByRow, setBulkOutreachStatusByRow] = useState({});
   const [pendingScopes, setPendingScopes] = useState({});
+  const [assistedApplyRow, setAssistedApplyRow] = useState(null);
 
   useEffect(() => {
     const nextFilters = {
@@ -773,6 +776,15 @@ export default function ReviewQueuePage() {
                             ) : null}
                             {(row.decision === "approved" || row.status === "approved") ? (
                               <>
+                                {isSupportedAssistedApplyUrl(row.apply_link) ? (
+                                  <button
+                                    className="rounded-full bg-primary px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-primary-container"
+                                    onClick={() => setAssistedApplyRow(row)}
+                                    type="button"
+                                  >
+                                    Review &amp; Apply
+                                  </button>
+                                ) : null}
                                 <button
                                   className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
                                   onClick={() => applyOnCompanySite(row)}
@@ -1204,6 +1216,17 @@ export default function ReviewQueuePage() {
             </div>
           </div>
         </div>
+      ) : null}
+      {assistedApplyRow ? (
+        <AssistedApplyLaunchDialog
+          onClose={() => setAssistedApplyRow(null)}
+          onLaunched={() => setFeedback(`job:${referralRowKey(assistedApplyRow)}`, {
+            message: "Assisted Apply package prepared. Review it in the employer tab before submitting.",
+          })}
+          profile={settingsData?.profile}
+          request={request}
+          row={assistedApplyRow}
+        />
       ) : null}
     </div>
   );

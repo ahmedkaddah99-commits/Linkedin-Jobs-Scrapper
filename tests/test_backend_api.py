@@ -601,6 +601,15 @@ class BackendApiTests(unittest.TestCase):
         handler.path = "/v1/assisted-apply/extension/session"
         self.assertEqual(handler._cors_origin(), extension_origin)
 
+        handler.path = "/v1/assisted-apply/telemetry/events"
+        self.assertEqual(handler._cors_origin(), extension_origin)
+
+        handler.path = "/v1/assisted-apply/telemetry/operator-report"
+        self.assertEqual(handler._cors_origin(), "")
+
+        handler.path = "/v1/assisted-apply/telemetry/events/unexpected"
+        self.assertEqual(handler._cors_origin(), "")
+
         handler.path = "/v1/workspaces"
         self.assertEqual(handler._cors_origin(), "")
 

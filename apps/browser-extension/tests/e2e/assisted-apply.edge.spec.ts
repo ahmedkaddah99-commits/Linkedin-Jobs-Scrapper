@@ -1,8 +1,6 @@
 import { test, expect, chromium, type BrowserContext, type Worker } from "@playwright/test";
 import { resolve } from "node:path";
 
-const RESERVED_EXTENSION_ID = "najcdfohhfgbjpbokhmmekkahghfhegp";
-
 declare const chrome: {
   runtime: { sendMessage(message: unknown): Promise<unknown>; };
   storage: { session: { get(keys?: null): Promise<Record<string, unknown>>; set(items: Record<string, unknown>): Promise<void>; }; };
@@ -37,7 +35,9 @@ test.beforeAll(async () => {
   worker ??= await context.waitForEvent("serviceworker");
   serviceWorker = worker;
   extensionId = new URL(worker.url()).host;
-  expect(extensionId).toBe(RESERVED_EXTENSION_ID);
+  // Edge builds deliberately omit Chrome's Web Store manifest key, so local
+  // Edge installs receive an Edge-specific extension identity.
+  expect(extensionId).toMatch(/^[a-p]{32}$/u);
 });
 
 test.afterAll(async () => { await context.close(); });
@@ -122,11 +122,12 @@ test("Edge: CV upload", async () => {
   if (await panelPage.getByTestId("connect-runr").isVisible().catch(() => false)) {
     await panelPage.getByTestId("connect-runr").click();
   }
+  await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
   const response = await panelPage.evaluate(() => chrome.runtime.sendMessage({
     type: "UPLOAD_SELECTED_DOCUMENT",
     documentId: "cv_version_7",
     package: {
-      packageId: "edge-pkg-cv", jobId: "edge-job-cv", version: 1, schemaVersion: 1,
+      packageId: "aapkg_fixture_edge_cv", jobId: "edge-job-cv", version: 1, schemaVersion: 1,
       job: { jobId: "edge-job-cv", title: "Engineer", company: "Acme", portal: "greenhouse", location: "Berlin" },
       answers: [],
       documents: [{ documentId: "cv_version_7", documentVersion: 7, documentKind: "cv", mimeType: "application/pdf", fileName: "Candidate CV.pdf" }],
@@ -151,7 +152,9 @@ test("Edge: tracker confirmation", async () => {
   const pkg = { packageId: "edge-pkg-tr", jobId: "edge-job-tr", version: 1, schemaVersion: 1, job: { jobId: "edge-job-tr", title: "Engineer", company: "Acme", portal: "greenhouse", location: "Berlin" }, answers: [], documents: [], warnings: [], policy: { permitSensitiveAutofill: false, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true } };
   await panelPage.evaluate(async (pkg) => { const tabs = await chrome.tabs.query({}); const tab = tabs.find(c => c.url?.includes("greenhouse-application.html")); if (tab?.id == null) throw new Error("Fixture tab missing."); await chrome.storage.session.set({ ["assisted-apply-package:" + tab.id]: pkg }); return chrome.runtime.sendMessage({ type: "RUN_GREENHOUSE_APPLICATION_PACKAGE", package: pkg }); }, pkg);
   const before = await fixtureAuthState();
-  await fixturePage.locator("form").evaluate(f => { f.noValidate = true; });
+  await fixturePage.locator("form").evaluate((form) => {
+    (form as HTMLFormElement).noValidate = true;
+  });
   await fixturePage.locator("#final-submit").click();
   await expect(panelPage.getByTestId("application-confirmation")).toBeVisible();
   await panelPage.getByRole("button", { name: "Yes, add to Tracker" }).click();
@@ -180,8 +183,8 @@ test("Edge: review panel", async () => {
   });
   await panelPage.reload();
   await expect(panelPage.getByText("Engineer")).toBeVisible({ timeout: 5000 });
-  await expect(panelPage.getByText("Ready")).toBeVisible();
-  await expect(panelPage.getByText("Documents")).toBeVisible();
+  await expect(panelPage.getByRole("heading", { name: "Ready" })).toBeVisible();
+  await expect(panelPage.getByRole("heading", { name: "Documents" })).toBeVisible();
   await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
   await panelPage.close(); await fixturePage.close();
 });

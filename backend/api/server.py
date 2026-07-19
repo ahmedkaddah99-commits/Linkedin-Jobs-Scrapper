@@ -8957,7 +8957,13 @@ def build_handler(
             segments = [item for item in (urlparse(self.path).path or "/").split("/") if item]
             if segments[:1] == ["v1"]:
                 segments = segments[1:]
-            return segments[:2] == ["assisted-apply", "extension"]
+            return (
+                segments[:2] == ["assisted-apply", "extension"]
+                # The canonical bounded telemetry endpoint intentionally has
+                # no user content. It is the only non-/extension Assisted
+                # Apply route an exact extension origin may call.
+                or segments == ["assisted-apply", "telemetry", "events"]
+            )
 
         def _cors_headers(self) -> dict[str, str]:
             headers = {

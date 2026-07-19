@@ -206,7 +206,7 @@ export function detectAtsFromUrl(value: string): DetectionResult {
   }
 
   const hostname = parsed.hostname.toLowerCase();
-  if (hostname.endsWith(".greenhouse.io")) {
+  if (hostname === "boards.greenhouse.io") {
     return {
       detected: true,
       ats: "greenhouse",
@@ -215,7 +215,7 @@ export function detectAtsFromUrl(value: string): DetectionResult {
     };
   }
 
-  if (hostname === "jobs.lever.co" || hostname === "jobs.eu.lever.co") {
+  if (hostname.endsWith(".lever.co")) {
     return {
       detected: true,
       ats: "lever",

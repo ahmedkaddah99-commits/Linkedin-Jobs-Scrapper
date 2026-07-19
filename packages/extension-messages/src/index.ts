@@ -107,6 +107,17 @@ export type PanelRequest =
   | { type: "CHECK_ALL_OPTIONAL_PERMISSIONS" }
   | { type: "REQUEST_ALL_OPTIONAL_PERMISSIONS" };
 
+/**
+ * The only message accepted from the Runr web application. It carries an
+ * opaque, short-lived binding ID â€” never profile data, package contents, or
+ * executable instructions.
+ */
+export interface RunrWebLaunchRequest {
+  type: "RUNR_WEB_BIND_APPLICATION_PACKAGE";
+  bindingId: string;
+  applicationUrl: string;
+}
+
 export interface ApplicationPackageJob {
   jobId: string;
   title: string;
@@ -597,7 +608,7 @@ export function isAdapterHealthTelemetry(value: unknown): value is AdapterHealth
 }
 
 /**
- * Remote telemetry configuration � strictly data-only.
+ * Remote telemetry configuration — strictly data-only.
  *
  * Must be and remain exclusively data: thresholds and toggles that cannot:
  * - change DOM detection, inspection, matching, fill, or validation algorithms
@@ -757,4 +768,19 @@ export function isApplicationPackageContentRequest(
         ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
           .includes(String(value.mimeType)) &&
         typeof value.base64Bytes === "string" && value.base64Bytes.length > 0));
+}
+
+export function isRunrWebLaunchRequest(value: unknown): value is RunrWebLaunchRequest {
+  if (!isRecord(value) || value.type !== "RUNR_WEB_BIND_APPLICATION_PACKAGE") return false;
+  if (typeof value.bindingId !== "string" || value.bindingId.length < 20 || value.bindingId.length > 256) {
+    return false;
+  }
+  if (typeof value.applicationUrl !== "string" || value.applicationUrl.length > 2048) return false;
+  try {
+    const url = new URL(value.applicationUrl);
+    return url.protocol === "https:" ||
+      (url.protocol === "http:" && url.hostname === "127.0.0.1");
+  } catch {
+    return false;
+  }
 }

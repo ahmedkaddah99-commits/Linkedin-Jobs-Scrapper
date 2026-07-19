@@ -40,9 +40,10 @@ function renderFixture(emailValue = ""): void {
 describe("ATS detection and submission guardrail", () => {
   it("recognizes only owned Greenhouse and supported Lever hosts", () => {
     expect(detectAtsFromUrl("https://boards.greenhouse.io/acme/jobs/1").ats).toBe("greenhouse");
-    expect(detectAtsFromUrl("https://job-boards.greenhouse.io/acme/jobs/1").ats).toBe("greenhouse");
     expect(detectAtsFromUrl("https://jobs.lever.co/acme/1").ats).toBe("lever");
     expect(detectAtsFromUrl("https://jobs.eu.lever.co/acme/1").ats).toBe("lever");
+    expect(detectAtsFromUrl("https://hiring.lever.co/acme/1").ats).toBe("lever");
+    expect(detectAtsFromUrl("https://job-boards.greenhouse.io/acme/jobs/1").ats).toBeNull();
     expect(detectAtsFromUrl("https://boards.greenhouse.io.evil.example/jobs/1").ats).toBeNull();
     expect(detectAtsFromUrl("http://boards.greenhouse.io/acme/jobs/1").ats).toBeNull();
   });

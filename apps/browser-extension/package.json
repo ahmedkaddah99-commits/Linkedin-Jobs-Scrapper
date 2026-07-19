@@ -17,11 +17,8 @@
     "build:test": "wxt build --mode testing",
     "build:test:edge": "wxt build --browser edge --mode testing",
     "verify:manifest": "node scripts/verify-manifest.mjs",
-<<<<<<< HEAD
     "verify:manifest:edge": "node scripts/verify-manifest.mjs edge",
-=======
     "package": "wxt build && node scripts/verify-manifest.mjs",
->>>>>>> 59b5a4d (AA-16: Make Chrome installation and permissions store-ready)
     "test:e2e": "npm run build:test && playwright test",
     "test:e2e:edge": "npm run build:test:edge && playwright test --config playwright.edge.config.ts",
     "check": "npm run typecheck && npm run test:unit && npm run build && npm run verify:manifest",

@@ -2,6 +2,12 @@
   "extends": "./.wxt/tsconfig.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "baseUrl": ".",
+    "paths": {
+      "@runr/ats-core": ["../../packages/ats-core/src/index.ts"],
+      "@runr/ats-core/*": ["../../packages/ats-core/src/*"],
+      "@runr/extension-messages": ["../../packages/extension-messages/src/index.ts"]
+    }
   }
 }

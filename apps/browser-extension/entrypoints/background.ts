@@ -7,6 +7,7 @@ import {
   isDocumentUploadMessage,
   isContentRuntimeEvent,
   isPanelRequest,
+  isRunrWebLaunchRequest,
   isTrackerConfirmationResult,
   type ApplicationPackagePayload,
   type ApplicationPackageDocumentMeta,
@@ -25,7 +26,7 @@ import {
 } from "../src/auth/browser-ports";
 import { ExtensionConnectionService } from "../src/auth/connection-service";
 import { assistedApplyRuntimeConfig } from "../src/auth/config";
-import { isExactSidePanelSender } from "../src/auth/trusted-sender";
+import { isExactRunrWebSender, isExactSidePanelSender } from "../src/auth/trusted-sender";
 import {
   hasAllOptionalHostPermissions,
   hasPortalPermission,
@@ -209,7 +210,7 @@ async function fetchPackageFromApi(
   const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
   const sessionToken = await currentSessionToken();
   const response = await api.request(
-    /assisted-apply/extension/packages?package_id=,
+    `/assisted-apply/extension/packages?package_id=${encodeURIComponent(packageId)}`,
     "GET",
     undefined,
     sessionToken,
@@ -239,6 +240,52 @@ async function bindPackageFromApi(
     throw new Error("Runr returned an invalid application package.");
   }
   return response as ApplicationPackagePayload;
+}
+
+function comparableUrl(value: string): string {
+  const parsed = new URL(value);
+  parsed.hash = "";
+  return parsed.href;
+}
+
+async function waitForRunrOpenedApplicationTab(applicationUrl: string): Promise<Browser.tabs.Tab> {
+  const expected = comparableUrl(applicationUrl);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const tabs = await browser.tabs.query({});
+    const matchingTab = tabs.find((tab) => {
+      if (tab.id == null || !tab.url || tab.url.startsWith("chrome-extension://")) return false;
+      try {
+        return comparableUrl(tab.url) === expected;
+      } catch {
+        return false;
+      }
+    });
+    if (matchingTab) return matchingTab;
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("Runr could not find the application tab that it opened.");
+}
+
+async function bindRunrWebLaunch(
+  bindingId: string,
+  applicationUrl: string,
+): Promise<{ ok: true; packageId: string }> {
+  // Locate the user-opened employer tab before consuming the short-lived binding.
+  // A transient tab/load failure therefore remains retryable during the binding TTL.
+  const tab = await waitForRunrOpenedApplicationTab(applicationUrl);
+  const detected = detectAtsFromUrl(tab.url || "");
+  const ats = detected.ats || (isExactGreenhouseFixtureUrl(tab.url) ? "greenhouse" :
+    isExactLeverFixtureUrl(tab.url) ? "lever" : null);
+  if (!ats) {
+    throw new Error("The opened job page is not a supported Greenhouse or Lever application.");
+  }
+  const applicationPackage = await bindPackageFromApi(bindingId);
+  if (applicationPackage.job.portal !== ats) {
+    throw new Error("The opened application page does not match the prepared Runr package.");
+  }
+  await writeTabPackage(tab.id as number, applicationPackage);
+  await refreshTabState(tab);
+  return { ok: true, packageId: applicationPackage.packageId };
 }
 
 async function currentSessionToken(): Promise<string> {
@@ -345,7 +392,7 @@ async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayl
       throw new Error("The application runner returned an invalid document result.");
     }
     void api.request(
-      "/assisted-apply/extension/telemetry",
+      "/assisted-apply/telemetry/events",
       "POST",
       {
         schemaVersion: result.telemetry.schemaVersion,
@@ -355,7 +402,6 @@ async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayl
         aggregateOutcome: result.telemetry.aggregateOutcome,
         errorCategory: result.telemetry.errorCategory,
       },
-      sessionToken,
     ).catch(() => console.warn("Runr Assisted Apply could not record bounded upload health telemetry."));
     if (result.status === "uploaded") {
       await recordUploadedDocument(tab.id, result.documentId, result.documentVersion);
@@ -378,6 +424,22 @@ export default defineBackground(() => {
     const enabled = state.ats !== null;
     await browser.sidePanel.setOptions({ tabId: tab.id, path: "sidepanel.html", enabled });
     if (enabled) await browser.sidePanel.open({ tabId: tab.id });
+  });
+
+  browser.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+    if (!isExactRunrWebSender(sender, runtimeConfig.frontendOrigin) || !isRunrWebLaunchRequest(message)) {
+      return undefined;
+    }
+    if (import.meta.env.MODE !== "testing" && !message.applicationUrl.startsWith("https://")) {
+      return undefined;
+    }
+    void bindRunrWebLaunch(message.bindingId, message.applicationUrl)
+      .then(sendResponse)
+      .catch((error: unknown) => sendResponse({
+        ok: false,
+        error: error instanceof Error ? error.message : "Runr could not bind this application package.",
+      }));
+    return true;
   });
 
   browser.runtime.onMessage.addListener(async (
@@ -534,7 +596,7 @@ export default defineBackground(() => {
                 proposedValue: message.correctedValue.trim(),
                 source: "scoped_preference",
                 scope: message.scope,
-                reasons: [...answer.reasons, explicit_user_correction:],
+                reasons: [...answer.reasons, `explicit_user_correction:${message.scope}`],
               }
             : answer),
         };

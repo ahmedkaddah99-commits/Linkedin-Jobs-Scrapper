@@ -8,6 +8,7 @@ const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const fixturePaths = new Map([
   ["/greenhouse-application.html", join(currentDirectory, "fixtures", "greenhouse-application.html")],
   ["/lever-application.html", join(currentDirectory, "fixtures", "lever-application.html")],
+  ["/runr-web-launch.html", join(currentDirectory, "fixtures", "runr-web-launch.html")],
   ["/same-origin-frame.html", join(currentDirectory, "fixtures", "same-origin-frame.html")],
   ["/cross-origin-frame.html", join(currentDirectory, "fixtures", "cross-origin-frame.html")],
 ]);
@@ -243,6 +244,38 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/assisted-apply/extension/packages/bind" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      const payload = await readJson(request);
+      if (payload.binding_id !== "aapkg_bind_fixture_web_launch") {
+        json(response, 403, { error: { code: "forbidden", message: "Binding rejected." } }, origin);
+        return;
+      }
+      json(response, 200, {
+        packageId: "aapkg_fixture_web_launch",
+        jobId: "job_fixture_web_launch",
+        version: 1,
+        schemaVersion: 1,
+        job: {
+          jobId: "job_fixture_web_launch",
+          title: "Engineer",
+          company: "Acme",
+          portal: "greenhouse",
+          location: "Berlin",
+        },
+        answers: [],
+        documents: [],
+        warnings: [],
+        policy: {
+          permitSensitiveAutofill: false,
+          permitDemographicAutofill: false,
+          requireLegalAnswerConfirmation: true,
+        },
+      }, origin);
+      return;
+    }
+
     if (url.pathname === "/assisted-apply/extension/preferences" && request.method === "PUT") {
       const record = activeRecord(request, response, origin);
       if (!record) return;
@@ -316,9 +349,7 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    if (url.pathname === "/assisted-apply/extension/telemetry" && request.method === "POST") {
-      const record = activeRecord(request, response, origin);
-      if (!record) return;
+    if (url.pathname === "/assisted-apply/telemetry/events" && request.method === "POST") {
       const payload = await readJson(request);
       const expectedKeys = ["adapter", "adapterVersion", "aggregateOutcome", "errorCategory", "lifecycleStage", "schemaVersion"];
       if (JSON.stringify(Object.keys(payload).sort()) !== JSON.stringify(expectedKeys)) {

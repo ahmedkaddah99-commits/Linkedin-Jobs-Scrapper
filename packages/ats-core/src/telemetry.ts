@@ -138,7 +138,6 @@ export function createTelemetryReporter(transport: TelemetryTransport): Telemetr
 
   return reporter;
 }
-}
 
 // ---------------------------------------------------------------------------
 // Outcome mapping helpers
