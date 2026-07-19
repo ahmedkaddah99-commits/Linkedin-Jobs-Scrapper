@@ -2879,7 +2879,14 @@ def _user_can_access_run_from_workspace_map(user, run, workspaces: Mapping[str, 
     return str(getattr(run, "workspace_id", "") or "").strip() in workspaces
 
 
-def _collect_authorized_runs(application, user, *, workspace_id: str = "") -> tuple[dict[str, object], list[object]]:
+def _collect_authorized_runs(application, user, *, workspace_id: str = "", max_runs: int = 200) -> tuple[dict[str, object], list[object]]:
+    """Collect authorized runs with a bounded limit.
+
+    max_runs controls how many runs are loaded from the repository.
+    The default (200) prevents unbounded memory usage while remaining
+    generous enough for most dashboard/tracker views.
+    """
+    effective_max = max(10, min(int(max_runs), 500))
     workspaces = {
         workspace.id: workspace
         for workspace in application.list_workspaces()
@@ -2887,7 +2894,7 @@ def _collect_authorized_runs(application, user, *, workspace_id: str = "") -> tu
     }
     runs = [
         run
-        for run in application.list_runs(limit=1000, offset=0, status="", workspace_id=workspace_id)
+        for run in application.list_runs(limit=effective_max, offset=0, status="", workspace_id=workspace_id)
         if _user_can_access_run_from_workspace_map(user, run, workspaces)
     ]
     return workspaces, runs
@@ -3451,9 +3458,20 @@ def _is_explicit_tracker_application(*, tracker_status: object = "", email_confi
     return bool(str(tracker_status or "").strip()) or bool(email_confirmed)
 
 
-def _collect_tracker_entries(application, user) -> list[dict]:
-    """Return all reviews that have been approved or have a tracker_status set."""
-    workspaces, runs = _collect_authorized_runs(application, user)
+
+_TRACKER_ENTRIES_HARD_LIMIT = 2000
+
+
+def _collect_tracker_entries(application, user, *, max_entries: int = _TRACKER_ENTRIES_HARD_LIMIT) -> list[dict]:
+    """Return all reviews that have been approved or have a tracker_status set.
+
+    max_entries provides a hard upper bound on the number of entries
+    collected.  When exceeded the collection stops early to prevent
+    unbounded memory growth. Callers should apply their own limit/offset
+    pagination on the returned list.
+    """
+    effective_max = max(50, min(int(max_entries), _TRACKER_ENTRIES_HARD_LIMIT))
+    workspaces, runs = _collect_authorized_runs(application, user, max_runs=min(500, effective_max))
     snapshot = _load_run_read_snapshot(
         application,
         runs,
