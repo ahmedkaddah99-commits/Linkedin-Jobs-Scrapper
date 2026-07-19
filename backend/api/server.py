@@ -1410,8 +1410,9 @@ def _run_summary(run) -> dict:
         "max_attempts": run.max_attempts,
         "current_stage_id": run.current_stage_id,
         "last_error": run.last_error,
-        "stage_results": [result.to_dict() for result in run.stage_results],
-        "final_job_set_keys": run.final_job_set_keys,
+        # Run-list callers render status/progress only. Stage results can carry
+        # large per-job metrics and belong on the single-run detail endpoint.
+        "stage_result_count": len(run.stage_results),
         "progress": dict(run.metadata.get("progress") or {}),
         "is_test_run": bool(run.is_test_run),
         "run_mode": "test" if run.is_test_run else "normal",
@@ -5361,13 +5362,21 @@ def _candidate_asset_to_document_item(
     asset: dict,
     workspace_names: dict[str, str],
     shared_profile: dict[str, Any],
+    *,
+    include_preview_profile: bool = False,
 ) -> dict:
     asset_kind = str(asset.get("asset_kind") or "uploaded_document")
     group_id, group_label = _document_group_for_asset_kind(asset_kind)
     workspace_id = str(asset.get("workspace_binding", {}).get("workspace_id") or "")
     metadata = dict(asset.get("metadata") or {})
+    if not include_preview_profile:
+        # Asset-library list cards need identity/status, not the original CV
+        # text or parsed profile. Those values can be megabytes (including an
+        # embedded photo) and used to be copied into every list response.
+        for heavy_key in ("source_text", "parsed_profile", "cv_section_decisions"):
+            metadata.pop(heavy_key, None)
     preview_profile: dict[str, Any] = {}
-    if asset_kind == "workspace_cv":
+    if asset_kind == "workspace_cv" and include_preview_profile:
         cv_text = str(metadata.get("source_text") or "").strip()
         preview_profile = _build_workspace_cv_preview_profile(
             cv_text,
@@ -5419,6 +5428,7 @@ def _collect_document_entries(
     job_sets_by_run: dict[str, dict[str, list[object]]] | None = None,
     artifacts_by_run: dict[str, list[object]] | None = None,
     access_checked: bool = False,
+    include_preview_profile: bool = False,
 ) -> list[dict]:
     asset_kind_filter = str(asset_kind or "").strip().lower()
     raw_profile = dict((user.metadata or {}).get("profile") or {})
@@ -5514,7 +5524,14 @@ def _collect_document_entries(
                     asset_for_item["metadata"] = asset_metadata
                 except Exception:
                     pass
-            entries.append(_candidate_asset_to_document_item(asset_for_item, workspaces, shared_profile))
+            entries.append(
+                _candidate_asset_to_document_item(
+                    asset_for_item,
+                    workspaces,
+                    shared_profile,
+                    include_preview_profile=include_preview_profile,
+                )
+            )
     if asset_kind_filter:
         entries = [item for item in entries if str(item.get("asset_kind") or "").lower() == asset_kind_filter]
     entries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
@@ -6220,7 +6237,9 @@ def _dashboard_job_role_label(job) -> str:
 def _dashboard_tracker_items(application, user, runs: list[object]) -> tuple[list[dict], int]:
     history_rows = application.repositories.review_store.list_application_status_history(
         user_id=user.user_id,
-        limit=10000,
+        # Dashboard analytics only need recent status transitions; loading the
+        # entire account history made the landing page an unbounded request.
+        limit=2000,
         offset=0,
     )
     history_by_review: dict[str, list[dict]] = {}
@@ -7025,7 +7044,9 @@ def _empty_dashboard_analytics() -> dict:
 
 
 def _dashboard_payload(application, user, *, mode: str = "") -> dict:
-    workspaces, runs = _collect_authorized_runs(application, user)
+    # The dashboard shows the ten newest runs and aggregate trends. A bounded
+    # recent window protects the landing page from growing with all history.
+    workspaces, runs = _collect_authorized_runs(application, user, max_runs=100)
     summary_only = str(mode or "").strip().lower() == "summary"
     analytics = (
         {"waitingReviewCount": 0, **_empty_dashboard_analytics()}
