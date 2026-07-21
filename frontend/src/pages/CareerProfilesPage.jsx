@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import CareerProfileSourceSelector from "../components/careerProfile/CareerProfileSourceSelector";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -49,6 +50,11 @@ export default function CareerProfilesPage() {
   const [bindingAction, setBindingAction] = useState("");
   const [bindingError, setBindingError] = useState("");
 
+  // Source selection state
+  const [sourceProfileId, setSourceProfileId] = useState("");
+  const [sourceSaving, setSourceSaving] = useState(false);
+  const [sourceError, setSourceError] = useState("");
+
   // Fetch workspaces for binding UI
   const { data: workspacesData } = useApiResource(
     () => request("/workspaces?limit=100", { timeoutMs: 60000 }),
@@ -79,6 +85,29 @@ export default function CareerProfilesPage() {
   }, [user?.user_id, request]);
 
   useEffect(() => { loadProfiles(); }, [loadProfiles]);
+
+  async function handleSaveSourceSelection(selectedAssetIds) {
+    if (!sourceProfileId) return;
+    setSourceSaving(true);
+    setSourceError("");
+    try {
+      const profile = profiles.find((p) => p.profile_id === sourceProfileId);
+      const metadata = { ...(profile?.metadata || {}), source_asset_ids: selectedAssetIds };
+      const updated = await request(
+        `/career-profiles/${sourceProfileId}`,
+        { method: "PUT", body: JSON.stringify({ metadata, status: "extracting_evidence" }) },
+        { rawPath: true },
+      );
+      setProfiles((prev) =>
+        prev.map((p) => (p.profile_id === updated.profile_id ? updated : p)),
+      );
+      setSourceProfileId("");
+    } catch (err) {
+      setSourceError(String(err?.message || "Failed to save source selection."));
+    } finally {
+      setSourceSaving(false);
+    }
+  }
 
   function handleShowForm() {
     setForm({ name: "", description: "", preferred_language: "en", target_direction: "" });
@@ -401,7 +430,7 @@ export default function CareerProfilesPage() {
                       )}
                       <button
                         className="inline-flex items-center gap-1.5 rounded-xl bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                        onClick={() => navigate(`/workspaces?profile_id=${profile.profile_id}`)}
+                        onClick={() => setSourceProfileId(profile.profile_id)}
                         type="button"
                       >
                         Select sources
@@ -418,6 +447,31 @@ export default function CareerProfilesPage() {
           </div>
         )}
       </section>
+
+      {/* Source Selection Step */}
+      {sourceProfileId ? (
+        <>
+          {sourceError ? (
+            <div className="mb-4 rounded-xl border border-error/20 bg-error/5 px-4 py-3 text-sm text-error">
+              {sourceError}
+            </div>
+          ) : null}
+          <CareerProfileSourceSelector
+          baselineCvAssetId={
+            (profiles.find((p) => p.profile_id === sourceProfileId) || {}).baseline_cv_asset_id || ""
+          }
+          onCancel={() => { setSourceProfileId(""); setSourceError(""); }}
+          onSave={handleSaveSourceSelection}
+          profileName={
+            (profiles.find((p) => p.profile_id === sourceProfileId) || {}).name || "Career Profile"
+          }
+          saving={sourceSaving}
+          selectedAssetIds={
+            (profiles.find((p) => p.profile_id === sourceProfileId) || {}).metadata?.source_asset_ids || []
+          }
+        />
+        </>
+      ) : null}
 
       {/* Binding Dialog */}
       {bindingProfileId ? (
