@@ -2859,12 +2859,12 @@ class SqliteCareerProfileStore(_SqliteStore):
                 (
                     "INSERT INTO career_profiles "
                     "(profile_id, user_id, name, description, preferred_language, "
-                    "target_direction, bound_workspace_id, status, created_at, updated_at, metadata_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "target_direction, bound_workspace_id, baseline_cv_asset_id, baseline_cv_display_name, baseline_cv_extraction_date, baseline_cv_source_version, status, created_at, updated_at, metadata_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(profile_id) DO UPDATE SET "
                     "user_id=excluded.user_id, name=excluded.name, "
                     "description=excluded.description, preferred_language=excluded.preferred_language, "
-                    "target_direction=excluded.target_direction, bound_workspace_id=excluded.bound_workspace_id, status=excluded.status, "
+                    "target_direction=excluded.target_direction, bound_workspace_id=excluded.bound_workspace_id, baseline_cv_asset_id=excluded.baseline_cv_asset_id, baseline_cv_display_name=excluded.baseline_cv_display_name, baseline_cv_extraction_date=excluded.baseline_cv_extraction_date, baseline_cv_source_version=excluded.baseline_cv_source_version, status=excluded.status, "
                     "updated_at=excluded.updated_at, metadata_json=excluded.metadata_json"
                 ),
                 (
@@ -2875,6 +2875,10 @@ class SqliteCareerProfileStore(_SqliteStore):
                     profile.preferred_language,
                     profile.target_direction,
                     profile.bound_workspace_id,
+                    profile.baseline_cv_asset_id,
+                    profile.baseline_cv_display_name,
+                    profile.baseline_cv_extraction_date,
+                    profile.baseline_cv_source_version,
                     profile.status,
                     profile.created_at,
                     utc_now_iso(),

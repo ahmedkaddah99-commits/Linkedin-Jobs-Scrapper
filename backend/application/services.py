@@ -2411,6 +2411,17 @@ class BackendApplication:
                 profile.preferred_language = lang
         if "target_direction" in payload:
             profile.target_direction = str(payload["target_direction"] or "").strip()
+        if "target_direction" in payload:
+            profile.target_direction = str(payload["target_direction"] or "").strip()
+        if "baseline_cv_asset_id" in payload:
+            profile.baseline_cv_asset_id = str(payload["baseline_cv_asset_id"] or "").strip()
+        if "baseline_cv_display_name" in payload:
+            profile.baseline_cv_display_name = str(payload["baseline_cv_display_name"] or "").strip()
+        if "baseline_cv_extraction_date" in payload:
+            profile.baseline_cv_extraction_date = str(payload["baseline_cv_extraction_date"] or "").strip()
+        if "baseline_cv_source_version" in payload:
+            profile.baseline_cv_source_version = str(payload["baseline_cv_source_version"] or "").strip()
+        if "status" in payload:
         if "status" in payload:
             from backend.domain.models import CAREER_PROFILE_STATUSES
             status = str(payload["status"] or "").strip()

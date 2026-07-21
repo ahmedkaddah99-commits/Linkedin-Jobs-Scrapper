@@ -978,6 +978,10 @@ class CareerProfile:
     preferred_language: str = "en"
     target_direction: str = ""
     bound_workspace_id: str = ""
+    baseline_cv_asset_id: str = ""
+    baseline_cv_display_name: str = ""
+    baseline_cv_extraction_date: str = ""
+    baseline_cv_source_version: str = ""
     status: str = CAREER_PROFILE_STATUS_NOT_STARTED
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -1019,6 +1023,10 @@ class CareerProfile:
             "preferred_language": self.preferred_language,
             "target_direction": self.target_direction,
             "bound_workspace_id": self.bound_workspace_id,
+            "baseline_cv_asset_id": self.baseline_cv_asset_id,
+            "baseline_cv_display_name": self.baseline_cv_display_name,
+            "baseline_cv_extraction_date": self.baseline_cv_extraction_date,
+            "baseline_cv_source_version": self.baseline_cv_source_version,
             "status": self.status,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -1038,6 +1046,10 @@ class CareerProfile:
             status=str(payload.get("status") or CAREER_PROFILE_STATUS_NOT_STARTED),
             created_at=str(payload.get("created_at") or utc_now_iso()),
             updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            baseline_cv_asset_id=str(payload.get("baseline_cv_asset_id") or ""),
+            baseline_cv_display_name=str(payload.get("baseline_cv_display_name") or ""),
+            baseline_cv_extraction_date=str(payload.get("baseline_cv_extraction_date") or ""),
+            baseline_cv_source_version=str(payload.get("baseline_cv_source_version") or ""),
             metadata=dict(payload.get("metadata") or {}),
         )
 

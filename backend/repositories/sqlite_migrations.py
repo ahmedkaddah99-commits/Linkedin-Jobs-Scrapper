@@ -1027,6 +1027,19 @@ def _apply_career_profiles_workspace_binding_migration(connection: DatabaseConne
 
 
 
+def _apply_career_profiles_baseline_cv_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        ALTER TABLE career_profiles ADD COLUMN baseline_cv_asset_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE career_profiles ADD COLUMN baseline_cv_display_name TEXT NOT NULL DEFAULT '';
+        ALTER TABLE career_profiles ADD COLUMN baseline_cv_extraction_date TEXT NOT NULL DEFAULT '';
+        ALTER TABLE career_profiles ADD COLUMN baseline_cv_source_version TEXT NOT NULL DEFAULT '';
+        """
+    )
+
+
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -1152,5 +1165,11 @@ MIGRATIONS = (
         "Add workspace binding column to career profiles.",
         _apply_career_profiles_workspace_binding_migration,
     ),
+    Migration.from_callable(
+        "023_career_profiles_baseline_cv",
+        "Add baseline CV fields to career profiles.",
+        _apply_career_profiles_baseline_cv_migration,
+    ),
+
 
 )
