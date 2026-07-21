@@ -18,10 +18,11 @@ export default function MemoryBankTab({
       <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h3 className="font-headline text-xl font-bold text-on-surface">Memory Bank</h3>
+            <h3 className="font-headline text-xl font-bold text-on-surface">Career Profile</h3>
             <p className="mt-1 text-sm leading-6 text-on-surface-variant">
-              One place for achievements, projects, metrics, stakeholder stories, motivation
-              notes, and challenge context.
+              A private, reusable library of real career evidence — achievements,
+              projects, metrics, and stories that go beyond your baseline CV. Runr
+              never invents unsupported achievements.
             </p>
           </div>
           <button

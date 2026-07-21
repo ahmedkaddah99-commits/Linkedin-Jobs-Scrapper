@@ -23,7 +23,7 @@ export default function MemoryDraftReview({
         <div>
           <div className="text-sm font-semibold text-on-surface">Generated Career Memory</div>
           <div className="mt-1 text-sm text-on-surface-variant">
-            Review the draft before saving it to your reusable memory bank.
+            Review the draft before saving it to your Career Profile.
           </div>
         </div>
         <span

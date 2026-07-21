@@ -53,7 +53,7 @@ export const MEMORY_BANK_FILTERS = [
 
 export const MEMORY_BUILDER_TABS = [
   { id: "build", label: "Build" },
-  { id: "memory_bank", label: "Memory Bank" },
+  { id: "memory_bank", label: "Career Profile" },
   { id: "sources", label: "Sources" },
   { id: "advanced", label: "Advanced" },
 ];
@@ -63,7 +63,7 @@ export const QUESTION_SET_DEFINITIONS = {
     id: "story_recovery",
     title: "Let's recover one strong career story",
     description:
-      "Answer the next useful question. Runr will turn it into a reusable career memory.",
+      "Answer each prompt. Runr will turn your real experience into reusable application material.",
     defaultCategory: "achievement",
     suggestedTrigger: "saved_time",
     steps: [
