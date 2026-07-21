@@ -8,6 +8,10 @@ from typing import Any
 from uuid import uuid4
 
 
+from backend.capabilities.source_processing.extraction import (
+    build_source_processing_summary,
+    run_source_processing_pipeline,
+)
 from backend.capabilities.reusable_packages.acquisition import build_stage1_args as build_reusable_stage1_args
 from backend.capabilities.reusable_packages.acquisition import run_stage1_pipeline as run_reusable_stage1_pipeline
 from backend.capabilities.reusable_packages.classification import build_stage3_args as build_reusable_stage3_args
@@ -1153,7 +1157,42 @@ class ApplicationPackageExportStage(BaseStage):
         )
 
 
+
+class SourceProcessingStage(BaseStage):
+    """Extract text and structured fields from selected source files."""
+
+    def can_run(self, context: StageContext, definition: StageDefinition) -> bool:
+        connector_id = str(definition.config.get("connector_id") or "")
+        if connector_id:
+            context.registries.connector_registry.get(connector_id)
+        source_paths = definition.config.get("source_paths") or []
+        return bool(source_paths)
+
+    def execute(self, context: StageContext, definition: StageDefinition) -> StageOutcome:
+        source_paths = definition.config.get("source_paths") or []
+        allow_ocr = bool(definition.config.get("allow_ocr", True))
+        sources = [{"source_id": f"{definition.stage_id}_source_{idx}", "file_path": str(p)}
+                   for idx, p in enumerate(source_paths)]
+        results = run_source_processing_pipeline(sources, allow_ocr=allow_ocr)
+        summary = build_source_processing_summary(results)
+        return StageOutcome(
+            data={
+                definition.output_key or "source_texts": [r.to_dict() for r in results],
+                f"{definition.stage_id}_summary": summary,
+            },
+            metrics={
+                "total_sources": summary["total_sources"],
+                "extracted": summary["extracted"],
+                "needs_review": summary["needs_review"],
+                "failed": summary["failed"],
+                "ocr_sources": summary["ocr_sources"],
+                "low_confidence_ocr": summary["low_confidence_ocr"],
+            },
+        )
+
 def register_stage_adapters(stage_registry) -> None:
+    stage_registry.register("jobs.sources.process_text", SourceProcessingStage())
+
     stage_registry.register("jobs.acquire.search_listings", LinkedInAcquireStage())
     stage_registry.register("jobs.ingest.curated_urls", ManualUrlIngestionStage())
     stage_registry.register("jobs.acquire.company_sites", CompanyCareerSiteAcquisitionStage())

@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from backend.domain.source_processing import (
+    OCR_METHODS,
+    SOURCE_STATUS_EXTRACTED,
+    SOURCE_STATUS_FAILED,
+    SOURCE_STATUS_NEEDS_REVIEW,
+    SOURCE_STATUS_PROCESSING,
+    SourceTextRecord,
+    _map_extraction_status_to_source_status,
+    utc_now_iso,
+)
+from backend.profiles.document_text import extract_document_text
+from backend.capabilities.source_processing.structure_parser import parse_structured_fields
+
+LOGGER = logging.getLogger(__name__)
+LOW_OCR_CONFIDENCE_THRESHOLD = 0.70
+
+
+def process_source(source_id: str, file_path: str, *, allow_ocr: bool = True) -> SourceTextRecord:
+    """Process a single source file and return a SourceTextRecord."""
+    file_name = Path(file_path).name if file_path else ""
+    record = SourceTextRecord(
+        source_id=source_id,
+        file_path=file_path,
+        file_name=file_name,
+        status=SOURCE_STATUS_PROCESSING,
+        processed_at=utc_now_iso(),
+    )
+
+    try:
+        data = Path(file_path).read_bytes()
+    except Exception as exc:
+        record.status = SOURCE_STATUS_FAILED
+        record.error = f"Failed to read file: {exc}"
+        record.processed_at = utc_now_iso()
+        return record
+
+    try:
+        extraction = extract_document_text(file_name, data, allow_ocr=allow_ocr)
+    except Exception as exc:
+        record.status = SOURCE_STATUS_FAILED
+        record.error = f"Extraction failed: {exc}"
+        record.processed_at = utc_now_iso()
+        return record
+
+    text = str(extraction.get("text") or "")
+    record.text = text
+    record.char_count = int(extraction.get("char_count") or 0)
+    record.method = str(extraction.get("method") or "none")
+    record.confidence = float(extraction.get("confidence") or 0)
+    record.warnings = [str(w) for w in (extraction.get("warnings") or [])]
+    record.pages = [dict(p) for p in (extraction.get("pages") or []) if isinstance(p, dict)]
+
+    extraction_status = str(extraction.get("status") or "failed")
+    record.is_ocr = record.method in OCR_METHODS
+    record.is_low_confidence_ocr = record.is_ocr and record.confidence < LOW_OCR_CONFIDENCE_THRESHOLD
+
+    record.status = _map_extraction_status_to_source_status(
+        extraction_status, record.method, record.confidence, record.warnings,
+    )
+
+    if record.is_low_confidence_ocr and record.status != SOURCE_STATUS_FAILED:
+        record.status = SOURCE_STATUS_NEEDS_REVIEW
+        if not any("low confidence" in w.lower() for w in record.warnings):
+            record.warnings.append(
+                f"OCR confidence is low ({record.confidence:.0%}); results may not be reliable."
+            )
+
+    # Parse structured fields
+    if text.strip():
+        try:
+            structured = parse_structured_fields(text)
+        except Exception:
+            structured = {}
+        record.employer = str(structured.get("employer") or "")
+        record.role = str(structured.get("role") or "")
+        record.dates = [str(d) for d in (structured.get("dates") or [])]
+        record.headings = [str(h) for h in (structured.get("headings") or [])]
+        record.bullets = [str(b) for b in (structured.get("bullets") or [])]
+        record.certificates = [str(c) for c in (structured.get("certificates") or [])]
+        record.letter_paragraphs = [str(p) for p in (structured.get("letter_paragraphs") or [])]
+
+    record.processed_at = utc_now_iso()
+    return record
+
+
+def run_source_processing_pipeline(
+    sources: list[dict[str, Any]],
+    *,
+    allow_ocr: bool = True,
+) -> list[SourceTextRecord]:
+    """Process a list of source file dicts.
+
+    Each source must have source_id and file_path.
+    Returns a list of SourceTextRecord with per-source status and extracted content.
+    """
+    results: list[SourceTextRecord] = []
+    for source in sources:
+        source_id = str(source.get("source_id") or "")
+        file_path = str(source.get("file_path") or "")
+
+        if not source_id:
+            source_id = f"source_{Path(file_path).stem}" if file_path else "source_unknown"
+
+        if not file_path or not Path(file_path).exists():
+            record = SourceTextRecord(
+                source_id=source_id,
+                file_path=file_path,
+                file_name=Path(file_path).name if file_path else "",
+                status=SOURCE_STATUS_FAILED,
+                error="Source file does not exist." if file_path else "No file path provided.",
+                processed_at=utc_now_iso(),
+            )
+            results.append(record)
+            continue
+
+        record = process_source(source_id, file_path, allow_ocr=allow_ocr)
+        results.append(record)
+
+    return results
+
+
+def build_source_processing_summary(results: list[SourceTextRecord]) -> dict[str, Any]:
+    """Build a summary dict from SourceTextRecord results."""
+    total = len(results)
+    return {
+        "total_sources": total,
+        "extracted": sum(1 for r in results if r.status == SOURCE_STATUS_EXTRACTED),
+        "needs_review": sum(1 for r in results if r.status == SOURCE_STATUS_NEEDS_REVIEW),
+        "failed": sum(1 for r in results if r.status == SOURCE_STATUS_FAILED),
+        "processing": sum(1 for r in results if r.status == SOURCE_STATUS_PROCESSING),
+        "ocr_sources": sum(1 for r in results if r.is_ocr),
+        "low_confidence_ocr": sum(1 for r in results if r.is_low_confidence_ocr),
+        "total_characters": sum(r.char_count for r in results),
+        "results": [r.to_dict() for r in results],
+    }
