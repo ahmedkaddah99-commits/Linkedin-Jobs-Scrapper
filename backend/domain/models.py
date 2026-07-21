@@ -954,6 +954,89 @@ class RunRecord:
             metadata=dict(payload.get("metadata") or {}),
         )
 
+# --- Career Profile lifecycle statuses ---
+
+CAREER_PROFILE_STATUS_NOT_STARTED = "not_started"
+CAREER_PROFILE_STATUS_EXTRACTING_EVIDENCE = "extracting_evidence"
+CAREER_PROFILE_STATUS_NEEDS_REVIEW = "needs_review"
+CAREER_PROFILE_STATUS_READY_FOR_TAILORING = "ready_for_tailoring"
+
+CAREER_PROFILE_STATUSES = {
+    CAREER_PROFILE_STATUS_NOT_STARTED,
+    CAREER_PROFILE_STATUS_EXTRACTING_EVIDENCE,
+    CAREER_PROFILE_STATUS_NEEDS_REVIEW,
+    CAREER_PROFILE_STATUS_READY_FOR_TAILORING,
+}
+
+
+@dataclass(slots=True)
+class CareerProfile:
+    profile_id: str
+    user_id: str
+    name: str
+    description: str = ""
+    preferred_language: str = "en"
+    target_direction: str = ""
+    status: str = CAREER_PROFILE_STATUS_NOT_STARTED
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        user_id: str,
+        name: str,
+        description: str = "",
+        preferred_language: str = "en",
+        target_direction: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "CareerProfile":
+        now = utc_now_iso()
+        return cls(
+            profile_id=f"prof_{uuid4().hex[:16]}",
+            user_id=str(user_id).strip(),
+            name=str(name).strip(),
+            description=str(description).strip(),
+            preferred_language=str(preferred_language).strip() or "en",
+            target_direction=str(target_direction).strip(),
+            status=CAREER_PROFILE_STATUS_NOT_STARTED,
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "profile_id": self.profile_id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "description": self.description,
+            "preferred_language": self.preferred_language,
+            "target_direction": self.target_direction,
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "CareerProfile":
+        return cls(
+            profile_id=str(payload.get("profile_id") or ""),
+            user_id=str(payload.get("user_id") or ""),
+            name=str(payload.get("name") or ""),
+            description=str(payload.get("description") or ""),
+            preferred_language=str(payload.get("preferred_language") or "en"),
+            target_direction=str(payload.get("target_direction") or ""),
+            status=str(payload.get("status") or CAREER_PROFILE_STATUS_NOT_STARTED),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
 
 @dataclass(slots=True)
 class StageContext:

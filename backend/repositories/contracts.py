@@ -5,6 +5,8 @@ from typing import Any, Iterable, Mapping, Protocol
 
 from backend.domain.assisted_apply import AssistedApplyConnectionRecord, AssistedApplyPreferences
 from backend.domain.models import (
+    CareerProfile,
+
     ApiTokenRecord,
     ArtifactRecord,
     JobRecord,
@@ -215,6 +217,15 @@ class SourcePolicyStoreProtocol(Protocol):
     def record_job_url_attempts(self, attempts: Iterable[Mapping[str, Any]]) -> None: ...
 
 
+
+class CareerProfileStoreProtocol(Protocol):
+    def list_profiles(self, *, user_id: str = "", limit: int = 50, offset: int = 0) -> list[CareerProfile]: ...
+    def get_profile(self, profile_id: str) -> CareerProfile: ...
+    def upsert_profile(self, profile: CareerProfile) -> None: ...
+    def delete_profile(self, profile_id: str) -> None: ...
+
+
+
 @dataclass(slots=True)
 class BackendRepositories:
     workspace_repository: WorkspaceRepositoryProtocol
@@ -228,3 +239,4 @@ class BackendRepositories:
     analytics_store: AnalyticsStoreProtocol
     config_store: ConfigStoreProtocol
     source_policy_store: SourcePolicyStoreProtocol | None = None
+    career_profile_store: CareerProfileStoreProtocol | None = None

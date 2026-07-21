@@ -25,6 +25,8 @@ from backend.domain.models import (
     WORKER_STATUS_STALE,
     WORKER_STATUS_STOPPED,
     ApiTokenRecord,
+    CareerProfile,
+
     ArtifactRecord,
     JobRecord,
     ReviewRecord,
@@ -1132,3 +1134,52 @@ class FileConfigStore:
             for key, value in payload.items()
             if str(key).startswith(normalized_prefix)
         }
+
+
+
+class FileCareerProfileStore:
+    """File-backed career profile persistence."""
+
+    def __init__(self, base_dir: Path):
+        self.base_dir = Path(base_dir)
+        self.profiles_path = self.base_dir / "career_profiles.json"
+
+    def _read_all(self) -> dict[str, dict[str, Any]]:
+        payload = _read_json(self.profiles_path, {})
+        if not isinstance(payload, dict):
+            return {}
+        return {str(key): dict(value) for key, value in payload.items() if isinstance(value, dict)}
+
+    def _write_all(self, payload: dict[str, dict[str, Any]]) -> None:
+        _write_json(self.profiles_path, payload)
+
+    def list_profiles(self, *, user_id: str = "", limit: int = 50, offset: int = 0) -> list:
+        from backend.domain.models import CareerProfile
+
+        all_profiles = self._read_all()
+        profiles = [CareerProfile.from_dict(p) for p in all_profiles.values()]
+        if user_id:
+            profiles = [p for p in profiles if p.user_id == user_id]
+        profiles.sort(key=lambda p: p.updated_at, reverse=True)
+        return profiles[max(0, int(offset)) : max(0, int(offset)) + max(1, int(limit))]
+
+    def get_profile(self, profile_id: str) -> "CareerProfile":
+        from backend.domain.models import CareerProfile
+
+        all_profiles = self._read_all()
+        payload = all_profiles.get(profile_id)
+        if payload is None:
+            raise KeyError(f"Career profile '{profile_id}' not found.")
+        return CareerProfile.from_dict(payload)
+
+    def upsert_profile(self, profile: "CareerProfile") -> None:
+        all_profiles = self._read_all()
+        all_profiles[profile.profile_id] = profile.to_dict()
+        self._write_all(all_profiles)
+
+    def delete_profile(self, profile_id: str) -> None:
+        all_profiles = self._read_all()
+        if profile_id not in all_profiles:
+            raise KeyError(f"Career profile '{profile_id}' not found.")
+        del all_profiles[profile_id]
+        self._write_all(all_profiles)

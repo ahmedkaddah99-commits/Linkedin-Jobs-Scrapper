@@ -4,6 +4,7 @@ from backend.api.routes.admin import register_routes as register_admin_routes
 from backend.api.routes.assisted_apply import register_routes as register_assisted_apply_routes
 from backend.api.routes.assisted_apply_packages import register_routes as register_assisted_apply_package_routes
 from backend.api.routes.assisted_apply_telemetry import register_routes as register_assisted_apply_telemetry_routes
+from backend.api.routes.career_profiles import register_routes as register_career_profiles_routes
 from backend.api.routes.career_memory import register_routes as register_career_memory_routes
 from backend.api.routes.documents import register_routes as register_document_routes
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
@@ -19,6 +20,8 @@ def build_route_registry() -> RouteRegistry:
     register_assisted_apply_package_routes(registry)
     register_assisted_apply_telemetry_routes(registry)
     register_admin_routes(registry)
+    register_career_profiles_routes(registry)
+
     register_career_memory_routes(registry)
     register_document_routes(registry)
     register_tracker_routes(registry)

@@ -37,6 +37,8 @@ from backend.connectors.company_career_sites import (
 )
 from backend.domain.assisted_apply import AssistedApplyConnectionRecord, AssistedApplyPreferences
 from backend.domain.models import (
+    CareerProfile,
+
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_CANCELLED,
     RUN_STATUS_COMPLETED,
@@ -2362,6 +2364,67 @@ class BackendApplication:
 
     def delete_user(self, user_id: str) -> None:
         self._identity_access_service.delete_user(user_id)
+
+    def delete_user(self, user_id: str) -> None:
+        self._identity_access_service.delete_user(user_id)
+
+    def list_career_profiles(self, *, user_id: str = "") -> list:
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            return []
+        return store.list_profiles(user_id=user_id)
+
+    def get_career_profile(self, profile_id: str):
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            raise ValueError("Career profile storage is not configured.")
+        return store.get_profile(profile_id)
+
+    def create_career_profile(self, payload: Mapping[str, Any]):
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            raise ValueError("Career profile storage is not configured.")
+        profile = CareerProfile.create(
+            user_id=str(payload.get("user_id") or "").strip(),
+            name=str(payload.get("name") or "").strip(),
+            description=str(payload.get("description") or "").strip(),
+            preferred_language=str(payload.get("preferred_language") or "en").strip(),
+            target_direction=str(payload.get("target_direction") or "").strip(),
+        )
+        store.upsert_profile(profile)
+        return profile
+
+    def update_career_profile(self, profile_id: str, payload: Mapping[str, Any]):
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            raise ValueError("Career profile storage is not configured.")
+        profile = store.get_profile(profile_id)
+        if "name" in payload:
+            name = str(payload["name"] or "").strip()
+            if name:
+                profile.name = name
+        if "description" in payload:
+            profile.description = str(payload["description"] or "").strip()
+        if "preferred_language" in payload:
+            lang = str(payload["preferred_language"] or "").strip()
+            if lang:
+                profile.preferred_language = lang
+        if "target_direction" in payload:
+            profile.target_direction = str(payload["target_direction"] or "").strip()
+        if "status" in payload:
+            from backend.domain.models import CAREER_PROFILE_STATUSES
+            status = str(payload["status"] or "").strip()
+            if status in CAREER_PROFILE_STATUSES:
+                profile.status = status
+        profile.updated_at = utc_now_iso()
+        store.upsert_profile(profile)
+        return profile
+
+    def delete_career_profile(self, profile_id: str) -> None:
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            raise ValueError("Career profile storage is not configured.")
+        store.delete_profile(profile_id)
 
     def list_referral_contacts(self, user_id: str) -> list[ReferralContactRecord]:
         return self._tracker_application_service.list_referral_contacts(user_id)

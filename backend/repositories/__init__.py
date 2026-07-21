@@ -3,6 +3,8 @@ from .contracts import (
     ArtifactStoreProtocol,
     AuthRepositoryProtocol,
     BackendRepositories,
+    CareerProfileStoreProtocol,
+
     ConfigStoreProtocol,
     JobStoreProtocol,
     ReviewStoreProtocol,
@@ -15,6 +17,8 @@ from .contracts import (
 from .file_backed import (
     FileAnalyticsStore,
     FileAuthRepository,
+    FileCareerProfileStore,
+
     FileArtifactStore,
     FileConfigStore,
     FileJobStore,
@@ -26,6 +30,8 @@ from .file_backed import (
 )
 from .sqlite_backed import (
     SqliteAnalyticsStore,
+    SqliteCareerProfileStore,
+
     SqliteAuthRepository,
     SqliteArtifactStore,
     SqliteConfigStore,
@@ -42,7 +48,11 @@ __all__ = [
     "AnalyticsStoreProtocol",
     "ArtifactStoreProtocol",
     "AuthRepositoryProtocol",
+    "CareerProfileStoreProtocol",
+
     "BackendRepositories",
+    FileCareerProfileStore,
+
     "ConfigStoreProtocol",
     "FileAnalyticsStore",
     "FileAuthRepository",
@@ -63,6 +73,8 @@ __all__ = [
     "SqliteAuthRepository",
     "SqliteArtifactStore",
     "SqliteConfigStore",
+    SqliteCareerProfileStore,
+
     "SqliteJobStore",
     "SqliteReviewStore",
     "SqliteRunRepository",

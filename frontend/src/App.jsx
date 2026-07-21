@@ -14,6 +14,8 @@ const AdminPage = lazy(() => import("./pages/AdminPage"));
 const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
 const AdminScrapeOpsPage = lazy(() => import("./pages/AdminScrapeOpsPage"));
 const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
+const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
+
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
 const DocumentsPage = lazy(() => import("./pages/ArtifactsPage"));
@@ -191,6 +193,7 @@ function AuthenticatedApp() {
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
+              <Route path="/career-profiles" element={<CareerProfilesPage />} />
               <Route path="/dashboard" element={<Navigate replace to="/" />} />
               <Route path="/workspaces" element={<WorkspacesPage />} />
               <Route path="/quick-apply" element={<QuickApplyPage />} />

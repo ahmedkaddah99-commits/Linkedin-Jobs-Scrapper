@@ -997,6 +997,27 @@ def _apply_assisted_apply_tracker_confirmation_migration(connection: DatabaseCon
     )
 
 
+def _apply_career_profiles_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS career_profiles (
+            profile_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            preferred_language TEXT NOT NULL DEFAULT 'en',
+            target_direction TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'not_started',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_career_profiles_user_updated
+            ON career_profiles(user_id, updated_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -1112,4 +1133,10 @@ MIGRATIONS = (
         "Create bounded Assisted Apply outcome events and idempotent Tracker records.",
         _apply_assisted_apply_tracker_confirmation_migration,
     ),
+    Migration.from_callable(
+        "021_career_profiles",
+        "Create career profile storage for career profile lifecycle management.",
+        _apply_career_profiles_migration,
+    ),
+
 )

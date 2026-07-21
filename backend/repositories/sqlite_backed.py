@@ -24,6 +24,8 @@ from backend.domain.models import (
     WORKER_STATUS_RUNNING,
     WORKER_STATUS_STALE,
     ApiTokenRecord,
+    CareerProfile,
+
     ArtifactRecord,
     JobRecord,
     ReviewRecord,
@@ -2816,3 +2818,73 @@ class SqliteConfigStore(_SqliteStore):
             str(row["config_key"] or ""): _deserialize(row["payload_json"], None)
             for row in rows
         }
+
+
+
+class SqliteCareerProfileStore(_SqliteStore):
+    """SQLite-backed career profile persistence."""
+
+    def list_profiles(self, *, user_id: str = "", limit: int = 50, offset: int = 0) -> list:
+        from backend.domain.models import CareerProfile
+
+        query = "SELECT payload_json FROM career_profiles"
+        params: list[Any] = []
+        if user_id:
+            query += " WHERE user_id = ?"
+            params.append(user_id)
+        query += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [CareerProfile.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
+
+    def get_profile(self, profile_id: str) -> "CareerProfile":
+        from backend.domain.models import CareerProfile
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM career_profiles WHERE profile_id = ?",
+                (profile_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Career profile '{profile_id}' not found.")
+        return CareerProfile.from_dict(_deserialize(row["payload_json"], {}))
+
+    def upsert_profile(self, profile: "CareerProfile") -> None:
+        from backend.domain.models import CareerProfile
+
+        storage = profile.to_dict()
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO career_profiles "
+                    "(profile_id, user_id, name, description, preferred_language, "
+                    "target_direction, status, created_at, updated_at, metadata_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(profile_id) DO UPDATE SET "
+                    "user_id=excluded.user_id, name=excluded.name, "
+                    "description=excluded.description, preferred_language=excluded.preferred_language, "
+                    "target_direction=excluded.target_direction, status=excluded.status, "
+                    "updated_at=excluded.updated_at, metadata_json=excluded.metadata_json"
+                ),
+                (
+                    profile.profile_id,
+                    profile.user_id,
+                    profile.name,
+                    profile.description,
+                    profile.preferred_language,
+                    profile.target_direction,
+                    profile.status,
+                    profile.created_at,
+                    utc_now_iso(),
+                    _serialize(profile.metadata),
+                ),
+            )
+
+    def delete_profile(self, profile_id: str) -> None:
+        with self._connect() as connection:
+            row_count = connection.execute(
+                "DELETE FROM career_profiles WHERE profile_id = ?", (profile_id,)
+            ).rowcount
+        if row_count == 0:
+            raise KeyError(f"Career profile '{profile_id}' not found.")
