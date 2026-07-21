@@ -2859,12 +2859,12 @@ class SqliteCareerProfileStore(_SqliteStore):
                 (
                     "INSERT INTO career_profiles "
                     "(profile_id, user_id, name, description, preferred_language, "
-                    "target_direction, status, created_at, updated_at, metadata_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "target_direction, bound_workspace_id, status, created_at, updated_at, metadata_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(profile_id) DO UPDATE SET "
                     "user_id=excluded.user_id, name=excluded.name, "
                     "description=excluded.description, preferred_language=excluded.preferred_language, "
-                    "target_direction=excluded.target_direction, status=excluded.status, "
+                    "target_direction=excluded.target_direction, bound_workspace_id=excluded.bound_workspace_id, status=excluded.status, "
                     "updated_at=excluded.updated_at, metadata_json=excluded.metadata_json"
                 ),
                 (
@@ -2874,6 +2874,7 @@ class SqliteCareerProfileStore(_SqliteStore):
                     profile.description,
                     profile.preferred_language,
                     profile.target_direction,
+                    profile.bound_workspace_id,
                     profile.status,
                     profile.created_at,
                     utc_now_iso(),

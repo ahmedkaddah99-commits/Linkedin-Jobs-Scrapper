@@ -1018,6 +1018,15 @@ def _apply_career_profiles_migration(connection: DatabaseConnection) -> None:
     )
 
 
+def _apply_career_profiles_workspace_binding_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        ALTER TABLE career_profiles ADD COLUMN bound_workspace_id TEXT NOT NULL DEFAULT '';
+        """
+    )
+
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -1137,6 +1146,11 @@ MIGRATIONS = (
         "021_career_profiles",
         "Create career profile storage for career profile lifecycle management.",
         _apply_career_profiles_migration,
+    ),
+    Migration.from_callable(
+        "022_career_profiles_workspace_binding",
+        "Add workspace binding column to career profiles.",
+        _apply_career_profiles_workspace_binding_migration,
     ),
 
 )

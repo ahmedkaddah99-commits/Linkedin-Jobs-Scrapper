@@ -22,6 +22,12 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.prefix(
         "DELETE", ("career-profiles", "{profile_id}"), _handle_delete, auth_required=True, name="career_profiles.delete"
     )
+    registry.prefix(
+        "POST", ("career-profiles", "{profile_id}", "bind"), _handle_bind, auth_required=True, name="career_profiles.bind"
+    )
+    registry.prefix(
+        "DELETE", ("career-profiles", "{profile_id}", "bind"), _handle_unbind, auth_required=True, name="career_profiles.unbind"
+    )
 
 
 def _career_profile_store(context: ApiRouteContext):
@@ -145,9 +151,78 @@ def _apply_update_payload(profile: CareerProfile, payload: Mapping[str, Any]) ->
             profile.preferred_language = lang
     if "target_direction" in payload:
         profile.target_direction = str(payload["target_direction"] or "").strip()
+    if "bound_workspace_id" in payload:
+        profile.bound_workspace_id = str(payload["bound_workspace_id"] or "").strip()
     if "status" in payload:
         status = str(payload["status"] or "").strip()
         if status in CAREER_PROFILE_STATUSES:
             profile.status = status
     from backend.domain.models import utc_now_iso
     profile.updated_at = utc_now_iso()
+
+
+
+def _handle_bind(context: ApiRouteContext) -> bool | None:
+    segments = list(context.segments)
+    if len(segments) == 3 and segments[0] == "career-profiles" and segments[2] == "bind":
+        store = _career_profile_store(context)
+        if store is None:
+            return True
+        user, _ = context.require_identity()
+        try:
+            profile = store.get_profile(segments[1])
+        except KeyError:
+            context.send_error(HTTPStatus.NOT_FOUND, "career_profile_not_found", f"Career profile '{segments[1]}' not found.")
+            return True
+        if profile.user_id != user.user_id:
+            context.send_error(HTTPStatus.FORBIDDEN, "forbidden", "You can only bind your own career profiles.")
+            return True
+        payload = context.read_json_body()
+        workspace_id = str(payload.get("workspace_id") or "").strip()
+        if not workspace_id:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY, "validation_error", "workspace_id is required.")
+            return True
+        # Validate workspace exists
+        workspace = None
+        try:
+            workspace = context.application.repositories.workspace_repository.get_workspace(workspace_id)
+        except Exception:
+            pass
+        if workspace is None:
+            context.send_error(HTTPStatus.NOT_FOUND, "workspace_not_found", f"Workspace '{workspace_id}' not found.")
+            return True
+        # Bind the workspace
+        profile.bound_workspace_id = workspace_id
+        from backend.domain.models import utc_now_iso
+        profile.updated_at = utc_now_iso()
+        store.upsert_profile(profile)
+        context.send_json(profile.to_dict(), status=HTTPStatus.OK)
+        return True
+    return False
+
+
+def _handle_unbind(context: ApiRouteContext) -> bool | None:
+    segments = list(context.segments)
+    if len(segments) == 3 and segments[0] == "career-profiles" and segments[2] == "bind":
+        store = _career_profile_store(context)
+        if store is None:
+            return True
+        user, _ = context.require_identity()
+        try:
+            profile = store.get_profile(segments[1])
+        except KeyError:
+            context.send_error(HTTPStatus.NOT_FOUND, "career_profile_not_found", f"Career profile '{segments[1]}' not found.")
+            return True
+        if profile.user_id != user.user_id:
+            context.send_error(HTTPStatus.FORBIDDEN, "forbidden", "You can only unbind your own career profiles.")
+            return True
+        if not profile.bound_workspace_id:
+            context.send_error(HTTPStatus.CONFLICT, "no_binding", "Career profile is not bound to any workspace.")
+            return True
+        profile.bound_workspace_id = ""
+        from backend.domain.models import utc_now_iso
+        profile.updated_at = utc_now_iso()
+        store.upsert_profile(profile)
+        context.send_json(profile.to_dict(), status=HTTPStatus.OK)
+        return True
+    return False

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
+import { useApiResource } from "../hooks/useApiResource";
 
 const STATUS_LABELS = {
   not_started: "Not started",
@@ -42,6 +43,26 @@ export default function CareerProfilesPage() {
   });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+
+  // Binding state
+  const [bindingProfileId, setBindingProfileId] = useState("");
+  const [bindingAction, setBindingAction] = useState("");
+  const [bindingError, setBindingError] = useState("");
+
+  // Fetch workspaces for binding UI
+  const { data: workspacesData } = useApiResource(
+    () => request("/workspaces?limit=100", { timeoutMs: 60000 }),
+    [request],
+    { cacheKey: "workspaces:list", staleMs: Infinity, backgroundRefresh: false },
+  );
+
+  const workspaceMap = useMemo(() => {
+    const map = {};
+    for (const ws of workspacesData?.workspaces || []) {
+      map[ws.id] = ws.name || ws.id;
+    }
+    return map;
+  }, [workspacesData]);
 
   const loadProfiles = useCallback(async () => {
     if (!user?.user_id) return;
@@ -100,6 +121,68 @@ export default function CareerProfilesPage() {
       setSaving(false);
     }
   }
+
+  // --- Workspace binding helpers ---
+
+  function openBindDialog(profileId, action) {
+    setBindingProfileId(profileId);
+    setBindingAction(action);
+    setBindingError("");
+  }
+
+  function closeBindDialog() {
+    setBindingProfileId("");
+    setBindingAction("");
+    setBindingError("");
+  }
+
+  async function handleBindWorkspace(workspaceId) {
+    if (!bindingProfileId || !workspaceId) return;
+    try {
+      setBindingError("");
+      const updated = await request(
+        `/career-profiles/${bindingProfileId}/bind`,
+        { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) },
+        { rawPath: true }
+      );
+      setProfiles((prev) => prev.map((p) => (p.profile_id === updated.profile_id ? updated : p)));
+      closeBindDialog();
+    } catch (err) {
+      setBindingError(String(err?.message || "Failed to bind workspace."));
+    }
+  }
+
+  async function handleUnbindWorkspace(profileId) {
+    try {
+      setBindingError("");
+      const updated = await request(
+        `/career-profiles/${profileId}/bind`,
+        { method: "DELETE" },
+        { rawPath: true }
+      );
+      setProfiles((prev) => prev.map((p) => (p.profile_id === updated.profile_id ? updated : p)));
+    } catch (err) {
+      setBindingError(String(err?.message || "Failed to unbind workspace."));
+    }
+  }
+
+  function resolveWorkspaceName(workspaceId) {
+    return workspaceMap[workspaceId] || workspaceId;
+  }
+
+  const userWorkspaces = useMemo(
+    () => (workspacesData?.workspaces || []).filter((ws) => {
+      const metadata = ws.metadata || {};
+      const wsType = String(ws.workspace_type || "").trim().toLowerCase();
+      return !(
+        wsType === "internal" ||
+        wsType === "system" ||
+        metadata.internal ||
+        metadata.system
+      );
+    }),
+    [workspacesData],
+  );
 
   return (
     <div className="space-y-8">
@@ -241,58 +324,152 @@ export default function CareerProfilesPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {profiles.map((profile) => (
-              <div
-                className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft transition-colors hover:border-outline-variant/40"
-                key={profile.profile_id}
-              >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="font-headline text-lg font-bold text-on-surface truncate">
-                        {profile.name}
-                      </h4>
-                      <StatusBadge tone={STATUS_TONES[profile.status] || "neutral"}>
-                        {STATUS_LABELS[profile.status] || profile.status}
-                      </StatusBadge>
-                    </div>
-                    {profile.description ? (
-                      <p className="mt-1 text-sm leading-6 text-on-surface-variant line-clamp-2">
-                        {profile.description}
-                      </p>
-                    ) : null}
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-on-surface-variant">
-                      {profile.target_direction ? (
-                        <span className="inline-flex items-center gap-1">
-                          <span className="material-symbols-outlined text-[14px]">target</span>
-                          {profile.target_direction}
-                        </span>
+            {profiles.map((profile) => {
+              const isBound = Boolean(profile.bound_workspace_id);
+              const workspaceName = isBound ? resolveWorkspaceName(profile.bound_workspace_id) : "";
+              return (
+                <div
+                  className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft transition-colors hover:border-outline-variant/40"
+                  key={profile.profile_id}
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="font-headline text-lg font-bold text-on-surface truncate">
+                          {profile.name}
+                        </h4>
+                        <StatusBadge tone={STATUS_TONES[profile.status] || "neutral"}>
+                          {STATUS_LABELS[profile.status] || profile.status}
+                        </StatusBadge>
+                        {isBound ? (
+                          <button
+                            className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary transition-colors hover:bg-primary/20"
+                            onClick={() => navigate(`/workspaces?workspace_id=${profile.bound_workspace_id}`)}
+                            title={`Bound to workspace: ${workspaceName}`}
+                            type="button"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">workspaces</span>
+                            {workspaceName}
+                          </button>
+                        ) : null}
+                      </div>
+                      {profile.description ? (
+                        <p className="mt-1 text-sm leading-6 text-on-surface-variant line-clamp-2">
+                          {profile.description}
+                        </p>
                       ) : null}
-                      <span className="inline-flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[14px]">language</span>
-                        {profile.preferred_language.toUpperCase()}
-                      </span>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-on-surface-variant">
+                        {profile.target_direction ? (
+                          <span className="inline-flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[14px]">target</span>
+                            {profile.target_direction}
+                          </span>
+                        ) : null}
+                        <span className="inline-flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[14px]">language</span>
+                          {profile.preferred_language.toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      {isBound ? (
+                        <>
+                          <button
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                            onClick={() => openBindDialog(profile.profile_id, "rebind")}
+                            type="button"
+                          >
+                            Rebind
+                          </button>
+                          <button
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-error-container hover:text-on-error-container"
+                            onClick={() => handleUnbindWorkspace(profile.profile_id)}
+                            type="button"
+                          >
+                            Unbind
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                          onClick={() => openBindDialog(profile.profile_id, "bind")}
+                          type="button"
+                        >
+                          Bind to workspace
+                          <span className="material-symbols-outlined text-[16px]">link</span>
+                        </button>
+                      )}
+                      <button
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                        onClick={() => navigate(`/workspaces?profile_id=${profile.profile_id}`)}
+                        type="button"
+                      >
+                        Select sources
+                        <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+                      </button>
                     </div>
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <button
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-                      onClick={() => navigate(`/workspaces?profile_id=${profile.profile_id}`)}
-                      type="button"
-                    >
-                      Select sources
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </button>
-                  </div>
+                  <p className="mt-3 text-xs text-on-surface-variant/60">
+                    Created {new Date(profile.created_at).toLocaleDateString()}
+                  </p>
                 </div>
-                <p className="mt-3 text-xs text-on-surface-variant/60">
-                  Created {new Date(profile.created_at).toLocaleDateString()}
-                </p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
+
+      {/* Binding Dialog */}
+      {bindingProfileId ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeBindDialog}>
+          <div
+            className="w-full max-w-md rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-headline text-xl font-bold text-on-surface">
+              {bindingAction === "rebind" ? "Change Workspace Binding" : "Bind to Workspace"}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-on-surface-variant">
+              {bindingAction === "rebind"
+                ? "Select a different workspace to bind this career profile to."
+                : "Select a workspace to connect this career profile to. This profile will be available for CV tailoring, letters, answers, and interview preparation."}
+            </p>
+            {bindingError ? (
+              <div className="mt-3 rounded-xl border border-error/20 bg-error/5 px-4 py-3 text-sm text-error">
+                {bindingError}
+              </div>
+            ) : null}
+            <div className="mt-4 space-y-2 max-h-64 overflow-y-auto">
+              {userWorkspaces.length === 0 ? (
+                <p className="text-sm text-on-surface-variant">No workspaces available. Create a workspace first.</p>
+              ) : (
+                userWorkspaces.map((ws) => (
+                  <button
+                    className="w-full rounded-xl border border-outline-variant/20 bg-surface px-4 py-3 text-left text-sm font-medium text-on-surface transition-colors hover:border-primary/30 hover:bg-primary/5"
+                    key={ws.id}
+                    onClick={() => handleBindWorkspace(ws.id)}
+                    type="button"
+                  >
+                    <div className="font-semibold">{ws.name}</div>
+                    {ws.description ? (
+                      <div className="mt-0.5 text-xs text-on-surface-variant line-clamp-1">{ws.description}</div>
+                    ) : null}
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="mt-4">
+              <button
+                className="w-full rounded-xl bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                onClick={closeBindDialog}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

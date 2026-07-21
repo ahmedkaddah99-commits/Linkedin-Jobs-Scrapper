@@ -977,6 +977,7 @@ class CareerProfile:
     description: str = ""
     preferred_language: str = "en"
     target_direction: str = ""
+    bound_workspace_id: str = ""
     status: str = CAREER_PROFILE_STATUS_NOT_STARTED
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -991,6 +992,7 @@ class CareerProfile:
         description: str = "",
         preferred_language: str = "en",
         target_direction: str = "",
+        bound_workspace_id: str = "",
         metadata: Mapping[str, Any] | None = None,
     ) -> "CareerProfile":
         now = utc_now_iso()
@@ -1001,6 +1003,7 @@ class CareerProfile:
             description=str(description).strip(),
             preferred_language=str(preferred_language).strip() or "en",
             target_direction=str(target_direction).strip(),
+            bound_workspace_id=str(bound_workspace_id).strip(),
             status=CAREER_PROFILE_STATUS_NOT_STARTED,
             created_at=now,
             updated_at=now,
@@ -1015,6 +1018,7 @@ class CareerProfile:
             "description": self.description,
             "preferred_language": self.preferred_language,
             "target_direction": self.target_direction,
+            "bound_workspace_id": self.bound_workspace_id,
             "status": self.status,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -1030,6 +1034,7 @@ class CareerProfile:
             description=str(payload.get("description") or ""),
             preferred_language=str(payload.get("preferred_language") or "en"),
             target_direction=str(payload.get("target_direction") or ""),
+            bound_workspace_id=str(payload.get("bound_workspace_id") or ""),
             status=str(payload.get("status") or CAREER_PROFILE_STATUS_NOT_STARTED),
             created_at=str(payload.get("created_at") or utc_now_iso()),
             updated_at=str(payload.get("updated_at") or utc_now_iso()),

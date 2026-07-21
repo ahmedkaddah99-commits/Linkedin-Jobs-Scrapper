@@ -1382,6 +1382,13 @@ export default function WorkspacesPage() {
   const navigate = useNavigate();
   const focusedSectionId = searchParams.get("focus") || "";
   const { request, resolvePath } = useSession();
+  const pendingProfileId = searchParams.get("profile_id") || "";
+  const pendingProfileId = searchParams.get("profile_id") || "";
+  const [profileBindingState, setProfileBindingState] = useState({
+    loading: "",
+    error: "",
+    message: "",
+  });
   const [actionState, setActionState] = useState(EMPTY_ACTION_STATE);
   const [builderState, setBuilderState] = useState({
     open: false,
@@ -2063,6 +2070,34 @@ export default function WorkspacesPage() {
     return () => window.clearTimeout(timer);
   }, [builderState.editingWorkspaceId, builderState.mode, builderState.open, focusedSectionId]);
 
+
+
+  async function handleBindProfileToWorkspace(workspaceId) {
+    if (!pendingProfileId) return;
+    setProfileBindingState({ loading: workspaceId, error: "", message: "" });
+    try {
+      await request(
+        `/career-profiles/${encodeURIComponent(pendingProfileId)}/bind`,
+        { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) },
+        { rawPath: true },
+      );
+      setProfileBindingState({
+        loading: "",
+        error: "",
+        message: `Career profile bound to workspace successfully.`,
+      });
+      const next = new URLSearchParams(searchParams);
+      next.delete("profile_id");
+      setSearchParams(next);
+    } catch (err) {
+      setProfileBindingState({
+        loading: "",
+        error: String(err?.message || "Failed to bind profile to workspace."),
+        message: "",
+      });
+    }
+  }
+
   async function deleteWorkspace(workspaceId) {
     const confirmed = window.confirm(
       "Delete this workspace? Existing runs stay in the system until you delete them separately.",
@@ -2225,6 +2260,16 @@ export default function WorkspacesPage() {
                         ? "Schedule"
                         : "Set Schedule"}
                   </button>
+                  {pendingProfileId ? (
+                    <button
+                      className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-primary/25 bg-primary/5 px-4 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={Boolean(profileBindingState.loading)}
+                      onClick={() => handleBindProfileToWorkspace(workspace.id)}
+                      type="button"
+                    >
+                      {profileBindingState.loading === workspace.id ? "Binding..." : "Bind profile"}
+                    </button>
+                  ) : null}
                   <button
                     className="inline-flex min-w-[6.5rem] items-center justify-center rounded-lg border border-outline-variant/20 bg-surface px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-error-container hover:text-on-error-container disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={builderState.deleting === workspace.id}
@@ -2488,6 +2533,40 @@ export default function WorkspacesPage() {
           </button>
         </div>
       ) : null}
+
+      {pendingProfileId && !profileBindingState.message ? (
+        <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <span className="font-semibold">Bind career profile to a workspace</span>
+              <p className="mt-1 text-xs text-on-surface-variant">
+                Choose a workspace below to connect your career profile. This profile will be available for CV tailoring, letters, answers, and interview preparation.
+              </p>
+            </div>
+            <button
+              className="rounded bg-surface-container-low px-4 py-2 text-xs font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete("profile_id");
+                setSearchParams(next);
+              }}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+          {profileBindingState.error ? (
+            <div className="mt-2 text-error text-xs">{profileBindingState.error}</div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {profileBindingState.message ? (
+        <div className="rounded-xl bg-primary/10 px-4 py-3 text-sm text-primary font-medium">
+          {profileBindingState.message}
+        </div>
+      ) : null}
+
 
       {builderState.message ? (
         <div className="rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface">
