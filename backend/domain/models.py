@@ -1855,3 +1855,150 @@ class EvidenceItem:
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, *, profile_id: str, text: str = "", fact_type: str = "",
+               certainty: str = "", source_asset_ids: list[str] | None = None,
+               source_context: str = "", extracted_employer: str = "",
+               extracted_role: str = "", extracted_start_date: str = "",
+               extracted_end_date: str = "", sort_order: int = 0,
+               metadata: Mapping[str, Any] | None = None) -> "EvidenceItem":
+        now = utc_now_iso()
+        return cls(
+            evidence_id=f"evd_{uuid4().hex[:16]}",
+            profile_id=str(profile_id).strip(), text=str(text).strip(),
+            fact_type=str(fact_type).strip(), certainty=str(certainty).strip(),
+            source_asset_ids=[str(a).strip() for a in (source_asset_ids or []) if str(a).strip()],
+            source_context=str(source_context).strip(),
+            extracted_employer=str(extracted_employer).strip(),
+            extracted_role=str(extracted_role).strip(),
+            extracted_start_date=str(extracted_start_date).strip(),
+            extracted_end_date=str(extracted_end_date).strip(),
+            status=EVIDENCE_STATUS_UNLINKED, linked_target_count=0,
+            sort_order=int(sort_order or 0), created_at=now, updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "evidence_id": self.evidence_id, "profile_id": self.profile_id,
+            "text": self.text, "fact_type": self.fact_type,
+            "certainty": self.certainty,
+            "source_asset_ids": list(self.source_asset_ids),
+            "source_context": self.source_context,
+            "extracted_employer": self.extracted_employer,
+            "extracted_role": self.extracted_role,
+            "extracted_start_date": self.extracted_start_date,
+            "extracted_end_date": self.extracted_end_date,
+            "status": self.status,
+            "linked_target_count": self.linked_target_count,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at, "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EvidenceItem":
+        return cls(
+            evidence_id=str(payload.get("evidence_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            text=str(payload.get("text") or ""),
+            fact_type=str(payload.get("fact_type") or ""),
+            certainty=str(payload.get("certainty") or ""),
+            source_asset_ids=[str(a).strip() for a in payload.get("source_asset_ids") or [] if str(a).strip()],
+            source_context=str(payload.get("source_context") or ""),
+            extracted_employer=str(payload.get("extracted_employer") or ""),
+            extracted_role=str(payload.get("extracted_role") or ""),
+            extracted_start_date=str(payload.get("extracted_start_date") or ""),
+            extracted_end_date=str(payload.get("extracted_end_date") or ""),
+            status=str(payload.get("status") or EVIDENCE_STATUS_UNLINKED),
+            linked_target_count=int(payload.get("linked_target_count") or 0),
+            sort_order=int(payload.get("sort_order") or 0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+    @property
+    def is_linked(self) -> bool:
+        return self.status == EVIDENCE_STATUS_LINKED
+
+    @property
+    def needs_resolution(self) -> bool:
+        return self.status in (EVIDENCE_STATUS_UNLINKED, EVIDENCE_STATUS_AMBIGUOUS, EVIDENCE_STATUS_CONFLICT)
+
+
+
+@dataclass(slots=True)
+class EvidenceLink:
+    """A link from an evidence item to a concrete target."""
+    link_id: str
+    evidence_id: str
+    profile_id: str
+    target_type: str = ""
+    target_id: str = ""
+    target_label: str = ""
+    confidence: float = 0.0
+    suggestion_reason: str = ""
+    is_suggested: bool = True
+    is_primary: bool = False
+    sort_order: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, *, evidence_id: str, profile_id: str,
+               target_type: str = EVIDENCE_LINK_TARGET_UNASSIGNED,
+               target_id: str = "", target_label: str = "",
+               confidence: float = 0.0, suggestion_reason: str = "",
+               is_suggested: bool = True, is_primary: bool = False,
+               sort_order: int = 0,
+               metadata: Mapping[str, Any] | None = None) -> "EvidenceLink":
+        now = utc_now_iso()
+        return cls(
+            link_id=f"elink_{uuid4().hex[:16]}",
+            evidence_id=str(evidence_id).strip(),
+            profile_id=str(profile_id).strip(),
+            target_type=str(target_type).strip() or EVIDENCE_LINK_TARGET_UNASSIGNED,
+            target_id=str(target_id).strip(),
+            target_label=str(target_label).strip(),
+            confidence=float(confidence or 0.0),
+            suggestion_reason=str(suggestion_reason).strip(),
+            is_suggested=bool(is_suggested), is_primary=bool(is_primary),
+            sort_order=int(sort_order or 0), created_at=now, updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "link_id": self.link_id, "evidence_id": self.evidence_id,
+            "profile_id": self.profile_id, "target_type": self.target_type,
+            "target_id": self.target_id, "target_label": self.target_label,
+            "confidence": self.confidence,
+            "suggestion_reason": self.suggestion_reason,
+            "is_suggested": self.is_suggested, "is_primary": self.is_primary,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at, "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EvidenceLink":
+        return cls(
+            link_id=str(payload.get("link_id") or ""),
+            evidence_id=str(payload.get("evidence_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            target_type=str(payload.get("target_type") or EVIDENCE_LINK_TARGET_UNASSIGNED),
+            target_id=str(payload.get("target_id") or ""),
+            target_label=str(payload.get("target_label") or ""),
+            confidence=float(payload.get("confidence") or 0.0),
+            suggestion_reason=str(payload.get("suggestion_reason") or ""),
+            is_suggested=bool(payload.get("is_suggested", True)),
+            is_primary=bool(payload.get("is_primary") or False),
+            sort_order=int(payload.get("sort_order") or 0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
