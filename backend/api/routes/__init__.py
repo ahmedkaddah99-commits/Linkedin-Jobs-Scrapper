@@ -12,6 +12,7 @@ from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.system import register_routes as register_system_routes
 from backend.api.routes.tracker import register_routes as register_tracker_routes
 from backend.api.routes.workspace import register_routes as register_workspace_routes
+from backend.api.routes.work_experiences import register_routes as register_work_experiences_routes
 
 
 def build_route_registry() -> RouteRegistry:
@@ -27,6 +28,7 @@ def build_route_registry() -> RouteRegistry:
     register_career_memory_routes(registry)
     register_document_routes(registry)
     register_tracker_routes(registry)
+    register_work_experiences_routes(registry)
     register_workspace_routes(registry)
     return registry
 

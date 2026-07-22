@@ -1249,3 +1249,215 @@ class RebindCompatibilityReview:
             requires_confirmation=bool(payload.get("requires_confirmation") or False),
             created_at=str(payload.get("created_at") or utc_now_iso()),
         )
+
+
+# --- Work Experience Record ---
+
+WORK_EXPERIENCE_STATUS_ACTIVE = "active"
+WORK_EXPERIENCE_STATUS_MERGED = "merged"
+WORK_EXPERIENCE_STATUS_ARCHIVED = "archived"
+WORK_EXPERIENCE_STATUSES = {
+    WORK_EXPERIENCE_STATUS_ACTIVE,
+    WORK_EXPERIENCE_STATUS_MERGED,
+    WORK_EXPERIENCE_STATUS_ARCHIVED,
+}
+
+WORK_EXPERIENCE_SOURCE_KIND_MANUAL = "manual"
+WORK_EXPERIENCE_SOURCE_KIND_EXTRACTED = "extracted"
+WORK_EXPERIENCE_SOURCE_KIND_IMPORTED = "imported"
+WORK_EXPERIENCE_SOURCE_KINDS = {
+    WORK_EXPERIENCE_SOURCE_KIND_MANUAL,
+    WORK_EXPERIENCE_SOURCE_KIND_EXTRACTED,
+    WORK_EXPERIENCE_SOURCE_KIND_IMPORTED,
+}
+
+EMPLOYMENT_TYPE_FULL_TIME = "full_time"
+EMPLOYMENT_TYPE_PART_TIME = "part_time"
+EMPLOYMENT_TYPE_CONTRACT = "contract"
+EMPLOYMENT_TYPE_FREELANCE = "freelance"
+EMPLOYMENT_TYPE_INTERNSHIP = "internship"
+EMPLOYMENT_TYPE_SELF_EMPLOYED = "self_employed"
+EMPLOYMENT_TYPES = {
+    EMPLOYMENT_TYPE_FULL_TIME,
+    EMPLOYMENT_TYPE_PART_TIME,
+    EMPLOYMENT_TYPE_CONTRACT,
+    EMPLOYMENT_TYPE_FREELANCE,
+    EMPLOYMENT_TYPE_INTERNSHIP,
+    EMPLOYMENT_TYPE_SELF_EMPLOYED,
+}
+
+MERGE_SUGGESTION_STATUS_PENDING = "pending"
+MERGE_SUGGESTION_STATUS_CONFIRMED = "confirmed"
+MERGE_SUGGESTION_STATUS_DISMISSED = "dismissed"
+
+
+@dataclass(slots=True)
+class WorkExperienceRecord:
+    """An identifiable work-experience record extracted from a CV or supporting source."""
+    experience_id: str
+    profile_id: str
+    employer: str = ""
+    job_title: str = ""
+    location: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    employment_type: str = ""
+    description: str = ""
+    source_kind: str = WORK_EXPERIENCE_SOURCE_KIND_MANUAL
+    source_asset_ids: list[str] = field(default_factory=list)
+    status: str = WORK_EXPERIENCE_STATUS_ACTIVE
+    merged_into_id: str = ""
+    sort_order: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        employer: str = "",
+        job_title: str = "",
+        location: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        employment_type: str = "",
+        description: str = "",
+        source_kind: str = WORK_EXPERIENCE_SOURCE_KIND_MANUAL,
+        source_asset_ids: list[str] | None = None,
+        sort_order: int = 0,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "WorkExperienceRecord":
+        now = utc_now_iso()
+        return cls(
+            experience_id=f"exp_{uuid4().hex[:16]}",
+            profile_id=str(profile_id).strip(),
+            employer=str(employer).strip(),
+            job_title=str(job_title).strip(),
+            location=str(location).strip(),
+            start_date=str(start_date).strip(),
+            end_date=str(end_date).strip(),
+            employment_type=str(employment_type).strip(),
+            description=str(description).strip(),
+            source_kind=str(source_kind or WORK_EXPERIENCE_SOURCE_KIND_MANUAL).strip(),
+            source_asset_ids=[str(a).strip() for a in (source_asset_ids or []) if str(a).strip()],
+            status=WORK_EXPERIENCE_STATUS_ACTIVE,
+            merged_into_id="",
+            sort_order=int(sort_order or 0),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "experience_id": self.experience_id,
+            "profile_id": self.profile_id,
+            "employer": self.employer,
+            "job_title": self.job_title,
+            "location": self.location,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "employment_type": self.employment_type,
+            "description": self.description,
+            "source_kind": self.source_kind,
+            "source_asset_ids": list(self.source_asset_ids),
+            "status": self.status,
+            "merged_into_id": self.merged_into_id,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WorkExperienceRecord":
+        return cls(
+            experience_id=str(payload.get("experience_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            employer=str(payload.get("employer") or ""),
+            job_title=str(payload.get("job_title") or ""),
+            location=str(payload.get("location") or ""),
+            start_date=str(payload.get("start_date") or ""),
+            end_date=str(payload.get("end_date") or ""),
+            employment_type=str(payload.get("employment_type") or ""),
+            description=str(payload.get("description") or ""),
+            source_kind=str(payload.get("source_kind") or WORK_EXPERIENCE_SOURCE_KIND_MANUAL),
+            source_asset_ids=[str(a).strip() for a in payload.get("source_asset_ids") or [] if str(a).strip()],
+            status=str(payload.get("status") or WORK_EXPERIENCE_STATUS_ACTIVE),
+            merged_into_id=str(payload.get("merged_into_id") or ""),
+            sort_order=int(payload.get("sort_order") or 0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class MergeSuggestion:
+    """A suggestion to merge two or more work experience records."""
+    suggestion_id: str
+    profile_id: str
+    experience_ids: list[str] = field(default_factory=list)
+    suggested_merged_record: dict[str, Any] = field(default_factory=dict)
+    match_score: float = 0.0
+    match_reason: str = ""
+    status: str = MERGE_SUGGESTION_STATUS_PENDING
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        experience_ids: list[str],
+        suggested_merged_record: Mapping[str, Any] | None = None,
+        match_score: float = 0.0,
+        match_reason: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "MergeSuggestion":
+        now = utc_now_iso()
+        return cls(
+            suggestion_id=f"merge_{uuid4().hex[:16]}",
+            profile_id=str(profile_id).strip(),
+            experience_ids=list(experience_ids),
+            suggested_merged_record=dict(suggested_merged_record or {}),
+            match_score=float(match_score or 0.0),
+            match_reason=str(match_reason).strip(),
+            status=MERGE_SUGGESTION_STATUS_PENDING,
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "suggestion_id": self.suggestion_id,
+            "profile_id": self.profile_id,
+            "experience_ids": list(self.experience_ids),
+            "suggested_merged_record": dict(self.suggested_merged_record),
+            "match_score": self.match_score,
+            "match_reason": self.match_reason,
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "MergeSuggestion":
+        return cls(
+            suggestion_id=str(payload.get("suggestion_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            experience_ids=[str(a).strip() for a in payload.get("experience_ids") or [] if str(a).strip()],
+            suggested_merged_record=dict(payload.get("suggested_merged_record") or {}),
+            match_score=float(payload.get("match_score") or 0.0),
+            match_reason=str(payload.get("match_reason") or ""),
+            status=str(payload.get("status") or MERGE_SUGGESTION_STATUS_PENDING),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )

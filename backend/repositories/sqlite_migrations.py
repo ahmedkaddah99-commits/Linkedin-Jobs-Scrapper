@@ -1172,4 +1172,61 @@ MIGRATIONS = (
     ),
 
 
+def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS work_experiences (
+            experience_id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            employer TEXT NOT NULL DEFAULT '',
+            job_title TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            start_date TEXT NOT NULL DEFAULT '',
+            end_date TEXT NOT NULL DEFAULT '',
+            employment_type TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            source_kind TEXT NOT NULL DEFAULT 'manual',
+            source_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'active',
+            merged_into_id TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_experiences_profile
+            ON work_experiences(profile_id, status, sort_order);
+        CREATE INDEX IF NOT EXISTS idx_work_experiences_profile_updated
+            ON work_experiences(profile_id, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS work_experience_merge_suggestions (
+            suggestion_id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            experience_ids_json TEXT NOT NULL DEFAULT '[]',
+            suggested_merged_record_json TEXT NOT NULL DEFAULT '{}',
+            match_score REAL NOT NULL DEFAULT 0.0,
+            match_reason TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_experience_merge_suggestions_profile
+            ON work_experience_merge_suggestions(profile_id, status);
+        """
+    )
+
+
+    Migration.from_callable(
+        "024_work_experiences",
+        "Create work experience records and merge suggestion storage.",
+        _apply_work_experiences_migration,
+    ),
+
+
 )
+# End of MIGRATIONS tuple
+
+
+
+# (trailing cleanup)
