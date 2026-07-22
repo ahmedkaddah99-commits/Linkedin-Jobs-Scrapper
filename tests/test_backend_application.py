@@ -1833,6 +1833,36 @@ class BackendApplicationTests(unittest.TestCase):
         self.assertEqual(authenticated_user.user_id, user.user_id)
         self.assertEqual(authenticated_token.token_id, token.token_id)
 
+    def test_delete_workspace_unbinds_career_profiles(self):
+        from backend.domain.models import CAREER_PROFILE_STATUS_UNBOUND, CareerProfile
+        app, _ = self._create_app_with_test_workflow("delete_workspace_career_profiles")
+
+        # Register a career profile store if available
+        profile_store = getattr(app.repositories, "career_profile_store", None)
+        if profile_store is None:
+            self.skipTest("Career profile store is not configured.")
+
+        # Create a career profile bound to the workspace
+        profile = CareerProfile.create(
+            user_id="test_user",
+            name="Test Career Profile",
+            bound_workspace_id="custom_workspace",
+        )
+        profile_store.upsert_profile(profile)
+        self.assertEqual(profile.bound_workspace_id, "custom_workspace")
+
+        # Delete the workspace
+        app.delete_workspace("custom_workspace")
+
+        # Verify the profile still exists (was not deleted)
+        retrieved = profile_store.get_profile(profile.profile_id)
+        self.assertIsNotNone(retrieved)
+        # Verify the profile is unbound
+        self.assertEqual(retrieved.bound_workspace_id, "")
+        self.assertEqual(retrieved.status, CAREER_PROFILE_STATUS_UNBOUND)
+        self.assertIn("unbound_reason", retrieved.metadata)
+        self.assertIn("unbound_former_workspace_id", retrieved.metadata)
+        self.assertEqual(retrieved.metadata["unbound_former_workspace_id"], "custom_workspace")
 
 if __name__ == "__main__":
     unittest.main()

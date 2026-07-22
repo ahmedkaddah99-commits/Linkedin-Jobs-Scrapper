@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from backend.domain.models import (
     CAREER_PROFILE_STATUS_NOT_STARTED,
     CAREER_PROFILE_STATUS_NEEDS_REVIEW,
+    CAREER_PROFILE_STATUS_UNBOUND,
     CareerProfile,
     UserRecord,
 )
@@ -73,8 +74,38 @@ class CareerProfileModelTests(unittest.TestCase):
             "extracting_evidence",
             "needs_review",
             "ready_for_tailoring",
+            "unbound",
         })
 
+    def test_unbound_status_is_valid(self):
+        self.assertEqual(CAREER_PROFILE_STATUS_UNBOUND, "unbound")
+        profile = CareerProfile.create(user_id="u1", name="Test")
+        profile.status = CAREER_PROFILE_STATUS_UNBOUND
+        self.assertEqual(profile.status, "unbound")
+        payload = profile.to_dict()
+        self.assertEqual(payload["status"], "unbound")
+        restored = CareerProfile.from_dict(payload)
+        self.assertEqual(restored.status, "unbound")
+
+    def test_unbound_profile_has_cleared_bound_workspace(self):
+        profile = CareerProfile.create(
+            user_id="u1",
+            name="Test",
+            bound_workspace_id="ws_abc",
+        )
+        self.assertEqual(profile.bound_workspace_id, "ws_abc")
+        # Simulate unbind on workspace deletion
+        profile.bound_workspace_id = ""
+        profile.status = CAREER_PROFILE_STATUS_UNBOUND
+        profile.metadata = dict(profile.metadata)
+        profile.metadata["unbound_reason"] = "Workspace 'ws_abc' was deleted."
+        profile.metadata["unbound_at"] = profile.updated_at
+        profile.metadata["unbound_former_workspace_id"] = "ws_abc"
+        self.assertEqual(profile.bound_workspace_id, "")
+        self.assertEqual(profile.status, CAREER_PROFILE_STATUS_UNBOUND)
+        self.assertIn("unbound_reason", profile.metadata)
+        self.assertIn("unbound_former_workspace_id", profile.metadata)
+        self.assertEqual(profile.metadata["unbound_former_workspace_id"], "ws_abc")
 
 if __name__ == "__main__":
     unittest.main()

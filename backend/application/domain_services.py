@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from backend.application.contracts import BackendRegistriesProtocol
 from backend.domain.models import (
+    CAREER_PROFILE_STATUS_UNBOUND,
     ROLE_ADMIN,
     ROLE_EDITOR,
     ROLE_REVIEWER,
@@ -59,6 +60,25 @@ class WorkspaceCatalogService:
         return self.repositories.workspace_repository.get_workspace(workspace.id)
 
     def delete_workspace(self, workspace_id: str) -> None:
+        # Unbind any career profiles bound to this workspace before deleting it.
+        profile_store = getattr(self.repositories, "career_profile_store", None)
+        if profile_store is not None:
+            try:
+                bound_profiles = profile_store.list_profiles_by_workspace(workspace_id)
+            except Exception:
+                bound_profiles = []
+            for profile in bound_profiles:
+                profile.bound_workspace_id = ""
+                profile.status = CAREER_PROFILE_STATUS_UNBOUND
+                profile.metadata = dict(profile.metadata)
+                profile.metadata["unbound_reason"] = (
+                    f"Workspace '{workspace_id}' was deleted. "
+                    "The career profile and verified evidence have been preserved."
+                )
+                profile.metadata["unbound_at"] = utc_now_iso()
+                profile.metadata["unbound_former_workspace_id"] = workspace_id
+                profile.updated_at = utc_now_iso()
+                profile_store.upsert_profile(profile)
         self.repositories.workspace_repository.delete_workspace(workspace_id)
 
     def list_workflow_templates(self) -> list[WorkflowTemplate]:

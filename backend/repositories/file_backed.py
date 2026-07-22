@@ -1177,6 +1177,13 @@ class FileCareerProfileStore:
         all_profiles[profile.profile_id] = profile.to_dict()
         self._write_all(all_profiles)
 
+    def list_profiles_by_workspace(self, workspace_id: str) -> list:
+        from backend.domain.models import CareerProfile
+
+        all_profiles = self._read_all()
+        profiles = [CareerProfile.from_dict(p) for p in all_profiles.values()]
+        return [p for p in profiles if p.bound_workspace_id == workspace_id]
+
     def delete_profile(self, profile_id: str) -> None:
         all_profiles = self._read_all()
         if profile_id not in all_profiles:

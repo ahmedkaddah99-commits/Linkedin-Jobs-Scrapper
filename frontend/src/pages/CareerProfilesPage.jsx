@@ -10,6 +10,7 @@ const STATUS_LABELS = {
   extracting_evidence: "Extracting evidence",
   needs_review: "Needs review",
   ready_for_tailoring: "Ready for tailoring",
+  unbound: "Unbound",
 };
 
 const STATUS_TONES = {
@@ -17,6 +18,7 @@ const STATUS_TONES = {
   extracting_evidence: "primary",
   needs_review: "warning",
   ready_for_tailoring: "success",
+  unbound: "warning",
 };
 
 const LANGUAGE_OPTIONS = [
@@ -380,6 +382,12 @@ export default function CareerProfilesPage() {
                             <span className="material-symbols-outlined text-[14px]">workspaces</span>
                             {workspaceName}
                           </button>
+                        ) : null}
+                        {profile.status === "unbound" ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-on-surface-variant/70" title={profile.metadata?.unbound_reason || "Profile was unbound"}>
+                            <span className="material-symbols-outlined text-[14px]">info</span>
+                            Preserved &mdash; workspace deleted
+                          </span>
                         ) : null}
                       </div>
                       {profile.description ? (

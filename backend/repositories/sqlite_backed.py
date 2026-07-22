@@ -2886,6 +2886,17 @@ class SqliteCareerProfileStore(_SqliteStore):
                 ),
             )
 
+    def list_profiles_by_workspace(self, workspace_id: str) -> list:
+        from backend.domain.models import CareerProfile
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM career_profiles WHERE bound_workspace_id = ? "
+                "ORDER BY updated_at DESC",
+                (workspace_id,),
+            ).fetchall()
+        return [CareerProfile.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
+
     def delete_profile(self, profile_id: str) -> None:
         with self._connect() as connection:
             row_count = connection.execute(
