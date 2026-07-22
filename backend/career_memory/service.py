@@ -163,7 +163,7 @@ def extract_facts(application, user, source_asset_ids: Iterable[str]) -> dict[st
     assets = _candidate_assets(user)
     missing_ids = [asset_id for asset_id in selected_ids if asset_id not in assets]
     if missing_ids:
-        raise ValueError(f"Career Memory sources were not found: {', '.join(missing_ids)}")
+        raise ValueError(f"Evidence sources were not found: {', '.join(missing_ids)}")
     stored = _store(user)
     facts = list(stored.get("facts") or [])
     latest_by_id = {fact["fact_id"]: fact for fact in _latest_versions(facts, "fact_id")}
@@ -244,9 +244,9 @@ def next_question(user) -> dict[str, Any]:
             "requires_confirmation": False,
         }
     return {
-        "question_id": "facts-ready",
+        "question_id": "evidence-ready",
         "fact_id": "",
-        "question": "The current facts are ready for grounded output generation.",
+        "question": "The current evidence is ready for verified output generation.",
         "expected_type": "",
         "requires_confirmation": False,
     }
@@ -258,7 +258,7 @@ def confirm_fact(application, user, fact_id: str, payload: Mapping[str, Any]) ->
     current = latest.get(str(fact_id or ""))
     value = str(payload.get("value") or "").strip()
     if current is None and not value:
-        raise KeyError(f"Career Memory fact '{fact_id}' not found.")
+        raise KeyError(f"Evidence item '{fact_id}' not found.")
     if current is None:
         current = {
             "fact_id": str(fact_id or f"fact_{uuid4().hex[:16]}"),
@@ -365,7 +365,7 @@ def _quality(output: Mapping[str, Any], facts: list[dict[str, Any]]) -> dict[str
             {
                 "code": "unsupported_phrase",
                 "message": (
-                    "Output wording is not grounded in the referenced facts: "
+                    "Output wording is not grounded in the referenced evidence: "
                     f"{', '.join(unsupported_tokens[:8])}"
                 ),
             }
@@ -408,7 +408,7 @@ def _compose_outputs(facts: list[dict[str, Any]], *, mode: str = "standard") -> 
         if not (_NUMBER_PATTERN.search(str(fact.get("value") or "")) and fact.get("certainty") != "confirmed")
     ]
     if not eligible:
-        raise ValueError("Confirm at least one grounded fact before generating output.")
+        raise ValueError("Verify at least one evidence item before generating output.")
     by_type = {fact_type: [fact for fact in eligible if fact.get("type") == fact_type] for fact_type in FACT_TYPES}
     selected = (
         by_type["action"][:1]
@@ -463,7 +463,7 @@ def regenerate_output(application, user, output_id: str, payload: Mapping[str, A
     latest_outputs = {output["output_id"]: output for output in _latest_versions(stored.get("outputs") or [], "output_id")}
     current = latest_outputs.get(str(output_id or ""))
     if current is None:
-        raise KeyError(f"Career Memory output '{output_id}' not found.")
+        raise KeyError(f"Evidence output '{output_id}' not found.")
     facts_by_id = {fact["fact_id"]: fact for fact in _active_facts(stored)}
     facts = [facts_by_id[fact_id] for fact_id in current.get("fact_ids") or [] if fact_id in facts_by_id]
     action = str(payload.get("action") or "regenerate")

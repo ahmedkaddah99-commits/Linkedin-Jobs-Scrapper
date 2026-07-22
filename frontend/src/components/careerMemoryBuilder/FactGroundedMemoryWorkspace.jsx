@@ -28,7 +28,7 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
 
   useEffect(() => {
     loadState().catch((error) => {
-      setFeedback({ busy: "", message: "", error: error.message || "Unable to load Career Memory facts." });
+      setFeedback({ busy: "", message: "", error: error.message || "Unable to load evidence items." });
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -55,11 +55,11 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
       setQuestion(nextQuestion);
       setFeedback({
         busy: "",
-        message: `Extracted ${payload.created_count || 0} new grounded fact${payload.created_count === 1 ? "" : "s"}.`,
+        message: `Analysed ${payload.created_count || 0} new evidence item${payload.created_count === 1 ? "" : "s"}.`,
         error: "",
       });
     } catch (error) {
-      setFeedback({ busy: "", message: "", error: error.message || "Unable to extract facts." });
+      setFeedback({ busy: "", message: "", error: error.message || "Unable to analyse the selected documents." });
     }
   }
 
@@ -80,9 +80,9 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
       setState(payload);
       setAnswer("");
       setQuestion(await request("/career-memory/questions/next", { method: "POST", body: {} }));
-      setFeedback({ busy: "", message: "Fact confirmed as a new immutable version.", error: "" });
+      setFeedback({ busy: "", message: "Evidence verified as a new immutable version.", error: "" });
     } catch (error) {
-      setFeedback({ busy: "", message: "", error: error.message || "Unable to confirm the fact." });
+      setFeedback({ busy: "", message: "", error: error.message || "Unable to verify the evidence." });
     }
   }
 
@@ -99,9 +99,9 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
             body: { mode },
           });
       setState(payload);
-      setFeedback({ busy: "", message: "Grounded CV and cover-letter outputs generated.", error: "" });
+      setFeedback({ busy: "", message: "Verified CV and cover-letter outputs generated.", error: "" });
     } catch (error) {
-      setFeedback({ busy: "", message: "", error: error.message || "Unable to generate grounded output." });
+      setFeedback({ busy: "", message: "", error: error.message || "Unable to generate verified output." });
     }
   }
 
@@ -114,7 +114,7 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
         body: { action: "edit", ...outputDraft },
       });
       setState(payload);
-      setFeedback({ busy: "", message: "Output edit saved without changing its source facts.", error: "" });
+      setFeedback({ busy: "", message: "Output edit saved without changing its source evidence.", error: "" });
     } catch (error) {
       setFeedback({ busy: "", message: "", error: error.message || "Unable to save the output edit." });
     }
@@ -126,9 +126,9 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
       <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h2 className="font-headline text-2xl font-bold text-on-surface">Fact-grounded Career Memory</h2>
+            <h2 className="font-headline text-2xl font-bold text-on-surface">Evidence-based Career Memory</h2>
             <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
-              Extract candidate facts from selected assets, confirm ambiguous claims, then generate separate CV and cover-letter wording.
+              Analyse selected documents, verify claims, then generate separate CV and cover-letter wording from verified evidence.
             </p>
           </div>
           <button
@@ -137,7 +137,7 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
             onClick={extract}
             type="button"
           >
-            {feedback.busy === "extract" ? "Extracting..." : "Extract facts from sources"}
+            {feedback.busy === "extract" ? "Analysing..." : "Analyse selected documents"}
           </button>
         </div>
         {feedback.message || feedback.error ? (
@@ -151,7 +151,7 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
         <div className="space-y-6">
           <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-headline text-xl font-bold text-on-surface">Facts</h3>
+              <h3 className="font-headline text-xl font-bold text-on-surface">Evidence</h3>
               <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
                 {activeFacts.length} active
               </span>
@@ -171,7 +171,7 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
                 </article>
               )) : (
                 <p className="rounded-2xl border border-dashed border-outline-variant/20 p-5 text-sm text-on-surface-variant">
-                  No facts yet. Select sources and extract candidate facts.
+                  No evidence items yet. Select sources and analyse the documents.
                 </p>
               )}
             </div>
@@ -181,7 +181,7 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
             <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
               <h3 className="font-headline text-xl font-bold text-on-surface">Next best question</h3>
               <p className="mt-3 text-sm leading-7 text-on-surface">{question.question}</p>
-              {question.question_id !== "facts-ready" ? (
+              {question.question_id !== "evidence-ready" ? (
                 <>
                   <textarea
                     className="mt-4 min-h-28 w-full rounded-2xl border border-outline-variant/20 bg-surface px-4 py-3 text-sm"
@@ -194,7 +194,7 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
                     onClick={confirmAnswer}
                     type="button"
                   >
-                    {feedback.busy === "confirm" ? "Confirming..." : "Confirm fact"}
+                    {feedback.busy === "confirm" ? "Verifying..." : "Verify evidence"}
                   </button>
                 </>
               ) : null}
@@ -205,8 +205,8 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
         <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="font-headline text-xl font-bold text-on-surface">Grounded output</h3>
-              <p className="mt-1 text-sm text-on-surface-variant">Edits create output versions and never mutate facts.</p>
+              <h3 className="font-headline text-xl font-bold text-on-surface">Generate from verified evidence</h3>
+              <p className="mt-1 text-sm text-on-surface-variant">Edits create output versions and never mutate evidence.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               {[
@@ -257,12 +257,12 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
                 {(output.quality?.issues || []).map((issue) => <div className="mt-1" key={issue.code}>{issue.message}</div>)}
               </div>
               <div className="text-xs text-on-surface-variant">
-                Facts: {(output.fact_ids || []).join(", ")} · output v{output.version}
+                Evidence: {(output.fact_ids || []).join(", ")} · output v{output.version}
               </div>
             </div>
           ) : (
             <p className="mt-5 rounded-2xl border border-dashed border-outline-variant/20 p-6 text-sm text-on-surface-variant">
-              Confirm grounded facts, then generate distinct CV and cover-letter output.
+              Verify evidence items, then generate distinct CV and cover-letter output.
             </p>
           )}
         </section>

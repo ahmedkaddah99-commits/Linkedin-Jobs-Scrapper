@@ -22,7 +22,7 @@ export default function MemoryBankTab({
             <p className="mt-1 text-sm leading-6 text-on-surface-variant">
               A private, reusable library of real career evidence — achievements,
               projects, metrics, and stories that go beyond your baseline CV. Runr
-              never invents unsupported achievements.
+              never invents unsupported claims.
             </p>
           </div>
           <button
@@ -30,7 +30,7 @@ export default function MemoryBankTab({
             onClick={onAddManual}
             type="button"
           >
-            Add memory manually
+            Add evidence
             <span className="material-symbols-outlined text-[16px]">add</span>
           </button>
         </div>
@@ -59,9 +59,9 @@ export default function MemoryBankTab({
         </div>
       ) : (
         <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
-          <h3 className="font-headline text-xl font-bold text-on-surface">No career memories yet.</h3>
+          <h3 className="font-headline text-xl font-bold text-on-surface">No evidence items yet.</h3>
           <p className="mt-2 text-sm leading-7 text-on-surface-variant">
-            Start the guided interview to turn rough memories into reusable application material.
+            Start the guided interview to turn your experience into reusable application evidence.
           </p>
         </section>
       )}
