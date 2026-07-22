@@ -177,6 +177,11 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Optional local-development switch that bypasses quota enforcement when set to 1/true/yes/on.",
     },
+    "GEMINI_API_KEY": {
+        "required": False,
+        "scope": "backend",
+        "description": "Google Gemini API key for multimodal OCR and evidence extraction. Server-side only; never exposed to browser code or logs.",
+    },
 }
 
 

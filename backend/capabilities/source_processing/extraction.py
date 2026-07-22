@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.domain.source_processing import (
+    EXTRACTION_METHOD_GEMINI,
     OCR_METHODS,
     SOURCE_STATUS_EXTRACTED,
     SOURCE_STATUS_FAILED,
@@ -41,7 +42,7 @@ def process_source(source_id: str, file_path: str, *, allow_ocr: bool = True) ->
         return record
 
     try:
-        extraction = extract_document_text(file_name, data, allow_ocr=allow_ocr)
+        extraction = _try_gemini_or_local(file_name, data, allow_ocr=allow_ocr)
     except Exception as exc:
         record.status = SOURCE_STATUS_FAILED
         record.error = f"Extraction failed: {exc}"
@@ -55,6 +56,9 @@ def process_source(source_id: str, file_path: str, *, allow_ocr: bool = True) ->
     record.confidence = float(extraction.get("confidence") or 0)
     record.warnings = [str(w) for w in (extraction.get("warnings") or [])]
     record.pages = [dict(p) for p in (extraction.get("pages") or []) if isinstance(p, dict)]
+    record.provider = str(extraction.get("provider") or "")
+    record.model = str(extraction.get("model") or "")
+
 
     extraction_status = str(extraction.get("status") or "failed")
     record.is_ocr = record.method in OCR_METHODS
@@ -86,7 +90,38 @@ def process_source(source_id: str, file_path: str, *, allow_ocr: bool = True) ->
         record.letter_paragraphs = [str(p) for p in (structured.get("letter_paragraphs") or [])]
 
     record.processed_at = utc_now_iso()
+
     return record
+
+
+def _try_gemini_or_local(
+    file_name: str, data: bytes, *, allow_ocr: bool = True
+) -> dict[str, Any]:
+    """Try Gemini extraction first; fall back to local extraction on failure."""
+    try:
+        from backend.profiles.gemini_extraction import extract_with_gemini
+
+        gemini_result = extract_with_gemini(file_name, data)
+        if gemini_result.get("status") != "failed":
+            LOGGER.info(
+                "Gemini extracted %d chars from %s (confidence=%.2f)",
+                gemini_result.get("char_count", 0),
+                file_name,
+                gemini_result.get("confidence", 0.0),
+            )
+            return gemini_result
+        LOGGER.warning(
+            "Gemini extraction succeeded but returned no text for %s; falling back.",
+            file_name,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "Gemini extraction failed for %s (%s); falling back to local extraction.",
+            file_name,
+            exc,
+        )
+
+    return extract_document_text(file_name, data, allow_ocr=allow_ocr)
 
 
 def run_source_processing_pipeline(

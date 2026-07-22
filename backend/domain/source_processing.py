@@ -29,6 +29,8 @@ EXTRACTION_METHOD_IMAGE_OCR = "image_ocr"
 EXTRACTION_METHOD_XLSX = "xlsx"
 EXTRACTION_METHOD_PLAIN_TEXT = "plain_text"
 EXTRACTION_METHOD_PLAIN_TEXT_FALLBACK = "plain_text_fallback"
+EXTRACTION_METHOD_GEMINI = "gemini"
+
 EXTRACTION_METHOD_NONE = "none"
 
 OCR_METHODS = {
@@ -72,6 +74,9 @@ class SourceTextRecord:
     confidence: float = 0.0
     status: str = SOURCE_STATUS_PROCESSING
     is_ocr: bool = False
+    provider: str = ""
+    model: str = ""
+
     is_low_confidence_ocr: bool = False
     warnings: list[str] = field(default_factory=list)
     error: str = ""
@@ -95,6 +100,9 @@ class SourceTextRecord:
             "text": self.text,
             "char_count": self.char_count,
             "method": self.method,
+            "provider": self.provider,
+            "model": self.model,
+
             "confidence": self.confidence,
             "status": self.status,
             "is_ocr": self.is_ocr,
@@ -121,6 +129,9 @@ class SourceTextRecord:
             text=str(payload.get("text") or ""),
             char_count=int(payload.get("char_count") or 0),
             method=str(payload.get("method") or EXTRACTION_METHOD_NONE),
+            provider=str(payload.get("provider") or ""),
+            model=str(payload.get("model") or ""),
+
             confidence=float(payload.get("confidence") or 0.0),
             status=str(payload.get("status") or SOURCE_STATUS_PROCESSING),
             is_ocr=bool(payload.get("is_ocr")),
@@ -141,6 +152,8 @@ class SourceTextRecord:
 
 __all__ = [
     "EXTRACTION_METHOD_DOCX",
+    "EXTRACTION_METHOD_GEMINI",
+
     "EXTRACTION_METHOD_IMAGE_OCR",
     "EXTRACTION_METHOD_NATIVE",
     "EXTRACTION_METHOD_NONE",

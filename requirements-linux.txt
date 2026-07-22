@@ -17,6 +17,8 @@ Django==6.0.2
 docx2pdf==0.1.8
 et_xmlfile==2.0.0
 google-api-core==2.25.2
+google-genai==2.13.0
+
 google-api-python-client==2.190.0
 google-auth==2.49.0.dev0
 google-auth-httplib2==0.3.0

@@ -17,6 +17,8 @@ et_xmlfile==2.0.0
 google-api-core==2.25.2
 google-api-python-client==2.190.0
 google-auth==2.49.0.dev0
+google-genai==2.13.0
+
 google-auth-httplib2==0.3.0
 googleapis-common-protos==1.72.0
 grpcio==1.78.1
