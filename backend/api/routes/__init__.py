@@ -7,6 +7,7 @@ from backend.api.routes.assisted_apply_telemetry import register_routes as regis
 from backend.api.routes.career_profiles import register_routes as register_career_profiles_routes
 from backend.api.routes.career_memory import register_routes as register_career_memory_routes
 from backend.api.routes.career_profile_evidence import register_routes as register_career_profile_evidence_routes
+from backend.api.routes.evidence_items import register_routes as register_evidence_items_routes
 from backend.api.routes.documents import register_routes as register_document_routes
 from backend.api.routes.evidence import register_routes as register_evidence_routes
 
@@ -31,6 +32,7 @@ def build_route_registry() -> RouteRegistry:
 
     register_source_text_review_routes(registry)
     register_career_memory_routes(registry)
+    register_evidence_items_routes(registry)
     register_document_routes(registry)
     register_evidence_routes(registry)
 

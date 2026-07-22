@@ -27,6 +27,12 @@ from backend.capabilities.candidate_evidence.conflict_detection import (
     detect_conflicts,
     apply_conflicts,
 )
+from backend.capabilities.candidate_evidence.migration import (
+    clear_legacy_career_memory,
+    has_legacy_career_memory,
+    migrate_legacy_facts_to_evidence,
+)
+
 from backend.domain.candidate_evidence import CandidateEvidence
 
 from typing import Any
@@ -85,5 +91,8 @@ __all__ = [
     "extract_evidence_from_source",
     "extract_evidence_from_verified_sources",
     "find_duplicate_groups",
+    "clear_legacy_career_memory",
+    "has_legacy_career_memory",
+    "migrate_legacy_facts_to_evidence",
     "run_evidence_pipeline",
 ]
