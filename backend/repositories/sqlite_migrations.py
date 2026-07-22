@@ -1170,6 +1170,12 @@ MIGRATIONS = (
         "Add baseline CV fields to career profiles.",
         _apply_career_profiles_baseline_cv_migration,
     ),
+    Migration.from_callable(
+        "024_evidence_state_tracking",
+        "Create evidence and evidence state history tables for CP-028 state visibility.",
+        _apply_evidence_storage_migration,
+    ),
+
 
 
 def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
@@ -1218,7 +1224,7 @@ def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
 
 
     Migration.from_callable(
-        "024_work_experiences",
+        "025_work_experiences",
         "Create work experience records and merge suggestion storage.",
         _apply_work_experiences_migration,
     ),
@@ -1226,7 +1232,51 @@ def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
 
 )
 # End of MIGRATIONS tuple
+# End of MIGRATIONS tuple
 
 
 
 # (trailing cleanup)
+
+
+
+
+def _apply_evidence_storage_migration(connection: DatabaseConnection) -> None:
+    """Create evidence and evidence state history tables for CP-028."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS evidence (
+            evidence_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL DEFAULT '',
+            run_id TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT 'evidence',
+            state TEXT NOT NULL DEFAULT 'draft',
+            label TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            source_ref TEXT NOT NULL DEFAULT '',
+            source_type TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS evidence_state_history (
+            history_id TEXT PRIMARY KEY,
+            evidence_id TEXT NOT NULL,
+            from_state TEXT NOT NULL DEFAULT '',
+            to_state TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            actor TEXT NOT NULL DEFAULT '',
+            occurred_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_evidence_workspace_state
+            ON evidence(workspace_id, state);
+        CREATE INDEX IF NOT EXISTS idx_evidence_run_id
+            ON evidence(run_id);
+        CREATE INDEX IF NOT EXISTS idx_evidence_kind_state
+            ON evidence(kind, state);
+        CREATE INDEX IF NOT EXISTS idx_evidence_state_history_evidence
+            ON evidence_state_history(evidence_id, occurred_at DESC);
+        """
+    )
+
