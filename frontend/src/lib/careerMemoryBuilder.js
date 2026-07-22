@@ -562,66 +562,62 @@ export function summarizeReadiness(draft, assetDocuments = []) {
     (item) => normalizeString(item.asset_kind).toLowerCase() === "workspace_cv",
   ).length;
   const selectedAssetCount = (draft.selectedAssetIds || []).length;
-  const missing = getMissingContextRecommendations(draft).filter((item) => !item.isComplete);
+  const totalSources = assetDocuments.length;
   const distinctCategories = new Set(cards.map((card) => card.category)).size;
   const metricsCount = cards.filter((card) => hasMetric(card)).length;
-
+  const verifiedCards = cards.filter((card) => card.confidenceLabel === "High confidence");
+  const awaitingReviewCards = cards.filter((card) => card.confidenceLabel !== "High confidence" && card.confidenceLabel !== "Imported source");
   const basicReady = baselineCount > 0;
-  const advancedReady =
-    basicReady &&
-    Boolean(draft.masterProfileAssetId) &&
-    selectedAssetCount > 0 &&
-    cards.length >= 4 &&
-    distinctCategories >= 3 &&
-    metricsCount >= 2 &&
-    missing.length === 0;
+  const readyForTailoring = basicReady && cards.length >= 1 && selectedAssetCount >= 1;
 
   return [
     {
-      title: "Connected Documents",
-      status: advancedReady
-        ? "Ready for advanced tailoring"
-        : basicReady
-          ? "Basic"
-          : "Needs more detail",
-      value: `${baselineCount} baseline CV${baselineCount === 1 ? "" : "s"} + ${selectedAssetCount} selected source asset${selectedAssetCount === 1 ? "" : "s"}`,
+      title: "Sources",
+      status: basicReady
+        ? "Ready for tailoring"
+        : "Needs setup",
+      value: `${selectedAssetCount} selected / ${totalSources} available`,
       description: basicReady
-        ? "Baseline CV is available. Add selected sources and a master profile to deepen tailoring."
+        ? "Baseline CV is available. Select source assets to strengthen tailoring."
         : "Upload a baseline CV in the Asset Library to unlock tailoring.",
     },
     {
-      title: "Memory Strength",
+      title: "Evidence",
       status:
-        cards.length >= 5 && distinctCategories >= 3
-          ? "Ready for advanced tailoring"
-          : cards.length >= 2
+        verifiedCards.length >= 2
+          ? "Ready for tailoring"
+          : cards.length >= 1
             ? "Basic"
-            : "Needs more detail",
-      value: `${cards.length} saved memories across ${distinctCategories || 0} categories`,
+            : "Needs setup",
+      value: `${awaitingReviewCards.length} awaiting review / ${verifiedCards.length} verified`,
       description:
         metricsCount > 0
           ? `${metricsCount} memories already include numbers or estimates.`
           : "Add examples with rough metrics so Runr has stronger proof of impact.",
     },
     {
-      title: "Missing High-Impact Details",
-      status: missing.length ? "Needs more detail" : "Ready for advanced tailoring",
-      value: missing.length ? `${missing.length} priority gap${missing.length === 1 ? "" : "s"}` : "No obvious gaps",
-      description: missing.length
-        ? missing.map((item) => item.title).join(" | ")
-        : "You have the main building blocks for stronger CV and cover-letter tailoring.",
+      title: "Experiences",
+      status: distinctCategories >= 2
+        ? "Ready for tailoring"
+        : distinctCategories >= 1
+          ? "Basic"
+          : "Needs setup",
+      value: `${cards.length} saved across ${distinctCategories || 0} categories`,
+      description: distinctCategories >= 2
+        ? "Multiple experience categories provide strong evidence for tailored CVs."
+        : "Add experiences from at least two different categories for stronger tailoring.",
     },
     {
-      title: "Advanced Tailoring Readiness",
-      status: advancedReady ? "Ready for advanced tailoring" : basicReady ? "Basic" : "Needs more detail",
-      value: advancedReady
+      title: "Ready for tailoring",
+      status: readyForTailoring ? "Ready for tailoring" : basicReady ? "Basic" : "Needs setup",
+      value: readyForTailoring
         ? "Runr can personalize beyond the baseline CV."
         : basicReady
           ? "Basic tailoring is ready. Add richer context for stronger customization."
           : "Upload documents first, then add memories that documents do not say.",
-      description: advancedReady
-        ? "Documents, story coverage, and reusable evidence are all in place."
-        : "The guided interview will help fill the missing evidence quickly.",
+      description: readyForTailoring
+        ? "Documents, evidence, and mapped experiences are in place for tailoring."
+        : "Add source assets and saved memories to reach the ready state.",
     },
   ];
 }

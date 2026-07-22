@@ -1,5 +1,5 @@
 function statusClasses(status) {
-  if (status === "Ready for advanced tailoring") {
+  if (status === "Ready for tailoring" || status === "Ready for advanced tailoring") {
     return "bg-primary/15 text-primary";
   }
   if (status === "Basic") {

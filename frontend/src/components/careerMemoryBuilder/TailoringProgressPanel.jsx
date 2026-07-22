@@ -1,4 +1,6 @@
 export default function TailoringProgressPanel({ checklist }) {
+  const ready = checklist.readyForTailoring;
+
   return (
     <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
       <div>
@@ -7,16 +9,17 @@ export default function TailoringProgressPanel({ checklist }) {
       </div>
       <div className="mt-4 rounded-2xl border border-outline-variant/15 bg-surface p-4">
         <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-on-surface">Progress</div>
-          <div className="text-sm font-semibold text-on-surface">
-            {checklist.completedCount} / {checklist.totalCount} complete
-          </div>
-        </div>
-        <div className="mt-3 h-2 rounded-full bg-surface-container-low">
+          <div className="text-sm font-semibold text-on-surface">State</div>
           <div
-            className="h-2 rounded-full bg-primary transition-all"
-            style={{ width: `${(checklist.completedCount / checklist.totalCount) * 100}%` }}
-          />
+            className={[
+              "rounded-full px-3 py-1 text-sm font-semibold",
+              ready
+                ? "bg-primary/15 text-primary"
+                : "bg-amber-500/10 text-amber-200 dark:text-amber-100",
+            ].join(" ")}
+          >
+            {checklist.level}
+          </div>
         </div>
       </div>
       <div className="mt-4 space-y-3">
@@ -33,4 +36,3 @@ export default function TailoringProgressPanel({ checklist }) {
     </section>
   );
 }
-

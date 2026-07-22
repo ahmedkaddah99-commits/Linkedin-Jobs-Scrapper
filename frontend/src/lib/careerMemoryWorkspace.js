@@ -535,8 +535,12 @@ export function buildCareerMemoryPayload(draft) {
   const motivationCards = cards.filter((card) =>
     ["motivation", "challenge", "stakeholder_story"].includes(card.category),
   );
+  const completedCount = items.filter((item) => item.complete).length;
+
   return {
-    master_career_profile_asset_id: normalizeString(draft.masterProfileAssetId),
+    items,
+    completedCount,
+    totalCount: items.length,
     master_career_profile_text: normalizeString(draft.importedCareerContext),
     career_highlights_text: mergeTextSections([
       draft.achievementHighlights,
@@ -572,8 +576,12 @@ export function getQuestionSetDefinition(questionSetType) {
 
 export function createInterviewState(questionSetType = DEFAULT_QUESTION_SET_TYPE) {
   const definition = getQuestionSetDefinition(questionSetType);
+  const completedCount = items.filter((item) => item.complete).length;
+
   return {
-    activeQuestionSet: definition.id,
+    items,
+    completedCount,
+    totalCount: items.length,
     currentStepIndex: 0,
     answers: {},
     selectedTrigger: definition.suggestedTrigger,
@@ -729,96 +737,90 @@ export function getSourceSummary(draft, assetDocuments) {
     masterProfileLinked,
   };
 }
-
 export function buildTailoringChecklist(draft, assetDocuments = []) {
   const cards = (draft.generatedMemoryCards || []).map(normalizeCareerMemoryCard);
   const baselineConnected = assetDocuments.some(
     (item) => normalizeString(item.asset_kind).toLowerCase() === "workspace_cv",
   );
-  const achievementStories = cards.filter((card) =>
-    ["achievement", "project"].includes(card.category),
-  ).length;
-  const metrics = cards.filter((card) => hasMetric(card)).length;
-  const projects = cards.filter((card) => card.category === "project").length;
-  const motivation = cards.filter((card) => card.category === "motivation").length;
+  const selectedAssetCount = (draft.selectedAssetIds || []).length;
+  const totalSources = assetDocuments.length;
+  const verifiedCards = cards.filter((card) => card.status === "ready_for_tailoring");
+  const awaitingReviewCards = cards.filter((card) => card.status !== "ready_for_tailoring");
+  const mappedCards = cards.filter((card) => card.useInCv || card.useInLetter);
+  const unmappedCards = cards.filter((card) => !card.useInCv && !card.useInLetter);
+  const readyForTailoring = baselineConnected && cards.length >= 1 && selectedAssetCount >= 1;
+
   const items = [
     {
-      id: "baseline",
-      label: "Baseline CV connected",
-      complete: baselineConnected,
-      progressLabel: baselineConnected ? "Connected" : "Missing",
+      id: "sources",
+      label: "Sources selected and processed",
+      complete: baselineConnected || selectedAssetCount > 0,
+      progressLabel: `${selectedAssetCount} selected / ${totalSources} available`,
     },
     {
-      id: "achievement_stories",
-      label: "Add 3 achievement stories",
-      complete: achievementStories >= 3,
-      progressLabel: `${achievementStories}/3`,
+      id: "evidence",
+      label: "Evidence awaiting review / verified",
+      complete: verifiedCards.length >= 1,
+      progressLabel: `${awaitingReviewCards.length} awaiting review / ${verifiedCards.length} verified`,
     },
     {
-      id: "metrics",
-      label: "Add 2 metrics",
-      complete: metrics >= 2,
-      progressLabel: `${metrics}/2`,
+      id: "experiences",
+      label: "Experiences mapped vs unmapped",
+      complete: mappedCards.length >= 1,
+      progressLabel: `${mappedCards.length} mapped / ${unmappedCards.length} unmapped`,
     },
     {
-      id: "projects",
-      label: "Add 1 project example",
-      complete: projects >= 1,
-      progressLabel: `${projects}/1`,
-    },
-    {
-      id: "motivation",
-      label: "Add motivation notes",
-      complete: motivation >= 1 || normalizeString(draft.motivationLetterNotes).length >= 60,
-      progressLabel:
-        motivation >= 1 || normalizeString(draft.motivationLetterNotes).length >= 60
-          ? "Added"
-          : "Missing",
+      id: "ready_state",
+      label: "Ready for tailoring",
+      complete: readyForTailoring,
+      progressLabel: readyForTailoring ? "Ready" : "Not ready",
     },
   ];
+
   const completedCount = items.filter((item) => item.complete).length;
-  const level = !baselineConnected
-    ? "Basic"
-    : completedCount >= 4
-      ? "Strong"
-      : completedCount >= 2
-        ? "Improving"
-        : "Basic";
-  const summary = baselineConnected
-    ? "Basic tailoring is ready because a baseline CV is connected."
-    : "Upload a baseline CV in Asset Library to unlock tailoring.";
+
   return {
     items,
     completedCount,
     totalCount: items.length,
-    level,
-    summary,
+    readyForTailoring,
+    totalSources,
+    selectedAssetCount,
+    baselineConnected,
+    verifiedCount: verifiedCards.length,
+    awaitingReviewCount: awaitingReviewCards.length,
+    mappedCount: mappedCards.length,
+    unmappedCount: unmappedCards.length,
+    totalCards: cards.length,
+    level: readyForTailoring ? "Ready for tailoring" : baselineConnected ? "Basic" : "Needs setup",
+    summary: baselineConnected
+      ? `${cards.length} saved memories, ${verifiedCards.length} verified, ${mappedCards.length} mapped to CV/letter usage.`
+      : "Upload a baseline CV in Asset Library to unlock tailoring.",
     missingCount: items.filter((item) => !item.complete).length,
   };
 }
-
 export function getTopStatusBarItems(draft, assetDocuments = []) {
   const checklist = buildTailoringChecklist(draft, assetDocuments);
   return [
     {
-      id: "documents",
-      label: "Documents",
-      value: `${assetDocuments.length} connected`,
+      id: "sources",
+      label: "Sources",
+      value: `${checklist.selectedAssetCount} selected / ${checklist.totalSources} available`,
     },
     {
-      id: "memories",
-      label: "Memories",
-      value: `${(draft.generatedMemoryCards || []).length} saved`,
+      id: "evidence",
+      label: "Evidence",
+      value: `${checklist.awaitingReviewCount} awaiting / ${checklist.verifiedCount} verified`,
     },
     {
-      id: "tailoring_level",
-      label: "Tailoring level",
+      id: "experiences",
+      label: "Experiences",
+      value: `${checklist.mappedCount} mapped / ${checklist.unmappedCount} unmapped`,
+    },
+    {
+      id: "ready_state",
+      label: "Tailoring state",
       value: checklist.level,
-    },
-    {
-      id: "missing",
-      label: "Missing",
-      value: `${checklist.missingCount} items`,
     },
   ];
 }
@@ -827,39 +829,29 @@ export function getNextBestActions(draft, assetDocuments = []) {
   const checklist = buildTailoringChecklist(draft, assetDocuments);
   const items = [
     {
-      id: "metrics",
-      label: "Add quantified outcome",
-      reason: "Numbers make tailored CV bullets and answers more credible.",
-      progress: checklist.items.find((item) => item.id === "metrics")?.progressLabel || "0/2",
-      questionSetType: "quantified_outcome",
-    },
-    {
-      id: "projects",
-      label: "Add project example",
-      reason: "Project examples help Runr swap in stronger evidence for different roles.",
-      progress: checklist.items.find((item) => item.id === "projects")?.progressLabel || "0/1",
-      questionSetType: "project_example",
+      id: "achievement",
+      label: "Add achievement story",
+      reason: "Achievement stories provide concrete proof points for tailored CV bullets.",
+      progress: `${checklist.mappedCount} mapped`,
+      questionSetType: "story_recovery",
     },
     {
       id: "stakeholder",
       label: "Add stakeholder or leadership story",
       reason: "Stakeholder stories strengthen cover letters, outreach, and interviews.",
-      progress: `${
-        (draft.generatedMemoryCards || []).filter((card) => card.category === "stakeholder_story").length
-      }/1`,
+      progress: `${(draft.generatedMemoryCards || []).filter((card) => card.category === "stakeholder_story").length}/1`,
       questionSetType: "stakeholder_story",
     },
     {
       id: "motivation",
       label: "Add motivation notes",
       reason: "Specific motivation makes applications feel intentional rather than generic.",
-      progress: checklist.items.find((item) => item.id === "motivation")?.progressLabel || "Missing",
+      progress: checklist.verifiedCount > 0 ? `${checklist.verifiedCount} verified` : "Missing",
       questionSetType: "motivation_notes",
     },
   ];
   return items;
 }
-
 export function sortMemoryCards(cards = []) {
   return [...cards].sort((left, right) =>
     String(right.updatedAt || right.createdAt || "").localeCompare(
