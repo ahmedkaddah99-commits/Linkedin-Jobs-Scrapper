@@ -225,6 +225,8 @@ def list_provenance_by_workspace(connection: DatabaseConnection, workspace_id: s
     rows = connection.execute(
         "SELECT * FROM generation_provenance WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?",
         (workspace_id, limit),
+    ).fetchall()
+    return [_provenance_from_row(row) for row in rows]
 
 
 def restore_profile_from_version(
@@ -323,17 +325,3 @@ def capture_cv_version_from_run(
     )
     save_cv_asset_version(connection, version)
     return version
-
-    ).fetchall()
-    return [_provenance_from_row(row) for row in rows]
-
-            provenance.job_id,
-            provenance.profile_version_id, provenance.profile_version_no,
-            provenance.cv_asset_version_id, provenance.cv_asset_version_no,
-            provenance.evidence_set_key, provenance.evidence_job_count,
-            provenance.generation_pipeline_version, provenance.generation_mode,
-            provenance.generation_fingerprint, provenance.renderer_version,
-            provenance.created_at,
-            json.dumps(provenance.metadata, ensure_ascii=False),
-        ),
-    )
