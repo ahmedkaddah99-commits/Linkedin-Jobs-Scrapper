@@ -1461,3 +1461,183 @@ class MergeSuggestion:
             updated_at=str(payload.get("updated_at") or utc_now_iso()),
             metadata=dict(payload.get("metadata") or {}),
         )
+
+
+
+# --- Job Application Binding (CP-017) ---
+
+APPLICATION_TYPE_TAILORED = "tailored"
+APPLICATION_TYPE_REUSABLE = "reusable"
+APPLICATION_TYPE_QUICK_APPLY = "quick_apply"
+APPLICATION_TYPES = {
+    APPLICATION_TYPE_TAILORED,
+    APPLICATION_TYPE_REUSABLE,
+    APPLICATION_TYPE_QUICK_APPLY,
+}
+
+REQUIREMENT_CATEGORY_SKILL = "skill"
+REQUIREMENT_CATEGORY_EXPERIENCE = "experience"
+REQUIREMENT_CATEGORY_EDUCATION = "education"
+REQUIREMENT_CATEGORY_LANGUAGE = "language"
+REQUIREMENT_CATEGORY_CERTIFICATION = "certification"
+REQUIREMENT_CATEGORY_TOOL = "tool"
+REQUIREMENT_CATEGORY_DOMAIN = "domain"
+REQUIREMENT_CATEGORY_OTHER = "other"
+REQUIREMENT_CATEGORIES = {
+    REQUIREMENT_CATEGORY_SKILL,
+    REQUIREMENT_CATEGORY_EXPERIENCE,
+    REQUIREMENT_CATEGORY_EDUCATION,
+    REQUIREMENT_CATEGORY_LANGUAGE,
+    REQUIREMENT_CATEGORY_CERTIFICATION,
+    REQUIREMENT_CATEGORY_TOOL,
+    REQUIREMENT_CATEGORY_DOMAIN,
+    REQUIREMENT_CATEGORY_OTHER,
+}
+
+MATCH_STATUS_STRONG = "strong"
+MATCH_STATUS_PARTIAL = "partial"
+MATCH_STATUS_MISSING = "missing"
+MATCH_STATUSES = {MATCH_STATUS_STRONG, MATCH_STATUS_PARTIAL, MATCH_STATUS_MISSING}
+
+
+@dataclass(slots=True)
+class ProfileRequirementMatch:
+    """A match between a job requirement and profile evidence."""
+    requirement_id: str
+    requirement_text: str
+    requirement_category: str = REQUIREMENT_CATEGORY_OTHER
+    match_status: str = MATCH_STATUS_MISSING
+    matched_evidence_ids: list[str] = field(default_factory=list)
+    match_score: float = 0.0
+    match_detail: str = ""
+    evidence_snippets: list[dict[str, str]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "requirement_id": self.requirement_id,
+            "requirement_text": self.requirement_text,
+            "requirement_category": self.requirement_category,
+            "match_status": self.match_status,
+            "matched_evidence_ids": list(self.matched_evidence_ids),
+            "match_score": self.match_score,
+            "match_detail": self.match_detail,
+            "evidence_snippets": [dict(s) for s in self.evidence_snippets],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ProfileRequirementMatch":
+        return cls(
+            requirement_id=str(payload.get("requirement_id") or ""),
+            requirement_text=str(payload.get("requirement_text") or ""),
+            requirement_category=str(payload.get("requirement_category") or REQUIREMENT_CATEGORY_OTHER),
+            match_status=str(payload.get("match_status") or MATCH_STATUS_MISSING),
+            matched_evidence_ids=[str(e) for e in payload.get("matched_evidence_ids") or [] if str(e).strip()],
+            match_score=float(payload.get("match_score") or 0.0),
+            match_detail=str(payload.get("match_detail") or ""),
+            evidence_snippets=[dict(s) for s in payload.get("evidence_snippets") or [] if isinstance(s, dict)],
+        )
+
+
+
+@dataclass(slots=True)
+class JobApplicationBinding:
+    """A binding that connects a career profile to a specific job application."""
+    binding_id: str
+    profile_id: str
+    job_id: str
+    run_id: str = ""
+    job_title: str = ""
+    company: str = ""
+    location: str = ""
+    target_role: str = ""
+    application_type: str = APPLICATION_TYPE_TAILORED
+    description_text: str = ""
+    extracted_requirements: list[dict[str, Any]] = field(default_factory=list)
+    extracted_themes: list[str] = field(default_factory=list)
+    requirement_matches: list[ProfileRequirementMatch] = field(default_factory=list)
+    match_summary: str = ""
+    coverage_score: float = 0.0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        job_id: str,
+        run_id: str = "",
+        job_title: str = "",
+        company: str = "",
+        location: str = "",
+        target_role: str = "",
+        application_type: str = APPLICATION_TYPE_TAILORED,
+        description_text: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "JobApplicationBinding":
+        now = utc_now_iso()
+        return cls(
+            binding_id=f"bind_{uuid4().hex[:16]}",
+            profile_id=str(profile_id).strip(),
+            job_id=str(job_id).strip(),
+            run_id=str(run_id).strip(),
+            job_title=str(job_title).strip(),
+            company=str(company).strip(),
+            location=str(location).strip(),
+            target_role=str(target_role).strip(),
+            application_type=str(application_type or APPLICATION_TYPE_TAILORED).strip() or APPLICATION_TYPE_TAILORED,
+            description_text=str(description_text).strip(),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "binding_id": self.binding_id,
+            "profile_id": self.profile_id,
+            "job_id": self.job_id,
+            "run_id": self.run_id,
+            "job_title": self.job_title,
+            "company": self.company,
+            "location": self.location,
+            "target_role": self.target_role,
+            "application_type": self.application_type,
+            "description_text": self.description_text,
+            "extracted_requirements": [dict(r) for r in self.extracted_requirements],
+            "extracted_themes": list(self.extracted_themes),
+            "requirement_matches": [m.to_dict() for m in self.requirement_matches],
+            "match_summary": self.match_summary,
+            "coverage_score": self.coverage_score,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "JobApplicationBinding":
+        return cls(
+            binding_id=str(payload.get("binding_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            job_id=str(payload.get("job_id") or ""),
+            run_id=str(payload.get("run_id") or ""),
+            job_title=str(payload.get("job_title") or ""),
+            company=str(payload.get("company") or ""),
+            location=str(payload.get("location") or ""),
+            target_role=str(payload.get("target_role") or ""),
+            application_type=str(payload.get("application_type") or APPLICATION_TYPE_TAILORED),
+            description_text=str(payload.get("description_text") or ""),
+            extracted_requirements=[dict(r) for r in payload.get("extracted_requirements") or [] if isinstance(r, dict)],
+            extracted_themes=[str(t) for t in payload.get("extracted_themes") or [] if str(t).strip()],
+            requirement_matches=[
+                ProfileRequirementMatch.from_dict(m)
+                for m in payload.get("requirement_matches") or []
+                if isinstance(m, dict)
+            ],
+            match_summary=str(payload.get("match_summary") or ""),
+            coverage_score=float(payload.get("coverage_score") or 0.0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
