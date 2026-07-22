@@ -4,7 +4,12 @@ from http import HTTPStatus
 from typing import Any, Mapping
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
+from backend.application.rebind_service import (
+    execute_rebind,
+    perform_rebind_compatibility_review,
+)
 from backend.domain.models import (
+    CAREER_PROFILE_STATUS_UNBOUND,
     CAREER_PROFILE_STATUSES,
     CareerProfile,
 )
@@ -33,6 +38,12 @@ def register_routes(registry: RouteRegistry) -> None:
     )
     registry.prefix(
         "DELETE", ("career-profiles", "{profile_id}", "baseline-cv"), _handle_unbind_baseline_cv, auth_required=True, name="career_profiles.unbind_baseline_cv"
+    )
+    registry.prefix(
+        "POST", ("career-profiles", "{profile_id}", "rebind-review"), _handle_rebind_review, auth_required=True, name="career_profiles.rebind_review"
+    )
+    registry.prefix(
+        "POST", ("career-profiles", "{profile_id}", "rebind-confirm"), _handle_rebind_confirm, auth_required=True, name="career_profiles.rebind_confirm"
     )
 
 
@@ -158,7 +169,6 @@ def _apply_update_payload(profile: CareerProfile, payload: Mapping[str, Any]) ->
     if "target_direction" in payload:
         profile.target_direction = str(payload["target_direction"] or "").strip()
     if "bound_workspace_id" in payload:
-    if "bound_workspace_id" in payload:
         profile.bound_workspace_id = str(payload["bound_workspace_id"] or "").strip()
     if "baseline_cv_asset_id" in payload:
         profile.baseline_cv_asset_id = str(payload["baseline_cv_asset_id"] or "").strip()
@@ -168,8 +178,6 @@ def _apply_update_payload(profile: CareerProfile, payload: Mapping[str, Any]) ->
         profile.baseline_cv_extraction_date = str(payload["baseline_cv_extraction_date"] or "").strip()
     if "baseline_cv_source_version" in payload:
         profile.baseline_cv_source_version = str(payload["baseline_cv_source_version"] or "").strip()
-    if "status" in payload:
-        profile.bound_workspace_id = str(payload["bound_workspace_id"] or "").strip()
     if "status" in payload:
         status = str(payload["status"] or "").strip()
         if status in CAREER_PROFILE_STATUSES:
@@ -321,5 +329,97 @@ def _handle_unbind_baseline_cv(context: ApiRouteContext) -> bool | None:
         profile.updated_at = utc_now_iso()
         store.upsert_profile(profile)
         context.send_json(profile.to_dict(), status=HTTPStatus.OK)
+        return True
+    return False
+
+
+def _handle_rebind_review(context: ApiRouteContext) -> bool | None:
+    segments = list(context.segments)
+    if len(segments) == 3 and segments[0] == "career-profiles" and segments[2] == "rebind-review":
+        store = _career_profile_store(context)
+        if store is None:
+            return True
+        user, _ = context.require_identity()
+        try:
+            profile = store.get_profile(segments[1])
+        except KeyError:
+            context.send_error(HTTPStatus.NOT_FOUND, "career_profile_not_found",
+                               f"Career profile '{segments[1]}' not found.")
+            return True
+        if profile.user_id != user.user_id:
+            context.send_error(HTTPStatus.FORBIDDEN, "forbidden",
+                               "You can only rebind your own career profiles.")
+            return True
+        payload = context.read_json_body()
+        workspace_id = str(payload.get("workspace_id") or "").strip()
+        if not workspace_id:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY, "validation_error",
+                               "workspace_id is required.")
+            return True
+        workspace = None
+        try:
+            workspace = context.application.repositories.workspace_repository.get_workspace(workspace_id)
+        except Exception:
+            pass
+        if workspace is None:
+            context.send_error(HTTPStatus.NOT_FOUND, "workspace_not_found",
+                               f"Workspace '{workspace_id}' not found.")
+            return True
+        baseline_cv_asset_id = str(payload.get("baseline_cv_asset_id") or "").strip()
+        review = perform_rebind_compatibility_review(
+            profile, workspace, baseline_cv_asset_id=baseline_cv_asset_id,
+        )
+        context.send_json(review.to_dict(), status=HTTPStatus.OK)
+        return True
+    return False
+
+
+def _handle_rebind_confirm(context: ApiRouteContext) -> bool | None:
+    segments = list(context.segments)
+    if len(segments) == 3 and segments[0] == "career-profiles" and segments[2] == "rebind-confirm":
+        store = _career_profile_store(context)
+        if store is None:
+            return True
+        user, _ = context.require_identity()
+        try:
+            profile = store.get_profile(segments[1])
+        except KeyError:
+            context.send_error(HTTPStatus.NOT_FOUND, "career_profile_not_found",
+                               f"Career profile '{segments[1]}' not found.")
+            return True
+        if profile.user_id != user.user_id:
+            context.send_error(HTTPStatus.FORBIDDEN, "forbidden",
+                               "You can only rebind your own career profiles.")
+            return True
+        payload = context.read_json_body()
+        workspace_id = str(payload.get("workspace_id") or "").strip()
+        if not workspace_id:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY, "validation_error",
+                               "workspace_id is required.")
+            return True
+        workspace = None
+        try:
+            workspace = context.application.repositories.workspace_repository.get_workspace(workspace_id)
+        except Exception:
+            pass
+        if workspace is None:
+            context.send_error(HTTPStatus.NOT_FOUND, "workspace_not_found",
+                               f"Workspace '{workspace_id}' not found.")
+            return True
+        baseline_cv_asset_id = str(payload.get("baseline_cv_asset_id") or "").strip()
+        confirmed_conflicts = list(payload.get("confirmed_conflicts") or [])
+        review = perform_rebind_compatibility_review(
+            profile, workspace, baseline_cv_asset_id=baseline_cv_asset_id,
+        )
+        try:
+            updated = execute_rebind(
+                profile, workspace, review,
+                baseline_cv_asset_id=baseline_cv_asset_id,
+                confirmed_conflicts=confirmed_conflicts,
+            )
+            store.upsert_profile(updated)
+            context.send_json(updated.to_dict(), status=HTTPStatus.OK)
+        except ValueError as exc:
+            context.send_error(HTTPStatus.CONFLICT, "rebind_conflict", str(exc))
         return True
     return False

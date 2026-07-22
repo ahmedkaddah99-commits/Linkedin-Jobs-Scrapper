@@ -1127,3 +1127,125 @@ class StageContext:
         self.run.updated_at = utc_now_iso()
         if save:
             self.repositories.run_repository.save(self.run)
+
+
+
+# --- Rebind Compatibility Review ---
+
+@dataclass(slots=True)
+class CompatibilityExperience:
+    """A single experience entry used in rebind compatibility comparison."""
+    experience_id: str
+    title: str = ""
+    company: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    description: str = ""
+    skills: list[str] = field(default_factory=list)
+    source: str = ""  # "preserved" or "new"
+    match_status: str = ""  # "match", "missing", "changed_date", "duplicate", "conflict"
+    match_details: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "CompatibilityExperience":
+        return cls(
+            experience_id=str(payload.get("experience_id") or ""),
+            title=str(payload.get("title") or ""),
+            company=str(payload.get("company") or ""),
+            start_date=str(payload.get("start_date") or ""),
+            end_date=str(payload.get("end_date") or ""),
+            description=str(payload.get("description") or ""),
+            skills=[str(item) for item in payload.get("skills") or [] if str(item).strip()],
+            source=str(payload.get("source") or ""),
+            match_status=str(payload.get("match_status") or ""),
+            match_details=str(payload.get("match_details") or ""),
+        )
+
+
+@dataclass(slots=True)
+class RebindCompatibilityReview:
+    """The result of a rebind compatibility review comparing preserved evidence against a new workspace."""
+    review_id: str
+    profile_id: str
+    workspace_id: str
+    baseline_cv_asset_id: str = ""
+    matching_experiences: list[CompatibilityExperience] = field(default_factory=list)
+    missing_experiences: list[CompatibilityExperience] = field(default_factory=list)
+    changed_dates: list[CompatibilityExperience] = field(default_factory=list)
+    possible_duplicates: list[CompatibilityExperience] = field(default_factory=list)
+    conflicts: list[CompatibilityExperience] = field(default_factory=list)
+    summary: str = ""
+    requires_confirmation: bool = False
+    created_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        workspace_id: str,
+        baseline_cv_asset_id: str = "",
+    ) -> "RebindCompatibilityReview":
+        return cls(
+            review_id=f"rebind_{uuid4().hex[:16]}",
+            profile_id=profile_id,
+            workspace_id=workspace_id,
+            baseline_cv_asset_id=baseline_cv_asset_id,
+            created_at=utc_now_iso(),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "review_id": self.review_id,
+            "profile_id": self.profile_id,
+            "workspace_id": self.workspace_id,
+            "baseline_cv_asset_id": self.baseline_cv_asset_id,
+            "matching_experiences": [exp.to_dict() for exp in self.matching_experiences],
+            "missing_experiences": [exp.to_dict() for exp in self.missing_experiences],
+            "changed_dates": [exp.to_dict() for exp in self.changed_dates],
+            "possible_duplicates": [exp.to_dict() for exp in self.possible_duplicates],
+            "conflicts": [exp.to_dict() for exp in self.conflicts],
+            "summary": self.summary,
+            "requires_confirmation": self.requires_confirmation,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "RebindCompatibilityReview":
+        return cls(
+            review_id=str(payload.get("review_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            workspace_id=str(payload.get("workspace_id") or ""),
+            baseline_cv_asset_id=str(payload.get("baseline_cv_asset_id") or ""),
+            matching_experiences=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("matching_experiences") or []
+                if isinstance(item, dict)
+            ],
+            missing_experiences=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("missing_experiences") or []
+                if isinstance(item, dict)
+            ],
+            changed_dates=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("changed_dates") or []
+                if isinstance(item, dict)
+            ],
+            possible_duplicates=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("possible_duplicates") or []
+                if isinstance(item, dict)
+            ],
+            conflicts=[
+                CompatibilityExperience.from_dict(item)
+                for item in payload.get("conflicts") or []
+                if isinstance(item, dict)
+            ],
+            summary=str(payload.get("summary") or ""),
+            requires_confirmation=bool(payload.get("requires_confirmation") or False),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+        )

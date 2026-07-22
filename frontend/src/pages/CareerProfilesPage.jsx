@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CareerProfileSourceSelector from "../components/careerProfile/CareerProfileSourceSelector";
+import RebindCompatibilityDialog from "../components/careerProfile/RebindCompatibilityDialog";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -51,6 +52,12 @@ export default function CareerProfilesPage() {
   const [bindingProfileId, setBindingProfileId] = useState("");
   const [bindingAction, setBindingAction] = useState("");
   const [bindingError, setBindingError] = useState("");
+
+  // Rebind compatibility state
+  const [rebindProfile, setRebindProfile] = useState(null);
+  const [rebindReview, setRebindReview] = useState(null);
+  const [rebinding, setRebinding] = useState(false);
+  const [rebindError, setRebindError] = useState("");
 
   // Source selection state
   const [sourceProfileId, setSourceProfileId] = useState("");
@@ -194,6 +201,60 @@ export default function CareerProfilesPage() {
       setProfiles((prev) => prev.map((p) => (p.profile_id === updated.profile_id ? updated : p)));
     } catch (err) {
       setBindingError(String(err?.message || "Failed to unbind workspace."));
+    }
+  }
+
+  // --- Rebind compatibility handlers ---
+
+  function openRebindDialog(profile) {
+    setRebindProfile(profile);
+    setRebindReview(null);
+    setRebindError("");
+  }
+
+  function closeRebindDialog() {
+    setRebindProfile(null);
+    setRebindReview(null);
+    setRebinding(false);
+    setRebindError("");
+  }
+
+  async function handleRebindReview(workspaceId) {
+    const profileId = rebindProfile?.profile_id;
+    if (!profileId) throw new Error("No profile selected.");
+    const review = await request(
+      `/career-profiles/${profileId}/rebind-review`,
+      { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) },
+      { rawPath: true }
+    );
+    setRebindReview(review);
+    return review;
+  }
+
+  async function handleRebindConfirm({ review_id, confirmed_conflicts }) {
+    const profileId = rebindProfile?.profile_id;
+    if (!profileId) return;
+    try {
+      setRebinding(true);
+      setRebindError("");
+      const updated = await request(
+        `/career-profiles/${profileId}/rebind-confirm`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            workspace_id: rebindReview?.workspace_id || "",
+            review_id,
+            confirmed_conflicts,
+          }),
+        },
+        { rawPath: true }
+      );
+      setProfiles((prev) => prev.map((p) => (p.profile_id === updated.profile_id ? updated : p)));
+      closeRebindDialog();
+    } catch (err) {
+      setRebindError(String(err?.message || "Failed to rebind profile."));
+    } finally {
+      setRebinding(false);
     }
   }
 
@@ -413,7 +474,7 @@ export default function CareerProfilesPage() {
                         <>
                           <button
                             className="inline-flex items-center gap-1.5 rounded-xl bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-                            onClick={() => openBindDialog(profile.profile_id, "rebind")}
+                            onClick={() => openRebindDialog(profile)}
                             type="button"
                           >
                             Rebind
@@ -532,6 +593,20 @@ export default function CareerProfilesPage() {
           </div>
         </div>
       ) : null}
+      {/* Rebind Compatibility Dialog */}
+      {rebindProfile ? (
+        <RebindCompatibilityDialog
+          confirming={rebinding}
+          error={rebindError}
+          onCancel={closeRebindDialog}
+          onConfirm={handleRebindConfirm}
+          onRequestReview={handleRebindReview}
+          profile={rebindProfile}
+          review={rebindReview}
+          workspaces={userWorkspaces}
+        />
+      ) : null}
+
     </div>
   );
 }
