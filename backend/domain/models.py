@@ -1464,6 +1464,175 @@ class MergeSuggestion:
 
 
 
+
+# --- Evidence Library (CP-015) ---
+
+EVIDENCE_VERIFICATION_STATE_UNVERIFIED = "unverified"
+EVIDENCE_VERIFICATION_STATE_VERIFIED = "verified"
+EVIDENCE_VERIFICATION_STATE_DISPUTED = "disputed"
+EVIDENCE_VERIFICATION_STATES = {
+    EVIDENCE_VERIFICATION_STATE_UNVERIFIED,
+    EVIDENCE_VERIFICATION_STATE_VERIFIED,
+    EVIDENCE_VERIFICATION_STATE_DISPUTED,
+}
+
+EVIDENCE_TYPE_ACHIEVEMENT = "achievement"
+EVIDENCE_TYPE_RESPONSIBILITY = "responsibility"
+EVIDENCE_TYPE_PROJECT = "project"
+EVIDENCE_TYPE_LEARNING = "learning"
+EVIDENCE_TYPE_LEADERSHIP = "leadership"
+EVIDENCE_TYPE_COLLABORATION = "collaboration"
+EVIDENCE_TYPE_PROBLEM_SOLVING = "problem_solving"
+EVIDENCE_TYPE_OTHER = "other"
+EVIDENCE_TYPES = {
+    EVIDENCE_TYPE_ACHIEVEMENT,
+    EVIDENCE_TYPE_RESPONSIBILITY,
+    EVIDENCE_TYPE_PROJECT,
+    EVIDENCE_TYPE_LEARNING,
+    EVIDENCE_TYPE_LEADERSHIP,
+    EVIDENCE_TYPE_COLLABORATION,
+    EVIDENCE_TYPE_PROBLEM_SOLVING,
+    EVIDENCE_TYPE_OTHER,
+}
+
+EVIDENCE_SOURCE_KIND_MANUAL = "manual"
+EVIDENCE_SOURCE_KIND_EXTRACTED = "extracted"
+EVIDENCE_SOURCE_KIND_IMPORTED = "imported"
+EVIDENCE_SOURCE_KINDS = {
+    EVIDENCE_SOURCE_KIND_MANUAL,
+    EVIDENCE_SOURCE_KIND_EXTRACTED,
+    EVIDENCE_SOURCE_KIND_IMPORTED,
+}
+
+
+@dataclass(slots=True)
+class EvidenceRecord:
+    """A reusable evidence item stored under a work experience.
+
+    This is a private evidence library — items are NOT automatically
+    shown in a CV.  They exist so you can capture more detail than a
+    short baseline CV bullet allows, and later select which evidence
+    to include when tailoring.
+    """
+
+    evidence_id: str
+    experience_id: str
+    profile_id: str
+    action: str = ""
+    why_it_mattered: str = ""
+    tools: str = ""
+    stakeholders: str = ""
+    challenge: str = ""
+    result: str = ""
+    metric: str = ""
+    source: str = EVIDENCE_SOURCE_KIND_MANUAL
+    source_asset_ids: list[str] = field(default_factory=list)
+    verification_state: str = EVIDENCE_VERIFICATION_STATE_UNVERIFIED
+    evidence_type: str = EVIDENCE_TYPE_ACHIEVEMENT
+    sort_order: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        experience_id: str,
+        profile_id: str,
+        action: str = "",
+        why_it_mattered: str = "",
+        tools: str = "",
+        stakeholders: str = "",
+        challenge: str = "",
+        result: str = "",
+        metric: str = "",
+        source: str = EVIDENCE_SOURCE_KIND_MANUAL,
+        source_asset_ids: list[str] | None = None,
+        verification_state: str = EVIDENCE_VERIFICATION_STATE_UNVERIFIED,
+        evidence_type: str = EVIDENCE_TYPE_ACHIEVEMENT,
+        sort_order: int = 0,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> "EvidenceRecord":
+        now = utc_now_iso()
+        return cls(
+            evidence_id=f"evid_{uuid4().hex[:16]}",
+            experience_id=str(experience_id).strip(),
+            profile_id=str(profile_id).strip(),
+            action=str(action).strip(),
+            why_it_mattered=str(why_it_mattered).strip(),
+            tools=str(tools).strip(),
+            stakeholders=str(stakeholders).strip(),
+            challenge=str(challenge).strip(),
+            result=str(result).strip(),
+            metric=str(metric).strip(),
+            source=str(source or EVIDENCE_SOURCE_KIND_MANUAL).strip(),
+            source_asset_ids=[str(a).strip() for a in (source_asset_ids or []) if str(a).strip()],
+            verification_state=str(verification_state or EVIDENCE_VERIFICATION_STATE_UNVERIFIED).strip(),
+            evidence_type=str(evidence_type or EVIDENCE_TYPE_ACHIEVEMENT).strip(),
+            sort_order=int(sort_order or 0),
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "evidence_id": self.evidence_id,
+            "experience_id": self.experience_id,
+            "profile_id": self.profile_id,
+            "action": self.action,
+            "why_it_mattered": self.why_it_mattered,
+            "tools": self.tools,
+            "stakeholders": self.stakeholders,
+            "challenge": self.challenge,
+            "result": self.result,
+            "metric": self.metric,
+            "source": self.source,
+            "source_asset_ids": list(self.source_asset_ids),
+            "verification_state": self.verification_state,
+            "evidence_type": self.evidence_type,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "EvidenceRecord":
+        return cls(
+            evidence_id=str(payload.get("evidence_id") or ""),
+            experience_id=str(payload.get("experience_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            action=str(payload.get("action") or ""),
+            why_it_mattered=str(payload.get("why_it_mattered") or ""),
+            tools=str(payload.get("tools") or ""),
+            stakeholders=str(payload.get("stakeholders") or ""),
+            challenge=str(payload.get("challenge") or ""),
+            result=str(payload.get("result") or ""),
+            metric=str(payload.get("metric") or ""),
+            source=str(payload.get("source") or EVIDENCE_SOURCE_KIND_MANUAL),
+            source_asset_ids=[str(a).strip() for a in payload.get("source_asset_ids") or [] if str(a).strip()],
+            verification_state=str(payload.get("verification_state") or EVIDENCE_VERIFICATION_STATE_UNVERIFIED),
+            evidence_type=str(payload.get("evidence_type") or EVIDENCE_TYPE_ACHIEVEMENT),
+            sort_order=int(payload.get("sort_order") or 0),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            updated_at=str(payload.get("updated_at") or utc_now_iso()),
+            metadata=dict(payload.get("metadata") or {}),
+        )
+
+
+# --- Job Application Binding (CP-017) ---
+
+EVIDENCE_SOURCE_KIND_IMPORTED = "imported"
+EVIDENCE_SOURCE_KINDS = {
+    EVIDENCE_SOURCE_KIND_MANUAL,
+    EVIDENCE_SOURCE_KIND_EXTRACTED,
+    EVIDENCE_SOURCE_KIND_IMPORTED,
+}
+
+
+
 # --- Job Application Binding (CP-017) ---
 
 APPLICATION_TYPE_TAILORED = "tailored"

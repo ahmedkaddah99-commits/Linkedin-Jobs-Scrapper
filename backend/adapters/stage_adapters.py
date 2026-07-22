@@ -997,6 +997,14 @@ class TailoredDocumentExportStage(BaseStage):
                 records = run_standard_cv_pipeline(stage4_args, config=config, jobs=jobs)
             else:
                 records = run_tailored_stage4_pipeline(stage4_args, config=config, jobs=jobs)
+
+        _capture_generation_provenance(
+            context=context,
+            settings=vars(cli_args),
+            records=records,
+            evidence_jobs=jobs,
+        )
+
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(records)},
             metrics={"generated_jobs": len(records)},
@@ -1217,3 +1225,144 @@ def register_stage_adapters(stage_registry) -> None:
     stage_registry.register("legacy.blue_collar.stage3", RoleClassificationStage())
     stage_registry.register("legacy.blue_collar.stage4", ReusableProfileGenerationStage())
     stage_registry.register("legacy.blue_collar.stage5", ApplicationPackageExportStage())
+
+
+
+def _capture_generation_provenance(
+    *,
+    context: StageContext,
+    settings: dict[str, Any],
+    records: list[dict[str, Any]],
+    evidence_jobs: list[dict[str, Any]],
+) -> None:
+    """Capture profile + CV versions and generation provenance for each record (CP-025).
+
+    Creates immutable version snapshots and provenance links so that every
+    generated output can be traced back to its exact profile, CV, and evidence set.
+    Historical materials are never silently modified after profile changes.
+    """
+    try:
+        from backend.repositories.versioning_repository import (
+            capture_profile_version_from_run,
+            capture_cv_version_from_run,
+            save_generation_provenance,
+        )
+        from backend.domain.models import GenerationProvenance
+        import hashlib
+    except Exception:
+        return
+
+    workspace = getattr(context, "workspace", None)
+    if workspace is None:
+        return
+
+    workspace_id = str(getattr(workspace, "id", "") or "")
+    run_id = str(getattr(context.run, "id", "") or "")
+    if not workspace_id or not run_id:
+        return
+
+    # Access the connection from the context's repositories
+    try:
+        run_repo = getattr(context.repositories, "run_repository", None)
+        if run_repo is None:
+            return
+        connection = getattr(run_repo, "connection", None) or getattr(
+            context.repositories, "connection", None
+        )
+        if connection is None:
+            return
+    except Exception:
+        return
+
+    # Build workspace snapshot from context
+    workspace_snapshot = {
+        "id": workspace_id,
+        "name": str(getattr(workspace, "name", "") or ""),
+        "settings": dict(getattr(workspace, "settings", {}) or {}),
+    }
+
+    # Build resolved settings from the stage args
+    resolved_settings = dict(settings or {})
+
+    # Capture profile version
+    profile_label = f"Generation run {run_id}"
+    try:
+        profile_version = capture_profile_version_from_run(
+            connection=connection,
+            workspace_id=workspace_id,
+            workspace_snapshot=workspace_snapshot,
+            resolved_settings=resolved_settings,
+            run_id=run_id,
+            label=profile_label,
+        )
+    except Exception:
+        profile_version = None
+
+    # Capture CV asset version
+    cv_asset_id = str(settings.get("workspace_cv_asset_id") or "")
+    cv_display_name = str(settings.get("workspace_cv_asset_display_name") or "")
+    cv_text = str(settings.get("workspace_cv_text") or "")
+    cv_sha = ""
+    if cv_text:
+        cv_sha = hashlib.sha256(cv_text.encode("utf-8")).hexdigest()
+    cv_preview = cv_text[:500] if cv_text else ""
+
+    cv_version = None
+    if cv_asset_id:
+        try:
+            cv_version = capture_cv_version_from_run(
+                connection=connection,
+                workspace_id=workspace_id,
+                asset_id=cv_asset_id,
+                display_name=cv_display_name,
+                char_count=len(cv_text),
+                cv_text_sha256=cv_sha,
+                source_text_preview=cv_preview,
+                run_id=run_id,
+            )
+        except Exception:
+            pass
+
+    # Generation pipeline info
+    from backend.capabilities.tailored_documents.documents import (
+        CV_GENERATION_PIPELINE_VERSION,
+        CV_RENDERER_VERSION,
+    )
+
+    generation_mode = str(settings.get("cv_generation_mode") or "")
+
+    # Evidence set key and count
+    evidence_set_key = "prioritized_jobs"
+    evidence_job_count = len(evidence_jobs) if evidence_jobs else 0
+
+    # Create provenance records for each generated document
+    for record in records:
+        job_id = str(record.get("job_id") or "")
+        gen_fingerprint = str(record.get("generation_fingerprint") or "")
+
+        try:
+            provenance = GenerationProvenance.create(
+                run_id=run_id,
+                workspace_id=workspace_id,
+                job_id=job_id,
+                profile_version_id=getattr(profile_version, "version_id", ""),
+                profile_version_no=getattr(profile_version, "version_no", 0),
+                cv_asset_version_id=getattr(cv_version, "version_id", ""),
+                cv_asset_version_no=getattr(cv_version, "version_no", 0),
+                evidence_set_key=evidence_set_key,
+                evidence_job_count=evidence_job_count,
+                generation_pipeline_version=CV_GENERATION_PIPELINE_VERSION,
+                generation_mode=generation_mode,
+                generation_fingerprint=gen_fingerprint,
+                renderer_version=CV_RENDERER_VERSION,
+            )
+            save_generation_provenance(connection, provenance)
+
+            # Also add provenance refs to the record metadata for downstream display
+            record["_provenance_id"] = provenance.provenance_id
+            record["_profile_version_id"] = provenance.profile_version_id
+            record["_profile_version_no"] = provenance.profile_version_no
+            record["_cv_asset_version_id"] = provenance.cv_asset_version_id
+            record["_cv_asset_version_no"] = provenance.cv_asset_version_no
+        except Exception:
+            continue

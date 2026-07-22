@@ -1223,6 +1223,13 @@ def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
     )
 
 
+
+    Migration.from_callable(
+        "026_profile_versioning",
+        "Create profile version, CV version, and generation provenance tables (CP-025).",
+        _apply_profile_versioning_migration,
+    ),
+
     Migration.from_callable(
         "025_work_experiences",
         "Create work experience records and merge suggestion storage.",
@@ -1233,6 +1240,80 @@ def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
 )
 # End of MIGRATIONS tuple
 # End of MIGRATIONS tuple
+
+
+
+def _apply_profile_versioning_migration(connection: DatabaseConnection) -> None:
+    """Create profile version, CV version, and generation provenance tables (CP-025)."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS profile_versions (
+            version_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            version_no INTEGER NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'saved',
+            workspace_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            resolved_settings_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            run_id TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_profile_versions_workspace_version
+            ON profile_versions(workspace_id, version_no DESC);
+        CREATE INDEX IF NOT EXISTS idx_profile_versions_run
+            ON profile_versions(run_id)
+            WHERE run_id != '';
+
+        CREATE TABLE IF NOT EXISTS cv_asset_versions (
+            version_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL DEFAULT '',
+            version_no INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'uploaded',
+            display_name TEXT NOT NULL DEFAULT '',
+            object_key TEXT NOT NULL DEFAULT '',
+            mime_type TEXT NOT NULL DEFAULT '',
+            extension TEXT NOT NULL DEFAULT '',
+            char_count INTEGER NOT NULL DEFAULT 0,
+            cv_text_sha256 TEXT NOT NULL DEFAULT '',
+            source_text_preview TEXT NOT NULL DEFAULT '',
+            extraction_timestamp TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            run_id TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_cv_asset_versions_workspace_version
+            ON cv_asset_versions(workspace_id, version_no DESC);
+        CREATE INDEX IF NOT EXISTS idx_cv_asset_versions_asset
+            ON cv_asset_versions(asset_id, version_no DESC);
+
+        CREATE TABLE IF NOT EXISTS generation_provenance (
+            provenance_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL DEFAULT '',
+            job_id TEXT NOT NULL DEFAULT '',
+            profile_version_id TEXT NOT NULL DEFAULT '',
+            profile_version_no INTEGER NOT NULL DEFAULT 0,
+            cv_asset_version_id TEXT NOT NULL DEFAULT '',
+            cv_asset_version_no INTEGER NOT NULL DEFAULT 0,
+            evidence_set_key TEXT NOT NULL DEFAULT '',
+            evidence_job_count INTEGER NOT NULL DEFAULT 0,
+            generation_pipeline_version TEXT NOT NULL DEFAULT '',
+            generation_mode TEXT NOT NULL DEFAULT '',
+            generation_fingerprint TEXT NOT NULL DEFAULT '',
+            renderer_version TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_generation_provenance_run
+            ON generation_provenance(run_id, job_id);
+        CREATE INDEX IF NOT EXISTS idx_generation_provenance_workspace
+            ON generation_provenance(workspace_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_generation_provenance_profile_version
+            ON generation_provenance(profile_version_id, created_at DESC);
+        """
+    )
 
 
 
