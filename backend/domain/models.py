@@ -1810,3 +1810,48 @@ class JobApplicationBinding:
             updated_at=str(payload.get("updated_at") or utc_now_iso()),
             metadata=dict(payload.get("metadata") or {}),
         )
+
+
+# --- Evidence Items and Evidence Links (CP-014) ---
+
+EVIDENCE_STATUS_UNLINKED = "unlinked"
+EVIDENCE_STATUS_LINKED = "linked"
+EVIDENCE_STATUS_AMBIGUOUS = "ambiguous"
+EVIDENCE_STATUS_CONFLICT = "conflict"
+EVIDENCE_STATUSES = {
+    EVIDENCE_STATUS_UNLINKED, EVIDENCE_STATUS_LINKED,
+    EVIDENCE_STATUS_AMBIGUOUS, EVIDENCE_STATUS_CONFLICT,
+}
+
+EVIDENCE_LINK_TARGET_WORK_EXPERIENCE = "work_experience"
+EVIDENCE_LINK_TARGET_PROJECT = "project"
+EVIDENCE_LINK_TARGET_EDUCATION = "education"
+EVIDENCE_LINK_TARGET_CERTIFICATION = "certification"
+EVIDENCE_LINK_TARGET_UNASSIGNED = "unassigned"
+EVIDENCE_LINK_TARGETS = {
+    EVIDENCE_LINK_TARGET_WORK_EXPERIENCE, EVIDENCE_LINK_TARGET_PROJECT,
+    EVIDENCE_LINK_TARGET_EDUCATION, EVIDENCE_LINK_TARGET_CERTIFICATION,
+    EVIDENCE_LINK_TARGET_UNASSIGNED,
+}
+
+
+@dataclass(slots=True)
+class EvidenceItem:
+    """A discrete piece of evidence extracted from a CV or supporting source."""
+    evidence_id: str
+    profile_id: str
+    text: str = ""
+    fact_type: str = ""
+    certainty: str = ""
+    source_asset_ids: list[str] = field(default_factory=list)
+    source_context: str = ""
+    extracted_employer: str = ""
+    extracted_role: str = ""
+    extracted_start_date: str = ""
+    extracted_end_date: str = ""
+    status: str = EVIDENCE_STATUS_UNLINKED
+    linked_target_count: int = 0
+    sort_order: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    metadata: dict[str, Any] = field(default_factory=dict)
