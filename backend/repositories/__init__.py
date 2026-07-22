@@ -5,6 +5,8 @@ from .contracts import (
     BackendRepositories,
     CareerProfileStoreProtocol,
 
+    EvidenceStoreProtocol,
+
     ConfigStoreProtocol,
     JobStoreProtocol,
     ReviewStoreProtocol,
@@ -31,6 +33,8 @@ from .file_backed import (
 from .sqlite_backed import (
     SqliteAnalyticsStore,
     SqliteCareerProfileStore,
+
+    SqliteEvidenceStore,
 
     SqliteAuthRepository,
     SqliteArtifactStore,

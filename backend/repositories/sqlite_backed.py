@@ -18,6 +18,8 @@ from backend.domain.assisted_apply import (
     AssistedApplyPreferences,
 )
 from backend.domain.models import (
+from backend.domain.evidence import EvidenceRecord, EvidenceStateHistory
+
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
@@ -2904,3 +2906,128 @@ class SqliteCareerProfileStore(_SqliteStore):
             ).rowcount
         if row_count == 0:
             raise KeyError(f"Career profile '{profile_id}' not found.")
+
+        if row_count == 0:
+            raise KeyError(f"Career profile '{profile_id}' not found.")
+
+
+class SqliteEvidenceStore(_SqliteStore):
+    """SQLite-backed evidence persistence for CP-028 evidence state visibility."""
+
+    def _evidence_from_row(self, row: sqlite3.Row) -> EvidenceRecord:
+        payload = _deserialize(row["payload_json"], {})
+        return EvidenceRecord.from_dict(payload)
+
+    def _history_from_row(self, row: sqlite3.Row) -> EvidenceStateHistory:
+        payload = _deserialize(row["payload_json"], {})
+        return EvidenceStateHistory.from_dict(payload)
+
+    def upsert_evidence(self, evidence: EvidenceRecord) -> None:
+        payload = evidence.to_dict()
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO evidence ("
+                    "evidence_id, workspace_id, run_id, kind, state, label, "
+                    "description, source_ref, source_type, created_at, updated_at, payload_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(evidence_id) DO UPDATE SET "
+                    "workspace_id=excluded.workspace_id, run_id=excluded.run_id, "
+                    "kind=excluded.kind, state=excluded.state, label=excluded.label, "
+                    "description=excluded.description, source_ref=excluded.source_ref, "
+                    "source_type=excluded.source_type, updated_at=excluded.updated_at, "
+                    "payload_json=excluded.payload_json"
+                ),
+                (
+                    evidence.evidence_id, evidence.workspace_id, evidence.run_id,
+                    evidence.kind, evidence.state, evidence.label,
+                    evidence.description, evidence.source_ref, evidence.source_type,
+                    evidence.created_at, evidence.updated_at, _serialize(payload),
+                ),
+            )
+
+    def get_evidence(self, evidence_id: str) -> EvidenceRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM evidence WHERE evidence_id = ?",
+                (str(evidence_id).strip(),),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Evidence '{evidence_id}' not found.")
+        return self._evidence_from_row(row)
+
+    def list_evidence(
+        self, *,
+        workspace_id: str = "",
+        run_id: str = "",
+        kind: str = "",
+        state: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[EvidenceRecord]:
+        query = "SELECT payload_json FROM evidence WHERE 1=1"
+        params: list[Any] = []
+        if workspace_id:
+            query += " AND workspace_id = ?"
+            params.append(str(workspace_id).strip())
+        if run_id:
+            query += " AND run_id = ?"
+            params.append(str(run_id).strip())
+        if kind:
+            query += " AND kind = ?"
+            params.append(str(kind).strip())
+        if state:
+            query += " AND state = ?"
+            params.append(str(state).strip())
+        query += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+        params.extend([max(1, min(200, int(limit))), max(0, int(offset))])
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [self._evidence_from_row(row) for row in rows]
+
+    def append_state_history(self, entry: EvidenceStateHistory) -> None:
+        payload = entry.to_dict()
+        with self._connect() as connection:
+            connection.execute(
+                (
+                    "INSERT INTO evidence_state_history ("
+                    "history_id, evidence_id, from_state, to_state, "
+                    "reason, actor, occurred_at, payload_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    entry.history_id, entry.evidence_id,
+                    entry.from_state, entry.to_state,
+                    entry.reason, entry.actor, entry.occurred_at,
+                    _serialize(payload),
+                ),
+            )
+
+    def list_state_history(
+        self, *,
+        evidence_id: str = "",
+        limit: int = 100,
+    ) -> list[EvidenceStateHistory]:
+        query = "SELECT payload_json FROM evidence_state_history WHERE 1=1"
+        params: list[Any] = []
+        if evidence_id:
+            query += " AND evidence_id = ?"
+            params.append(str(evidence_id).strip())
+        query += " ORDER BY occurred_at DESC LIMIT ?"
+        params.append(max(1, min(200, int(limit))))
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        return [self._history_from_row(row) for row in rows]
+
+    def delete_evidence(self, evidence_id: str) -> None:
+        normalized = str(evidence_id).strip()
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM evidence_state_history WHERE evidence_id = ?",
+                (normalized,),
+            )
+            row_count = connection.execute(
+                "DELETE FROM evidence WHERE evidence_id = ?", (normalized,),
+            ).rowcount
+        if row_count == 0:
+            raise KeyError(f"Evidence '{normalized}' not found.")

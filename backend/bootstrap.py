@@ -25,6 +25,8 @@ from backend.repositories import (
     SqliteAnalyticsStore,
     SqliteCareerProfileStore,
 
+    SqliteEvidenceStore,
+
     SqliteAuthRepository,
     SqliteArtifactStore,
     SqliteConfigStore,
@@ -269,6 +271,8 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             analytics_store=FileAnalyticsStore(base_path),
             config_store=FileConfigStore(base_path),
             career_profile_store=FileCareerProfileStore(base_path),
+            evidence_store=None,
+
 
         )
     if storage_backend == "sqlite":
@@ -287,6 +291,8 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             config_store=SqliteConfigStore(db_path),
             source_policy_store=SqliteSourcePolicyStore(db_path),
             career_profile_store=SqliteCareerProfileStore(db_path),
+            evidence_store=SqliteEvidenceStore(db_path),
+
 
         )
 

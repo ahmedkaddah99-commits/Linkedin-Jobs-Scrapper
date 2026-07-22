@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Protocol
 
 from backend.domain.assisted_apply import AssistedApplyConnectionRecord, AssistedApplyPreferences
+from backend.domain.evidence import EvidenceRecord, EvidenceStateHistory
+
 from backend.domain.models import (
     CareerProfile,
 
@@ -218,6 +220,27 @@ class SourcePolicyStoreProtocol(Protocol):
 
 
 
+class EvidenceStoreProtocol(Protocol):
+    def upsert_evidence(self, evidence: EvidenceRecord) -> None: ...
+    def get_evidence(self, evidence_id: str) -> EvidenceRecord: ...
+    def list_evidence(
+        self, *,
+        workspace_id: str = "",
+        run_id: str = "",
+        kind: str = "",
+        state: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[EvidenceRecord]: ...
+    def append_state_history(self, entry: EvidenceStateHistory) -> None: ...
+    def list_state_history(
+        self, *,
+        evidence_id: str = "",
+        limit: int = 100,
+    ) -> list[EvidenceStateHistory]: ...
+    def delete_evidence(self, evidence_id: str) -> None: ...
+
+
 class CareerProfileStoreProtocol(Protocol):
     def list_profiles(self, *, user_id: str = "", limit: int = 50, offset: int = 0) -> list[CareerProfile]: ...
     def get_profile(self, profile_id: str) -> CareerProfile: ...
@@ -241,3 +264,6 @@ class BackendRepositories:
     config_store: ConfigStoreProtocol
     source_policy_store: SourcePolicyStoreProtocol | None = None
     career_profile_store: CareerProfileStoreProtocol | None = None
+    career_profile_store: CareerProfileStoreProtocol | None = None
+    evidence_store: EvidenceStoreProtocol | None = None
+
