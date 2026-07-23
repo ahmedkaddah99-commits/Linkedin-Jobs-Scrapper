@@ -10,7 +10,7 @@ from backend.config.job_seeker import (
     cfg_str,
     load_job_seeker_config,
 )
-from backend.domain.phase0_contracts import JOB_FILTERING_MODE_BROADER, JOB_FILTERING_MODE_STRICT
+# Lazy import: from backend.domain.phase0_contracts import JOB_FILTERING_MODE_BROADER, JOB_FILTERING_MODE_STRICT
 from backend.profiles.cv_text import load_cv_text
 
 from .linkedin_connector import (
@@ -183,6 +183,7 @@ def main() -> int:
         default=default_stage1_prompt_override,
         help="Optional full prompt override. Supports {{CV_SUMMARY}} and {{JOB_LIST}} placeholders.",
     )
+    from backend.domain.phase0_contracts import JOB_FILTERING_MODE_BROADER, JOB_FILTERING_MODE_STRICT
     parser.add_argument(
         "--job-filtering-mode",
         default=JOB_FILTERING_MODE_BROADER,
@@ -229,6 +230,7 @@ def main() -> int:
 
 
 def run_stage1_pipeline(args, *, usage_callback=None):
+    from backend.domain.phase0_contracts import JOB_FILTERING_MODE_BROADER, JOB_FILTERING_MODE_STRICT
     scrapeops_api_key, deepseek_api_key, so_requests = build_clients()
     cv_summary = load_cv_text()
     proxy_health_confirmed = False

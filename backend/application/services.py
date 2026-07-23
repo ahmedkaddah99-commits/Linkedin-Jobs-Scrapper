@@ -2422,7 +2422,6 @@ class BackendApplication:
         if "baseline_cv_source_version" in payload:
             profile.baseline_cv_source_version = str(payload["baseline_cv_source_version"] or "").strip()
         if "status" in payload:
-        if "status" in payload:
             from backend.domain.models import CAREER_PROFILE_STATUSES
             status = str(payload["status"] or "").strip()
             if status in CAREER_PROFILE_STATUSES:

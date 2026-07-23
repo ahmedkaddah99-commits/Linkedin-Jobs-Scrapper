@@ -45,10 +45,10 @@ _CERTIFICATE_PATTERN = re.compile(
     r"Microsoft\s*Certified|Oracle\s*Certified|"
     r"Salesforce|HubSpot|"
     r"Certified|Certificate|Certification|Diploma)\b"
+    r")"
     r")",
     re.MULTILINE,
 )
-
 _DATE_PATTERN = re.compile(
     r"\b("
     r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"

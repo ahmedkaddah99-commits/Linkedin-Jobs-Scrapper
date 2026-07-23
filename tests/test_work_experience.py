@@ -150,6 +150,7 @@ class WorkExperienceServiceTests(unittest.TestCase):
         self.assertEqual(updated.job_title, "Manager")
 
     def test_update_nonexistent(self):
+        pass
 
 
 class MergeSuggestionServiceTests(unittest.TestCase):

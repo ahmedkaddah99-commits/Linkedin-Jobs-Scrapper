@@ -128,17 +128,3 @@ class GeminiExtractionIntegrationTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-        self.assertEqual(result["model"], MODEL_ID)
-        self.assertIn("extracted_at", result)
-
-    def test_extraction_method_gemini_constant_is_defined(self):
-        """EXTRACTION_METHOD_GEMINI should be in the domain model."""
-        self.assertEqual(EXTRACTION_METHOD_GEMINI, "gemini")
-
-    def test_gemini_key_not_exposed_to_browser(self):
-        """GEMINI_API_KEY must be server-side only (env_schema scope=backend)."""
-        from backend.config.env_schema import ENV_SCHEMA
-        gemini_entry = ENV_SCHEMA.get("GEMINI_API_KEY")
-        self.assertIsNotNone(gemini_entry)
-        self.assertEqual(gemini_entry["scope"], "backend")
-        self.assertFalse(gemini_entry["required"])

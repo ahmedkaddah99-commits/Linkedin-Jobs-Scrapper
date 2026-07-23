@@ -17,8 +17,8 @@ from backend.domain.assisted_apply import (
     AssistedApplyConnectionRecord,
     AssistedApplyPreferences,
 )
-from backend.domain.models import (
 from backend.domain.evidence import EvidenceRecord, EvidenceStateHistory
+from backend.domain.models import (
 
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_QUEUED,
