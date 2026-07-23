@@ -1040,6 +1040,168 @@ def _apply_career_profiles_baseline_cv_migration(connection: DatabaseConnection)
 
 
 
+
+
+def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS work_experiences (
+            experience_id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            employer TEXT NOT NULL DEFAULT '',
+            job_title TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            start_date TEXT NOT NULL DEFAULT '',
+            end_date TEXT NOT NULL DEFAULT '',
+            employment_type TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            source_kind TEXT NOT NULL DEFAULT 'manual',
+            source_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'active',
+            merged_into_id TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_experiences_profile
+            ON work_experiences(profile_id, status, sort_order);
+        CREATE INDEX IF NOT EXISTS idx_work_experiences_profile_updated
+            ON work_experiences(profile_id, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS work_experience_merge_suggestions (
+            suggestion_id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL,
+            experience_ids_json TEXT NOT NULL DEFAULT '[]',
+            suggested_merged_record_json TEXT NOT NULL DEFAULT '{}',
+            match_score REAL NOT NULL DEFAULT 0.0,
+            match_reason TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_work_experience_merge_suggestions_profile
+            ON work_experience_merge_suggestions(profile_id, status);
+        """
+    )
+
+
+
+def _apply_profile_versioning_migration(connection: DatabaseConnection) -> None:
+    """Create profile version, CV version, and generation provenance tables (CP-025)."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS profile_versions (
+            version_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            version_no INTEGER NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'saved',
+            workspace_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            resolved_settings_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            run_id TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_profile_versions_workspace_version
+            ON profile_versions(workspace_id, version_no DESC);
+        CREATE INDEX IF NOT EXISTS idx_profile_versions_run
+            ON profile_versions(run_id)
+            WHERE run_id != '';
+
+        CREATE TABLE IF NOT EXISTS cv_asset_versions (
+            version_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL DEFAULT '',
+            version_no INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'uploaded',
+            display_name TEXT NOT NULL DEFAULT '',
+            object_key TEXT NOT NULL DEFAULT '',
+            mime_type TEXT NOT NULL DEFAULT '',
+            extension TEXT NOT NULL DEFAULT '',
+            char_count INTEGER NOT NULL DEFAULT 0,
+            cv_text_sha256 TEXT NOT NULL DEFAULT '',
+            source_text_preview TEXT NOT NULL DEFAULT '',
+            extraction_timestamp TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            run_id TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_cv_asset_versions_workspace_version
+            ON cv_asset_versions(workspace_id, version_no DESC);
+        CREATE INDEX IF NOT EXISTS idx_cv_asset_versions_asset
+            ON cv_asset_versions(asset_id, version_no DESC);
+
+        CREATE TABLE IF NOT EXISTS generation_provenance (
+            provenance_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL DEFAULT '',
+            job_id TEXT NOT NULL DEFAULT '',
+            profile_version_id TEXT NOT NULL DEFAULT '',
+            profile_version_no INTEGER NOT NULL DEFAULT 0,
+            cv_asset_version_id TEXT NOT NULL DEFAULT '',
+            cv_asset_version_no INTEGER NOT NULL DEFAULT 0,
+            evidence_set_key TEXT NOT NULL DEFAULT '',
+            evidence_job_count INTEGER NOT NULL DEFAULT 0,
+            generation_pipeline_version TEXT NOT NULL DEFAULT '',
+            generation_mode TEXT NOT NULL DEFAULT '',
+            generation_fingerprint TEXT NOT NULL DEFAULT '',
+            renderer_version TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_generation_provenance_run
+            ON generation_provenance(run_id, job_id);
+        CREATE INDEX IF NOT EXISTS idx_generation_provenance_workspace
+            ON generation_provenance(workspace_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_generation_provenance_profile_version
+            ON generation_provenance(profile_version_id, created_at DESC);
+        """
+    )
+
+
+
+
+def _apply_evidence_storage_migration(connection: DatabaseConnection) -> None:
+    """Create evidence and evidence state history tables for CP-028."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS evidence (
+            evidence_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL DEFAULT '',
+            run_id TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT 'evidence',
+            state TEXT NOT NULL DEFAULT 'draft',
+            label TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            source_ref TEXT NOT NULL DEFAULT '',
+            source_type TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS evidence_state_history (
+            history_id TEXT PRIMARY KEY,
+            evidence_id TEXT NOT NULL,
+            from_state TEXT NOT NULL DEFAULT '',
+            to_state TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            actor TEXT NOT NULL DEFAULT '',
+            occurred_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_evidence_workspace_state
+            ON evidence(workspace_id, state);
+        CREATE INDEX IF NOT EXISTS idx_evidence_run_id
+            ON evidence(run_id);
+        CREATE INDEX IF NOT EXISTS idx_evidence_kind_state
+            ON evidence(kind, state);
+        CREATE INDEX IF NOT EXISTS idx_evidence_state_history_evidence
+            ON evidence_state_history(evidence_id, occurred_at DESC);
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -1178,64 +1340,16 @@ MIGRATIONS = (
 
 
 
-def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
-    connection.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS work_experiences (
-            experience_id TEXT PRIMARY KEY,
-            profile_id TEXT NOT NULL,
-            employer TEXT NOT NULL DEFAULT '',
-            job_title TEXT NOT NULL DEFAULT '',
-            location TEXT NOT NULL DEFAULT '',
-            start_date TEXT NOT NULL DEFAULT '',
-            end_date TEXT NOT NULL DEFAULT '',
-            employment_type TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL DEFAULT '',
-            source_kind TEXT NOT NULL DEFAULT 'manual',
-            source_asset_ids_json TEXT NOT NULL DEFAULT '[]',
-            status TEXT NOT NULL DEFAULT 'active',
-            merged_into_id TEXT NOT NULL DEFAULT '',
-            sort_order INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_work_experiences_profile
-            ON work_experiences(profile_id, status, sort_order);
-        CREATE INDEX IF NOT EXISTS idx_work_experiences_profile_updated
-            ON work_experiences(profile_id, updated_at DESC);
-
-        CREATE TABLE IF NOT EXISTS work_experience_merge_suggestions (
-            suggestion_id TEXT PRIMARY KEY,
-            profile_id TEXT NOT NULL,
-            experience_ids_json TEXT NOT NULL DEFAULT '[]',
-            suggested_merged_record_json TEXT NOT NULL DEFAULT '{}',
-            match_score REAL NOT NULL DEFAULT 0.0,
-            match_reason TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_work_experience_merge_suggestions_profile
-            ON work_experience_merge_suggestions(profile_id, status);
-        """
-    )
-
-
-
     Migration.from_callable(
-        "026_profile_versioning",
-        "Create profile version, CV version, and generation provenance tables (CP-025).",
-        _apply_profile_versioning_migration,
+    "026_profile_versioning",
+    "Create profile version, CV version, and generation provenance tables (CP-025).",
+    _apply_profile_versioning_migration,
     ),
-
     Migration.from_callable(
-        "025_work_experiences",
-        "Create work experience records and merge suggestion storage.",
-        _apply_work_experiences_migration,
+    "025_work_experiences",
+    "Create work experience records and merge suggestion storage.",
+    _apply_work_experiences_migration,
     ),
-
 
 )
 # End of MIGRATIONS tuple
@@ -1243,121 +1357,8 @@ def _apply_work_experiences_migration(connection: DatabaseConnection) -> None:
 
 
 
-def _apply_profile_versioning_migration(connection: DatabaseConnection) -> None:
-    """Create profile version, CV version, and generation provenance tables (CP-025)."""
-    connection.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS profile_versions (
-            version_id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            version_no INTEGER NOT NULL,
-            label TEXT NOT NULL DEFAULT '',
-            source TEXT NOT NULL DEFAULT 'saved',
-            workspace_snapshot_json TEXT NOT NULL DEFAULT '{}',
-            resolved_settings_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL,
-            run_id TEXT NOT NULL DEFAULT '',
-            metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_profile_versions_workspace_version
-            ON profile_versions(workspace_id, version_no DESC);
-        CREATE INDEX IF NOT EXISTS idx_profile_versions_run
-            ON profile_versions(run_id)
-            WHERE run_id != '';
-
-        CREATE TABLE IF NOT EXISTS cv_asset_versions (
-            version_id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL,
-            asset_id TEXT NOT NULL DEFAULT '',
-            version_no INTEGER NOT NULL,
-            source TEXT NOT NULL DEFAULT 'uploaded',
-            display_name TEXT NOT NULL DEFAULT '',
-            object_key TEXT NOT NULL DEFAULT '',
-            mime_type TEXT NOT NULL DEFAULT '',
-            extension TEXT NOT NULL DEFAULT '',
-            char_count INTEGER NOT NULL DEFAULT 0,
-            cv_text_sha256 TEXT NOT NULL DEFAULT '',
-            source_text_preview TEXT NOT NULL DEFAULT '',
-            extraction_timestamp TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            run_id TEXT NOT NULL DEFAULT '',
-            metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_cv_asset_versions_workspace_version
-            ON cv_asset_versions(workspace_id, version_no DESC);
-        CREATE INDEX IF NOT EXISTS idx_cv_asset_versions_asset
-            ON cv_asset_versions(asset_id, version_no DESC);
-
-        CREATE TABLE IF NOT EXISTS generation_provenance (
-            provenance_id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            workspace_id TEXT NOT NULL DEFAULT '',
-            job_id TEXT NOT NULL DEFAULT '',
-            profile_version_id TEXT NOT NULL DEFAULT '',
-            profile_version_no INTEGER NOT NULL DEFAULT 0,
-            cv_asset_version_id TEXT NOT NULL DEFAULT '',
-            cv_asset_version_no INTEGER NOT NULL DEFAULT 0,
-            evidence_set_key TEXT NOT NULL DEFAULT '',
-            evidence_job_count INTEGER NOT NULL DEFAULT 0,
-            generation_pipeline_version TEXT NOT NULL DEFAULT '',
-            generation_mode TEXT NOT NULL DEFAULT '',
-            generation_fingerprint TEXT NOT NULL DEFAULT '',
-            renderer_version TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_generation_provenance_run
-            ON generation_provenance(run_id, job_id);
-        CREATE INDEX IF NOT EXISTS idx_generation_provenance_workspace
-            ON generation_provenance(workspace_id, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_generation_provenance_profile_version
-            ON generation_provenance(profile_version_id, created_at DESC);
-        """
-    )
-
-
-
 # (trailing cleanup)
 
 
 
-
-def _apply_evidence_storage_migration(connection: DatabaseConnection) -> None:
-    """Create evidence and evidence state history tables for CP-028."""
-    connection.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS evidence (
-            evidence_id TEXT PRIMARY KEY,
-            workspace_id TEXT NOT NULL DEFAULT '',
-            run_id TEXT NOT NULL DEFAULT '',
-            kind TEXT NOT NULL DEFAULT 'evidence',
-            state TEXT NOT NULL DEFAULT 'draft',
-            label TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL DEFAULT '',
-            source_ref TEXT NOT NULL DEFAULT '',
-            source_type TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS evidence_state_history (
-            history_id TEXT PRIMARY KEY,
-            evidence_id TEXT NOT NULL,
-            from_state TEXT NOT NULL DEFAULT '',
-            to_state TEXT NOT NULL,
-            reason TEXT NOT NULL DEFAULT '',
-            actor TEXT NOT NULL DEFAULT '',
-            occurred_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_evidence_workspace_state
-            ON evidence(workspace_id, state);
-        CREATE INDEX IF NOT EXISTS idx_evidence_run_id
-            ON evidence(run_id);
-        CREATE INDEX IF NOT EXISTS idx_evidence_kind_state
-            ON evidence(kind, state);
-        CREATE INDEX IF NOT EXISTS idx_evidence_state_history_evidence
-            ON evidence_state_history(evidence_id, occurred_at DESC);
-        """
-    )
 

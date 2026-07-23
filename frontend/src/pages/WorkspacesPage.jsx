@@ -1383,7 +1383,6 @@ export default function WorkspacesPage() {
   const focusedSectionId = searchParams.get("focus") || "";
   const { request, resolvePath } = useSession();
   const pendingProfileId = searchParams.get("profile_id") || "";
-  const pendingProfileId = searchParams.get("profile_id") || "";
   const [profileBindingState, setProfileBindingState] = useState({
     loading: "",
     error: "",
