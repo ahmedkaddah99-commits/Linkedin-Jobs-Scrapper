@@ -145,6 +145,8 @@ export default function SourceTextReviewPanel({
             Low confidence extraction ({Math.round(review.original_confidence * 100)}%).
             Review is required before this text can be used as evidence.
           </p>
+        </div>
+      )}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <div>
@@ -174,6 +176,12 @@ export default function SourceTextReviewPanel({
           ) : (
             <div className="mt-2 rounded-xl border border-outline-variant/20 bg-surface p-4">
               <pre className="whitespace-pre-wrap break-words text-sm text-on-surface font-sans">
+                {review.corrected_text || review.original_text}
+              </pre>
+            </div>
+          )}
+        </div>
+      </div>
 
       {review.correction_history?.length > 0 && (
         <details className="group mt-4">
@@ -219,13 +227,3 @@ export default function SourceTextReviewPanel({
     </div>
   );
 }
-
-                {review.corrected_text || review.original_text}
-              </pre>
-            </div>
-          )}
-        </div>
-      </div>
-
-        </div>
-      )}

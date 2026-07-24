@@ -23,6 +23,10 @@ LOGGER = logging.getLogger(__name__)
 # In-memory store keyed by "{profile_id}:{evidence_id}"
 _evidence_store: dict[str, CareerProfileEvidence] = {}
 
+def _reset_evidence_store() -> None:
+    """Clear the in-memory evidence store (for test isolation)."""
+    _evidence_store.clear()
+
 
 def _store_key(profile_id: str, evidence_id: str) -> str:
     return f"{profile_id}:{evidence_id}"

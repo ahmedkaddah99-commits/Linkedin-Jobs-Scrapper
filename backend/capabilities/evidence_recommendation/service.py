@@ -30,6 +30,10 @@ LOGGER = logging.getLogger(__name__)
 # In-memory store keyed by recommendation_id
 _recommendations: dict[str, EvidenceRecommendation] = {}
 
+def _reset_recommendations() -> None:
+    """Clear the in-memory recommendation store (for test isolation)."""
+    _recommendations.clear()
+
 
 def _verified_source_ids(profile_id: str) -> set[str]:
     reviews = list_reviews(profile_id)
@@ -121,7 +125,9 @@ def generate_recommendations(
             if not fact_id:
                 continue
             fact_sources = _fact_source_ids(fact)
-            if verified_sources and not fact_sources.issubset(verified_sources):
+            if profile_id and (
+                not fact_sources or not fact_sources.issubset(verified_sources)
+            ):
                 continue
             evidence_text = str(fact.get("value") or "")
             if not evidence_text.strip():

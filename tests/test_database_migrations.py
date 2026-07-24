@@ -137,7 +137,7 @@ class DatabaseMigrationTests(unittest.TestCase):
 
     def test_committed_registry_preserves_migration_ids_001_through_020(self):
         self.assertEqual(
-            [migration.migration_id for migration in MIGRATIONS],
+            [migration.migration_id for migration in MIGRATIONS[:20]],
             [
                 "001_runtime_normalization",
                 "002_analytics_events",

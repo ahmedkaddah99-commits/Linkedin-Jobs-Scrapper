@@ -1337,27 +1337,17 @@ MIGRATIONS = (
         "Create evidence and evidence state history tables for CP-028 state visibility.",
         _apply_evidence_storage_migration,
     ),
-
-
-
     Migration.from_callable(
-    "026_profile_versioning",
-    "Create profile version, CV version, and generation provenance tables (CP-025).",
-    _apply_profile_versioning_migration,
+        "025_work_experiences",
+        "Create work experience records and merge suggestion storage.",
+        _apply_work_experiences_migration,
     ),
     Migration.from_callable(
-    "025_work_experiences",
-    "Create work experience records and merge suggestion storage.",
-    _apply_work_experiences_migration,
+        "026_profile_versioning",
+        "Create profile version, CV version, and generation provenance tables (CP-025).",
+        _apply_profile_versioning_migration,
     ),
-
 )
-# End of MIGRATIONS tuple
-# End of MIGRATIONS tuple
-
-
-
-# (trailing cleanup)
 
 
 

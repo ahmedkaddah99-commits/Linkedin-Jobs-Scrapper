@@ -77,7 +77,11 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         workspace_id = str((query.get("workspace_id") or [""])[0]).strip()
                         run_id = str((query.get("run_id") or [""])[0]).strip()
                         asset_kind = str((query.get("asset_kind") or [""])[0]).strip().lower()
-                        include_preview_profile = _parse_bool_param(query, "include_preview_profile")
+                        include_preview_profile = _parse_bool_param(
+                            query,
+                            "include_preview_profile",
+                            default=True,
+                        )
                         group_id = str((query.get("group_id") or [""])[0]).strip().lower()
                         if workspace_id and not application.user_can_access_workspace(user, workspace_id):
                             raise PermissionError(f"Workspace access denied for '{workspace_id}'.")

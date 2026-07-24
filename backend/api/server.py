@@ -4844,7 +4844,12 @@ def _update_candidate_asset_section_decisions(
             if application.user_can_access_workspace(refreshed_user, workspace.id)
         }
         shared_profile = dict((refreshed_user.metadata or {}).get("profile") or {})
-        return _candidate_asset_to_document_item(refreshed_asset, workspace_names, shared_profile)
+        return _candidate_asset_to_document_item(
+            refreshed_asset,
+            workspace_names,
+            shared_profile,
+            include_preview_profile=True,
+        )
     raise KeyError(f"Candidate asset '{target_asset_id}' not found.")
 
 
