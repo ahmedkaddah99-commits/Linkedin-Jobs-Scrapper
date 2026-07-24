@@ -205,6 +205,9 @@ class EvidenceExtractionTests(unittest.TestCase):
         ev2 = CandidateEvidence.create(text="Increased revenue 30%", evidence_type=EVIDENCE_TYPE_METRIC)
         ev3 = CandidateEvidence.create(text="Used Python", evidence_type=EVIDENCE_TYPE_TOOL)
         summary = build_evidence_summary([ev1, ev2, ev3])
+        self.assertEqual(summary["total_evidence"], 3)
+        self.assertEqual(summary["by_type"]["metric"], 1)
+        self.assertEqual(summary["needs_review_count"], 3)
 
 
 class DeduplicationTests(unittest.TestCase):
@@ -240,10 +243,6 @@ class DeduplicationTests(unittest.TestCase):
         result = deduplicate_evidence([ev1, ev2, ev3])
         self.assertIn("duplicate_groups", result)
         self.assertIn("merged_items", result)
-
-        self.assertEqual(summary["total_evidence"], 3)
-        self.assertEqual(summary["by_type"]["metric"], 1)
-        self.assertEqual(summary["needs_review_count"], 3)
 
     def test_classify_default_responsibility(self):
         self.assertEqual(classify_evidence_type("Responsible for daily operations"), EVIDENCE_TYPE_RESPONSIBILITY)

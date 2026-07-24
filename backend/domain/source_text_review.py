@@ -113,7 +113,7 @@ class SourceTextReview:
             or str(rec.get("status") or "") == "needs_review"
         )
         return cls(
-            source_id=str(rec.get("source_id") or source_id),
+            source_id=str(source_id or rec.get("source_id") or ""),
             profile_id=profile_id,
             file_name=str(rec.get("file_name") or ""),
             file_path=str(rec.get("file_path") or ""),

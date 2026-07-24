@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
+from difflib import SequenceMatcher
 from typing import Any, Iterable, Mapping
 
 from backend.domain.models import (
@@ -41,13 +42,17 @@ def _tokenize(text: str) -> set[str]:
 
 
 def _fuzzy_score(text_a: str, text_b: str) -> float:
+    normalized_a = _normalize(text_a)
+    normalized_b = _normalize(text_b)
+    if not normalized_a or not normalized_b:
+        return 0.0
     tokens_a = _tokenize(text_a)
     tokens_b = _tokenize(text_b)
-    if not tokens_a or not tokens_b:
-        return 0.0
     intersection = tokens_a & tokens_b
     union = tokens_a | tokens_b
-    return len(intersection) / len(union)
+    token_score = len(intersection) / len(union) if union else 0.0
+    character_score = SequenceMatcher(None, normalized_a, normalized_b).ratio()
+    return max(token_score, character_score)
 
 
 def _read_experiences(profile_metadata: dict[str, Any]) -> list[dict[str, Any]]:
@@ -359,11 +364,15 @@ def get_merge_suggestions(profile) -> list[MergeSuggestion]:
 
 
 def _compute_merge_score(a: WorkExperienceRecord, b: WorkExperienceRecord) -> float:
-    employer_score = _fuzzy_score(a.employer, b.employer)
-    title_score = _fuzzy_score(a.job_title, b.job_title)
-    location_score = _fuzzy_score(a.location, b.location) if a.location and b.location else 0.0
-    weighted = (employer_score * 0.45) + (title_score * 0.35) + (location_score * 0.20)
-    return round(weighted, 4)
+    weighted_scores = [
+        (_fuzzy_score(a.employer, b.employer), 0.45),
+        (_fuzzy_score(a.job_title, b.job_title), 0.35),
+    ]
+    if a.location and b.location:
+        weighted_scores.append((_fuzzy_score(a.location, b.location), 0.20))
+    available_weight = sum(weight for _, weight in weighted_scores)
+    weighted = sum(score * weight for score, weight in weighted_scores)
+    return round(weighted / available_weight, 4) if available_weight else 0.0
 
 
 def _build_merged_record(a: WorkExperienceRecord, b: WorkExperienceRecord, score: float) -> dict[str, Any]:
@@ -395,6 +404,10 @@ def _merge_reason(a: WorkExperienceRecord, b: WorkExperienceRecord, score: float
         parts.append("same employer")
     if _fuzzy_score(a.job_title, b.job_title) >= 0.7:
         parts.append("similar title")
+    if a.location and b.location and _fuzzy_score(a.location, b.location) >= 0.7:
+        parts.append("same location")
+    detail = ", ".join(parts) if parts else "similar experience details"
+    return f"{detail} (score {score:.0%})"
 
 
 def confirm_merge(profile, suggestion_id: str) -> WorkExperienceRecord:

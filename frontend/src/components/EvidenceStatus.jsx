@@ -65,6 +65,7 @@ export function EvidenceStatusBadge({ state, size = "md", showLabel = true }) {
       {showLabel ? label : ""}
     </span>
   );
+}
 
 
 // ---------------------------------------------------------------------------
@@ -130,6 +131,7 @@ export function EvidenceStateTimeline({ currentState, history = [] }) {
       })}
     </div>
   );
+}
 
 
 // ---------------------------------------------------------------------------
@@ -243,8 +245,4 @@ export function EvidenceStatusHistory({ evidenceId }) {
       ))}
     </div>
   );
-}
-
-}
-
 }

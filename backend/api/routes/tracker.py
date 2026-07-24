@@ -258,7 +258,12 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         user, _ = self._require_identity()
                         limit = _parse_int_param(query, "limit", default=200, maximum=1000)
                         offset = _parse_int_param(query, "offset", default=0, maximum=100000)
-                        entries = _collect_tracker_entries(application, user, max_entries=limit + offset + 500)
+                        entries = _collect_tracker_entries(
+                            application,
+                            user,
+                            max_entries=limit + offset + 500,
+                            include_full_details=True,
+                        )
                         if _parse_bool_param(query, "explicit_only"):
                             entries = [item for item in entries if bool(item.get("is_explicit_application"))]
                         paged_entries = entries[offset : offset + limit]

@@ -47,17 +47,26 @@ def _normalize(text: str) -> str:
 
 def _tokenize(text: str) -> set[str]:
     cleaned = re.sub(r"[^a-z0-9\s]", " ", _normalize(text))
-    return {token for token in cleaned.split() if len(token) > 1}
+    tokens: set[str] = set()
+    for token in cleaned.split():
+        if len(token) <= 1:
+            continue
+        for suffix in ("ment", "ing", "er", "ed"):
+            if token.endswith(suffix) and len(token) - len(suffix) >= 4:
+                token = token[: -len(suffix)]
+                break
+        tokens.add(token)
+    return tokens
 
 
 def _fuzzy_score(text_a: str, text_b: str) -> float:
+    """Measure how much of requirement ``text_a`` appears in evidence."""
     tokens_a = _tokenize(text_a)
     tokens_b = _tokenize(text_b)
     if not tokens_a or not tokens_b:
         return 0.0
     intersection = tokens_a & tokens_b
-    union = tokens_a | tokens_b
-    return len(intersection) / len(union)
+    return len(intersection) / len(tokens_a)
 
 
 def _read_bindings(profile_metadata: dict[str, Any]) -> list[dict[str, Any]]:
@@ -338,6 +347,21 @@ def _load_verified_evidence(profile_metadata: dict[str, Any]) -> list[WorkExperi
 # requirement matching against evidence
 # ---------------------------------------------------------------------------
 
+def _build_evidence_text(experience: WorkExperienceRecord) -> str:
+    """Build the searchable text for one verified work-experience record."""
+    return " ".join(
+        part.strip()
+        for part in (
+            experience.job_title,
+            experience.employer,
+            experience.location,
+            experience.employment_type,
+            experience.description,
+        )
+        if str(part or "").strip()
+    )
+
+
 def _match_requirement(
     requirement: dict[str, Any],
     evidence_records: list[WorkExperienceRecord],
@@ -355,8 +379,11 @@ def _match_requirement(
         evidence_text = _build_evidence_text(exp)
         title_employer = f"{exp.job_title} {exp.employer}"
         title_score = _fuzzy_score(req_text, title_employer)
-        desc_score = _fuzzy_score(req_text, evidence_text)
-        combined_score = (title_score * 0.6) + (desc_score * 0.4)
+        evidence_score = _fuzzy_score(req_text, evidence_text)
+        # A requirement fully supported in either the role identity or the
+        # complete evidence text is a full match; do not dilute an exact
+        # description match merely because it is absent from the title.
+        combined_score = max(title_score, evidence_score)
 
         if combined_score >= PARTIAL_MATCH_THRESHOLD and combined_score > best_score:
             best_score = combined_score

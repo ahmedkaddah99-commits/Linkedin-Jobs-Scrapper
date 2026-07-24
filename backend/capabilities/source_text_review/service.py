@@ -20,6 +20,10 @@ LOGGER = logging.getLogger(__name__)
 # In-memory store keyed by "{profile_id}:{source_id}"
 _reviews: dict[str, SourceTextReview] = {}
 
+def _reset_reviews() -> None:
+    """Clear the in-memory review store (for test isolation)."""
+    _reviews.clear()
+
 
 def _review_key(profile_id: str, source_id: str) -> str:
     return f"{profile_id}:{source_id}"

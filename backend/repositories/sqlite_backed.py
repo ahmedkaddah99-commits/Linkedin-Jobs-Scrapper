@@ -2826,10 +2826,16 @@ class SqliteConfigStore(_SqliteStore):
 class SqliteCareerProfileStore(_SqliteStore):
     """SQLite-backed career profile persistence."""
 
-    def list_profiles(self, *, user_id: str = "", limit: int = 50, offset: int = 0) -> list:
+    @staticmethod
+    def _profile_from_row(row: sqlite3.Row) -> "CareerProfile":
         from backend.domain.models import CareerProfile
 
-        query = "SELECT payload_json FROM career_profiles"
+        payload = dict(row)
+        payload["metadata"] = _deserialize(payload.pop("metadata_json", "{}"), {})
+        return CareerProfile.from_dict(payload)
+
+    def list_profiles(self, *, user_id: str = "", limit: int = 50, offset: int = 0) -> list:
+        query = "SELECT * FROM career_profiles"
         params: list[Any] = []
         if user_id:
             query += " WHERE user_id = ?"
@@ -2838,19 +2844,17 @@ class SqliteCareerProfileStore(_SqliteStore):
         params.extend([max(1, int(limit)), max(0, int(offset))])
         with self._connect() as connection:
             rows = connection.execute(query, tuple(params)).fetchall()
-        return [CareerProfile.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
+        return [self._profile_from_row(row) for row in rows]
 
     def get_profile(self, profile_id: str) -> "CareerProfile":
-        from backend.domain.models import CareerProfile
-
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT payload_json FROM career_profiles WHERE profile_id = ?",
+                "SELECT * FROM career_profiles WHERE profile_id = ?",
                 (profile_id,),
             ).fetchone()
         if row is None:
             raise KeyError(f"Career profile '{profile_id}' not found.")
-        return CareerProfile.from_dict(_deserialize(row["payload_json"], {}))
+        return self._profile_from_row(row)
 
     def upsert_profile(self, profile: "CareerProfile") -> None:
         from backend.domain.models import CareerProfile
@@ -2889,15 +2893,13 @@ class SqliteCareerProfileStore(_SqliteStore):
             )
 
     def list_profiles_by_workspace(self, workspace_id: str) -> list:
-        from backend.domain.models import CareerProfile
-
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT payload_json FROM career_profiles WHERE bound_workspace_id = ? "
+                "SELECT * FROM career_profiles WHERE bound_workspace_id = ? "
                 "ORDER BY updated_at DESC",
                 (workspace_id,),
             ).fetchall()
-        return [CareerProfile.from_dict(_deserialize(row["payload_json"], {})) for row in rows]
+        return [self._profile_from_row(row) for row in rows]
 
     def delete_profile(self, profile_id: str) -> None:
         with self._connect() as connection:

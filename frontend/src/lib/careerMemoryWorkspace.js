@@ -535,12 +535,7 @@ export function buildCareerMemoryPayload(draft) {
   const motivationCards = cards.filter((card) =>
     ["motivation", "challenge", "stakeholder_story"].includes(card.category),
   );
-  const completedCount = items.filter((item) => item.complete).length;
-
   return {
-    items,
-    completedCount,
-    totalCount: items.length,
     master_career_profile_text: normalizeString(draft.importedCareerContext),
     career_highlights_text: mergeTextSections([
       draft.achievementHighlights,
@@ -576,12 +571,9 @@ export function getQuestionSetDefinition(questionSetType) {
 
 export function createInterviewState(questionSetType = DEFAULT_QUESTION_SET_TYPE) {
   const definition = getQuestionSetDefinition(questionSetType);
-  const completedCount = items.filter((item) => item.complete).length;
 
   return {
-    items,
-    completedCount,
-    totalCount: items.length,
+    activeQuestionSet: definition.id,
     currentStepIndex: 0,
     answers: {},
     selectedTrigger: definition.suggestedTrigger,
