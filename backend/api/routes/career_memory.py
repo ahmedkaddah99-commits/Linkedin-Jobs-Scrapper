@@ -1,16 +1,15 @@
+"""Legacy career-memory routes — read-only compatibility adapters (CP-032R).
+
+All mutations have been replaced by the canonical evidence-items API.
+These routes remain for backward compatibility: GET returns a read-only
+view; POST mutation endpoints return 410 Gone with a redirect hint.
+"""
+
 from __future__ import annotations
 
 from http import HTTPStatus
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
-from backend.career_memory import (
-    confirm_fact,
-    extract_facts,
-    generate_outputs,
-    get_career_memory_state,
-    next_question,
-    regenerate_output,
-)
 
 
 def register_routes(registry: RouteRegistry) -> None:
@@ -22,39 +21,52 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     segments = list(context.segments)
     if segments == ["career-memory"]:
         user, _ = context.require_identity()
-        context.send_json(get_career_memory_state(user), status=HTTPStatus.OK)
+        # Return read-only compatibility view from canonical evidence
+        metadata = dict(user.metadata or {})
+        evidence_list = list(metadata.get("candidate_evidence") or [])
+        context.send_json({
+            "active_facts": evidence_list,
+            "facts": evidence_list,
+            "outputs": list(metadata.get("evidence_outputs") or []),
+            "fact_history": evidence_list,
+            "output_history": list(metadata.get("evidence_outputs") or []),
+            "message": "Legacy career-memory is read-only. Use /evidence-items for mutations.",
+        }, status=HTTPStatus.OK)
         return True
     return False
 
 
 def _handle_post(context: ApiRouteContext) -> bool | None:
-    application = context.application
-    segments = list(context.segments)
-    payload = context.read_json_body()
-    user, _ = context.require_identity()
+    """All legacy mutation endpoints are deprecated (CP-032R).
 
-    if segments == ["career-memory", "facts", "extract"]:
-        context.send_json(
-            extract_facts(application, user, payload.get("source_asset_ids") or []),
-            status=HTTPStatus.OK,
-        )
+    Returns 410 Gone with a hint to use the canonical evidence-items API.
+    """
+    segments = list(context.segments)
+
+    if segments[:2] == ["career-memory", "facts"]:
+        context.send_json({
+            "error": "gone",
+            "message": "The /career-memory/facts mutation endpoints have been replaced.",
+            "migration_hint": "Use POST /evidence-items/migrate for migration, "
+                              "or the canonical evidence-items API for CRUD.",
+        }, status=HTTPStatus.GONE)
         return True
-    if segments == ["career-memory", "questions", "next"]:
-        context.send_json(next_question(user), status=HTTPStatus.OK)
+
+    if segments[:2] == ["career-memory", "outputs"]:
+        context.send_json({
+            "error": "gone",
+            "message": "The /career-memory/outputs mutation endpoints have been replaced.",
+            "migration_hint": "Use POST /evidence-items/generate for generation, "
+                              "or POST /evidence-items/outputs/{id}/regenerate for edits.",
+        }, status=HTTPStatus.GONE)
         return True
-    if len(segments) == 4 and segments[:2] == ["career-memory", "facts"] and segments[3] == "confirm":
-        context.send_json(
-            confirm_fact(application, user, segments[2], payload),
-            status=HTTPStatus.OK,
-        )
+
+    if segments[:2] == ["career-memory", "questions"]:
+        context.send_json({
+            "error": "gone",
+            "message": "The /career-memory/questions endpoint has been replaced.",
+            "migration_hint": "Use the canonical evidence lifecycle (needs_review -> reviewed -> confirmed).",
+        }, status=HTTPStatus.GONE)
         return True
-    if segments == ["career-memory", "outputs", "generate"]:
-        context.send_json(generate_outputs(application, user, payload), status=HTTPStatus.CREATED)
-        return True
-    if len(segments) == 4 and segments[:2] == ["career-memory", "outputs"] and segments[3] == "regenerate":
-        context.send_json(
-            regenerate_output(application, user, segments[2], payload),
-            status=HTTPStatus.OK,
-        )
-        return True
+
     return False

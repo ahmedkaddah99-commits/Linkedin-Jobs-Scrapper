@@ -12,7 +12,7 @@ from hashlib import sha256
 from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
-from backend.career_memory.service import _active_facts, _store
+from backend.domain.candidate_evidence import CandidateEvidence, EVIDENCE_STATUS_CONFIRMED
 from backend.capabilities.source_text_review import list_reviews
 from backend.domain.evidence_recommendation import (
     EVIDENCE_RECOMMENDATION_STATUS_EXCLUDED,
@@ -41,13 +41,40 @@ def _verified_source_ids(profile_id: str) -> set[str]:
 
 
 def _verified_facts(user) -> list[dict[str, Any]]:
-    stored = _store(user)
-    facts = _active_facts(stored)
-    return [f for f in facts if str(f.get("certainty") or "").strip() == "confirmed"]
+    """Read confirmed facts from the canonical evidence store (CP-032R)."""
+    metadata = dict(user.metadata or {})
+    evidence_list = list(metadata.get("candidate_evidence") or [])
+    confirmed = [
+        ev for ev in evidence_list
+        if str(ev.get("status") or "") == EVIDENCE_STATUS_CONFIRMED
+        and str(ev.get("certainty") or "") == "confirmed"
+    ]
+    return [
+        {
+            "fact_id": ev.get("evidence_id", ""),
+            "type": ev.get("evidence_type", "action"),
+            "value": ev.get("text", ""),
+            "certainty": ev.get("certainty", "confirmed"),
+            "sources": [{"asset_id": ev.get("source_asset", "")}],
+            "subject": {
+                "company": ev.get("inferred_employer", ""),
+                "role": ev.get("inferred_role", ""),
+                "project": (ev.get("experience_mapping") or {}).get("project", ""),
+            },
+            "version": ev.get("version", 1),
+            "source_signature": "",
+        }
+        for ev in confirmed
+    ]
 
 
 def _fact_source_ids(fact: Mapping[str, Any]) -> set[str]:
-    return {str(s.get("asset_id") or "") for s in (fact.get("sources") or [])}
+    sources = fact.get("sources") or []
+    if not sources and fact.get("fact_id"):
+        # Canonical evidence: fact_id is evidence_id, source is source_asset
+        source = fact.get("sources", [{"asset_id": fact.get("fact_id", "")}])
+        return {str(s.get("asset_id") or "") for s in source}
+    return {str(s.get("asset_id") or "") for s in sources}
 
 
 def _fact_linked_experience(fact: Mapping[str, Any]) -> str:

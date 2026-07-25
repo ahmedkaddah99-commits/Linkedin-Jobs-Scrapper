@@ -1,4 +1,4 @@
-"""Migration adapter: convert legacy career_memory facts into CandidateEvidence items (CP-016).
+"""Migration adapter: convert legacy career_memory facts into CandidateEvidence items (CP-016, CP-032R).
 
 Provides a read-and-convert path for existing stored "facts" in user.metadata["career_memory"]
 so they become first-class CandidateEvidence items with proper provenance and lifecycle.
@@ -11,9 +11,13 @@ from typing import Any, Mapping
 
 from backend.domain.candidate_evidence import (
     CandidateEvidence,
+    CERTAINTY_CONFIRMED,
+    CERTAINTY_ESTIMATED,
+    CERTAINTY_UNCERTAIN,
     EVIDENCE_STATUS_CONFIRMED,
     EVIDENCE_STATUS_NEEDS_REVIEW,
     classify_evidence_type,
+    compute_content_hash,
 )
 from backend.domain.models import utc_now_iso
 
@@ -123,6 +127,13 @@ def migrate_legacy_facts_to_evidence(
             source_confidence=0.5,
             created_at=str(fact.get("created_at") or utc_now_iso()),
             updated_at=str(fact.get("updated_at") or utc_now_iso()),
+            version=int(fact.get("version") or 1),
+            certainty=legacy_certainty if legacy_certainty in ("confirmed", "estimated", "uncertain") else "estimated",
+            experience_mapping={
+                "company": employer,
+                "role": role,
+                "project": str(subject.get("project") or ""),
+            },
             metadata={
                 "migrated_from": "career_memory",
                 "legacy_fact_id": fact.get("fact_id", ""),
@@ -163,9 +174,59 @@ def clear_legacy_career_memory(user_metadata: Mapping[str, Any] | None) -> dict[
     return cleaned
 
 
+
+def migrate_and_deduplicate(
+    *,
+    profile_id: str,
+    user_metadata: Mapping[str, Any] | None,
+    existing_evidence: list[CandidateEvidence] | None = None,
+) -> dict[str, Any]:
+    """Idempotent migration: convert legacy facts and deduplicate against existing canonical evidence.
+
+    - Converts active legacy career_memory facts to CandidateEvidence items.
+    - Skips any fact whose content_hash already exists in the canonical store.
+    - Returns newly migrated items only (no duplicates).
+    """
+    legacy_evidence = migrate_legacy_facts_to_evidence(
+        profile_id=profile_id,
+        user_metadata=user_metadata,
+    )
+    if not legacy_evidence:
+        return {"migrated": 0, "skipped": 0, "evidence": []}
+
+    existing_hashes: set[str] = set()
+    if existing_evidence:
+        for ev in existing_evidence:
+            h = ev.content_hash or compute_content_hash(ev.text)
+            if h:
+                existing_hashes.add(h)
+
+    new_items: list[CandidateEvidence] = []
+    skipped = 0
+    for ev in legacy_evidence:
+        h = ev.content_hash or compute_content_hash(ev.text)
+        if h in existing_hashes:
+            skipped += 1
+            LOGGER.debug("Skipping duplicate legacy fact: %s", ev.text[:80])
+            continue
+        existing_hashes.add(h)
+        new_items.append(ev)
+
+    LOGGER.info(
+        "Idempotent migration: %d new, %d skipped (duplicates) for profile %s",
+        len(new_items), skipped, profile_id,
+    )
+    return {
+        "migrated": len(new_items),
+        "skipped": skipped,
+        "evidence": [ev.to_dict() for ev in new_items],
+    }
+
+
 __all__ = [
     "clear_legacy_career_memory",
     "has_legacy_career_memory",
+    "migrate_and_deduplicate",
     "migrate_legacy_facts_to_evidence",
 ]
 

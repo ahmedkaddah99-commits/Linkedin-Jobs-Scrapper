@@ -27,9 +27,15 @@ from backend.capabilities.candidate_evidence.conflict_detection import (
     detect_conflicts,
     apply_conflicts,
 )
+from backend.capabilities.candidate_evidence.generation import (
+    generate_evidence_outputs,
+    get_confirmed_evidence,
+    regenerate_evidence_output,
+)
 from backend.capabilities.candidate_evidence.migration import (
     clear_legacy_career_memory,
     has_legacy_career_memory,
+    migrate_and_deduplicate,
     migrate_legacy_facts_to_evidence,
 )
 
@@ -85,14 +91,18 @@ __all__ = [
     "apply_conflicts",
     "apply_duplicate_groups",
     "build_evidence_summary",
+    "clear_legacy_career_memory",
     "deduplicate_evidence",
     "detect_and_apply_conflicts",
     "detect_conflicts",
     "extract_evidence_from_source",
     "extract_evidence_from_verified_sources",
     "find_duplicate_groups",
-    "clear_legacy_career_memory",
+    "generate_evidence_outputs",
+    "get_confirmed_evidence",
     "has_legacy_career_memory",
+    "migrate_and_deduplicate",
     "migrate_legacy_facts_to_evidence",
+    "regenerate_evidence_output",
     "run_evidence_pipeline",
 ]
