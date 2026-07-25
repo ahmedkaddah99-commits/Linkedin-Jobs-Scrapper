@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import EvidenceQuestions from "./EvidenceQuestions";
 
 function latestOutput(outputs = []) {
   return [...outputs].sort((left, right) => (
@@ -152,6 +153,7 @@ export default function FactGroundedMemoryWorkspace({ request, selectedAssetIds 
           </p>
         ) : null}
       </section>
+      <EvidenceQuestions request={request} onEvidenceRefresh={loadState} />
 
       <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
         <div className="space-y-6">
