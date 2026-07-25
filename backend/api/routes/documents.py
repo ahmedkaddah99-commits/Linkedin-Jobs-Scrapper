@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
+from backend.capabilities.source_processing.extraction import process_source_bytes
+
 
 # Documents, uploads, exports, CV preview, and ATS export gate.
 _SERVER_BIND_RESERVED = {
@@ -176,11 +178,15 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             asset_metadata = extraction_metadata(document_extraction)
                             asset_metadata["status"] = CV_STATUS_UPLOADED
                         else:
-                            document_extraction = extract_document_text(
+                            source_id = f"upload_{filename}"
+                            document_extraction = process_source_bytes(
+                                source_id,
                                 filename,
                                 file_bytes,
                                 allow_ocr=not is_cv_asset,
                             )
+                            if hasattr(document_extraction, 'to_dict'):
+                                document_extraction = document_extraction.to_dict()
                             asset_metadata = extraction_metadata(document_extraction)
                         if is_cv_asset:
                             cv_text = str(document_extraction.get("text") or "")

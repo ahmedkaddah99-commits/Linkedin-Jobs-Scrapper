@@ -272,10 +272,17 @@ def extract_document_text(filename: str, data: bytes, *, allow_ocr: bool = True)
         "text": text.strip(),
         "char_count": len(text.strip()),
         "method": method,
+        "provider": "",
+        "model": "",
         "warnings": list(dict.fromkeys(warnings)),
         "pages": pages,
         "confidence": confidence,
         "status": status,
+        "is_ocr": False,
+        "is_low_confidence_ocr": False,
+        "extracted_at": "",
+        "layout_sections": [],
+        "experience_details": [],
     }
 
 
@@ -301,10 +308,17 @@ def extraction_metadata(extraction: dict[str, Any]) -> dict[str, Any]:
         "source_char_count": int(extraction.get("char_count") or 0),
         "text_extraction": {
             "method": str(extraction.get("method") or "none"),
+            "provider": str(extraction.get("provider") or ""),
+            "model": str(extraction.get("model") or ""),
             "warnings": list(extraction.get("warnings") or []),
             "status": str(extraction.get("status") or "failed"),
             "confidence": float(extraction.get("confidence") or 0),
             "pages": list(extraction.get("pages") or []),
+            "is_ocr": bool(extraction.get("is_ocr")),
+            "is_low_confidence_ocr": bool(extraction.get("is_low_confidence_ocr")),
+            "extracted_at": str(extraction.get("extracted_at") or ""),
+            "layout_sections": list(extraction.get("layout_sections") or []),
+            "experience_details": list(extraction.get("experience_details") or []),
         },
     }
 

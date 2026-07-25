@@ -16,8 +16,9 @@ from backend.domain.models import (
     utc_now_iso,
 )
 from backend.domain.phase0_contracts import normalize_candidate_asset_descriptor
+from backend.capabilities.source_processing.extraction import process_source_bytes
 from backend.profiles.cv_profile_extraction import extract_cv_profile
-from backend.profiles.document_text import create_word_companion_bytes, extract_document_text, extraction_metadata
+from backend.profiles.document_text import create_word_companion_bytes, extraction_metadata
 from backend.repositories.contracts import BackendRepositories
 from backend.storage import build_private_object_key
 
@@ -320,11 +321,16 @@ def process_cv_upload_run(
             raise ValueError(f"CV asset '{asset_id}' is missing its source object key.")
         source_bytes = object_storage.get(object_key)
         is_cv_asset = str(asset.get("asset_kind") or "").strip().lower() == "workspace_cv"
-        document_extraction = extract_document_text(
-            _asset_filename(asset),
+        asset_filename = _asset_filename(asset)
+        document_extraction = process_source_bytes(
+            asset_id,
+            asset_filename,
             source_bytes,
             allow_ocr=not is_cv_asset,
         )
+        # Adapt SourceTextRecord to dict format for downstream code
+        if hasattr(document_extraction, 'to_dict'):
+            document_extraction = document_extraction.to_dict()
         cv_text = str(document_extraction.get("text") or "").strip()
         if not cv_text:
             warning = " ".join(str(item) for item in document_extraction.get("warnings") or []).strip()

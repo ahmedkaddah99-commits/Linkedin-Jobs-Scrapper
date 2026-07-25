@@ -160,6 +160,27 @@ def run_source_processing_pipeline(
     return results
 
 
+def process_source_bytes(source_id: str, file_name: str, data: bytes, *, allow_ocr: bool = True) -> SourceTextRecord:
+    """Process source file bytes (from object storage or upload) through Gemini + local fallback.
+
+    Writes bytes to a temp file for disk-based processing, then cleans up.
+    """
+    import tempfile, os
+    suffix = Path(file_name).suffix if file_name else ".bin"
+    tmp_path = None
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+        os.write(tmp_fd, data)
+        os.close(tmp_fd)
+        return process_source(source_id, tmp_path, allow_ocr=allow_ocr)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 def build_source_processing_summary(results: list[SourceTextRecord]) -> dict[str, Any]:
     """Build a summary dict from SourceTextRecord results."""
     total = len(results)

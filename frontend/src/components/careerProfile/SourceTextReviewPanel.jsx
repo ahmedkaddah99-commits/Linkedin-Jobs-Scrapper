@@ -124,7 +124,27 @@ export default function SourceTextReviewPanel({
         </span>
       </div>
 
-
+      {/* CP-031R: Provider/model badge for AI-processed sources */}
+      {review.original_provider && review.original_provider !== "" && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+            review.original_provider === "gemini"
+              ? "bg-violet-100 text-violet-700 border border-violet-200"
+              : "bg-surface-container-low text-on-surface-variant"
+          }`}>
+            <span className="material-symbols-outlined text-[14px]">
+              {review.original_provider === "gemini" ? "auto_awesome" : "description"}
+            </span>
+            {review.original_provider === "gemini" ? "Gemini AI Processed" : `Processed via ${review.original_provider}`}
+          </span>
+          {review.original_model && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-surface-container-low px-2.5 py-1 text-[11px] font-medium text-on-surface-variant">
+              <span className="material-symbols-outlined text-[12px]">smart_toy</span>
+              {review.original_model}
+            </span>
+          )}
+        </div>
+      )}
 
       {review.warnings?.length > 0 && (
         <div className="mt-4 rounded-xl border border-warning/20 bg-warning/5 p-3">
@@ -141,10 +161,19 @@ export default function SourceTextReviewPanel({
       )}
       {isLowConfidence && (
         <div className="mt-3 rounded-xl border border-error/20 bg-error/5 p-3">
-          <p className="text-sm font-medium text-error">
-            Low confidence extraction ({Math.round(review.original_confidence * 100)}%).
-            Review is required before this text can be used as evidence.
-          </p>
+          <div className="flex items-start gap-2">
+            <span className="material-symbols-outlined mt-0.5 text-[18px] text-error">error</span>
+            <div>
+              <p className="text-sm font-medium text-error">
+                Low confidence extraction ({Math.round(review.original_confidence * 100)}%)
+                {review.original_provider === "gemini" ? " from Gemini AI" : ""}
+              </p>
+              <p className="mt-1 text-xs text-error/80">
+                Review is required before this text can be used as evidence.
+                {review.original_provider === "gemini" ? " AI extraction confidence is below the acceptable threshold." : ""}
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
