@@ -125,6 +125,7 @@ export default function CareerEvidencePage() {
   // CP-040R: One-at-a-time evidence review state
   const [reviewItem, setReviewItem] = useState(null);
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewError, setReviewError] = useState("");
   // CP-041R: Question state shown inline after confirmation
   const [activeQuestion, setActiveQuestion] = useState(null);
   // CP-044R: Ready actions with CV/motivation provenance
@@ -290,12 +291,30 @@ export default function CareerEvidencePage() {
       const response = await request("/evidence-items/next-review");
       if (response?.state) {
         setReviewItem(response);
+      } else {
+        setReviewItem(null);
       }
     } catch {
       // Fall back to client-side review if endpoint unavailable
       setReviewItem(null);
     }
   }, [request]);
+
+  const applyJourneyResponse = useCallback((response) => {
+    if (!response) return;
+    setJourneyPayload(response);
+    setReviewError("");
+    if (response.state === "question" && response.question) {
+      setActiveQuestion(response.question);
+      setReviewItem(null);
+    } else {
+      setActiveQuestion(null);
+      setReviewItem(response.next_review || null);
+    }
+    if (response.primary_actions) {
+      setReadyActions(response.primary_actions);
+    }
+  }, [setJourneyPayload]);
 
   // CP-044R: Restore the exact server-side journey step after transitions or
   // reloads. Mapping and questions remain inline in the single review screen.
@@ -319,41 +338,10 @@ export default function CareerEvidencePage() {
     }
   }, [lifecycle.state, journeyPayload, request]);
 
-  // CP-040R: Confirm evidence with mapping via review service
-  async function handleConfirmEvidence(evidenceId, mapping) {
-    setReviewLoading(true);
-    try {
-      const response = await request("/evidence-items/review-action", {
-        method: "POST",
-        body: {
-          evidence_id: evidenceId,
-          action: "confirm",
-          mapping: mapping || undefined,
-        },
-      });
-      if (response?.evidence) {
-        await Promise.all([
-          refreshSettings().catch(() => undefined),
-          refreshDocuments().catch(() => undefined),
-        ]);
-        // Fetch next item
-        await fetchNextReviewItem();
-      }
-    } catch {
-      // Fallback: local confirm
-      const updated = evidenceItems.map((ev) =>
-        ev.evidence_id === evidenceId ? { ...ev, status: "confirmed" } : ev,
-      );
-      await saveToSettings({ evidence_items: updated });
-      setReviewItem(null);
-    } finally {
-      setReviewLoading(false);
-    }
-  }
-
   // CP-040R: Reject evidence via review service
   async function handleRejectEvidence(evidenceId) {
     setReviewLoading(true);
+    setReviewError("");
     try {
       const response = await request("/evidence-items/review-action", {
         method: "POST",
@@ -362,20 +350,9 @@ export default function CareerEvidencePage() {
           action: "reject",
         },
       });
-      if (response?.evidence) {
-        await Promise.all([
-          refreshSettings().catch(() => undefined),
-          refreshDocuments().catch(() => undefined),
-        ]);
-        await fetchNextReviewItem();
-      }
-    } catch {
-      // Fallback: local reject
-      const updated = evidenceItems.map((ev) =>
-        ev.evidence_id === evidenceId ? { ...ev, status: "rejected" } : ev,
-      );
-      await saveToSettings({ evidence_items: updated });
-      setReviewItem(null);
+      applyJourneyResponse(response);
+    } catch (error) {
+      setReviewError(error?.message || "Could not reject this evidence. Please retry.");
     } finally {
       setReviewLoading(false);
     }
@@ -384,35 +361,19 @@ export default function CareerEvidencePage() {
   // CP-040R: Edit evidence via review service
   async function handleEditEvidence(evidenceId, updates, mapping) {
     setReviewLoading(true);
+    setReviewError("");
     try {
-      const body = {
-        evidence_id: evidenceId,
-        action: "edit",
-        ...updates,
-      };
-      if (mapping) {
-        body.mapping = mapping;
-      }
-      const response = await request("/evidence-items/review-action", {
+      const response = await request("/evidence-items/confirm-inspect", {
         method: "POST",
-        body,
+        body: {
+          evidence_id: evidenceId,
+          edited_text: updates?.text,
+          mapping: mapping || undefined,
+        },
       });
-      if (response?.evidence) {
-        await Promise.all([
-          refreshSettings().catch(() => undefined),
-          refreshDocuments().catch(() => undefined),
-        ]);
-        await fetchNextReviewItem();
-      }
-    } catch {
-      // Fallback: local edit
-      const updated = evidenceItems.map((ev) =>
-        ev.evidence_id === evidenceId
-          ? { ...ev, ...updates, status: "reviewed" }
-          : ev,
-      );
-      await saveToSettings({ evidence_items: updated });
-      setReviewItem(null);
+      applyJourneyResponse(response);
+    } catch (error) {
+      setReviewError(error?.message || "Could not save this evidence. Please retry.");
     } finally {
       setReviewLoading(false);
     }
@@ -429,6 +390,7 @@ export default function CareerEvidencePage() {
   // CP-044R: Confirm evidence with inspect — next item comes inline
   async function handleConfirmWithInspect(evidenceId, mapping) {
     setReviewLoading(true);
+    setReviewError("");
     setActiveQuestion(null);
     try {
       const response = await request("/evidence-items/confirm-inspect", {
@@ -439,9 +401,7 @@ export default function CareerEvidencePage() {
         },
       });
       if (response) {
-        setJourneyPayload(response);
-        const canonicalJourney = await refreshJourneyState().catch(() => null);
-        if (canonicalJourney) setJourneyPayload(canonicalJourney);
+        applyJourneyResponse(response);
 
         if (response.state === "question" && response.question) {
           // CP-044R: Show one missing-detail question inline
@@ -456,8 +416,8 @@ export default function CareerEvidencePage() {
           setReviewItem(null);
         }
       }
-    } catch {
-      setActiveQuestion(null);
+    } catch (error) {
+      setReviewError(error?.message || "Could not confirm this evidence. Please retry.");
     } finally {
       setReviewLoading(false);
     }
@@ -467,6 +427,7 @@ export default function CareerEvidencePage() {
   async function handleAnswerQuestion(answerText) {
     if (!activeQuestion) return;
     setReviewLoading(true);
+    setReviewError("");
     try {
       const response = await request("/evidence-items/answer-enrich", {
         method: "POST",
@@ -477,21 +438,16 @@ export default function CareerEvidencePage() {
         },
       });
       if (response) {
-        setJourneyPayload(response);
-        setActiveQuestion(null);
-        const canonicalJourney = await refreshJourneyState().catch(() => null);
-        if (canonicalJourney) setJourneyPayload(canonicalJourney);
+        applyJourneyResponse(response);
         // CP-044R: Use next_review from response (inline — no separate fetch)
         if (response.next_review) {
           setReviewItem(response.next_review);
         } else if (response.state === "ready") {
           setReviewItem(null);
-        } else {
-          await fetchNextReviewItem();
         }
       }
-    } catch {
-      setActiveQuestion(null);
+    } catch (error) {
+      setReviewError(error?.message || "Could not save your answer. Please retry.");
     } finally {
       setReviewLoading(false);
     }
@@ -500,6 +456,7 @@ export default function CareerEvidencePage() {
   // CP-044R: Skip the inline question — next item comes inline
   async function handleSkipQuestion() {
     if (!activeQuestion) return;
+    setReviewError("");
     try {
       const response = await request("/evidence-items/skip-question", {
         method: "POST",
@@ -507,20 +464,13 @@ export default function CareerEvidencePage() {
           question_id: activeQuestion.question_id,
         },
       });
-      setJourneyPayload(response);
-      const canonicalJourney = await refreshJourneyState().catch(() => null);
-      if (canonicalJourney) setJourneyPayload(canonicalJourney);
-      setActiveQuestion(null);
+      applyJourneyResponse(response);
       // CP-044R: Use next_review from response (inline)
       if (response?.next_review) {
         setReviewItem(response.next_review);
-      } else {
-        await fetchNextReviewItem();
       }
-    } catch {
-      // Fallback
-      setActiveQuestion(null);
-      await fetchNextReviewItem();
+    } catch (error) {
+      setReviewError(error?.message || "Could not skip this question. Please retry.");
     }
   }
 
@@ -564,7 +514,10 @@ export default function CareerEvidencePage() {
     }
   }, [state]);
 
-  if ((documentsLoading && !documentsPayload) || (settingsLoading && !settingsPayload)) {
+  const needsSourceResources = !journeyPayload || journeyPayload.state === "empty";
+  if (journeyLoading || (needsSourceResources && (
+    (documentsLoading && !documentsPayload) || (settingsLoading && !settingsPayload)
+  ))) {
     return (
       <div className="mx-auto max-w-2xl space-y-5 px-4 py-8" aria-busy="true" aria-label="Loading Career Assets">
         <div className="h-6 w-36 animate-pulse rounded-full bg-surface-container" />
@@ -574,7 +527,9 @@ export default function CareerEvidencePage() {
     );
   }
 
-  if ((documentsError && !documentsPayload) || (settingsError && !settingsPayload)) {
+  if (needsSourceResources && (
+    (documentsError && !documentsPayload) || (settingsError && !settingsPayload)
+  )) {
     return (
       <div className="mx-auto max-w-2xl px-4 py-8">
         <section className="rounded-2xl border border-error/30 bg-surface-container-lowest p-6 shadow-soft" role="alert">
@@ -657,6 +612,7 @@ export default function CareerEvidencePage() {
             onEdit={handleEditEvidence}
             reviewItem={reviewItem}
             reviewLoading={reviewLoading}
+            reviewError={reviewError}
             activeQuestion={activeQuestion}
             onAnswerQuestion={handleAnswerQuestion}
             onSkipQuestion={handleSkipQuestion}
@@ -792,7 +748,7 @@ function ProcessingState({ processingState, processingError, selectedSourceCount
 
 // CP-040R + CP-041R: One-item-at-a-time evidence review with suggested mapping
 // and inline question after confirmation
-function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, reviewLoading, activeQuestion, onAnswerQuestion, onSkipQuestion }) {
+function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, reviewLoading, reviewError, activeQuestion, onAnswerQuestion, onSkipQuestion }) {
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [selectedMapping, setSelectedMapping] = useState(null);
@@ -877,6 +833,11 @@ function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, r
 
   return (
     <div className="space-y-4">
+      {reviewError ? (
+        <p className="rounded-xl border border-error/30 bg-error/5 px-4 py-3 text-sm text-error" role="alert">
+          {reviewError}
+        </p>
+      ) : null}
       <div className="flex items-center justify-between">
         <h2 className="font-headline text-lg font-bold text-on-surface">
           Confirm evidence
