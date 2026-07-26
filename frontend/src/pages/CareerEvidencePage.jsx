@@ -108,6 +108,8 @@ export default function CareerEvidencePage() {
   const [reviewLoading, setReviewLoading] = useState(false);
   // CP-041R: Question state shown inline after confirmation
   const [activeQuestion, setActiveQuestion] = useState(null);
+  // CP-044R: Ready actions with CV/motivation provenance
+  const [readyActions, setReadyActions] = useState([]);
 
 
   const processSelectedSources = useCallback(async (fileBytesMap = null, sourceIdsOverride = null) => {
@@ -271,12 +273,30 @@ export default function CareerEvidencePage() {
     }
   }, [request]);
 
-  // CP-040R: Auto-fetch review item on mount and after processing
+  // CP-044R: Restore the exact server-side journey step after transitions or
+  // reloads. Mapping and questions remain inline in the single review screen.
   useEffect(() => {
     if (lifecycle.state === LIFECYCLE_STATE.REVIEW) {
-      fetchNextReviewItem();
+      request("/evidence-items/journey-state")
+        .then((response) => {
+          if (response?.state === "question" && response.question) {
+            setActiveQuestion(response.question);
+            setReviewItem(null);
+          } else {
+            setActiveQuestion(null);
+            setReviewItem(response?.next_review || null);
+          }
+        })
+        .catch(() => fetchNextReviewItem());
+    } else if (lifecycle.state === LIFECYCLE_STATE.READY) {
+      // CP-044R: Fetch ready actions with CV/motivation provenance
+      request("/evidence-items/ready-actions")
+        .then((res) => {
+          if (res?.primary_actions) setReadyActions(res.primary_actions);
+        })
+        .catch(() => undefined);
     }
-  }, [lifecycle.state, fetchNextReviewItem]);
+  }, [lifecycle.state, fetchNextReviewItem, request]);
 
   // CP-040R: Confirm evidence with mapping via review service
   async function handleConfirmEvidence(evidenceId, mapping) {
@@ -385,7 +405,7 @@ export default function CareerEvidencePage() {
     await saveToSettings({ experience_links: links });
   }
 
-  // CP-041R: Confirm evidence with inspect — gets question or ready state
+  // CP-044R: Confirm evidence with inspect — next item comes inline
   async function handleConfirmWithInspect(evidenceId, mapping) {
     setReviewLoading(true);
     setActiveQuestion(null);
@@ -404,12 +424,16 @@ export default function CareerEvidencePage() {
         ]);
 
         if (response.state === "question" && response.question) {
-          // CP-041R: Show one missing-detail question inline
+          // CP-044R: Show one missing-detail question inline
           setActiveQuestion(response.question);
-        } else {
-          // Ready or no question needed — advance
+        } else if (response.next_review) {
+          // CP-044R: Next review item returned inline — no separate fetch
           setActiveQuestion(null);
-          await fetchNextReviewItem();
+          setReviewItem(response.next_review);
+        } else {
+          // Ready state — no more items
+          setActiveQuestion(null);
+          setReviewItem(null);
         }
       }
     } catch {
@@ -419,7 +443,7 @@ export default function CareerEvidencePage() {
     }
   }
 
-  // CP-041R: Answer the inline question and enrich evidence
+  // CP-044R: Answer the inline question — next item comes inline
   async function handleAnswerQuestion(answerText) {
     if (!activeQuestion) return;
     setReviewLoading(true);
@@ -438,7 +462,14 @@ export default function CareerEvidencePage() {
           refreshSettings().catch(() => undefined),
           refreshDocuments().catch(() => undefined),
         ]);
-        await fetchNextReviewItem();
+        // CP-044R: Use next_review from response (inline — no separate fetch)
+        if (response.next_review) {
+          setReviewItem(response.next_review);
+        } else if (response.state === "ready") {
+          setReviewItem(null);
+        } else {
+          await fetchNextReviewItem();
+        }
       }
     } catch {
       setActiveQuestion(null);
@@ -447,21 +478,28 @@ export default function CareerEvidencePage() {
     }
   }
 
-  // CP-041R: Skip the inline question
+  // CP-044R: Skip the inline question — next item comes inline
   async function handleSkipQuestion() {
     if (!activeQuestion) return;
     try {
-      await request("/evidence-items/skip-question", {
+      const response = await request("/evidence-items/skip-question", {
         method: "POST",
         body: {
           question_id: activeQuestion.question_id,
         },
       });
+      setActiveQuestion(null);
+      // CP-044R: Use next_review from response (inline)
+      if (response?.next_review) {
+        setReviewItem(response.next_review);
+      } else {
+        await fetchNextReviewItem();
+      }
     } catch {
       // Fallback
+      setActiveQuestion(null);
+      await fetchNextReviewItem();
     }
-    setActiveQuestion(null);
-    await fetchNextReviewItem();
   }
 
 
@@ -486,14 +524,18 @@ export default function CareerEvidencePage() {
     }
   }, []); // Only on mount
 
-  // CP-043R: Auto-advance when processing completes
+  // CP-044R: Auto-advance when processing completes — fetch first review item
   useEffect(() => {
     if (processingState?.state === "completed" && state === LIFECYCLE_STATE.PROCESSING) {
-      // Processing just completed - refresh to get new evidence and advance
-      refreshSettings().catch(() => undefined);
-      refreshDocuments().catch(() => undefined);
+      // Processing just completed - refresh data and auto-load first review
+      Promise.all([
+        refreshSettings().catch(() => undefined),
+        refreshDocuments().catch(() => undefined),
+      ]).then(() => {
+        fetchNextReviewItem();
+      });
     }
-  }, [processingState?.state, state, refreshSettings, refreshDocuments]);
+  }, [processingState?.state, state, refreshSettings, refreshDocuments, fetchNextReviewItem]);
 
   // CP-043R: Focus management - move focus to heading on state transition
   useEffect(() => {
@@ -573,21 +615,12 @@ export default function CareerEvidencePage() {
             onAnswerQuestion={handleAnswerQuestion}
             onSkipQuestion={handleSkipQuestion}
           />
-        ) : state === LIFECYCLE_STATE.MAPPING ? (
-          <MappingState
-            confirmedCount={lifecycle.confirmedCount}
-            onLink={handleLinkExperience}
-          />
-        ) : state === LIFECYCLE_STATE.FOLLOW_UP ? (
-          <FollowUpState
-            onAnswer={handleAnswerQuestion}
-            pendingQuestions={pendingQuestions}
-          />
         ) : state === LIFECYCLE_STATE.READY ? (
           <ReadyState
             confirmedCount={lifecycle.confirmedCount}
             mappedCount={lifecycle.mappedCount}
             onToggleHistory={() => setShowHistory((v) => !v)}
+            readyActions={readyActions}
           />
         ) : null}
       </section>
@@ -713,6 +746,9 @@ function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, r
   // CP-041R: Question answer state
   const [questionAnswer, setQuestionAnswer] = useState("");
   const currentItem = reviewItem?.evidence || (
+    (activeQuestion?.evidence_id
+      ? (evidenceItems || []).find((ev) => ev?.evidence_id === activeQuestion.evidence_id)
+      : null) ||
     (evidenceItems || []).find(
       (ev) => ev && ev.status !== "confirmed" && ev.status !== "rejected",
     ) || null
@@ -951,7 +987,7 @@ function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, r
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2">
+      {!activeQuestion ? <div className="flex flex-wrap items-center gap-2">
         <button
           className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           disabled={reviewLoading}
@@ -986,7 +1022,7 @@ function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, r
           <span className="material-symbols-outlined text-[16px]">close</span>
           Reject
         </button>
-      </div>
+      </div> : null}
     </div>
   );
 }
@@ -1050,14 +1086,56 @@ function FollowUpState({ onAnswer, pendingQuestions }) {
   );
 }
 
-function ReadyState({ confirmedCount, mappedCount, onToggleHistory }) {
+function ReadyState({ confirmedCount, mappedCount, onToggleHistory, readyActions = [] }) {
+  const cvAction = readyActions.find((a) => a.action === "cv_bullet");
+  const mlAction = readyActions.find((a) => a.action === "motivation_letter");
+  const libAction = readyActions.find((a) => a.action === "evidence_library");
+
   return (
-    <div className="space-y-4">
-      <h2 className="font-headline text-lg font-bold text-on-surface">View profile</h2>
+    <div className="space-y-5">
+      <h2 className="font-headline text-lg font-bold text-on-surface">Ready to use</h2>
       <p className="text-sm text-on-surface-variant">
-        Your career evidence is complete. {confirmedCount} confirmed, {mappedCount} linked.
+        Your career evidence is complete. {confirmedCount} confirmed.
       </p>
-      <div className="flex flex-wrap gap-3">
+
+      {cvAction ? (
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-2">
+          <div className="flex items-start gap-2">
+            <span className="material-symbols-outlined text-primary text-[18px] mt-0.5">article</span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-on-surface">{cvAction.label}</p>
+              <p className="text-xs text-on-surface-variant mt-0.5">{cvAction.description}</p>
+            </div>
+          </div>
+          <p className="text-xs text-on-surface-variant">
+            Evidence: {cvAction.evidence_ids?.length || 0} items · Source: {cvAction.source}
+          </p>
+          <Link
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90"
+            to="/workspaces"
+          >
+            <span className="material-symbols-outlined text-[14px]">workspaces</span>
+            Use in workspace
+          </Link>
+        </div>
+      ) : null}
+
+      {mlAction ? (
+        <div className="rounded-xl border border-outline-variant/20 bg-surface p-4 space-y-2">
+          <div className="flex items-start gap-2">
+            <span className="material-symbols-outlined text-on-surface-variant text-[18px] mt-0.5">description</span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-on-surface">{mlAction.label}</p>
+              <p className="text-xs text-on-surface-variant mt-0.5">{mlAction.description}</p>
+            </div>
+          </div>
+          <p className="text-xs text-on-surface-variant">
+            Evidence: {mlAction.evidence_ids?.length || 0} items · Source: {mlAction.source}
+          </p>
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-3 pt-2">
         <Link
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
           to="/workspaces"

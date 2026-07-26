@@ -638,7 +638,7 @@ def confirm_with_inspect(
     mapping: dict[str, str] | None = None,
     edited_text: str | None = None,
 ) -> dict[str, Any]:
-    """CP-041R: Confirm evidence, then inspect for one highest-value missing-detail question.
+    """CP-044R: Confirm evidence, inspect for missing details, auto-return next item.
 
     Flow:
     1. Confirm the evidence with mapping and/or edited text
@@ -673,13 +673,18 @@ def confirm_with_inspect(
 
     # Skip question if evidence was already confirmed (idempotency)
     if was_already_confirmed:
-        return {
-            "state": "ready",
+        readiness = compute_canonical_readiness(user)
+        result: dict[str, Any] = {
+            "state": "ready" if readiness["is_ready"] else "review",
             "evidence": confirmed["evidence"],
             "action": "confirmed",
-            "readiness": compute_canonical_readiness(user),
-            "primary_actions": build_ready_actions(user),
+            "readiness": readiness,
         }
+        if readiness["is_ready"]:
+            result["primary_actions"] = build_ready_actions(user)
+        else:
+            result["next_review"] = try_get_next_review_item(user)
+        return result
 
     question = _inspect_for_question(confirmed_ev) if _HAS_QUESTION_SERVICE else None
 
@@ -695,12 +700,23 @@ def confirm_with_inspect(
             "readiness": readiness,
         }
 
+    # CP-044R: After confirming (no question needed), auto-return next review item
+    next_item = try_get_next_review_item(user)
+    if next_item and next_item.get("state") == "review":
+        return {
+            "state": "review",
+            "evidence": confirmed["evidence"],
+            "action": "confirmed",
+            "readiness": readiness,
+            "next_review": next_item,
+        }
+
     return {
-        "state": "ready",
+        "state": "ready" if readiness["is_ready"] else "review",
         "evidence": confirmed["evidence"],
         "action": "confirmed",
         "readiness": readiness,
-        "primary_actions": build_ready_actions(user),
+        **({"primary_actions": build_ready_actions(user)} if readiness["is_ready"] else {}),
     }
 
 
@@ -776,19 +792,14 @@ def answer_enrich_evidence(
             "primary_actions": build_ready_actions(user),
         }
 
-    evidence_items = _read_evidence(user)
-    unreviewed = [
-        ev for ev in evidence_items
-        if ev.status in (EVIDENCE_STATUS_NEEDS_REVIEW, EVIDENCE_STATUS_REVIEWED)
-        and not ev.is_merged and not ev.is_rejected
-    ]
-
-    if unreviewed:
+    # CP-044R: Return next review item inline (no separate fetch needed)
+    next_item = try_get_next_review_item(user)
+    if next_item and next_item.get("state") == "review":
         return {
             "state": "review",
             "action": "answered",
             "readiness": readiness,
-            "remaining_review": len(unreviewed),
+            "next_review": next_item,
         }
 
     return {
@@ -909,6 +920,16 @@ def skip_question_for_evidence(
             "primary_actions": build_ready_actions(user),
         }
 
+    # CP-044R: Return next review item inline (no separate fetch needed)
+    next_item = try_get_next_review_item(user)
+    if next_item and next_item.get("state") == "review":
+        return {
+            "state": "review",
+            "action": "skipped",
+            "readiness": readiness,
+            "next_review": next_item,
+        }
+
     return {
         "state": "review",
         "action": "skipped",
@@ -916,7 +937,158 @@ def skip_question_for_evidence(
     }
 
 
-# CP-041R: Updated __all__ to include all public functions
+
+
+# ── CP-044R: Continuous journey helpers ────────────────────────────────
+
+
+def try_get_next_review_item(user) -> dict[str, Any] | None:
+    """CP-044R: Try to get next review item without side effects.
+
+    Returns None if no more items to review (complete state).
+    This is a read-only version — it does NOT advance the cursor.
+    """
+    evidence_items = _read_evidence(user)
+    unreviewed = [
+        ev for ev in evidence_items
+        if ev.status in (EVIDENCE_STATUS_NEEDS_REVIEW, EVIDENCE_STATUS_REVIEWED)
+        and not ev.is_merged and not ev.is_rejected
+    ]
+    # Mapping is an inline part of review.  Keep a confirmed item in this
+    # journey until it has a canonical work-experience ID.
+    if not unreviewed:
+        unreviewed = [
+            ev for ev in evidence_items
+            if ev.is_confirmed
+            and not ev.is_merged
+            and not ev.is_rejected
+            and not (ev.experience_mapping or {}).get("experience_id")
+        ]
+    if not unreviewed:
+        return None
+    cursor = _get_review_cursor(user)
+    if cursor >= len(unreviewed):
+        cursor = 0
+    current = unreviewed[cursor]
+    experiences = _read_experiences(user)
+    mapping = suggest_mapping_for_evidence(current, experiences)
+    provenance = {
+        "source_asset": current.source_asset,
+        "source_id": current.source_id,
+        "excerpt": current.excerpt[:200] if current.excerpt else current.text[:200],
+        "confidence": current.source_confidence,
+        "location": current.location,
+        "dates": list(current.dates),
+        "inferred_employer": current.inferred_employer,
+        "inferred_role": current.inferred_role,
+    }
+    total_count = len(evidence_items)
+    reviewed_count = sum(
+        1 for ev in evidence_items
+        if ev.status in (EVIDENCE_STATUS_CONFIRMED, EVIDENCE_STATUS_REJECTED)
+    )
+    remaining = sum(
+        1 for ev in unreviewed
+        if ev.evidence_id != current.evidence_id
+    ) + 1
+    return {
+        "state": "review",
+        "evidence": current.to_dict(),
+        "provenance": provenance,
+        "suggested_mapping": mapping["suggested_mapping"],
+        "is_ambiguous": mapping["is_ambiguous"],
+        "alternatives": mapping["alternatives"],
+        "match_confidence": mapping["match_confidence"],
+        "progress": {
+            "cursor": cursor + 1,
+            "remaining": remaining,
+            "total": total_count,
+            "reviewed": reviewed_count,
+        },
+    }
+
+
+def _get_pending_question(user) -> dict[str, Any] | None:
+    """Restore the single persisted unanswered question after a reload."""
+    metadata = dict(user.metadata or {})
+    history = metadata.get("evidence_question_history") or []
+    pending = next(
+        (
+            item for item in history
+            if isinstance(item, dict) and item.get("state") == QUESTION_STATE_ASKED
+        ),
+        None,
+    )
+    if pending is None:
+        return None
+
+    evidence = next(
+        (ev for ev in _read_evidence(user) if ev.evidence_id == pending.get("evidence_id")),
+        None,
+    )
+    if evidence is None:
+        return None
+
+    missing_type = str(pending.get("missing_type") or "")
+    return {
+        "question_id": str(pending.get("question_id") or ""),
+        "evidence_id": evidence.evidence_id,
+        "evidence_type": evidence.evidence_type,
+        "evidence_label": _item_label(evidence),
+        "missing_type": missing_type,
+        "question": _question_text(evidence, missing_type),
+    }
+
+
+def get_journey_state(user) -> dict[str, Any]:
+    """CP-044R: Full journey state — processing, review, ready, or complete.
+
+    Returns the complete journey snapshot including readiness, next review
+    item (if any), and ready actions (if ready).
+    """
+    readiness = compute_canonical_readiness(user)
+
+    if readiness["is_ready"]:
+        return {
+            "state": "ready",
+            "readiness": readiness,
+            "primary_actions": build_ready_actions(user),
+        }
+
+    pending_question = _get_pending_question(user)
+    if pending_question is not None:
+        return {
+            "state": "question",
+            "readiness": readiness,
+            "question": pending_question,
+        }
+
+    next_item = try_get_next_review_item(user)
+    if next_item is not None:
+        return {
+            "state": "review",
+            "readiness": readiness,
+            "next_review": next_item,
+        }
+
+    # Never claim Ready unless canonical readiness agrees.  This fallback is a
+    # recoverable review state for inconsistent/legacy records.
+    evidence_items = _read_evidence(user)
+    if evidence_items:
+        return {
+            "state": "review",
+            "readiness": readiness,
+            "next_review": None,
+        }
+
+    return {
+        "state": "empty",
+        "readiness": readiness,
+        "primary_actions": build_ready_actions(user),
+    }
+
+
+# CP-044R: Updated __all__ to include journey state functions
 __all__ = [
     "answer_enrich_evidence",
     "build_ready_actions",
@@ -924,11 +1096,12 @@ __all__ = [
     "confirm_evidence",
     "confirm_with_inspect",
     "edit_evidence",
+    "get_journey_state",
     "get_next_review_item",
     "reject_evidence",
     "remove_legacy_memory_spike",
     "reset_review_state",
     "skip_question_for_evidence",
     "suggest_mapping_for_evidence",
+    "try_get_next_review_item",
 ]
-

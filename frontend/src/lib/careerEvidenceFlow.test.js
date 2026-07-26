@@ -15,25 +15,21 @@ import {
 } from "./careerEvidenceFlow.js";
 
 // CP-038R: Lifecycle order is deterministic and fixed.
-test("LIFECYCLE_ORDER has exactly six states in the required sequence", () => {
+test("LIFECYCLE_ORDER has four visible states in the seamless sequence", () => {
   assert.deepStrictEqual(LIFECYCLE_ORDER, [
     "source",
     "processing",
     "review",
-    "mapping",
-    "follow_up",
     "ready",
   ]);
-  assert.equal(LIFECYCLE_ORDER.length, 6);
+  assert.equal(LIFECYCLE_ORDER.length, 4);
 });
 
 test("STATE_INDEX maps every lifecycle state to its ordinal", () => {
   assert.equal(STATE_INDEX.source, 0);
   assert.equal(STATE_INDEX.processing, 1);
   assert.equal(STATE_INDEX.review, 2);
-  assert.equal(STATE_INDEX.mapping, 3);
-  assert.equal(STATE_INDEX.follow_up, 4);
-  assert.equal(STATE_INDEX.ready, 5);
+  assert.equal(STATE_INDEX.ready, 3);
 });
 
 test("every state has a label and primary action", () => {
@@ -85,7 +81,7 @@ test("resolveLifecycleState returns review when evidence needs review", () => {
 });
 
 // CP-038R: Confirmed evidence without mapping → mapping state.
-test("resolveLifecycleState returns mapping when evidence confirmed but not linked", () => {
+test("confirmed but unmapped evidence remains in inline review", () => {
   const evidence = [{ evidence_id: "ev_1", status: "confirmed", text: "Led team" }];
   assert.equal(
     resolveLifecycleState({
@@ -94,13 +90,13 @@ test("resolveLifecycleState returns mapping when evidence confirmed but not link
       evidenceItems: evidence,
       experienceLinks: [],
     }),
-    LIFECYCLE_STATE.MAPPING,
+    LIFECYCLE_STATE.REVIEW,
   );
 });
 
 // CP-038R: Mapped evidence with pending questions → follow_up.
-test("resolveLifecycleState returns follow_up when mapped but questions pending", () => {
-  const evidence = [{ evidence_id: "ev_1", status: "confirmed" }];
+test("pending questions remain in inline review", () => {
+  const evidence = [{ evidence_id: "ev_1", status: "confirmed", experience_mapping: { experience_id: "exp_1" } }];
   const links = [{ link_id: "lnk_1", evidence_id: "ev_1", mapped: true }];
   const questions = [{ question_id: "q_1", resolved: false, dismissed: false }];
   assert.equal(
@@ -111,13 +107,13 @@ test("resolveLifecycleState returns follow_up when mapped but questions pending"
       experienceLinks: links,
       pendingQuestions: questions,
     }),
-    LIFECYCLE_STATE.FOLLOW_UP,
+    LIFECYCLE_STATE.REVIEW,
   );
 });
 
 // CP-038R: All done → ready state.
 test("resolveLifecycleState returns ready when all steps complete", () => {
-  const evidence = [{ evidence_id: "ev_1", status: "confirmed" }];
+  const evidence = [{ evidence_id: "ev_1", status: "confirmed", experience_mapping: { experience_id: "exp_1" } }];
   const links = [{ link_id: "lnk_1", evidence_id: "ev_1", mapped: true }];
   const questions = [{ question_id: "q_1", resolved: true, dismissed: false }];
   assert.equal(
@@ -134,7 +130,7 @@ test("resolveLifecycleState returns ready when all steps complete", () => {
 
 // CP-038R: Dismissed questions → ready.
 test("dismissed questions resolve to ready", () => {
-  const evidence = [{ evidence_id: "ev_1", status: "confirmed" }];
+  const evidence = [{ evidence_id: "ev_1", status: "confirmed", experience_mapping: { experience_id: "exp_1" } }];
   const links = [{ link_id: "lnk_1", evidence_id: "ev_1", mapped: true }];
   const questions = [{ question_id: "q_1", resolved: false, dismissed: true }];
   assert.equal(
@@ -153,25 +149,21 @@ test("dismissed questions resolve to ready", () => {
 test("nextLifecycleState advances through the lifecycle in order", () => {
   assert.equal(nextLifecycleState(LIFECYCLE_STATE.SOURCE), LIFECYCLE_STATE.PROCESSING);
   assert.equal(nextLifecycleState(LIFECYCLE_STATE.PROCESSING), LIFECYCLE_STATE.REVIEW);
-  assert.equal(nextLifecycleState(LIFECYCLE_STATE.REVIEW), LIFECYCLE_STATE.MAPPING);
-  assert.equal(nextLifecycleState(LIFECYCLE_STATE.MAPPING), LIFECYCLE_STATE.FOLLOW_UP);
-  assert.equal(nextLifecycleState(LIFECYCLE_STATE.FOLLOW_UP), LIFECYCLE_STATE.READY);
+  assert.equal(nextLifecycleState(LIFECYCLE_STATE.REVIEW), LIFECYCLE_STATE.READY);
   assert.equal(nextLifecycleState(LIFECYCLE_STATE.READY), LIFECYCLE_STATE.READY);
 });
 
 // CP-038R: Progress calculations.
 test("lifecycleProgress returns correct fractions", () => {
   assert.equal(lifecycleProgress(LIFECYCLE_STATE.SOURCE), 0);
-  assert.equal(lifecycleProgress(LIFECYCLE_STATE.PROCESSING), 0.2);
-  assert.equal(lifecycleProgress(LIFECYCLE_STATE.REVIEW), 0.4);
-  assert.equal(lifecycleProgress(LIFECYCLE_STATE.MAPPING), 0.6);
-  assert.equal(lifecycleProgress(LIFECYCLE_STATE.FOLLOW_UP), 0.8);
+  assert.equal(lifecycleProgress(LIFECYCLE_STATE.PROCESSING), 1 / 3);
+  assert.equal(lifecycleProgress(LIFECYCLE_STATE.REVIEW), 2 / 3);
   assert.equal(lifecycleProgress(LIFECYCLE_STATE.READY), 1);
 });
 
 test("progressLabel returns step-based labels", () => {
-  assert.equal(progressLabel(LIFECYCLE_STATE.SOURCE), "Step 1 of 6");
-  assert.equal(progressLabel(LIFECYCLE_STATE.READY), "Step 6 of 6");
+  assert.equal(progressLabel(LIFECYCLE_STATE.SOURCE), "Step 1 of 4");
+  assert.equal(progressLabel(LIFECYCLE_STATE.READY), "Step 4 of 4");
 });
 
 // CP-038R: buildLifecycleSummary returns exactly one primary action.
@@ -179,7 +171,7 @@ test("buildLifecycleSummary returns one primary action for ready state", () => {
   const summary = buildLifecycleSummary({
     sources: [{ document_id: "doc_1" }],
     selectedSourceIds: ["doc_1"],
-    evidenceItems: [{ evidence_id: "ev_1", status: "confirmed" }],
+    evidenceItems: [{ evidence_id: "ev_1", status: "confirmed", experience_mapping: { experience_id: "exp_1" } }],
     experienceLinks: [{ link_id: "lnk_1", evidence_id: "ev_1", mapped: true }],
     pendingQuestions: [],
   });

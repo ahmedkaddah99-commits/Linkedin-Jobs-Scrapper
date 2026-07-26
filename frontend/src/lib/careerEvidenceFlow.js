@@ -5,23 +5,20 @@ export const QUESTION_STATE = {
   SKIPPED: "skipped",
 };
 
-// CP-038R: Career Evidence guided flow — deterministic state resolver.
+// CP-044R: Career Evidence continuous journey — one action per screen.
 // Reads canonical evidence records and returns the single next primary action.
 //
-// Lifecycle states:
+// Lifecycle states (simplified — mapping/questions are inline during review):
 //   source    — No verified sources selected; add/upload a source.
 //   processing— Source(s) selected but evidence not yet extracted.
 //   review    — Evidence extracted but not yet confirmed/rejected.
-//   mapping   — Evidence confirmed but not yet linked to experiences.
-//   follow-up — Mapped but missing detail questions pending.
+//               Mapping and missing-detail questions happen inline.
 //   ready     — All steps complete; profile ready for tailoring.
 
 export const LIFECYCLE_STATE = {
   SOURCE: "source",
   PROCESSING: "processing",
   REVIEW: "review",
-  MAPPING: "mapping",
-  FOLLOW_UP: "follow_up",
   READY: "ready",
 };
 
@@ -29,8 +26,6 @@ export const STATE_LABELS = {
   [LIFECYCLE_STATE.SOURCE]: "Add source evidence",
   [LIFECYCLE_STATE.PROCESSING]: "Processing evidence",
   [LIFECYCLE_STATE.REVIEW]: "Confirm evidence",
-  [LIFECYCLE_STATE.MAPPING]: "Link experience",
-  [LIFECYCLE_STATE.FOLLOW_UP]: "One missing detail",
   [LIFECYCLE_STATE.READY]: "Ready to use",
 };
 
@@ -40,11 +35,7 @@ export const STATE_DESCRIPTIONS = {
   [LIFECYCLE_STATE.PROCESSING]:
     "Extracting evidence from your selected sources. This happens automatically.",
   [LIFECYCLE_STATE.REVIEW]:
-    "Review and confirm the evidence extracted from your sources.",
-  [LIFECYCLE_STATE.MAPPING]:
-    "Link confirmed evidence to your career experiences and roles.",
-  [LIFECYCLE_STATE.FOLLOW_UP]:
-    "Answer one quick question to complete a missing detail.",
+    "Review, confirm, and map evidence from your sources. Questions appear inline.",
   [LIFECYCLE_STATE.READY]:
     "Your career evidence profile is complete and ready for tailoring applications.",
 };
@@ -53,8 +44,6 @@ export const STATE_PRIMARY_ACTION = {
   [LIFECYCLE_STATE.SOURCE]: "Upload source",
   [LIFECYCLE_STATE.PROCESSING]: "View progress",
   [LIFECYCLE_STATE.REVIEW]: "Confirm evidence",
-  [LIFECYCLE_STATE.MAPPING]: "Link to experience",
-  [LIFECYCLE_STATE.FOLLOW_UP]: "Answer question",
   [LIFECYCLE_STATE.READY]: "View profile",
 };
 
@@ -62,8 +51,6 @@ export const LIFECYCLE_ORDER = [
   LIFECYCLE_STATE.SOURCE,
   LIFECYCLE_STATE.PROCESSING,
   LIFECYCLE_STATE.REVIEW,
-  LIFECYCLE_STATE.MAPPING,
-  LIFECYCLE_STATE.FOLLOW_UP,
   LIFECYCLE_STATE.READY,
 ];
 // CP-039R: Source processing sub-states for compact UI display.
@@ -195,30 +182,31 @@ export function resolveLifecycleState({
     return LIFECYCLE_STATE.PROCESSING;
   }
 
+  // CP-044R: Any unreviewed evidence → REVIEW (mapping/questions are inline)
   const needsReview = allEvidence.filter(
     (ev) => ev && (ev.status === "needs_review" || ev.status === "reviewed"),
   );
-  if (confirmedEvidence.length === 0 && needsReview.length > 0) {
-    return LIFECYCLE_STATE.REVIEW;
-  }
-  if (confirmedEvidence.length === 0 && allEvidence.length > 0) {
+  if (needsReview.length > 0) {
     return LIFECYCLE_STATE.REVIEW;
   }
 
-  const mappedLinks = (experienceLinks || []).filter(
-    (link) => link && (link.mapped || link.linked),
+  // Mapping and questions stay visually inside REVIEW, but they still gate
+  // readiness.  A confirmed item without a canonical experience ID must not
+  // be presented as ready.
+  const confirmedUnmapped = allEvidence.some(
+    (ev) =>
+      ev &&
+      ev.status === "confirmed" &&
+      !(ev.experience_mapping && ev.experience_mapping.experience_id),
   );
-  if (confirmedEvidence.length > 0 && mappedLinks.length === 0) {
-    return LIFECYCLE_STATE.MAPPING;
+  const unresolvedQuestions = (pendingQuestions || []).some(
+    (q) => q && !q.resolved && !q.dismissed && q.state !== "answered" && q.state !== "skipped",
+  );
+  if (confirmedUnmapped || unresolvedQuestions) {
+    return LIFECYCLE_STATE.REVIEW;
   }
 
-  const unresolvedQuestions = (pendingQuestions || []).filter(
-    (q) => q && !q.resolved && !q.dismissed,
-  );
-  if (mappedLinks.length > 0 && unresolvedQuestions.length > 0) {
-    return LIFECYCLE_STATE.FOLLOW_UP;
-  }
-
+  // All actionable evidence is confirmed and mapped (or rejected).
   return LIFECYCLE_STATE.READY;
 }
 

@@ -62,6 +62,9 @@ def register_routes(registry: RouteRegistry) -> None:
                     auth_required=True, name="evidence_items.skip_question")
     registry.prefix("GET", ("evidence-items", "ready-actions"), _handle_ready_actions,
                     auth_required=True, name="evidence_items.ready_actions")
+    # CP-044R: Full journey state endpoint
+    registry.prefix("GET", ("evidence-items", "journey-state"), _handle_journey_state,
+                    auth_required=True, name="evidence_items.journey_state")
 
 
 
@@ -708,6 +711,21 @@ def _handle_skip_question(context: ApiRouteContext) -> bool | None:
         return True
 
     return False
+
+
+def _handle_journey_state(context: ApiRouteContext) -> bool | None:
+    """CP-044R: Get the full evidence journey state."""
+    segments = list(context.segments)
+
+    if segments == ["evidence-items", "journey-state"]:
+        user, _ = context.require_identity()
+        from backend.evidence.review_service import get_journey_state
+        result = get_journey_state(user)
+        context.send_json(result, status=HTTPStatus.OK)
+        return True
+
+    return False
+
 
 
 def _handle_ready_actions(context: ApiRouteContext) -> bool | None:
