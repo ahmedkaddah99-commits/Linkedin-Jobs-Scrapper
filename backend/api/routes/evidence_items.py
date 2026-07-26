@@ -338,5 +338,96 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
         context.send_json(ev.to_dict(), status=HTTPStatus.OK)
         return True
 
+    # CP-039R: Process sources through Gemini and extract evidence
+    if segments == ["evidence-items", "process-sources"]:
+        user, _ = context.require_identity()
+        asset_ids = list(payload.get("source_ids") or payload.get("asset_ids") or [])
+        profile_id = str(payload.get("profile_id") or "")
+        sources_data = list(payload.get("sources") or [])
+
+        if not sources_data and not asset_ids:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                               "validation_error", "source_ids or sources with file data required.")
+            return True
+
+        # Build source entries from provided data
+        sources_to_process = []
+        for src in sources_data:
+            asset_id = str(src.get("asset_id") or src.get("source_id") or "")
+            file_name = str(src.get("file_name") or src.get("display_name") or "")
+            file_bytes_b64 = str(src.get("file_bytes") or src.get("data") or "")
+
+            file_bytes = b""
+            if file_bytes_b64:
+                import base64
+                try:
+                    file_bytes = base64.b64decode(file_bytes_b64)
+                except Exception:
+                    file_bytes = file_bytes_b64.encode("utf-8")
+
+            if asset_id and file_bytes:
+                sources_to_process.append({
+                    "asset_id": asset_id,
+                    "file_name": file_name,
+                    "file_bytes": file_bytes,
+                })
+
+        # For bare asset_ids, try to find in candidate_assets
+        metadata = dict(user.metadata or {})
+        candidate_assets = list(metadata.get("candidate_assets") or [])
+        for aid in asset_ids:
+            if any(s["asset_id"] == aid for s in sources_to_process):
+                continue
+            asset = next((a for a in candidate_assets if str(a.get("asset_id") or "") == aid), None)
+            if asset:
+                asset_meta = dict(asset.get("metadata") or {})
+                source_text = str(asset_meta.get("source_text") or asset_meta.get("text") or "")
+                if source_text:
+                    sources_to_process.append({
+                        "asset_id": aid,
+                        "file_name": str(asset.get("display_name") or asset.get("file_name") or ""),
+                        "file_bytes": source_text.encode("utf-8"),
+                    })
+
+        if not sources_to_process:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                               "validation_error", "No processable sources found.")
+            return True
+
+        from backend.capabilities.source_processing.pipeline import (
+            process_sources_and_extract_evidence,
+        )
+
+        result = process_sources_and_extract_evidence(
+            sources_to_process,
+            profile_id=profile_id,
+        )
+
+        # Persist evidence via metadata-backed store (compatible with CandidateEvidence)
+        if result.get("evidence"):
+            store = _metadata_evidence_store(context)
+            evidence_objs = [CandidateEvidence.from_dict(ev) for ev in result["evidence"]]
+            # Idempotency: only store evidence not already persisted
+            existing = {ev["evidence_id"]: ev for ev in store.list_all()}
+            new_evidence = [ev for ev in evidence_objs if ev.evidence_id not in existing]
+            if new_evidence:
+                store.upsert_many(new_evidence)
+
+        from backend.capabilities.source_processing.pipeline import (
+            build_source_processing_state,
+        )
+        state = build_source_processing_state(result)
+
+        context.send_json({
+            "batch_id": result["batch_id"],
+            "status": result["status"],
+            "sources": result["sources"],
+            "evidence": result["evidence"],
+            "summary": result["summary"],
+            "state": state,
+        }, status=HTTPStatus.OK if result["status"] == "completed" else HTTPStatus.ACCEPTED)
+        return True
+
+
     return False
 

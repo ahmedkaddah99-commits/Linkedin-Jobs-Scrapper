@@ -59,6 +59,34 @@ export const LIFECYCLE_ORDER = [
   LIFECYCLE_STATE.FOLLOW_UP,
   LIFECYCLE_STATE.READY,
 ];
+// CP-039R: Source processing sub-states for compact UI display.
+export const SOURCE_PROCESSING_STATE = {
+  QUEUED: "queued",
+  PROCESSING: "processing",
+  COMPLETED: "completed",
+  EMPTY: "empty",
+  TIMEOUT: "timeout",
+  FAILED: "failed",
+};
+
+export const SOURCE_PROCESSING_LABELS = {
+  [SOURCE_PROCESSING_STATE.QUEUED]: "Queued",
+  [SOURCE_PROCESSING_STATE.PROCESSING]: "Processing",
+  [SOURCE_PROCESSING_STATE.COMPLETED]: "Extracted",
+  [SOURCE_PROCESSING_STATE.EMPTY]: "No content found",
+  [SOURCE_PROCESSING_STATE.TIMEOUT]: "Timed out",
+  [SOURCE_PROCESSING_STATE.FAILED]: "Failed",
+};
+
+export const SOURCE_PROCESSING_DESCRIPTIONS = {
+  [SOURCE_PROCESSING_STATE.QUEUED]: "Waiting to process...",
+  [SOURCE_PROCESSING_STATE.PROCESSING]: "Gemini is extracting text and evidence...",
+  [SOURCE_PROCESSING_STATE.COMPLETED]: "",
+  [SOURCE_PROCESSING_STATE.EMPTY]: "No extractable content found in the source.",
+  [SOURCE_PROCESSING_STATE.TIMEOUT]: "Processing timed out. You can retry.",
+  [SOURCE_PROCESSING_STATE.FAILED]: "Processing failed. You can retry.",
+};
+
 
 export const STATE_INDEX = Object.fromEntries(
   LIFECYCLE_ORDER.map((state, index) => [state, index]),

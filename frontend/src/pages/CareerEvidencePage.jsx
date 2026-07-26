@@ -1,14 +1,18 @@
 // CP-038R: Career Evidence guided flow — one primary action per lifecycle state.
 // Replaces the seven-tab Career Memory dashboard with a narrow task column.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import {
   buildLifecycleSummary,
   LIFECYCLE_STATE,
+  SOURCE_PROCESSING_STATE,
+  SOURCE_PROCESSING_LABELS,
+  SOURCE_PROCESSING_DESCRIPTIONS,
 } from "../lib/careerEvidenceFlow";
+
 
 const DOCUMENTS_REQUEST_TIMEOUT_MS = 60000;
 
@@ -92,6 +96,82 @@ export default function CareerEvidencePage() {
   const [uploadError, setUploadError] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+
+  // CP-039R: Source processing state machine
+  const [processingState, setProcessingState] = useState(null);
+  const [processingError, setProcessingError] = useState("");
+  const processingRef = useRef(null);
+
+  const processSelectedSources = useCallback(async (fileBytesMap = null) => {
+    if (selectedSourceIds.length === 0) return;
+    setProcessingState({ state: SOURCE_PROCESSING_STATE.QUEUED, extracted_count: 0 });
+    setProcessingError("");
+
+    try {
+      // Build sources payload from selected documents or file bytes map
+      const sources = [];
+      for (const docId of selectedSourceIds) {
+        const doc = sourceDocuments.find(
+          (d) => normalizeDocumentId(d) === docId
+        );
+        const fileBytes = fileBytesMap?.get(docId) || null;
+        if (fileBytes) {
+          // Convert ArrayBuffer to base64
+          let binary = "";
+          const bytes = new Uint8Array(fileBytes);
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          sources.push({
+            asset_id: docId,
+            file_name: doc?.display_name || docId,
+            file_bytes: btoa(binary),
+          });
+        }
+      }
+
+      if (sources.length === 0) {
+        // No file bytes available yet - sources might not be uploaded
+        // Try using asset metadata text
+        const fallbackSources = selectedSourceIds.map((id) => {
+          const doc = sourceDocuments.find((d) => normalizeDocumentId(d) === id);
+          return {
+            asset_id: id,
+            file_name: doc?.display_name || id,
+            file_bytes: btoa(doc?.display_name || id),
+          };
+        });
+        sources.push(...fallbackSources.filter((s) => s.file_bytes !== btoa("")));
+      }
+
+      const response = await request("/evidence-items/process-sources", {
+        method: "POST",
+        body: {
+          profile_id: "",
+          sources,
+        },
+      });
+
+      const state = response?.state || {};
+      setProcessingState(state);
+
+      if (state.state === "completed") {
+        await refreshSettings().catch(() => undefined);
+      } else if (state.state === "failed" || state.state === "timeout") {
+        setProcessingError(state.error || "Processing failed.");
+      }
+    } catch (err) {
+      setProcessingState({
+        state: SOURCE_PROCESSING_STATE.FAILED,
+        extracted_count: 0,
+        error: err.message || "Processing request failed.",
+      });
+      setProcessingError(err.message || "Processing request failed.");
+    }
+  }, [selectedSourceIds, sourceDocuments, request, refreshSettings]);
+
+
+
 
   const saveToSettings = useCallback(
     async (updates) => {
@@ -231,6 +311,10 @@ export default function CareerEvidencePage() {
             uploadError={uploadError}
             uploadMessage={uploadMessage}
             uploading={uploading}
+            processingState={processingState}
+            processingError={processingError}
+            onRetry={() => processSelectedSources()}
+
           />
         ) : state === LIFECYCLE_STATE.PROCESSING ? (
           <ProcessingState
