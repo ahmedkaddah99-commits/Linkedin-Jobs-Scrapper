@@ -38,11 +38,13 @@ def _reset_career_profile_memory_stores():
         _reset_recommendations,
     )
     from backend.capabilities.source_text_review.service import _reset_reviews
+    from backend.capabilities.cv_bullet_suggestions import _reset_suggestions
 
     resetters = (
         _reset_evidence_store,
         _reset_recommendations,
         _reset_reviews,
+        _reset_suggestions,
     )
     for reset in resetters:
         reset()
