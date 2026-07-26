@@ -20,7 +20,6 @@ from backend.api.routes.evidence import register_routes as register_evidence_rou
 from backend.api.routes.evidence_library import register_routes as register_evidence_library_routes
 from backend.api.routes.evidence_recommendation import register_routes as register_evidence_recommendation_routes
 from backend.api.routes.source_text_review import register_routes as register_source_text_review_routes
-from backend.api.routes.career_evidence_fixture import register_routes as register_career_evidence_fixture_routes
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.system import register_routes as register_system_routes
@@ -58,9 +57,6 @@ def build_route_registry() -> RouteRegistry:
     register_tracker_routes(registry)
     register_work_experiences_routes(registry)
     register_workspace_routes(registry)
-    # CP-042R: Fixture routes for browser-level tests
-    register_career_evidence_fixture_routes(registry)
-
     return registry
 
 

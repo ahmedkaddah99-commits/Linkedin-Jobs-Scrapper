@@ -3,10 +3,22 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
+import { BrowserTestSessionProvider } from "./context/SessionContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import "./styles.css";
 
 const clerkPublishableKey = String(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || "").trim();
+const browserTestMode = import.meta.env.VITE_E2E_AUTH === "1";
+
+function AppFrame() {
+  return (
+    <BrowserRouter>
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    </BrowserRouter>
+  );
+}
 
 function ClerkConfigurationMessage() {
   return (
@@ -25,13 +37,15 @@ function ClerkConfigurationMessage() {
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    {clerkPublishableKey ? (
+    {browserTestMode ? (
+      <ClerkProvider publishableKey="pk_test_Y2xlcmsuZXhhbXBsZS5jb20k">
+        <BrowserTestSessionProvider>
+          <AppFrame />
+        </BrowserTestSessionProvider>
+      </ClerkProvider>
+    ) : clerkPublishableKey ? (
       <ClerkProvider afterSignOutUrl="/sign-in">
-        <BrowserRouter>
-          <ThemeProvider>
-            <App />
-          </ThemeProvider>
-        </BrowserRouter>
+        <AppFrame />
       </ClerkProvider>
     ) : (
       <ClerkConfigurationMessage />

@@ -16,6 +16,30 @@ import {
 
 const SessionContext = createContext(null);
 
+export function BrowserTestSessionProvider({ children }) {
+  const request = useCallback(
+    (path, options = {}) => apiRequest("/v1", async () => "e2e-token", path, options),
+    [],
+  );
+  const value = useMemo(() => ({
+    apiBaseUrl: "/v1",
+    user: { user_id: "e2e-user", email: "e2e@runr.test", role: "user" },
+    tokenInfo: { source: "browser-test" },
+    status: "connected",
+    error: "",
+    isLoaded: true,
+    isSignedIn: true,
+    isConnected: true,
+    connect: async () => undefined,
+    disconnect: async () => undefined,
+    refreshSession: async () => undefined,
+    request,
+    getAccessToken: async () => "e2e-token",
+    resolvePath: (path) => resolveApiUrl("/v1", path),
+  }), [request]);
+  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+}
+
 function resolveAnalyticsUserId(user) {
   return String(user?.user_id || user?.clerk_user_id || user?.email || "").trim();
 }

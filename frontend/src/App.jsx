@@ -32,6 +32,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const TrackerPage = lazy(() => import("./pages/TrackerPage"));
 const TrackerAtsPage = lazy(() => import("./pages/TrackerAtsPage"));
 const WorkspacesPage = lazy(() => import("./pages/WorkspacesPage"));
+const browserTestMode = import.meta.env.VITE_E2E_AUTH === "1";
 
 function RouteLoadingFallback() {
   return (
@@ -252,6 +253,7 @@ function AuthenticatedApp() {
 }
 
 function ProtectedAppRoute() {
+  if (browserTestMode) return <AuthenticatedApp />;
   return (
     <Show fallback={<RedirectToSignIn />} when="signed-in">
       <AuthenticatedApp />
@@ -280,6 +282,7 @@ function AppRoutes() {
 }
 
 export default function App() {
+  if (browserTestMode) return <AppRoutes />;
   return (
     <SessionProvider>
       <AppRoutes />

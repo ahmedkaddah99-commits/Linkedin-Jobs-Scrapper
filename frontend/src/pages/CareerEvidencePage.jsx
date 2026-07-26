@@ -120,7 +120,8 @@ export default function CareerEvidencePage() {
 
   const processSelectedSources = useCallback(async (fileBytesMap = null, sourceIdsOverride = null) => {
     const sourceIds = sourceIdsOverride || selectedSourceIds;
-    if (sourceIds.length === 0) return;
+    if (sourceIds.length === 0 || processingRef.current) return;
+    processingRef.current = true;
     setProcessingState({ state: SOURCE_PROCESSING_STATE.QUEUED, extracted_count: 0 });
     setProcessingError("");
 
@@ -176,6 +177,8 @@ export default function CareerEvidencePage() {
         error: err.message || "Processing request failed.",
       });
       setProcessingError(err.message || "Processing request failed.");
+    } finally {
+      processingRef.current = false;
     }
   }, [selectedSourceIds, sourceDocuments, request, refreshSettings]);
 
@@ -514,6 +517,20 @@ export default function CareerEvidencePage() {
 
   // CP-043R: Track previous state for focus management
   const prevStateRef = useRef(state);
+
+  // A reload may interrupt the browser request while the server-side source
+  // selection is already persisted. Resume that same production operation
+  // automatically instead of leaving the user on a dead processing screen.
+  useEffect(() => {
+    if (
+      state === LIFECYCLE_STATE.PROCESSING &&
+      selectedSourceIds.length > 0 &&
+      (!processingState || ["queued", "processing"].includes(processingState.state)) &&
+      !processingRef.current
+    ) {
+      processSelectedSources().catch(() => undefined);
+    }
+  }, [state, selectedSourceIds, processingState, processSelectedSources]);
 
   // CP-043R: Persist processing state across reloads
   useEffect(() => {

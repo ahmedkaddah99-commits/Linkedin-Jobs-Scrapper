@@ -1,8 +1,9 @@
 import { defineConfig } from "playwright/test";
 
 // CP-042R: Playwright browser-level tests for the Career Evidence route.
-// Runs against the real frontend at the configured baseURL with
-// deterministic fixture providers.
+// Runs against a production frontend build. API determinism is installed at
+// the network/provider boundary by each test; production route names remain
+// unchanged.
 
 export default defineConfig({
   testDir: "./e2e",
@@ -38,9 +39,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev",
+    command: "node scripts/serve-production-e2e.mjs",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: !process.env.CI,
-    timeout: 30000,
+    timeout: 120000,
   },
 });
