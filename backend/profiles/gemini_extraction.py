@@ -72,13 +72,41 @@ _EXTRACTION_JSON_SCHEMA = {
                 "properties": {
                     "employer": {"type": "string", "description": "Employer or organization name."},
                     "role": {"type": "string", "description": "Job title or role."},
-                    "dates": {"type": "string", "description": "Date range or duration."},
+                    "location": {"type": "string", "description": "Location of this experience."},
+                    "start_date": {"type": "string", "description": "Start date as written."},
+                    "end_date": {"type": "string", "description": "End date as written."},
+                    "dates": {"type": "string", "description": "Original date range or duration."},
                     "bullets": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Bullet points describing responsibilities and achievements.",
                     },
                 },
+            },
+        },
+        "evidence_items": {
+            "type": "array",
+            "description": (
+                "Meaningful candidate claims tied to an experience_details entry. "
+                "Prefer complete achievements and responsibilities. Exclude names, contact "
+                "details, headings, skill labels, standalone locations, standalone dates, "
+                "and organization names."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Complete reviewable claim."},
+                    "evidence_type": {
+                        "type": "string",
+                        "description": "achievement, metric, responsibility, project, leadership, stakeholder, challenge, tool, education, or motivation.",
+                    },
+                    "inferred_employer": {"type": "string"},
+                    "inferred_role": {"type": "string"},
+                    "dates": {"type": "array", "items": {"type": "string"}},
+                    "location": {"type": "string"},
+                    "source_section": {"type": "string"},
+                },
+                "required": ["text", "evidence_type"],
             },
         },
         "confidence": {
@@ -132,7 +160,11 @@ def _gemini_extract_multimodal(
     prompt = (
         "Extract all text from this document or image. "
         "Return structured JSON with: extracted_text, layout_sections (title, type, text), "
-        "experience_details (employer, role, dates, bullets), confidence (0.0-1.0), and warnings. "
+        "experience_details (employer, role, location, start_date, end_date, dates, bullets), "
+        "evidence_items (complete meaningful claims tied to an experience_details entry), "
+        "confidence (0.0-1.0), and warnings. "
+        "Do not create evidence items from names, contact details, headings, standalone "
+        "locations, standalone dates, or organization names. "
         "Capture handwritten annotations, image-based comments, and any text visible in screenshots."
     )
 
@@ -173,6 +205,7 @@ def _gemini_extract_text(
             "pages": [],
             "layout_sections": [],
             "experience_details": [],
+            "evidence_items": [],
         }
 
     max_chars = 900_000
@@ -187,7 +220,9 @@ def _gemini_extract_text(
         "Extract structured information from the following document text. "
         "Return JSON with: extracted_text (the full original text), "
         "layout_sections (title, type, text for each logical section), "
-        "experience_details (employer, role, dates, bullets for each work experience entry), "
+        "experience_details (employer, role, location, start_date, end_date, dates, bullets), "
+        "evidence_items (complete meaningful claims tied to an experience_details entry), "
+        "excluding names, contact details, headings, standalone locations/dates, "
         "confidence (0.0-1.0), and warnings."
     )
 
@@ -218,6 +253,7 @@ def _parse_gemini_response(response: Any, file_name: str) -> dict[str, Any]:
     extracted_text = ""
     layout_sections: list[dict[str, Any]] = []
     experience_details: list[dict[str, Any]] = []
+    evidence_items: list[dict[str, Any]] = []
 
     try:
         raw_text = response.text if hasattr(response, "text") else ""
@@ -238,6 +274,7 @@ def _parse_gemini_response(response: Any, file_name: str) -> dict[str, Any]:
             "extracted_at": extracted_at,
             "layout_sections": [],
             "experience_details": [],
+            "evidence_items": [],
         }
 
     parsed: dict[str, Any] = {}
@@ -257,6 +294,10 @@ def _parse_gemini_response(response: Any, file_name: str) -> dict[str, Any]:
         experience_details = [
             dict(exp) for exp in (parsed.get("experience_details") or [])
             if isinstance(exp, dict)
+        ]
+        evidence_items = [
+            dict(item) for item in (parsed.get("evidence_items") or [])
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
         ]
         confidence = max(0.0, min(1.0, float(parsed.get("confidence") or 0.0)))
         warnings = [str(w) for w in (parsed.get("warnings") or [])]
@@ -288,6 +329,7 @@ def _parse_gemini_response(response: Any, file_name: str) -> dict[str, Any]:
         "extracted_at": extracted_at,
         "layout_sections": layout_sections,
         "experience_details": experience_details,
+        "evidence_items": evidence_items,
     }
 
 
@@ -335,6 +377,7 @@ def extract_with_gemini(file_name: str, data: bytes) -> dict[str, Any]:
                 "extracted_at": extraction_started,
                 "layout_sections": [],
                 "experience_details": [],
+                "evidence_items": [],
             }
 
         result = _gemini_extract_text(client, file_name, local_text)
@@ -344,6 +387,7 @@ def extract_with_gemini(file_name: str, data: bytes) -> dict[str, Any]:
     result.setdefault("extracted_at", extraction_started)
     result.setdefault("layout_sections", [])
     result.setdefault("experience_details", [])
+    result.setdefault("evidence_items", [])
 
     return result
 

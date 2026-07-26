@@ -35,11 +35,19 @@ from backend.domain.candidate_evidence import CandidateEvidence, compute_content
 class TestSourceProcessingPipeline(unittest.TestCase):
     """Tests for process_sources_and_extract_evidence."""
 
-    def _mock_gemini_response(self, text="Extracted text content.", confidence=0.92):
+    def _mock_gemini_response(
+        self,
+        text="Extracted text content.",
+        confidence=0.92,
+        *,
+        experience_details=None,
+        evidence_items=None,
+    ):
         j = json.dumps({
             "extracted_text": text,
             "layout_sections": [],
-            "experience_details": [],
+            "experience_details": experience_details or [],
+            "evidence_items": evidence_items or [],
             "confidence": confidence,
             "warnings": [],
         })
@@ -67,6 +75,50 @@ class TestSourceProcessingPipeline(unittest.TestCase):
         for ev_dict in result["evidence"]:
             self.assertTrue(ev_dict.get("content_hash"))
             self.assertEqual(ev_dict["status"], "needs_review")
+
+    def test_structured_gemini_output_excludes_cv_chrome_and_maps_real_experience(self):
+        mr = self._mock_gemini_response(
+            "Erlangen, Germany\nahmed@example.com\nWORK EXPERIENCE\n"
+            "Operations Analyst at Acme GmbH\n"
+            "Automated monthly reporting and reduced preparation time by 40%.",
+            0.97,
+            experience_details=[{
+                "employer": "Acme GmbH",
+                "role": "Operations Analyst",
+                "location": "Erlangen, Germany",
+                "start_date": "2022-01",
+                "end_date": "2024-06",
+                "bullets": [
+                    "Automated monthly reporting and reduced preparation time by 40%.",
+                ],
+            }],
+            evidence_items=[{
+                "text": "Automated monthly reporting and reduced preparation time by 40%.",
+                "evidence_type": "metric",
+                "inferred_employer": "Acme GmbH",
+                "inferred_role": "Operations Analyst",
+                "dates": ["2022-01", "2024-06"],
+                "location": "Erlangen, Germany",
+                "source_section": "Work Experience",
+            }],
+        )
+        with patch("backend.profiles.gemini_extraction._build_client") as cb:
+            client = MagicMock()
+            cb.return_value = client
+            client.models.generate_content.return_value = mr
+            result = process_sources_and_extract_evidence([{
+                "asset_id": "cv_1",
+                "file_name": "resume.txt",
+                "file_bytes": b"real cv content",
+            }])
+
+        self.assertEqual(len(result["evidence"]), 1)
+        self.assertEqual(len(result["experiences"]), 1)
+        evidence = result["evidence"][0]
+        experience = result["experiences"][0]
+        self.assertNotIn("Erlangen, Germany", [item["text"] for item in result["evidence"]])
+        self.assertEqual(evidence["experience_mapping"]["experience_id"], experience["experience_id"])
+        self.assertEqual(experience["employer"], "Acme GmbH")
 
 
 
@@ -323,6 +375,67 @@ class TestSourceProcessingPipelineAPIIntegration(unittest.TestCase):
             self.assertEqual(s1, 200, p1)
             self.assertEqual(s2, 200, p2)
             self.assertEqual(len(p1["evidence"]), len(p2["evidence"]))
+
+    def test_confirm_is_persisted_and_next_authenticated_request_advances(self):
+        from backend.domain.candidate_evidence import CandidateEvidence
+
+        first = CandidateEvidence.create(
+            text="Automated reporting and reduced preparation time by 40%.",
+            evidence_type="metric",
+            source_id="cv_1",
+            inferred_employer="Acme GmbH",
+            inferred_role="Operations Analyst",
+            experience_mapping={
+                "experience_id": "exp_acme",
+                "company": "Acme GmbH",
+                "role": "Operations Analyst",
+            },
+        )
+        second = CandidateEvidence.create(
+            text="Coordinated five stakeholders and delivered the launch on schedule.",
+            evidence_type="stakeholder",
+            source_id="cv_1",
+            inferred_employer="Acme GmbH",
+            inferred_role="Operations Analyst",
+            experience_mapping={
+                "experience_id": "exp_acme",
+                "company": "Acme GmbH",
+                "role": "Operations Analyst",
+            },
+        )
+        persisted = self.app.repositories.auth_repository.get_user(self.user.user_id)
+        persisted.metadata = {
+            **dict(persisted.metadata or {}),
+            "candidate_evidence": [first.to_dict(), second.to_dict()],
+            "work_experiences": [{
+                "experience_id": "exp_acme",
+                "employer": "Acme GmbH",
+                "job_title": "Operations Analyst",
+                "start_date": "2022-01",
+                "end_date": "2024-06",
+            }],
+        }
+        self.app.repositories.auth_repository.upsert_user(persisted)
+
+        status, response = self._request("POST", "/evidence-items/confirm-inspect", {
+            "evidence_id": first.evidence_id,
+            "mapping": first.experience_mapping,
+        })
+        self.assertEqual(status, 200, response)
+
+        reloaded = self.app.repositories.auth_repository.get_user(self.user.user_id)
+        statuses = {
+            item["evidence_id"]: item["status"]
+            for item in (reloaded.metadata or {}).get("candidate_evidence", [])
+        }
+        self.assertEqual(statuses[first.evidence_id], "confirmed")
+
+        status, journey = self._request("GET", "/evidence-items/journey-state")
+        self.assertEqual(status, 200, journey)
+        self.assertEqual(
+            journey["next_review"]["evidence"]["evidence_id"],
+            second.evidence_id,
+        )
 
 
 if __name__ == "__main__":

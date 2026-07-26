@@ -58,6 +58,18 @@ def process_source(source_id: str, file_path: str, *, allow_ocr: bool = True) ->
     record.pages = [dict(p) for p in (extraction.get("pages") or []) if isinstance(p, dict)]
     record.provider = str(extraction.get("provider") or "")
     record.model = str(extraction.get("model") or "")
+    record.layout_sections = [
+        dict(item) for item in (extraction.get("layout_sections") or [])
+        if isinstance(item, dict)
+    ]
+    record.experience_details = [
+        dict(item) for item in (extraction.get("experience_details") or [])
+        if isinstance(item, dict)
+    ]
+    record.evidence_items = [
+        dict(item) for item in (extraction.get("evidence_items") or [])
+        if isinstance(item, dict)
+    ]
 
 
     extraction_status = str(extraction.get("status") or "failed")

@@ -85,6 +85,11 @@ def _metadata_evidence_store(context: ApiRouteContext):
     return _MetadataEvidenceAdapter(evidence_list, user, context.application)
 
 
+def _persist_user(context: ApiRouteContext, user) -> None:
+    """Persist lifecycle mutations before any response is returned."""
+    context.application.repositories.auth_repository.upsert_user(user)
+
+
 class _MetadataEvidenceAdapter:
     """Adapter that stores evidence in user.metadata for simple persistence."""
 
@@ -382,12 +387,17 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
 
         metadata = dict(user.metadata or {})
 
-        # CP-043R: Idempotency check - skip if evidence already exists
+        # Skip only evidence created by the current structured extractor. Older
+        # sentence-split batches must be reprocessed instead of trapping users.
+        from backend.capabilities.source_processing.pipeline import STRUCTURED_EXTRACTION_VERSION
+
         store = _metadata_evidence_store(context)
         evidence_objs_existing = [CandidateEvidence.from_dict(ev) for ev in store.list_all()]
         existing_source_ids = {
             str(getattr(ev, "source_id", "") or "").strip()
-            for ev in evidence_objs_existing if getattr(ev, "source_id", "")
+            for ev in evidence_objs_existing
+            if getattr(ev, "source_id", "")
+            and (ev.metadata or {}).get("extraction_version") == STRUCTURED_EXTRACTION_VERSION
         }
         all_requested_ids = set(asset_ids) | {str(s.get("asset_id") or "") for s in sources_data}
         all_requested_ids.discard("")
@@ -495,17 +505,27 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
             sources_to_process, profile_id=profile_id,
         )
 
-        if result.get("evidence"):
-            evidence_objs = [CandidateEvidence.from_dict(ev) for ev in result["evidence"]]
-            existing = {ev["evidence_id"]: ev for ev in store.list_all()}
-            new_evidence = [ev for ev in evidence_objs if ev.evidence_id not in existing]
-            if new_evidence:
-                store.upsert_many(new_evidence)
-
         state = build_source_processing_state(result)
 
-        # Persist terminal processing state
+        # A processing batch is the canonical journey unit. Archive the prior
+        # batch and atomically replace active evidence/experiences so stale
+        # fragments never appear beside the new extraction.
         metadata_final = dict(user.metadata or {})
+        previous_evidence = list(metadata_final.get("candidate_evidence") or [])
+        if result.get("evidence"):
+            if previous_evidence:
+                archives = list(metadata_final.get("candidate_evidence_archives") or [])
+                archives.append({
+                    "batch_id": str(metadata_final.get("_active_evidence_batch_id") or "legacy"),
+                    "archived_at": datetime.now(timezone.utc).isoformat(),
+                    "evidence": previous_evidence,
+                })
+                metadata_final["candidate_evidence_archives"] = archives[-2:]
+            metadata_final["candidate_evidence"] = list(result["evidence"])
+            metadata_final["work_experiences"] = list(result.get("experiences") or [])
+            metadata_final["_active_evidence_batch_id"] = result["batch_id"]
+            metadata_final["evidence_review_cursor"] = 0
+            metadata_final["evidence_question_history"] = []
         metadata_final["_evidence_processing_state"] = {
             "state": result["status"], "batch_id": result["batch_id"],
             "started_at": result.get("started_at"), "completed_at": result.get("completed_at"),
@@ -515,13 +535,14 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
         }
         user.metadata = metadata_final
         user.updated_at = datetime.now(timezone.utc).isoformat()
-        context.application.repositories.auth_repository.upsert_user(user)
+        _persist_user(context, user)
 
         from backend.evidence.review_service import get_journey_state
 
         context.send_json({
             "batch_id": result["batch_id"], "status": result["status"],
             "sources": result["sources"], "evidence": result["evidence"],
+            "experiences": result.get("experiences") or [],
             "summary": result["summary"], "state": state,
             "journey": get_journey_state(user),
         }, status=HTTPStatus.OK if result["status"] == "completed" else HTTPStatus.ACCEPTED)
@@ -589,7 +610,10 @@ def _handle_review_action(context: ApiRouteContext) -> bool | None:
                                    f"Invalid action: {action}. Use confirm, reject, or edit.")
                 return True
 
-            context.send_json(result, status=HTTPStatus.OK)
+            _persist_user(context, user)
+            from backend.evidence.review_service import get_journey_state
+            journey = get_journey_state(user)
+            context.send_json({**journey, **result}, status=HTTPStatus.OK)
         except KeyError as exc:
             context.send_error(HTTPStatus.NOT_FOUND,
                                "evidence_not_found", str(exc))
@@ -651,7 +675,13 @@ def _handle_confirm_inspect(context: ApiRouteContext) -> bool | None:
             result = confirm_with_inspect(
                 user, evidence_id, mapping=mapping, edited_text=edited_text
             )
-            context.send_json(result, status=HTTPStatus.OK)
+            _persist_user(context, user)
+            from backend.evidence.review_service import get_journey_state
+            journey = get_journey_state(user)
+            context.send_json({**journey, **{
+                key: value for key, value in result.items()
+                if key in ("action", "evidence")
+            }}, status=HTTPStatus.OK)
         except KeyError as exc:
             context.send_error(HTTPStatus.NOT_FOUND,
                                "evidence_not_found", str(exc))
@@ -681,7 +711,13 @@ def _handle_answer_enrich(context: ApiRouteContext) -> bool | None:
             result = answer_enrich_evidence(
                 user, question_id, answer_text, evidence_id=evidence_id or None
             )
-            context.send_json(result, status=HTTPStatus.OK)
+            _persist_user(context, user)
+            from backend.evidence.review_service import get_journey_state
+            journey = get_journey_state(user)
+            context.send_json({**journey, **{
+                key: value for key, value in result.items()
+                if key in ("action", "evidence")
+            }}, status=HTTPStatus.OK)
         except Exception as exc:
             context.send_error(HTTPStatus.INTERNAL_SERVER_ERROR,
                                "enrich_error", str(exc))
@@ -707,7 +743,13 @@ def _handle_skip_question(context: ApiRouteContext) -> bool | None:
         try:
             from backend.evidence.review_service import skip_question_for_evidence
             result = skip_question_for_evidence(user, question_id)
-            context.send_json(result, status=HTTPStatus.OK)
+            _persist_user(context, user)
+            from backend.evidence.review_service import get_journey_state
+            journey = get_journey_state(user)
+            context.send_json({**journey, **{
+                key: value for key, value in result.items()
+                if key in ("action", "evidence")
+            }}, status=HTTPStatus.OK)
         except Exception as exc:
             context.send_error(HTTPStatus.INTERNAL_SERVER_ERROR,
                                "skip_error", str(exc))

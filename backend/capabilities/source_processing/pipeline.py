@@ -32,8 +32,7 @@ from backend.domain.source_processing import (
 )
 from backend.domain.candidate_evidence import (
     CandidateEvidence,
-    compute_content_hash,
-    EVIDENCE_STATUS_NEEDS_REVIEW,
+    classify_evidence_type,
 )
 from backend.domain.models import utc_now_iso
 
@@ -44,6 +43,7 @@ DEFAULT_POLL_TIMEOUT_SECONDS = 120
 DEFAULT_POLL_INITIAL_DELAY_SECONDS = 1.0
 DEFAULT_POLL_MAX_DELAY_SECONDS = 8.0
 DEFAULT_POLL_BACKOFF_FACTOR = 2.0
+STRUCTURED_EXTRACTION_VERSION = "gemini-career-v2"
 
 
 
@@ -53,6 +53,136 @@ def _source_asset_content_key(asset_id: str, file_bytes: bytes) -> str:
     h.update(asset_id.encode("utf-8"))
     h.update(file_bytes)
     return h.hexdigest()
+
+
+def _stable_experience_id(source_id: str, experience: dict[str, Any], index: int) -> str:
+    identity = "|".join((
+        source_id,
+        str(experience.get("employer") or "").strip().lower(),
+        str(experience.get("role") or experience.get("job_title") or "").strip().lower(),
+        str(experience.get("start_date") or experience.get("dates") or "").strip().lower(),
+        str(experience.get("end_date") or "").strip().lower(),
+        str(index),
+    ))
+    return "exp_" + sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+
+def _structured_experiences(
+    record: SourceTextRecord,
+    *,
+    source_id: str,
+    profile_id: str,
+) -> list[dict[str, Any]]:
+    experiences: list[dict[str, Any]] = []
+    for index, raw in enumerate(record.experience_details):
+        employer = str(raw.get("employer") or "").strip()
+        role = str(raw.get("role") or raw.get("job_title") or "").strip()
+        bullets = [str(item).strip() for item in (raw.get("bullets") or []) if str(item).strip()]
+        if not employer and not role and not bullets:
+            continue
+        experiences.append({
+            "experience_id": _stable_experience_id(source_id, raw, index),
+            "profile_id": profile_id,
+            "employer": employer,
+            "job_title": role,
+            "location": str(raw.get("location") or "").strip(),
+            "start_date": str(raw.get("start_date") or "").strip(),
+            "end_date": str(raw.get("end_date") or "").strip(),
+            "dates": str(raw.get("dates") or "").strip(),
+            "description": "\n".join(bullets),
+            "source_kind": "extracted",
+            "source_asset_ids": [source_id],
+            "status": "active",
+            "sort_order": index,
+            "metadata": {"extraction_version": STRUCTURED_EXTRACTION_VERSION},
+        })
+    return experiences
+
+
+def _match_structured_experience(
+    item: dict[str, Any], experiences: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    employer = str(item.get("inferred_employer") or item.get("employer") or "").strip().lower()
+    role = str(item.get("inferred_role") or item.get("role") or "").strip().lower()
+    for experience in experiences:
+        exp_employer = str(experience.get("employer") or "").strip().lower()
+        exp_role = str(experience.get("job_title") or "").strip().lower()
+        if (employer and employer == exp_employer) or (role and role == exp_role):
+            return experience
+    return experiences[0] if len(experiences) == 1 else None
+
+
+def _structured_evidence(
+    record: SourceTextRecord,
+    *,
+    source_id: str,
+    source_asset: str,
+    profile_id: str,
+    batch_id: str,
+    experiences: list[dict[str, Any]],
+) -> list[CandidateEvidence]:
+    raw_items = list(record.evidence_items)
+    if not raw_items:
+        for experience in record.experience_details:
+            for bullet in experience.get("bullets") or []:
+                text = str(bullet).strip()
+                if text:
+                    raw_items.append({
+                        "text": text,
+                        "inferred_employer": experience.get("employer", ""),
+                        "inferred_role": experience.get("role", ""),
+                        "dates": [
+                            value for value in (
+                                experience.get("start_date"), experience.get("end_date")
+                            ) if value
+                        ],
+                        "location": experience.get("location", ""),
+                    })
+
+    evidence: list[CandidateEvidence] = []
+    for raw in raw_items:
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            continue
+        experience = _match_structured_experience(raw, experiences)
+        if experiences and experience is None:
+            # The guided review maps every claim to the work context it came
+            # from. General profile text belongs elsewhere and must not create
+            # an unresolvable review item.
+            continue
+        mapping = {}
+        if experience is not None:
+            mapping = {
+                "experience_id": str(experience["experience_id"]),
+                "company": str(experience.get("employer") or ""),
+                "role": str(experience.get("job_title") or ""),
+                "start_date": str(experience.get("start_date") or ""),
+                "end_date": str(experience.get("end_date") or ""),
+                "label": " at ".join(filter(None, (
+                    str(experience.get("job_title") or ""),
+                    str(experience.get("employer") or ""),
+                ))),
+            }
+        evidence.append(CandidateEvidence.create(
+            profile_id=profile_id,
+            evidence_type=str(raw.get("evidence_type") or classify_evidence_type(text)),
+            text=text,
+            source_asset=source_asset,
+            source_id=source_id,
+            excerpt=text,
+            location=str(raw.get("location") or raw.get("source_section") or "").strip(),
+            confidence=record.confidence,
+            inferred_employer=str(raw.get("inferred_employer") or raw.get("employer") or ""),
+            inferred_role=str(raw.get("inferred_role") or raw.get("role") or ""),
+            dates=[str(value) for value in (raw.get("dates") or []) if str(value).strip()],
+            source_confidence=record.confidence,
+            experience_mapping=mapping,
+            metadata={
+                "batch_id": batch_id,
+                "extraction_version": STRUCTURED_EXTRACTION_VERSION,
+            },
+        ))
+    return evidence
 
 
 def process_sources_and_extract_evidence(
@@ -76,6 +206,7 @@ def process_sources_and_extract_evidence(
 
     source_results: list[dict[str, Any]] = []
     all_evidence: list[CandidateEvidence] = []
+    all_experiences: list[dict[str, Any]] = []
     processed_content_keys: set[str] = set()
 
     for source in sources:
@@ -137,17 +268,36 @@ def process_sources_and_extract_evidence(
             source_status["status"] = record.status
 
             if record.status in (SOURCE_STATUS_EXTRACTED, "needs_review") and record.text.strip():
-                from backend.capabilities.candidate_evidence.extraction import extract_evidence_from_source
-
-                evidence_items = extract_evidence_from_source(
-                    profile_id=profile_id,
-                    source_id=asset_id,
-                    text=record.text,
-                    source_asset=file_name,
-                    confidence=record.confidence,
-                    headings=list(record.headings),
-                    dates=list(record.dates),
+                experiences = _structured_experiences(
+                    record, source_id=asset_id, profile_id=profile_id,
                 )
+                evidence_items = _structured_evidence(
+                    record,
+                    source_id=asset_id,
+                    source_asset=file_name,
+                    profile_id=profile_id,
+                    batch_id=batch_id,
+                    experiences=experiences,
+                )
+                if not evidence_items:
+                    from backend.capabilities.candidate_evidence.extraction import extract_evidence_from_source
+
+                    evidence_items = extract_evidence_from_source(
+                        profile_id=profile_id,
+                        source_id=asset_id,
+                        text=record.text,
+                        source_asset=file_name,
+                        confidence=record.confidence,
+                        headings=list(record.headings),
+                        dates=list(record.dates),
+                    )
+                    for evidence_item in evidence_items:
+                        evidence_item.metadata.update({
+                            "batch_id": batch_id,
+                            "extraction_version": "local-fallback-v1",
+                        })
+
+                all_experiences.extend(experiences)
 
                 # CP-039R: Idempotency via content_hash
                 for ev in evidence_items:
@@ -202,6 +352,7 @@ def process_sources_and_extract_evidence(
         "completed_at": completed_at,
         "sources": source_results,
         "evidence": [ev.to_dict() for ev in all_evidence],
+        "experiences": all_experiences,
         "summary": {
             "total_sources": len(source_results),
             "extracted": success_count,

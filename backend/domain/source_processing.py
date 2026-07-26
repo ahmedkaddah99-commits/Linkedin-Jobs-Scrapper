@@ -124,6 +124,9 @@ class SourceTextRecord:
     bullets: list[str] = field(default_factory=list)
     certificates: list[str] = field(default_factory=list)
     letter_paragraphs: list[str] = field(default_factory=list)
+    layout_sections: list[dict[str, Any]] = field(default_factory=list)
+    experience_details: list[dict[str, Any]] = field(default_factory=list)
+    evidence_items: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -151,6 +154,9 @@ class SourceTextRecord:
             "bullets": list(self.bullets),
             "certificates": list(self.certificates),
             "letter_paragraphs": list(self.letter_paragraphs),
+            "layout_sections": [dict(item) for item in self.layout_sections],
+            "experience_details": [dict(item) for item in self.experience_details],
+            "evidence_items": [dict(item) for item in self.evidence_items],
         }
 
     @classmethod
@@ -180,6 +186,9 @@ class SourceTextRecord:
             bullets=[str(b) for b in (payload.get("bullets") or [])],
             certificates=[str(c) for c in (payload.get("certificates") or [])],
             letter_paragraphs=[str(p) for p in (payload.get("letter_paragraphs") or [])],
+            layout_sections=[dict(item) for item in (payload.get("layout_sections") or []) if isinstance(item, Mapping)],
+            experience_details=[dict(item) for item in (payload.get("experience_details") or []) if isinstance(item, Mapping)],
+            evidence_items=[dict(item) for item in (payload.get("evidence_items") or []) if isinstance(item, Mapping)],
         )
 
 

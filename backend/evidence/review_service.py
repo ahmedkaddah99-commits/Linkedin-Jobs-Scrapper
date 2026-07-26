@@ -604,15 +604,10 @@ def _inspect_for_question(evidence: CandidateEvidence) -> dict[str, Any] | None:
     if not missing:
         return None
 
-    _priority_order = [
-        MISSING_OUTCOME,
-        MISSING_METRIC,
-        "missing_tool",
-        "missing_scope",
-        "missing_stakeholder",
-        "missing_date",
-        "missing_mapping",
-    ]
+    # The guided journey asks only for details that materially improve a CV
+    # claim. Tool/scope/date questions are optional context, and mapping is
+    # handled by the inline experience chooser rather than another form.
+    _priority_order = [MISSING_OUTCOME, MISSING_METRIC]
 
     for mt in _priority_order:
         if mt in missing:
