@@ -3178,7 +3178,11 @@ class BackendApiTests(unittest.TestCase):
         status, queued_payload = self._request("GET", payload["status_url"])
         self.assertEqual(status, 200)
         self.assertEqual(queued_payload["status"], "queued")
-        self.app.process_next_queued_run(auto_retry_failed=False)
+        with patch(
+            "backend.profiles.gemini_extraction.extract_with_gemini",
+            side_effect=RuntimeError("force deterministic local extraction"),
+        ):
+            self.app.process_next_queued_run(auto_retry_failed=False)
         status, ready_payload = self._request("GET", payload["status_url"])
         self.assertEqual(status, 200)
         self.assertEqual(ready_payload["status"], "ready")
@@ -3588,7 +3592,11 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(upload_payload["job_id"])
         self.assertEqual(upload_payload["asset"]["metadata"]["status"], "queued")
 
-        self.app.process_next_queued_run(auto_retry_failed=False)
+        with patch(
+            "backend.profiles.gemini_extraction.extract_with_gemini",
+            side_effect=RuntimeError("force deterministic local extraction"),
+        ):
+            self.app.process_next_queued_run(auto_retry_failed=False)
         status, processing_payload = self._request("GET", upload_payload["status_url"])
 
         self.assertEqual(status, 200)
