@@ -36,3 +36,19 @@ def test_deterministic_extraction_uses_the_real_gemini_provider_boundary():
 def test_obsolete_fixture_control_routes_are_not_registered_in_production():
     route_names = {route.name for route in build_route_registry()._routes}
     assert not any(name.startswith("career_evidence_fixture.") for name in route_names)
+
+
+def test_fixed_journey_routes_precede_generic_evidence_id_route():
+    registry = build_route_registry()
+    for segments, expected_name in (
+        (("evidence-items", "journey-state"), "evidence_items.journey_state"),
+        (("evidence-items", "next-review"), "evidence_items.next_review"),
+        (("evidence-items", "ready-actions"), "evidence_items.ready_actions"),
+    ):
+        matches = [
+            route.name
+            for route in registry._routes
+            if route.auth_required and route.matches("GET", segments)
+        ]
+        assert matches
+        assert matches[0] == expected_name

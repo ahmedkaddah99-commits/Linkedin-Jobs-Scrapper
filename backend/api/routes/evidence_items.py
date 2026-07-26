@@ -40,31 +40,31 @@ from backend.domain.candidate_evidence import (
 
 
 def register_routes(registry: RouteRegistry) -> None:
+    # Fixed lifecycle routes must precede the generic
+    # /evidence-items/{evidence_id} prefix.
+    registry.exact("GET", ("evidence-items", "next-review"), _handle_next_review,
+                    auth_required=True, name="evidence_items.next_review")
+    registry.exact("GET", ("evidence-items", "readiness"), _handle_readiness,
+                    auth_required=True, name="evidence_items.readiness")
+    registry.exact("GET", ("evidence-items", "ready-actions"), _handle_ready_actions,
+                    auth_required=True, name="evidence_items.ready_actions")
+    registry.exact("GET", ("evidence-items", "journey-state"), _handle_journey_state,
+                    auth_required=True, name="evidence_items.journey_state")
+
+    registry.exact("POST", ("evidence-items", "review-action"), _handle_review_action,
+                    auth_required=True, name="evidence_items.review_action")
+    registry.exact("POST", ("evidence-items", "clear-spikes"), _handle_clear_spikes,
+                    auth_required=True, name="evidence_items.clear_spikes")
+    registry.exact("POST", ("evidence-items", "confirm-inspect"), _handle_confirm_inspect,
+                    auth_required=True, name="evidence_items.confirm_inspect")
+    registry.exact("POST", ("evidence-items", "answer-enrich"), _handle_answer_enrich,
+                    auth_required=True, name="evidence_items.answer_enrich")
+    registry.exact("POST", ("evidence-items", "skip-question"), _handle_skip_question,
+                    auth_required=True, name="evidence_items.skip_question")
+
     registry.prefix("GET", ("evidence-items",), _handle_get, auth_required=True, name="evidence_items.get")
     registry.prefix("POST", ("evidence-items",), _handle_post, auth_required=True, name="evidence_items.post")
     registry.prefix("PUT", ("evidence-items",), _handle_put, auth_required=True, name="evidence_items.put")
-
-    # CP-040R: Evidence review endpoints
-    registry.prefix("GET", ("evidence-items", "next-review"), _handle_next_review,
-                    auth_required=True, name="evidence_items.next_review")
-    registry.prefix("POST", ("evidence-items", "review-action"), _handle_review_action,
-                    auth_required=True, name="evidence_items.review_action")
-    registry.prefix("GET", ("evidence-items", "readiness"), _handle_readiness,
-                    auth_required=True, name="evidence_items.readiness")
-    registry.prefix("POST", ("evidence-items", "clear-spikes"), _handle_clear_spikes,
-                    auth_required=True, name="evidence_items.clear_spikes")
-    # CP-041R: Integrated confirm + question + enrich endpoints
-    registry.prefix("POST", ("evidence-items", "confirm-inspect"), _handle_confirm_inspect,
-                    auth_required=True, name="evidence_items.confirm_inspect")
-    registry.prefix("POST", ("evidence-items", "answer-enrich"), _handle_answer_enrich,
-                    auth_required=True, name="evidence_items.answer_enrich")
-    registry.prefix("POST", ("evidence-items", "skip-question"), _handle_skip_question,
-                    auth_required=True, name="evidence_items.skip_question")
-    registry.prefix("GET", ("evidence-items", "ready-actions"), _handle_ready_actions,
-                    auth_required=True, name="evidence_items.ready_actions")
-    # CP-044R: Full journey state endpoint
-    registry.prefix("GET", ("evidence-items", "journey-state"), _handle_journey_state,
-                    auth_required=True, name="evidence_items.journey_state")
 
 
 
