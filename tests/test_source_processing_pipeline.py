@@ -166,7 +166,7 @@ class TestSourceProcessingPipeline(unittest.TestCase):
         self.assertEqual(result["sources"][0]["status"], SOURCE_STATUS_EMPTY)
         self.assertEqual(len(result["evidence"]), 0)
 
-    def test_gemini_unavailable_falls_back(self):
+    def test_gemini_unavailable_does_not_create_unstructured_evidence(self):
         with patch(
             "backend.profiles.gemini_extraction.extract_with_gemini",
             side_effect=RuntimeError("API key not configured"),
@@ -176,7 +176,9 @@ class TestSourceProcessingPipeline(unittest.TestCase):
                  "file_bytes": b"Fallback content.\n"}
             ])
         src = result["sources"][0]
-        self.assertIn(src["status"], [SOURCE_STATUS_EXTRACTED, "needs_review"])
+        self.assertEqual(src["status"], SOURCE_STATUS_FAILED)
+        self.assertIn("Gemini structured extraction", src["error"])
+        self.assertEqual(result["evidence"], [])
 
     def test_idempotent_no_duplicate_evidence(self):
         mr = self._mock_gemini_response("Delivered migration project on time.", 0.91)

@@ -267,6 +267,15 @@ def process_sources_and_extract_evidence(
             source_status["char_count"] = record.char_count
             source_status["status"] = record.status
 
+            if record.provider != "gemini":
+                source_status["status"] = SOURCE_STATUS_FAILED
+                source_status["error"] = (
+                    "Gemini structured extraction is temporarily unavailable. "
+                    "Retry after provider quota or billing is available."
+                )
+                source_results.append(source_status)
+                continue
+
             if record.status in (SOURCE_STATUS_EXTRACTED, "needs_review") and record.text.strip():
                 experiences = _structured_experiences(
                     record, source_id=asset_id, profile_id=profile_id,
