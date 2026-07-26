@@ -56,6 +56,7 @@ const navItems = [
     matchers: [
       { path: "/documents", end: false },
       { path: "/artifacts", end: false },
+      { path: "/career-evidence", end: false },
       { path: "/career-memory", end: false },
       { path: "/cv-studio", end: false },
     ],

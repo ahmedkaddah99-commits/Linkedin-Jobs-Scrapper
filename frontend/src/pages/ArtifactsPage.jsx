@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useSearchParams } from "react-router-dom";
 import CareerMemoryBuilderPage from "../components/careerMemoryBuilder/CareerMemoryBuilderPage";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
@@ -526,6 +526,10 @@ export default function DocumentsPage() {
 
   function handleViewChange(nextViewId) {
     const normalizedView = normalizeViewParam(nextViewId);
+    if (normalizedView === VIEW_MEMORY) {
+      window.location.href = "/career-evidence";
+      return;
+    }
     setActiveView(normalizedView);
     const next = new URLSearchParams(searchParams);
     if (normalizedView === VIEW_LIBRARY) {

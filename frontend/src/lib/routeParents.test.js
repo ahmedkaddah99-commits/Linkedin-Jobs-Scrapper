@@ -4,9 +4,10 @@ import test from "node:test";
 import { resolveRouteParent } from "./routeParents.js";
 
 test("resolves explicit nested route parents including query-sensitive Career Memory", () => {
-  assert.equal(resolveRouteParent({ pathname: "/career-memory" }), "/documents?view=memory");
-  assert.equal(resolveRouteParent({ pathname: "/career-memory/guide" }), "/documents?view=memory");
-  assert.equal(resolveRouteParent({ pathname: "/documents", search: "?view=memory" }), "/documents");
+  assert.equal(resolveRouteParent({ pathname: "/career-evidence" }), "/documents");
+  assert.equal(resolveRouteParent({ pathname: "/career-memory" }), "/career-evidence");
+  assert.equal(resolveRouteParent({ pathname: "/career-memory/guide" }), "/career-evidence");
+  assert.equal(resolveRouteParent({ pathname: "/documents", search: "?view=memory" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/cv-studio" }), "/documents");
   assert.equal(resolveRouteParent({ pathname: "/tracker/job-descriptions/review_1" }), "/tracker");
   assert.equal(resolveRouteParent({ pathname: "/job-workspaces/run_1/job_1" }), "/workspaces");
