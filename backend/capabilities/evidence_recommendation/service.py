@@ -13,6 +13,9 @@ from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 from backend.domain.candidate_evidence import CandidateEvidence, EVIDENCE_STATUS_CONFIRMED
+from backend.capabilities.candidate_evidence.migration import (
+    migrate_legacy_facts_to_evidence,
+)
 from backend.capabilities.source_text_review import list_reviews
 from backend.domain.evidence_recommendation import (
     EVIDENCE_RECOMMENDATION_STATUS_EXCLUDED,
@@ -40,10 +43,17 @@ def _verified_source_ids(profile_id: str) -> set[str]:
     return {r.source_id for r in reviews if r.status == SOURCE_REVIEW_STATUS_CONFIRMED}
 
 
-def _verified_facts(user) -> list[dict[str, Any]]:
-    """Read confirmed facts from the canonical evidence store (CP-032R)."""
+def _verified_facts(user, profile_id: str = "") -> list[dict[str, Any]]:
+    """Read confirmed facts through the canonical evidence compatibility view."""
     metadata = dict(user.metadata or {})
     evidence_list = list(metadata.get("candidate_evidence") or [])
+    evidence_list.extend(
+        evidence.to_dict()
+        for evidence in migrate_legacy_facts_to_evidence(
+            profile_id=profile_id,
+            user_metadata=metadata,
+        )
+    )
     confirmed = [
         ev for ev in evidence_list
         if str(ev.get("status") or "") == EVIDENCE_STATUS_CONFIRMED
@@ -131,7 +141,7 @@ def generate_recommendations(
     asset_map = dict(candidate_asset_map or {})
 
     verified_sources = _verified_source_ids(profile_id) if profile_id else set()
-    confirmed_facts = _verified_facts(user)
+    confirmed_facts = _verified_facts(user, profile_id)
 
     fact_lookup: dict[str, dict[str, Any]] = {}
     for fact in confirmed_facts:

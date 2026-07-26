@@ -8,6 +8,8 @@ from backend.api.routes.assisted_apply_telemetry import register_routes as regis
 from backend.api.routes.career_profiles import register_routes as register_career_profiles_routes
 from backend.api.routes.career_evidence import register_routes as register_career_evidence_routes
 from backend.api.routes.cv_bullet_suggestions import register_routes as register_cv_bullet_suggestions_routes
+from backend.api.routes.motivation_letters import register_routes as register_motivation_letters_routes
+
 
 from backend.api.routes.career_memory import register_routes as register_career_memory_routes
 from backend.api.routes.career_profile_evidence import register_routes as register_career_profile_evidence_routes
@@ -37,6 +39,8 @@ def build_route_registry() -> RouteRegistry:
 
     register_career_evidence_routes(registry)
     register_cv_bullet_suggestions_routes(registry)
+
+    register_motivation_letters_routes(registry)
 
     register_career_profile_evidence_routes(registry)
     register_evidence_recommendation_routes(registry)

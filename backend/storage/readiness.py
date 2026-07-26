@@ -23,7 +23,9 @@ def probe_object_storage(
 ) -> ObjectStorageProbeResult:
     """Perform a bounded write/read/delete probe against the configured backend."""
 
-    timeout = min(30.0, max(0.1, float(timeout_seconds)))
+    # Honor short caller deadlines. The previous 100 ms floor could make a
+    # requested 20 ms health-check timeout take longer than upstream budgets.
+    timeout = min(30.0, max(0.001, float(timeout_seconds)))
     probe_id = uuid4().hex
     key = build_private_object_key(
         namespace="health",

@@ -282,5 +282,264 @@ class MotivationLetterSectionTests(unittest.TestCase):
         self.assertEqual(d["evidence_refs"], ["ev_m1", "ev_e1"])
 
 
+# =============================================================================
+# CP-037R: New tests for integrated motivation letter generation
+# =============================================================================
+
+
+class CheckPersonalMotivationSufficientTests(unittest.TestCase):
+    """CP-037R: Personal motivation sufficiency checks."""
+
+    def test_sufficient_with_high_confidence(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            check_personal_motivation_sufficient)
+        ok, _ = check_personal_motivation_sufficient([
+            MotivationEvidence(evidence_id="m1", category="personal_motivation",
+                              statement="I love solving problems.", confidence="high"),
+        ])
+        self.assertTrue(ok)
+
+    def test_insufficient_with_low_confidence(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            check_personal_motivation_sufficient)
+        ok, msg = check_personal_motivation_sufficient([
+            MotivationEvidence(evidence_id="m1", category="personal_motivation",
+                              statement="Summary-based.", confidence="low"),
+        ])
+        self.assertFalse(ok)
+        self.assertIn("Insufficient personal motivation", msg)
+
+    def test_insufficient_with_empty(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            check_personal_motivation_sufficient)
+        ok, _ = check_personal_motivation_sufficient([])
+        self.assertFalse(ok)
+
+
+class BuildStructuredPromptTests(unittest.TestCase):
+    """CP-037R: Structured prompt builder tests."""
+
+    def test_excludes_full_cv_and_jd(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            build_structured_motivation_prompt)
+        input_data = MotivationLetterInput(
+            candidate_name="Alice", job_title="Engineer", job_company="Acme",
+            job_description_text="LONG_JD_TEXT_HERE", cv_text="LONG_CV_TEXT_HERE",
+            verified_motivations=[
+                MotivationEvidence(evidence_id="ev_m1", category="career_goal",
+                                   statement="Goal.", confidence="high"),
+            ],
+            verified_experiences=[
+                ExperienceEvidence(experience_id="ev_e1", role_title="Dev",
+                                   company="PrevCo", period="2020-2023",
+                                   key_bullets=["Built APIs"]),
+            ],
+        )
+        prompt = build_structured_motivation_prompt(input_data)
+        self.assertIn("ev_m1", prompt)
+        self.assertIn("ev_e1", prompt)
+        self.assertNotIn("LONG_JD_TEXT_HERE", prompt)
+        self.assertNotIn("LONG_CV_TEXT_HERE", prompt)
+
+    def test_insufficient_evidence_adds_warning_note(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            build_structured_motivation_prompt)
+        input_data = MotivationLetterInput(
+            candidate_name="Carol", job_title="Analyst", job_company="Firm",
+            job_description_text="JD", cv_text="CV",
+        )
+        prompt = build_structured_motivation_prompt(
+            input_data, evidence_sufficient=False)
+        self.assertIn("IMPORTANT", prompt)
+        self.assertIn("evidence is limited", prompt.lower())
+
+
+class ValidateLetterClaimsTests(unittest.TestCase):
+    """CP-037R: Anti-copying validation tests."""
+
+    def test_passes_when_no_copying_detected(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            validate_letter_claims)
+        result = validate_letter_claims(
+            "I am excited to apply for this role at Acme Corp.",
+            "Experienced engineer with 10 years in software development.",
+            "Acme Corp is seeking a senior engineer with cloud experience.",
+        )
+        self.assertTrue(result["passed"])
+        self.assertEqual(len(result["issues"]), 0)
+
+    def test_detects_copied_cv_text(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            validate_letter_claims)
+        copied = "Experienced engineer with 10 years in software development."
+        result = validate_letter_claims(
+            f"I am writing. {copied} I am excited.",
+            copied + " More CV details here.",
+            "Some job description.",
+        )
+        self.assertFalse(result["passed"])
+        self.assertTrue(len(result["cv_copies"]) > 0)
+
+    def test_detects_copied_jd_text(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            validate_letter_claims)
+        copied = "Seeking a senior engineer with cloud experience in AWS"
+        result = validate_letter_claims(
+            f"Dear Team, {copied} and I believe I am a good fit.",
+            "My CV text.",
+            copied + " and Azure.",
+        )
+        self.assertFalse(result["passed"])
+        self.assertTrue(len(result["jd_copies"]) > 0)
+
+
+class ValidateSectionEvidenceRefsTests(unittest.TestCase):
+    """CP-037R: Section evidence reference validation."""
+
+    def test_passes_with_valid_references(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            validate_section_evidence_refs)
+        sections = [
+            MotivationLetterSection(
+                heading="Why This Role", body="I am excited [ev_m1].",
+                evidence_refs=["ev_m1"],
+            ),
+        ]
+        motivations = [
+            MotivationEvidence(evidence_id="ev_m1", category="career_goal",
+                              statement="Goal.", confidence="high"),
+        ]
+        result = validate_section_evidence_refs(sections, motivations, [])
+        self.assertTrue(result["passed"])
+
+    def test_detects_unknown_evidence_ref(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            validate_section_evidence_refs)
+        sections = [
+            MotivationLetterSection(
+                heading="Why This Role", body="I am excited [ev_fake].",
+                evidence_refs=["ev_fake"],
+            ),
+        ]
+        motivations = [
+            MotivationEvidence(evidence_id="ev_m1", category="career_goal",
+                              statement="Goal.", confidence="high"),
+        ]
+        result = validate_section_evidence_refs(sections, motivations, [])
+        self.assertFalse(result["passed"])
+        self.assertTrue(len(result["issues"]) > 0)
+
+
+class ParseLetterSectionsTests(unittest.TestCase):
+    """CP-037R: Section parsing tests."""
+
+    def test_parses_greeting_and_body(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            parse_letter_sections)
+        sections = parse_letter_sections(
+            "Dear Hiring Team,\n\nWhy This Role\nExcited [ev_m1].\n\nSincerely,\nAlice"
+        )
+        self.assertGreaterEqual(len(sections), 2)
+
+    def test_extracts_evidence_refs(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            parse_letter_sections)
+        sections = parse_letter_sections(
+            "Dear Hiring Team,\n\nWhy This Role\nMy [ev_m1] and [ev_e1] fit.\n\nSincerely,\nA"
+        )
+        all_refs = []
+        for s in sections:
+            all_refs.extend(s.evidence_refs)
+        self.assertIn("ev_m1", all_refs)
+        self.assertIn("ev_e1", all_refs)
+
+    def test_empty_letter_returns_empty(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            parse_letter_sections)
+        self.assertEqual(len(parse_letter_sections("")), 0)
+
+
+
+
+
+class GenerateMotivationLetterIntegrationTests(unittest.TestCase):
+    """CP-037R: End-to-end integration tests (skip_api_call mode)."""
+
+    def test_skip_api_call_insufficient_evidence(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            generate_motivation_letter)
+        job = {"job_id": "test_001", "title": "DS", "company": "TC",
+               "full_description": "Data scientist role."}
+        result = generate_motivation_letter(
+            deepseek_api_key="", deepseek_model="deepseek-chat",
+            job=job, cv_text="CV", candidate_name="Alice",
+            verified_motivations=[], verified_experiences=[],
+            skip_api_call=True)
+        self.assertTrue(result.evidence_insufficient)
+        self.assertTrue(len(result.insufficient_warning) > 0)
+
+    def test_skip_api_call_sufficient_evidence(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            generate_motivation_letter)
+        job = {"job_id": "test_002", "title": "Eng", "company": "DC",
+               "full_description": "Engineering role."}
+        result = generate_motivation_letter(
+            deepseek_api_key="", deepseek_model="deepseek-chat",
+            job=job, cv_text="CV", candidate_name="Bob",
+            verified_motivations=[
+                MotivationEvidence(evidence_id="m1", category="personal_motivation",
+                                  statement="Passionate.", confidence="high"),
+                MotivationEvidence(evidence_id="m2", category="career_goal",
+                                  statement="Lead teams.", confidence="high"),
+            ],
+            verified_experiences=[
+                ExperienceEvidence(experience_id="e1", role_title="SrEng",
+                                   company="PC", period="2020-2024",
+                                   key_bullets=["Led team"]),
+                ExperienceEvidence(experience_id="e2", role_title="Eng",
+                                   company="OC", period="2018-2020",
+                                   key_bullets=["Built services"]),
+            ],
+            skip_api_call=True)
+        self.assertFalse(result.evidence_insufficient)
+        self.assertEqual(result.insufficient_warning, "")
+
+    def test_missing_api_key_without_skip(self):
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            generate_motivation_letter)
+        job = {"job_id": "t3", "title": "PM", "company": "MC",
+               "full_description": "PM role."}
+        result = generate_motivation_letter(
+            deepseek_api_key="", deepseek_model="deepseek-chat",
+            job=job, cv_text="CV", candidate_name="C",
+            verified_motivations=[
+                MotivationEvidence(evidence_id="m1", category="career_goal",
+                                  statement="G.", confidence="high")],
+            verified_experiences=[], skip_api_call=False)
+        self.assertTrue(result.evidence_insufficient)
+        self.assertIn("Missing DeepSeek API key", result.insufficient_warning)
+
+    def test_warning_when_personal_motivation_insufficient(self):
+        """CP-037R: Visible warning when personal motivation is insufficient."""
+        from backend.capabilities.tailored_documents.motivation_letters import (
+            generate_motivation_letter)
+        job = {"job_id": "t5", "title": "Dev", "company": "CC",
+               "full_description": "Dev role."}
+        result = generate_motivation_letter(
+            deepseek_api_key="sk-test", deepseek_model="deepseek-chat",
+            job=job, cv_text="CV", candidate_name="Eve",
+            verified_motivations=[
+                MotivationEvidence(evidence_id="m1", category="personal_motivation",
+                                  statement="Summary.", confidence="low"),
+            ],
+            verified_experiences=[
+                ExperienceEvidence(experience_id="e1", role_title="Dev",
+                                   company="OC", period="2020-2023"),
+            ],
+            skip_api_call=True)
+        self.assertTrue(result.evidence_insufficient)
+        self.assertIn("Insufficient personal motivation", result.insufficient_warning)
+
+
 if __name__ == "__main__":
     unittest.main()

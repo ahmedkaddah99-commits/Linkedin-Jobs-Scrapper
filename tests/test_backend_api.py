@@ -3430,7 +3430,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 202)
 
         with patch(
-            "backend.profiles.cv_upload_jobs.extract_document_text",
+            "backend.profiles.cv_upload_jobs.process_source_bytes",
             side_effect=[
                 RuntimeError("temporary extractor outage"),
                 {"text": "Retry Candidate\nSummary\nReliable analyst.", "char_count": 42, "method": "plain_text", "warnings": []},
@@ -5836,82 +5836,96 @@ class BackendApiTests(unittest.TestCase):
             ],
         )
 
-    def test_career_memory_endpoints_extract_confirm_generate_and_version_outputs(self):
-        user = self.app.get_user(self.user.user_id)
-        user.metadata = {
-            **dict(user.metadata or {}),
-            "candidate_assets": [
-                {
-                    "asset_id": "asset_career_memory",
-                    "asset_kind": "workspace_cv",
-                    "metadata": {
-                        "content_sha256": "career-memory-signature",
-                        "source_text": (
-                            "Built Python automation for weekly application reporting.\n"
-                            "Reduced manual review time by 40 percent across the recruiting team."
-                        ),
-                    },
-                }
-            ],
+    def test_career_memory_mutation_endpoints_are_read_only_adapters(self):
+        requests = (
+            ("/career-memory/facts/extract", {"source_asset_ids": ["asset"]}),
+            ("/career-memory/facts/fact_1/confirm", {"value": "confirmed"}),
+            ("/career-memory/questions/next", {}),
+            ("/career-memory/outputs/generate", {"mode": "standard"}),
+            ("/career-memory/outputs/output_1/regenerate", {"action": "edit"}),
+        )
+        for path, payload in requests:
+            with self.subTest(path=path):
+                status, response = self._request("POST", path, payload)
+                self.assertEqual(status, 410)
+                self.assertIn("migration_hint", response)
+
+    def test_motivation_letters_generate_endpoint(self):
+        """CP-037R: API endpoint for evidence-backed motivation letter generation."""
+        job = {
+            "job_id": "ml_test_001",
+            "title": "Data Scientist",
+            "company": "Acme Corp",
+            "full_description": "Looking for a data scientist with Python and ML experience.",
         }
-        self.app.repositories.auth_repository.upsert_user(user)
-
-        status, extracted = self._request(
+        status, response = self._request(
             "POST",
-            "/career-memory/facts/extract",
-            {"source_asset_ids": ["asset_career_memory"]},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(extracted["created_count"], 2)
-        metric = next(fact for fact in extracted["active_facts"] if fact["type"] == "metric")
-
-        status, question = self._request("POST", "/career-memory/questions/next", {})
-        self.assertEqual(status, 200)
-        self.assertEqual(question["fact_id"], metric["fact_id"])
-        self.assertTrue(question["requires_confirmation"])
-
-        status, confirmed = self._request(
-            "POST",
-            f"/career-memory/facts/{metric['fact_id']}/confirm",
+            "/motivation-letters",
             {
-                "value": metric["value"],
-                "type": "metric",
-                "certainty": "confirmed",
+                "job": job,
+                "cv_text": "Experienced data scientist with Python and ML background.",
+                "candidate_name": "Test User",
+                "verified_motivations": [
+                    {
+                        "evidence_id": "ev_m1",
+                        "category": "personal_motivation",
+                        "statement": "Passionate about machine learning.",
+                        "confidence": "high",
+                    },
+                    {
+                        "evidence_id": "ev_m2",
+                        "category": "career_goal",
+                        "statement": "Want to lead ML teams.",
+                        "confidence": "high",
+                    },
+                ],
+                "verified_experiences": [
+                    {
+                        "experience_id": "ev_e1",
+                        "role_title": "Data Scientist",
+                        "company": "PrevCo",
+                        "period": "2020-2024",
+                        "key_bullets": ["Built ML pipelines", "Led team of 3"],
+                    },
+                    {
+                        "experience_id": "ev_e2",
+                        "role_title": "ML Engineer",
+                        "company": "StartupCo",
+                        "period": "2018-2020",
+                        "key_bullets": ["Deployed models to production"],
+                    },
+                ],
+                "skip_api_call": True,
             },
         )
         self.assertEqual(status, 200)
-        self.assertEqual(confirmed["fact"]["version"], 2)
+        self.assertEqual(response["job_id"], "ml_test_001")
+        self.assertEqual(response["candidate_name"], "Test User")
+        self.assertIn("evidence_insufficient", response)
+        self.assertIn("motivation_evidence_count", response)
+        self.assertIn("experience_evidence_count", response)
 
-        status, generated = self._request(
+    def test_motivation_letters_rejects_missing_job(self):
+        """CP-037R: API rejects requests without a job object."""
+        status, response = self._request(
             "POST",
-            "/career-memory/outputs/generate",
-            {"mode": "standard"},
-        )
-        self.assertEqual(status, 201)
-        self.assertEqual(generated["output"]["quality"]["status"], "passed")
-        self.assertNotEqual(
-            generated["output"]["cv_bullet"],
-            generated["output"]["cover_letter"],
-        )
-
-        output_id = generated["output"]["output_id"]
-        fact_history_before = generated["fact_history"]
-        status, edited = self._request(
-            "POST",
-            f"/career-memory/outputs/{output_id}/regenerate",
+            "/motivation-letters",
             {
-                "action": "edit",
-                "cv_bullet": "Invented unsupported synergy claim.",
-                "cover_letter": generated["output"]["cover_letter"],
+                "cv_text": "CV text",
+                "candidate_name": "Test User",
             },
         )
-        self.assertEqual(status, 200)
-        self.assertEqual(edited["output"]["version"], 2)
-        self.assertEqual(edited["fact_history"], fact_history_before)
-        self.assertIn(
-            "unsupported_phrase",
-            {issue["code"] for issue in edited["output"]["quality"]["issues"]},
+        self.assertEqual(status, 422)
+
+    def test_motivation_letters_requires_auth(self):
+        """CP-037R: API requires authentication."""
+        status, response = self._request(
+            "POST",
+            "/motivation-letters",
+            {"job": {"title": "Test"}},
+            authenticated=False,
         )
+        self.assertEqual(status, 401)
 
     def test_tracker_ats_detail_returns_persisted_read_only_diagnostics(self):
         status, run_payload = self._request(
