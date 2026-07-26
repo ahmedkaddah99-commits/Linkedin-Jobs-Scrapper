@@ -53,6 +53,16 @@ def register_routes(registry: RouteRegistry) -> None:
                     auth_required=True, name="evidence_items.readiness")
     registry.prefix("POST", ("evidence-items", "clear-spikes"), _handle_clear_spikes,
                     auth_required=True, name="evidence_items.clear_spikes")
+    # CP-041R: Integrated confirm + question + enrich endpoints
+    registry.prefix("POST", ("evidence-items", "confirm-inspect"), _handle_confirm_inspect,
+                    auth_required=True, name="evidence_items.confirm_inspect")
+    registry.prefix("POST", ("evidence-items", "answer-enrich"), _handle_answer_enrich,
+                    auth_required=True, name="evidence_items.answer_enrich")
+    registry.prefix("POST", ("evidence-items", "skip-question"), _handle_skip_question,
+                    auth_required=True, name="evidence_items.skip_question")
+    registry.prefix("GET", ("evidence-items", "ready-actions"), _handle_ready_actions,
+                    auth_required=True, name="evidence_items.ready_actions")
+
 
 
 def _evidence_store(context: ApiRouteContext):
@@ -539,3 +549,112 @@ def _handle_clear_spikes(context: ApiRouteContext) -> bool | None:
         return True
 
     return False
+
+
+# ── CP-041R: Integrated confirm + question + enrich handlers ───────────
+
+
+def _handle_confirm_inspect(context: ApiRouteContext) -> bool | None:
+    """CP-041R: Confirm evidence and inspect for highest-value missing-detail question."""
+    segments = list(context.segments)
+    payload = context.read_json_body()
+
+    if segments == ["evidence-items", "confirm-inspect"]:
+        user, _ = context.require_identity()
+        evidence_id = str(payload.get("evidence_id") or "")
+
+        if not evidence_id:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                               "validation_error", "evidence_id is required.")
+            return True
+
+        mapping = payload.get("mapping") if payload.get("mapping") else None
+        edited_text = payload.get("edited_text")
+
+        try:
+            from backend.evidence.review_service import confirm_with_inspect
+            result = confirm_with_inspect(
+                user, evidence_id, mapping=mapping, edited_text=edited_text
+            )
+            context.send_json(result, status=HTTPStatus.OK)
+        except KeyError as exc:
+            context.send_error(HTTPStatus.NOT_FOUND,
+                               "evidence_not_found", str(exc))
+        return True
+
+    return False
+
+
+def _handle_answer_enrich(context: ApiRouteContext) -> bool | None:
+    """CP-041R: Answer a question and enrich the evidence record."""
+    segments = list(context.segments)
+    payload = context.read_json_body()
+
+    if segments == ["evidence-items", "answer-enrich"]:
+        user, _ = context.require_identity()
+        question_id = str(payload.get("question_id") or "")
+        answer_text = str(payload.get("answer_text") or payload.get("text") or "")
+        evidence_id = str(payload.get("evidence_id") or "")
+
+        if not question_id or not answer_text:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                               "validation_error", "question_id and answer_text are required.")
+            return True
+
+        try:
+            from backend.evidence.review_service import answer_enrich_evidence
+            result = answer_enrich_evidence(
+                user, question_id, answer_text, evidence_id=evidence_id or None
+            )
+            context.send_json(result, status=HTTPStatus.OK)
+        except Exception as exc:
+            context.send_error(HTTPStatus.INTERNAL_SERVER_ERROR,
+                               "enrich_error", str(exc))
+        return True
+
+    return False
+
+
+def _handle_skip_question(context: ApiRouteContext) -> bool | None:
+    """CP-041R: Skip a question permanently."""
+    segments = list(context.segments)
+    payload = context.read_json_body()
+
+    if segments == ["evidence-items", "skip-question"]:
+        user, _ = context.require_identity()
+        question_id = str(payload.get("question_id") or "")
+
+        if not question_id:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                               "validation_error", "question_id is required.")
+            return True
+
+        try:
+            from backend.evidence.review_service import skip_question_for_evidence
+            result = skip_question_for_evidence(user, question_id)
+            context.send_json(result, status=HTTPStatus.OK)
+        except Exception as exc:
+            context.send_error(HTTPStatus.INTERNAL_SERVER_ERROR,
+                               "skip_error", str(exc))
+        return True
+
+    return False
+
+
+def _handle_ready_actions(context: ApiRouteContext) -> bool | None:
+    """CP-041R: Get grounded primary actions when Ready."""
+    segments = list(context.segments)
+
+    if segments == ["evidence-items", "ready-actions"]:
+        user, _ = context.require_identity()
+        from backend.evidence.review_service import build_ready_actions, compute_canonical_readiness
+        readiness = compute_canonical_readiness(user)
+        actions = build_ready_actions(user) if readiness["is_ready"] else []
+        context.send_json({
+            "readiness": readiness,
+            "primary_actions": actions,
+        }, status=HTTPStatus.OK)
+        return True
+
+    return False
+

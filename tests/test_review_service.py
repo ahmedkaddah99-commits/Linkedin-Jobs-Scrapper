@@ -334,6 +334,23 @@ class ConfirmEvidenceTests(unittest.TestCase):
         next_item = get_next_review_item(user)
         self.assertEqual(next_item["evidence"]["text"], ev2.text)
 
+    def test_confirm_with_three_items_does_not_skip(self):
+        """CP-041R: Confirm item 1 of 3, verify item 2 (not 3) comes next."""
+        ev2 = _make_evidence(text="Item 2.")
+        ev3 = _make_evidence(text="Item 3.")
+        user = _make_user({
+            "candidate_evidence": [
+                self.ev.to_dict(), ev2.to_dict(), ev3.to_dict(),
+            ],
+        })
+        result = confirm_evidence(user, self.ev.evidence_id)
+        self.assertEqual(result["action"], "confirmed")
+        next_item = get_next_review_item(user)
+        self.assertEqual(next_item["evidence"]["text"], ev2.text)
+        confirm_evidence(user, ev2.evidence_id)
+        third_item = get_next_review_item(user)
+        self.assertEqual(third_item["evidence"]["text"], ev3.text)
+
 
 
 # ── reject_evidence ──────────────────────────────────────────────────────────
@@ -365,6 +382,23 @@ class RejectEvidenceTests(unittest.TestCase):
         reject_evidence(user, self.ev.evidence_id)
         next_item = get_next_review_item(user)
         self.assertEqual(next_item["evidence"]["text"], ev2.text)
+
+    def test_reject_with_three_items_does_not_skip(self):
+        """CP-041R: Reject item 1 of 3, verify item 2 (not 3) comes next."""
+        ev2 = _make_evidence(text="Item 2.")
+        ev3 = _make_evidence(text="Item 3.")
+        user = _make_user({
+            "candidate_evidence": [
+                self.ev.to_dict(), ev2.to_dict(), ev3.to_dict(),
+            ],
+        })
+        result = reject_evidence(user, self.ev.evidence_id)
+        self.assertEqual(result["action"], "rejected")
+        next_item = get_next_review_item(user)
+        self.assertEqual(next_item["evidence"]["text"], ev2.text)
+        reject_evidence(user, ev2.evidence_id)
+        third_item = get_next_review_item(user)
+        self.assertEqual(third_item["evidence"]["text"], ev3.text)
 
 
 # ── edit_evidence ────────────────────────────────────────────────────────────

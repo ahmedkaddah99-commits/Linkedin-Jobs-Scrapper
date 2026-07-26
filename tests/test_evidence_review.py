@@ -167,14 +167,20 @@ class TestEvidenceReview(unittest.TestCase):
         ev1.status = EVIDENCE_STATUS_NEEDS_REVIEW
         ev2 = _make_evidence(text="Item 2.")
         ev2.status = EVIDENCE_STATUS_NEEDS_REVIEW
+        ev3 = _make_evidence(text="Item 3.")
+        ev3.status = EVIDENCE_STATUS_NEEDS_REVIEW
         user = _make_user(metadata={
-            "candidate_evidence": [ev1.to_dict(), ev2.to_dict()],
+            "candidate_evidence": [ev1.to_dict(), ev2.to_dict(), ev3.to_dict()],
             "work_experiences": [],
         })
         result = confirm_evidence(user, ev1.evidence_id)
         self.assertEqual(result["action"], "confirmed")
         next_item = get_next_review_item(user)
         self.assertEqual(next_item["evidence"]["text"], "Item 2.")
+        # CP-041R: Confirm item 2, verify item 3 comes next (no skip)
+        confirm_evidence(user, ev2.evidence_id)
+        third_item = get_next_review_item(user)
+        self.assertEqual(third_item["evidence"]["text"], "Item 3.")
 
     def test_reject_advances_cursor(self):
         ev1 = _make_evidence(text="Rejected.")
@@ -186,6 +192,27 @@ class TestEvidenceReview(unittest.TestCase):
         result = reject_evidence(user, ev1.evidence_id)
         self.assertEqual(result["action"], "rejected")
         self.assertEqual(get_next_review_item(user)["state"], "complete")
+
+    def test_reject_three_items_no_skip(self):
+        """CP-041R: Reject items 1 and 2 of 3, verify item 3 comes next."""
+        ev1 = _make_evidence(text="R1.")
+        ev1.status = EVIDENCE_STATUS_NEEDS_REVIEW
+        ev2 = _make_evidence(text="R2.")
+        ev2.status = EVIDENCE_STATUS_NEEDS_REVIEW
+        ev3 = _make_evidence(text="R3.")
+        ev3.status = EVIDENCE_STATUS_NEEDS_REVIEW
+        user = _make_user(metadata={
+            "candidate_evidence": [ev1.to_dict(), ev2.to_dict(), ev3.to_dict()],
+            "work_experiences": [],
+        })
+        first = get_next_review_item(user)
+        self.assertEqual(first["evidence"]["text"], "R1.")
+        reject_evidence(user, first["evidence"]["evidence_id"])
+        second = get_next_review_item(user)
+        self.assertEqual(second["evidence"]["text"], "R2.")
+        reject_evidence(user, second["evidence"]["evidence_id"])
+        third = get_next_review_item(user)
+        self.assertEqual(third["evidence"]["text"], "R3.")
 
     def test_confirm_with_mapping(self):
         ev1 = _make_evidence(text="Mapped.")

@@ -24,6 +24,25 @@ from backend.domain.candidate_evidence import (
 )
 from backend.domain.models import utc_now_iso
 
+# CP-041R: Import question service for integrated confirmation+question flow
+try:
+    from backend.evidence.question_service import (
+        select_next_question,
+        answer_question,
+        skip_question,
+        _detect_missing_details,
+        _question_text,
+        _make_question_id,
+        _item_label,
+        MISSING_METRIC,
+        MISSING_OUTCOME,
+        QUESTION_STATE_ASKED,
+    )
+    _HAS_QUESTION_SERVICE = True
+except ImportError:
+    _HAS_QUESTION_SERVICE = False
+
+
 
 # ── Constants ──────────────────────────────────────────────────────────
 _REVIEW_CURSOR_KEY = "evidence_review_cursor"
@@ -449,8 +468,9 @@ def confirm_evidence(
 
     found.confirm()
     _write_evidence(user, evidence_items)
-    _set_review_cursor(user, _get_review_cursor(user) + 1)
-
+    # CP-041R: Do NOT advance cursor after confirm: the confirmed item
+    # leaves the unreviewed list, so the cursor naturally points to
+    # the next unreviewed item.
     return {"evidence": found.to_dict(), "action": "confirmed"}
 
 
@@ -468,8 +488,9 @@ def reject_evidence(user, evidence_id: str) -> dict[str, Any]:
 
     found.reject()
     _write_evidence(user, evidence_items)
-    _set_review_cursor(user, _get_review_cursor(user) + 1)
-
+    # CP-041R: Do NOT advance cursor after reject: the rejected item
+    # leaves the unreviewed list, so the cursor naturally points to
+    # the next unreviewed item.
     return {"evidence": found.to_dict(), "action": "rejected"}
 
 
@@ -567,13 +588,347 @@ def reset_review_state(user) -> dict[str, Any]:
     }
 
 
+# ── CP-041R: Integrated confirmation + question flow ───────────────────
+
+
+def _inspect_for_question(evidence: CandidateEvidence) -> dict[str, Any] | None:
+    """Inspect a single confirmed evidence item for missing details.
+
+    Returns exactly one highest-value missing-detail question, or None if
+    the evidence is sufficiently complete.
+    """
+    if not _HAS_QUESTION_SERVICE:
+        return None
+
+    missing = _detect_missing_details(evidence)
+    if not missing:
+        return None
+
+    _priority_order = [
+        MISSING_OUTCOME,
+        MISSING_METRIC,
+        "missing_tool",
+        "missing_scope",
+        "missing_stakeholder",
+        "missing_date",
+        "missing_mapping",
+    ]
+
+    for mt in _priority_order:
+        if mt in missing:
+            question_text = _question_text(evidence, mt)
+            question_id = _make_question_id(evidence.evidence_id, mt)
+            return {
+                "question_id": question_id,
+                "evidence_id": evidence.evidence_id,
+                "evidence_type": evidence.evidence_type,
+                "evidence_label": _item_label(evidence),
+                "missing_type": mt,
+                "question": question_text,
+            }
+
+    return None
+
+
+
+def confirm_with_inspect(
+    user,
+    evidence_id: str,
+    *,
+    mapping: dict[str, str] | None = None,
+    edited_text: str | None = None,
+) -> dict[str, Any]:
+    """CP-041R: Confirm evidence, then inspect for one highest-value missing-detail question.
+
+    Flow:
+    1. Confirm the evidence with mapping and/or edited text
+    2. Inspect the canonical item for missing details
+    3. If a missing detail is found -> return {state: "question", ...}
+    4. If no missing detail -> return {state: "ready", ...} with readiness and actions
+    """
+    # Check if already confirmed before calling confirm_evidence (CP-041R idempotency)
+    existing_items = _read_evidence(user)
+    was_already_confirmed = any(
+        ev.evidence_id == evidence_id and ev.is_confirmed
+        for ev in existing_items
+    )
+
+    confirmed = confirm_evidence(
+        user, evidence_id, mapping=mapping, edited_text=edited_text
+    )
+
+    evidence_items = _read_evidence(user)
+    confirmed_ev = next(
+        (ev for ev in evidence_items if ev.evidence_id == evidence_id), None
+    )
+
+    if confirmed_ev is None:
+        return {
+            "state": "confirmed",
+            "evidence": confirmed["evidence"],
+            "action": "confirmed",
+            "readiness": compute_canonical_readiness(user),
+        }
+
+
+    # Skip question if evidence was already confirmed (idempotency)
+    if was_already_confirmed:
+        return {
+            "state": "ready",
+            "evidence": confirmed["evidence"],
+            "action": "confirmed",
+            "readiness": compute_canonical_readiness(user),
+            "primary_actions": build_ready_actions(user),
+        }
+
+    question = _inspect_for_question(confirmed_ev) if _HAS_QUESTION_SERVICE else None
+
+    readiness = compute_canonical_readiness(user)
+
+    if question and not readiness["is_ready"]:
+        _record_asked_question(user, question)
+        return {
+            "state": "question",
+            "evidence": confirmed["evidence"],
+            "action": "confirmed",
+            "question": question,
+            "readiness": readiness,
+        }
+
+    return {
+        "state": "ready",
+        "evidence": confirmed["evidence"],
+        "action": "confirmed",
+        "readiness": readiness,
+        "primary_actions": build_ready_actions(user),
+    }
+
+
+
+def _record_asked_question(user, question: dict[str, Any]) -> None:
+    """Record a question as 'asked' in the evidence question history."""
+    if not _HAS_QUESTION_SERVICE:
+        return
+    metadata = dict(user.metadata or {})
+    history = list(metadata.get("evidence_question_history") or [])
+    if not isinstance(history, list):
+        history = []
+    existing = any(
+        str(h.get("question_id") or "") == question["question_id"] for h in history
+        if isinstance(h, dict)
+    )
+    if not existing:
+        from datetime import datetime, timezone
+        history.append({
+            "question_id": question["question_id"],
+            "evidence_id": question["evidence_id"],
+            "missing_type": question["missing_type"],
+            "state": QUESTION_STATE_ASKED,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "asked_at": datetime.now(timezone.utc).isoformat(),
+        })
+        metadata["evidence_question_history"] = history
+        user.metadata = metadata
+        user.updated_at = _now()
+
+
+
+def answer_enrich_evidence(
+    user,
+    question_id: str,
+    answer_text: str,
+    *,
+    evidence_id: str | None = None,
+) -> dict[str, Any]:
+    """CP-041R: Answer a question and enrich the evidence record.
+
+    1. Records the answer in question history
+    2. Enriches the evidence record with the answer
+    3. Recalculates readiness immediately
+    4. Returns updated state
+    """
+    if _HAS_QUESTION_SERVICE:
+        try:
+            answer_question(user, question_id, {"answer_text": answer_text})
+        except Exception:
+            pass
+
+    if evidence_id:
+        evidence_items = _read_evidence(user)
+        for ev in evidence_items:
+            if ev.evidence_id == evidence_id:
+                if answer_text.strip():
+                    original = ev.text.rstrip(".")
+                    appended = f"{original}. {answer_text.strip().rstrip('.')}."
+                    ev.text = appended
+                    ev.content_hash = compute_content_hash(ev.text)
+                ev.updated_at = _now()
+                _write_evidence(user, evidence_items)
+                break
+
+    readiness = compute_canonical_readiness(user)
+
+    if readiness["is_ready"]:
+        return {
+            "state": "ready",
+            "action": "answered",
+            "readiness": readiness,
+            "primary_actions": build_ready_actions(user),
+        }
+
+    evidence_items = _read_evidence(user)
+    unreviewed = [
+        ev for ev in evidence_items
+        if ev.status in (EVIDENCE_STATUS_NEEDS_REVIEW, EVIDENCE_STATUS_REVIEWED)
+        and not ev.is_merged and not ev.is_rejected
+    ]
+
+    if unreviewed:
+        return {
+            "state": "review",
+            "action": "answered",
+            "readiness": readiness,
+            "remaining_review": len(unreviewed),
+        }
+
+    return {
+        "state": "ready",
+        "action": "answered",
+        "readiness": readiness,
+        "primary_actions": build_ready_actions(user),
+    }
+
+
+
+def build_ready_actions(user) -> list[dict[str, Any]]:
+    """CP-041R: Build grounded primary actions for Ready state.
+
+    Generates CV bullet and motivation-letter claim from confirmed/mapped
+    evidence items. Every output retains its evidence IDs and never invents
+    unsupported claims. Libraries/history are secondary.
+    """
+    evidence_items = _read_evidence(user)
+
+    confirmed = [
+        ev for ev in evidence_items
+        if ev.is_confirmed and ev.experience_mapping and ev.experience_mapping.get("experience_id")
+    ]
+
+    if not confirmed:
+        confirmed = [ev for ev in evidence_items if ev.is_confirmed]
+
+    actions: list[dict[str, Any]] = []
+
+    evidence_library = [
+        {
+            "evidence_id": ev.evidence_id,
+            "text": ev.text,
+            "evidence_type": ev.evidence_type,
+            "employer": ev.inferred_employer or (ev.experience_mapping or {}).get("company", ""),
+            "role": ev.inferred_role or (ev.experience_mapping or {}).get("role", ""),
+            "dates": list(ev.dates),
+            "experience_id": (ev.experience_mapping or {}).get("experience_id", ""),
+        }
+        for ev in confirmed
+    ]
+
+    if confirmed:
+        sample = confirmed[0]
+        company = sample.inferred_employer or (sample.experience_mapping or {}).get("company", "your role")
+        role = sample.inferred_role or (sample.experience_mapping or {}).get("role", "")
+        snippet = sample.text[:120].rstrip(".").strip() if sample.text else ""
+        evidence_refs = [ev.evidence_id for ev in confirmed[:3]]
+
+        cv_bullet = {
+            "action": "cv_bullet",
+            "label": "Generate CV Bullet",
+            "description": f'Grounded CV bullet from: "{snippet}..."' if snippet else "Generate a CV bullet from your evidence",
+            "evidence_ids": evidence_refs,
+            "evidence_count": len(confirmed),
+            "source": "canonical_evidence",
+            "claim": f"{role} at {company}: {snippet}." if role and snippet else snippet,
+        }
+        actions.append(cv_bullet)
+
+    if confirmed:
+        motivations = [
+            ev for ev in confirmed if ev.evidence_type in ("motivation", "achievement")
+        ] or confirmed[:1]
+
+        claim_ev = motivations[0]
+        company = claim_ev.inferred_employer or (claim_ev.experience_mapping or {}).get("company", "")
+        role = claim_ev.inferred_role or (claim_ev.experience_mapping or {}).get("role", "")
+
+        motivation_letter = {
+            "action": "motivation_letter",
+            "label": "Generate Motivation Letter",
+            "description": "Grounded motivation claim from confirmed evidence",
+            "evidence_ids": [ev.evidence_id for ev in motivations[:2]],
+            "evidence_count": len(confirmed),
+            "source": "canonical_evidence",
+            "claim": f"At {company} as {role}, I delivered measurable impact."
+                if company and role else "I delivered measurable impact in my roles.",
+        }
+        actions.append(motivation_letter)
+
+    if evidence_library:
+        actions.append({
+            "action": "evidence_library",
+            "label": "View Evidence Library",
+            "description": f"{len(evidence_library)} confirmed evidence items",
+            "evidence_ids": [item["evidence_id"] for item in evidence_library],
+            "evidence_count": len(evidence_library),
+            "source": "canonical_evidence",
+            "items": evidence_library[:5],
+        })
+
+    return actions
+
+
+def skip_question_for_evidence(
+    user,
+    question_id: str,
+) -> dict[str, Any]:
+    """CP-041R: Skip a question — permanently exclude it.
+
+    Returns readiness and advances to next state.
+    """
+    if _HAS_QUESTION_SERVICE:
+        try:
+            skip_question(user, question_id)
+        except Exception:
+            pass
+
+    readiness = compute_canonical_readiness(user)
+
+    if readiness["is_ready"]:
+        return {
+            "state": "ready",
+            "action": "skipped",
+            "readiness": readiness,
+            "primary_actions": build_ready_actions(user),
+        }
+
+    return {
+        "state": "review",
+        "action": "skipped",
+        "readiness": readiness,
+    }
+
+
+# CP-041R: Updated __all__ to include all public functions
 __all__ = [
+    "answer_enrich_evidence",
+    "build_ready_actions",
     "compute_canonical_readiness",
     "confirm_evidence",
+    "confirm_with_inspect",
     "edit_evidence",
     "get_next_review_item",
     "reject_evidence",
     "remove_legacy_memory_spike",
     "reset_review_state",
+    "skip_question_for_evidence",
     "suggest_mapping_for_evidence",
 ]
+

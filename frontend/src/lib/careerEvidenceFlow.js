@@ -1,3 +1,10 @@
+// CP-041R: Question state — shown inline after confirmation
+export const QUESTION_STATE = {
+  ASKED: "asked",
+  ANSWERED: "answered",
+  SKIPPED: "skipped",
+};
+
 // CP-038R: Career Evidence guided flow — deterministic state resolver.
 // Reads canonical evidence records and returns the single next primary action.
 //

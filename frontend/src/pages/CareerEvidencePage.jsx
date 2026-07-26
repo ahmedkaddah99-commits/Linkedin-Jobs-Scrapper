@@ -105,6 +105,9 @@ export default function CareerEvidencePage() {
   // CP-040R: One-at-a-time evidence review state
   const [reviewItem, setReviewItem] = useState(null);
   const [reviewLoading, setReviewLoading] = useState(false);
+  // CP-041R: Question state shown inline after confirmation
+  const [activeQuestion, setActiveQuestion] = useState(null);
+
 
   const processSelectedSources = useCallback(async (fileBytesMap = null) => {
     if (selectedSourceIds.length === 0) return;
@@ -379,6 +382,86 @@ export default function CareerEvidencePage() {
     await saveToSettings({ experience_links: links });
   }
 
+  // CP-041R: Confirm evidence with inspect — gets question or ready state
+  async function handleConfirmWithInspect(evidenceId, mapping) {
+    setReviewLoading(true);
+    setActiveQuestion(null);
+    try {
+      const response = await request("/evidence-items/confirm-inspect", {
+        method: "POST",
+        body: {
+          evidence_id: evidenceId,
+          mapping: mapping || undefined,
+        },
+      });
+      if (response) {
+        await Promise.all([
+          refreshSettings().catch(() => undefined),
+          refreshDocuments().catch(() => undefined),
+        ]);
+
+        if (response.state === "question" && response.question) {
+          // CP-041R: Show one missing-detail question inline
+          setActiveQuestion(response.question);
+        } else {
+          // Ready or no question needed — advance
+          setActiveQuestion(null);
+          await fetchNextReviewItem();
+        }
+      }
+    } catch {
+      setActiveQuestion(null);
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  // CP-041R: Answer the inline question and enrich evidence
+  async function handleAnswerQuestion(answerText) {
+    if (!activeQuestion) return;
+    setReviewLoading(true);
+    try {
+      const response = await request("/evidence-items/answer-enrich", {
+        method: "POST",
+        body: {
+          question_id: activeQuestion.question_id,
+          answer_text: answerText,
+          evidence_id: activeQuestion.evidence_id,
+        },
+      });
+      if (response) {
+        setActiveQuestion(null);
+        await Promise.all([
+          refreshSettings().catch(() => undefined),
+          refreshDocuments().catch(() => undefined),
+        ]);
+        await fetchNextReviewItem();
+      }
+    } catch {
+      setActiveQuestion(null);
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  // CP-041R: Skip the inline question
+  async function handleSkipQuestion() {
+    if (!activeQuestion) return;
+    try {
+      await request("/evidence-items/skip-question", {
+        method: "POST",
+        body: {
+          question_id: activeQuestion.question_id,
+        },
+      });
+    } catch {
+      // Fallback
+    }
+    setActiveQuestion(null);
+    await fetchNextReviewItem();
+  }
+
+
   const { state, label, description, primaryAction, progress, progressLabel: stepLabel } =
     lifecycle;
 
@@ -440,11 +523,14 @@ export default function CareerEvidencePage() {
         ) : state === LIFECYCLE_STATE.REVIEW ? (
           <ReviewState
             evidenceItems={evidenceItems}
-            onConfirm={handleConfirmEvidence}
+            onConfirm={handleConfirmWithInspect}
             onReject={handleRejectEvidence}
             onEdit={handleEditEvidence}
             reviewItem={reviewItem}
             reviewLoading={reviewLoading}
+            activeQuestion={activeQuestion}
+            onAnswerQuestion={handleAnswerQuestion}
+            onSkipQuestion={handleSkipQuestion}
           />
         ) : state === LIFECYCLE_STATE.MAPPING ? (
           <MappingState
@@ -563,12 +649,15 @@ function ProcessingState({ navigate, selectedSourceCount }) {
   );
 }
 
-// CP-040R: One-item-at-a-time evidence review with suggested mapping
-function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, reviewLoading }) {
+// CP-040R + CP-041R: One-item-at-a-time evidence review with suggested mapping
+// and inline question after confirmation
+function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, reviewLoading, activeQuestion, onAnswerQuestion, onSkipQuestion }) {
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [selectedMapping, setSelectedMapping] = useState(null);
 
+  // CP-041R: Question answer state
+  const [questionAnswer, setQuestionAnswer] = useState("");
   const currentItem = reviewItem?.evidence || (
     (evidenceItems || []).find(
       (ev) => ev && ev.status !== "confirmed" && ev.status !== "rejected",
@@ -753,6 +842,58 @@ function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, r
               </button>
             ))}
           </div>
+        </div>
+      ) : null}
+
+
+      {/* CP-041R: Inline question after confirmation */}
+      {activeQuestion ? (
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3">
+          <div className="flex items-start gap-2">
+            <span className="material-symbols-outlined text-primary text-[18px] mt-0.5">help</span>
+            <div>
+              <p className="text-sm font-medium text-on-surface">
+                {activeQuestion.question || activeQuestion.text}
+              </p>
+              <p className="mt-1 text-xs text-on-surface-variant">
+                One missing detail — answer to enrich your evidence.
+              </p>
+            </div>
+          </div>
+          <form
+            className="space-y-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (questionAnswer.trim()) {
+                onAnswerQuestion(questionAnswer.trim());
+                setQuestionAnswer("");
+              }
+            }}
+          >
+            <textarea
+              className="min-h-20 w-full rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm text-on-surface"
+              onChange={(e) => setQuestionAnswer(e.target.value)}
+              placeholder="Type your answer..."
+              value={questionAnswer}
+            />
+            <div className="flex items-center gap-2">
+              <button
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                disabled={!questionAnswer.trim() || reviewLoading}
+                type="submit"
+              >
+                <span className="material-symbols-outlined text-[14px]">check</span>
+                {reviewLoading ? "Saving..." : "Answer"}
+              </button>
+              <button
+                className="rounded-lg border border-outline-variant/20 bg-surface px-4 py-2 text-xs font-medium text-on-surface-variant hover:bg-surface-container-low"
+                onClick={onSkipQuestion}
+                type="button"
+              >
+                Skip
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
 
