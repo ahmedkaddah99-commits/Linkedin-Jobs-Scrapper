@@ -11,6 +11,7 @@ export function resolveRouteParent({ pathname = "", search = "" } = {}) {
   const normalizedPath = String(pathname || "").replace(/\/+$/, "") || "/";
   const params = new URLSearchParams(search);
 
+  if (normalizedPath === "/career-memory") return "/documents?view=memory";
   if (normalizedPath === "/career-memory/guide") return "/documents?view=memory";
   if (normalizedPath === "/documents" && params.get("view") === "memory") return "/documents";
   if (normalizedPath === "/cv-studio") return "/documents";

@@ -52,11 +52,22 @@ export const MEMORY_BANK_FILTERS = [
 ];
 
 export const MEMORY_BUILDER_TABS = [
-  { id: "build", label: "Build" },
-  { id: "memory_bank", label: "Career Profile" },
+  { id: "overview", label: "Overview" },
   { id: "sources", label: "Sources" },
-  { id: "advanced", label: "Advanced" },
+  { id: "review_evidence", label: "Review evidence" },
+  { id: "career_timeline", label: "Career timeline" },
+  { id: "evidence_library", label: "Evidence library" },
+  { id: "use_for_application", label: "Use for application" },
+  { id: "settings", label: "Settings" },
 ];
+
+// CP-035: Legacy tab IDs kept for redirect compatibility.
+export const LEGACY_TAB_MAP = {
+  build: "overview",
+  memory_bank: "evidence_library",
+  sources: "sources",
+  advanced: "settings",
+};
 
 export const QUESTION_SET_DEFINITIONS = {
   story_recovery: {
@@ -919,4 +930,3 @@ export function createDraftReviewWarnings(card) {
 export function getSourceLabel(source) {
   return sourceLabel(source);
 }
-

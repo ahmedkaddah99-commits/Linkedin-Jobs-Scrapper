@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useSession } from "../../context/SessionContext";
 import AdvancedMemorySettings from "./AdvancedMemorySettings";
+import CareerTimelineTab from "./CareerTimelineTab";
+import OverviewTab from "./OverviewTab";
+import UseForApplicationTab from "./UseForApplicationTab";
+import CareerProfileEvidenceReview from "../careerProfile/CareerProfileEvidenceReview";
 import BuildWorkspace from "./BuildWorkspace";
 import MemoryBankTab from "./MemoryBankTab";
 import MemoryBuilderHeader from "./MemoryBuilderHeader";
@@ -21,6 +26,7 @@ import {
   getSourceSummary,
   getTopStatusBarItems,
   MEMORY_BANK_FILTERS,
+  LEGACY_TAB_MAP,
   MEMORY_BUILDER_TABS,
   MEMORY_TRIGGER_CHIPS,
   normalizeCareerMemoryCard,
@@ -42,10 +48,19 @@ export default function CareerMemoryBuilderPage({
   workspaceScopeTo = "/workspaces?focus=documents",
 }) {
   const { request } = useSession();
-  const [activeTab, setActiveTab] = useState("build");
+  const [activeTab, setActiveTab] = useState("overview");
   const [memorySearch, setMemorySearch] = useState("");
   const [memoryFilter, setMemoryFilter] = useState("all");
   const [autoEditCardId, setAutoEditCardId] = useState("");
+  const [searchParams] = useSearchParams();
+
+  // CP-035: Legacy tab redirect via URL param.
+  useEffect(() => {
+    const legacyTab = searchParams.get("tab");
+    if (legacyTab && LEGACY_TAB_MAP[legacyTab]) {
+      setActiveTab(LEGACY_TAB_MAP[legacyTab]);
+    }
+  }, [searchParams]);
   const [currentAnswer, setCurrentAnswer] = useState("");
   const [interviewState, setInterviewState] = useState(() => createInterviewState());
   const questionSet = useMemo(
@@ -77,6 +92,19 @@ export default function CareerMemoryBuilderPage({
     () => getNextBestActions(draft, assetDocuments),
     [draft, assetDocuments],
   );
+  const readinessItems = useMemo(
+    () => {
+      if (!tailoringChecklist) return [];
+      return [
+        { title: "Sources", status: tailoringChecklist.baselineConnected ? "Ready" : "Needs setup", value: `${tailoringChecklist.selectedAssetCount} selected / ${tailoringChecklist.totalSources} available`, description: "" },
+        { title: "Evidence", status: tailoringChecklist.verifiedCount > 0 ? "Ready" : "Needs setup", value: `${tailoringChecklist.awaitingReviewCount} awaiting / ${tailoringChecklist.verifiedCount} verified`, description: "" },
+        { title: "Experiences", status: tailoringChecklist.mappedCount > 0 ? "Ready" : "Needs setup", value: `${tailoringChecklist.mappedCount} mapped / ${tailoringChecklist.unmappedCount} unmapped`, description: "" },
+        { title: "Ready", status: tailoringChecklist.readyForTailoring ? "Ready for tailoring" : "Needs setup", value: tailoringChecklist.summary, description: "" },
+      ];
+    },
+    [tailoringChecklist],
+  );
+
   const sourceSummary = useMemo(
     () => getSourceSummary(draft, assetDocuments),
     [draft, assetDocuments],
@@ -164,7 +192,7 @@ export default function CareerMemoryBuilderPage({
     const nextState = createInterviewState(questionSetType);
     setInterviewState(nextState);
     setCurrentAnswer("");
-    setActiveTab("build");
+    setActiveTab("overview");
   }
 
   function selectMemoryTrigger(trigger) {
@@ -250,7 +278,7 @@ export default function CareerMemoryBuilderPage({
   }
 
   function addMetricToMemory(cardId) {
-    setActiveTab("memory_bank");
+    setActiveTab("evidence_library");
     setAutoEditCardId(cardId);
   }
 
@@ -286,12 +314,12 @@ export default function CareerMemoryBuilderPage({
   function handleManualMemory() {
     const card = createManualMemoryCard();
     onChangeField("generatedMemoryCards", [card, ...(draft.generatedMemoryCards || [])]);
-    setActiveTab("memory_bank");
+    setActiveTab("evidence_library");
     setAutoEditCardId(card.id);
   }
 
   function handleContinueInterview() {
-    setActiveTab("build");
+    setActiveTab("overview");
   }
 
   function handleToggleUseInCv(cardId) {
@@ -334,6 +362,24 @@ export default function CareerMemoryBuilderPage({
         tabs={MEMORY_BUILDER_TABS}
       />
 
+      {activeTab === "overview" ? (
+        <OverviewTab
+          baselineCvAssetId={draft.masterProfileAssetId}
+          boundWorkspaceId=""
+          boundWorkspaceName=""
+          nextBestActions={nextBestActions}
+          onContinueInterview={handleContinueInterview}
+          onStartAction={startGuidedInterview}
+          profileName="Career Profile"
+          profileStatus=""
+          readinessItems={readinessItems}
+          statusBarItems={statusBarItems}
+          tailoringChecklist={tailoringChecklist}
+          workspaceBindingLabel=""
+        />
+      ) : null}
+
+      {/* Build workspace kept for backwards compatibility */}
       {activeTab === "build" ? (
         <BuildWorkspace
           answer={currentAnswer}
@@ -350,7 +396,7 @@ export default function CareerMemoryBuilderPage({
           onImproveDraft={handleImproveDraft}
           onLatestAddMetric={addMetricToMemory}
           onLatestEdit={(cardId) => {
-            setActiveTab("memory_bank");
+            setActiveTab("evidence_library");
             setAutoEditCardId(cardId);
           }}
           onLatestToggleUseInCv={handleToggleUseInCv}
@@ -367,7 +413,7 @@ export default function CareerMemoryBuilderPage({
         />
       ) : null}
 
-      {activeTab === "memory_bank" ? (
+      {activeTab === "evidence_library" ? (
         <MemoryBankTab
           autoEditCardId={autoEditCardId}
           cards={filteredMemoryCards}
@@ -399,7 +445,7 @@ export default function CareerMemoryBuilderPage({
         />
       ) : null}
 
-      {activeTab === "advanced" ? (
+      {activeTab === "settings" ? (
         <AdvancedMemorySettings
           advancedFields={advancedFields}
           guideTo={guideTo}
@@ -407,6 +453,29 @@ export default function CareerMemoryBuilderPage({
           workspaceScopeTo={workspaceScopeTo}
         />
       ) : null}
-    </div>
+    
+      {activeTab === "review_evidence" ? (
+        <CareerProfileEvidenceReview
+          profileId=""
+          profileName="Career Profile"
+        />
+      ) : null}
+
+      {activeTab === "career_timeline" ? (
+        <CareerTimelineTab
+          cards={memoryCards}
+          onEditCard={(cardId) => { setActiveTab("evidence_library"); setAutoEditCardId(cardId); }}
+        />
+      ) : null}
+
+      {activeTab === "use_for_application" ? (
+        <UseForApplicationTab
+          baselineCvAssetId={draft.masterProfileAssetId}
+          boundWorkspaceId=""
+          boundWorkspaceName=""
+          cards={memoryCards}
+        />
+      ) : null}
+</div>
   );
 }
