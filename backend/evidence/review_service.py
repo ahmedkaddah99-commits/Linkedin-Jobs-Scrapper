@@ -1047,10 +1047,12 @@ def get_journey_state(user) -> dict[str, Any]:
     item (if any), and ready actions (if ready).
     """
     readiness = compute_canonical_readiness(user)
+    evidence_items = [item.to_dict() for item in _read_evidence(user)]
 
     if readiness["is_ready"]:
         return {
             "state": "ready",
+            "evidence_items": evidence_items,
             "readiness": readiness,
             "primary_actions": build_ready_actions(user),
         }
@@ -1059,6 +1061,7 @@ def get_journey_state(user) -> dict[str, Any]:
     if pending_question is not None:
         return {
             "state": "question",
+            "evidence_items": evidence_items,
             "readiness": readiness,
             "question": pending_question,
         }
@@ -1067,22 +1070,24 @@ def get_journey_state(user) -> dict[str, Any]:
     if next_item is not None:
         return {
             "state": "review",
+            "evidence_items": evidence_items,
             "readiness": readiness,
             "next_review": next_item,
         }
 
     # Never claim Ready unless canonical readiness agrees.  This fallback is a
     # recoverable review state for inconsistent/legacy records.
-    evidence_items = _read_evidence(user)
     if evidence_items:
         return {
             "state": "review",
+            "evidence_items": evidence_items,
             "readiness": readiness,
             "next_review": None,
         }
 
     return {
         "state": "empty",
+        "evidence_items": [],
         "readiness": readiness,
         "primary_actions": build_ready_actions(user),
     }

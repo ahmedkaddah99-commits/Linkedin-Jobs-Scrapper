@@ -517,10 +517,13 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
         user.updated_at = datetime.now(timezone.utc).isoformat()
         context.application.repositories.auth_repository.upsert_user(user)
 
+        from backend.evidence.review_service import get_journey_state
+
         context.send_json({
             "batch_id": result["batch_id"], "status": result["status"],
             "sources": result["sources"], "evidence": result["evidence"],
             "summary": result["summary"], "state": state,
+            "journey": get_journey_state(user),
         }, status=HTTPStatus.OK if result["status"] == "completed" else HTTPStatus.ACCEPTED)
         return True
 

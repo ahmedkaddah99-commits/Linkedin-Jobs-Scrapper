@@ -24,6 +24,7 @@ from backend.evidence.review_service import (
     confirm_evidence,
     confirm_with_inspect,
     get_next_review_item,
+    get_journey_state,
     skip_question_for_evidence,
     suggest_mapping_for_evidence,
 )
@@ -399,6 +400,17 @@ class ReadyStateOutputsTests(unittest.TestCase):
 
 class ReloadPersistenceTests(unittest.TestCase):
     """Reload restores exact unfinished step."""
+
+    def test_journey_exposes_canonical_evidence_without_settings_mirror(self):
+        ev = _make_evidence(text="Persisted canonical evidence.")
+        user = _make_user({"candidate_evidence": [ev.to_dict()]})
+
+        journey = get_journey_state(user)
+
+        self.assertEqual(journey["state"], "review")
+        self.assertEqual(len(journey["evidence_items"]), 1)
+        self.assertEqual(journey["evidence_items"][0]["evidence_id"], ev.evidence_id)
+        self.assertNotIn("evidence_items", user.metadata.get("documents", {}))
 
     def test_review_cursor_persisted_for_reload(self):
         ev1 = _make_evidence(text="First.", status=EVIDENCE_STATUS_NEEDS_REVIEW)

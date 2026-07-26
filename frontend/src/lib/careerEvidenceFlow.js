@@ -276,3 +276,32 @@ export function buildLifecycleSummary({
     nextState: nextLifecycleState(state),
   };
 }
+
+/** Apply the canonical server journey instead of inferring evidence from settings. */
+export function applyCanonicalJourneyState(summary, journeySnapshot) {
+  const serverState = String(journeySnapshot?.state || "").trim().toLowerCase();
+  let state = summary?.state || LIFECYCLE_STATE.SOURCE;
+
+  if (serverState === "review" || serverState === "question") {
+    state = LIFECYCLE_STATE.REVIEW;
+  } else if (serverState === "ready" || serverState === "complete") {
+    state = LIFECYCLE_STATE.READY;
+  } else if (serverState === "processing") {
+    state = LIFECYCLE_STATE.PROCESSING;
+  } else if (serverState === "empty") {
+    state = (summary?.selectedSourceCount || 0) > 0
+      ? LIFECYCLE_STATE.PROCESSING
+      : LIFECYCLE_STATE.SOURCE;
+  }
+
+  return {
+    ...summary,
+    state,
+    label: STATE_LABELS[state] || STATE_LABELS[LIFECYCLE_STATE.SOURCE],
+    description: STATE_DESCRIPTIONS[state] || "",
+    primaryAction: STATE_PRIMARY_ACTION[state] || "",
+    progress: lifecycleProgress(state),
+    progressLabel: progressLabel(state),
+    nextState: nextLifecycleState(state),
+  };
+}

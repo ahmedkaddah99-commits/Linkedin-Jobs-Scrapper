@@ -7,12 +7,38 @@ import {
   STATE_INDEX,
   STATE_LABELS,
   STATE_PRIMARY_ACTION,
+  applyCanonicalJourneyState,
   buildLifecycleSummary,
   lifecycleProgress,
   nextLifecycleState,
   progressLabel,
   resolveLifecycleState,
 } from "./careerEvidenceFlow.js";
+
+test("canonical journey advances when evidence is not mirrored into settings", () => {
+  const settingsDerived = buildLifecycleSummary({
+    sources: [{ document_id: "doc_1" }],
+    selectedSourceIds: ["doc_1"],
+    evidenceItems: [],
+  });
+  assert.equal(settingsDerived.state, LIFECYCLE_STATE.PROCESSING);
+  assert.equal(
+    applyCanonicalJourneyState(settingsDerived, {
+      state: "review",
+      next_review: { evidence: { evidence_id: "ev_1", status: "needs_review" } },
+    }).state,
+    LIFECYCLE_STATE.REVIEW,
+  );
+});
+
+test("canonical question and ready states override stale settings", () => {
+  const summary = buildLifecycleSummary({
+    sources: [{ document_id: "doc_1" }],
+    selectedSourceIds: ["doc_1"],
+  });
+  assert.equal(applyCanonicalJourneyState(summary, { state: "question" }).state, LIFECYCLE_STATE.REVIEW);
+  assert.equal(applyCanonicalJourneyState(summary, { state: "ready" }).state, LIFECYCLE_STATE.READY);
+});
 
 // CP-038R: Lifecycle order is deterministic and fixed.
 test("LIFECYCLE_ORDER has four visible states in the seamless sequence", () => {

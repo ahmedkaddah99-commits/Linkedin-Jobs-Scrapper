@@ -67,7 +67,6 @@ async function installProductionApi(page: Page, { failFirstProcessing = false } 
     if (path === "/settings" && method === "GET") {
       return json(route, { documents: {
         selectedAssetIds: state.selected,
-        evidence_items: state.evidence ? [state.evidence] : [],
         pending_questions: state.questionPending ? [{
           question_id: "q_prod_001", evidence_id: evidence.evidence_id,
           resolved: false, dismissed: false,
@@ -94,19 +93,30 @@ async function installProductionApi(page: Page, { failFirstProcessing = false } 
       });
     }
     if (path === "/evidence-items/journey-state" && method === "GET") {
+      if (!state.evidence) {
+        return json(route, { state: "empty", evidence_items: [] });
+      }
       if (state.questionPending) {
         return json(route, { state: "question", question: {
           question_id: "q_prod_001",
           evidence_id: evidence.evidence_id,
           question: "What measurable outcome did this automation produce?",
-        } });
+        }, evidence_items: [state.evidence] });
+      }
+      if (state.evidence.status === "confirmed") {
+        return json(route, { state: "ready", evidence_items: [state.evidence], primary_actions: [
+          { action: "cv_bullet", label: "Generate CV Bullet", description: "Grounded CV evidence",
+            evidence_ids: [evidence.evidence_id], source: "canonical_evidence" },
+          { action: "motivation_letter", label: "Generate Motivation Letter", description: "Grounded letter evidence",
+            evidence_ids: [evidence.evidence_id], source: "canonical_evidence" },
+        ] });
       }
       return json(route, { state: "review", next_review: {
         state: "review", evidence: state.evidence,
         suggested_mapping: mapping, is_ambiguous: false, alternatives: [],
         provenance: { source_asset: "baseline-cv.txt", confidence: 0.96 },
         progress: { cursor: 1, remaining: 1, total: 1 },
-      } });
+      }, evidence_items: [state.evidence] });
     }
     if (path === "/evidence-items/next-review" && method === "GET") {
       return json(route, { state: "review", evidence: state.evidence, suggested_mapping: mapping,

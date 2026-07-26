@@ -6,6 +6,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import {
+  applyCanonicalJourneyState,
   buildLifecycleSummary,
   LIFECYCLE_STATE,
   SOURCE_PROCESSING_STATE,
@@ -51,9 +52,22 @@ export default function CareerEvidencePage() {
   const allDocuments = documentsPayload?.documents || [];
   const settingsDocuments = settingsPayload?.documents || {};
 
+  const {
+    data: journeyPayload,
+    loading: journeyLoading,
+    refresh: refreshJourneyState,
+    setData: setJourneyPayload,
+  } = useApiResource(
+    () => request("/evidence-items/journey-state"),
+    [request],
+    { cacheKey: "career-evidence:journey", staleMs: 0, backgroundRefresh: true },
+  );
+
   const evidenceItems = useMemo(
-    () => settingsPayload?.documents?.evidence_items || [],
-    [settingsPayload],
+    () => journeyPayload?.evidence_items ||
+      (journeyPayload?.evidence ? [journeyPayload.evidence] : null) ||
+      settingsPayload?.documents?.evidence_items || [],
+    [journeyPayload, settingsPayload],
   );
 
   const experienceLinks = useMemo(
@@ -83,17 +97,16 @@ export default function CareerEvidencePage() {
     [allDocuments],
   );
 
-  const lifecycle = useMemo(
-    () =>
-      buildLifecycleSummary({
+  const lifecycle = useMemo(() => {
+    const settingsDerived = buildLifecycleSummary({
         sources: sourceDocuments,
         selectedSourceIds,
         evidenceItems,
         experienceLinks,
         pendingQuestions,
-      }),
-    [sourceDocuments, selectedSourceIds, evidenceItems, experienceLinks, pendingQuestions],
-  );
+      });
+    return applyCanonicalJourneyState(settingsDerived, journeyPayload);
+  }, [sourceDocuments, selectedSourceIds, evidenceItems, experienceLinks, pendingQuestions, journeyPayload]);
 
 
 
@@ -166,7 +179,9 @@ export default function CareerEvidencePage() {
       setProcessingState(state);
 
       if (state.state === "completed") {
-        await refreshSettings().catch(() => undefined);
+        const journey = response?.journey || await refreshJourneyState().catch(() => null);
+        if (journey) setJourneyPayload(journey);
+        if (journey?.next_review) setReviewItem(journey.next_review);
       } else if (state.state === "failed" || state.state === "timeout") {
         setProcessingError(state.error || "Processing failed.");
       }
@@ -180,7 +195,7 @@ export default function CareerEvidencePage() {
     } finally {
       processingRef.current = false;
     }
-  }, [selectedSourceIds, sourceDocuments, request, refreshSettings]);
+  }, [selectedSourceIds, sourceDocuments, request, refreshJourneyState, setJourneyPayload]);
 
 
 
@@ -286,26 +301,23 @@ export default function CareerEvidencePage() {
   // reloads. Mapping and questions remain inline in the single review screen.
   useEffect(() => {
     if (lifecycle.state === LIFECYCLE_STATE.REVIEW) {
-      request("/evidence-items/journey-state")
-        .then((response) => {
-          if (response?.state === "question" && response.question) {
-            setActiveQuestion(response.question);
-            setReviewItem(null);
-          } else {
-            setActiveQuestion(null);
-            setReviewItem(response?.next_review || null);
-          }
-        })
-        .catch(() => fetchNextReviewItem());
+      if (journeyPayload?.state === "question" && journeyPayload.question) {
+        setActiveQuestion(journeyPayload.question);
+        setReviewItem(null);
+      } else if (journeyPayload?.state === "review") {
+        setActiveQuestion(null);
+        setReviewItem(journeyPayload.next_review || null);
+      }
     } else if (lifecycle.state === LIFECYCLE_STATE.READY) {
-      // CP-044R: Fetch ready actions with CV/motivation provenance
-      request("/evidence-items/ready-actions")
-        .then((res) => {
-          if (res?.primary_actions) setReadyActions(res.primary_actions);
-        })
-        .catch(() => undefined);
+      if (journeyPayload?.primary_actions) {
+        setReadyActions(journeyPayload.primary_actions);
+      } else {
+        request("/evidence-items/ready-actions")
+          .then((response) => setReadyActions(response?.primary_actions || []))
+          .catch(() => undefined);
+      }
     }
-  }, [lifecycle.state, fetchNextReviewItem, request]);
+  }, [lifecycle.state, journeyPayload, request]);
 
   // CP-040R: Confirm evidence with mapping via review service
   async function handleConfirmEvidence(evidenceId, mapping) {
@@ -427,10 +439,9 @@ export default function CareerEvidencePage() {
         },
       });
       if (response) {
-        await Promise.all([
-          refreshSettings().catch(() => undefined),
-          refreshDocuments().catch(() => undefined),
-        ]);
+        setJourneyPayload(response);
+        const canonicalJourney = await refreshJourneyState().catch(() => null);
+        if (canonicalJourney) setJourneyPayload(canonicalJourney);
 
         if (response.state === "question" && response.question) {
           // CP-044R: Show one missing-detail question inline
@@ -466,11 +477,10 @@ export default function CareerEvidencePage() {
         },
       });
       if (response) {
+        setJourneyPayload(response);
         setActiveQuestion(null);
-        await Promise.all([
-          refreshSettings().catch(() => undefined),
-          refreshDocuments().catch(() => undefined),
-        ]);
+        const canonicalJourney = await refreshJourneyState().catch(() => null);
+        if (canonicalJourney) setJourneyPayload(canonicalJourney);
         // CP-044R: Use next_review from response (inline — no separate fetch)
         if (response.next_review) {
           setReviewItem(response.next_review);
@@ -497,6 +507,9 @@ export default function CareerEvidencePage() {
           question_id: activeQuestion.question_id,
         },
       });
+      setJourneyPayload(response);
+      const canonicalJourney = await refreshJourneyState().catch(() => null);
+      if (canonicalJourney) setJourneyPayload(canonicalJourney);
       setActiveQuestion(null);
       // CP-044R: Use next_review from response (inline)
       if (response?.next_review) {
@@ -524,41 +537,23 @@ export default function CareerEvidencePage() {
   useEffect(() => {
     if (
       state === LIFECYCLE_STATE.PROCESSING &&
+      !journeyLoading &&
       selectedSourceIds.length > 0 &&
       (!processingState || ["queued", "processing"].includes(processingState.state)) &&
       !processingRef.current
     ) {
       processSelectedSources().catch(() => undefined);
     }
-  }, [state, selectedSourceIds, processingState, processSelectedSources]);
-
-  // CP-043R: Persist processing state across reloads
-  useEffect(() => {
-    if (processingState) {
-      saveToSettings({ _processing_state: processingState }).catch(() => undefined);
-    }
-  }, [processingState]);
-
-  // CP-043R: Load persisted processing state on mount
-  useEffect(() => {
-    const saved = settingsDocuments._processing_state;
-    if (saved && saved.state && saved.state !== "completed" && saved.state !== "failed") {
-      setProcessingState(saved);
-    }
-  }, []); // Only on mount
+  }, [state, journeyLoading, selectedSourceIds, processingState, processSelectedSources]);
 
   // CP-044R: Auto-advance when processing completes — fetch first review item
   useEffect(() => {
     if (processingState?.state === "completed" && state === LIFECYCLE_STATE.PROCESSING) {
-      // Processing just completed - refresh data and auto-load first review
-      Promise.all([
-        refreshSettings().catch(() => undefined),
-        refreshDocuments().catch(() => undefined),
-      ]).then(() => {
-        fetchNextReviewItem();
-      });
+      refreshJourneyState().then((journey) => {
+        if (journey?.next_review) setReviewItem(journey.next_review);
+      }).catch(() => fetchNextReviewItem());
     }
-  }, [processingState?.state, state, refreshSettings, refreshDocuments, fetchNextReviewItem]);
+  }, [processingState?.state, state, refreshJourneyState, fetchNextReviewItem]);
 
   // CP-043R: Focus management - move focus to heading on state transition
   useEffect(() => {
