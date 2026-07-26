@@ -102,6 +102,10 @@ export default function CareerEvidencePage() {
   const [processingError, setProcessingError] = useState("");
   const processingRef = useRef(null);
 
+  // CP-040R: One-at-a-time evidence review state
+  const [reviewItem, setReviewItem] = useState(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+
   const processSelectedSources = useCallback(async (fileBytesMap = null) => {
     if (selectedSourceIds.length === 0) return;
     setProcessingState({ state: SOURCE_PROCESSING_STATE.QUEUED, extracted_count: 0 });
@@ -248,11 +252,123 @@ export default function CareerEvidencePage() {
     await saveToSettings({ pending_questions: updated });
   }
 
-  async function handleConfirmEvidence(evidenceId) {
-    const updated = evidenceItems.map((ev) =>
-      ev.evidence_id === evidenceId ? { ...ev, status: "confirmed" } : ev,
-    );
-    await saveToSettings({ evidence_items: updated });
+  // CP-040R: Fetch next review item from backend
+  const fetchNextReviewItem = useCallback(async () => {
+    try {
+      const response = await request("/evidence-items/next-review");
+      if (response?.state) {
+        setReviewItem(response);
+      }
+    } catch {
+      // Fall back to client-side review if endpoint unavailable
+      setReviewItem(null);
+    }
+  }, [request]);
+
+  // CP-040R: Auto-fetch review item on mount and after processing
+  useEffect(() => {
+    if (lifecycle.state === LIFECYCLE_STATE.REVIEW) {
+      fetchNextReviewItem();
+    }
+  }, [lifecycle.state, fetchNextReviewItem]);
+
+  // CP-040R: Confirm evidence with mapping via review service
+  async function handleConfirmEvidence(evidenceId, mapping) {
+    setReviewLoading(true);
+    try {
+      const response = await request("/evidence-items/review-action", {
+        method: "POST",
+        body: {
+          evidence_id: evidenceId,
+          action: "confirm",
+          mapping: mapping || undefined,
+        },
+      });
+      if (response?.evidence) {
+        await Promise.all([
+          refreshSettings().catch(() => undefined),
+          refreshDocuments().catch(() => undefined),
+        ]);
+        // Fetch next item
+        await fetchNextReviewItem();
+      }
+    } catch {
+      // Fallback: local confirm
+      const updated = evidenceItems.map((ev) =>
+        ev.evidence_id === evidenceId ? { ...ev, status: "confirmed" } : ev,
+      );
+      await saveToSettings({ evidence_items: updated });
+      setReviewItem(null);
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  // CP-040R: Reject evidence via review service
+  async function handleRejectEvidence(evidenceId) {
+    setReviewLoading(true);
+    try {
+      const response = await request("/evidence-items/review-action", {
+        method: "POST",
+        body: {
+          evidence_id: evidenceId,
+          action: "reject",
+        },
+      });
+      if (response?.evidence) {
+        await Promise.all([
+          refreshSettings().catch(() => undefined),
+          refreshDocuments().catch(() => undefined),
+        ]);
+        await fetchNextReviewItem();
+      }
+    } catch {
+      // Fallback: local reject
+      const updated = evidenceItems.map((ev) =>
+        ev.evidence_id === evidenceId ? { ...ev, status: "rejected" } : ev,
+      );
+      await saveToSettings({ evidence_items: updated });
+      setReviewItem(null);
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  // CP-040R: Edit evidence via review service
+  async function handleEditEvidence(evidenceId, updates, mapping) {
+    setReviewLoading(true);
+    try {
+      const body = {
+        evidence_id: evidenceId,
+        action: "edit",
+        ...updates,
+      };
+      if (mapping) {
+        body.mapping = mapping;
+      }
+      const response = await request("/evidence-items/review-action", {
+        method: "POST",
+        body,
+      });
+      if (response?.evidence) {
+        await Promise.all([
+          refreshSettings().catch(() => undefined),
+          refreshDocuments().catch(() => undefined),
+        ]);
+        await fetchNextReviewItem();
+      }
+    } catch {
+      // Fallback: local edit
+      const updated = evidenceItems.map((ev) =>
+        ev.evidence_id === evidenceId
+          ? { ...ev, ...updates, status: "reviewed" }
+          : ev,
+      );
+      await saveToSettings({ evidence_items: updated });
+      setReviewItem(null);
+    } finally {
+      setReviewLoading(false);
+    }
   }
 
   async function handleLinkExperience() {
@@ -325,6 +441,10 @@ export default function CareerEvidencePage() {
           <ReviewState
             evidenceItems={evidenceItems}
             onConfirm={handleConfirmEvidence}
+            onReject={handleRejectEvidence}
+            onEdit={handleEditEvidence}
+            reviewItem={reviewItem}
+            reviewLoading={reviewLoading}
           />
         ) : state === LIFECYCLE_STATE.MAPPING ? (
           <MappingState
@@ -443,31 +563,234 @@ function ProcessingState({ navigate, selectedSourceCount }) {
   );
 }
 
-function ReviewState({ evidenceItems, onConfirm }) {
-  const pending = (evidenceItems || []).filter(
-    (ev) => ev && ev.status !== "confirmed" && ev.status !== "rejected",
+// CP-040R: One-item-at-a-time evidence review with suggested mapping
+function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, reviewLoading }) {
+  const [editMode, setEditMode] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [selectedMapping, setSelectedMapping] = useState(null);
+
+  const currentItem = reviewItem?.evidence || (
+    (evidenceItems || []).find(
+      (ev) => ev && ev.status !== "confirmed" && ev.status !== "rejected",
+    ) || null
   );
-  return (
-    <div className="space-y-4">
-      <h2 className="font-headline text-lg font-bold text-on-surface">Confirm evidence</h2>
-      <p className="text-sm text-on-surface-variant">
-        {evidenceItems.length} item{evidenceItems.length !== 1 ? "s" : ""} extracted.
-      </p>
-      <div className="max-h-64 space-y-2 overflow-y-auto">
-        {pending.slice(0, 5).map((ev) => (
-          <div className="flex items-start gap-3 rounded-xl border border-outline-variant/20 bg-surface p-3" key={ev.evidence_id}>
-            <span className="mt-0.5 flex-1 text-sm leading-relaxed text-on-surface">
-              {ev.text || ev.label || ev.evidence_id}
-            </span>
+
+  const suggestedMapping = reviewItem?.suggested_mapping || null;
+  const isAmbiguous = reviewItem?.is_ambiguous || false;
+  const alternatives = reviewItem?.alternatives || [];
+  const provenance = reviewItem?.provenance || null;
+  const progress = reviewItem?.progress || { cursor: 0, remaining: 0, total: 0 };
+
+  if (!currentItem) {
+    return (
+      <div className="space-y-4">
+        <h2 className="font-headline text-lg font-bold text-on-surface">Confirm evidence</h2>
+        <p className="text-sm text-on-surface-variant">No evidence items to review.</p>
+      </div>
+    );
+  }
+
+  const itemLabel = currentItem.inferred_employer || currentItem.inferred_role
+    ? [currentItem.inferred_role, currentItem.inferred_employer]
+        .filter(Boolean)
+        .join(" at ")
+    : "Unattributed";
+
+  const hasDates = currentItem.dates && currentItem.dates.length > 0;
+  const evidenceType = (currentItem.evidence_type || "responsibility")
+    .replace(/_/g, " ");
+
+  if (editMode) {
+    return (
+      <div className="space-y-4">
+        <h2 className="font-headline text-lg font-bold text-on-surface">Edit evidence</h2>
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (editText.trim()) {
+              onEdit(currentItem.evidence_id, { text: editText }, selectedMapping);
+              setEditMode(false);
+              setEditText("");
+            }
+          }}
+        >
+          <textarea
+            className="min-h-32 w-full rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-3 text-sm text-on-surface"
+            onChange={(e) => setEditText(e.target.value)}
+            placeholder="Edit the evidence text..."
+            value={editText}
+          />
+          <div className="flex items-center gap-2">
             <button
-              className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90"
-              onClick={() => onConfirm(ev.evidence_id)}
+              className="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              disabled={!editText.trim() || reviewLoading}
+              type="submit"
+            >
+              {reviewLoading ? "Saving..." : "Save & advance"}
+            </button>
+            <button
+              className="rounded-lg border border-outline-variant/20 bg-surface px-4 py-2 text-xs font-medium text-on-surface hover:bg-surface-container-low"
+              onClick={() => { setEditMode(false); setEditText(""); }}
               type="button"
             >
-              Confirm
+              Cancel
             </button>
           </div>
-        ))}
+        </form>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="font-headline text-lg font-bold text-on-surface">
+          Confirm evidence
+        </h2>
+        {progress.total > 0 ? (
+          <span className="text-xs text-on-surface-variant">
+            {progress.cursor}/{progress.total}
+          </span>
+        ) : null}
+      </div>
+
+      {progress.total > 0 ? (
+        <div className="h-1 w-full overflow-hidden rounded-full bg-surface-container-highest">
+          <div
+            className="h-full rounded-full bg-primary transition-all duration-300"
+            style={{
+              width: `${Math.round(
+                ((progress.total - progress.remaining) / Math.max(progress.total, 1)) * 100,
+              )}%`,
+            }}
+          />
+        </div>
+      ) : null}
+
+      <div className="rounded-xl border border-outline-variant/20 bg-surface p-4">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+            {evidenceType}
+          </span>
+          <span className="text-xs text-on-surface-variant">{itemLabel}</span>
+        </div>
+        <p className="text-sm leading-relaxed text-on-surface">
+          {currentItem.text || currentItem.label || currentItem.evidence_id}
+        </p>
+      </div>
+
+      {provenance ? (
+        <div className="rounded-xl border border-outline-variant/10 bg-surface-container-lowest px-4 py-2.5">
+          <p className="text-xs text-on-surface-variant">
+            <span className="font-medium">Source:</span>{" "}
+            {provenance.source_asset || currentItem.source_asset || "Unknown"}
+            {hasDates ? " · " + currentItem.dates.join(" – ") : ""}
+            {provenance.confidence > 0 ? (
+              <span className="ml-1 text-[10px]">
+                (confidence: {Math.round(provenance.confidence * 100)}%)
+              </span>
+            ) : null}
+          </p>
+        </div>
+      ) : null}
+
+      {suggestedMapping ? (
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+                Suggested experience
+              </p>
+              <p className="mt-1 text-sm font-medium text-on-surface">
+                {suggestedMapping.label || suggestedMapping.role}
+              </p>
+              {suggestedMapping.reason ? (
+                <p className="mt-0.5 text-xs text-on-surface-variant">
+                  {suggestedMapping.reason}
+                </p>
+              ) : null}
+            </div>
+            <span className="shrink-0 rounded-full bg-primary/20 px-2 py-0.5 text-[10px] font-semibold text-primary">
+              {Math.round((suggestedMapping.confidence || 0) * 100)}%
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-outline-variant/10 bg-surface-container-lowest px-4 py-3">
+          <p className="text-xs text-on-surface-variant">
+            No matching experience found. Add this evidence without mapping.
+          </p>
+        </div>
+      )}
+
+      {isAmbiguous && alternatives.length > 0 ? (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-50/50 p-4">
+          <p className="mb-2 text-xs font-semibold text-amber-700">
+            Multiple matches found. Select the correct one:
+          </p>
+          <div className="space-y-1.5">
+            {[suggestedMapping, ...alternatives].map((alt) => (
+              <button
+                className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
+                  (selectedMapping || suggestedMapping)?.experience_id === alt.experience_id
+                    ? "border-primary/30 bg-primary/10 text-on-surface"
+                    : "border-outline-variant/10 hover:bg-surface-container-low text-on-surface-variant"
+                }`}
+                key={alt.experience_id || alt.label}
+                onClick={() => setSelectedMapping(alt)}
+                type="button"
+              >
+                <span className="material-symbols-outlined text-[14px]">
+                  {(selectedMapping || suggestedMapping)?.experience_id === alt.experience_id
+                    ? "radio_button_checked"
+                    : "radio_button_unchecked"}
+                </span>
+                <span className="truncate">{alt.label}</span>
+                <span className="ml-auto shrink-0 text-[10px]">
+                  {Math.round((alt.confidence || 0) * 100)}%
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          disabled={reviewLoading}
+          onClick={() =>
+            onConfirm(currentItem.evidence_id, selectedMapping || suggestedMapping)
+          }
+          type="button"
+        >
+          <span className="material-symbols-outlined text-[16px]">check</span>
+          {reviewLoading ? "Saving..." : "Confirm"}
+        </button>
+
+        <button
+          className="inline-flex items-center gap-1.5 rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low disabled:opacity-50"
+          disabled={reviewLoading}
+          onClick={() => {
+            setEditMode(true);
+            setEditText(currentItem.text || "");
+          }}
+          type="button"
+        >
+          <span className="material-symbols-outlined text-[16px]">edit</span>
+          Edit
+        </button>
+
+        <button
+          className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50"
+          disabled={reviewLoading}
+          onClick={() => onReject(currentItem.evidence_id)}
+          type="button"
+        >
+          <span className="material-symbols-outlined text-[16px]">close</span>
+          Reject
+        </button>
       </div>
     </div>
   );
@@ -503,6 +826,7 @@ function FollowUpState({ onAnswer, pendingQuestions }) {
       </div>
     );
   }
+
   function handleSubmit(e) {
     e.preventDefault();
     if (answer.trim()) onAnswer(question.question_id, answer.trim());

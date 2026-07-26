@@ -44,6 +44,16 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.prefix("POST", ("evidence-items",), _handle_post, auth_required=True, name="evidence_items.post")
     registry.prefix("PUT", ("evidence-items",), _handle_put, auth_required=True, name="evidence_items.put")
 
+    # CP-040R: Evidence review endpoints
+    registry.prefix("GET", ("evidence-items", "next-review"), _handle_next_review,
+                    auth_required=True, name="evidence_items.next_review")
+    registry.prefix("POST", ("evidence-items", "review-action"), _handle_review_action,
+                    auth_required=True, name="evidence_items.review_action")
+    registry.prefix("GET", ("evidence-items", "readiness"), _handle_readiness,
+                    auth_required=True, name="evidence_items.readiness")
+    registry.prefix("POST", ("evidence-items", "clear-spikes"), _handle_clear_spikes,
+                    auth_required=True, name="evidence_items.clear_spikes")
+
 
 def _evidence_store(context: ApiRouteContext):
     """Resolve the evidence store from the application."""
@@ -431,3 +441,101 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
 
     return False
 
+
+
+
+# ── CP-040R: Evidence review handlers ──────────────────────────────────
+
+
+def _handle_next_review(context: ApiRouteContext) -> bool | None:
+    """Get the next evidence item awaiting review with suggested mapping."""
+    segments = list(context.segments)
+
+    if segments == ["evidence-items", "next-review"]:
+        user, _ = context.require_identity()
+        from backend.evidence.review_service import get_next_review_item
+        result = get_next_review_item(user)
+        context.send_json(result, status=HTTPStatus.OK)
+        return True
+
+    return False
+
+
+def _handle_review_action(context: ApiRouteContext) -> bool | None:
+    """Apply a review action: confirm, reject, or edit an evidence item."""
+    segments = list(context.segments)
+    payload = context.read_json_body()
+
+    if segments == ["evidence-items", "review-action"]:
+        user, _ = context.require_identity()
+        evidence_id = str(payload.get("evidence_id") or "")
+
+        if not evidence_id:
+            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                               "validation_error", "evidence_id is required.")
+            return True
+
+        action = str(payload.get("action") or "")
+
+        from backend.evidence.review_service import (
+            confirm_evidence,
+            edit_evidence,
+            reject_evidence,
+        )
+
+        try:
+            if action == "confirm":
+                mapping = payload.get("mapping") if payload.get("mapping") else None
+                edited_text = payload.get("edited_text")
+                result = confirm_evidence(user, evidence_id,
+                                          mapping=mapping,
+                                          edited_text=edited_text)
+            elif action == "reject":
+                result = reject_evidence(user, evidence_id)
+            elif action == "edit":
+                updates = {
+                    k: v for k, v in payload.items()
+                    if k not in ("evidence_id", "action")
+                }
+                result = edit_evidence(user, evidence_id, updates)
+            else:
+                context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                                   "validation_error",
+                                   f"Invalid action: {action}. Use confirm, reject, or edit.")
+                return True
+
+            context.send_json(result, status=HTTPStatus.OK)
+        except KeyError as exc:
+            context.send_error(HTTPStatus.NOT_FOUND,
+                               "evidence_not_found", str(exc))
+        return True
+
+    return False
+
+
+def _handle_readiness(context: ApiRouteContext) -> bool | None:
+    """Compute canonical readiness from evidence records."""
+    segments = list(context.segments)
+
+    if segments == ["evidence-items", "readiness"]:
+        user, _ = context.require_identity()
+        from backend.evidence.review_service import compute_canonical_readiness
+        result = compute_canonical_readiness(user)
+        context.send_json(result, status=HTTPStatus.OK)
+        return True
+
+    return False
+
+
+def _handle_clear_spikes(context: ApiRouteContext) -> bool | None:
+    """Remove legacy memory-spike counters and migrate data."""
+    segments = list(context.segments)
+
+    if segments == ["evidence-items", "clear-spikes"]:
+        user, _ = context.require_identity()
+        from backend.evidence.review_service import remove_legacy_memory_spike
+        result = remove_legacy_memory_spike(user)
+        context.send_json(result, status=HTTPStatus.OK)
+        return True
+
+    return False

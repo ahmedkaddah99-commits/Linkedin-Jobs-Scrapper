@@ -88,6 +88,67 @@ export const SOURCE_PROCESSING_DESCRIPTIONS = {
 };
 
 
+// CP-040R: Evidence review actions
+export const REVIEW_ACTION = {
+  CONFIRM: "confirm",
+  REJECT: "reject",
+  EDIT: "edit",
+};
+
+export const REVIEW_ACTION_LABELS = {
+  [REVIEW_ACTION.CONFIRM]: "Confirm",
+  [REVIEW_ACTION.REJECT]: "Reject",
+  [REVIEW_ACTION.EDIT]: "Edit",
+};
+
+/**
+ * Compute canonical readiness from evidence items (CP-040R).
+ * Replaces legacy memory-spike counters with canonical evidence statuses.
+ */
+export function computeCanonicalReadiness(evidenceItems = []) {
+  const total = evidenceItems.length;
+  const confirmed = evidenceItems.filter((ev) => ev && ev.status === "confirmed").length;
+  const rejected = evidenceItems.filter((ev) => ev && ev.status === "rejected").length;
+  const needsReview = evidenceItems.filter(
+    (ev) => ev && (ev.status === "needs_review" || ev.status === "reviewed"),
+  ).length;
+  const merged = evidenceItems.filter((ev) => ev && ev.status === "merged").length;
+
+  const mapped = evidenceItems.filter(
+    (ev) =>
+      ev &&
+      ev.experience_mapping &&
+      ev.experience_mapping.experience_id,
+  ).length;
+  const mappedReady = evidenceItems.filter(
+    (ev) =>
+      ev &&
+      ev.status === "confirmed" &&
+      ev.experience_mapping &&
+      ev.experience_mapping.experience_id,
+  ).length;
+
+  const actionable = Math.max(total - merged - rejected, 0);
+  const readinessRatio = actionable > 0
+    ? Math.round((mappedReady / actionable) * 100) / 100
+    : 0;
+
+  return {
+    total,
+    confirmed,
+    rejected,
+    merged,
+    needsReview,
+    mapped,
+    mappedReady,
+    readinessRatio,
+    isReady: readinessRatio >= 0.9 && needsReview === 0,
+    computedFrom: "canonical_evidence",
+    legacyCountersExcluded: true,
+  };
+}
+
+
 export const STATE_INDEX = Object.fromEntries(
   LIFECYCLE_ORDER.map((state, index) => [state, index]),
 );
