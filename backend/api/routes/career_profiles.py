@@ -8,7 +8,13 @@ from backend.application.rebind_service import (
     execute_rebind,
     perform_rebind_compatibility_review,
 )
+from backend.application.baseline_cv_replacement_service import (
+    preview_baseline_cv_replacement,
+    confirm_baseline_cv_replacement,
+)
+
 from backend.domain.models import (
+    BaselineCVReplacementPreview,
     CAREER_PROFILE_STATUS_UNBOUND,
     CAREER_PROFILE_STATUSES,
     CareerProfile,
@@ -44,6 +50,12 @@ def register_routes(registry: RouteRegistry) -> None:
     )
     registry.prefix(
         "POST", ("career-profiles", "{profile_id}", "rebind-confirm"), _handle_rebind_confirm, auth_required=True, name="career_profiles.rebind_confirm"
+    )
+    registry.prefix(
+        "POST", ("career-profiles", "{profile_id}", "baseline-cv-replacement-preview"), _handle_baseline_cv_replacement_preview, auth_required=True, name="career_profiles.baseline_cv_replacement_preview"
+    )
+    registry.prefix(
+        "POST", ("career-profiles", "{profile_id}", "baseline-cv-replacement-confirm"), _handle_baseline_cv_replacement_confirm, auth_required=True, name="career_profiles.baseline_cv_replacement_confirm"
     )
 
 
@@ -423,3 +435,156 @@ def _handle_rebind_confirm(context: ApiRouteContext) -> bool | None:
             context.send_error(HTTPStatus.CONFLICT, "rebind_conflict", str(exc))
         return True
     return False
+
+
+
+def _resolve_cv_text_from_asset(context: ApiRouteContext, asset_id: str) -> str:
+    """Resolve the text content of a workspace CV asset from user metadata."""
+    user, _ = context.require_identity()
+    user_metadata = dict(getattr(user, "metadata", None) or {})
+    user_assets = user_metadata.get("candidate_assets", [])
+    if not isinstance(user_assets, list):
+        user_assets = []
+    for candidate in user_assets:
+        if str(candidate.get("asset_id") or "").strip() == asset_id:
+            asset_metadata = dict(candidate.get("metadata") or {})
+            return str(asset_metadata.get("source_text") or "")
+    return ""
+
+
+def _handle_baseline_cv_replacement_preview(context: ApiRouteContext) -> bool | None:
+    segments = list(context.segments)
+    if len(segments) != 3 or segments[0] != "career-profiles" or segments[2] != "baseline-cv-replacement-preview":
+        return False
+    store = _career_profile_store(context)
+    if store is None:
+        return True
+    user, _ = context.require_identity()
+    try:
+        profile = store.get_profile(segments[1])
+    except KeyError:
+        context.send_error(
+            HTTPStatus.NOT_FOUND, "career_profile_not_found",
+            f"Career profile '{segments[1]}' not found."
+        )
+        return True
+    if profile.user_id != user.user_id:
+        context.send_error(
+            HTTPStatus.FORBIDDEN, "forbidden",
+            "You can only modify your own career profiles."
+        )
+        return True
+
+    payload = context.read_json_body()
+    proposed_asset_id = str(payload.get("asset_id") or "").strip()
+    if not proposed_asset_id:
+        context.send_error(
+            HTTPStatus.UNPROCESSABLE_ENTITY, "validation_error",
+            "asset_id is required."
+        )
+        return True
+
+    # Resolve proposed asset
+    user_metadata = dict(getattr(user, "metadata", None) or {})
+    user_assets = user_metadata.get("candidate_assets", [])
+    if not isinstance(user_assets, list):
+        user_assets = []
+    proposed_asset = None
+    for candidate in user_assets:
+        if str(candidate.get("asset_id") or "").strip() == proposed_asset_id:
+            proposed_asset = candidate
+            break
+    if proposed_asset is None:
+        context.send_error(
+            HTTPStatus.NOT_FOUND, "asset_not_found",
+            f"Workspace CV asset '{proposed_asset_id}' not found."
+        )
+        return True
+    asset_kind = str(proposed_asset.get("asset_kind") or "").strip().lower()
+    if asset_kind != "workspace_cv":
+        context.send_error(
+            HTTPStatus.UNPROCESSABLE_ENTITY, "invalid_asset_kind",
+            "Asset must be a workspace CV."
+        )
+        return True
+
+    proposed_metadata = dict(proposed_asset.get("metadata") or {})
+    proposed_cv_text = str(proposed_metadata.get("source_text") or "")
+    proposed_display_name = str(proposed_asset.get("display_name") or "").strip()
+    proposed_source_version = str(proposed_metadata.get("content_sha256") or "").strip()
+
+    # Resolve old CV text
+    old_cv_text = ""
+    if profile.baseline_cv_asset_id:
+        old_cv_text = _resolve_cv_text_from_asset(
+            context, profile.baseline_cv_asset_id
+        )
+
+    preview = preview_baseline_cv_replacement(
+        profile=profile,
+        old_cv_text=old_cv_text,
+        proposed_cv_text=proposed_cv_text,
+        proposed_asset_id=proposed_asset_id,
+        proposed_display_name=proposed_display_name,
+        proposed_source_version=proposed_source_version,
+    )
+
+    context.send_json(preview.to_dict(), status=HTTPStatus.OK)
+    return True
+
+
+def _handle_baseline_cv_replacement_confirm(context: ApiRouteContext) -> bool | None:
+    segments = list(context.segments)
+    if len(segments) != 3 or segments[0] != "career-profiles" or segments[2] != "baseline-cv-replacement-confirm":
+        return False
+    store = _career_profile_store(context)
+    if store is None:
+        return True
+    user, _ = context.require_identity()
+    try:
+        profile = store.get_profile(segments[1])
+    except KeyError:
+        context.send_error(
+            HTTPStatus.NOT_FOUND, "career_profile_not_found",
+            f"Career profile '{segments[1]}' not found."
+        )
+        return True
+    if profile.user_id != user.user_id:
+        context.send_error(
+            HTTPStatus.FORBIDDEN, "forbidden",
+            "You can only modify your own career profiles."
+        )
+        return True
+
+    payload = context.read_json_body()
+    preview_payload = payload.get("preview")
+    if not isinstance(preview_payload, dict):
+        context.send_error(
+            HTTPStatus.UNPROCESSABLE_ENTITY, "validation_error",
+            "preview object is required."
+        )
+        return True
+
+
+    try:
+        preview = BaselineCVReplacementPreview.from_dict(preview_payload)
+    except Exception:
+        context.send_error(
+            HTTPStatus.UNPROCESSABLE_ENTITY, "invalid_preview",
+            "Invalid preview payload."
+        )
+        return True
+
+    accepted_actions = dict(payload.get("accepted_actions") or {})
+
+    try:
+        updated = confirm_baseline_cv_replacement(
+            profile=profile,
+            preview=preview,
+            accepted_actions=accepted_actions,
+        )
+        store.upsert_profile(updated)
+        context.send_json(updated.to_dict(), status=HTTPStatus.OK)
+    except ValueError as exc:
+        context.send_error(HTTPStatus.CONFLICT, "replacement_conflict", str(exc))
+    return True

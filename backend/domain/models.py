@@ -1250,6 +1250,205 @@ class RebindCompatibilityReview:
             created_at=str(payload.get("created_at") or utc_now_iso()),
         )
 
+# --- Baseline CV Replacement (CP-034) ---
+
+BASELINE_CV_REPLACEMENT_ACTION_ADD = "add"
+BASELINE_CV_REPLACEMENT_ACTION_IGNORE = "ignore"
+BASELINE_CV_REPLACEMENT_ACTION_NEEDS_REVIEW = "needs_review"
+BASELINE_CV_REPLACEMENT_ACTIONS = {
+    BASELINE_CV_REPLACEMENT_ACTION_ADD,
+    BASELINE_CV_REPLACEMENT_ACTION_IGNORE,
+    BASELINE_CV_REPLACEMENT_ACTION_NEEDS_REVIEW,
+}
+
+BASELINE_CV_DIFF_CATEGORY_MATCHING = "matching"
+BASELINE_CV_DIFF_CATEGORY_ADDED = "added"
+BASELINE_CV_DIFF_CATEGORY_REMOVED = "removed"
+BASELINE_CV_DIFF_CATEGORY_CHANGED_TITLE = "changed_title"
+BASELINE_CV_DIFF_CATEGORY_CHANGED_DATES = "changed_dates"
+BASELINE_CV_DIFF_CATEGORY_CHANGED_BULLETS = "changed_bullets"
+BASELINE_CV_DIFF_CATEGORY_CHANGED_COMPANY = "changed_company"
+
+
+@dataclass(slots=True)
+class BaselineCVBulletDiff:
+    """A single bullet-level diff between old and new CV experiences."""
+    bullet_id: str
+    text: str = ""
+    diff_category: str = ""
+    old_text: str = ""
+    new_text: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BaselineCVBulletDiff":
+        return cls(
+            bullet_id=str(payload.get("bullet_id") or ""),
+            text=str(payload.get("text") or ""),
+            diff_category=str(payload.get("diff_category") or ""),
+            old_text=str(payload.get("old_text") or ""),
+            new_text=str(payload.get("new_text") or ""),
+        )
+
+
+
+@dataclass(slots=True)
+class BaselineCVExperienceDiff:
+    """Diff for a single experience entry between old and new baseline CVs."""
+    diff_id: str
+    diff_category: str = ""
+    old_experience_id: str = ""
+    new_experience_id: str = ""
+    old_title: str = ""
+    new_title: str = ""
+    old_company: str = ""
+    new_company: str = ""
+    old_start_date: str = ""
+    new_start_date: str = ""
+    old_end_date: str = ""
+    new_end_date: str = ""
+    old_description: str = ""
+    new_description: str = ""
+    bullet_diffs: list[BaselineCVBulletDiff] = field(default_factory=list)
+    old_skills: list[str] = field(default_factory=list)
+    new_skills: list[str] = field(default_factory=list)
+    suggested_action: str = ""
+    match_score: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "diff_id": self.diff_id,
+            "diff_category": self.diff_category,
+            "old_experience_id": self.old_experience_id,
+            "new_experience_id": self.new_experience_id,
+            "old_title": self.old_title,
+            "new_title": self.new_title,
+            "old_company": self.old_company,
+            "new_company": self.new_company,
+            "old_start_date": self.old_start_date,
+            "new_start_date": self.new_start_date,
+            "old_end_date": self.old_end_date,
+            "new_end_date": self.new_end_date,
+            "old_description": self.old_description,
+            "new_description": self.new_description,
+            "bullet_diffs": [bd.to_dict() for bd in self.bullet_diffs],
+            "old_skills": list(self.old_skills),
+            "new_skills": list(self.new_skills),
+            "suggested_action": self.suggested_action,
+            "match_score": self.match_score,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BaselineCVExperienceDiff":
+        return cls(
+            diff_id=str(payload.get("diff_id") or ""),
+            diff_category=str(payload.get("diff_category") or ""),
+            old_experience_id=str(payload.get("old_experience_id") or ""),
+            new_experience_id=str(payload.get("new_experience_id") or ""),
+            old_title=str(payload.get("old_title") or ""),
+            new_title=str(payload.get("new_title") or ""),
+            old_company=str(payload.get("old_company") or ""),
+            new_company=str(payload.get("new_company") or ""),
+            old_start_date=str(payload.get("old_start_date") or ""),
+            new_start_date=str(payload.get("new_start_date") or ""),
+            old_end_date=str(payload.get("old_end_date") or ""),
+            new_end_date=str(payload.get("new_end_date") or ""),
+            old_description=str(payload.get("old_description") or ""),
+            new_description=str(payload.get("new_description") or ""),
+            bullet_diffs=[BaselineCVBulletDiff.from_dict(bd) for bd in payload.get("bullet_diffs") or [] if isinstance(bd, dict)],
+            old_skills=[str(s) for s in payload.get("old_skills") or [] if str(s).strip()],
+            new_skills=[str(s) for s in payload.get("new_skills") or [] if str(s).strip()],
+            suggested_action=str(payload.get("suggested_action") or ""),
+            match_score=float(payload.get("match_score") or 0.0),
+        )
+
+
+
+@dataclass(slots=True)
+class BaselineCVReplacementPreview:
+    """Non-mutating preview for a baseline CV replacement (CP-034)."""
+    preview_id: str
+    profile_id: str
+    old_baseline_cv_asset_id: str = ""
+    old_baseline_cv_display_name: str = ""
+    old_baseline_cv_source_version: str = ""
+    proposed_baseline_cv_asset_id: str = ""
+    proposed_baseline_cv_display_name: str = ""
+    proposed_baseline_cv_source_version: str = ""
+    experience_diffs: list[BaselineCVExperienceDiff] = field(default_factory=list)
+    summary: str = ""
+    requires_confirmation: bool = True
+    created_at: str = field(default_factory=utc_now_iso)
+    existing_evidence_count: int = 0
+    preserved_timestamp_count: int = 0
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        profile_id: str,
+        old_baseline_cv_asset_id: str = "",
+        old_baseline_cv_display_name: str = "",
+        old_baseline_cv_source_version: str = "",
+        proposed_baseline_cv_asset_id: str = "",
+        proposed_baseline_cv_display_name: str = "",
+        proposed_baseline_cv_source_version: str = "",
+    ) -> "BaselineCVReplacementPreview":
+        return cls(
+            preview_id=f"bcvrpreview_{uuid4().hex[:16]}",
+            profile_id=profile_id,
+            old_baseline_cv_asset_id=old_baseline_cv_asset_id,
+            old_baseline_cv_display_name=old_baseline_cv_display_name,
+            old_baseline_cv_source_version=old_baseline_cv_source_version,
+            proposed_baseline_cv_asset_id=proposed_baseline_cv_asset_id,
+            proposed_baseline_cv_display_name=proposed_baseline_cv_display_name,
+            proposed_baseline_cv_source_version=proposed_baseline_cv_source_version,
+            created_at=utc_now_iso(),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "preview_id": self.preview_id,
+            "profile_id": self.profile_id,
+            "old_baseline_cv_asset_id": self.old_baseline_cv_asset_id,
+            "old_baseline_cv_display_name": self.old_baseline_cv_display_name,
+            "old_baseline_cv_source_version": self.old_baseline_cv_source_version,
+            "proposed_baseline_cv_asset_id": self.proposed_baseline_cv_asset_id,
+            "proposed_baseline_cv_display_name": self.proposed_baseline_cv_display_name,
+            "proposed_baseline_cv_source_version": self.proposed_baseline_cv_source_version,
+            "experience_diffs": [ed.to_dict() for ed in self.experience_diffs],
+            "summary": self.summary,
+            "requires_confirmation": self.requires_confirmation,
+            "created_at": self.created_at,
+            "existing_evidence_count": self.existing_evidence_count,
+            "preserved_timestamp_count": self.preserved_timestamp_count,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BaselineCVReplacementPreview":
+        return cls(
+            preview_id=str(payload.get("preview_id") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            old_baseline_cv_asset_id=str(payload.get("old_baseline_cv_asset_id") or ""),
+            old_baseline_cv_display_name=str(payload.get("old_baseline_cv_display_name") or ""),
+            old_baseline_cv_source_version=str(payload.get("old_baseline_cv_source_version") or ""),
+            proposed_baseline_cv_asset_id=str(payload.get("proposed_baseline_cv_asset_id") or ""),
+            proposed_baseline_cv_display_name=str(payload.get("proposed_baseline_cv_display_name") or ""),
+            proposed_baseline_cv_source_version=str(payload.get("proposed_baseline_cv_source_version") or ""),
+            experience_diffs=[
+                BaselineCVExperienceDiff.from_dict(ed)
+                for ed in payload.get("experience_diffs") or []
+                if isinstance(ed, dict)
+            ],
+            summary=str(payload.get("summary") or ""),
+            requires_confirmation=bool(payload.get("requires_confirmation", True)),
+            created_at=str(payload.get("created_at") or utc_now_iso()),
+            existing_evidence_count=int(payload.get("existing_evidence_count") or 0),
+            preserved_timestamp_count=int(payload.get("preserved_timestamp_count") or 0),
+        )
+
 
 # --- Work Experience Record ---
 

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import CareerProfileSourceSelector from "../components/careerProfile/CareerProfileSourceSelector";
 import RebindCompatibilityDialog from "../components/careerProfile/RebindCompatibilityDialog";
+import BaselineCVReplacementDialog from "../components/careerProfile/BaselineCVReplacementDialog";
+
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -59,6 +61,15 @@ export default function CareerProfilesPage() {
   const [rebinding, setRebinding] = useState(false);
   const [rebindError, setRebindError] = useState("");
 
+  // Baseline CV replacement state (CP-034)
+  const [cvReplaceProfile, setCvReplaceProfile] = useState(null);
+  const [cvReplacePreview, setCvReplacePreview] = useState(null);
+  const [cvReplacePreviewing, setCvReplacePreviewing] = useState(false);
+  const [cvReplaceConfirming, setCvReplaceConfirming] = useState(false);
+  const [cvReplaceError, setCvReplaceError] = useState("");
+
+
+
   // Source selection state
   const [sourceProfileId, setSourceProfileId] = useState("");
   const [sourceSaving, setSourceSaving] = useState(false);
@@ -70,6 +81,17 @@ export default function CareerProfilesPage() {
     [request],
     { cacheKey: "workspaces:list", staleMs: Infinity, backgroundRefresh: false },
   );
+
+  // Fetch documents for baseline CV replacement UI
+  const { data: documentsData } = useApiResource(
+    () => request("/documents?limit=200", { timeoutMs: 60000 }),
+    [request],
+    { cacheKey: "documents:list", staleMs: 30000, backgroundRefresh: true },
+  );
+
+  const userDocuments = documentsData?.documents || [];
+
+
 
   const workspaceMap = useMemo(() => {
     const map = {};
@@ -257,6 +279,68 @@ export default function CareerProfilesPage() {
       setRebinding(false);
     }
   }
+
+  // --- Baseline CV replacement handlers (CP-034) ---
+
+  function openCvReplaceDialog(profile) {
+    setCvReplaceProfile(profile);
+    setCvReplacePreview(null);
+    setCvReplaceError("");
+  }
+
+  function closeCvReplaceDialog() {
+    setCvReplaceProfile(null);
+    setCvReplacePreview(null);
+    setCvReplacePreviewing(false);
+    setCvReplaceConfirming(false);
+    setCvReplaceError("");
+  }
+
+  async function handleCvReplacePreview(assetId) {
+    const profileId = cvReplaceProfile?.profile_id;
+    if (!profileId) throw new Error("No profile selected.");
+    setCvReplacePreviewing(true);
+    setCvReplaceError("");
+    try {
+      const preview = await request(
+        `/career-profiles/${profileId}/baseline-cv-replacement-preview`,
+        { method: "POST", body: JSON.stringify({ asset_id: assetId }) },
+        { rawPath: true }
+      );
+      setCvReplacePreview(preview);
+      return preview;
+    } catch (err) {
+      setCvReplaceError(String(err?.message || "Failed to generate preview."));
+      throw err;
+    } finally {
+      setCvReplacePreviewing(false);
+    }
+  }
+
+  async function handleCvReplaceConfirm(preview, acceptedActions) {
+    const profileId = cvReplaceProfile?.profile_id;
+    if (!profileId) return;
+    setCvReplaceConfirming(true);
+    setCvReplaceError("");
+    try {
+      const updated = await request(
+        `/career-profiles/${profileId}/baseline-cv-replacement-confirm`,
+        {
+          method: "POST",
+          body: JSON.stringify({ preview: preview, accepted_actions: acceptedActions }),
+        },
+        { rawPath: true }
+      );
+      setProfiles((prev) => prev.map((p) => (p.profile_id === updated.profile_id ? updated : p)));
+      closeCvReplaceDialog();
+    } catch (err) {
+      setCvReplaceError(String(err?.message || "Failed to replace baseline CV."));
+    } finally {
+      setCvReplaceConfirming(false);
+    }
+  }
+
+
 
   function resolveWorkspaceName(workspaceId) {
     return workspaceMap[workspaceId] || workspaceId;
@@ -505,6 +589,15 @@ export default function CareerProfilesPage() {
                         Select sources
                         <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
                       </button>
+                      <button
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                        onClick={() => openCvReplaceDialog(profile)}
+                        type="button"
+                      >
+                        Replace baseline CV
+                        <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
+                      </button>
+
                     </div>
                   </div>
                   <p className="mt-3 text-xs text-on-surface-variant/60">
@@ -603,6 +696,22 @@ export default function CareerProfilesPage() {
           onRequestReview={handleRebindReview}
           profile={rebindProfile}
           review={rebindReview}
+          workspaces={userWorkspaces}
+        />
+      ) : null}
+
+      {/* Baseline CV Replacement Dialog (CP-034) */}
+      {cvReplaceProfile ? (
+        <BaselineCVReplacementDialog
+          confirming={cvReplaceConfirming}
+          error={cvReplaceError}
+          onCancel={closeCvReplaceDialog}
+          onConfirm={handleCvReplaceConfirm}
+          onPreview={handleCvReplacePreview}
+          preview={cvReplacePreview}
+          previewing={cvReplacePreviewing}
+          profile={cvReplaceProfile}
+          userDocuments={userDocuments}
           workspaces={userWorkspaces}
         />
       ) : null}
