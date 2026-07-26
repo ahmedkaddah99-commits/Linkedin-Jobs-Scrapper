@@ -358,7 +358,8 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
         context.send_json(ev.to_dict(), status=HTTPStatus.OK)
         return True
 
-    # CP-039R: Process sources through Gemini and extract evidence
+    # CP-043R: Process sources through Gemini and extract evidence
+    # Enhanced: idempotency, persistent state, real file bytes lookup.
     if segments == ["evidence-items", "process-sources"]:
         user, _ = context.require_identity()
         asset_ids = list(payload.get("source_ids") or payload.get("asset_ids") or [])
@@ -370,8 +371,43 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                                "validation_error", "source_ids or sources with file data required.")
             return True
 
-        # Build source entries from provided data
-        sources_to_process = []
+        import base64
+        from datetime import datetime, timezone
+        from backend.capabilities.source_processing.pipeline import (
+            process_sources_and_extract_evidence, build_source_processing_state,
+        )
+
+        metadata = dict(user.metadata or {})
+
+        # CP-043R: Idempotency check - skip if evidence already exists
+        store = _metadata_evidence_store(context)
+        evidence_objs_existing = [CandidateEvidence.from_dict(ev) for ev in store.list_all()]
+        existing_source_ids = {
+            str(getattr(ev, "source_id", "") or "").strip()
+            for ev in evidence_objs_existing if getattr(ev, "source_id", "")
+        }
+        all_requested_ids = set(asset_ids) | {str(s.get("asset_id") or "") for s in sources_data}
+        all_requested_ids.discard("")
+        if all_requested_ids and all_requested_ids.issubset(existing_source_ids):
+            idem_state = build_source_processing_state({
+                "status": "completed",
+                "sources": [{"asset_id": aid, "status": "extracted", "extracted_count": 1}
+                            for aid in all_requested_ids],
+                "summary": {"total_sources": len(all_requested_ids)},
+                "batch_id": "idem_" + str(len(all_requested_ids)),
+            })
+            idem_state["state"] = "completed"
+            idem_state["retry_allowed"] = False
+            context.send_json({
+                "batch_id": "idem_" + str(len(all_requested_ids)),
+                "status": "completed", "sources": [],
+                "evidence": [], "summary": {"total_sources": len(all_requested_ids)},
+                "state": idem_state, "_idempotent": True,
+            }, status=HTTPStatus.OK)
+            return True
+
+        # Build source entries (real bytes verification)
+        sources_to_process: list[dict[str, Any]] = []
         for src in sources_data:
             asset_id = str(src.get("asset_id") or src.get("source_id") or "")
             file_name = str(src.get("file_name") or src.get("display_name") or "")
@@ -379,78 +415,111 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
 
             file_bytes = b""
             if file_bytes_b64:
-                import base64
                 try:
                     file_bytes = base64.b64decode(file_bytes_b64)
                 except Exception:
-                    file_bytes = file_bytes_b64.encode("utf-8")
+                    pass
 
-            if asset_id and file_bytes:
-                sources_to_process.append({
-                    "asset_id": asset_id,
-                    "file_name": file_name,
-                    "file_bytes": file_bytes,
-                })
+            # Never accept filename as fake content
+            if asset_id and file_bytes and len(file_bytes) > 10:
+                if file_bytes != file_name.encode("utf-8"):
+                    sources_to_process.append({
+                        "asset_id": asset_id, "file_name": file_name, "file_bytes": file_bytes,
+                    })
 
-        # For bare asset_ids, try to find in candidate_assets
-        metadata = dict(user.metadata or {})
+        # For bare asset_ids, find actual file bytes from document storage
         candidate_assets = list(metadata.get("candidate_assets") or [])
+        processed_ids = {s["asset_id"] for s in sources_to_process}
         for aid in asset_ids:
-            if any(s["asset_id"] == aid for s in sources_to_process):
+            if aid in processed_ids:
                 continue
             asset = next((a for a in candidate_assets if str(a.get("asset_id") or "") == aid), None)
-            if asset:
-                asset_meta = dict(asset.get("metadata") or {})
+            if not asset:
+                continue
+            asset_meta = dict(asset.get("metadata") or {})
+            file_payload = dict(asset.get("file") or {})
+            file_name = str(asset.get("display_name") or asset.get("file_name") or aid)
+            file_bytes = b""
+
+            # Try object storage
+            object_key = str(file_payload.get("object_key") or "").strip()
+            if object_key:
+                try:
+                    obj_storage = getattr(context.application, "object_storage", None)
+                    if obj_storage and obj_storage.exists(object_key):
+                        file_bytes = obj_storage.get(object_key)
+                except Exception:
+                    pass
+
+            # Try local file path
+            if not file_bytes:
+                raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
+                if raw_path:
+                    p = Path(raw_path)
+                    if p.is_file():
+                        try:
+                            file_bytes = p.read_bytes()
+                        except Exception:
+                            pass
+
+            # Fall back to stored extracted text
+            if not file_bytes:
                 source_text = str(asset_meta.get("source_text") or asset_meta.get("text") or "")
-                if source_text:
-                    sources_to_process.append({
-                        "asset_id": aid,
-                        "file_name": str(asset.get("display_name") or asset.get("file_name") or ""),
-                        "file_bytes": source_text.encode("utf-8"),
-                    })
+                if source_text and len(source_text) > 20:
+                    file_bytes = source_text.encode("utf-8")
+
+            if file_bytes:
+                sources_to_process.append({
+                    "asset_id": aid, "file_name": file_name, "file_bytes": file_bytes,
+                })
+                processed_ids.add(aid)
 
         if not sources_to_process:
             context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
                                "validation_error", "No processable sources found.")
             return True
 
-        from backend.capabilities.source_processing.pipeline import (
-            process_sources_and_extract_evidence,
-        )
+        # CP-043R: Persist processing state before pipeline
+        metadata["_evidence_processing_state"] = {
+            "state": "processing", "batch_id": "", "started_at": datetime.now(timezone.utc).isoformat(),
+            "source_count": len(sources_to_process),
+        }
+        user.metadata = metadata
+        user.updated_at = datetime.now(timezone.utc).isoformat()
+        context.application.repositories.auth_repository.upsert_user(user)
 
         result = process_sources_and_extract_evidence(
-            sources_to_process,
-            profile_id=profile_id,
+            sources_to_process, profile_id=profile_id,
         )
 
-        # Persist evidence via metadata-backed store (compatible with CandidateEvidence)
         if result.get("evidence"):
-            store = _metadata_evidence_store(context)
             evidence_objs = [CandidateEvidence.from_dict(ev) for ev in result["evidence"]]
-            # Idempotency: only store evidence not already persisted
             existing = {ev["evidence_id"]: ev for ev in store.list_all()}
             new_evidence = [ev for ev in evidence_objs if ev.evidence_id not in existing]
             if new_evidence:
                 store.upsert_many(new_evidence)
 
-        from backend.capabilities.source_processing.pipeline import (
-            build_source_processing_state,
-        )
         state = build_source_processing_state(result)
 
+        # Persist terminal processing state
+        metadata_final = dict(user.metadata or {})
+        metadata_final["_evidence_processing_state"] = {
+            "state": result["status"], "batch_id": result["batch_id"],
+            "started_at": result.get("started_at"), "completed_at": result.get("completed_at"),
+            "source_count": result["summary"]["total_sources"],
+            "extracted_count": result["summary"]["extracted"],
+            "error": state.get("error", ""),
+        }
+        user.metadata = metadata_final
+        user.updated_at = datetime.now(timezone.utc).isoformat()
+        context.application.repositories.auth_repository.upsert_user(user)
+
         context.send_json({
-            "batch_id": result["batch_id"],
-            "status": result["status"],
-            "sources": result["sources"],
-            "evidence": result["evidence"],
-            "summary": result["summary"],
-            "state": state,
+            "batch_id": result["batch_id"], "status": result["status"],
+            "sources": result["sources"], "evidence": result["evidence"],
+            "summary": result["summary"], "state": state,
         }, status=HTTPStatus.OK if result["status"] == "completed" else HTTPStatus.ACCEPTED)
         return True
-
-
-    return False
-
 
 
 

@@ -101,6 +101,7 @@ export default function CareerEvidencePage() {
   const [processingState, setProcessingState] = useState(null);
   const [processingError, setProcessingError] = useState("");
   const processingRef = useRef(null);
+  const headingRef = useRef(null);
 
   // CP-040R: One-at-a-time evidence review state
   const [reviewItem, setReviewItem] = useState(null);
@@ -109,15 +110,16 @@ export default function CareerEvidencePage() {
   const [activeQuestion, setActiveQuestion] = useState(null);
 
 
-  const processSelectedSources = useCallback(async (fileBytesMap = null) => {
-    if (selectedSourceIds.length === 0) return;
+  const processSelectedSources = useCallback(async (fileBytesMap = null, sourceIdsOverride = null) => {
+    const sourceIds = sourceIdsOverride || selectedSourceIds;
+    if (sourceIds.length === 0) return;
     setProcessingState({ state: SOURCE_PROCESSING_STATE.QUEUED, extracted_count: 0 });
     setProcessingError("");
 
     try {
       // Build sources payload from selected documents or file bytes map
       const sources = [];
-      for (const docId of selectedSourceIds) {
+      for (const docId of sourceIds) {
         const doc = sourceDocuments.find(
           (d) => normalizeDocumentId(d) === docId
         );
@@ -137,25 +139,17 @@ export default function CareerEvidencePage() {
         }
       }
 
-      if (sources.length === 0) {
-        // No file bytes available yet - sources might not be uploaded
-        // Try using asset metadata text
-        const fallbackSources = selectedSourceIds.map((id) => {
-          const doc = sourceDocuments.find((d) => normalizeDocumentId(d) === id);
-          return {
-            asset_id: id,
-            file_name: doc?.display_name || id,
-            file_bytes: btoa(doc?.display_name || id),
-          };
-        });
-        sources.push(...fallbackSources.filter((s) => s.file_bytes !== btoa("")));
-      }
+      // CP-043R: Never send fake filename as content (was btoa(display_name))
+      // Backend will look up real file bytes from asset storage
+      const assetIdsParam = sources.length === 0 ? sourceIds : [];
 
+      // CP-043R: Send asset_ids for backend content lookup, sources for new uploads
       const response = await request("/evidence-items/process-sources", {
         method: "POST",
         body: {
           profile_id: "",
           sources,
+          asset_ids: assetIdsParam,
         },
       });
 
@@ -195,12 +189,17 @@ export default function CareerEvidencePage() {
     [request, settingsDocuments, refreshSettings],
   );
 
+  // CP-043R: Selection auto-starts real processing
   async function handleSourceSelect(assetId) {
     const nextIds = selectedSourceIds.includes(assetId)
       ? selectedSourceIds.filter((id) => id !== assetId)
       : [...selectedSourceIds, assetId];
     await saveToSettings({ selectedAssetIds: nextIds });
     await refreshSettings().catch(() => undefined);
+    // Auto-trigger processing when sources are selected
+    if (nextIds.length > 0) {
+      await processSelectedSources(null, nextIds);
+    }
   }
 
   async function handleUploadSource(file) {
@@ -236,6 +235,10 @@ export default function CareerEvidencePage() {
       await refreshSettings().catch(() => undefined);
       setUploading(false);
       setUploadMessage(`Uploaded ${file.name}.`);
+      // CP-043R: Auto-start processing after upload
+      if (assetId) {
+        await processSelectedSources(null, [...new Set([...selectedSourceIds, assetId])]);
+      }
     } catch (err) {
       setUploading(false);
       setUploadError(err.message || "Upload failed.");
@@ -465,13 +468,49 @@ export default function CareerEvidencePage() {
   const { state, label, description, primaryAction, progress, progressLabel: stepLabel } =
     lifecycle;
 
+  // CP-043R: Track previous state for focus management
+  const prevStateRef = useRef(state);
+
+  // CP-043R: Persist processing state across reloads
+  useEffect(() => {
+    if (processingState) {
+      saveToSettings({ _processing_state: processingState }).catch(() => undefined);
+    }
+  }, [processingState]);
+
+  // CP-043R: Load persisted processing state on mount
+  useEffect(() => {
+    const saved = settingsDocuments._processing_state;
+    if (saved && saved.state && saved.state !== "completed" && saved.state !== "failed") {
+      setProcessingState(saved);
+    }
+  }, []); // Only on mount
+
+  // CP-043R: Auto-advance when processing completes
+  useEffect(() => {
+    if (processingState?.state === "completed" && state === LIFECYCLE_STATE.PROCESSING) {
+      // Processing just completed - refresh to get new evidence and advance
+      refreshSettings().catch(() => undefined);
+      refreshDocuments().catch(() => undefined);
+    }
+  }, [processingState?.state, state, refreshSettings, refreshDocuments]);
+
+  // CP-043R: Focus management - move focus to heading on state transition
+  useEffect(() => {
+    const prev = prevStateRef.current;
+    prevStateRef.current = state;
+    if (prev !== state && headingRef.current) {
+      headingRef.current.focus();
+    }
+  }, [state]);
+
   return (
     <div className="mx-auto max-w-2xl space-y-8 px-4 py-8">
       <header>
         <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
           Career Evidence
         </div>
-        <h1 className="mt-3 font-headline text-3xl font-extrabold tracking-tight text-on-surface">
+        <h1 ref={headingRef} tabIndex={-1} className="mt-3 font-headline text-3xl font-extrabold tracking-tight text-on-surface outline-none">
           {label}
         </h1>
         <p className="mt-2 max-w-xl text-sm leading-6 text-on-surface-variant">
@@ -517,8 +556,10 @@ export default function CareerEvidencePage() {
           />
         ) : state === LIFECYCLE_STATE.PROCESSING ? (
           <ProcessingState
-            navigate={navigate}
+            processingState={processingState}
+            processingError={processingError}
             selectedSourceCount={selectedSourceIds.length}
+            onRetry={() => processSelectedSources()}
           />
         ) : state === LIFECYCLE_STATE.REVIEW ? (
           <ReviewState
@@ -630,21 +671,34 @@ function SourceState({ onFileChange, onSourceSelect, selectedSourceIds, sourceDo
 
 
 
-function ProcessingState({ navigate, selectedSourceCount }) {
+function ProcessingState({ processingState, processingError, selectedSourceCount, onRetry }) {
+  const pState = processingState?.state || "processing";
+  const extractedCount = processingState?.extracted_count || 0;
   return (
     <div className="space-y-4" role="status">
-      <h2 className="font-headline text-lg font-bold text-on-surface">View progress</h2>
+      <h2 className="font-headline text-lg font-bold text-on-surface">Processing evidence</h2>
       <p className="text-sm text-on-surface-variant">
-        Evidence extraction will begin once sources are confirmed. {selectedSourceCount} selected.
+        {pState === "completed"
+          ? `Evidence extracted from ${selectedSourceCount} source(s). Advancing...`
+          : pState === "failed" || pState === "timeout"
+            ? `Processing ${pState}. ${processingError || ""}`
+            : `Gemini is extracting evidence from ${selectedSourceCount} source(s)...`}
       </p>
-      <button
-        className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-        onClick={() => navigate("/documents")}
-        type="button"
-      >
-        <span className="material-symbols-outlined text-[18px]">description</span>
-        Open Asset Library
-      </button>
+      {(pState === "failed" || pState === "timeout") && onRetry ? (
+        <button
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+          onClick={onRetry}
+          type="button"
+        >
+          <span className="material-symbols-outlined text-[18px]">refresh</span>
+          Retry processing
+        </button>
+      ) : pState !== "completed" ? (
+        <div className="flex items-center gap-2 text-sm text-on-surface-variant">
+          <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+          Processing{extractedCount > 0 ? ` (${extractedCount} items found)` : ""}...
+        </div>
+      ) : null}
     </div>
   );
 }
