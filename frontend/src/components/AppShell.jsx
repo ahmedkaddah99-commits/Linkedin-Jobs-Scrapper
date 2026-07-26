@@ -52,7 +52,7 @@ const navItems = [
   {
     label: "Career Assets",
     icon: "inventory_2",
-    to: "/documents",
+    to: "/career-evidence",
     matchers: [
       { path: "/documents", end: false },
       { path: "/artifacts", end: false },

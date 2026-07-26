@@ -28,6 +28,7 @@ export default function CareerEvidencePage() {
 
   const {
     data: documentsPayload,
+    error: documentsError,
     loading: documentsLoading,
     refresh: refreshDocuments,
   } = useApiResource(
@@ -36,7 +37,12 @@ export default function CareerEvidencePage() {
     { cacheKey: "documents:all", staleMs: 30000, backgroundRefresh: true },
   );
 
-  const { data: settingsPayload, refresh: refreshSettings } = useApiResource(
+  const {
+    data: settingsPayload,
+    error: settingsError,
+    loading: settingsLoading,
+    refresh: refreshSettings,
+  } = useApiResource(
     () => request("/settings", { timeoutMs: 60000 }),
     [request],
     { cacheKey: "settings", staleMs: Infinity, backgroundRefresh: false },
@@ -546,6 +552,34 @@ export default function CareerEvidencePage() {
     }
   }, [state]);
 
+  if ((documentsLoading && !documentsPayload) || (settingsLoading && !settingsPayload)) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-5 px-4 py-8" aria-busy="true" aria-label="Loading Career Assets">
+        <div className="h-6 w-36 animate-pulse rounded-full bg-surface-container" />
+        <div className="h-10 w-2/3 animate-pulse rounded-xl bg-surface-container" />
+        <div className="h-56 animate-pulse rounded-2xl bg-surface-container" />
+      </div>
+    );
+  }
+
+  if ((documentsError && !documentsPayload) || (settingsError && !settingsPayload)) {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-8">
+        <section className="rounded-2xl border border-error/30 bg-surface-container-lowest p-6 shadow-soft" role="alert">
+          <h1 className="font-headline text-2xl font-bold text-on-surface">Career Assets could not load</h1>
+          <p className="mt-2 text-sm text-on-surface-variant">{documentsError || settingsError}</p>
+          <button
+            className="mt-4 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
+            onClick={() => Promise.all([refreshDocuments(), refreshSettings()]).catch(() => undefined)}
+            type="button"
+          >
+            Retry
+          </button>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-2xl space-y-8 px-4 py-8">
       <header>
@@ -635,6 +669,14 @@ export default function CareerEvidencePage() {
 
       {/* ── Secondary: Settings ─────────────────────────── */}
       <div className="text-center">
+        <nav aria-label="Career Assets secondary tools" className="mb-4 flex justify-center gap-4 text-xs">
+          <Link className="font-medium text-on-surface-variant hover:text-primary" to="/documents">
+            Asset Library
+          </Link>
+          <Link className="font-medium text-on-surface-variant hover:text-primary" to="/cv-studio">
+            CV Studio
+          </Link>
+        </nav>
         <button
           className="text-xs font-medium text-on-surface-variant underline decoration-outline-variant hover:text-on-surface"
           onClick={() => setShowSettings((v) => !v)}

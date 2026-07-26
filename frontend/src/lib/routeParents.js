@@ -11,11 +11,12 @@ export function resolveRouteParent({ pathname = "", search = "" } = {}) {
   const normalizedPath = String(pathname || "").replace(/\/+$/, "") || "/";
   const params = new URLSearchParams(search);
 
-  if (normalizedPath === "/career-evidence") return "/documents";
+  if (normalizedPath === "/career-evidence") return "";
   if (normalizedPath === "/career-memory") return "/career-evidence";
   if (normalizedPath === "/career-memory/guide") return "/career-evidence";
   if (normalizedPath === "/documents" && params.get("view") === "memory") return "/career-evidence";
-  if (normalizedPath === "/cv-studio") return "/documents";
+  if (normalizedPath === "/documents") return "/career-evidence";
+  if (normalizedPath === "/cv-studio") return "/career-evidence";
   if (/^\/tracker\/job-descriptions\/[^/]+$/.test(normalizedPath)) return TRACKER_ROOT;
   if (/^\/tracker\/[^/]+\/ats$/.test(normalizedPath)) {
     return safeTrackerReturnPath(params.get("return"));

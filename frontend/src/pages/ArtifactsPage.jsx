@@ -526,10 +526,7 @@ export default function DocumentsPage() {
 
   function handleViewChange(nextViewId) {
     const normalizedView = normalizeViewParam(nextViewId);
-    if (normalizedView === VIEW_MEMORY) {
-      window.location.href = "/career-evidence";
-      return;
-    }
+    if (normalizedView === VIEW_MEMORY) return;
     setActiveView(normalizedView);
     const next = new URLSearchParams(searchParams);
     if (normalizedView === VIEW_LIBRARY) {
@@ -538,6 +535,10 @@ export default function DocumentsPage() {
       next.set("view", normalizedView);
     }
     setSearchParams(next);
+  }
+
+  if (activeView === VIEW_MEMORY) {
+    return <Navigate replace to="/career-evidence" />;
   }
 
   return (
@@ -549,8 +550,7 @@ export default function DocumentsPage() {
           </h1>
           <p className="max-w-3xl text-sm leading-7 text-on-surface-variant">
             Keep uploaded CVs, certifications, letters, and supporting career evidence in one
-            place, then use Career Memory Builder to add the context your documents do not fully
-            say yet.
+            place. The guided Career Assets flow uses these sources automatically.
           </p>
         </div>
       </header>
@@ -564,11 +564,6 @@ export default function DocumentsPage() {
             description: "Upload and manage the source files Runr can use.",
             id: VIEW_LIBRARY,
             label: "Asset Library",
-          },
-          {
-            description: "Capture reusable stories, metrics, and career context.",
-            id: VIEW_MEMORY,
-            label: "Career Memory",
           },
         ].map((view) => (
           <button

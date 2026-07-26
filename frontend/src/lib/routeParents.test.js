@@ -3,12 +3,13 @@ import test from "node:test";
 
 import { resolveRouteParent } from "./routeParents.js";
 
-test("resolves explicit nested route parents including query-sensitive Career Memory", () => {
-  assert.equal(resolveRouteParent({ pathname: "/career-evidence" }), "/documents");
+test("resolves Career Assets secondary destinations to the guided flow", () => {
+  assert.equal(resolveRouteParent({ pathname: "/career-evidence" }), "");
   assert.equal(resolveRouteParent({ pathname: "/career-memory" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/career-memory/guide" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/documents", search: "?view=memory" }), "/career-evidence");
-  assert.equal(resolveRouteParent({ pathname: "/cv-studio" }), "/documents");
+  assert.equal(resolveRouteParent({ pathname: "/documents" }), "/career-evidence");
+  assert.equal(resolveRouteParent({ pathname: "/cv-studio" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/tracker/job-descriptions/review_1" }), "/tracker");
   assert.equal(resolveRouteParent({ pathname: "/job-workspaces/run_1/job_1" }), "/workspaces");
   assert.equal(resolveRouteParent({ pathname: "/runs/run_1" }), "/runs");
@@ -31,6 +32,6 @@ test("uses a safe tracker return target for ATS details and stops at section roo
     "/tracker",
   );
   assert.equal(resolveRouteParent({ pathname: "/tracker" }), "");
-  assert.equal(resolveRouteParent({ pathname: "/documents" }), "");
+  assert.equal(resolveRouteParent({ pathname: "/career-evidence" }), "");
   assert.equal(resolveRouteParent({ pathname: "/settings" }), "");
 });

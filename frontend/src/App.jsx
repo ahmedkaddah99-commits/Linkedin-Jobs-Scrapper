@@ -20,7 +20,6 @@ const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const CareerEvidencePage = lazy(() => import("./pages/CareerEvidencePage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
 const DocumentsPage = lazy(() => import("./pages/ArtifactsPage"));
-const DocumentAICanvasGuidePage = lazy(() => import("./pages/DocumentAICanvasGuidePage"));
 const JobDescriptionPage = lazy(() => import("./pages/JobDescriptionPage"));
 const JobWorkspacePage = lazy(() => import("./pages/JobWorkspacePage"));
 const PricingPage = lazy(() => import("./pages/PricingPage"));
@@ -208,8 +207,8 @@ function AuthenticatedApp() {
               <Route path="/documents" element={<DocumentsPage />} />
               <Route path="/career-evidence" element={<CareerEvidencePage />} />
               <Route path="/career-memory" element={<Navigate replace to="/career-evidence" />} />
-              <Route path="/career-memory/guide" element={<DocumentAICanvasGuidePage />} />
-              <Route path="/documents/ai-canvas-guide" element={<Navigate replace to="/career-memory/guide" />} />
+              <Route path="/career-memory/guide" element={<Navigate replace to="/career-evidence" />} />
+              <Route path="/documents/ai-canvas-guide" element={<Navigate replace to="/career-evidence" />} />
               <Route path="/cv-studio" element={<CvStudioPage />} />
               <Route path="/artifacts" element={<Navigate replace to="/documents" />} />
               <Route path="/referrals" element={<ReferralsPage />} />

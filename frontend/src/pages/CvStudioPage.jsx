@@ -659,7 +659,7 @@ export default function CvStudioPage() {
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-on-surface-variant">
               Edit the current CV draft, preview the exact HTML output, and print or save to PDF.
-              Career Memory remains separate and supplies reusable facts for future tailoring.
+              Confirmed Career Assets supply reusable facts for future tailoring.
             </p>
             <div className="mt-3 inline-flex rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
               Editing: {sourceLabel}
