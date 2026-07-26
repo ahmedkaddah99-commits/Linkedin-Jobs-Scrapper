@@ -1042,7 +1042,27 @@ def get_journey_state(user) -> dict[str, Any]:
     item (if any), and ready actions (if ready).
     """
     readiness = compute_canonical_readiness(user)
-    evidence_items = [item.to_dict() for item in _read_evidence(user)]
+    evidence_records = _read_evidence(user)
+    metadata = dict(user.metadata or {})
+    processing_state = dict(metadata.get("_evidence_processing_state") or {})
+    has_legacy_extraction = bool(
+        evidence_records
+        and processing_state
+        and any(
+            (item.metadata or {}).get("extraction_version") != "gemini-career-v2"
+            for item in evidence_records
+        )
+    )
+    if has_legacy_extraction:
+        return {
+            "state": "processing",
+            "evidence_items": [],
+            "readiness": readiness,
+            "requires_reprocessing": True,
+            "processing_state": processing_state,
+        }
+
+    evidence_items = [item.to_dict() for item in evidence_records]
 
     if readiness["is_ready"]:
         return {

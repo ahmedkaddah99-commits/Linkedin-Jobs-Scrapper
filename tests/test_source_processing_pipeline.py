@@ -439,6 +439,28 @@ class TestSourceProcessingPipelineAPIIntegration(unittest.TestCase):
             second.evidence_id,
         )
 
+    def test_legacy_extraction_is_reprocessed_instead_of_reviewed(self):
+        legacy = CandidateEvidence.create(
+            text="Erlangen, Germany",
+            source_id="cv_legacy",
+        )
+        persisted = self.app.repositories.auth_repository.get_user(self.user.user_id)
+        persisted.metadata = {
+            **dict(persisted.metadata or {}),
+            "candidate_evidence": [legacy.to_dict()],
+            "_evidence_processing_state": {
+                "state": "completed",
+                "batch_id": "legacy",
+            },
+        }
+        self.app.repositories.auth_repository.upsert_user(persisted)
+
+        status, journey = self._request("GET", "/evidence-items/journey-state")
+        self.assertEqual(status, 200, journey)
+        self.assertEqual(journey["state"], "processing")
+        self.assertTrue(journey["requires_reprocessing"])
+        self.assertEqual(journey["evidence_items"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
