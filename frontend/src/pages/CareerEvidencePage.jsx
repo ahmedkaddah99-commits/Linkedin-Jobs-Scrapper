@@ -9,6 +9,8 @@ import {
   applyCanonicalJourneyState,
   buildLifecycleSummary,
   LIFECYCLE_STATE,
+  LIFECYCLE_ORDER,
+  STATE_INDEX,
   SOURCE_PROCESSING_STATE,
   SOURCE_PROCESSING_LABELS,
   SOURCE_PROCESSING_DESCRIPTIONS,
@@ -127,6 +129,8 @@ export default function CareerEvidencePage() {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState("");
   const [reviewNotice, setReviewNotice] = useState("");
+  const [inspectedStep, setInspectedStep] = useState(null);
+  const initialJourneyStateRef = useRef(null);
   // CP-041R: Question state shown inline after confirmation
   const [activeQuestion, setActiveQuestion] = useState(null);
   // CP-044R: Ready actions with CV/motivation provenance
@@ -489,6 +493,18 @@ export default function CareerEvidencePage() {
   const { state, label, description, primaryAction, progress, progressLabel: stepLabel } =
     lifecycle;
 
+  if (!journeyLoading && initialJourneyStateRef.current === null) {
+    initialJourneyStateRef.current = state;
+  }
+  const currentStepIndex = STATE_INDEX[state] ?? 0;
+  const resumedAtReview = (STATE_INDEX[initialJourneyStateRef.current] ?? 0) >=
+    STATE_INDEX[LIFECYCLE_STATE.REVIEW];
+  const sourceNames = [...new Set(
+    evidenceItems
+      .map((item) => String(item?.source_asset || "").trim())
+      .filter(Boolean),
+  )];
+
   // CP-043R: Track previous state for focus management
   const prevStateRef = useRef(state);
 
@@ -572,6 +588,15 @@ export default function CareerEvidencePage() {
         </p>
       </header>
 
+      {resumedAtReview && !inspectedStep ? (
+        <div className="rounded-2xl border border-primary/20 bg-primary/5 px-5 py-4" role="status">
+          <p className="text-sm font-semibold text-on-surface">Continuing your saved progress</p>
+          <p className="mt-1 text-xs leading-5 text-on-surface-variant">
+            Your source was selected and its evidence was extracted earlier. You are resuming at the next unfinished review item.
+          </p>
+        </div>
+      ) : null}
+
       <div
         aria-label="Progress"
         className="space-y-2"
@@ -590,11 +615,48 @@ export default function CareerEvidencePage() {
             style={{ width: `${Math.round(progress * 100)}%` }}
           />
         </div>
+        <ol aria-label="Career Evidence steps" className="grid grid-cols-4 gap-2 pt-2">
+          {LIFECYCLE_ORDER.map((step, index) => {
+            const completed = index < currentStepIndex;
+            const current = index === currentStepIndex;
+            const inspectable = completed && index <= STATE_INDEX[LIFECYCLE_STATE.PROCESSING];
+            const names = ["Sources", "Extracted", "Review", "Ready"];
+            return (
+              <li key={step}>
+                <button
+                  aria-current={current && !inspectedStep ? "step" : undefined}
+                  className={`w-full rounded-xl border px-2 py-2 text-left text-[11px] font-medium transition-colors ${
+                    inspectedStep === step
+                      ? "border-primary bg-primary/10 text-primary"
+                      : current
+                        ? "border-primary/30 bg-primary/5 text-on-surface"
+                        : completed
+                          ? "border-outline-variant/20 bg-surface text-on-surface-variant"
+                          : "cursor-default border-outline-variant/10 text-on-surface-variant/50"
+                  }`}
+                  disabled={!inspectable}
+                  onClick={() => inspectable && setInspectedStep(step)}
+                  type="button"
+                >
+                  <span className="block">{completed ? "✓" : index + 1}</span>
+                  <span>{names[index]}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
       </div>
 
       {/* ── One primary action ──────────────────────────── */}
       <section className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
-        {state === LIFECYCLE_STATE.SOURCE ? (
+        {inspectedStep ? (
+          <CompletedStepSummary
+            evidenceItems={evidenceItems}
+            onReturn={() => setInspectedStep(null)}
+            sourceNames={sourceNames}
+            step={inspectedStep}
+          />
+        ) : state === LIFECYCLE_STATE.SOURCE ? (
           <SourceState
             onFileChange={handleFileChange}
             onSourceSelect={handleSourceSelect}
@@ -679,6 +741,62 @@ export default function CareerEvidencePage() {
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function CompletedStepSummary({ evidenceItems, onReturn, sourceNames, step }) {
+  const isSource = step === LIFECYCLE_STATE.SOURCE;
+  const evidenceTypes = [...new Set(
+    evidenceItems
+      .map((item) => String(item?.evidence_type || "").replace(/_/g, " ").trim())
+      .filter(Boolean),
+  )];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-primary">Completed step</p>
+          <h2 className="mt-1 font-headline text-lg font-bold text-on-surface">
+            {isSource ? "Sources used" : "Extraction summary"}
+          </h2>
+        </div>
+        <span className="material-symbols-outlined text-primary" aria-hidden="true">check_circle</span>
+      </div>
+
+      {isSource ? (
+        sourceNames.length ? (
+          <ul className="space-y-2">
+            {sourceNames.map((name) => (
+              <li className="rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface" key={name}>
+                {name}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-on-surface-variant">The saved evidence source is still connected.</p>
+        )
+      ) : (
+        <div className="rounded-xl bg-surface-container-low px-4 py-3">
+          <p className="text-sm font-medium text-on-surface">
+            {evidenceItems.length} evidence item{evidenceItems.length === 1 ? "" : "s"} extracted
+          </p>
+          {evidenceTypes.length ? (
+            <p className="mt-1 text-xs capitalize text-on-surface-variant">
+              {evidenceTypes.join(" · ")}
+            </p>
+          ) : null}
+        </div>
+      )}
+
+      <button
+        className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white"
+        onClick={onReturn}
+        type="button"
+      >
+        Return to current step
+      </button>
     </div>
   );
 }
