@@ -620,6 +620,8 @@ export default function CareerEvidencePage() {
             const completed = index < currentStepIndex;
             const current = index === currentStepIndex;
             const inspectable = completed && index <= STATE_INDEX[LIFECYCLE_STATE.PROCESSING];
+            const returnsToCurrent = current && Boolean(inspectedStep);
+            const clickable = inspectable || returnsToCurrent;
             const names = ["Sources", "Extracted", "Review", "Ready"];
             return (
               <li key={step}>
@@ -631,11 +633,14 @@ export default function CareerEvidencePage() {
                       : current
                         ? "border-primary/30 bg-primary/5 text-on-surface"
                         : completed
-                          ? "border-outline-variant/20 bg-surface text-on-surface-variant"
+                          ? "border-outline-variant/20 bg-surface text-on-surface-variant hover:border-primary/30 hover:text-primary"
                           : "cursor-default border-outline-variant/10 text-on-surface-variant/50"
                   }`}
-                  disabled={!inspectable}
-                  onClick={() => inspectable && setInspectedStep(step)}
+                  disabled={!clickable}
+                  onClick={() => {
+                    if (returnsToCurrent) setInspectedStep(null);
+                    else if (inspectable) setInspectedStep(step);
+                  }}
                   type="button"
                 >
                   <span className="block">{completed ? "✓" : index + 1}</span>
