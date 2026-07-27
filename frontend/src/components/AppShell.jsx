@@ -9,6 +9,27 @@ import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents"
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
 
+export const careerAssetSections = [
+  {
+    label: "Asset Library",
+    description: "Upload and manage source files.",
+    icon: "folder_open",
+    to: "/documents",
+  },
+  {
+    label: "Career Evidence",
+    description: "Extract, review, and map your experience.",
+    icon: "fact_check",
+    to: "/career-evidence",
+  },
+  {
+    label: "CV Studio",
+    description: "Edit and export your latest CV draft.",
+    icon: "description",
+    to: "/cv-studio",
+  },
+];
+
 const navItems = [
   {
     label: "Dashboard",
@@ -172,6 +193,45 @@ function SidebarActionButton({ collapsed = false, icon, label, onClick, type = "
       {!collapsed ? <span>{label}</span> : null}
       {collapsed ? <HoverLabel label={label} /> : null}
     </button>
+  );
+}
+
+function CareerAssetsNavigation() {
+  return (
+    <nav
+      aria-label="Career Assets sections"
+      className="mx-auto mb-2 grid w-full max-w-5xl gap-2 rounded-2xl bg-surface-container-low p-2 sm:grid-cols-3"
+    >
+      {careerAssetSections.map((section) => (
+        <NavLink
+          className={({ isActive }) => [
+            "flex items-start gap-3 rounded-xl px-4 py-3 transition-colors",
+            isActive
+              ? "bg-surface-container-lowest text-on-surface shadow-soft"
+              : "text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface",
+          ].join(" ")}
+          key={section.to}
+          to={section.to}
+        >
+          {({ isActive }) => (
+            <>
+              <span
+                className="material-symbols-outlined mt-0.5 text-[20px] text-primary"
+                style={isActive ? { fontVariationSettings: "'FILL' 1" } : undefined}
+              >
+                {section.icon}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">{section.label}</span>
+                <span className="mt-0.5 block text-xs leading-5 text-on-surface-variant">
+                  {section.description}
+                </span>
+              </span>
+            </>
+          )}
+        </NavLink>
+      ))}
+    </nav>
   );
 }
 
@@ -418,6 +478,9 @@ export default function AppShell({ children, muteSidebar = false }) {
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
   const isRunDetail = Boolean(runMatch);
   const routeParent = resolveRouteParent(location);
+  const isCareerAssetsRoute = navItems
+    .find((item) => item.label === "Career Assets")
+    ?.matchers.some((matcher) => Boolean(matchPath(matcher, location.pathname)));
   const { status, user } = useSession();
   const { user: clerkUser } = useUser();
   const { isDark, toggleTheme } = useTheme();
@@ -689,7 +752,10 @@ export default function AppShell({ children, muteSidebar = false }) {
           </div>
         ) : null}
 
-        <main className="w-full px-4 pb-12 pt-6 md:px-8">{children}</main>
+        <main className="w-full px-4 pb-12 pt-6 md:px-8">
+          {isCareerAssetsRoute ? <CareerAssetsNavigation /> : null}
+          {children}
+        </main>
       </div>
     </div>
   );

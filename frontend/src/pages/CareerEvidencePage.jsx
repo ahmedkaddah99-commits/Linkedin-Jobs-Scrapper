@@ -716,14 +716,6 @@ export default function CareerEvidencePage() {
 
       {/* ── Secondary: Settings ─────────────────────────── */}
       <div className="text-center">
-        <nav aria-label="Career Assets secondary tools" className="mb-4 flex justify-center gap-4 text-xs">
-          <Link className="font-medium text-on-surface-variant hover:text-primary" to="/documents">
-            Asset Library
-          </Link>
-          <Link className="font-medium text-on-surface-variant hover:text-primary" to="/cv-studio">
-            CV Studio
-          </Link>
-        </nav>
         <button
           className="text-xs font-medium text-on-surface-variant underline decoration-outline-variant hover:text-on-surface"
           onClick={() => setShowSettings((v) => !v)}

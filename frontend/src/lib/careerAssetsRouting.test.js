@@ -10,6 +10,13 @@ test("Career Assets navigation opens the canonical guided flow", () => {
   assert.match(appShellSource, /label: "Career Assets",[\s\S]*?to: "\/career-evidence"/);
 });
 
+test("Career Assets exposes its three main sections on every section page", () => {
+  assert.match(appShellSource, /aria-label="Career Assets sections"/);
+  assert.match(appShellSource, /label: "Asset Library",[\s\S]*?to: "\/documents"/);
+  assert.match(appShellSource, /label: "Career Evidence",[\s\S]*?to: "\/career-evidence"/);
+  assert.match(appShellSource, /label: "CV Studio",[\s\S]*?to: "\/cv-studio"/);
+});
+
 test("legacy Career Memory routes redirect to the canonical flow", () => {
   assert.match(appSource, /path="\/career-memory"[^>]*<Navigate replace to="\/career-evidence"/);
   assert.match(appSource, /path="\/career-memory\/guide"[^>]*<Navigate replace to="\/career-evidence"/);

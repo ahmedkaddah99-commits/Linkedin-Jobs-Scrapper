@@ -8,7 +8,6 @@ import {
   buildCareerMemoryDraft,
   buildCareerMemoryPayload,
 } from "../lib/careerMemoryWorkspace";
-import { CV_STUDIO_ROUTE } from "../lib/cvStudio";
 import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 
 const VIEW_LIBRARY = "library";
@@ -554,45 +553,6 @@ export default function DocumentsPage() {
           </p>
         </div>
       </header>
-
-      <section
-        aria-label="Career asset tools"
-        className="grid gap-2 rounded-xl bg-surface-container-low p-2 lg:grid-cols-3"
-      >
-        {[
-          {
-            description: "Upload and manage the source files Runr can use.",
-            id: VIEW_LIBRARY,
-            label: "Asset Library",
-          },
-        ].map((view) => (
-          <button
-            key={view.id}
-            className={[
-              "rounded-lg px-4 py-3 text-left transition-colors",
-              activeView === view.id
-                ? "bg-surface-container-lowest text-on-surface shadow-soft"
-                : "text-on-surface-variant hover:bg-surface-container-high",
-            ].join(" ")}
-            onClick={() => handleViewChange(view.id)}
-            type="button"
-          >
-            <span className="block text-sm font-semibold">{view.label}</span>
-            <span className="mt-1 block text-xs leading-5 text-on-surface-variant">
-              {view.description}
-            </span>
-          </button>
-        ))}
-        <Link
-          className="rounded-lg px-4 py-3 text-left text-on-surface-variant transition-colors hover:bg-surface-container-high"
-          to={CV_STUDIO_ROUTE}
-        >
-          <span className="block text-sm font-semibold text-on-surface">CV Studio</span>
-          <span className="mt-1 block text-xs leading-5 text-on-surface-variant">
-            Edit the latest browser draft. Use Tracker's Edit CV action for a generated job CV.
-          </span>
-        </Link>
-      </section>
 
       {activeView === VIEW_LIBRARY ? (
         <div className="space-y-6">
