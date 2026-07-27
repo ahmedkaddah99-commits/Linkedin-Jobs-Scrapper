@@ -85,6 +85,22 @@ class AutoOpenFirstEvidenceTests(unittest.TestCase):
         r2 = try_get_next_review_item(user)
         self.assertEqual(r1["evidence"]["text"], r2["evidence"]["text"])
 
+    def test_progress_advances_when_reviewed_item_leaves_queue(self):
+        ev1 = _make_evidence(text="First item.", status=EVIDENCE_STATUS_NEEDS_REVIEW)
+        ev2 = _make_evidence(text="Second item.", status=EVIDENCE_STATUS_NEEDS_REVIEW)
+        user = _make_user({"candidate_evidence": [ev1.to_dict(), ev2.to_dict()]})
+
+        first = try_get_next_review_item(user)
+        confirm_evidence(user, ev1.evidence_id, mapping={"experience_id": "exp_1"})
+        second = try_get_next_review_item(user)
+
+        self.assertEqual(first["progress"], {
+            "cursor": 1, "remaining": 2, "total": 2, "reviewed": 0,
+        })
+        self.assertEqual(second["progress"], {
+            "cursor": 2, "remaining": 1, "total": 2, "reviewed": 1,
+        })
+
     def test_complete_returns_none(self):
         ev = _make_evidence(text="Done.", status=EVIDENCE_STATUS_CONFIRMED)
         user = _make_user({"candidate_evidence": [ev.to_dict()]})

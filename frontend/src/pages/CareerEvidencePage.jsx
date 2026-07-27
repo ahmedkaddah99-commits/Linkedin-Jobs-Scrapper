@@ -126,6 +126,7 @@ export default function CareerEvidencePage() {
   const [reviewItem, setReviewItem] = useState(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState("");
+  const [reviewNotice, setReviewNotice] = useState("");
   // CP-041R: Question state shown inline after confirmation
   const [activeQuestion, setActiveQuestion] = useState(null);
   // CP-044R: Ready actions with CV/motivation provenance
@@ -342,6 +343,7 @@ export default function CareerEvidencePage() {
   async function handleRejectEvidence(evidenceId) {
     setReviewLoading(true);
     setReviewError("");
+    setReviewNotice("");
     try {
       const response = await request("/evidence-items/review-action", {
         method: "POST",
@@ -351,6 +353,7 @@ export default function CareerEvidencePage() {
         },
       });
       applyJourneyResponse(response);
+      setReviewNotice(response?.state === "ready" ? "Review complete." : "Rejected. Showing the next item.");
     } catch (error) {
       setReviewError(error?.message || "Could not reject this evidence. Please retry.");
     } finally {
@@ -362,6 +365,7 @@ export default function CareerEvidencePage() {
   async function handleEditEvidence(evidenceId, updates, mapping) {
     setReviewLoading(true);
     setReviewError("");
+    setReviewNotice("");
     try {
       const response = await request("/evidence-items/confirm-inspect", {
         method: "POST",
@@ -372,6 +376,7 @@ export default function CareerEvidencePage() {
         },
       });
       applyJourneyResponse(response);
+      setReviewNotice(response?.state === "ready" ? "Review complete." : "Saved. Showing the next item.");
     } catch (error) {
       setReviewError(error?.message || "Could not save this evidence. Please retry.");
     } finally {
@@ -391,6 +396,7 @@ export default function CareerEvidencePage() {
   async function handleConfirmWithInspect(evidenceId, mapping) {
     setReviewLoading(true);
     setReviewError("");
+    setReviewNotice("");
     setActiveQuestion(null);
     try {
       const response = await request("/evidence-items/confirm-inspect", {
@@ -406,10 +412,12 @@ export default function CareerEvidencePage() {
         if (response.state === "question" && response.question) {
           // CP-044R: Show one missing-detail question inline
           setActiveQuestion(response.question);
+          setReviewNotice("Evidence saved. Add one useful detail, or skip.");
         } else if (response.next_review) {
           // CP-044R: Next review item returned inline — no separate fetch
           setActiveQuestion(null);
           setReviewItem(response.next_review);
+          setReviewNotice("Saved. Showing the next item.");
         } else {
           // Ready state — no more items
           setActiveQuestion(null);
@@ -428,6 +436,7 @@ export default function CareerEvidencePage() {
     if (!activeQuestion) return;
     setReviewLoading(true);
     setReviewError("");
+    setReviewNotice("");
     try {
       const response = await request("/evidence-items/answer-enrich", {
         method: "POST",
@@ -442,8 +451,10 @@ export default function CareerEvidencePage() {
         // CP-044R: Use next_review from response (inline — no separate fetch)
         if (response.next_review) {
           setReviewItem(response.next_review);
+          setReviewNotice("Answer saved. Showing the next item.");
         } else if (response.state === "ready") {
           setReviewItem(null);
+          setReviewNotice("Answer saved. Review complete.");
         }
       }
     } catch (error) {
@@ -613,6 +624,7 @@ export default function CareerEvidencePage() {
             reviewItem={reviewItem}
             reviewLoading={reviewLoading}
             reviewError={reviewError}
+            reviewNotice={reviewNotice}
             activeQuestion={activeQuestion}
             onAnswerQuestion={handleAnswerQuestion}
             onSkipQuestion={handleSkipQuestion}
@@ -748,7 +760,7 @@ function ProcessingState({ processingState, processingError, selectedSourceCount
 
 // CP-040R + CP-041R: One-item-at-a-time evidence review with suggested mapping
 // and inline question after confirmation
-function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, reviewLoading, reviewError, activeQuestion, onAnswerQuestion, onSkipQuestion }) {
+function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, reviewLoading, reviewError, reviewNotice, activeQuestion, onAnswerQuestion, onSkipQuestion }) {
   const [editMode, setEditMode] = useState(false);
   const [editText, setEditText] = useState("");
   const [selectedMapping, setSelectedMapping] = useState(null);
@@ -838,13 +850,18 @@ function ReviewState({ evidenceItems, onConfirm, onReject, onEdit, reviewItem, r
           {reviewError}
         </p>
       ) : null}
+      {reviewNotice ? (
+        <p className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm font-medium text-primary" role="status">
+          {reviewNotice}
+        </p>
+      ) : null}
       <div className="flex items-center justify-between">
         <h2 className="font-headline text-lg font-bold text-on-surface">
           Confirm evidence
         </h2>
         {progress.total > 0 ? (
           <span className="text-xs text-on-surface-variant">
-            {progress.cursor}/{progress.total}
+            Item {progress.cursor} of {progress.total} · {progress.reviewed || 0} saved
           </span>
         ) : null}
       </div>

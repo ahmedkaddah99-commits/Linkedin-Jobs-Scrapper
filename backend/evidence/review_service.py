@@ -91,6 +91,25 @@ def _set_review_cursor(user, index: int) -> None:
     user.updated_at = _now()
 
 
+def _review_progress(
+    evidence_items: list[CandidateEvidence],
+    unreviewed: list[CandidateEvidence],
+) -> dict[str, int]:
+    """Return monotonic journey progress, independent of the shrinking queue index."""
+    total_count = len(evidence_items)
+    remaining = len(unreviewed)
+    reviewed_count = sum(
+        1 for ev in evidence_items
+        if ev.status in (EVIDENCE_STATUS_CONFIRMED, EVIDENCE_STATUS_REJECTED)
+    )
+    return {
+        "cursor": min(max(total_count - remaining + 1, 1), max(total_count, 1)),
+        "remaining": remaining,
+        "total": total_count,
+        "reviewed": reviewed_count,
+    }
+
+
 # ── Legacy memory-spike migration ─────────────────────────────────────
 
 _LEGACY_SPIKE_KEYS = {
@@ -404,16 +423,6 @@ def get_next_review_item(user) -> dict[str, Any]:
 
     mapping = suggest_mapping_for_evidence(current, experiences)
 
-    total_count = len(evidence_items)
-    reviewed_count = sum(
-        1 for ev in evidence_items
-        if ev.status in (EVIDENCE_STATUS_CONFIRMED, EVIDENCE_STATUS_REJECTED)
-    )
-    remaining = sum(
-        1 for ev in unreviewed
-        if ev.evidence_id != current.evidence_id
-    ) + 1
-
     return {
         "state": "review",
         "evidence": current.to_dict(),
@@ -422,12 +431,7 @@ def get_next_review_item(user) -> dict[str, Any]:
         "is_ambiguous": mapping["is_ambiguous"],
         "alternatives": mapping["alternatives"],
         "match_confidence": mapping["match_confidence"],
-        "progress": {
-            "cursor": cursor + 1,
-            "remaining": remaining,
-            "total": total_count,
-            "reviewed": reviewed_count,
-        },
+        "progress": _review_progress(evidence_items, unreviewed),
     }
 
 
@@ -977,15 +981,6 @@ def try_get_next_review_item(user) -> dict[str, Any] | None:
         "inferred_employer": current.inferred_employer,
         "inferred_role": current.inferred_role,
     }
-    total_count = len(evidence_items)
-    reviewed_count = sum(
-        1 for ev in evidence_items
-        if ev.status in (EVIDENCE_STATUS_CONFIRMED, EVIDENCE_STATUS_REJECTED)
-    )
-    remaining = sum(
-        1 for ev in unreviewed
-        if ev.evidence_id != current.evidence_id
-    ) + 1
     return {
         "state": "review",
         "evidence": current.to_dict(),
@@ -994,12 +989,7 @@ def try_get_next_review_item(user) -> dict[str, Any] | None:
         "is_ambiguous": mapping["is_ambiguous"],
         "alternatives": mapping["alternatives"],
         "match_confidence": mapping["match_confidence"],
-        "progress": {
-            "cursor": cursor + 1,
-            "remaining": remaining,
-            "total": total_count,
-            "reviewed": reviewed_count,
-        },
+        "progress": _review_progress(evidence_items, unreviewed),
     }
 
 
