@@ -467,7 +467,10 @@ test("connects only on explicit action and preserves then revokes the extension 
   });
   await expect(sensitivePreference).not.toBeChecked();
   await expect(demographicPreference).not.toBeChecked();
-  await sensitivePreference.check();
+  // The checkbox is controlled by the persisted API response. Click it and
+  // wait for that response instead of requiring the DOM state to flip within
+  // Playwright's single check action.
+  await sensitivePreference.click();
   await expect(sensitivePreference).toBeChecked();
   await expect.poll(fixtureAuthState).toMatchObject({ preferenceUpdates: 1 });
 
