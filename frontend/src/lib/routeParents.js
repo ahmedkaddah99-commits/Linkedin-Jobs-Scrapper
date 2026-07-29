@@ -12,6 +12,7 @@ export function resolveRouteParent({ pathname = "", search = "" } = {}) {
   const params = new URLSearchParams(search);
 
   if (normalizedPath === "/career-evidence") return "";
+  if (/^\/career-evidence\/[^/]+$/.test(normalizedPath)) return "/career-evidence";
   if (normalizedPath === "/career-memory") return "/career-evidence";
   if (normalizedPath === "/career-memory/guide") return "/career-evidence";
   if (normalizedPath === "/documents" && params.get("view") === "memory") return "/career-evidence";

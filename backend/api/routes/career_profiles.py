@@ -194,6 +194,8 @@ def _apply_update_payload(profile: CareerProfile, payload: Mapping[str, Any]) ->
         status = str(payload["status"] or "").strip()
         if status in CAREER_PROFILE_STATUSES:
             profile.status = status
+    if "metadata" in payload and isinstance(payload["metadata"], Mapping):
+        profile.metadata = dict(payload["metadata"])
     from backend.domain.models import utc_now_iso
     profile.updated_at = utc_now_iso()
 
