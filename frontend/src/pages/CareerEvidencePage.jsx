@@ -2,7 +2,7 @@
 // Replaces the seven-tab Career Memory dashboard with a narrow task column.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import {
@@ -28,6 +28,13 @@ function normalizeDocumentId(document) {
 export default function CareerEvidencePage() {
   const { request } = useSession();
   const navigate = useNavigate();
+  const { profileId = "" } = useParams();
+
+  const { data: profile, refresh: refreshProfile } = useApiResource(
+    () => request(`/career-profiles/${encodeURIComponent(profileId)}`, { method: "GET" }, { rawPath: true }),
+    [profileId, request],
+    { cacheKey: `career-profile:${profileId}`, staleMs: 30000, backgroundRefresh: true },
+  );
 
   const {
     data: documentsPayload,
@@ -60,9 +67,9 @@ export default function CareerEvidencePage() {
     refresh: refreshJourneyState,
     setData: setJourneyPayload,
   } = useApiResource(
-    () => request("/evidence-items/journey-state"),
-    [request],
-    { cacheKey: "career-evidence:journey", staleMs: 0, backgroundRefresh: true },
+    () => request(`/evidence-items/journey-state?profile_id=${encodeURIComponent(profileId)}`),
+    [profileId, request],
+    { cacheKey: `career-evidence:journey:${profileId}`, staleMs: 0, backgroundRefresh: true },
   );
 
   const evidenceItems = useMemo(
@@ -73,21 +80,20 @@ export default function CareerEvidencePage() {
   );
 
   const experienceLinks = useMemo(
-    () => settingsDocuments.experience_links || [],
-    [settingsDocuments],
+    () => profile?.metadata?.experience_links || [],
+    [profile?.metadata?.experience_links],
   );
 
   const pendingQuestions = useMemo(
-    () => settingsDocuments.pending_questions || [],
-    [settingsDocuments],
+    () => profile?.metadata?.pending_questions || [],
+    [profile?.metadata?.pending_questions],
   );
 
   const selectedSourceIds = useMemo(
     () =>
-      settingsDocuments.selectedAssetIds ||
-      settingsDocuments.ai_canvas_source_asset_ids ||
+      profile?.metadata?.source_asset_ids ||
       [],
-    [settingsDocuments],
+    [profile?.metadata?.source_asset_ids],
   );
 
   const sourceDocuments = useMemo(
@@ -175,7 +181,7 @@ export default function CareerEvidencePage() {
       const response = await request("/evidence-items/process-sources", {
         method: "POST",
         body: {
-          profile_id: "",
+          profile_id: profileId,
           sources,
           asset_ids: assetIdsParam,
         },
@@ -201,7 +207,7 @@ export default function CareerEvidencePage() {
     } finally {
       processingRef.current = false;
     }
-  }, [selectedSourceIds, sourceDocuments, request, refreshJourneyState, setJourneyPayload]);
+  }, [selectedSourceIds, sourceDocuments, request, refreshJourneyState, setJourneyPayload, profileId]);
 
 
 
@@ -209,16 +215,16 @@ export default function CareerEvidencePage() {
   const saveToSettings = useCallback(
     async (updates) => {
       try {
-        await request("/settings", {
+        await request(`/career-profiles/${encodeURIComponent(profileId)}`, {
           method: "PUT",
-          body: { documents: { ...settingsDocuments, ...updates } },
-        });
-        await refreshSettings().catch(() => undefined);
+          body: JSON.stringify({ metadata: { ...(profile?.metadata || {}), ...updates } }),
+        }, { rawPath: true });
+        await refreshProfile().catch(() => undefined);
       } catch {
         // Retry on next action.
       }
     },
-    [request, settingsDocuments, refreshSettings],
+    [profile?.metadata, profileId, refreshProfile, request],
   );
 
   // CP-043R: Selection auto-starts real processing
@@ -226,8 +232,7 @@ export default function CareerEvidencePage() {
     const nextIds = selectedSourceIds.includes(assetId)
       ? selectedSourceIds.filter((id) => id !== assetId)
       : [...selectedSourceIds, assetId];
-    await saveToSettings({ selectedAssetIds: nextIds });
-    await refreshSettings().catch(() => undefined);
+    await saveToSettings({ source_asset_ids: nextIds });
     // Auto-trigger processing when sources are selected
     if (nextIds.length > 0) {
       await processSelectedSources(null, nextIds);
@@ -293,7 +298,7 @@ export default function CareerEvidencePage() {
   // CP-040R: Fetch next review item from backend
   const fetchNextReviewItem = useCallback(async () => {
     try {
-      const response = await request("/evidence-items/next-review");
+      const response = await request(`/evidence-items/next-review?profile_id=${encodeURIComponent(profileId)}`);
       if (response?.state) {
         setReviewItem(response);
       } else {
@@ -303,7 +308,7 @@ export default function CareerEvidencePage() {
       // Fall back to client-side review if endpoint unavailable
       setReviewItem(null);
     }
-  }, [request]);
+  }, [profileId, request]);
 
   const applyJourneyResponse = useCallback((response) => {
     if (!response) return;
@@ -336,12 +341,12 @@ export default function CareerEvidencePage() {
       if (journeyPayload?.primary_actions) {
         setReadyActions(journeyPayload.primary_actions);
       } else {
-        request("/evidence-items/ready-actions")
+        request(`/evidence-items/ready-actions?profile_id=${encodeURIComponent(profileId)}`)
           .then((response) => setReadyActions(response?.primary_actions || []))
           .catch(() => undefined);
       }
     }
-  }, [lifecycle.state, journeyPayload, request]);
+  }, [lifecycle.state, journeyPayload, profileId, request]);
 
   // CP-040R: Reject evidence via review service
   async function handleRejectEvidence(evidenceId) {
@@ -352,6 +357,7 @@ export default function CareerEvidencePage() {
       const response = await request("/evidence-items/review-action", {
         method: "POST",
         body: {
+          profile_id: profileId,
           evidence_id: evidenceId,
           action: "reject",
         },
@@ -374,6 +380,7 @@ export default function CareerEvidencePage() {
       const response = await request("/evidence-items/confirm-inspect", {
         method: "POST",
         body: {
+          profile_id: profileId,
           evidence_id: evidenceId,
           edited_text: updates?.text,
           mapping: mapping || undefined,
@@ -406,6 +413,7 @@ export default function CareerEvidencePage() {
       const response = await request("/evidence-items/confirm-inspect", {
         method: "POST",
         body: {
+          profile_id: profileId,
           evidence_id: evidenceId,
           mapping: mapping || undefined,
         },
@@ -445,6 +453,7 @@ export default function CareerEvidencePage() {
       const response = await request("/evidence-items/answer-enrich", {
         method: "POST",
         body: {
+          profile_id: profileId,
           question_id: activeQuestion.question_id,
           answer_text: answerText,
           evidence_id: activeQuestion.evidence_id,
@@ -476,6 +485,7 @@ export default function CareerEvidencePage() {
       const response = await request("/evidence-items/skip-question", {
         method: "POST",
         body: {
+          profile_id: profileId,
           question_id: activeQuestion.question_id,
         },
       });
@@ -577,8 +587,12 @@ export default function CareerEvidencePage() {
   return (
     <div className="mx-auto max-w-2xl space-y-8 px-4 py-8">
       <header>
+        <Link className="mb-4 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline" to="/career-evidence">
+          <span className="material-symbols-outlined text-[16px]">arrow_back</span>
+          All evidence profiles
+        </Link>
         <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
-          Career Evidence
+          {profile?.name || "Career Evidence"}{profile?.bound_workspace_id ? ` · ${profile.bound_workspace_id}` : ""}
         </div>
         <h1 ref={headingRef} tabIndex={-1} className="mt-3 font-headline text-3xl font-extrabold tracking-tight text-on-surface outline-none">
           {label}

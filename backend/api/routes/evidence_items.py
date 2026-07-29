@@ -86,6 +86,68 @@ def _metadata_evidence_store(context: ApiRouteContext):
     return _MetadataEvidenceAdapter(evidence_list, user, context.application)
 
 
+def _lifecycle_profile_id(context: ApiRouteContext, payload: dict[str, Any] | None = None) -> str:
+    body_value = str((payload or {}).get("profile_id") or "").strip()
+    if body_value:
+        return body_value
+    return str((context.query.get("profile_id") or [""])[0]).strip()
+
+
+def _lifecycle_subject(
+    context: ApiRouteContext,
+    payload: dict[str, Any] | None = None,
+    *,
+    allow_legacy_missing_profile: bool = False,
+):
+    """Resolve a guided evidence journey to its owning career profile."""
+    user, _ = context.require_identity()
+    profile_id = _lifecycle_profile_id(context, payload)
+    if not profile_id:
+        return user
+    store = getattr(context.application.repositories, "career_profile_store", None)
+    if store is None:
+        context.send_error(HTTPStatus.NOT_IMPLEMENTED, "career_profiles_disabled",
+                           "Career profile storage is not configured.")
+    try:
+        profile = store.get_profile(profile_id)
+    except KeyError:
+        if allow_legacy_missing_profile:
+            return user
+        context.send_error(HTTPStatus.NOT_FOUND, "career_profile_not_found",
+                           f"Career profile '{profile_id}' not found.")
+    if str(profile.user_id or "") != str(user.user_id or ""):
+        context.send_error(HTTPStatus.FORBIDDEN, "career_profile_forbidden",
+                           "You can only access your own career profiles.")
+    return profile
+
+
+def _persist_lifecycle_subject(context: ApiRouteContext, subject) -> None:
+    if getattr(subject, "profile_id", ""):
+        context.application.repositories.career_profile_store.upsert_profile(subject)
+    else:
+        _persist_user(context, subject)
+
+
+def _sync_profile_journey_status(subject, journey: dict[str, Any]) -> None:
+    if not getattr(subject, "profile_id", ""):
+        return
+    state = str(journey.get("state") or "")
+    if state == "ready":
+        subject.status = "ready_for_tailoring"
+    elif state in {"review", "question"}:
+        subject.status = "needs_review"
+    elif state == "processing":
+        subject.status = "extracting_evidence"
+    else:
+        subject.status = "not_started"
+
+
+def _metadata_evidence_store_for(context: ApiRouteContext, subject):
+    metadata = dict(subject.metadata or {})
+    evidence_list: list[dict[str, Any]] = list(metadata.get("candidate_evidence") or [])
+    return _MetadataEvidenceAdapter(evidence_list, subject, context.application)
+
+
 def _persist_user(context: ApiRouteContext, user) -> None:
     """Persist lifecycle mutations before any response is returned."""
     context.application.repositories.auth_repository.upsert_user(user)
@@ -105,7 +167,10 @@ class _MetadataEvidenceAdapter:
         self._user.metadata = metadata
         from datetime import datetime, timezone
         self._user.updated_at = datetime.now(timezone.utc).isoformat()
-        self._app.repositories.auth_repository.upsert_user(self._user)
+        if getattr(self._user, "profile_id", ""):
+            self._app.repositories.career_profile_store.upsert_profile(self._user)
+        else:
+            self._app.repositories.auth_repository.upsert_user(self._user)
 
     def list_all(self) -> list[dict[str, Any]]:
         return list(self._list)
@@ -373,6 +438,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
         user, _ = context.require_identity()
         asset_ids = list(payload.get("source_ids") or payload.get("asset_ids") or [])
         profile_id = str(payload.get("profile_id") or "")
+        subject = _lifecycle_subject(context, payload, allow_legacy_missing_profile=True)
         sources_data = list(payload.get("sources") or [])
 
         if not sources_data and not asset_ids:
@@ -386,13 +452,13 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
             process_sources_and_extract_evidence, build_source_processing_state,
         )
 
-        metadata = dict(user.metadata or {})
+        metadata = dict(subject.metadata or {})
 
         # Skip only evidence created by the current structured extractor. Older
         # sentence-split batches must be reprocessed instead of trapping users.
         from backend.capabilities.source_processing.pipeline import STRUCTURED_EXTRACTION_VERSION
 
-        store = _metadata_evidence_store(context)
+        store = _metadata_evidence_store_for(context, subject)
         evidence_objs_existing = [CandidateEvidence.from_dict(ev) for ev in store.list_all()]
         existing_source_ids = {
             str(getattr(ev, "source_id", "") or "").strip()
@@ -442,7 +508,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                     })
 
         # For bare asset_ids, find actual file bytes from document storage
-        candidate_assets = list(metadata.get("candidate_assets") or [])
+        candidate_assets = list((user.metadata or {}).get("candidate_assets") or [])
         processed_ids = {s["asset_id"] for s in sources_to_process}
         for aid in asset_ids:
             if aid in processed_ids:
@@ -498,9 +564,9 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
             "state": "processing", "batch_id": "", "started_at": datetime.now(timezone.utc).isoformat(),
             "source_count": len(sources_to_process),
         }
-        user.metadata = metadata
-        user.updated_at = datetime.now(timezone.utc).isoformat()
-        context.application.repositories.auth_repository.upsert_user(user)
+        subject.metadata = metadata
+        subject.updated_at = datetime.now(timezone.utc).isoformat()
+        _persist_lifecycle_subject(context, subject)
 
         result = process_sources_and_extract_evidence(
             sources_to_process, profile_id=profile_id,
@@ -511,7 +577,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
         # A processing batch is the canonical journey unit. Archive the prior
         # batch and atomically replace active evidence/experiences so stale
         # fragments never appear beside the new extraction.
-        metadata_final = dict(user.metadata or {})
+        metadata_final = dict(subject.metadata or {})
         previous_evidence = list(metadata_final.get("candidate_evidence") or [])
         if result.get("evidence"):
             if previous_evidence:
@@ -534,18 +600,19 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
             "extracted_count": result["summary"]["extracted"],
             "error": state.get("error", ""),
         }
-        user.metadata = metadata_final
-        user.updated_at = datetime.now(timezone.utc).isoformat()
-        _persist_user(context, user)
-
+        subject.metadata = metadata_final
+        subject.updated_at = datetime.now(timezone.utc).isoformat()
         from backend.evidence.review_service import get_journey_state
+        journey = get_journey_state(subject)
+        _sync_profile_journey_status(subject, journey)
+        _persist_lifecycle_subject(context, subject)
 
         context.send_json({
             "batch_id": result["batch_id"], "status": result["status"],
             "sources": result["sources"], "evidence": result["evidence"],
             "experiences": result.get("experiences") or [],
             "summary": result["summary"], "state": state,
-            "journey": get_journey_state(user),
+            "journey": journey,
         }, status=HTTPStatus.OK if result["status"] == "completed" else HTTPStatus.ACCEPTED)
         return True
 
@@ -559,7 +626,7 @@ def _handle_next_review(context: ApiRouteContext) -> bool | None:
     segments = list(context.segments)
 
     if segments == ["evidence-items", "next-review"]:
-        user, _ = context.require_identity()
+        user = _lifecycle_subject(context)
         from backend.evidence.review_service import get_next_review_item
         result = get_next_review_item(user)
         context.send_json(result, status=HTTPStatus.OK)
@@ -574,7 +641,7 @@ def _handle_review_action(context: ApiRouteContext) -> bool | None:
     payload = context.read_json_body()
 
     if segments == ["evidence-items", "review-action"]:
-        user, _ = context.require_identity()
+        user = _lifecycle_subject(context, payload)
         evidence_id = str(payload.get("evidence_id") or "")
 
         if not evidence_id:
@@ -611,9 +678,10 @@ def _handle_review_action(context: ApiRouteContext) -> bool | None:
                                    f"Invalid action: {action}. Use confirm, reject, or edit.")
                 return True
 
-            _persist_user(context, user)
             from backend.evidence.review_service import get_journey_state
             journey = get_journey_state(user)
+            _sync_profile_journey_status(user, journey)
+            _persist_lifecycle_subject(context, user)
             context.send_json({**journey, **result}, status=HTTPStatus.OK)
         except KeyError as exc:
             context.send_error(HTTPStatus.NOT_FOUND,
@@ -660,7 +728,7 @@ def _handle_confirm_inspect(context: ApiRouteContext) -> bool | None:
     payload = context.read_json_body()
 
     if segments == ["evidence-items", "confirm-inspect"]:
-        user, _ = context.require_identity()
+        user = _lifecycle_subject(context, payload)
         evidence_id = str(payload.get("evidence_id") or "")
 
         if not evidence_id:
@@ -676,9 +744,10 @@ def _handle_confirm_inspect(context: ApiRouteContext) -> bool | None:
             result = confirm_with_inspect(
                 user, evidence_id, mapping=mapping, edited_text=edited_text
             )
-            _persist_user(context, user)
             from backend.evidence.review_service import get_journey_state
             journey = get_journey_state(user)
+            _sync_profile_journey_status(user, journey)
+            _persist_lifecycle_subject(context, user)
             context.send_json({**journey, **{
                 key: value for key, value in result.items()
                 if key in ("action", "evidence")
@@ -697,7 +766,7 @@ def _handle_answer_enrich(context: ApiRouteContext) -> bool | None:
     payload = context.read_json_body()
 
     if segments == ["evidence-items", "answer-enrich"]:
-        user, _ = context.require_identity()
+        user = _lifecycle_subject(context, payload)
         question_id = str(payload.get("question_id") or "")
         answer_text = str(payload.get("answer_text") or payload.get("text") or "")
         evidence_id = str(payload.get("evidence_id") or "")
@@ -712,9 +781,10 @@ def _handle_answer_enrich(context: ApiRouteContext) -> bool | None:
             result = answer_enrich_evidence(
                 user, question_id, answer_text, evidence_id=evidence_id or None
             )
-            _persist_user(context, user)
             from backend.evidence.review_service import get_journey_state
             journey = get_journey_state(user)
+            _sync_profile_journey_status(user, journey)
+            _persist_lifecycle_subject(context, user)
             context.send_json({**journey, **{
                 key: value for key, value in result.items()
                 if key in ("action", "evidence")
@@ -733,7 +803,7 @@ def _handle_skip_question(context: ApiRouteContext) -> bool | None:
     payload = context.read_json_body()
 
     if segments == ["evidence-items", "skip-question"]:
-        user, _ = context.require_identity()
+        user = _lifecycle_subject(context, payload)
         question_id = str(payload.get("question_id") or "")
 
         if not question_id:
@@ -744,9 +814,10 @@ def _handle_skip_question(context: ApiRouteContext) -> bool | None:
         try:
             from backend.evidence.review_service import skip_question_for_evidence
             result = skip_question_for_evidence(user, question_id)
-            _persist_user(context, user)
             from backend.evidence.review_service import get_journey_state
             journey = get_journey_state(user)
+            _sync_profile_journey_status(user, journey)
+            _persist_lifecycle_subject(context, user)
             context.send_json({**journey, **{
                 key: value for key, value in result.items()
                 if key in ("action", "evidence")
@@ -764,7 +835,7 @@ def _handle_journey_state(context: ApiRouteContext) -> bool | None:
     segments = list(context.segments)
 
     if segments == ["evidence-items", "journey-state"]:
-        user, _ = context.require_identity()
+        user = _lifecycle_subject(context)
         from backend.evidence.review_service import get_journey_state
         result = get_journey_state(user)
         context.send_json(result, status=HTTPStatus.OK)
@@ -779,7 +850,7 @@ def _handle_ready_actions(context: ApiRouteContext) -> bool | None:
     segments = list(context.segments)
 
     if segments == ["evidence-items", "ready-actions"]:
-        user, _ = context.require_identity()
+        user = _lifecycle_subject(context)
         from backend.evidence.review_service import build_ready_actions, compute_canonical_readiness
         readiness = compute_canonical_readiness(user)
         actions = build_ready_actions(user) if readiness["is_ready"] else []

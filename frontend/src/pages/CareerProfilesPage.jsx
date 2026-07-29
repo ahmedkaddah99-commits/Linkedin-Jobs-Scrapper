@@ -46,6 +46,7 @@ export default function CareerProfilesPage() {
     description: "",
     preferred_language: "en",
     target_direction: "",
+    workspace_id: "",
   });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
@@ -141,7 +142,7 @@ export default function CareerProfilesPage() {
   }
 
   function handleShowForm() {
-    setForm({ name: "", description: "", preferred_language: "en", target_direction: "" });
+    setForm({ name: "", description: "", preferred_language: "en", target_direction: "", workspace_id: "" });
     setFormError("");
     setShowForm(true);
   }
@@ -172,9 +173,17 @@ export default function CareerProfilesPage() {
         },
         { rawPath: true }
       );
-      setProfiles((prev) => [profile, ...prev]);
+      let savedProfile = profile;
+      if (form.workspace_id) {
+        savedProfile = await request(
+          `/career-profiles/${profile.profile_id}/bind`,
+          { method: "POST", body: JSON.stringify({ workspace_id: form.workspace_id }) },
+          { rawPath: true },
+        );
+      }
+      setProfiles((prev) => [savedProfile, ...prev]);
       setShowForm(false);
-      navigate(`/workspaces?profile_id=${profile.profile_id}`);
+      navigate(`/career-evidence/${profile.profile_id}`);
     } catch (err) {
       setFormError(String(err?.message || "Failed to create career profile."));
     } finally {
@@ -396,6 +405,23 @@ export default function CareerProfilesPage() {
           </p>
           <form className="mt-6 space-y-5" onSubmit={handleCreateProfile}>
             <div>
+              <label className="block text-sm font-semibold text-on-surface" htmlFor="profile-workspace">
+                Workspace <span className="text-error">*</span>
+              </label>
+              <select
+                className="mt-1.5 w-full rounded-xl border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                id="profile-workspace"
+                onChange={(e) => handleFieldChange("workspace_id", e.target.value)}
+                required
+                value={form.workspace_id}
+              >
+                <option value="">Select a workspace</option>
+                {userWorkspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>{workspace.name || workspace.id}</option>
+                ))}
+              </select>
+            </div>
+            <div>
               <label className="block text-sm font-semibold text-on-surface" htmlFor="profile-name">
                 Profile name <span className="text-error">*</span>
               </label>
@@ -554,6 +580,14 @@ export default function CareerProfilesPage() {
                       </div>
                     </div>
                     <div className="flex shrink-0 gap-2">
+                      <button
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                        onClick={() => navigate(`/career-evidence/${profile.profile_id}`)}
+                        type="button"
+                      >
+                        {profile.status === "not_started" ? "Start evidence" : "Open evidence"}
+                        <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+                      </button>
                       {isBound ? (
                         <>
                           <button

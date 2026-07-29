@@ -194,7 +194,7 @@ function AuthenticatedApp() {
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
-              <Route path="/career-profiles" element={<CareerProfilesPage />} />
+              <Route path="/career-profiles" element={<Navigate replace to="/career-evidence" />} />
               <Route path="/dashboard" element={<Navigate replace to="/" />} />
               <Route path="/workspaces" element={<WorkspacesPage />} />
               <Route path="/quick-apply" element={<QuickApplyPage />} />
@@ -206,7 +206,8 @@ function AuthenticatedApp() {
               <Route path="/tracker/:reviewId/ats" element={<TrackerAtsPage />} />
               <Route path="/tracker/job-descriptions/:reviewId" element={<JobDescriptionPage />} />
               <Route path="/documents" element={<DocumentsPage />} />
-              <Route path="/career-evidence" element={<CareerEvidencePage />} />
+              <Route path="/career-evidence" element={<CareerProfilesPage />} />
+              <Route path="/career-evidence/:profileId" element={<CareerEvidencePage />} />
               <Route path="/career-memory" element={<Navigate replace to="/career-evidence" />} />
               <Route path="/career-memory/guide" element={<Navigate replace to="/career-evidence" />} />
               <Route path="/documents/ai-canvas-guide" element={<Navigate replace to="/career-evidence" />} />

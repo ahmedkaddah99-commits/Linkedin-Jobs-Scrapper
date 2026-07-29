@@ -5,6 +5,7 @@ import { resolveRouteParent } from "./routeParents.js";
 
 test("resolves Career Assets secondary destinations to the guided flow", () => {
   assert.equal(resolveRouteParent({ pathname: "/career-evidence" }), "");
+  assert.equal(resolveRouteParent({ pathname: "/career-evidence/profile_1" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/career-memory" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/career-memory/guide" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/documents", search: "?view=memory" }), "/career-evidence");
