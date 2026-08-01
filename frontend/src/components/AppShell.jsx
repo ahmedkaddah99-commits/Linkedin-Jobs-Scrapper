@@ -737,9 +737,6 @@ export default function AppShell({ children, muteSidebar = false }) {
           >
             <div>
               <div className="font-semibold text-on-surface">A newer Runr version is available.</div>
-              <div className="text-xs leading-5 text-on-surface-variant">
-                Refresh once to load the latest deployed UI and avoid stale pages from an older tab.
-              </div>
             </div>
             <button
               className="inline-flex items-center justify-center gap-2 rounded-full bg-primary px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
