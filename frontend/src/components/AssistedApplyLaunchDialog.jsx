@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApiResource } from "../hooks/useApiResource";
-import { bindRunrApplicationPackage } from "../lib/assistedApplyLaunch";
+import {
+  isAssistedApplyPreparationEnabled,
+  normalizePreparationStatus,
+  preparationUiModel,
+  sendAssistedApplyPreparationCommand,
+} from "../lib/assistedApplyPreparation";
 
 const SUPPORTED_MIME_TYPES = new Set([
   "application/pdf",
@@ -27,6 +32,10 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
   const [confirmed, setConfirmed] = useState(false);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
   const [state, setState] = useState({ loading: false, message: "", error: "" });
+  const [preparation, setPreparation] = useState(null);
+  const [extensionStatus, setExtensionStatus] = useState("");
+  const preparationEnabled = isAssistedApplyPreparationEnabled();
+  const preparationUi = preparationUiModel(preparation, extensionStatus);
   const { data: documentsPayload, loading: documentsLoading, error: documentsError } = useApiResource(
     () => request("/documents?limit=500"),
     [request],
@@ -43,6 +52,23 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
     if (primaryCv) setSelectedDocumentIds([primaryCv.document_id]);
   }, [documents]);
 
+  useEffect(() => {
+    const preparationId = preparation?.preparation_id;
+    if (!preparationId) return undefined;
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const payload = await request(`/assisted-apply/preparations/${encodeURIComponent(preparationId)}`);
+        if (!stopped) setPreparation(normalizePreparationStatus(payload));
+      } catch (error) {
+        if (!stopped) setState((current) => ({ ...current, error: error?.message || "Unable to read preparation status." }));
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 1500);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [preparation?.preparation_id, request]);
+
   function toggleDocument(documentId) {
     setSelectedDocumentIds((current) =>
       current.includes(documentId)
@@ -53,20 +79,15 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
 
   async function launch() {
     if (!confirmed || state.loading) return;
+    if (!preparationEnabled) {
+      setState({ loading: false, message: "", error: "Assisted Apply preparation is not enabled in this environment yet." });
+      return;
+    }
     const applicationUrl = String(row?.apply_link || "").trim();
     if (!applicationUrl) {
       setState({ loading: false, message: "", error: "No employer application URL is available for this role." });
       return;
     }
-    // Open synchronously inside the click handler so popup protection does not
-    // block the employer tab. Clear opener before navigating cross-origin.
-    const applicationWindow = window.open("about:blank", "runr-assisted-apply");
-    if (!applicationWindow) {
-      setState({ loading: false, message: "", error: "Your browser blocked the application tab. Allow popups for Runr and try again." });
-      return;
-    }
-    applicationWindow.opener = null;
-    applicationWindow.location.replace(applicationUrl);
     setState({ loading: true, message: "Preparing your reviewed application package…", error: "" });
     try {
       const prepared = await request("/assisted-apply/packages/prepare", {
@@ -78,26 +99,60 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
           confirm_standard_profile: true,
         },
       });
-      const launched = await request("/assisted-apply/packages/launch", {
+      const created = await request("/assisted-apply/preparations", {
         method: "POST",
         body: { package_id: prepared.package_id },
       });
-      await bindRunrApplicationPackage({
-        bindingId: launched.binding_id,
-        applicationUrl: prepared.application_url,
+      setPreparation(normalizePreparationStatus(created));
+      const started = await sendAssistedApplyPreparationCommand({
+        type: "start",
+        preparationId: created.preparation_id,
+        packageId: prepared.package_id,
+        ats: prepared.portal,
       });
+      setExtensionStatus(started.status || "accepted");
       setState({
         loading: false,
-        message: "The package is ready in the employer tab. Open the Runr side panel there to review and fill it.",
+        message: "Preparation started. The employer tab remains inactive until you choose Review filled application.",
         error: "",
       });
-      onLaunched?.(prepared);
+      onLaunched?.(created);
     } catch (error) {
+      if (error?.status === "permission_required") {
+        setExtensionStatus("permission_required");
+        setState({ loading: false, message: "Portal access is required before preparation can continue.", error: "Open the Runr extension side panel on the application page, choose Grant portal access, then retry preparation." });
+        return;
+      }
       setState({
         loading: false,
         message: "",
         error: error?.message || "Runr could not prepare this assisted application.",
       });
+    }
+  }
+
+  async function runPreparationAction(type) {
+    if (!preparation || state.loading) return;
+    const preparationId = preparation.preparation_id;
+    setState({ loading: true, message: "", error: "" });
+    try {
+      if (type === "cancel") {
+        await sendAssistedApplyPreparationCommand({ type, preparationId, packageId: preparation.package_id, ats: preparation.ats })
+          .catch(() => request(`/assisted-apply/preparations/${encodeURIComponent(preparationId)}`, { method: "POST", body: { action: "cancel" } }));
+        setState({ loading: false, message: "Preparation cancelled. No application was submitted.", error: "" });
+        return;
+      }
+      const response = await sendAssistedApplyPreparationCommand({
+        type,
+        preparationId,
+        packageId: preparation.package_id,
+        ats: preparation.ats,
+        retryOf: preparationId,
+      });
+      setExtensionStatus(response.status || type);
+      setState({ loading: false, message: type === "review_activate" ? "The exact prepared tab is active for your review. No submission occurred." : "Explicit retry requested.", error: "" });
+    } catch (error) {
+      setState({ loading: false, message: "", error: error?.message || "The preparation action could not be completed." });
     }
   }
 
@@ -157,10 +212,25 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
 
         <div className="mt-7 flex flex-wrap justify-end gap-3">
           <button className="rounded-full bg-surface-container px-4 py-2.5 text-sm font-semibold text-on-surface" disabled={state.loading} onClick={onClose} type="button">Cancel</button>
-          <button className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60" disabled={!confirmed || state.loading} onClick={() => void launch()} type="button">
-            {state.loading ? "Opening application…" : "Open reviewed application"}
+          <button className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60" disabled={!confirmed || state.loading || !preparationEnabled} onClick={() => void launch()} type="button">
+            {state.loading ? "Preparing…" : "Start preparation"}
           </button>
         </div>
+        {!preparationEnabled ? <p className="mt-4 rounded-xl bg-amber-500/10 p-3 text-sm text-amber-700" role="status">Assisted Apply preparation is feature-disabled until the remaining production foundation is complete.</p> : null}
+        {preparation ? (
+          <section className="mt-4 rounded-xl border border-outline-variant/20 bg-surface-container-low p-4" data-testid="assisted-apply-preparation-status">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Preparation status</p>
+            <h3 className="mt-1 text-lg font-semibold text-on-surface">{preparationUi.state.replaceAll("_", " ")}</h3>
+            <p className="mt-1 text-sm text-on-surface-variant">{preparationUi.filled} filled · {preparationUi.unresolved} unresolved</p>
+            {preparationUi.permissionRequired ? <p className="mt-3 text-sm text-amber-700">Grant portal access from the Runr extension side panel on the application page, then choose Retry preparation.</p> : null}
+            {preparationUi.expired ? <p className="mt-3 text-sm text-amber-700">This preparation expired. Create a new reviewed package before retrying.</p> : null}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {preparationUi.canReview ? <button className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white" disabled={state.loading} onClick={() => void runPreparationAction("review_activate")} type="button">Review filled application</button> : null}
+              {preparationUi.canRetry ? <button className="rounded-full bg-primary/10 px-4 py-2 text-sm font-semibold text-primary" disabled={state.loading} onClick={() => void runPreparationAction("retry")} type="button">Retry preparation</button> : null}
+              {preparationUi.canCancel ? <button className="rounded-full bg-surface-container-high px-4 py-2 text-sm font-semibold text-on-surface" disabled={state.loading} onClick={() => void runPreparationAction("cancel")} type="button">Cancel preparation</button> : null}
+            </div>
+          </section>
+        ) : null}
         {state.message ? <p className="mt-4 rounded-xl bg-primary/10 p-3 text-sm text-primary" role="status">{state.message}</p> : null}
         {state.error ? <p className="mt-4 rounded-xl bg-error/10 p-3 text-sm text-error" role="alert">{state.error}</p> : null}
       </section>

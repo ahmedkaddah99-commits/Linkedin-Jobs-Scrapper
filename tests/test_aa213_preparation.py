@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from backend import create_backend
 from backend.api.routes import build_route_registry
-from backend.api.routes.assisted_apply_preparations import _create, _read, _report
+from backend.api.routes.assisted_apply_preparations import _action, _create, _read, _report
 from backend.domain.assisted_apply_preparation import (
     PREPARATION_STATE_ACTIVE,
     PREPARATION_STATE_EXPIRED,
@@ -175,6 +175,12 @@ class AA213PreparationTests(unittest.TestCase):
         read_context = Context(("assisted-apply", "preparations", preparation_id), {}, self.owner)
         _read(read_context)
         self.assertEqual(read_context.response[1]["state"], PREPARATION_STATE_PERMISSION_REQUIRED)
+        action_context = Context(
+            ("assisted-apply", "preparations", preparation_id, "action"),
+            {"action": "retry"}, self.owner,
+        )
+        _action(action_context)
+        self.assertEqual(action_context.response[1]["state"], "created")
         with self.assertRaises(ValueError):
             _report(Context(
                 ("assisted-apply", "extension", "preparations", "report"),
