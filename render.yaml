@@ -20,6 +20,9 @@ services:
           envVarKey: RENDER_EXTERNAL_HOSTNAME
       - key: VITE_CLERK_PUBLISHABLE_KEY
         sync: false
+      # Controlled pilot switch; leave unset/false outside the AA-226 pilot.
+      - key: VITE_ENABLE_ASSISTED_APPLY_PREPARATION
+        sync: false
     routes:
       - type: rewrite
         source: /*
@@ -48,6 +51,9 @@ services:
       - key: BACKEND_ALLOWED_ORIGINS
         value: https://runr-frontend.onrender.com,https://app.userunr.com
       - key: RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS
+        sync: false
+      # Controlled pilot switch; leave unset/false outside the AA-226 pilot.
+      - key: RUNR_ENABLE_ASSISTED_APPLY_PREPARATION
         sync: false
       - key: RENDER_FRONTEND_EXTERNAL_HOSTNAME
         fromService:

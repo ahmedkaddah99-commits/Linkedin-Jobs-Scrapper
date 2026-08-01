@@ -26,6 +26,11 @@ backend's existing `RUNR_ENABLE_ASSISTED_APPLY_PREPARATION` gate remains the
 production kill switch until AA-226 completes the remaining production
 foundation.
 
+Render declares both flags as unsynchronized, operator-set variables. A
+controlled pilot may set both to `true` for the pilot deployment; leaving either
+unset keeps the flow disabled. The repository change does not enable either
+flag or broaden the rollout.
+
 ## Evidence
 
 - `frontend/src/components/AssistedApplyLaunchDialog.jsx` implements the
