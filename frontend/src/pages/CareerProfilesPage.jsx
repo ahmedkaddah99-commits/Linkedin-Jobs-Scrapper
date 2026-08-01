@@ -127,7 +127,7 @@ export default function CareerProfilesPage() {
       const metadata = { ...(profile?.metadata || {}), source_asset_ids: selectedAssetIds };
       const updated = await request(
         `/career-profiles/${sourceProfileId}`,
-        { method: "PUT", body: JSON.stringify({ metadata, status: "extracting_evidence" }) },
+        { method: "PUT", body: { metadata, status: "extracting_evidence" } },
         { rawPath: true },
       );
       setProfiles((prev) =>
@@ -211,7 +211,7 @@ export default function CareerProfilesPage() {
       setBindingError("");
       const updated = await request(
         `/career-profiles/${bindingProfileId}/bind`,
-        { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) },
+        { method: "POST", body: { workspace_id: workspaceId } },
         { rawPath: true }
       );
       setProfiles((prev) => prev.map((p) => (p.profile_id === updated.profile_id ? updated : p)));
@@ -255,7 +255,7 @@ export default function CareerProfilesPage() {
     if (!profileId) throw new Error("No profile selected.");
     const review = await request(
       `/career-profiles/${profileId}/rebind-review`,
-      { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) },
+      { method: "POST", body: { workspace_id: workspaceId } },
       { rawPath: true }
     );
     setRebindReview(review);
@@ -272,11 +272,11 @@ export default function CareerProfilesPage() {
         `/career-profiles/${profileId}/rebind-confirm`,
         {
           method: "POST",
-          body: JSON.stringify({
+          body: {
             workspace_id: rebindReview?.workspace_id || "",
             review_id,
             confirmed_conflicts,
-          }),
+          },
         },
         { rawPath: true }
       );
@@ -313,7 +313,7 @@ export default function CareerProfilesPage() {
     try {
       const preview = await request(
         `/career-profiles/${profileId}/baseline-cv-replacement-preview`,
-        { method: "POST", body: JSON.stringify({ asset_id: assetId }) },
+        { method: "POST", body: { asset_id: assetId } },
         { rawPath: true }
       );
       setCvReplacePreview(preview);
@@ -336,7 +336,7 @@ export default function CareerProfilesPage() {
         `/career-profiles/${profileId}/baseline-cv-replacement-confirm`,
         {
           method: "POST",
-          body: JSON.stringify({ preview: preview, accepted_actions: acceptedActions }),
+          body: { preview, accepted_actions: acceptedActions },
         },
         { rawPath: true }
       );
