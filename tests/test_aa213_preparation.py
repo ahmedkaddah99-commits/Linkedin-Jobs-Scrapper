@@ -18,6 +18,7 @@ from backend.domain.assisted_apply_preparation import (
     PREPARATION_STATE_PERMISSION_REQUIRED,
     PREPARATION_STATE_PREPARING,
     PREPARATION_STATE_READY_FOR_REVIEW,
+    PREPARATION_MAX_ATTEMPTS,
     PreparationAuthorizationError,
     PreparationFeatureDisabledError,
     PreparationStateError,
@@ -112,6 +113,18 @@ class AA213PreparationTests(unittest.TestCase):
         self.assertEqual(retried.attempt_count, 2)
         self.assertEqual(retried.state, "created")
         self.assertNotIn("submitted", retried.to_dict())
+
+    def test_bounded_retry_attempts_fail_closed(self):
+        preparation = self.service.create(user_id=self.owner.user_id, package_id=self.package.package_id)
+        preparation.state = PREPARATION_STATE_EXPIRED
+        preparation.attempt_count = PREPARATION_MAX_ATTEMPTS
+        self.service._repository.save(preparation)
+        with self.assertRaisesRegex(PreparationStateError, "retry limit"):
+            self.service.apply_action(
+                user_id=self.owner.user_id,
+                preparation_id=preparation.preparation_id,
+                action="retry",
+            )
 
     def test_feature_is_disabled_by_default(self):
         disabled = type(self.service)(repositories=self.app.repositories, package_service=self.service.package_service, enabled=False)

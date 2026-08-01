@@ -20,6 +20,7 @@ from backend.domain.assisted_apply_preparation import (
     PREPARATION_STATE_PREPARING,
     PREPARATION_STATE_READY_FOR_REVIEW,
     AssistedApplyPreparation,
+    PREPARATION_MAX_ATTEMPTS,
     PreparationAuthorizationError,
     PreparationFeatureDisabledError,
     PreparationStateError,
@@ -235,6 +236,8 @@ class AssistedApplyPreparationService:
         if action == "cancel":
             preparation.cancelled_at = now
         elif action == "retry":
+            if preparation.attempt_count >= PREPARATION_MAX_ATTEMPTS:
+                raise PreparationStateError("The bounded preparation retry limit has been reached.")
             preparation.attempt_count += 1
             preparation.error_category = ""
             preparation.completed_count = 0

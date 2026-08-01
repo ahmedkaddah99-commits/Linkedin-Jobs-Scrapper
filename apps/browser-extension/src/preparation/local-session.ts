@@ -1,6 +1,7 @@
 import { browser } from "wxt/browser";
 
 export const PREPARATION_LOCAL_RECORD_KEY = "assisted-apply-preparation:local:v1";
+export const PREPARATION_MAX_ATTEMPTS = 3;
 
 export type PreparationLocalStatus =
   | "starting"
@@ -71,6 +72,12 @@ export async function clearPreparationLocalRecord(): Promise<void> {
 
 export function hasActivePreparation(record: PreparationLocalRecord | null): boolean {
   return record !== null && activeStatuses.has(record.status);
+}
+
+export function canRetryPreparation(record: PreparationLocalRecord | null): boolean {
+  return record !== null && !hasActivePreparation(record) &&
+    ["permission_required", "closed", "discarded", "navigation_mismatch", "auth_lost", "retry_required", "failed"].includes(record.status) &&
+    record.attempt < PREPARATION_MAX_ATTEMPTS;
 }
 
 export function comparableLocalUrl(value: string): string {

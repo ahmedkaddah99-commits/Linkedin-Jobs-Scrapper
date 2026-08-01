@@ -58,6 +58,7 @@ import {
 } from "../src/state/tab-state";
 import {
   canActivateExactPreparationTab,
+  canRetryPreparation,
   classifyPreparationTabChange,
   hasActivePreparation,
   readPreparationLocalRecord,
@@ -411,6 +412,7 @@ async function applyPreparationExtensionAction(
 
 async function startPreparationCommand(
   message: Extract<AssistedApplyPreparationMessage, { type: "start" }>,
+  options: { forceNewTab?: boolean; attempt?: number } = {},
 ): Promise<PreparationCommandResponse> {
   const existing = await readPreparationLocalRecord();
   if (hasActivePreparation(existing)) {
@@ -448,7 +450,7 @@ async function startPreparationCommand(
   await reportPreparationFromExtension(message, "accepted");
   const expected = comparableApplicationUrl(applicationUrl);
   const tabs = await browser.tabs.query({});
-  let tab = tabs.find((candidate) => {
+  let tab = options.forceNewTab ? undefined : tabs.find((candidate) => {
     if (candidate.id == null || !candidate.url) return false;
     try { return comparableApplicationUrl(candidate.url) === expected; } catch { return false; }
   });
@@ -457,7 +459,7 @@ async function startPreparationCommand(
   const localRecord: PreparationLocalRecord = {
     preparationId: message.preparationId, packageId: message.packageId, packageVersion: applicationPackage.version,
     ats: portal, applicationUrl, tabId: tab.id, windowId: tab.windowId,
-    status: "waiting_ready", createdAt: now(), updatedAt: now(), attempt: 1,
+    status: "waiting_ready", createdAt: now(), updatedAt: now(), attempt: options.attempt ?? 1,
     completedCount: 0, totalCount: applicationPackage.answers.length,
     lastMessageId: message.messageId,
   };
@@ -499,24 +501,44 @@ async function handlePreparationCommand(
       } else throw error;
     }
   } else if (message.type === "retry") {
-    if (!await readPreparationLocalRecord()) {
+    const localRecord = await readPreparationLocalRecord();
+    if (!localRecord) {
       response = { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "retry_required", error: "Local browser ownership was lost; start a new explicit preparation." };
       preparationCommandReplay.set(message.messageId, { fingerprint, response, expiresAt: Date.now() + ASSISTED_APPLY_PREPARATION_MAX_AGE_MS });
       return response;
     }
+    if (!canRetryPreparation(localRecord)) {
+      response = { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "retry_required", error: "The bounded preparation retry limit has been reached or the session is still active." };
+      preparationCommandReplay.set(message.messageId, { fingerprint, response, expiresAt: Date.now() + ASSISTED_APPLY_PREPARATION_MAX_AGE_MS });
+      return response;
+    }
     await applyPreparationExtensionAction(message, "retry");
-    response = await startPreparationCommand({
-      protocol: message.protocol,
-      protocolVersion: message.protocolVersion,
-      type: "start",
-      source: "web",
-      messageId: message.messageId,
-      preparationId: message.preparationId,
-      packageId: message.packageId,
-      emittedAt: message.emittedAt,
-      capabilities: { adapters: ["greenhouse", "lever"], capabilities: ["fill"] },
-    });
-    response = { ...response, status: "retrying" };
+    await writePreparationLocalRecord({ ...localRecord, status: "retry_required", updatedAt: now() });
+    try {
+      response = await startPreparationCommand({
+        protocol: message.protocol,
+        protocolVersion: message.protocolVersion,
+        type: "start",
+        source: "web",
+        messageId: message.messageId,
+        preparationId: message.preparationId,
+        packageId: message.packageId,
+        emittedAt: message.emittedAt,
+        capabilities: { adapters: ["greenhouse", "lever"], capabilities: ["fill"] },
+      }, { forceNewTab: true, attempt: localRecord.attempt + 1 });
+      response = { ...response, status: "retrying" };
+    } catch (error) {
+      await updatePreparationLocalStatus("retry_required");
+      response = {
+        ok: false,
+        preparationId: message.preparationId,
+        packageId: message.packageId,
+        status: "retry_required",
+        error: /package|expired|unavailable/iu.test(error instanceof Error ? error.message : String(error))
+          ? "The approved application package is unavailable or expired; create a new package."
+          : "Explicit retry could not be completed; review authentication, permission, or ATS state.",
+      };
+    }
   } else if (message.type === "review_activate") {
     const record = await readPreparationLocalRecord();
     const tab = record ? await browser.tabs.get(record.tabId).catch(() => null) : null;

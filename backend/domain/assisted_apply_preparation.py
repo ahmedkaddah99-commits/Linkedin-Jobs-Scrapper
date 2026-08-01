@@ -33,6 +33,7 @@ PREPARATION_REPORT_TYPES = {
     "ready_for_review",
 }
 PREPARATION_ACTIONS = {"activate", "cancel", "retry"}
+PREPARATION_MAX_ATTEMPTS = 3
 PREPARATION_ERROR_CATEGORIES = {
     "",
     "permission_required",
@@ -158,6 +159,6 @@ def transition_for_action(state: str, action: str) -> str:
         PREPARATION_STATE_ACTIVE, PREPARATION_STATE_CANCELLED, PREPARATION_STATE_EXPIRED,
     }:
         return PREPARATION_STATE_CANCELLED
-    if action == "retry" and state in {PREPARATION_STATE_PERMISSION_REQUIRED, PREPARATION_STATE_NEEDS_ATTENTION, PREPARATION_STATE_EXPIRED}:
+    if action == "retry" and state in {PREPARATION_STATE_PERMISSION_REQUIRED, PREPARATION_STATE_PREPARING, PREPARATION_STATE_NEEDS_ATTENTION, PREPARATION_STATE_EXPIRED}:
         return PREPARATION_STATE_CREATED
     raise PreparationStateError(f"Action '{action}' is invalid from state '{state}'.")
