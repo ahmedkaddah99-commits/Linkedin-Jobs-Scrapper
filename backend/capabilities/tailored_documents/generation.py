@@ -9,6 +9,7 @@ from backend.domain.ats_export_gate import evaluate_ats_export_gate
 
 from .common import compact_whitespace, strip_json_fences
 from .modes import CV_GENERATION_MODE_LIGHT, normalize_cv_generation_mode
+from .provenance import bullet_text, source_experience_id
 
 
 DEFAULT_SYSTEM_PROMPT = "You are an expert career writing assistant."
@@ -414,16 +415,34 @@ def _normalize_experiences(experiences_raw: Any) -> list[dict[str, Any]]:
         company = str(item.get("company", "")).strip()
         period = str(item.get("period", "")).strip()
         bullets_raw = item.get("bullets", [])
-        bullets = [str(b).strip() for b in bullets_raw if str(b).strip()] if isinstance(bullets_raw, list) else split_bullets(str(bullets_raw))
+        bullets = []
+        if isinstance(bullets_raw, list):
+            for bullet in bullets_raw:
+                text = bullet_text(bullet)
+                if not text:
+                    continue
+                if isinstance(bullet, dict):
+                    normalized_bullet = dict(bullet)
+                    normalized_bullet["text"] = normalized_bullet.get("approved_text", text)
+                else:
+                    normalized_bullet = str(bullet).strip()
+                bullets.append(normalized_bullet)
+        else:
+            bullets = split_bullets(str(bullets_raw))
         if role_title or company or period or bullets:
-            experiences.append(
-                {
-                    "role_title": role_title,
-                    "company": company,
-                    "period": period,
-                    "bullets": bullets,
-                }
-            )
+            experience = {
+                "role_title": role_title,
+                "company": company,
+                "period": period,
+                "bullets": bullets,
+            }
+            experience_id = source_experience_id(item)
+            if experience_id:
+                experience["source_experience_id"] = experience_id
+            for key in ("selected_cv_version", "generation_provenance", "provenance_confidence"):
+                if key in item:
+                    experience[key] = item[key]
+            experiences.append(experience)
     return experiences
 
 
@@ -490,7 +509,7 @@ def _render_tailored_cv_text(payload: Dict[str, Any], *, output_language: str = 
         if line:
             tailored_cv_lines.append(line)
         for bullet in exp.get("bullets", []):
-            tailored_cv_lines.append(f"- {bullet}")
+            tailored_cv_lines.append(f"- {bullet_text(bullet)}")
     if payload.get("cv_strategic_initiatives"):
         tailored_cv_lines.append("")
         tailored_cv_lines.append(f"{labels['projects']}:")

@@ -17,6 +17,7 @@
     "build:test": "wxt build --mode testing",
     "build:test:edge": "wxt build --browser edge --mode testing",
     "verify:manifest": "node scripts/verify-manifest.mjs",
+    "verify:assisted-apply-boundary": "node scripts/verify-assisted-apply-boundary.mjs",
     "verify:manifest:edge": "node scripts/verify-manifest.mjs edge",
     "package": "wxt build && node scripts/verify-manifest.mjs",
     "test:e2e": "npm run build:test && playwright test",

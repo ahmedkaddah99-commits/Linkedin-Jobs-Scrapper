@@ -181,13 +181,26 @@ class RouteRegistry:
         name: str = "",
     ) -> None:
         expected_prefix = tuple(prefix)
+
+        def matches(request_segments: tuple[str, ...]) -> bool:
+            if len(request_segments) < len(expected_prefix):
+                return False
+            for expected, actual in zip(expected_prefix, request_segments):
+                if expected.startswith("{") and expected.endswith("}"):
+                    if not actual:
+                        return False
+                    continue
+                if actual != expected:
+                    return False
+            return True
+
         self.register(
             ApiRoute(
                 method=method.upper(),
                 name=name or f"{method.upper()} {'/'.join(expected_prefix)}/*",
                 handler=handler,
                 auth_required=auth_required,
-                matcher=lambda request_segments: request_segments[: len(expected_prefix)] == expected_prefix,
+                matcher=matches,
             )
         )
 

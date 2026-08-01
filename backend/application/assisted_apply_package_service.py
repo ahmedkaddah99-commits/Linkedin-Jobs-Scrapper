@@ -22,6 +22,10 @@ from backend.domain.application_package import (
     APPLICATION_PACKAGE_TTL_SECONDS,
     ApplicationPackage,
     ApplicationPackageAnswer,
+    ApplicationPackageCandidate,
+    ApplicationPackageEducation,
+    ApplicationPackageExperience,
+    ApplicationPackageFact,
     ApplicationPackageDocumentRef,
     ApplicationPackageJob,
     ApplicationPackagePolicy,
@@ -46,6 +50,18 @@ ASSISTED_APPLY_DOCUMENT_KINDS = {"cv", "cover_letter", "supporting_document"}
 ASSISTED_APPLY_DOCUMENT_MIME_TYPES = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+}
+ASSISTED_APPLY_UPLOAD_FIELD_INTENTS = {
+    "greenhouse": {
+        "cv": "greenhouse.resume",
+        "cover_letter": "greenhouse.cover_letter",
+        "supporting_document": "greenhouse.supporting_document",
+    },
+    "lever": {
+        "cv": "lever.resume",
+        "cover_letter": "lever.cover_letter",
+        "supporting_document": "lever.supporting_document",
+    },
 }
 ASSISTED_APPLY_OUTCOME_EVIDENCE = {"success_banner", "confirmation_page", "url_transition"}
 ASSISTED_APPLY_ADAPTERS = {"greenhouse", "lever"}
@@ -241,6 +257,12 @@ class ApplicationPackageService:
         answers: list[Mapping[str, Any]] | None = None,
         documents: list[Mapping[str, Any]] | None = None,
         warnings_items: list[str] | None = None,
+        candidate: Mapping[str, Any] | None = None,
+        experiences: list[Mapping[str, Any]] | None = None,
+        education: list[Mapping[str, Any]] | None = None,
+        skills: list[Mapping[str, Any]] | None = None,
+        languages: list[Mapping[str, Any]] | None = None,
+        standard_answers: list[Mapping[str, Any]] | None = None,
     ) -> ApplicationPackage:
         """Create an immutable, versioned application package.
 
@@ -272,6 +294,12 @@ class ApplicationPackageService:
                 if isinstance(item, Mapping)
             ],
             documents=selected_documents,
+            candidate=(ApplicationPackageCandidate.from_payload(candidate) if isinstance(candidate, Mapping) else None),
+            experiences=[ApplicationPackageExperience.from_payload(item) for item in experiences or [] if isinstance(item, Mapping)],
+            education=[ApplicationPackageEducation.from_payload(item) for item in education or [] if isinstance(item, Mapping)],
+            skills=[ApplicationPackageFact.from_payload(item) for item in skills or [] if isinstance(item, Mapping)],
+            languages=[ApplicationPackageFact.from_payload(item) for item in languages or [] if isinstance(item, Mapping)],
+            standard_answers=[ApplicationPackageAnswer.from_payload(item) for item in standard_answers or [] if isinstance(item, Mapping)],
             warnings=(
                 ApplicationPackageWarnings(items=list(warnings_items or []))
                 if warnings_items
@@ -281,6 +309,7 @@ class ApplicationPackageService:
             now=now.isoformat(),
         )
         package.answers = self._correction_service.apply_matching(package, package.answers)
+        package.refresh_content_hashes()
         self._store.save(package)
         return self._store.get(package.package_id)  # type: ignore[return-value]
 
@@ -367,6 +396,7 @@ class ApplicationPackageService:
                 f"Package is {package.status}; only launched packages can be bound."
             )
 
+        package.mark_approved(now.isoformat())
         bound = ApplicationPackage.from_payload(
             {
                 **package.to_dict(),
@@ -431,6 +461,8 @@ class ApplicationPackageService:
         *,
         package_id: str,
         document_id: str,
+        adapter: str = "",
+        upload_field_intent: str = "",
         raw_session: str,
         extension_origin: str,
     ) -> dict[str, Any]:
@@ -456,6 +488,10 @@ class ApplicationPackageService:
             raise ValueError("The selected document is not in this application package.")
         if selected.document_kind not in ASSISTED_APPLY_DOCUMENT_KINDS:
             raise ValueError("The selected document has an unsupported application role.")
+        selected_adapter = str(adapter or package.job.portal or "").strip().lower()
+        expected_intent = ASSISTED_APPLY_UPLOAD_FIELD_INTENTS.get(selected_adapter, {}).get(selected.document_kind)
+        if not expected_intent or (upload_field_intent and upload_field_intent != expected_intent):
+            raise ValueError("The upload field intent is not declared for this adapter and document role.")
         expected_suffix = ASSISTED_APPLY_DOCUMENT_MIME_TYPES.get(selected.mime_type)
         if expected_suffix is None or not selected.file_name.lower().endswith(expected_suffix):
             raise ValueError("The selected document has an unsupported MIME type or filename.")
@@ -481,9 +517,9 @@ class ApplicationPackageService:
             INSERT INTO assisted_apply_document_grants (
                 grant_id, grant_token_prefix, grant_token_hash, user_id,
                 connection_request_id, extension_origin, package_id, document_id,
-                document_version, asset_id, object_key, file_name, mime_type,
+                document_version, asset_id, object_key, file_name, mime_type, upload_field_intent,
                 expected_size, expected_sha256_hex, status, created_at, expires_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?)
             """,
             (
                 grant_id,
@@ -499,6 +535,7 @@ class ApplicationPackageService:
                 selected.object_key,
                 selected.file_name,
                 selected.mime_type,
+                expected_intent,
                 actual_size,
                 actual_sha256,
                 now.isoformat(),
@@ -518,6 +555,7 @@ class ApplicationPackageService:
                 "sha256Hex": actual_sha256,
             },
             "expiresAt": expires_at,
+            "uploadFieldIntent": expected_intent,
         }
 
     def consume_document_grant(
@@ -592,6 +630,7 @@ class ApplicationPackageService:
             "mimeType": str(row["mime_type"]),
             "size": int(row["expected_size"]),
             "sha256Hex": str(row["expected_sha256_hex"]),
+            "uploadFieldIntent": str(row["upload_field_intent"] or ""),
         }
 
     def respond_to_application_outcome(

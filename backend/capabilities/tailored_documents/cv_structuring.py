@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from .common import compact_whitespace
 from .generation import split_bullets
+from .provenance import bullet_text, source_experience_id
 from .modes import CV_GENERATION_MODE_AGGRESSIVE, normalize_cv_generation_mode
 
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*]|\u2022|\u2023|\u25e6|\u2022)+\s*")
@@ -242,6 +243,14 @@ def _normalize_bullet_value(value: Any) -> str:
 
 
 def _normalize_bullet_item(value: Any) -> Any:
+    if isinstance(value, dict) and "approved_text" in value:
+        approved_text = str(value.get("approved_text") or "")
+        if not approved_text:
+            return ""
+        clone = dict(value)
+        clone["approved_text"] = approved_text
+        clone["text"] = approved_text
+        return clone
     text = _normalize_bullet_value(value)
     if not text:
         return ""
@@ -260,6 +269,12 @@ def _repair_generated_experience_item(item: Dict) -> Dict:
         "period": str(item.get("period") or "").strip(),
         "bullets": [normalized for bullet in item.get("bullets", []) if (normalized := _normalize_bullet_item(bullet))],
     }
+    experience_id = source_experience_id(item)
+    if experience_id:
+        clone["source_experience_id"] = experience_id
+    for key in ("provenance_confidence", "selected_cv_version", "generation_provenance"):
+        if key in item:
+            clone[key] = item[key]
     period_header = clone["period"]
     if "|" not in period_header:
         return clone
@@ -283,6 +298,7 @@ def _repair_generated_experience_item(item: Dict) -> Dict:
         "location": str(parsed_header.get("location") or clone.get("location") or "").strip(),
         "period": str(parsed_header.get("period") or "").strip(),
         "bullets": merge_unique_bullets(promoted_bullets, [_normalize_bullet_value(bullet) for bullet in clone["bullets"]]),
+        **({"source_experience_id": experience_id} if experience_id else {}),
     }
 
 
@@ -443,6 +459,12 @@ def dedupe_experiences(experiences: List[Dict]) -> List[Dict]:
             "period": str(item.get("period") or "").strip(),
             "bullets": [normalized for bullet in item.get("bullets", []) if (normalized := _normalize_bullet_item(bullet))],
         }
+        experience_id = source_experience_id(item)
+        if experience_id:
+            clone["source_experience_id"] = experience_id
+        for key in ("provenance_confidence", "selected_cv_version", "generation_provenance"):
+            if key in item:
+                clone[key] = item[key]
         seen[key] = clone
         ordered.append(clone)
 
@@ -515,13 +537,13 @@ def extract_cv_strategic_initiatives(cv_text: str) -> List[Dict]:
 
 
 def merge_unique_bullets(existing: List[str], additions: List[str]) -> List[str]:
-    merged = [str(item).strip() for item in (existing or []) if str(item).strip()]
-    seen = {normalize_compare_token(item) for item in merged}
+    merged = [normalized for item in (existing or []) if (normalized := _normalize_bullet_item(item))]
+    seen = {normalize_compare_token(_normalize_bullet_value(item)) for item in merged}
     for bullet in additions or []:
-        cleaned = str(bullet).strip()
+        cleaned = _normalize_bullet_item(bullet)
         if not cleaned:
             continue
-        key = normalize_compare_token(cleaned)
+        key = normalize_compare_token(_normalize_bullet_value(cleaned))
         if key and key not in seen:
             merged.append(cleaned)
             seen.add(key)
@@ -680,7 +702,11 @@ def extract_role_from_cv_text(cv_text: str, company_keyword: str):
 
 
 def _clamp_rewritten_bullets(generated_bullets: List[str], baseline_bullets: List[str]) -> List[str]:
-    normalized_generated = [str(item).strip() for item in (generated_bullets or []) if str(item).strip()]
+    normalized_generated = [
+        _normalize_bullet_item(item)
+        for item in (generated_bullets or [])
+        if _normalize_bullet_item(item)
+    ]
     normalized_baseline = [str(item).strip() for item in (baseline_bullets or []) if str(item).strip()]
     if not normalized_baseline:
         return normalized_generated
@@ -719,9 +745,9 @@ def _render_structured_cv_text(record: Dict) -> str:
             if header:
                 lines.append(header)
             for bullet in item.get("bullets", []):
-                bullet_text = str(bullet).strip()
-                if bullet_text:
-                    lines.append(f"- {bullet_text}")
+                rendered_bullet = bullet_text(bullet).strip()
+                if rendered_bullet:
+                    lines.append(f"- {rendered_bullet}")
         lines.append("")
 
     skills = [str(skill).strip() for skill in record.get("cv_skills", []) if str(skill).strip()]
@@ -741,9 +767,9 @@ def _render_structured_cv_text(record: Dict) -> str:
             if thesis_title:
                 lines.append(thesis_title)
             for bullet in item.get("thesis_bullets", []):
-                bullet_text = str(bullet).strip()
-                if bullet_text:
-                    lines.append(f"- {bullet_text}")
+                rendered_bullet = bullet_text(bullet).strip()
+                if rendered_bullet:
+                    lines.append(f"- {rendered_bullet}")
 
     return "\n".join(line for line in lines if line is not None).strip()
 
@@ -791,7 +817,7 @@ def ensure_structured_cv_fields(
     for generated_item in generated_experiences:
         generated_bullets_by_index.append(
             [
-                _normalize_bullet_value(bullet)
+            _normalize_bullet_item(bullet)
                 for bullet in generated_item.get("bullets", [])
                 if _normalize_bullet_value(bullet)
             ]
@@ -806,7 +832,7 @@ def ensure_structured_cv_fields(
                 continue
             bullets_raw = item.get("bullets", [])
             if isinstance(bullets_raw, list):
-                bullets = [_normalize_bullet_value(b) for b in bullets_raw if _normalize_bullet_value(b)]
+                bullets = [_normalize_bullet_item(b) for b in bullets_raw if _normalize_bullet_item(b)]
             else:
                 bullets = split_bullets(str(bullets_raw))
             key = _experience_key(matched_cv_experience)
@@ -844,14 +870,23 @@ def ensure_structured_cv_fields(
                 and (not base_bullets or looks_like_location_value(str(base_item.get("company") or "")))
             ):
                 display_item = generated_display
+            preserved_experience_id = (
+                source_experience_id(generated_display or {})
+                or source_experience_id(display_item)
+                or source_experience_id(base_item)
+            )
+            normalized_experience = {
+                "role_title": str(display_item.get("role_title") or base_item.get("role_title", "")).strip(),
+                "company": str(display_item.get("company") or base_item.get("company", "")).strip(),
+                "location": str(display_item.get("location") or base_item.get("location", "")).strip(),
+                "period": str(display_item.get("period") or base_item.get("period", "")).strip(),
+                "bullets": selected_bullets,
+                "provenance_confidence": "full" if preserved_experience_id else "reduced",
+            }
+            if preserved_experience_id:
+                normalized_experience["source_experience_id"] = preserved_experience_id
             normalized_experiences.append(
-                {
-                    "role_title": str(display_item.get("role_title") or base_item.get("role_title", "")).strip(),
-                    "company": str(display_item.get("company") or base_item.get("company", "")).strip(),
-                    "location": str(display_item.get("location") or base_item.get("location", "")).strip(),
-                    "period": str(display_item.get("period") or base_item.get("period", "")).strip(),
-                    "bullets": selected_bullets,
-                }
+                normalized_experience
             )
     else:
         normalized_experiences = normalize_cv_experience_items(generated_experiences)

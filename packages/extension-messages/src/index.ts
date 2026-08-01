@@ -118,6 +118,256 @@ export interface RunrWebLaunchRequest {
   applicationUrl: string;
 }
 
+/**
+ * Versioned, data-only preparation protocol. This contract deliberately
+ * carries opaque Runr identifiers and bounded capabilities only: browser-local
+ * tab/window IDs, candidate records, DOM data, credentials, and document bytes
+ * are not protocol fields.
+ */
+export const ASSISTED_APPLY_PREPARATION_PROTOCOL = "runr.assisted_apply.preparation" as const;
+export const ASSISTED_APPLY_PREPARATION_PROTOCOL_VERSION = 1 as const;
+export const ASSISTED_APPLY_PREPARATION_MAX_AGE_MS = 5 * 60 * 1000;
+
+export type AssistedApplyPreparationMessageType =
+  | "start"
+  | "permission_required"
+  | "accepted"
+  | "rejected"
+  | "progress"
+  | "needs_attention"
+  | "ready_for_review"
+  | "review_activate"
+  | "cancel"
+  | "retry";
+
+export type AssistedApplyPreparationSource = "web" | "extension";
+export type AssistedApplyPreparationAdapter = SupportedAts;
+export type AssistedApplyPreparationCapability =
+  | "fill"
+  | "document_attachment"
+  | "reconciliation";
+export type AssistedApplyPreparationProgressStage =
+  | "permission"
+  | "inspect"
+  | "prepare"
+  | "reconcile"
+  | "document";
+export type AssistedApplyPreparationRejectionCode =
+  | "invalid_package"
+  | "unsupported_adapter"
+  | "permission_denied"
+  | "expired"
+  | "conflict"
+  | "unknown";
+export type AssistedApplyPreparationAttentionCode =
+  | "permission_required"
+  | "manual_control"
+  | "ambiguous_match"
+  | "document_unavailable"
+  | "unknown";
+
+export interface AssistedApplyPreparationCapabilities {
+  adapters: AssistedApplyPreparationAdapter[];
+  capabilities: AssistedApplyPreparationCapability[];
+}
+
+interface AssistedApplyPreparationMessageBase {
+  protocol: typeof ASSISTED_APPLY_PREPARATION_PROTOCOL;
+  protocolVersion: typeof ASSISTED_APPLY_PREPARATION_PROTOCOL_VERSION;
+  type: AssistedApplyPreparationMessageType;
+  source: AssistedApplyPreparationSource;
+  messageId: string;
+  preparationId: string;
+  packageId: string;
+  emittedAt: string;
+}
+
+export type AssistedApplyPreparationMessage =
+  | (AssistedApplyPreparationMessageBase & {
+      type: "start";
+      source: "web";
+      capabilities: AssistedApplyPreparationCapabilities;
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "permission_required";
+      source: "extension";
+      capability: AssistedApplyPreparationCapability;
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "accepted";
+      source: "extension";
+      result: { status: "accepted" };
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "rejected";
+      source: "extension";
+      result: { status: "rejected"; code: AssistedApplyPreparationRejectionCode; retryable: boolean };
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "progress";
+      source: "extension";
+      result: { status: "progress"; stage: AssistedApplyPreparationProgressStage; completed: number; total: number };
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "needs_attention";
+      source: "extension";
+      result: { status: "needs_attention"; code: AssistedApplyPreparationAttentionCode };
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "ready_for_review";
+      source: "extension";
+      result: { status: "ready_for_review"; reviewId: string };
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "review_activate";
+      source: "web";
+      reviewId: string;
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "cancel";
+      source: "web";
+      reason: "user_requested" | "expired" | "superseded";
+    })
+  | (AssistedApplyPreparationMessageBase & {
+      type: "retry";
+      source: "web";
+      retryOf: string;
+    });
+
+export interface AssistedApplyPreparationValidatorOptions {
+  preparationId: string;
+  packageId: string;
+  now?: () => Date;
+  maxAgeMs?: number;
+}
+
+const PREPARATION_WEB_TYPES: AssistedApplyPreparationMessageType[] = ["start", "review_activate", "cancel", "retry"];
+const PREPARATION_EXTENSION_TYPES: AssistedApplyPreparationMessageType[] = [
+  "permission_required", "accepted", "rejected", "progress", "needs_attention", "ready_for_review",
+];
+
+function isExactObject(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));
+}
+
+function isPreparationIdentifier(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,160}$/u.test(value);
+}
+
+function isPreparationCapabilities(value: unknown): value is AssistedApplyPreparationCapabilities {
+  if (!isRecord(value) || !isExactObject(value, ["adapters", "capabilities"]) ||
+      !Array.isArray(value.adapters) || !Array.isArray(value.capabilities)) return false;
+  const adapters = value.adapters;
+  const capabilities = value.capabilities;
+  return adapters.length > 0 && adapters.length <= 2 &&
+    adapters.every((item) => item === "greenhouse" || item === "lever") && new Set(adapters).size === adapters.length &&
+    capabilities.length > 0 && capabilities.length <= 3 &&
+    capabilities.every((item) => item === "fill" || item === "document_attachment" || item === "reconciliation") &&
+    new Set(capabilities).size === capabilities.length;
+}
+
+function isPreparationBase(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const baseKeys = ["protocol", "protocolVersion", "type", "source", "messageId", "preparationId", "packageId", "emittedAt"];
+  if (!baseKeys.every((key) => key in value)) return false;
+  return value.protocol === ASSISTED_APPLY_PREPARATION_PROTOCOL &&
+    value.protocolVersion === ASSISTED_APPLY_PREPARATION_PROTOCOL_VERSION &&
+    typeof value.type === "string" &&
+    typeof value.source === "string" &&
+    isPreparationIdentifier(value.messageId) &&
+    isPreparationIdentifier(value.preparationId) &&
+    isPreparationIdentifier(value.packageId) &&
+    isIsoDate(value.emittedAt);
+}
+
+/** Structural validator: strict version-1 fields, no association/state assumptions. */
+export function isAssistedApplyPreparationMessage(value: unknown): value is AssistedApplyPreparationMessage {
+  if (!isPreparationBase(value)) return false;
+  const baseKeys = [
+    "protocol", "protocolVersion", "type", "source", "messageId", "preparationId", "packageId", "emittedAt",
+  ];
+  switch (value.type) {
+    case "start":
+      return value.source === "web" && isExactObject(value, [...baseKeys, "capabilities"]) &&
+        isPreparationCapabilities(value.capabilities);
+    case "permission_required":
+      return value.source === "extension" && isExactObject(value, [...baseKeys, "capability"]) &&
+        (value.capability === "fill" || value.capability === "document_attachment" || value.capability === "reconciliation");
+    case "accepted":
+      return value.source === "extension" && isExactObject(value, [...baseKeys, "result"]) &&
+        isRecord(value.result) && isExactObject(value.result, ["status"]) && value.result.status === "accepted";
+    case "rejected":
+      return value.source === "extension" && isExactObject(value, [...baseKeys, "result"]) && isRecord(value.result) &&
+        isExactObject(value.result, ["status", "code", "retryable"]) && value.result.status === "rejected" &&
+        typeof value.result.code === "string" && ["invalid_package", "unsupported_adapter", "permission_denied", "expired", "conflict", "unknown"].includes(value.result.code) &&
+        typeof value.result.retryable === "boolean";
+    case "progress":
+      return value.source === "extension" && isExactObject(value, [...baseKeys, "result"]) && isRecord(value.result) &&
+        isExactObject(value.result, ["status", "stage", "completed", "total"]) && value.result.status === "progress" &&
+        typeof value.result.stage === "string" && ["permission", "inspect", "prepare", "reconcile", "document"].includes(value.result.stage) &&
+        typeof value.result.completed === "number" && typeof value.result.total === "number" &&
+        Number.isInteger(value.result.completed) && Number.isInteger(value.result.total) &&
+        value.result.completed >= 0 && value.result.total > 0 && value.result.completed <= value.result.total;
+    case "needs_attention":
+      return value.source === "extension" && isExactObject(value, [...baseKeys, "result"]) && isRecord(value.result) &&
+        isExactObject(value.result, ["status", "code"]) && value.result.status === "needs_attention" &&
+        typeof value.result.code === "string" && ["permission_required", "manual_control", "ambiguous_match", "document_unavailable", "unknown"].includes(value.result.code);
+    case "ready_for_review":
+      return value.source === "extension" && isExactObject(value, [...baseKeys, "result"]) && isRecord(value.result) &&
+        isExactObject(value.result, ["status", "reviewId"]) && value.result.status === "ready_for_review" &&
+        isPreparationIdentifier(value.result.reviewId);
+    case "review_activate":
+      return value.source === "web" && isExactObject(value, [...baseKeys, "reviewId"]) &&
+        isPreparationIdentifier(value.reviewId);
+    case "cancel":
+      return value.source === "web" && isExactObject(value, [...baseKeys, "reason"]) &&
+        ["user_requested", "expired", "superseded"].includes(String(value.reason));
+    case "retry":
+      return value.source === "web" && isExactObject(value, [...baseKeys, "retryOf"]) &&
+        isPreparationIdentifier(value.retryOf);
+    default:
+      return false;
+  }
+}
+
+/** Stateful runtime validator for association, freshness, replay, and order. */
+export class AssistedApplyPreparationValidator {
+  private readonly seenMessageIds = new Set<string>();
+  private state: "idle" | "active" | "attention" | "rejected" | "ready" | "cancelled" | "activated" = "idle";
+  private lastMessageId = "";
+  private reviewId = "";
+
+  constructor(private readonly options: AssistedApplyPreparationValidatorOptions) {}
+
+  validate(value: unknown): value is AssistedApplyPreparationMessage {
+    if (!isAssistedApplyPreparationMessage(value) ||
+        value.preparationId !== this.options.preparationId || value.packageId !== this.options.packageId ||
+        this.seenMessageIds.has(value.messageId)) return false;
+    const now = (this.options.now || (() => new Date()))().getTime();
+    const age = now - new Date(value.emittedAt).getTime();
+    const maxAge = this.options.maxAgeMs ?? ASSISTED_APPLY_PREPARATION_MAX_AGE_MS;
+    if (!Number.isFinite(age) || age > maxAge || age < -30_000) return false;
+
+    const validTransition = value.type === "start" ? this.state === "idle" :
+      value.type === "retry" ? (this.state === "rejected" || this.state === "attention") && value.retryOf === this.lastMessageId :
+      value.type === "review_activate" ? this.state === "ready" && value.reviewId === this.reviewId :
+      value.type === "cancel" ? this.state !== "cancelled" && this.state !== "activated" :
+      this.state === "active" || this.state === "attention";
+    if (!validTransition) return false;
+
+    this.seenMessageIds.add(value.messageId);
+    this.lastMessageId = value.messageId;
+    if (value.type === "start" || value.type === "accepted" || value.type === "progress") this.state = "active";
+    if (value.type === "needs_attention") this.state = "attention";
+    if (value.type === "rejected") this.state = "rejected";
+    if (value.type === "ready_for_review") { this.state = "ready"; this.reviewId = value.result.reviewId; }
+    if (value.type === "review_activate") this.state = "activated";
+    if (value.type === "cancel") this.state = "cancelled";
+    if (value.type === "retry") this.state = "active";
+    return true;
+  }
+}
+
 export interface ApplicationPackageJob {
   jobId: string;
   title: string;
@@ -169,6 +419,7 @@ export interface ApplicationPackageDocumentMeta {
   documentKind: ApplicationDocumentKind;
   mimeType: ApplicationDocumentMimeType;
   fileName: string;
+  uploadFieldIntent?: string;
 }
 
 export interface ApplicationPackagePayload {
@@ -233,6 +484,7 @@ export type ContentRequest =
       fileName: string;
       mimeType: ApplicationDocumentMimeType;
       base64Bytes: string;
+      uploadFieldIntent?: string;
     };
 
 /** @privateRemarks Bounded lifecycle stages — each maps to an adapter method. */

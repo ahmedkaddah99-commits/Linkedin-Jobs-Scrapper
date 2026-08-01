@@ -28,6 +28,7 @@ from backend.capabilities.tailored_documents.documents import (
     run_standard_cv_pipeline,
     run_stage4_pipeline as run_tailored_stage4_pipeline,
 )
+from backend.capabilities.tailored_documents.common import save_json_file
 from backend.capabilities.tailored_documents.modes import (
     APPLIED_CV_ASSET_KIND,
     CV_GENERATION_MODE_STANDARD,
@@ -1004,6 +1005,10 @@ class TailoredDocumentExportStage(BaseStage):
             records=records,
             evidence_jobs=jobs,
         )
+        # Provenance is attached after the generator writes its first output;
+        # rewrite that JSON artifact so downstream consumers receive the same
+        # IDs and version references as the in-memory job set.
+        save_json_file(Path(stage4_args.output_json), records)
 
         return StageOutcome(
             job_sets={definition.output_key: _to_job_records(records)},
@@ -1364,5 +1369,23 @@ def _capture_generation_provenance(
             record["_profile_version_no"] = provenance.profile_version_no
             record["_cv_asset_version_id"] = provenance.cv_asset_version_id
             record["_cv_asset_version_no"] = provenance.cv_asset_version_no
+            from backend.capabilities.tailored_documents.provenance import propagate_tailored_provenance
+            propagate_tailored_provenance(
+                record,
+                selected_cv_version={
+                    "asset_id": provenance.cv_asset_version_id,
+                    "version_id": provenance.cv_asset_version_id,
+                    "version_no": provenance.cv_asset_version_no,
+                },
+                generation_provenance={
+                    "provenance_id": provenance.provenance_id,
+                    "run_id": provenance.run_id,
+                    "job_id": provenance.job_id,
+                    "generation_pipeline_version": provenance.generation_pipeline_version,
+                    "generation_mode": provenance.generation_mode,
+                    "generation_fingerprint": provenance.generation_fingerprint,
+                    "renderer_version": provenance.renderer_version,
+                },
+            )
         except Exception:
             continue

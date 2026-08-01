@@ -13,9 +13,82 @@ import {
   isContentRuntimeEvent,
   isPendingApplicationConfirmation,
   isAdapterHealthTelemetry,
+  AssistedApplyPreparationValidator,
+  isAssistedApplyPreparationMessage,
+  isRunrWebLaunchRequest,
 } from "@runr/extension-messages";
 
 describe("extension message boundaries", () => {
+  it("validates the versioned preparation lifecycle and rejects stale, replayed, forged, and future messages", () => {
+    const now = new Date("2026-08-01T12:00:00.000Z");
+    const base = {
+      protocol: "runr.assisted_apply.preparation",
+      protocolVersion: 1,
+      source: "web",
+      preparationId: "prep_123",
+      packageId: "aapkg_123",
+      emittedAt: now.toISOString(),
+    } as const;
+    const start = { ...base, type: "start", messageId: "msg_start", capabilities: { adapters: ["greenhouse"], capabilities: ["fill", "document_attachment"] } };
+    const validator = new AssistedApplyPreparationValidator({
+      preparationId: "prep_123",
+      packageId: "aapkg_123",
+      now: () => now,
+    });
+    expect(isAssistedApplyPreparationMessage(start)).toBe(true);
+    expect(validator.validate(start)).toBe(true);
+    expect(validator.validate(start)).toBe(false);
+    expect(isAssistedApplyPreparationMessage({ ...base, type: "permission_required", source: "extension", messageId: "msg_permission", capability: "document_attachment" })).toBe(true);
+    expect(validator.validate({ ...base, type: "accepted", source: "extension", messageId: "msg_accept", result: { status: "accepted" } })).toBe(true);
+    expect(validator.validate({ ...base, type: "progress", source: "extension", messageId: "msg_progress", result: { status: "progress", stage: "prepare", completed: 1, total: 2 } })).toBe(true);
+    expect(validator.validate({ ...base, type: "ready_for_review", source: "extension", messageId: "msg_ready", result: { status: "ready_for_review", reviewId: "review_123" } })).toBe(true);
+    expect(validator.validate({ ...base, type: "review_activate", messageId: "msg_activate", reviewId: "review_123" })).toBe(true);
+    expect(validator.validate({ ...base, type: "review_activate", messageId: "msg_replay", reviewId: "review_123" })).toBe(false);
+
+    const rejected = new AssistedApplyPreparationValidator({ preparationId: "prep_123", packageId: "aapkg_123", now: () => now });
+    expect(rejected.validate(start)).toBe(true);
+    expect(rejected.validate({ ...base, type: "needs_attention", source: "extension", messageId: "msg_attention", result: { status: "needs_attention", code: "manual_control" } })).toBe(true);
+    expect(rejected.validate({ ...base, type: "retry", messageId: "msg_retry_attention", retryOf: "msg_attention" })).toBe(true);
+    expect(rejected.validate({ ...base, type: "rejected", source: "extension", messageId: "msg_rejected", result: { status: "rejected", code: "conflict", retryable: true } })).toBe(true);
+    expect(rejected.validate({ ...base, type: "retry", messageId: "msg_retry", retryOf: "msg_rejected" })).toBe(true);
+    expect(rejected.validate({ ...base, type: "retry", messageId: "msg_retry_forged", retryOf: "msg_start" })).toBe(false);
+    const cancelled = new AssistedApplyPreparationValidator({ preparationId: "prep_123", packageId: "aapkg_123", now: () => now });
+    expect(cancelled.validate(start)).toBe(true);
+    expect(cancelled.validate({ ...base, type: "cancel", messageId: "msg_cancel", reason: "user_requested" })).toBe(true);
+  });
+
+  it("fails closed for unknown fields, malformed capabilities, forged associations, stale messages, and future versions", () => {
+    const now = new Date("2026-08-01T12:00:00.000Z");
+    const start = {
+      protocol: "runr.assisted_apply.preparation",
+      protocolVersion: 1,
+      type: "start",
+      source: "web",
+      messageId: "msg_start_2",
+      preparationId: "prep_456",
+      packageId: "aapkg_456",
+      emittedAt: now.toISOString(),
+      capabilities: { adapters: ["lever"], capabilities: ["fill"] },
+    };
+    expect(isAssistedApplyPreparationMessage({ ...start, candidate: { name: "raw" } })).toBe(false);
+    expect(isAssistedApplyPreparationMessage({ ...start, tabId: 42 })).toBe(false);
+    expect(isAssistedApplyPreparationMessage({ ...start, capabilities: { adapters: ["greenhouse", "greenhouse"], capabilities: ["fill"] } })).toBe(false);
+    expect(isAssistedApplyPreparationMessage({ ...start, protocolVersion: 2 })).toBe(false);
+
+    const validator = new AssistedApplyPreparationValidator({ preparationId: "prep_456", packageId: "aapkg_other", now: () => now });
+    expect(validator.validate(start)).toBe(false);
+    const stale = { ...start, messageId: "msg_stale", emittedAt: "2026-08-01T11:00:00.000Z" };
+    expect(new AssistedApplyPreparationValidator({ preparationId: "prep_456", packageId: "aapkg_456", now: () => now }).validate(stale)).toBe(false);
+  });
+
+  it("preserves the existing unversioned web package-binding validator", () => {
+    expect(isRunrWebLaunchRequest({
+      type: "RUNR_WEB_BIND_APPLICATION_PACKAGE",
+      bindingId: "aapkg_binding_123456789",
+      applicationUrl: "https://jobs.example.test/apply/123",
+    })).toBe(true);
+  });
+
   it("bounds possible-success evidence and requires an explicit confirmation decision", () => {
     const evidence = {
       packageId: "aapkg_14",

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { reconcileVisibleEntries, type ReconciliationCandidate, type AtsReconciliationEntry } from "../../../../packages/ats-core/src/reconciliation-spike";
+import { reconcileVisibleEntries, type ReconciliationCandidate, type AtsReconciliationEntry } from "../../../../packages/ats-core/src/reconciliation";
 
 declare global {
   interface Window {
@@ -38,22 +38,22 @@ test.describe("AA-202 sanitized reconciliation prototype", () => {
 
   test("adds, updates, preserves unmatched entries, and reruns without duplicates", async ({ page }) => {
     const first = await applyCandidates(page, baseCandidates);
-    expect(first.actions.map((action) => action.kind)).toEqual(["update", "add", "noop"]);
+    expect(first.actions.map((action) => action.kind)).toEqual(["update", "add", "leave"]);
     expect(await page.locator("[data-ats-entry-id]").count()).toBe(5);
     expect(await page.locator('[data-ats-entry-id="exp-acme-engineer"]').textContent()).toContain("Engineer");
     expect(await page.locator('[data-ats-entry-id="exp-beta-engineer"]').textContent()).toContain("Beta Labs");
 
     const second = await applyCandidates(page, baseCandidates);
-    expect(second.actions.map((action) => action.kind)).toEqual(["noop", "noop", "noop"]);
+    expect(second.actions.map((action) => action.kind)).toEqual(["leave", "leave", "leave"]);
     expect(await page.locator("[data-ats-entry-id]").count()).toBe(5);
   });
 
   test("survives reload and SPA remount without duplicates", async ({ page }) => {
     await applyCandidates(page, baseCandidates);
     await page.reload();
-    expect((await applyCandidates(page, baseCandidates)).actions.every((action) => action.kind === "noop")).toBe(true);
+    expect((await applyCandidates(page, baseCandidates)).actions.every((action) => action.kind === "leave")).toBe(true);
     await page.evaluate(() => window.__aa202Fixture.remount());
-    expect((await applyCandidates(page, baseCandidates)).actions.every((action) => action.kind === "noop")).toBe(true);
+    expect((await applyCandidates(page, baseCandidates)).actions.every((action) => action.kind === "leave")).toBe(true);
     expect(await page.locator("[data-ats-entry-id]").count()).toBe(5);
     await expect(page.locator("#reconciliation-fixture")).toHaveAttribute("data-aa202-remounts", "1");
   });
@@ -63,7 +63,7 @@ test.describe("AA-202 sanitized reconciliation prototype", () => {
       { candidateId: "promotion", kind: "experience", employerOrInstitution: "ACME & CO", titleOrDegree: "Engineer", startDate: "2022-07", current: true, location: "Berlin", content: "Maintained services." },
       { candidateId: "overlap", kind: "experience", employerOrInstitution: "Beta Labs", titleOrDegree: "Engineer", startDate: "2021-05", endDate: "2022-02", location: "Paris", content: "Built data tooling." },
     ]);
-    expect(result.actions.map((action) => action.kind)).toEqual(["noop", "update"]);
+    expect(result.actions.map((action) => action.kind)).toEqual(["leave", "update"]);
     expect(result.actions[1]).toMatchObject({ kind: "update", atsEntryId: "exp-beta-engineer" });
     await expect(page.locator('[data-kind="experience"]')).toHaveCount(3);
   });
@@ -73,7 +73,7 @@ test.describe("AA-202 sanitized reconciliation prototype", () => {
     await page.evaluate((entries) => window.__aa202Fixture.applyEntries([...entries, { ...entries[2]!, atsEntryId: "exp-beta-engineer-copy" }]), initial);
     const before = await visibleEntries(page);
     const result = await applyCandidates(page, [{ candidateId: "ambiguous", kind: "experience", employerOrInstitution: "Beta Labs", titleOrDegree: "Engineer", startDate: "2021-06", endDate: "2022-02", location: "Paris", content: "Built data tooling." }]);
-    expect(result.actions[0]?.kind).toBe("review_required");
+    expect(result.actions[0]?.kind).toBe("ambiguous");
     expect(await visibleEntries(page)).toEqual(before);
     await expect(page.locator("[data-ats-entry-id]")).toHaveCount(5);
   });

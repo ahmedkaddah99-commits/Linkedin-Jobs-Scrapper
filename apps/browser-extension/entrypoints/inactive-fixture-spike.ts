@@ -9,6 +9,7 @@ import {
   runGreenhouseStandardFacts,
   runLeverStandardFacts,
   uploadApplicationDocument,
+  uploadFieldIntentFor,
   type ApplicationPackageAnswer,
 } from "@runr/ats-core";
 import { browser } from "wxt/browser";
@@ -60,6 +61,7 @@ export default defineUnlistedScript(async () => {
         documentId: command.document.documentId,
         documentVersion: command.document.documentVersion,
         documentKind: command.document.documentKind,
+        uploadFieldIntent: uploadFieldIntentFor(command.ats, command.document.documentKind),
       });
       await browser.runtime.sendMessage({
         type: "AA201_INACTIVE_FIXTURE_COMPLETED",

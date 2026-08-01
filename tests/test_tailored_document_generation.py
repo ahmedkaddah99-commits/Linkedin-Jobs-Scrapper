@@ -1,3 +1,4 @@
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -18,6 +19,7 @@ from backend.capabilities.tailored_documents.documents import (
 from backend.capabilities.tailored_documents.generation import build_docs_prompt, generate_docs_for_job
 from backend.capabilities.tailored_documents.language_rules import detect_reasons
 from backend.capabilities.tailored_documents.modes import resolve_cv_generation_prompt_settings
+from backend.capabilities.tailored_documents.provenance import propagate_tailored_provenance
 from backend.capabilities.tailored_documents.rendering import (
     build_cv_html_export_payload,
     create_cv_document,
@@ -125,6 +127,86 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
                 "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
             ],
         )
+
+    def test_aa211_propagates_source_ids_approved_text_versions_and_generation_provenance(self):
+        approved_text = "Approved wording  —  preserve spacing exactly."
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [{
+                "source_experience_id": "exp_source_1",
+                "role_title": "Business Analyst",
+                "company": "ACME",
+                "period": "2022-2024",
+                "bullets": [{"approved_text": approved_text}],
+            }],
+            "cv_skills": ["SQL"],
+            "cv_education": [],
+        }
+        ensure_structured_cv_fields(record, "Ahmed", self.cv_text)
+        propagate_tailored_provenance(
+            record,
+            selected_cv_version={"asset_id": "asset_cv", "version_id": "cvv_2", "version_no": 2},
+            generation_provenance={"provenance_id": "prov_1", "run_id": "run_1", "renderer_version": "3"},
+        )
+        record["package_version"] = 7
+        propagate_tailored_provenance(record)
+        experience = record["cv_professional_experience"][0]
+        bullet = experience["bullets"][0]
+        self.assertEqual(experience["source_experience_id"], "exp_source_1")
+        self.assertEqual(experience["provenance_confidence"], "full")
+        self.assertEqual(bullet["approved_text"], approved_text)
+        self.assertEqual(bullet["text"], approved_text)
+        self.assertTrue(bullet["bullet_id"].startswith("exp_source_1:bullet:"))
+        self.assertEqual(experience["selected_cv_version"]["version_no"], 2)
+        self.assertEqual(experience["generation_provenance"]["provenance_id"], "prov_1")
+        self.assertEqual(record["selected_package_version"], 7)
+        serialized = json.loads(json.dumps(record, ensure_ascii=False))
+        self.assertEqual(serialized["cv_professional_experience"][0]["bullets"][0]["approved_text"], approved_text)
+
+    def test_aa211_legacy_experience_remains_readable_with_reduced_confidence(self):
+        record = {
+            "cv_professional_experience": [{
+                "role_title": "Business Analyst",
+                "company": "ACME",
+                "period": "2022-2024",
+                "bullets": ["Legacy bullet text."],
+            }],
+        }
+        propagate_tailored_provenance(record)
+        self.assertEqual(record["provenance_status"], "legacy_reduced_confidence")
+        self.assertEqual(record["provenance_confidence"], "reduced")
+        self.assertEqual(record["cv_professional_experience"][0]["bullets"], ["Legacy bullet text."])
+        self.assertNotIn("source_experience_id", record["cv_professional_experience"][0])
+
+    def test_aa211_render_regression_preserves_approved_bullet_text(self):
+        approved_text = "Approved tailored outcome with metric  —  kept verbatim."
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "location_raw": "Berlin, Germany",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [{
+                "source_experience_id": "exp_source_1",
+                "role_title": "Business Analyst",
+                "company": "ACME",
+                "period": "2022-2024",
+                "bullets": [{"approved_text": approved_text}],
+            }],
+            "cv_skills": ["SQL"],
+            "cv_education": [],
+        }
+        propagate_tailored_provenance(record)
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record, Path(temp_dir), "2026-08-01", "Ahmed", "ahmed@example.com",
+                "Calibri", "plain", "classic_navy", [], None, False, [],
+            )
+            text = "\n".join(paragraph.text for paragraph in Document(output_path).paragraphs)
+        self.assertIn(approved_text, text)
 
     def test_word_cv_templates_repair_malformed_experience_before_rendering(self):
         malformed_record = {

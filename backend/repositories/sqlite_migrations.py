@@ -997,6 +997,55 @@ def _apply_assisted_apply_tracker_confirmation_migration(connection: DatabaseCon
     )
 
 
+def _apply_assisted_apply_document_grant_intents_migration(connection: DatabaseConnection) -> None:
+    connection.execute(
+        "ALTER TABLE assisted_apply_document_grants ADD COLUMN upload_field_intent TEXT NOT NULL DEFAULT ''"
+    )
+
+
+def _apply_assisted_apply_preparations_migration(connection: DatabaseConnection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS assisted_apply_preparations (
+            preparation_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            package_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            ats TEXT NOT NULL,
+            application_url TEXT NOT NULL,
+            state TEXT NOT NULL,
+            total_count INTEGER NOT NULL DEFAULT 0,
+            completed_count INTEGER NOT NULL DEFAULT 0,
+            error_category TEXT NOT NULL DEFAULT '',
+            attempt_count INTEGER NOT NULL DEFAULT 1,
+            session_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            started_at TEXT NOT NULL DEFAULT '',
+            ready_at TEXT NOT NULL DEFAULT '',
+            attention_at TEXT NOT NULL DEFAULT '',
+            cancelled_at TEXT NOT NULL DEFAULT '',
+            expired_at TEXT NOT NULL DEFAULT '',
+            last_report_id TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_preparations_user_created
+            ON assisted_apply_preparations(user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_preparations_package
+            ON assisted_apply_preparations(package_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS assisted_apply_preparation_reports (
+            report_id TEXT PRIMARY KEY,
+            preparation_id TEXT NOT NULL,
+            report_type TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assisted_apply_preparation_reports_session
+            ON assisted_apply_preparation_reports(preparation_id, created_at DESC);
+        """
+    )
+
+
 def _apply_career_profiles_migration(connection: DatabaseConnection) -> None:
     connection.executescript(
         """
@@ -1346,6 +1395,16 @@ MIGRATIONS = (
         "026_profile_versioning",
         "Create profile version, CV version, and generation provenance tables (CP-025).",
         _apply_profile_versioning_migration,
+    ),
+    Migration.from_callable(
+        "027_assisted_apply_preparations",
+        "Create disabled-by-default durable Assisted Apply preparation state and sanitized report idempotency storage.",
+        _apply_assisted_apply_preparations_migration,
+    ),
+    Migration.from_callable(
+        "028_assisted_apply_document_grant_intents",
+        "Bind one-time document grants to adapter-declared upload field intents.",
+        _apply_assisted_apply_document_grant_intents_migration,
     ),
 )
 

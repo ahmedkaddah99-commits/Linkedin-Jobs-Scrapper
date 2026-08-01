@@ -1,5 +1,5 @@
 /**
- * AA-202 disposable reconciliation prototype.
+ * AA-217 production reconciliation core, promoted from AA-202.
  *
  * This module deliberately matches only ATS-visible fields. sourceId is
  * provenance metadata for Runr and is never treated as an ATS DOM identifier.
@@ -18,6 +18,7 @@ export type ReconciliationCandidate = {
   current?: boolean;
   location?: string;
   content?: string;
+  contentHash?: string;
 };
 
 export type AtsReconciliationEntry = Omit<ReconciliationCandidate, "candidateId" | "sourceId"> & {
@@ -25,10 +26,16 @@ export type AtsReconciliationEntry = Omit<ReconciliationCandidate, "candidateId"
 };
 
 export type ReconciliationAction =
-  | { kind: "update"; candidateId: string; atsEntryId: string; changes: Partial<AtsReconciliationEntry>; score: number }
+  | { kind: "update"; candidateId: string; atsEntryId: string; changes: Partial<AtsReconciliationEntry>; score: number; audit: ReconciliationAudit }
   | { kind: "add"; candidateId: string; entry: AtsReconciliationEntry; score: 0 }
-  | { kind: "review_required"; candidateId: string; atsEntryIds: string[]; reason: string }
-  | { kind: "noop"; candidateId: string; atsEntryId: string; score: number };
+  | { kind: "ambiguous"; candidateId: string; atsEntryIds: string[]; reason: string; audit: ReconciliationAudit }
+  | { kind: "leave"; candidateId: string; atsEntryId: string; score: number; audit: ReconciliationAudit };
+
+export type ReconciliationAudit = {
+  score: number;
+  matchedFields: string[];
+  reason: "unique_match" | "unchanged" | "ambiguous" | "claimed_by_other_candidate";
+};
 
 export type ReconciliationResult = {
   actions: ReconciliationAction[];
@@ -43,6 +50,7 @@ type Comparable = {
   current?: boolean;
   location?: string;
   content?: string;
+  contentHash?: string;
 };
 
 const DATE_PATTERN = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/u;
@@ -82,7 +90,7 @@ function contentOverlap(left: string | undefined, right: string | undefined): bo
   return overlap >= 2;
 }
 
-function scoreMatch(candidate: ReconciliationCandidate, entry: AtsReconciliationEntry): number | null {
+export function scoreReconciliationCandidate(candidate: ReconciliationCandidate, entry: AtsReconciliationEntry): { score: number; matchedFields: string[] } | null {
   if (candidate.kind !== entry.kind) return null;
   if (normalizeReconciliationText(candidate.employerOrInstitution) !== normalizeReconciliationText(entry.employerOrInstitution)) return null;
   if (normalizeReconciliationText(candidate.titleOrDegree) !== normalizeReconciliationText(entry.titleOrDegree)) return null;
@@ -92,8 +100,22 @@ function scoreMatch(candidate: ReconciliationCandidate, entry: AtsReconciliation
   const location = Boolean(candidate.location && entry.location &&
     normalizeReconciliationText(candidate.location) === normalizeReconciliationText(entry.location));
   const content = contentOverlap(candidate.content, entry.content);
-  if (!dates && !current && !content) return null;
-  return 5 + (dates ? 3 : 0) + (current ? 1 : 0) + (location ? 1 : 0) + (content ? 1 : 0);
+  if (!dates && !current && !content && candidate.contentHash !== entry.contentHash) return null;
+  const matchedFields = ["employerOrInstitution", "titleOrDegree"];
+  if (dates) matchedFields.push("dates");
+  if (current) matchedFields.push("current");
+  if (location) matchedFields.push("location");
+  if (content) matchedFields.push("content");
+  if (candidate.contentHash && candidate.contentHash === entry.contentHash) matchedFields.push("contentHash");
+  return {
+    score: 5 + (dates ? 3 : 0) + (current ? 1 : 0) + (location ? 1 : 0) + (content ? 1 : 0) +
+      (candidate.contentHash === entry.contentHash && candidate.contentHash ? 2 : 0),
+    matchedFields,
+  };
+}
+
+export function verifyApprovedContentHash(candidate: ReconciliationCandidate, entry: AtsReconciliationEntry): boolean {
+  return !candidate.contentHash || candidate.contentHash === entry.contentHash;
 }
 
 function changesFor(candidate: ReconciliationCandidate, entry: AtsReconciliationEntry): Partial<AtsReconciliationEntry> {
@@ -103,6 +125,7 @@ function changesFor(candidate: ReconciliationCandidate, entry: AtsReconciliation
   if (candidate.current !== undefined && candidate.current !== entry.current) changes.current = candidate.current;
   if (candidate.location !== undefined && candidate.location !== entry.location) changes.location = candidate.location;
   if (candidate.content !== undefined && candidate.content !== entry.content) changes.content = candidate.content;
+  if (candidate.contentHash !== undefined && candidate.contentHash !== entry.contentHash) changes.contentHash = candidate.contentHash;
   return changes;
 }
 
@@ -128,15 +151,19 @@ export function reconcileVisibleEntries(
   for (const candidate of candidates) {
     const key = `${candidate.kind}:${normalizeReconciliationText(candidate.employerOrInstitution)}`;
     const matches = (byEmployer.get(key) || [])
-      .map((entry) => ({ entry, score: scoreMatch(candidate, entry) }))
-      .filter((item): item is { entry: AtsReconciliationEntry; score: number } => item.score !== null);
+      .map((entry) => ({ entry, result: scoreReconciliationCandidate(candidate, entry) }))
+      .filter((item): item is { entry: AtsReconciliationEntry; result: { score: number; matchedFields: string[] } } => item.result !== null)
+      .sort((left, right) => right.result.score - left.result.score || left.entry.atsEntryId.localeCompare(right.entry.atsEntryId));
 
-    if (matches.length > 1) {
+    const best = matches[0];
+    const tied = best && matches[1] && best.result.score === matches[1].result.score;
+    if (tied || (best && !verifyApprovedContentHash(candidate, best.entry))) {
       actions.push({
-        kind: "review_required",
+        kind: "ambiguous",
         candidateId: candidate.candidateId,
-        atsEntryIds: matches.map((item) => item.entry.atsEntryId),
-        reason: "Multiple visible ATS entries are plausible matches.",
+        atsEntryIds: tied ? matches.filter((item) => item.result.score === best.result.score).map((item) => item.entry.atsEntryId) : [best.entry.atsEntryId],
+        reason: tied ? "Top visible ATS entries have the same deterministic score." : "Approved content hash did not match visible ATS content.",
+        audit: { score: best.result.score, matchedFields: best.result.matchedFields, reason: "ambiguous" },
       });
       continue;
     }
@@ -151,6 +178,7 @@ export function reconcileVisibleEntries(
         current: candidate.current,
         location: candidate.location,
         content: candidate.content,
+        ...(candidate.contentHash === undefined ? {} : { contentHash: candidate.contentHash }),
       };
       entries.push(entry);
       const bucket = byEmployer.get(key) || [];
@@ -163,24 +191,27 @@ export function reconcileVisibleEntries(
 
     const match = matches[0];
     if (!match) throw new Error("AA-202 internal matching invariant failed.");
-    const { entry, score } = match;
+    const { entry } = match;
+    const score = match.result.score;
+    const audit: ReconciliationAudit = { score, matchedFields: match.result.matchedFields, reason: "unique_match" };
     if (claimedAtsEntryIds.has(entry.atsEntryId)) {
       actions.push({
-        kind: "review_required",
+        kind: "ambiguous",
         candidateId: candidate.candidateId,
         atsEntryIds: [entry.atsEntryId],
         reason: "A visible ATS entry is already claimed by another candidate in this run.",
+        audit: { ...audit, reason: "claimed_by_other_candidate" },
       });
       continue;
     }
     claimedAtsEntryIds.add(entry.atsEntryId);
     const changes = changesFor(candidate, entry);
-    if (!Object.keys(changes).length) actions.push({ kind: "noop", candidateId: candidate.candidateId, atsEntryId: entry.atsEntryId, score });
+    if (!Object.keys(changes).length) actions.push({ kind: "leave", candidateId: candidate.candidateId, atsEntryId: entry.atsEntryId, score, audit: { ...audit, reason: "unchanged" } });
     else {
       const index = entries.findIndex((item) => item.atsEntryId === entry.atsEntryId);
       const existing = entries[index];
       if (existing) entries[index] = { ...existing, ...changes };
-      actions.push({ kind: "update", candidateId: candidate.candidateId, atsEntryId: entry.atsEntryId, changes, score });
+      actions.push({ kind: "update", candidateId: candidate.candidateId, atsEntryId: entry.atsEntryId, changes, score, audit });
     }
   }
   return { actions, entries };

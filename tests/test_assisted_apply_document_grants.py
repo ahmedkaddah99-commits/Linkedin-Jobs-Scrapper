@@ -164,6 +164,7 @@ class AssistedApplyDocumentGrantTests(unittest.TestCase):
             extension_origin=EXTENSION_ORIGIN,
         )
         self.assertEqual(grant["file"]["documentVersion"], 7)
+        self.assertEqual(grant["uploadFieldIntent"], "greenhouse.resume")
         self.assertEqual(grant["file"]["sha256Hex"], hashlib.sha256(PDF_BYTES).hexdigest())
         self.assertNotIn("url", str(grant).lower())
 
@@ -282,6 +283,43 @@ class AssistedApplyDocumentGrantTests(unittest.TestCase):
                 job={"job_id": "duplicate_cover", "portal": "greenhouse"},
                 documents=duplicate_covers,
             )
+
+    def test_grant_rejects_forged_or_ambiguous_upload_intents_and_retry_is_fresh(self):
+        owner, _connection, session = self._connected_user("intent")
+        package, _ = self._bound_package(owner.user_id)
+        with self.assertRaisesRegex(ValueError, "upload field intent"):
+            self.app.create_assisted_apply_document_grant(
+                package_id=package.package_id,
+                document_id="cv_version_7",
+                adapter="greenhouse",
+                upload_field_intent="greenhouse.cover_letter",
+                raw_session=session,
+                extension_origin=EXTENSION_ORIGIN,
+            )
+        first = self.app.create_assisted_apply_document_grant(
+            package_id=package.package_id,
+            document_id="cv_version_7",
+            adapter="greenhouse",
+            upload_field_intent="greenhouse.resume",
+            raw_session=session,
+            extension_origin=EXTENSION_ORIGIN,
+        )
+        self.app.consume_assisted_apply_document_grant(
+            raw_grant=first["grantToken"], raw_session=session, extension_origin=EXTENSION_ORIGIN
+        )
+        with self.assertRaises(PermissionError):
+            self.app.consume_assisted_apply_document_grant(
+                raw_grant=first["grantToken"], raw_session=session, extension_origin=EXTENSION_ORIGIN
+            )
+        second = self.app.create_assisted_apply_document_grant(
+            package_id=package.package_id,
+            document_id="cv_version_7",
+            adapter="greenhouse",
+            upload_field_intent="greenhouse.resume",
+            raw_session=session,
+            extension_origin=EXTENSION_ORIGIN,
+        )
+        self.assertNotEqual(first["grantToken"], second["grantToken"])
 
 
 if __name__ == "__main__":

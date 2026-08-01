@@ -5,6 +5,7 @@ import {
   runGreenhouseStandardFacts,
   runGreenhouseFixtureProof,
   uploadApplicationDocument,
+  installSubmissionGuard,
 } from "@runr/ats-core";
 import { observeDynamicForm, type DynamicFormMonitor } from "@runr/ats-core/dynamic-form";
 import {
@@ -55,6 +56,8 @@ function armPossibleSuccessObservation(
 }
 
 export default defineUnlistedScript(async () => {
+  const submissionGuard = installSubmissionGuard(document);
+  void submissionGuard;
   const testingFixturePage =
     import.meta.env.MODE === "testing" &&
     (isExactGreenhouseFixtureUrl(window.location.href) || isExactLeverFixtureUrl(window.location.href));
@@ -139,6 +142,7 @@ export default defineUnlistedScript(async () => {
           documentId: request.documentId,
           documentVersion: request.documentVersion,
           documentKind: request.documentKind,
+          uploadFieldIntent: request.uploadFieldIntent as import("@runr/ats-core").UploadFieldIntent,
         }).then((result) => ({
           documentId: request.documentId,
           documentVersion: request.documentVersion,
@@ -171,6 +175,10 @@ export default defineUnlistedScript(async () => {
     });
     window.__runrAssistedApplyFixtureBridgeInstalled = true;
   }
+
+  // Local service-worker handshake. The sender tab is the authority for the
+  // browser-local mapping; this message never crosses the web/backend boundary.
+  void browser.runtime.sendMessage({ type: "ASSISTED_APPLY_CONTENT_READY" });
 
   const inspection = isExactLeverFixtureUrl(window.location.href)
     ? await inspectLeverFixture(document, window.location.href)

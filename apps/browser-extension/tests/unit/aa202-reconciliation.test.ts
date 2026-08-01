@@ -4,7 +4,7 @@ import {
   reconcileVisibleEntries,
   type AtsReconciliationEntry,
   type ReconciliationCandidate,
-} from "../../../../packages/ats-core/src/reconciliation-spike";
+} from "../../../../packages/ats-core/src/reconciliation";
 
 const entries: AtsReconciliationEntry[] = [
   { atsEntryId: "exp-acme-senior", kind: "experience", employerOrInstitution: "Acme & Co.", titleOrDegree: "Senior Engineer", startDate: "2020-01", endDate: "2022-06", current: false, location: "Berlin", content: "Built platform foundations." },
@@ -19,6 +19,19 @@ describe("AA-202 reconciliation spike", () => {
   it("normalizes deterministically", () => {
     expect(normalizeReconciliationText(" Acme & Co. ")).toBe("acme and co");
     expect(normalizeReconciliationText("BSc\u00a0Computer-Science")).toBe("bsc computer science");
+  });
+
+  it("uses approved content hashes for verification, never as DOM identity", () => {
+    const hashed = { ...entries[0]!, contentHash: "sha256:approved" };
+    const candidateWithHash = candidate({ candidateId: "hashed", kind: "experience", employerOrInstitution: hashed.employerOrInstitution, titleOrDegree: hashed.titleOrDegree, startDate: hashed.startDate, endDate: hashed.endDate, contentHash: hashed.contentHash });
+    expect(reconcileVisibleEntries([candidateWithHash], [hashed]).actions[0]?.kind).toBe("leave");
+    expect(reconcileVisibleEntries([{ ...candidateWithHash, contentHash: "sha256:wrong" }], [hashed]).actions[0]?.kind).toBe("ambiguous");
+  });
+
+  it("scores candidates deterministically and records field-level audit without values", () => {
+    const result = reconcileVisibleEntries([candidate({ candidateId: "audited", kind: "experience", employerOrInstitution: "Acme & Co.", titleOrDegree: "Senior Engineer", startDate: "2020-01", endDate: "2022-06", location: "Berlin", content: "Built platform foundations." })], entries);
+    expect(result.actions[0]).toMatchObject({ kind: "leave", audit: { reason: "unchanged", matchedFields: expect.arrayContaining(["employerOrInstitution", "titleOrDegree", "dates"]) } });
+    expect(JSON.stringify(result.actions[0])).not.toContain("Built platform");
   });
 
   it("updates one unique confident match and adds only a missing entry", () => {
@@ -36,9 +49,9 @@ describe("AA-202 reconciliation spike", () => {
       candidate({ candidateId: "promotion", kind: "experience", employerOrInstitution: "ACME & CO", titleOrDegree: "Engineer", startDate: "2022-07", current: true, location: "Berlin", content: "Maintained services." }),
       candidate({ candidateId: "overlap", kind: "experience", employerOrInstitution: "Beta Labs", titleOrDegree: "Engineer", startDate: "2021-05", endDate: "2022-02", location: "Paris", content: "Built data tooling." }),
     ], entries);
-    expect(result.actions.map((action) => action.kind)).toEqual(["noop", "update"]);
+    expect(result.actions.map((action) => action.kind)).toEqual(["leave", "update"]);
     expect(result.actions[1]).toMatchObject({ kind: "update", atsEntryId: "exp-beta-engineer" });
-    expect(result.actions.every((action) => action.kind !== "review_required")).toBe(true);
+    expect(result.actions.every((action) => action.kind !== "ambiguous")).toBe(true);
   });
 
   it("stops on ambiguity without mutating either plausible ATS entry", () => {
@@ -49,7 +62,7 @@ describe("AA-202 reconciliation spike", () => {
     const result = reconcileVisibleEntries([
       candidate({ candidateId: "ambiguous", kind: "experience", employerOrInstitution: "Beta Labs", titleOrDegree: "Engineer", startDate: "2021-06", endDate: "2022-02", location: "Paris", content: "Built data tooling." }),
     ], ambiguousEntries);
-    expect(result.actions).toEqual([{ kind: "review_required", candidateId: "ambiguous", atsEntryIds: ["exp-beta-engineer", "exp-beta-engineer-copy"], reason: "Multiple visible ATS entries are plausible matches." }]);
+    expect(result.actions[0]).toMatchObject({ kind: "ambiguous", candidateId: "ambiguous", atsEntryIds: ["exp-beta-engineer", "exp-beta-engineer-copy"] });
     expect(result.entries).toEqual(ambiguousEntries);
   });
 
@@ -57,8 +70,8 @@ describe("AA-202 reconciliation spike", () => {
     const candidates = [candidate({ candidateId: "edu", kind: "education", employerOrInstitution: "University of Example", titleOrDegree: "BSc Computer Science", startDate: "2014-09", endDate: "2018-06", location: "Berlin", content: "Computer science degree." })];
     const first = reconcileVisibleEntries(candidates, entries);
     const second = reconcileVisibleEntries(candidates, first.entries);
-    expect(first.actions[0]?.kind).toBe("noop");
-    expect(second.actions[0]?.kind).toBe("noop");
+    expect(first.actions[0]?.kind).toBe("leave");
+    expect(second.actions[0]?.kind).toBe("leave");
     expect(second.entries).toEqual(first.entries);
   });
 
@@ -67,7 +80,7 @@ describe("AA-202 reconciliation spike", () => {
       candidate({ candidateId: "first", kind: "experience", employerOrInstitution: "Acme & Co.", titleOrDegree: "Senior Engineer", startDate: "2020-01", endDate: "2022-06", content: "Built platform foundations." }),
       candidate({ candidateId: "second", kind: "experience", employerOrInstitution: "Acme & Co.", titleOrDegree: "Senior Engineer", startDate: "2020-01", endDate: "2022-06", content: "Built platform foundations." }),
     ], [entries[0]!]);
-    expect(result.actions.map((action) => action.kind)).toEqual(["noop", "review_required"]);
+    expect(result.actions.map((action) => action.kind)).toEqual(["leave", "ambiguous"]);
     expect(result.actions[1]).toMatchObject({
       candidateId: "second",
       atsEntryIds: ["exp-acme-senior"],
@@ -82,7 +95,7 @@ describe("AA-202 reconciliation spike", () => {
       candidate({ candidateId: "new-second", kind: "education", employerOrInstitution: "New University", titleOrDegree: "BA History", startDate: "2010-09", endDate: "2014-06", content: "History degree." }),
     ];
     const result = reconcileVisibleEntries(candidates, []);
-    expect(result.actions.map((action) => action.kind)).toEqual(["add", "review_required"]);
+    expect(result.actions.map((action) => action.kind)).toEqual(["add", "ambiguous"]);
     expect(result.entries).toHaveLength(1);
   });
 });

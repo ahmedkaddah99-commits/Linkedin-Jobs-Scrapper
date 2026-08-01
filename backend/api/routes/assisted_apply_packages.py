@@ -15,7 +15,7 @@ from backend.domain import normalize_candidate_asset_descriptor
 _CREATE_PACKAGE_KEYS = {"job", "answers", "documents", "warnings"}
 _PREPARE_PACKAGE_KEYS = {"run_id", "job_id", "document_ids", "confirm_standard_profile"}
 _BIND_PACKAGE_KEYS = {"binding_id"}
-_DOCUMENT_GRANT_KEYS = {"package_id", "document_id"}
+_DOCUMENT_GRANT_KEYS = {"package_id", "document_id", "adapter", "upload_field_intent"}
 _CORRECTION_KEYS = {"package_id", "field_intent", "corrected_value", "scope"}
 _OUTCOME_KEYS = {
     "package_id", "package_version", "adapter", "adapter_version",
@@ -339,6 +339,8 @@ def _create_document_grant(context: ApiRouteContext) -> None:
     result = context.application.create_assisted_apply_document_grant(
         package_id=str(payload.get("package_id") or "").strip(),
         document_id=str(payload.get("document_id") or "").strip(),
+        adapter=str(payload.get("adapter") or "").strip(),
+        upload_field_intent=str(payload.get("upload_field_intent") or "").strip(),
         raw_session=context.bearer_token(),
         extension_origin=context.request_client_origin(),
     )

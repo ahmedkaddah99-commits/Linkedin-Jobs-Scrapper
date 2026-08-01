@@ -1,8 +1,28 @@
 import { requestPageContextSet } from "./page-bridge";
+import { executeNativeValueAction, inspectControlValidation, planFillAction, readControlValue, type NativeValueAction } from "./declarative-actions";
 
 export * from "./telemetry";
+export * from "./declarative-actions";
+export * from "./submission-guard";
+export * from "./reconciliation";
 
 export type AtsType = "greenhouse" | "lever";
+export type UploadFieldIntent =
+  | "greenhouse.resume"
+  | "greenhouse.cover_letter"
+  | "greenhouse.supporting_document"
+  | "lever.resume"
+  | "lever.cover_letter"
+  | "lever.supporting_document";
+
+export type ApplicationDocumentKind = "cv" | "cover_letter" | "supporting_document";
+
+export function uploadFieldIntentFor(
+  ats: AtsType,
+  kind: ApplicationDocumentKind,
+): UploadFieldIntent {
+  return `${ats}.${kind === "cv" ? "resume" : kind}` as UploadFieldIntent;
+}
 
 export interface PageContext {
   url: string;
@@ -52,6 +72,7 @@ export interface DetectedField {
   options?: Array<{ label: string; value: string }>;
   existingValue?: unknown;
   classification: "fillable" | "manual";
+  uploadFieldIntent?: UploadFieldIntent;
   manualReason?: ManualReason;
   locator: {
     adapterStrategy: string;
@@ -128,6 +149,7 @@ export interface DocumentUploadRequest {
   documentId: string;
   documentVersion: number;
   documentKind: "cv" | "cover_letter" | "supporting_document";
+  uploadFieldIntent: UploadFieldIntent;
 }
 
 export interface DocumentUploadResult {
@@ -156,6 +178,7 @@ export interface AtsAdapter {
     form: InspectedApplicationForm,
     applicationPackage: ApplicationPackage,
   ): Promise<FieldMatch[]>;
+  plan(match: ApprovedFieldMatch): NativeValueAction | null;
   fill(match: ApprovedFieldMatch): Promise<FieldExecutionResult>;
   authorizeReplacement(detectedFieldId: string): void;
   upload(request: DocumentUploadRequest): Promise<DocumentUploadResult>;
@@ -169,6 +192,7 @@ export const ATS_ADAPTER_CAPABILITIES = [
   "detect",
   "inspect",
   "match",
+  "plan",
   "fill",
   "authorizeReplacement",
   "upload",
@@ -290,6 +314,17 @@ function fieldType(control: Element): DetectedFieldType {
     return type as DetectedFieldType;
   }
   return "unknown";
+}
+
+function declaredUploadFieldIntent(ats: AtsType, control: Element): UploadFieldIntent | undefined {
+  if (!isInput(control) || control.type !== "file") return undefined;
+  const id = control.id.toLowerCase();
+  const name = (control.getAttribute("name") || "").toLowerCase();
+  const prefix = ats === "greenhouse" ? "" : "lever-";
+  if (id === `${prefix}resume` || name === "resume") return `${ats}.resume` as UploadFieldIntent;
+  if (id === `${prefix}cover-letter` || name === "cover_letter") return `${ats}.cover_letter` as UploadFieldIntent;
+  if (id === `${prefix}supporting-document` || name === "supporting_document") return `${ats}.supporting_document` as UploadFieldIntent;
+  return undefined;
 }
 
 function manualReason(control: Element, normalized: string): ManualReason | undefined {
@@ -644,6 +679,7 @@ class StandardFactsAdapter implements AtsAdapter {
         options: controlOptions(control),
         existingValue: existingValue(control),
         classification,
+        uploadFieldIntent: declaredUploadFieldIntent(this.id, control),
         manualReason: reason || (type === "unknown" ? "unsupported_control" : undefined),
         locator: {
           adapterStrategy: `${this.id}-${strategy}`,
@@ -676,6 +712,13 @@ class StandardFactsAdapter implements AtsAdapter {
 
   authorizeReplacement(detectedFieldId: string): void {
     this.replacementAuthorizations.add(detectedFieldId);
+  }
+
+  plan(match: ApprovedFieldMatch): NativeValueAction | null {
+    const registered = this.controls.get(match.detectedFieldId);
+    const approved = this.approvedMatches.get(match.detectedFieldId);
+    if (!registered || !approved || approved.fieldIntent !== match.fieldIntent || approved.proposedValue !== match.proposedValue) return null;
+    return planFillAction(registered.field, match.proposedValue);
   }
 
   async match(
@@ -900,16 +943,32 @@ class StandardFactsAdapter implements AtsAdapter {
       };
     }
 
-    control.focus();
-    if (isSelect(control)) setNativeSelectValue(control, match.proposedValue);
-    else if (isInput(control) && control.type === "checkbox") {
-      setNativeChecked(control, booleanValue(match.proposedValue) === true);
-    } else if (isInput(control) && control.type === "radio") {
-      setNativeChecked(control, true);
-    } else setNativeTextValue(control, match.proposedValue);
-    const EventConstructor = control.ownerDocument.defaultView?.Event ?? Event;
-    control.dispatchEvent(new EventConstructor("input", { bubbles: true, composed: true }));
-    control.dispatchEvent(new EventConstructor("change", { bubbles: true, composed: true }));
+    const plannedAction = this.plan(match);
+    if (!plannedAction) {
+      return {
+        detectedFieldId: match.detectedFieldId,
+        fieldLabel: match.fieldLabel,
+        status: "rejected",
+        reasons: ["The adapter could not express this control as a declarative action."],
+      };
+    }
+    const actionResult = executeNativeValueAction(
+      control.ownerDocument,
+      plannedAction,
+      () => control,
+    );
+    if (actionResult.status !== "applied") {
+      const validation = inspectControlValidation(control.ownerDocument, match.detectedFieldId, () => control);
+      return {
+        detectedFieldId: match.detectedFieldId,
+        fieldLabel: match.fieldLabel,
+        status: "rejected",
+        acceptedValue: readControlValue(control.ownerDocument, match.detectedFieldId, () => control) == null
+          ? undefined : String(readControlValue(control.ownerDocument, match.detectedFieldId, () => control)),
+        validationMessage: validation.messages[0],
+        reasons: [actionResult.reason, ...validation.messages],
+      };
+    }
     control.blur();
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1081,11 +1140,16 @@ export async function uploadApplicationDocument(
     return { status: "rejected", reasons: ["The current page does not match its supported application adapter."] };
   }
   const form = await adapter.inspect({ document, url });
-  const roleFields = form.fields.filter((field) =>
-    field.type === "file" && documentRolePattern(request.documentKind).test(field.normalizedLabel));
-  const roleField = roleFields.find((field) => adapter.canReceiveDocument(field.id)) || roleFields[0];
-  if (!roleField) {
-    return { status: "rejected", reasons: [`No verified ${request.documentKind.replaceAll("_", " ")} upload control was found.`] };
+  const declaredFields = form.fields.filter((field) =>
+    field.type === "file" && field.uploadFieldIntent === request.uploadFieldIntent);
+  if (declaredFields.length !== 1) {
+    return { status: "rejected", reasons: [declaredFields.length > 1
+      ? "The declared upload intent matched multiple controls."
+      : "The declared upload intent did not match exactly one upload control."] };
+  }
+  const roleField = declaredFields[0]!;
+  if (!adapter.canReceiveDocument(roleField.id)) {
+    return { status: "rejected", reasons: ["The declared upload control is unavailable or already occupied."] };
   }
   return adapter.upload({ ...request, detectedFieldId: roleField.id });
 }
@@ -1095,7 +1159,11 @@ export async function uploadGreenhousePdf(
   url: string,
   request: Omit<DocumentUploadRequest, "detectedFieldId" | "documentKind">,
 ): Promise<DocumentUploadResult> {
-  return uploadApplicationDocument(document, url, { ...request, documentKind: "cv" });
+  return uploadApplicationDocument(document, url, {
+    ...request,
+    documentKind: "cv",
+    uploadFieldIntent: "greenhouse.resume",
+  });
 }
 
 export interface FixtureInspectionResult {

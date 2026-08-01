@@ -25,11 +25,18 @@ from backend.domain.application_package import (
     APPLICATION_PACKAGE_BINDING_TTL_SECONDS,
     ApplicationPackage,
     ApplicationPackageAnswer,
+    ApplicationPackageBullet,
+    ApplicationPackageCandidate,
     ApplicationPackageDocumentRef,
+    ApplicationPackageEducation,
+    ApplicationPackageExperience,
+    ApplicationPackageFact,
     ApplicationPackageJob,
+    ApplicationPackageMutationError,
     ApplicationPackagePolicy,
     ApplicationPackageWarnings,
     new_application_package,
+    resolve_approved_value,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -296,6 +303,104 @@ class ApplicationPackageImmutableTests(unittest.TestCase):
         self.assertGreater(len(payload["warnings"]), 0)
         self.assertIn("policy", payload)
         self.assertIn("permitSensitiveAutofill", payload["policy"])
+
+    def test_aa212_package_content_round_trips_with_hashes_and_provenance(self):
+        approved_text = "Approved role-specific bullet — unchanged."
+        package = new_application_package(
+            user_id="u1", job=self._make_job(), answers=[self._make_answer()], documents=[self._make_doc()],
+            candidate=ApplicationPackageCandidate(email="candidate@example.com", approved=True, provenance="career_memory"),
+            experiences=[ApplicationPackageExperience(
+                source_experience_id="exp_1", role_title="Engineer", company="Test Corp",
+                bullets=[ApplicationPackageBullet(
+                    bullet_id="exp_1:bullet:1", text=approved_text, approved_text=approved_text,
+                    source_experience_id="exp_1", provenance_id="prov_1",
+                )], selected_cv_version={"version_id": "cvv_2", "version_no": 2},
+                generation_provenance={"provenance_id": "prov_1"},
+            )],
+            education=[ApplicationPackageEducation(institution="Example University", degree="MSc")],
+            skills=[ApplicationPackageFact(value="SQL", provenance="career_memory")],
+            languages=[ApplicationPackageFact(value="English C1", provenance="career_memory")],
+            standard_answers=[self._make_answer(approved=True)],
+        )
+        payload = package.to_dict()
+        self.assertIn("content_hashes", payload)
+        self.assertEqual(payload["experiences"][0]["bullets"][0]["approved_text"], approved_text)
+        restored = ApplicationPackage.from_payload(json.loads(json.dumps(payload, ensure_ascii=False)))
+        self.assertEqual(restored.content_hashes, package.content_hashes)
+        self.assertEqual(restored.experiences[0].bullets[0].approved_text, approved_text)
+        self.assertEqual(restored.experiences[0].source_experience_id, "exp_1")
+
+    def test_aa212_approval_rejects_in_place_mutation_and_requires_new_version(self):
+        package = new_application_package(user_id="u1", job=self._make_job(), answers=[self._make_answer()], documents=[])
+        package.mark_approved("2026-08-01T12:00:00+00:00")
+        with self.assertRaises(ApplicationPackageMutationError):
+            package.replace_content(candidate=ApplicationPackageCandidate(email="changed@example.com", approved=True))
+        revision = package.new_version(candidate=ApplicationPackageCandidate(email="changed@example.com", approved=True))
+        self.assertEqual(revision.version, package.version + 1)
+        self.assertEqual(revision.status, APPLICATION_PACKAGE_STATUS_CREATED)
+        self.assertEqual(revision.approved_at, "")
+
+    def test_aa212_direct_mutation_is_rejected_at_serialization_boundary(self):
+        package = new_application_package(user_id="u1", job=self._make_job(), answers=[], documents=[])
+        package.mark_approved("2026-08-01T12:00:00+00:00")
+        with self.assertRaises(ApplicationPackageMutationError):
+            package.candidate = ApplicationPackageCandidate(email="tampered@example.com", approved=True)
+        package.experiences.append(ApplicationPackageExperience(role_title="Tampered", company="Unapproved"))
+        with self.assertRaises(ApplicationPackageMutationError):
+            package.to_dict()
+
+    def test_aa212_precedence_is_approved_only_and_sensitive_is_review_gated(self):
+        resolved = resolve_approved_value(
+            {"value": "Job-specific", "approved": True, "provenance": "tailored"},
+            {"value": "Selected CV", "approved": True, "provenance": "cv"},
+            {"value": "Memory", "confirmed": True, "provenance": "memory"},
+        )
+        self.assertEqual((resolved.value, resolved.source), ("Job-specific", "job_specific"))
+        self.assertEqual(resolve_approved_value({"value": "unapproved", "approved": False}, {"value": "", "approved": True}, None).source, "unresolved")
+        sensitive = resolve_approved_value(None, {"value": "candidate@example.com", "approved": True}, None, sensitive=True)
+        self.assertTrue(sensitive.requires_review)
+        self.assertEqual(sensitive.value, "candidate@example.com")
+
+    def test_aa212_sensitive_answer_cannot_clear_review_gate(self):
+        answer = ApplicationPackageAnswer.from_payload({
+            "field_intent": "candidate.email", "label": "Email", "proposed_value": "candidate@example.com",
+            "source": "profile_verified", "sensitivity": "personal", "scope": "global", "confidence": 1,
+            "requires_review": False, "approved": True,
+        })
+        self.assertTrue(answer.requires_review)
+
+    def test_aa212_tampered_approved_text_or_hash_is_rejected(self):
+        package = new_application_package(
+            user_id="u1", job=self._make_job(), answers=[], documents=[],
+            experiences=[ApplicationPackageExperience(
+                role_title="Engineer", company="Test", source_experience_id="exp_1",
+                bullets=[ApplicationPackageBullet(
+                    text="Approved", approved_text="Approved", bullet_id="b1",
+                )],
+            )],
+        )
+        tampered_text = json.loads(json.dumps(package.to_dict()))
+        tampered_text["experiences"][0]["bullets"][0]["approved_text"] = "Changed"
+        with self.assertRaises(ValueError):
+            ApplicationPackage.from_payload(tampered_text)
+        tampered_hash = json.loads(json.dumps(package.to_dict()))
+        tampered_hash["content_hashes"]["candidate"] = "0" * 64
+        with self.assertRaises(ValueError):
+            ApplicationPackage.from_payload(tampered_hash)
+
+    def test_aa212_legacy_v1_payload_is_readable(self):
+        package = ApplicationPackage.from_payload({
+            "package_id": "aapkg_legacy", "user_id": "u1", "job_id": "j1", "version": 1,
+            "status": "created", "schema_version": 1,
+            "job": {"job_id": "j1", "title": "Engineer", "company": "Test", "portal": "greenhouse"},
+            "answers": [], "documents": [],
+            "experiences": [{"role_title": "Engineer", "company": "Test", "bullets": ["Legacy bullet"]}],
+        })
+        self.assertEqual(package.version, 1)
+        self.assertEqual(package.experiences[0].source_experience_id, "")
+        self.assertEqual(package.experiences[0].provenance_confidence, "reduced")
+        self.assertEqual(package.experiences[0].bullets[0].text, "Legacy bullet")
+        self.assertTrue(package.content_hashes)
 
     # ---- Binding secrets not in extension payload ----
 

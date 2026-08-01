@@ -157,6 +157,12 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Comma-separated exact chrome-extension:// origins allowed only on Assisted Apply extension routes; wildcards are forbidden.",
     },
+    "RUNR_ENABLE_ASSISTED_APPLY_PREPARATION": {
+        "required": False,
+        "scope": "backend",
+        "default": "0",
+        "description": "Explicit opt-in for durable Assisted Apply preparation status/report routes; disabled by default.",
+    },
     "VITE_CLERK_PUBLISHABLE_KEY": {
         "required": True,
         "scope": "frontend",

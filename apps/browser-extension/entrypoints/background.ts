@@ -1,9 +1,12 @@
-﻿import { detectAtsFromUrl } from "@runr/ats-core";
+﻿import { detectAtsFromUrl, uploadFieldIntentFor } from "@runr/ats-core";
 import {
   isExactGreenhouseFixtureUrl,
   isExactLeverFixtureUrl,
   isFixtureInspectionMessage,
   isPackageExecutionMessage,
+  isApplicationPackagePayload,
+  ASSISTED_APPLY_PREPARATION_PROTOCOL,
+  ASSISTED_APPLY_PREPARATION_MAX_AGE_MS,
   isDocumentUploadMessage,
   isContentRuntimeEvent,
   isPanelRequest,
@@ -15,6 +18,7 @@ import {
   type ContentRequest,
   type FixtureInspectionMessage,
   type PanelResponse,
+  type AssistedApplyPreparationMessage,
 } from "@runr/extension-messages";
 import { browser, type Browser } from "wxt/browser";
 import { defineBackground } from "wxt/utils/define-background";
@@ -28,6 +32,11 @@ import { ExtensionConnectionService } from "../src/auth/connection-service";
 import { assistedApplyRuntimeConfig } from "../src/auth/config";
 import { isExactRunrWebSender, isExactSidePanelSender } from "../src/auth/trusted-sender";
 import { comparableApplicationUrl, preparedApplicationUrlMatches } from "../src/application-url";
+import {
+  isFreshPreparationCommand,
+  isWebPreparationCommand,
+  preparationCommandFingerprint,
+} from "../src/preparation/external-command";
 import {
   hasAllOptionalHostPermissions,
   hasPortalPermission,
@@ -47,6 +56,15 @@ import {
   writeTabPackage,
   writeTabState,
 } from "../src/state/tab-state";
+import {
+  canActivateExactPreparationTab,
+  classifyPreparationTabChange,
+  hasActivePreparation,
+  readPreparationLocalRecord,
+  writePreparationLocalRecord,
+  type PreparationLocalRecord,
+  type PreparationLocalStatus,
+} from "../src/preparation/local-session";
 
 const runtimeConfig = assistedApplyRuntimeConfig();
 const authStorage = new BrowserAuthStorage();
@@ -159,9 +177,8 @@ async function getState(refresh: boolean): Promise<AssistedApplyTabState> {
   return refreshTabState(tab);
 }
 
-async function runGreenhousePackage(applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
-  const tab = await resolveTargetTab();
-  if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
+async function runGreenhousePackageOnTab(tabId: number, applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
+  const tab = await browser.tabs.get(tabId);
   const detection = detectAtsFromUrl(tab.url || "");
   if (detection.ats !== "greenhouse" && !isLocalFixtureUrl(tab.url)) {
     throw new Error("This application package can only fill a detected Greenhouse page.");
@@ -169,22 +186,21 @@ async function runGreenhousePackage(applicationPackage: ApplicationPackagePayloa
   if (applicationPackage.job.portal && applicationPackage.job.portal !== "greenhouse") {
     throw new Error("The bound application package is not for Greenhouse.");
   }
-  await injectPageRunner(tab.id, true);
+  await injectPageRunner(tabId, true);
   const command: ContentRequest = {
     type: "CONTENT_RUN_GREENHOUSE_APPLICATION_PACKAGE",
     package: applicationPackage,
     replaceFieldIntents,
   };
-  const raw: unknown = await browser.tabs.sendMessage(tab.id, command);
+  const raw: unknown = await browser.tabs.sendMessage(tabId, command);
   if (!isPackageExecutionMessage(raw) || raw.packageId !== applicationPackage.packageId) {
     throw new Error("The Greenhouse runner returned an invalid package result.");
   }
   return raw;
 }
 
-async function runLeverPackage(applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
-  const tab = await resolveTargetTab();
-  if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
+async function runLeverPackageOnTab(tabId: number, applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
+  const tab = await browser.tabs.get(tabId);
   const detection = detectAtsFromUrl(tab.url || "");
   if (detection.ats !== "lever" && !isExactLeverFixtureUrl(tab.url)) {
     throw new Error("This application package can only fill a detected Lever page.");
@@ -192,9 +208,9 @@ async function runLeverPackage(applicationPackage: ApplicationPackagePayload, re
   if (applicationPackage.job.portal && applicationPackage.job.portal !== "lever") {
     throw new Error("The bound application package is not for Lever.");
   }
-  await injectPageRunner(tab.id, true);
+  await injectPageRunner(tabId, true);
   const command: ContentRequest = { type: "CONTENT_RUN_LEVER_APPLICATION_PACKAGE", package: applicationPackage, replaceFieldIntents };
-  const raw: unknown = await browser.tabs.sendMessage(tab.id, command);
+  const raw: unknown = await browser.tabs.sendMessage(tabId, command);
   if (!isPackageExecutionMessage(raw) || raw.packageId !== applicationPackage.packageId) {
     throw new Error("The Lever runner returned an invalid package result.");
   }
@@ -243,6 +259,18 @@ async function bindPackageFromApi(
   return response as ApplicationPackagePayload;
 }
 
+async function runGreenhousePackage(applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
+  const tab = await resolveTargetTab();
+  if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
+  return runGreenhousePackageOnTab(tab.id, applicationPackage, replaceFieldIntents);
+}
+
+async function runLeverPackage(applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
+  const tab = await resolveTargetTab();
+  if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
+  return runLeverPackageOnTab(tab.id, applicationPackage, replaceFieldIntents);
+}
+
 async function waitForRunrOpenedApplicationTab(applicationUrl: string): Promise<Browser.tabs.Tab> {
   const expected = comparableApplicationUrl(applicationUrl);
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -287,6 +315,231 @@ async function bindRunrWebLaunch(
   return { ok: true, packageId: applicationPackage.packageId };
 }
 
+async function preparationApiRequest(path: string, body: Record<string, unknown>): Promise<unknown> {
+  const token = await currentSessionToken();
+  const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
+  return api.request(path, "POST", body, token);
+}
+
+async function reportPreparationFromExtension(
+  message: AssistedApplyPreparationMessage,
+  type: "permission_required" | "accepted",
+): Promise<void> {
+  await preparationApiRequest("/assisted-apply/extension/preparations/report", {
+    preparation_id: message.preparationId,
+    package_id: message.packageId,
+    message_id: `${message.messageId}:${type}`,
+    type,
+    result: type === "accepted"
+      ? { status: "accepted" }
+      : { status: "needs_attention", code: "permission_required" },
+  });
+}
+
+async function reportPreparationProgress(
+  message: Extract<AssistedApplyPreparationMessage, { source: "web" }>,
+  type: "progress" | "ready_for_review",
+  completed: number,
+  total: number,
+): Promise<void> {
+  await preparationApiRequest("/assisted-apply/extension/preparations/report", {
+    preparation_id: message.preparationId,
+    package_id: message.packageId,
+    message_id: `${message.messageId}:${type}`,
+    type,
+    result: { status: type, completed, total, ...(type === "ready_for_review" ? { reviewId: message.preparationId } : {}) },
+  });
+}
+
+const preparationReadyWaiters = new Map<number, () => void>();
+
+async function waitForPreparationTabReady(tabId: number, applicationUrl: string): Promise<void> {
+  const current = await browser.tabs.get(tabId);
+  if (current.url && comparableApplicationUrl(current.url) !== comparableApplicationUrl(applicationUrl)) {
+    throw new Error("The preparation tab navigated away before readiness.");
+  }
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      browser.tabs.onUpdated.removeListener(listener);
+      preparationReadyWaiters.delete(tabId);
+      error ? reject(error) : resolve();
+    };
+    const listener = (updatedTabId: number, changeInfo: { status?: string; url?: string }) => {
+      if (updatedTabId !== tabId) return;
+      if (changeInfo.url && comparableApplicationUrl(changeInfo.url) !== comparableApplicationUrl(applicationUrl)) {
+        finish(new Error("The preparation tab navigated away before readiness."));
+      } else if (changeInfo.status === "complete") {
+        void browser.tabs.get(tabId).then((tab) => {
+          if (tab.discarded || !tab.url || comparableApplicationUrl(tab.url) !== comparableApplicationUrl(applicationUrl)) {
+            finish(new Error("The preparation tab was discarded or changed before readiness."));
+          } else if (preparationReadyWaiters.has(tabId)) {
+            // The content-script handshake completes the promise.
+          }
+        }).catch(finish);
+      }
+    };
+    browser.tabs.onUpdated.addListener(listener);
+    preparationReadyWaiters.set(tabId, () => finish());
+    if (current.status === "complete" && current.url === applicationUrl) {
+      // The injection below will produce the handshake without a polling loop.
+    }
+    setTimeout(() => finish(new Error("The preparation content-script readiness handshake timed out.")), 10_000);
+  });
+}
+
+async function updatePreparationLocalStatus(status: PreparationLocalStatus): Promise<PreparationLocalRecord | null> {
+  const record = await readPreparationLocalRecord();
+  if (!record) return null;
+  const updated = { ...record, status, updatedAt: now() };
+  await writePreparationLocalRecord(updated);
+  return updated;
+}
+
+async function applyPreparationExtensionAction(
+  message: Extract<AssistedApplyPreparationMessage, { source: "web" }>,
+  action: "activate" | "cancel" | "retry",
+): Promise<void> {
+  await preparationApiRequest("/assisted-apply/extension/preparations/action", {
+    preparation_id: message.preparationId,
+    package_id: message.packageId,
+    action,
+  });
+}
+
+async function startPreparationCommand(
+  message: Extract<AssistedApplyPreparationMessage, { type: "start" }>,
+): Promise<PreparationCommandResponse> {
+  const existing = await readPreparationLocalRecord();
+  if (hasActivePreparation(existing)) {
+    return { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "busy", error: "Another preparation is already active." };
+  }
+  const connection = await connectionService.getConnection();
+  if (connection.status !== "connected" || !connection.session || Date.parse(connection.session.expiresAt) <= Date.now()) {
+    await updatePreparationLocalStatus("auth_lost");
+    throw new Error("Runr extension connection is missing or expired.");
+  }
+  const applicationPackage = await fetchPackageFromApi(message.packageId);
+  if (!isApplicationPackagePayload(applicationPackage) || applicationPackage.packageId !== message.packageId) {
+    throw new Error("Runr returned an invalid or unassociated application package.");
+  }
+  const portal = applicationPackage.job.portal;
+  if ((portal !== "greenhouse" && portal !== "lever") || !message.capabilities.adapters.includes(portal) ||
+      !message.capabilities.capabilities.includes("fill")) {
+    throw new Error("Preparation capabilities do not match the bound application package.");
+  }
+  const applicationUrl = (applicationPackage.job as ApplicationPackagePayload["job"] & { url?: unknown }).url;
+  if (typeof applicationUrl !== "string" || !applicationUrl || (import.meta.env.MODE !== "testing" && !applicationUrl.startsWith("https://"))) {
+    throw new Error("The bound application package has no safe application URL.");
+  }
+  const permissionGranted = await hasPortalPermission(portal);
+  if (!permissionGranted) {
+    await writePreparationLocalRecord({
+      preparationId: message.preparationId, packageId: message.packageId, packageVersion: applicationPackage.version,
+      ats: portal, applicationUrl, status: "permission_required", tabId: -1,
+      createdAt: now(), updatedAt: now(), attempt: 1, completedCount: 0, totalCount: 0,
+      lastMessageId: message.messageId,
+    });
+    await reportPreparationFromExtension(message, "permission_required");
+    return { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "permission_required", permissionGranted: false };
+  }
+  await reportPreparationFromExtension(message, "accepted");
+  const expected = comparableApplicationUrl(applicationUrl);
+  const tabs = await browser.tabs.query({});
+  let tab = tabs.find((candidate) => {
+    if (candidate.id == null || !candidate.url) return false;
+    try { return comparableApplicationUrl(candidate.url) === expected; } catch { return false; }
+  });
+  if (!tab) tab = await browser.tabs.create({ url: applicationUrl, active: false });
+  if (tab.id == null) throw new Error("Runr could not create or resume the application tab.");
+  const localRecord: PreparationLocalRecord = {
+    preparationId: message.preparationId, packageId: message.packageId, packageVersion: applicationPackage.version,
+    ats: portal, applicationUrl, tabId: tab.id, windowId: tab.windowId,
+    status: "waiting_ready", createdAt: now(), updatedAt: now(), attempt: 1,
+    completedCount: 0, totalCount: applicationPackage.answers.length,
+    lastMessageId: message.messageId,
+  };
+  await writePreparationLocalRecord(localRecord);
+  await writeTabPackage(tab.id, applicationPackage);
+  const readyPromise = waitForPreparationTabReady(tab.id, applicationUrl);
+  await injectPageRunner(tab.id, true);
+  await readyPromise;
+  await updatePreparationLocalStatus("preparing");
+  const execution = portal === "greenhouse"
+    ? await runGreenhousePackageOnTab(tab.id, applicationPackage)
+    : await runLeverPackageOnTab(tab.id, applicationPackage);
+  const completedCount = Array.isArray(execution.executions) ? execution.executions.length : 0;
+  await reportPreparationProgress(message, "progress", completedCount, localRecord.totalCount);
+  await reportPreparationProgress(message, "ready_for_review", completedCount, localRecord.totalCount);
+  await writePreparationLocalRecord({ ...(await readPreparationLocalRecord() ?? localRecord), status: "ready_for_review", completedCount, updatedAt: now() });
+  return { ok: true, preparationId: message.preparationId, packageId: message.packageId, ats: portal, permissionGranted: true, status: "ready_for_review" };
+}
+
+async function handlePreparationCommand(
+  message: Extract<AssistedApplyPreparationMessage, { source: "web" }>,
+): Promise<PreparationCommandResponse> {
+  if (!isFreshPreparationCommand(message)) throw new Error("The preparation command is stale or has an invalid timestamp.");
+  const fingerprint = preparationCommandFingerprint(message);
+  const existing = preparationCommandReplay.get(message.messageId);
+  if (existing) {
+    if (existing.expiresAt > Date.now() && existing.fingerprint === fingerprint) return existing.response;
+    throw new Error("The preparation command was replayed or reused with different content.");
+  }
+  let response: PreparationCommandResponse;
+  if (message.type === "start") {
+    try {
+      response = await startPreparationCommand(message);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      if (/connection|session|authenticate/iu.test(text)) {
+        await updatePreparationLocalStatus("auth_lost");
+        response = { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "auth_lost", error: "Extension authentication is unavailable; explicit retry is required." };
+      } else throw error;
+    }
+  } else if (message.type === "retry") {
+    if (!await readPreparationLocalRecord()) {
+      response = { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "retry_required", error: "Local browser ownership was lost; start a new explicit preparation." };
+      preparationCommandReplay.set(message.messageId, { fingerprint, response, expiresAt: Date.now() + ASSISTED_APPLY_PREPARATION_MAX_AGE_MS });
+      return response;
+    }
+    await applyPreparationExtensionAction(message, "retry");
+    response = await startPreparationCommand({
+      protocol: message.protocol,
+      protocolVersion: message.protocolVersion,
+      type: "start",
+      source: "web",
+      messageId: message.messageId,
+      preparationId: message.preparationId,
+      packageId: message.packageId,
+      emittedAt: message.emittedAt,
+      capabilities: { adapters: ["greenhouse", "lever"], capabilities: ["fill"] },
+    });
+    response = { ...response, status: "retrying" };
+  } else if (message.type === "review_activate") {
+    const record = await readPreparationLocalRecord();
+    const tab = record ? await browser.tabs.get(record.tabId).catch(() => null) : null;
+    if (!canActivateExactPreparationTab(record, tab)) {
+      if (record?.status === "ready_for_review") await updatePreparationLocalStatus(tab ? "navigation_mismatch" : "closed");
+      response = { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "retry_required", error: "The exact session-owned review tab is unavailable or no longer matches." };
+      preparationCommandReplay.set(message.messageId, { fingerprint, response, expiresAt: Date.now() + ASSISTED_APPLY_PREPARATION_MAX_AGE_MS });
+      return response;
+    }
+    if (!record) throw new Error("The preparation ownership record disappeared.");
+    await browser.tabs.update(record.tabId, { active: true });
+    await applyPreparationExtensionAction(message, "activate");
+    await updatePreparationLocalStatus("review_activated");
+    response = { ok: true, preparationId: message.preparationId, packageId: message.packageId, status: "activated" };
+  } else {
+    await updatePreparationLocalStatus("cancelled");
+    await applyPreparationExtensionAction(message, "cancel");
+    response = { ok: true, preparationId: message.preparationId, packageId: message.packageId, status: "cancelled" };
+  }
+  preparationCommandReplay.set(message.messageId, { fingerprint, response, expiresAt: Date.now() + ASSISTED_APPLY_PREPARATION_MAX_AGE_MS });
+  return response;
+}
+
 async function currentSessionToken(): Promise<string> {
   const value = await authStorage.readSessionSecret();
   if (!value || typeof value !== "object" || Array.isArray(value) ||
@@ -296,7 +549,7 @@ async function currentSessionToken(): Promise<string> {
   return (value as { sessionToken: string }).sessionToken;
 }
 
-function parseDocumentGrant(value: unknown, expected: ApplicationPackageDocumentMeta) {
+function parseDocumentGrant(value: unknown, expected: ApplicationPackageDocumentMeta, expectedUploadFieldIntent: string) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Runr returned an invalid document grant.");
   }
@@ -311,6 +564,7 @@ function parseDocumentGrant(value: unknown, expected: ApplicationPackageDocument
       !Number.isInteger(metadata.documentVersion) || Number(metadata.documentVersion) < 1 ||
       metadata.documentVersion !== expected.documentVersion ||
       metadata.documentKind !== expected.documentKind ||
+      metadata.uploadFieldIntent !== expectedUploadFieldIntent ||
       metadata.fileName !== expected.fileName ||
       metadata.mimeType !== expected.mimeType ||
       !((metadata.mimeType === "application/pdf" && expected.fileName.toLowerCase().endsWith(".pdf")) ||
@@ -325,6 +579,7 @@ function parseDocumentGrant(value: unknown, expected: ApplicationPackageDocument
     documentId: metadata.documentId as string,
     documentVersion: metadata.documentVersion as number,
     documentKind: expected.documentKind,
+    uploadFieldIntent: metadata.uploadFieldIntent as string,
     fileName: metadata.fileName as string,
     mimeType: expected.mimeType,
     size: metadata.size as number,
@@ -361,9 +616,14 @@ async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayl
   const grant = parseDocumentGrant(await api.request(
     "/assisted-apply/extension/document-grants",
     "POST",
-    { package_id: applicationPackage.packageId, document_id: documentId },
+    {
+      package_id: applicationPackage.packageId,
+      document_id: documentId,
+      adapter: applicationPackage.job.portal,
+      upload_field_intent: uploadFieldIntentFor(applicationPackage.job.portal, selected.documentKind),
+    },
     sessionToken,
-  ), selected);
+  ), selected, uploadFieldIntentFor(applicationPackage.job.portal, selected.documentKind));
   let bytes = await api.downloadDocument(sessionToken, grant.grantToken, grant.mimeType);
   try {
     if (bytes.byteLength !== grant.size) throw new Error("The downloaded document size did not match its grant.");
@@ -379,6 +639,7 @@ async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayl
       documentId: grant.documentId,
       documentVersion: grant.documentVersion,
       documentKind: grant.documentKind,
+      uploadFieldIntent: grant.uploadFieldIntent,
       fileName: grant.fileName,
       mimeType: grant.mimeType,
       base64Bytes: bytesToBase64(bytes),
@@ -528,9 +789,24 @@ export default defineBackground(() => {
   });
 
   browser.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-    if (!isExactRunrWebSender(sender, runtimeConfig.frontendOrigin) || !isRunrWebLaunchRequest(message)) {
+    if (!isExactRunrWebSender(sender, runtimeConfig.frontendOrigin)) {
       return undefined;
     }
+    if (isWebPreparationCommand(message)) {
+      void handlePreparationCommand(message)
+        .then(sendResponse)
+        .catch((error: unknown) => sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : "Runr could not handle the preparation command.",
+        }));
+      return true;
+    }
+    if (message && typeof message === "object" &&
+        (message as { protocol?: unknown }).protocol === ASSISTED_APPLY_PREPARATION_PROTOCOL) {
+      sendResponse({ ok: false, error: "Runr rejected the invalid or unsupported preparation command." });
+      return false;
+    }
+    if (!isRunrWebLaunchRequest(message)) return undefined;
     if (import.meta.env.MODE !== "testing" && !message.applicationUrl.startsWith("https://")) {
       return undefined;
     }
@@ -547,6 +823,12 @@ export default defineBackground(() => {
     message: unknown,
     sender,
   ): Promise<PanelResponse | undefined> => {
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_CONTENT_READY") {
+      const tabId = sender.tab?.id;
+      if (sender.id === browser.runtime.id && tabId != null) preparationReadyWaiters.get(tabId)?.();
+      return { ok: true };
+    }
     if (import.meta.env.MODE === "testing" && message && typeof message === "object" &&
         (message as { type?: unknown }).type === "AA201_INACTIVE_FIXTURE_READY") {
       return { ok: true };
@@ -756,6 +1038,34 @@ export default defineBackground(() => {
   });
 
   browser.tabs.onRemoved.addListener((tabId) => {
+    void readPreparationLocalRecord().then(async (record) => {
+      if (record?.tabId === tabId && !["cancelled", "closed", "discarded"].includes(record.status)) {
+        await updatePreparationLocalStatus("closed");
+      }
+    });
     void removeTabState(tabId);
   });
+  browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    void readPreparationLocalRecord().then(async (record) => {
+      if (!record || record.tabId !== tabId) return;
+      const status = classifyPreparationTabChange(record, changeInfo, tab.url);
+      if (status) await updatePreparationLocalStatus(status);
+    });
+  });
 });
+
+type PreparationCommandResponse = {
+  ok: boolean;
+  preparationId?: string;
+  packageId?: string;
+  ats?: "greenhouse" | "lever";
+  permissionGranted?: boolean;
+  status?: "permission_required" | "accepted" | "ready_for_review" | "activated" | "cancelled" | "retrying" | "busy" | "retry_required" | "auth_lost";
+  error?: string;
+};
+
+const preparationCommandReplay = new Map<string, {
+  fingerprint: string;
+  response: PreparationCommandResponse;
+  expiresAt: number;
+}>();

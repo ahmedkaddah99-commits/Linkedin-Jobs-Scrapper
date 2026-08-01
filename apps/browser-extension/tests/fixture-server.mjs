@@ -303,8 +303,16 @@ const server = createServer(async (request, response) => {
       if (!record) return;
       const payload = await readJson(request);
       const fixtureDocument = fixtureDocuments.get(String(payload.document_id || ""));
+      const expectedIntent = fixtureDocument?.documentKind === "cv"
+        ? `${payload.adapter}.resume`
+        : fixtureDocument?.documentKind ? `${payload.adapter}.${fixtureDocument.documentKind}` : "";
       if (!String(payload.package_id || "").startsWith("aapkg_fixture_") || !fixtureDocument) {
         json(response, 400, { error: { code: "bad_request", message: "Unknown fixed document." } }, origin);
+        return;
+      }
+      if (!/(greenhouse|lever)\.(resume|cover_letter|supporting_document)/u.test(String(payload.upload_field_intent || "")) ||
+          payload.upload_field_intent !== expectedIntent) {
+        json(response, 400, { error: { code: "bad_request", message: "Undeclared upload intent." } }, origin);
         return;
       }
       counters.documentGrants += 1;
@@ -321,6 +329,7 @@ const server = createServer(async (request, response) => {
           mimeType: fixtureDocument.mimeType,
           size: fixtureDocument.bytes.length,
           sha256Hex: createHash("sha256").update(fixtureDocument.bytes).digest("hex"),
+          uploadFieldIntent: expectedIntent,
         },
       }, origin);
       return;

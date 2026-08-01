@@ -12,6 +12,7 @@ from uuid import uuid4
 from backend.application.assisted_apply_package_service import (
     ApplicationPackageService,
 )
+from backend.application.assisted_apply_preparation_service import AssistedApplyPreparationService
 from backend.application.assisted_apply_service import AssistedApplyConnectionService
 from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
 from backend.application.domain_services import IdentityAccessService, WorkspaceCatalogService
@@ -886,6 +887,7 @@ class BackendApplication:
     _identity_access_service: IdentityAccessService = field(init=False, repr=False)
     _assisted_apply_connection_service: AssistedApplyConnectionService = field(init=False, repr=False)
     _assisted_apply_package_service: ApplicationPackageService = field(init=False, repr=False)
+    _assisted_apply_preparation_service: AssistedApplyPreparationService = field(init=False, repr=False)
     _tracker_application_service: TrackerApplicationService = field(init=False, repr=False)
     _run_lifecycle_service: RunLifecycleService = field(init=False, repr=False)
 
@@ -902,6 +904,10 @@ class BackendApplication:
         self._assisted_apply_package_service = ApplicationPackageService(
             repositories=self.repositories,
             object_storage=self.object_storage,
+        )
+        self._assisted_apply_preparation_service = AssistedApplyPreparationService(
+            repositories=self.repositories,
+            package_service=self._assisted_apply_package_service,
         )
         self._tracker_application_service = TrackerApplicationService(
             repositories=self.repositories,
@@ -3055,6 +3061,12 @@ class BackendApplication:
         answers: Any = None,
         documents: Any = None,
         warnings_items: Any = None,
+        candidate: Any = None,
+        experiences: Any = None,
+        education: Any = None,
+        skills: Any = None,
+        languages: Any = None,
+        standard_answers: Any = None,
     ):
         return self._assisted_apply_package_service.create_package(
             user_id=user_id,
@@ -3062,6 +3074,12 @@ class BackendApplication:
             answers=answers,
             documents=documents,
             warnings_items=warnings_items,
+            candidate=candidate,
+            experiences=experiences,
+            education=education,
+            skills=skills,
+            languages=languages,
+            standard_answers=standard_answers,
         )
 
     def launch_application_package(self, *, user_id: str, package_id: str):
@@ -3109,11 +3127,13 @@ class BackendApplication:
         )
 
     def create_assisted_apply_document_grant(
-        self, *, package_id: str, document_id: str, raw_session: str, extension_origin: str
+        self, *, package_id: str, document_id: str, adapter: str = "", upload_field_intent: str = "", raw_session: str, extension_origin: str
     ):
         return self._assisted_apply_package_service.create_document_grant(
             package_id=package_id,
             document_id=document_id,
+            adapter=adapter,
+            upload_field_intent=upload_field_intent,
             raw_session=raw_session,
             extension_origin=extension_origin,
         )
@@ -3150,4 +3170,24 @@ class BackendApplication:
             uploaded_documents=uploaded_documents,
             raw_session=raw_session,
             extension_origin=extension_origin,
+        )
+
+    def create_assisted_apply_preparation(self, *, user_id: str, package_id: str):
+        return self._assisted_apply_preparation_service.create(user_id=user_id, package_id=package_id)
+
+    def get_assisted_apply_preparation(self, *, user_id: str, preparation_id: str):
+        return self._assisted_apply_preparation_service.get_for_user(user_id=user_id, preparation_id=preparation_id)
+
+    def list_assisted_apply_preparations(self, *, user_id: str):
+        return self._assisted_apply_preparation_service.list_for_user(user_id=user_id)
+
+    def report_assisted_apply_preparation(self, **kwargs):
+        return self._assisted_apply_preparation_service.report_from_extension(**kwargs)
+
+    def act_on_assisted_apply_preparation_from_extension(self, **kwargs):
+        return self._assisted_apply_preparation_service.apply_action_from_extension(**kwargs)
+
+    def act_on_assisted_apply_preparation(self, *, user_id: str, preparation_id: str, action: str):
+        return self._assisted_apply_preparation_service.apply_action(
+            user_id=user_id, preparation_id=preparation_id, action=action,
         )

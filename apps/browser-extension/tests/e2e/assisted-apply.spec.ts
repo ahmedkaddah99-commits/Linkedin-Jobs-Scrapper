@@ -771,6 +771,44 @@ test("uploads selected CV, cover-letter, and supporting-document roles on both a
   });
 });
 
+test("stops on an ambiguous duplicate upload intent without navigation or submission", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
+  await fixturePage.evaluate(() => {
+    const duplicate = document.createElement("input");
+    duplicate.id = "resume-duplicate";
+    duplicate.name = "resume";
+    duplicate.type = "file";
+    document.querySelector("form")?.append(duplicate);
+  });
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await expect(panelPage.getByTestId("connection-status")).not.toHaveText("loading");
+  if (await panelPage.getByTestId("connect-runr").isVisible().catch(() => false)) {
+    await panelPage.getByTestId("connect-runr").click();
+    await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
+  }
+  const response = await panelPage.evaluate(() => chrome.runtime.sendMessage({
+    type: "UPLOAD_SELECTED_DOCUMENT",
+    documentId: "cv_version_7",
+    package: {
+      packageId: "aapkg_fixture_aa221_ambiguous",
+      jobId: "job_fixture_aa221_ambiguous",
+      version: 1,
+      schemaVersion: 1,
+      job: { jobId: "job_fixture_aa221_ambiguous", title: "Engineer", company: "Acme", portal: "greenhouse", location: "Berlin" },
+      answers: [],
+      documents: [{ documentId: "cv_version_7", documentVersion: 7, documentKind: "cv", mimeType: "application/pdf", fileName: "Candidate CV.pdf" }],
+      warnings: [],
+      policy: { permitSensitiveAutofill: false, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+    },
+  }));
+  expect(response).toMatchObject({ ok: true, documentUpload: { status: "rejected" } });
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+  await expect(fixturePage).toHaveURL(/greenhouse-application\.html/u);
+});
+
 test("AA-09 review panel shows all sections, field evidence, and keyboard-accessible actions", async () => {
   for (const page of context.pages()) await page.close();
   const fixturePage = await context.newPage();
