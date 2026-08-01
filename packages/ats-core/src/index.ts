@@ -1115,6 +1115,91 @@ export class GreenhouseAdapter extends StandardFactsAdapter {
   constructor() { super("greenhouse"); }
 }
 
+/**
+ * AA-219: Greenhouse planning is deliberately separate from execution.  The
+ * adapter may inspect and propose native actions, while the shared
+ * declarative executor remains the only action executor.  Unsupported ATS
+ * structures are returned as manual boundaries instead of being guessed.
+ */
+export interface GreenhouseApplicationPlan {
+  schemaVersion: 1;
+  adapter: "greenhouse";
+  actions: import("./declarative-actions").DeclarativeAction[];
+  unresolved: string[];
+  manualReasons: ManualReason[];
+  stopsAtReview: boolean;
+}
+
+export async function planGreenhouseApplication(
+  document: Document,
+  url: string,
+  applicationPackage: ApplicationPackage,
+): Promise<GreenhouseApplicationPlan> {
+  const adapter = new GreenhouseAdapter();
+  const detection = await adapter.detect({ document, url });
+  if (detection.ats !== "greenhouse") {
+    return {
+      schemaVersion: 1,
+      adapter: "greenhouse",
+      actions: [],
+      unresolved: ["The inspected page is not a confirmed Greenhouse application."],
+      manualReasons: [],
+      stopsAtReview: true,
+    };
+  }
+
+  const form = await adapter.inspect({ document, url });
+  const matches = await adapter.match(form, applicationPackage);
+  const fieldsById = new Map(form.fields.map((field) => [field.id, field]));
+  const actions = matches.flatMap((match) => {
+    if (match.action !== "fill") return [];
+    if (/work authorization|sponsorship|veteran|disability|demographic/iu.test(match.fieldLabel)) return [];
+    const field = fieldsById.get(match.detectedFieldId);
+    const existing = field?.existingValue;
+    const hasExistingValue = typeof existing === "string"
+      ? existing.trim().length > 0
+      : existing === true;
+    if (hasExistingValue) return [];
+    const action = adapter.plan({
+      ...match,
+      action: "fill",
+      proposedValue: String(match.proposedValue ?? ""),
+    });
+    return action ? [action] : [];
+  });
+  const manualReasons = Array.from(
+    new Set(
+      form.fields
+        .map((field) => field.manualReason)
+        .filter((reason): reason is ManualReason => Boolean(reason)),
+    ),
+  );
+  const unresolved = matches
+    .filter((match) => {
+      if (match.action !== "fill") return true;
+      if (/work authorization|sponsorship|veteran|disability|demographic/iu.test(match.fieldLabel)) return true;
+      const existing = fieldsById.get(match.detectedFieldId)?.existingValue;
+      return typeof existing === "string" ? existing.trim().length > 0 : existing === true;
+    })
+    .map((match) => `${match.fieldLabel}: ${match.reasons[0] || "manual review required"}`);
+
+  // No Greenhouse repeatable experience/education controls are confirmed by
+  // the repository fixtures. A future inspected control must declare a
+  // controlled executor contract before it can produce an action.
+  if (!form.fields.some((field) => /experience|education/iu.test(field.normalizedLabel))) {
+    unresolved.push("Greenhouse repeatable experience/education controls are not present in the approved fixture.");
+  }
+
+  return {
+    schemaVersion: 1,
+    adapter: "greenhouse",
+    actions,
+    unresolved,
+    manualReasons,
+    stopsAtReview: manualReasons.includes("final_submission"),
+  };
+}
+
 export class LeverAdapter extends StandardFactsAdapter {
   constructor() { super("lever"); }
 }

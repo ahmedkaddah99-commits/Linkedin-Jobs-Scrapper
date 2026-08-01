@@ -224,6 +224,54 @@ test("fills package-backed Greenhouse standard facts through the panel and worke
   await fixturePage.close();
 });
 
+test("AA-219 stops Greenhouse preparation at review across rerun and reload", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const applicationPackage = {
+    packageId: "aa219-greenhouse-review-boundary",
+    jobId: "aa219-greenhouse-job",
+    version: 1,
+    schemaVersion: 1,
+    job: { jobId: "aa219-greenhouse-job", title: "Engineer", company: "Acme", portal: "greenhouse", location: "Berlin" },
+    answers: [
+      ["candidate.legal_last_name", "Legal last name", "Lovelace"],
+      ["candidate.email", "Email address", "ada@example.com"],
+      ["application.work_authorization", "Work authorization", "Yes"],
+    ].map(([fieldIntent, label, proposedValue]) => ({
+      fieldIntent, label, proposedValue, source: "profile_verified",
+      sensitivity: label === "Work authorization" ? "legal" : "standard",
+      scope: "application", confidence: 1, requiresReview: false, reasons: ["Sanitized fixture value."],
+    })),
+    documents: [], warnings: [],
+    policy: { permitSensitiveAutofill: true, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+  };
+  const run = () => panelPage.evaluate((pkg) => chrome.runtime.sendMessage({
+    type: "RUN_GREENHOUSE_APPLICATION_PACKAGE", package: pkg,
+  }), applicationPackage) as Promise<{ ok: boolean; packageExecution: { executions: Array<{ fieldLabel: string; status: string }> } }>;
+
+  const first = await run();
+  expect(first.ok).toBe(true);
+  expect(first.packageExecution.executions.map((item) => item.fieldLabel)).toEqual(["Legal last name", "Email address"]);
+  await expect(fixturePage.locator("#last-name")).toHaveValue("Lovelace");
+  await expect(fixturePage.locator("#email")).toHaveValue("ada@example.com");
+  await expect(fixturePage.locator("#work-yes")).not.toBeChecked();
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+
+  await fixturePage.reload();
+  const second = await run();
+  expect(second.ok).toBe(true);
+  expect(second.packageExecution.executions).toHaveLength(2);
+  await expect(fixturePage.locator("#last-name")).toHaveValue("Lovelace");
+  await expect(fixturePage.locator("#email")).toHaveValue("ada@example.com");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-submit-events", "0");
+  await panelPage.close();
+  await fixturePage.close();
+});
+
 test("fills a Lever package independently of Greenhouse DOM assumptions", async () => {
   for (const page of context.pages()) await page.close();
   const fixturePage = await context.newPage();
