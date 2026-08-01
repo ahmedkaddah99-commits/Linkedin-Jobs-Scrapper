@@ -164,12 +164,12 @@ export default function CareerProfilesPage() {
         "/career-profiles",
         {
           method: "POST",
-          body: JSON.stringify({
+          body: {
             name,
             description: form.description.trim(),
             preferred_language: form.preferred_language,
             target_direction: form.target_direction.trim(),
-          }),
+          },
         },
         { rawPath: true }
       );
@@ -177,7 +177,7 @@ export default function CareerProfilesPage() {
       if (form.workspace_id) {
         savedProfile = await request(
           `/career-profiles/${profile.profile_id}/bind`,
-          { method: "POST", body: JSON.stringify({ workspace_id: form.workspace_id }) },
+          { method: "POST", body: { workspace_id: form.workspace_id } },
           { rawPath: true },
         );
       }

@@ -11,7 +11,7 @@
       input, textarea, button { padding: 8px; }
     </style>
   </head>
-  <body data-submit-clicks="0" data-email-events="">
+  <body data-submit-clicks="0" data-email-events="" data-aa201-submit-events="0" data-aa201-request-submit-calls="0" data-aa201-form-submit-calls="0" data-aa201-enter-submissions="0" data-aa201-terminal-clicks="0" data-aa201-terminal-requests="0" data-aa201-success-transitions="0" data-aa201-final-navigation="0">
     <h1>Example Greenhouse application</h1>
     <section aria-label="AA-13 accessibility matrix">
       <iframe id="same-origin-frame" title="Same-origin application section" src="/same-origin-frame.html"></iframe>
@@ -111,6 +111,7 @@
       document.getElementById("application-form").addEventListener("submit", (event) => {
         event.preventDefault();
         body.dataset.submitClicks = String(Number(body.dataset.submitClicks || "0") + 1);
+        body.dataset.aa201SubmitEvents = String(Number(body.dataset.aa201SubmitEvents || "0") + 1);
         body.dataset.runrApplicationSuccess = "true";
       });
       document.getElementById("resume").addEventListener("change", (event) => {
@@ -123,6 +124,44 @@
             event.currentTarget.files[0]?.name || "";
         });
       }
+      // AA-201 disposable fixture instrumentation for final-submit paths.
+      const increment = (key) => { body.dataset[key] = String(Number(body.dataset[key] || "0") + 1); };
+      const originalSubmit = HTMLFormElement.prototype.submit;
+      HTMLFormElement.prototype.submit = function (...args) { increment("aa201FormSubmitCalls"); return originalSubmit.apply(this, args); };
+      const originalRequestSubmit = HTMLFormElement.prototype.requestSubmit;
+      HTMLFormElement.prototype.requestSubmit = function (...args) { increment("aa201RequestSubmitCalls"); return originalRequestSubmit.apply(this, args); };
+      document.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest("button[type=submit], input[type=submit]")) increment("aa201TerminalClicks");
+      }, true);
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && event.target instanceof Element && event.target.closest("form")) increment("aa201EnterSubmissions");
+      }, true);
+      const originalFetch = window.fetch;
+      window.fetch = (...args) => { if (/submit|application/iu.test(String(args[0]))) increment("aa201TerminalRequests"); return originalFetch(...args); };
+      const originalXhrOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (...args) {
+        this.__aa201TerminalRequest = /submit|application/iu.test(String(args[1]));
+        return originalXhrOpen.apply(this, args);
+      };
+      const originalXhrSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function (...args) {
+        if (this.__aa201TerminalRequest) increment("aa201TerminalRequests");
+        return originalXhrSend.apply(this, args);
+      };
+      const successObserver = new MutationObserver(() => {
+        if (body.dataset.runrApplicationSuccess === "true") increment("aa201SuccessTransitions");
+      });
+      successObserver.observe(body, { attributes: true, attributeFilter: ["data-runr-application-success"] });
+      for (const method of ["pushState", "replaceState"]) {
+        const originalHistoryMethod = history[method];
+        history[method] = function (...args) {
+          const before = window.location.href;
+          const result = originalHistoryMethod.apply(this, args);
+          if (window.location.href !== before) increment("aa201FinalNavigation");
+          return result;
+        };
+      }
+      window.addEventListener("beforeunload", () => increment("aa201FinalNavigation"));
     </script>
   </body>
 </html>

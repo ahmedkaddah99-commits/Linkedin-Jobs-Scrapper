@@ -413,6 +413,108 @@ async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayl
   }
 }
 
+type InactiveFixtureSpikeRequest = {
+  type: "AA201_START_INACTIVE_FIXTURE_SPIKE";
+  ats: "greenhouse" | "lever";
+  packageId: string;
+  packageVersion: number;
+  applicationUrl: string;
+  candidate: { firstName?: string; lastName?: string; fullName?: string; email?: string; phone?: string };
+  answers: Array<{ fieldIntent: string; label: string; proposedValue: string }>;
+  document: {
+    documentId: string;
+    documentVersion: number;
+    documentKind: "cv" | "cover_letter" | "supporting_document";
+    fileName: string;
+    mimeType: string;
+    base64Bytes: string;
+  };
+};
+
+type InactiveFixtureSpikeActivation = {
+  type: "AA201_ACTIVATE_INACTIVE_FIXTURE_TAB";
+  tabId: number;
+};
+
+const inactiveSpikeCompletionWaiters = new Map<number, (value: unknown) => void>();
+
+function isInactiveSpikeRequest(value: unknown): value is InactiveFixtureSpikeRequest {
+  return import.meta.env.MODE === "testing" && Boolean(value) && typeof value === "object" &&
+    (value as { type?: unknown }).type === "AA201_START_INACTIVE_FIXTURE_SPIKE";
+}
+
+function isInactiveSpikeActivation(value: unknown): value is InactiveFixtureSpikeActivation {
+  return import.meta.env.MODE === "testing" && Boolean(value) && typeof value === "object" &&
+    (value as { type?: unknown }).type === "AA201_ACTIVATE_INACTIVE_FIXTURE_TAB" &&
+    Number.isInteger((value as { tabId?: unknown }).tabId);
+}
+
+async function waitForFixtureTabReady(tabId: number, applicationUrl: string): Promise<void> {
+  const tabReady = new Promise<void>((resolve, reject) => {
+    const listener = (updatedTabId: number, changeInfo: { status?: string }) => {
+      if (updatedTabId !== tabId || changeInfo.status !== "complete") return;
+      browser.tabs.onUpdated.removeListener(listener);
+      void browser.tabs.get(tabId).then((readyTab) => {
+        if (readyTab.url !== applicationUrl) reject(new Error("AA-201 fixture tab URL changed before readiness."));
+        else resolve();
+      }).catch(reject);
+    };
+    browser.tabs.onUpdated.addListener(listener);
+    void browser.tabs.get(tabId).then((tab) => {
+      if (tab.url && tab.url !== "about:blank" && tab.url !== applicationUrl) {
+        reject(new Error("AA-201 fixture tab URL changed before readiness."));
+        return;
+      }
+      if (tab.status === "complete" && tab.url === applicationUrl) {
+        browser.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }).catch(reject);
+  });
+  await tabReady;
+}
+
+async function runInactiveFixtureSpike(request: InactiveFixtureSpikeRequest): Promise<unknown> {
+  const tab = await browser.tabs.create({ url: request.applicationUrl, active: false });
+  if (tab.id == null) throw new Error("AA-201 could not create a fixture tab.");
+  const tabId = tab.id;
+  await waitForFixtureTabReady(tabId, request.applicationUrl);
+
+  const completion = new Promise<unknown>((resolve) => inactiveSpikeCompletionWaiters.set(tabId, resolve));
+  const ready = await new Promise<unknown>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("AA-201 content-script readiness handshake timed out.")), 10_000);
+    const listener = (message: unknown, sender: { tab?: { id?: number } }) => {
+      if (sender.tab?.id !== tabId || !message || typeof message !== "object" ||
+          (message as { type?: unknown }).type !== "AA201_INACTIVE_FIXTURE_READY") return;
+      clearTimeout(timer);
+      browser.runtime.onMessage.removeListener(listener);
+      resolve(message);
+    };
+    browser.runtime.onMessage.addListener(listener);
+    void browser.scripting.executeScript({ target: { tabId }, files: ["/inactive-fixture-spike.js"] })
+      .catch((error: unknown) => {
+        clearTimeout(timer);
+        browser.runtime.onMessage.removeListener(listener);
+        reject(error);
+      });
+  });
+  const result = await browser.tabs.sendMessage(tabId, {
+    type: "AA201_RUN_INACTIVE_FIXTURE",
+    ats: request.ats,
+    packageId: request.packageId,
+    packageVersion: request.packageVersion,
+    candidate: request.candidate,
+    answers: request.answers,
+    document: request.document,
+  });
+  const reported = await Promise.race([
+    completion,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("AA-201 completion report timed out.")), 10_000)),
+  ]);
+  inactiveSpikeCompletionWaiters.delete(tabId);
+  return { tabId, active: false, ready, response: result, completion: reported };
+}
+
 export default defineBackground(() => {
   void connectionService.initialize().catch(() => {
     console.warn("Runr Assisted Apply could not restrict extension storage access.");
@@ -446,6 +548,25 @@ export default defineBackground(() => {
     message: unknown,
     sender,
   ): Promise<PanelResponse | undefined> => {
+    if (import.meta.env.MODE === "testing" && message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "AA201_INACTIVE_FIXTURE_READY") {
+      return { ok: true };
+    }
+    if (import.meta.env.MODE === "testing" && message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "AA201_INACTIVE_FIXTURE_COMPLETED") {
+      const tabId = sender.tab?.id;
+      if (tabId != null) inactiveSpikeCompletionWaiters.get(tabId)?.(message);
+      return { ok: true };
+    }
+    if (isInactiveSpikeRequest(message)) {
+      return { ok: true, spike: await runInactiveFixtureSpike(message) } as PanelResponse;
+    }
+    if (isInactiveSpikeActivation(message)) {
+      const tab = await browser.tabs.get(message.tabId);
+      if (!tab.url?.startsWith("http://127.0.0.1:4174/")) throw new Error("AA-201 may activate only a locally owned fixture tab.");
+      await browser.tabs.update(message.tabId, { active: true });
+      return { ok: true, tabId: message.tabId, active: true } as PanelResponse;
+    }
     if (isContentRuntimeEvent(message)) {
       const tabId = sender.tab?.id;
       if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
