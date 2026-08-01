@@ -167,7 +167,7 @@ class TestSourceProcessingPipeline(unittest.TestCase):
         self.assertEqual(len(result["evidence"]), 0)
 
     def test_gemini_unavailable_does_not_create_unstructured_evidence(self):
-        with patch(
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}), patch(
             "backend.profiles.gemini_extraction.extract_with_gemini",
             side_effect=RuntimeError("API key not configured"),
         ):
@@ -177,8 +177,49 @@ class TestSourceProcessingPipeline(unittest.TestCase):
             ])
         src = result["sources"][0]
         self.assertEqual(src["status"], SOURCE_STATUS_FAILED)
-        self.assertIn("Gemini structured extraction", src["error"])
+        self.assertIn("AI structured extraction", src["error"])
         self.assertEqual(result["evidence"], [])
+
+    def test_deepseek_fallback_structures_text_when_gemini_is_unavailable(self):
+        deepseek_result = {
+            "text": "Alice\nData Scientist\nBuilt an ML pipeline.",
+            "char_count": 44,
+            "method": "deepseek",
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "confidence": 0.86,
+            "status": "ready",
+            "warnings": [],
+            "pages": [],
+            "layout_sections": [],
+            "experience_details": [{
+                "employer": "Acme",
+                "role": "Data Scientist",
+                "bullets": ["Built an ML pipeline."],
+            }],
+            "evidence_items": [{
+                "text": "Built an ML pipeline.",
+                "evidence_type": "achievement",
+                "inferred_employer": "Acme",
+                "inferred_role": "Data Scientist",
+            }],
+        }
+        with patch(
+            "backend.profiles.gemini_extraction.extract_with_gemini",
+            side_effect=RuntimeError("Gemini quota exhausted"),
+        ), patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
+            return_value=deepseek_result,
+        ):
+            result = process_sources_and_extract_evidence([{
+                "asset_id": "deepseek_1",
+                "file_name": "resume.txt",
+                "file_bytes": b"Alice\nData Scientist\nBuilt an ML pipeline.",
+            }])
+
+        self.assertEqual(result["status"], SOURCE_BATCH_STATUS_COMPLETED)
+        self.assertEqual(result["sources"][0]["provider"], "deepseek")
+        self.assertGreater(len(result["evidence"]), 0)
 
     def test_idempotent_no_duplicate_evidence(self):
         mr = self._mock_gemini_response("Delivered migration project on time.", 0.91)

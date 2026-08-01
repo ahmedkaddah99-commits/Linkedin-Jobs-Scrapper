@@ -267,10 +267,10 @@ def process_sources_and_extract_evidence(
             source_status["char_count"] = record.char_count
             source_status["status"] = record.status
 
-            if record.provider != "gemini":
+            if record.provider not in {"gemini", "deepseek"}:
                 source_status["status"] = SOURCE_STATUS_FAILED
                 source_status["error"] = (
-                    "Gemini structured extraction is temporarily unavailable. "
+                    "AI structured extraction is temporarily unavailable. "
                     "Retry after provider quota or billing is available."
                 )
                 source_results.append(source_status)

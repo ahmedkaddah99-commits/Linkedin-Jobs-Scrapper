@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -133,7 +134,20 @@ def _try_gemini_or_local(
             exc,
         )
 
-    return extract_document_text(file_name, data, allow_ocr=allow_ocr)
+    local_result = extract_document_text(file_name, data, allow_ocr=allow_ocr)
+    local_text = str(local_result.get("text") or "").strip()
+    if local_text and (os.getenv("DEEPSEEK_API_KEY") or "").strip():
+        try:
+            from backend.profiles.deepseek_extraction import extract_with_deepseek
+
+            return extract_with_deepseek(file_name, local_text)
+        except Exception as exc:
+            LOGGER.warning(
+                "DeepSeek text extraction failed for %s (%s); using local extraction.",
+                file_name,
+                exc,
+            )
+    return local_result
 
 
 def run_source_processing_pipeline(
