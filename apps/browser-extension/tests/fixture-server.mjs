@@ -8,6 +8,7 @@ const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const fixturePaths = new Map([
   ["/greenhouse-application.html", join(currentDirectory, "fixtures", "greenhouse-application.html")],
   ["/lever-application.html", join(currentDirectory, "fixtures", "lever-application.html")],
+  ["/reconciliation-application.html", join(currentDirectory, "fixtures", "reconciliation-application.html")],
   ["/runr-web-launch.html", join(currentDirectory, "fixtures", "runr-web-launch.html")],
   ["/same-origin-frame.html", join(currentDirectory, "fixtures", "same-origin-frame.html")],
   ["/cross-origin-frame.html", join(currentDirectory, "fixtures", "cross-origin-frame.html")],
@@ -262,6 +263,7 @@ const server = createServer(async (request, response) => {
           title: "Engineer",
           company: "Acme",
           portal: "greenhouse",
+          url: "http://127.0.0.1:4174/greenhouse-application.html",
           location: "Berlin",
         },
         answers: [],

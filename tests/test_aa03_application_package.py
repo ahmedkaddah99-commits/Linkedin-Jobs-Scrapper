@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend import create_backend
@@ -193,6 +194,44 @@ class ApplicationPackageImmutableTests(unittest.TestCase):
         self.assertEqual(bound.status, APPLICATION_PACKAGE_STATUS_BOUND)
         rebound = service.bind_package(binding_id=launched.launch_tab_binding_id, extension_origin=EXTENSION_ORIGIN)
         self.assertEqual(rebound.status, APPLICATION_PACKAGE_STATUS_BOUND)
+
+    def test_extension_retrieval_requires_bound_package(self):
+        """The extension can retrieve a package only after the launch binding succeeds."""
+        app = self._create_app()
+        service = app._assisted_apply_package_service
+        uid = "user_extension_retrieval"
+        app.upsert_user({"user_id": uid, "email": "retrieve@t.com", "role": "admin", "is_active": True})
+        package = service.create_package(
+            user_id=uid,
+            job={"job_id": "j_retrieve", "title": "Retrieve", "company": "RC", "portal": "greenhouse"},
+        )
+        with patch.object(
+            type(service._connection_service),
+            "authenticate_session",
+            return_value=(SimpleNamespace(user_id=uid), None),
+        ):
+            with self.assertRaises(ApplicationPackageStateError):
+                service.get_package_for_extension(
+                    package_id=package.package_id,
+                    raw_session="session-token",
+                    extension_origin=EXTENSION_ORIGIN,
+                )
+
+            launched = service.launch_package(user_id=uid, package_id=package.package_id)
+            with self.assertRaises(ApplicationPackageStateError):
+                service.get_package_for_extension(
+                    package_id=launched.package_id,
+                    raw_session="session-token",
+                    extension_origin=EXTENSION_ORIGIN,
+                )
+
+            service.bind_package(binding_id=launched.launch_tab_binding_id, extension_origin=EXTENSION_ORIGIN)
+            payload = service.get_package_for_extension(
+                package_id=package.package_id,
+                raw_session="session-token",
+                extension_origin=EXTENSION_ORIGIN,
+            )
+        self.assertEqual(payload["packageId"], package.package_id)
 
     # ---- Fixed document versions ----
 

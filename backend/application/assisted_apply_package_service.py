@@ -395,6 +395,10 @@ class ApplicationPackageService:
             raise ValueError("Application package not found.")
         if package.user_id != user.user_id:
             raise PermissionError("Application package belongs to another user.")
+        if package.status != APPLICATION_PACKAGE_STATUS_BOUND:
+            raise ApplicationPackageStateError(
+                f"Package is {package.status}; only bound packages can be retrieved by the extension."
+            )
         return package.to_extension_payload()
 
     def save_correction_for_extension(

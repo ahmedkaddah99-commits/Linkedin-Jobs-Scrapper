@@ -27,6 +27,7 @@ import {
 import { ExtensionConnectionService } from "../src/auth/connection-service";
 import { assistedApplyRuntimeConfig } from "../src/auth/config";
 import { isExactRunrWebSender, isExactSidePanelSender } from "../src/auth/trusted-sender";
+import { comparableApplicationUrl, preparedApplicationUrlMatches } from "../src/application-url";
 import {
   hasAllOptionalHostPermissions,
   hasPortalPermission,
@@ -242,20 +243,14 @@ async function bindPackageFromApi(
   return response as ApplicationPackagePayload;
 }
 
-function comparableUrl(value: string): string {
-  const parsed = new URL(value);
-  parsed.hash = "";
-  return parsed.href;
-}
-
 async function waitForRunrOpenedApplicationTab(applicationUrl: string): Promise<Browser.tabs.Tab> {
-  const expected = comparableUrl(applicationUrl);
+  const expected = comparableApplicationUrl(applicationUrl);
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const tabs = await browser.tabs.query({});
     const matchingTab = tabs.find((tab) => {
       if (tab.id == null || !tab.url || tab.url.startsWith("chrome-extension://")) return false;
       try {
-        return comparableUrl(tab.url) === expected;
+        return comparableApplicationUrl(tab.url) === expected;
       } catch {
         return false;
       }
@@ -280,6 +275,10 @@ async function bindRunrWebLaunch(
     throw new Error("The opened job page is not a supported Greenhouse or Lever application.");
   }
   const applicationPackage = await bindPackageFromApi(bindingId);
+  const preparedApplicationUrl = (applicationPackage.job as ApplicationPackagePayload["job"] & { url?: unknown }).url;
+  if (!preparedApplicationUrlMatches(preparedApplicationUrl, applicationUrl)) {
+    throw new Error("The opened application URL does not match the prepared Runr package.");
+  }
   if (applicationPackage.job.portal !== ats) {
     throw new Error("The opened application page does not match the prepared Runr package.");
   }

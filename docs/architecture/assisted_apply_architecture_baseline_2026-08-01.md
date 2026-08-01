@@ -1,6 +1,6 @@
 # Assisted Apply Architecture Baseline — 2026-08-01
 
-Status: repository-grounded baseline for AA-200
+Status: frozen repository-grounded architecture record for AA-204
 
 Date: 2026-08-01
 
@@ -29,11 +29,20 @@ authorization/session, application-package launch binding, and one-time
 document grant. They are not one shared TTL, and package status is the
 authoritative lifecycle boundary for most package operations.
 
-**Unresolved:** The package constant `APPLICATION_PACKAGE_TTL_SECONDS` says
-“30 min after launch,” but the current stale-expiry query does not expire a
-bound package by that value. Whether bound packages should remain retrievable
-indefinitely, expire after a separate bound lifetime, or be explicitly consumed
-is a decision for a follow-up ticket; this record does not choose it.
+**AA-204 freeze decision:** `APPLICATION_PACKAGE_BINDING_TTL_SECONDS` is the
+authoritative five-minute pre-bind launch window. After `launched → bound`,
+the package remains retrievable for its authenticated owner while the bound
+package record and extension session remain valid; the named
+`APPLICATION_PACKAGE_TTL_SECONDS` constant is non-authoritative legacy intent
+and is not an enforced post-bind lifetime. This matches the current
+`bind_package`, `get_package_for_extension`, and `expire_stale` behavior.
+
+**Later-ticket amendment required:** a lifecycle-cleanup ticket must either
+remove/rename the unused 30-minute constant or implement a separate bound
+package expiry with migration and tests. Until that ticket is explicitly
+accepted, no implementation may infer a 30-minute post-bind expiry. This is a
+documented product decision, not an unresolved shared-architecture
+contradiction.
 
 ## 1. Web-to-extension connection and external messaging
 
@@ -144,13 +153,27 @@ is a decision for a follow-up ticket; this record does not choose it.
 4. User/ATS navigation and DOM mutation → observer classification: success banner, confirmation/thanks/success path, same-origin URL transition, form submit, or mutation (`possible-success-observer.ts`, `classifyPossibleSuccess`, lines 30–47; `observePossibleSuccess`, lines 55–77).
 5. **Repository-confirmed absent path:** no extension code calls `form.submit()`, `requestSubmit()`, `window.location` assignment, `history.pushState`, `tabs.update`, or an adapter submission API. The observed navigation is therefore user/ATS-owned; this absence is also covered by the manifest/source boundary audit and unit/E2E zero-submit assertions.
 
-## 8. Contradictions and decisions left open
+## 8. AA-204 freeze and later-ticket amendments
 
-- **Contradiction:** package domain constant says 30 minutes after launch, while stale-expiry/retrieval logic does not enforce that lifetime after binding. Evidence: `backend/domain/application_package.py:10`; `backend/application/assisted_apply_package_service.py:151–176, 381–398`.
-- **Unresolved:** whether a bound package is intentionally reusable until explicit consumption, should expire at a separate deadline, or should be revoked on tab/session conditions.
-- **Unresolved:** whether tailored CV generation should gain explicit source experience/bullet identity fields before Assisted Apply treats tailored artifacts as provenance-safe.
-- **Unresolved:** whether production permission requests are always invoked synchronously from a visible user gesture; repository tests do not prove this browser-level condition.
-- **Proposed:** add a follow-up evidence ticket that defines bound-package expiry semantics and adds a state-transition test for retrieval before/after that boundary; do not infer the desired policy from the unused constant.
+**Frozen decisions:**
+
+- The five-minute binding TTL governs only `launched → bound`; bound-package retrieval remains available to the authenticated owner while the bound record and session remain valid. The unused 30-minute constant is legacy intent, not an active bound-package expiry.
+- Message ownership remains exact-origin/exact-runtime: web launch through `isExactRunrWebSender` and `isRunrWebLaunchRequest`; side panel through `isExactSidePanelSender`; content events through runtime ID, tab ID, frame, and package/version/adapter checks.
+- Optional ATS permissions remain user-triggered and limited to Greenhouse/Lever. Workday permissions are not implied.
+- Backend owns durable package/session/grant/outcome state; extension `storage.session` owns transient tab execution state. Restart requires explicit retry.
+- The persisted immutable package `job.url` is the canonical retry source.
+- Adapters propose declarative work; the centralized executor owns approved mutations/uploads and any future independently validated intermediate navigation. Final submission is absent from the action protocol and adapter interface.
+- AA-202 rules are frozen as a proof boundary: deterministic visible-field matching, unique update, add only with no plausible match, ambiguity → review, never delete unmatched entries. It is not production repeater behavior.
+- Greenhouse and Lever are the MVP production scope. Workday remains AA-203 discovery-only.
+
+**Later-ticket amendments, not blockers:**
+
+1. Lifecycle cleanup must remove/rename the unused 30-minute constant or implement a separately approved bound expiry with migration and state-transition tests.
+2. Any intermediate-navigation implementation must add adapter proposals plus independent navigation-controller validation and same-tab/package ownership tests; it must not add final submission.
+3. Production repeatable sections require DOM identity/readback tests beyond the AA-202 pure planner.
+4. Workday requires a controlled discovery gate before permissions, an adapter, or production executor changes.
+
+**Remaining evidence gaps, explicitly non-safety:** tailored CV per-bullet source-ID propagation, browser-level gesture provenance after asynchronous hops, and live-provider DOM drift. These do not contradict the frozen no-submit, ownership, permission, or state boundaries; they remain scoped follow-up evidence.
 
 ## 9. Verification run for AA-200
 
