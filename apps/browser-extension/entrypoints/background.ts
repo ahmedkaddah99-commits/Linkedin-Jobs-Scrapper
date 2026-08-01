@@ -228,12 +228,7 @@ async function fetchPackageFromApi(
   }
   const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
   const sessionToken = await currentSessionToken();
-  const response = await api.request(
-    `/assisted-apply/extension/packages?package_id=${encodeURIComponent(packageId)}`,
-    "GET",
-    undefined,
-    sessionToken,
-  );
+  const response = await api.getApplicationPackage(sessionToken, packageId);
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw new Error("Runr returned an invalid application package.");
   }

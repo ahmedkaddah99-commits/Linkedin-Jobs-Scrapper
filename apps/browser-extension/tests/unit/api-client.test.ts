@@ -27,6 +27,7 @@ describe("fixed Runr Assisted Apply API client", () => {
       code_verifier: "verifier",
     });
     await api.getSession("session-secret");
+    await api.getApplicationPackage("session-secret", "package_123");
     await api.updatePreferences("session-secret", {
       permit_sensitive_autofill: true,
       permit_demographic_autofill: false,
@@ -36,6 +37,7 @@ describe("fixed Runr Assisted Apply API client", () => {
       "https://api.userunr.com/v1/assisted-apply/extension/connection-requests",
       "https://api.userunr.com/v1/assisted-apply/extension/token",
       "https://api.userunr.com/v1/assisted-apply/extension/session/verify",
+      "https://api.userunr.com/v1/assisted-apply/extension/packages",
       "https://api.userunr.com/v1/assisted-apply/extension/preferences",
     ]);
     const publicHeaders = fetchPort.mock.calls.slice(0, 2).map(([, init]) => new Headers(init?.headers));
@@ -47,6 +49,10 @@ describe("fixed Runr Assisted Apply API client", () => {
       expect(init).toMatchObject({ cache: "no-store", credentials: "omit", redirect: "error" });
     }
     expect(fetchPort.mock.calls[2]?.[1]).toMatchObject({ method: "POST", body: "{}" });
+    expect(fetchPort.mock.calls[3]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ package_id: "package_123" }),
+    });
   });
 
   it("accepts HTTP only for explicit loopback testing", () => {

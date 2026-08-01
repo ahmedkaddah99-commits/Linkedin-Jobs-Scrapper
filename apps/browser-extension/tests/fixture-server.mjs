@@ -245,6 +245,44 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === "/assisted-apply/extension/packages" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      const payload = await readJson(request);
+      if (payload.package_id !== "aapkg_fixture_web_launch") {
+        json(response, 403, { error: { code: "forbidden", message: "Package rejected." } }, origin);
+        return;
+      }
+      json(
+        response,
+        200,
+        {
+          packageId: "aapkg_fixture_web_launch",
+          jobId: "job_fixture_web_launch",
+          version: 1,
+          schemaVersion: 1,
+          job: {
+            jobId: "job_fixture_web_launch",
+            title: "Engineer",
+            company: "Acme",
+            portal: "greenhouse",
+            url: "http://127.0.0.1:4174/greenhouse-application.html",
+            location: "Berlin",
+          },
+          answers: [],
+          documents: [],
+          warnings: [],
+          policy: {
+            permitSensitiveAutofill: false,
+            permitDemographicAutofill: false,
+            requireLegalAnswerConfirmation: true,
+          },
+        },
+        origin,
+      );
+      return;
+    }
+
     if (url.pathname === "/assisted-apply/extension/packages/bind" && request.method === "POST") {
       const record = activeRecord(request, response, origin);
       if (!record) return;

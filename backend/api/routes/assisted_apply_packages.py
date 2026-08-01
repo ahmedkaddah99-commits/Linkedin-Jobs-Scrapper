@@ -64,6 +64,13 @@ def register_routes(registry: RouteRegistry) -> None:
     )
     registry.exact(
         "POST",
+        ("assisted-apply", "extension", "packages"),
+        _get_package_for_extension_post,
+        auth_required=False,
+        name="assisted_apply.extension.packages.post",
+    )
+    registry.exact(
+        "POST",
         ("assisted-apply", "extension", "document-grants"),
         _create_document_grant,
         auth_required=False,
@@ -333,6 +340,23 @@ def _get_package_for_extension(context: ApiRouteContext) -> None:
     ).strip()
     if not package_id:
         raise ValueError("package_id query parameter is required.")
+    _send_package_for_extension(context, package_id)
+
+
+def _get_package_for_extension_post(context: ApiRouteContext) -> None:
+    _authenticate_extension_session(context)
+    payload = _read_strict_object(
+        context,
+        allowed_keys={"package_id"},
+        label="application package lookup",
+    )
+    package_id = str(payload.get("package_id") or "").strip()
+    if not package_id:
+        raise ValueError("package_id is required.")
+    _send_package_for_extension(context, package_id)
+
+
+def _send_package_for_extension(context: ApiRouteContext, package_id: str) -> None:
     payload = context.application.get_application_package_for_extension(
         package_id=package_id,
         raw_session=context.bearer_token(),

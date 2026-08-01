@@ -133,6 +133,18 @@ export class RunrAssistedApplyApi implements AssistedApplyApiPort {
     return this.request(SESSION_VERIFY_PATH, "POST", {}, sessionToken);
   }
 
+  getApplicationPackage(sessionToken: string, packageId: string): Promise<unknown> {
+    // A body-bearing POST preserves Chrome's extension Origin. A privileged
+    // extension GET may omit Origin, which is required for origin-bound
+    // package authorization on the API.
+    return this.request(
+      "/assisted-apply/extension/packages",
+      "POST",
+      { package_id: packageId },
+      sessionToken,
+    );
+  }
+
   async deleteSession(sessionToken: string): Promise<void> {
     await this.request(SESSION_PATH, "DELETE", undefined, sessionToken);
   }
