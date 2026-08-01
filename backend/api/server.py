@@ -5006,14 +5006,27 @@ def _document_type_for_asset_kind(asset_kind: str) -> str:
         return "Tailored CV"
     if normalized_kind in {"cover_letter", "motivation_letter"}:
         return "Cover letter"
+    labels = {
+        "cover_letter": "Cover Letter / Motivation Letter",
+        "degree_diploma": "Degree / Diploma",
+        "academic_transcript": "Academic Transcript",
+        "certification": "Certification",
+        "language_certificate": "Language Certificate",
+        "employment_certificate": "Employment Certificate / Arbeitszeugnis",
+        "recommendation_letter": "Recommendation Letter",
+        "portfolio_work_sample": "Portfolio / Work Sample",
+        "other_supporting_document": "Other Supporting Document",
+        "uploaded_document": "Other Supporting Document",
+        "identity_work_authorization": "Identity / Work Authorization",
+    }
+    if normalized_kind in labels:
+        return labels[normalized_kind]
     if normalized_kind == "recommendation_letter":
         return "Recommendation letter"
     if "transcript" in normalized_kind:
         return "Transcript"
     if "certificate" in normalized_kind or "certification" in normalized_kind:
         return "Certificate"
-    if normalized_kind == "uploaded_document":
-        return "Supporting document"
     return "Other"
 
 

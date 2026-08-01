@@ -18,6 +18,18 @@ PHASE0_CONTRACT_VERSION = "2026-04-20"
 
 WORKSPACE_CONFIGURATION_V2_SCHEMA = "workspace_configuration_v2"
 CANDIDATE_ASSET_DESCRIPTOR_SCHEMA = "candidate_asset_descriptor_v1"
+
+# Stable values for reusable Career Assets. ``uploaded_document`` is retained
+# as the legacy value for previously stored "Supporting Document" assets.
+CAREER_ASSET_KINDS = (
+    "workspace_cv", "cover_letter", "degree_diploma", "academic_transcript",
+    "certification", "language_certificate", "employment_certificate",
+    "recommendation_letter", "portfolio_work_sample", "other_supporting_document",
+    "identity_work_authorization",
+)
+CAREER_ASSET_PURPOSES = (
+    "extract_career_facts", "include_in_applications", "evidence_only", "private_never_attach",
+)
 REJECTED_JOB_REVIEW_SCHEMA = "rejected_job_review_v1"
 MAIL_CONNECTION_CONTRACT_SCHEMA = "mail_connection_contract_v1"
 REFERRAL_RELATIONSHIP_SCHEMA = "referral_relationship_v1"
@@ -828,6 +840,7 @@ def default_candidate_asset_descriptor() -> dict[str, Any]:
                 "warnings": [],
                 "extracted_at": "",
             },
+            "purposes": ["extract_career_facts", "include_in_applications", "evidence_only"],
         },
     }
 
@@ -854,6 +867,14 @@ def normalize_candidate_asset_descriptor(payload: Mapping[str, Any] | None) -> d
     contract["file"]["mime_type"] = _clean_text(raw.get("mime_type") or raw.get("content_type") or raw_file.get("mime_type"))
     contract["file"]["extension"] = _clean_text(raw.get("extension") or raw.get("file_extension") or raw_file.get("extension"))
     metadata = dict(raw.get("metadata") or {})
+    purposes = raw.get("purposes") or metadata.get("purposes")
+    if isinstance(purposes, (list, tuple)):
+        contract["metadata"]["purposes"] = [
+            str(item).strip().lower() for item in purposes
+            if str(item).strip().lower() in CAREER_ASSET_PURPOSES
+        ]
+    if not contract["metadata"]["purposes"]:
+        contract["metadata"]["purposes"] = ["extract_career_facts", "include_in_applications", "evidence_only"]
     contract["metadata"]["job_id"] = _clean_text(raw.get("job_id") or metadata.get("job_id"))
     contract["metadata"]["created_at"] = _clean_text(raw.get("created_at") or metadata.get("created_at"))
     contract["metadata"]["tags"] = _clean_tag_list(raw.get("tags") or metadata.get("tags"), limit=20)
@@ -908,6 +929,7 @@ def build_candidate_asset_contract() -> dict[str, Any]:
             "recommendation_letter",
             "uploaded_document",
             "bundle_export",
+            *CAREER_ASSET_KINDS,
         ],
     }
 

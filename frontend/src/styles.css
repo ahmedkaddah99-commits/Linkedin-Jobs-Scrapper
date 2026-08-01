@@ -36,6 +36,23 @@ body {
   box-sizing: border-box;
 }
 
+/* Keep native select text inside its own region instead of allowing it to
+   collide with the platform-rendered arrow at compressed/wide breakpoints. */
+.career-assets-select {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding-inline-end: 3.25rem !important;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .career-assets-select {
+    padding-inline-end: 3rem !important;
+  }
+}
+
 html.dark body {
   background: #07111f;
   color: #e6eefc;

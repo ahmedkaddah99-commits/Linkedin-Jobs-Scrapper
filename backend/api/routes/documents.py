@@ -4,6 +4,7 @@ from __future__ import annotations
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
 from backend.capabilities.source_processing.extraction import process_source_bytes
+from backend.domain.phase0_contracts import CAREER_ASSET_KINDS, CAREER_ASSET_PURPOSES
 
 
 # Documents, uploads, exports, CV preview, and ATS export gate.
@@ -149,15 +150,26 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         if not file_bytes:
                             raise ValueError("No file found in multipart body. Ensure the form field has a filename.")
                         asset_kind = str((query.get("asset_kind") or ["uploaded_document"])[0]).strip().lower() or "uploaded_document"
+                        if asset_kind == "supporting_document":
+                            asset_kind = "uploaded_document"
                         if asset_kind in {"master_career_profile", "motivation_letter"}:
                             raise ValueError(
                                 "This legacy asset type can no longer be uploaded. "
-                                "Use Baseline CV, Supporting Document, Certification, or Recommendation Letter."
+                                "Use one of the supported Career Asset document types."
                             )
+                        if asset_kind not in set(CAREER_ASSET_KINDS) | {"uploaded_document"}:
+                            raise ValueError("Unsupported Career Asset type.")
                         workspace_id = str((query.get("workspace_id") or [""])[0]).strip()
                         if workspace_id and not application.user_can_access_workspace(user, workspace_id):
                             raise PermissionError(f"Workspace access denied for '{workspace_id}'.")
                         display_name = str((query.get("display_name") or [filename])[0]).strip() or filename
+                        purposes = [item.strip().lower() for item in str((query.get("purposes") or [""])[0]).split(",") if item.strip().lower() in CAREER_ASSET_PURPOSES]
+                        if not purposes:
+                            purposes = ["extract_career_facts", "evidence_only"]
+                        if asset_kind == "identity_work_authorization":
+                            purposes = [item for item in purposes if item != "include_in_applications"]
+                            if "private_never_attach" not in purposes:
+                                purposes.append("private_never_attach")
                         tags = [asset_kind]
                         is_cv_asset = asset_kind == "workspace_cv"
                         suffix = Path(filename or "").suffix.lower()
@@ -188,6 +200,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             if hasattr(document_extraction, 'to_dict'):
                                 document_extraction = document_extraction.to_dict()
                             asset_metadata = extraction_metadata(document_extraction)
+                        asset_metadata["purposes"] = purposes
                         if is_cv_asset:
                             cv_text = str(document_extraction.get("text") or "")
                             if not cv_text:

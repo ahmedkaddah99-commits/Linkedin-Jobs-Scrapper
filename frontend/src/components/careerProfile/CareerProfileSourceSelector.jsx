@@ -45,9 +45,10 @@ export default function CareerProfileSourceSelector({
     () =>
       allDocuments.filter((item) => {
         const assetKind = String(item.asset_kind || "").trim().toLowerCase();
+        const sourceOrigin = String(item.source_origin || "").trim().toLowerCase();
         return (
           CAREER_ASSET_KINDS.has(assetKind) &&
-          String(item.source_origin || "") === "upload"
+          (assetKind === "workspace_cv" || sourceOrigin === "upload")
         );
       }),
     [allDocuments],

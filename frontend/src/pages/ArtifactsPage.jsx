@@ -13,7 +13,7 @@ import { formatDateTime, labelize, statusTone } from "../lib/formatters";
 const VIEW_LIBRARY = "library";
 const VIEW_MEMORY = "memory";
 const LEGACY_VIEW_CANVAS = "canvas";
-const DEFAULT_UPLOAD_KIND = "uploaded_document";
+const DEFAULT_UPLOAD_KIND = "other_supporting_document";
 const DOCUMENTS_REQUEST_TIMEOUT_MS = 60000;
 const MASTER_CAREER_PROFILE_KIND = "master_career_profile";
 const LEGACY_GENERAL_ASSET_KINDS = new Set([
@@ -27,6 +27,8 @@ const CAREER_ASSET_KINDS = new Set([
   "certification",
   "recommendation_letter",
   "motivation_letter",
+  "cover_letter", "degree_diploma", "academic_transcript", "language_certificate",
+  "employment_certificate", "portfolio_work_sample", "other_supporting_document", "identity_work_authorization",
 ]);
 const MEMORY_DEFAULTS = buildCareerMemoryDraft({});
 
@@ -40,9 +42,23 @@ function normalizeViewParam(value) {
 
 const UPLOAD_KIND_OPTIONS = [
   { value: "workspace_cv", label: "Baseline CV" },
-  { value: "uploaded_document", label: "Supporting Document" },
+  { value: "cover_letter", label: "Cover Letter / Motivation Letter" },
+  { value: "degree_diploma", label: "Degree / Diploma" },
+  { value: "academic_transcript", label: "Academic Transcript" },
   { value: "certification", label: "Certification" },
+  { value: "language_certificate", label: "Language Certificate" },
+  { value: "employment_certificate", label: "Employment Certificate / Arbeitszeugnis" },
   { value: "recommendation_letter", label: "Recommendation Letter" },
+  { value: "portfolio_work_sample", label: "Portfolio / Work Sample" },
+  { value: "other_supporting_document", label: "Other Supporting Document" },
+  { value: "identity_work_authorization", label: "Identity / Work Authorization" },
+];
+
+const PURPOSE_OPTIONS = [
+  ["extract_career_facts", "Extract career facts"],
+  ["include_in_applications", "Include in applications"],
+  ["evidence_only", "Evidence only"],
+  ["private_never_attach", "Private / never attach automatically"],
 ];
 
 function matchesQuery(values, search) {
@@ -70,7 +86,7 @@ function FilterSelect({ children, className = "", onChange, value }) {
   return (
     <select
       className={[
-        "rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-4 py-2.5 text-sm text-on-surface",
+        "career-assets-select rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-4 py-2.5 text-sm text-on-surface",
         className,
       ].join(" ")}
       onChange={onChange}
@@ -101,7 +117,9 @@ function assetKindLabel(assetKind) {
   const normalized = String(assetKind || "").trim().toLowerCase();
   if (normalized === "workspace_cv") return "Baseline CV";
   if (normalized === MASTER_CAREER_PROFILE_KIND) return "Legacy Master Career Profile";
-  if (normalized === "uploaded_document") return "Supporting Document";
+  if (normalized === "uploaded_document" || normalized === "other_supporting_document") return "Other Supporting Document";
+  const option = UPLOAD_KIND_OPTIONS.find((item) => item.value === normalized);
+  if (option) return option.label;
   if (normalized === "recommendation_letter") return "Recommendation Letter";
   if (normalized === "motivation_letter") return "Legacy Motivation Letter";
   return labelize(assetKind);
@@ -135,6 +153,7 @@ export default function DocumentsPage() {
   const [uploadForm, setUploadForm] = useState({
     assetKind: DEFAULT_UPLOAD_KIND,
     workspaceId: "",
+    purposes: ["extract_career_facts", "evidence_only"],
   });
   const [exportState, setExportState] = useState({
     exporting: false,
@@ -247,16 +266,8 @@ export default function DocumentsPage() {
   );
   const documentKindOptions = useMemo(
     () =>
-      Array.from(
-        new Map(
-          assetDocuments
-            .filter((item) => !LEGACY_GENERAL_ASSET_KINDS.has(String(item.asset_kind || "").trim().toLowerCase()))
-            .map((item) => [
-              String(item.asset_kind || ""),
-              assetKindLabel(item.asset_kind || item.document_type),
-            ]),
-        ).entries(),
-      ).map(([value, label]) => ({ value, label })),
+      UPLOAD_KIND_OPTIONS.concat([{ value: "uploaded_document", label: "Other Supporting Document" }])
+        .filter((option, index, options) => options.findIndex((item) => item.value === option.value) === index),
     [assetDocuments],
   );
   const filteredDocuments = useMemo(
@@ -416,6 +427,7 @@ export default function DocumentsPage() {
       if (uploadForm.workspaceId) {
         params.set("workspace_id", uploadForm.workspaceId);
       }
+      params.set("purposes", uploadForm.purposes.join(","));
       const response = await request(`/documents/upload?${params.toString()}`, {
         method: "POST",
         body: formData,
@@ -587,6 +599,19 @@ export default function DocumentsPage() {
                     ))}
                   </FilterSelect>
                 </label>
+
+                <fieldset className="grid gap-2 lg:col-span-2">
+                  <legend className="text-sm font-semibold text-on-surface">Purpose</legend>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {PURPOSE_OPTIONS.map(([value, label]) => (
+                      <label key={value} className="flex items-center gap-2 text-sm text-on-surface-variant">
+                        <input type="checkbox" checked={uploadForm.purposes.includes(value)} onChange={() => setUploadForm((current) => ({ ...current, purposes: current.purposes.includes(value) ? current.purposes.filter((item) => item !== value) : [...current.purposes, value] }))} />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                  {uploadForm.assetKind === "identity_work_authorization" ? <p className="text-sm text-amber-700">Privacy warning: identity and work-authorization documents are sensitive and will never be attached automatically.</p> : null}
+                </fieldset>
 
                 <label className="grid gap-2 lg:grid-cols-[max-content_minmax(0,1fr)] lg:items-center lg:gap-4">
                   <span className="text-sm font-semibold text-on-surface">

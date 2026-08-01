@@ -202,12 +202,23 @@ def _selected_candidate_documents(user: Any, document_ids: object) -> list[dict[
         "uploaded_document": "supporting_document",
         "certification": "supporting_document",
         "recommendation_letter": "supporting_document",
+        "degree_diploma": "supporting_document",
+        "academic_transcript": "supporting_document",
+        "language_certificate": "supporting_document",
+        "employment_certificate": "supporting_document",
+        "portfolio_work_sample": "supporting_document",
+        "other_supporting_document": "supporting_document",
     }
     for document_id in requested:
         asset_id = document_id.removeprefix("asset::")
         asset = assets.get(asset_id)
         if asset is None:
             raise PermissionError("A selected document is not available in your Runr library.")
+        if str(asset.get("asset_kind") or "").strip().casefold() == "identity_work_authorization":
+            raise ValueError("Identity / Work Authorization documents cannot be attached automatically.")
+        purposes = set(dict(asset.get("metadata") or {}).get("purposes") or [])
+        if "private_never_attach" in purposes or "include_in_applications" not in purposes:
+            raise ValueError("This Career Asset is not approved for application inclusion.")
         file_payload = dict(asset.get("file") or {})
         metadata = dict(asset.get("metadata") or {})
         object_key = str(file_payload.get("object_key") or "").strip()
