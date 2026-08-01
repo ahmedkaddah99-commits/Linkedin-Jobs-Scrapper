@@ -1204,6 +1204,81 @@ export class LeverAdapter extends StandardFactsAdapter {
   constructor() { super("lever"); }
 }
 
+/** AA-220: Lever planning is inspect/plan only; execution stays centralized. */
+export interface LeverApplicationPlan {
+  schemaVersion: 1;
+  adapter: "lever";
+  actions: import("./declarative-actions").DeclarativeAction[];
+  unresolved: string[];
+  manualReasons: ManualReason[];
+  stopsAtReview: boolean;
+}
+
+export async function planLeverApplication(
+  document: Document,
+  url: string,
+  applicationPackage: ApplicationPackage,
+): Promise<LeverApplicationPlan> {
+  const adapter = new LeverAdapter();
+  const detection = await adapter.detect({ document, url });
+  if (detection.ats !== "lever") {
+    return {
+      schemaVersion: 1,
+      adapter: "lever",
+      actions: [],
+      unresolved: ["The inspected page is not a confirmed Lever application."],
+      manualReasons: [],
+      stopsAtReview: true,
+    };
+  }
+
+  const form = await adapter.inspect({ document, url });
+  const matches = await adapter.match(form, applicationPackage);
+  const fieldsById = new Map(form.fields.map((field) => [field.id, field]));
+  const sensitive = (label: string): boolean =>
+    /work authorization|sponsorship|veteran|disability|demographic/iu.test(label);
+  const actions = matches.flatMap((match) => {
+    if (match.action !== "fill" || sensitive(match.fieldLabel)) return [];
+    const existing = fieldsById.get(match.detectedFieldId)?.existingValue;
+    const hasExistingValue = typeof existing === "string"
+      ? existing.trim().length > 0
+      : existing === true;
+    if (hasExistingValue) return [];
+    const action = adapter.plan({
+      ...match,
+      action: "fill",
+      proposedValue: String(match.proposedValue ?? ""),
+    });
+    return action ? [action] : [];
+  });
+  const manualReasons = Array.from(
+    new Set(
+      form.fields
+        .map((field) => field.manualReason)
+        .filter((reason): reason is ManualReason => Boolean(reason)),
+    ),
+  );
+  const unresolved = matches
+    .filter((match) => {
+      if (match.action !== "fill" || sensitive(match.fieldLabel)) return true;
+      const existing = fieldsById.get(match.detectedFieldId)?.existingValue;
+      return typeof existing === "string" ? existing.trim().length > 0 : existing === true;
+    })
+    .map((match) => `${match.fieldLabel}: ${match.reasons[0] || "manual review required"}`);
+  if (!form.fields.some((field) => /experience|education/iu.test(field.normalizedLabel))) {
+    unresolved.push("Lever repeatable experience/education controls are not present in the approved fixture.");
+  }
+
+  return {
+    schemaVersion: 1,
+    adapter: "lever",
+    actions,
+    unresolved,
+    manualReasons,
+    stopsAtReview: manualReasons.includes("final_submission"),
+  };
+}
+
 function documentRolePattern(kind: DocumentUploadRequest["documentKind"]): RegExp {
   if (kind === "cv") return /(^|\b)(cv|resume|résumé)(\b|$)/iu;
   if (kind === "cover_letter") return /(^|\b)cover\s+letter(\b|$)/iu;

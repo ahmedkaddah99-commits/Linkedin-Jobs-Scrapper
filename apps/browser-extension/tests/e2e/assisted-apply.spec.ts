@@ -306,6 +306,54 @@ test("fills a Lever package independently of Greenhouse DOM assumptions", async 
   await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
 });
 
+test("AA-220 stops Lever preparation at review across rerun and reload", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/lever-application.html");
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const applicationPackage = {
+    packageId: "aa220-lever-review-boundary",
+    jobId: "aa220-lever-job",
+    version: 1,
+    schemaVersion: 1,
+    job: { jobId: "aa220-lever-job", title: "Engineer", company: "Acme", portal: "lever", location: "Berlin" },
+    answers: [
+      ["candidate.full_name", "Full name", "Ada Lovelace"],
+      ["candidate.email", "Email", "ada@example.com"],
+      ["application.work_authorization", "Work authorization", "Yes"],
+    ].map(([fieldIntent, label, proposedValue]) => ({
+      fieldIntent, label, proposedValue, source: "profile_verified",
+      sensitivity: label === "Work authorization" ? "legal" : "standard",
+      scope: "application", confidence: 1, requiresReview: false, reasons: ["Sanitized fixture value."],
+    })),
+    documents: [], warnings: [],
+    policy: { permitSensitiveAutofill: true, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+  };
+  const run = () => panelPage.evaluate((pkg) => chrome.runtime.sendMessage({
+    type: "RUN_LEVER_APPLICATION_PACKAGE", package: pkg,
+  }), applicationPackage) as Promise<{ ok: boolean; packageExecution: { executions: Array<{ fieldLabel: string; status: string }> } }>;
+
+  const first = await run();
+  expect(first.ok).toBe(true);
+  expect(first.packageExecution.executions.map((item) => item.fieldLabel)).toEqual(["Full name", "Email"]);
+  await expect(fixturePage.locator('input[name="name"]')).toHaveValue("Ada Lovelace");
+  await expect(fixturePage.locator('input[name="email"]')).toHaveValue("ada@example.com");
+  await expect(fixturePage.locator("#lever-work-yes")).not.toBeChecked();
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+
+  await fixturePage.reload();
+  const second = await run();
+  expect(second.ok).toBe(true);
+  expect(second.packageExecution.executions).toHaveLength(2);
+  await expect(fixturePage.locator('input[name="name"]')).toHaveValue("Ada Lovelace");
+  await expect(fixturePage.locator('input[name="email"]')).toHaveValue("ada@example.com");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-submit-events", "0");
+  await panelPage.close();
+  await fixturePage.close();
+});
+
 test("fills and verifies mixed native controls on Greenhouse and Lever", async () => {
   for (const portal of ["greenhouse", "lever"] as const) {
     for (const page of context.pages()) await page.close();
