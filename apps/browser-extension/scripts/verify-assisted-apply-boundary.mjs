@@ -3,6 +3,7 @@ import path from "node:path";
 
 const root = path.resolve("../../packages/ats-core/src");
 const forbidden = [
+  /(?:adapter|greenhouse|lever)\.fill\s*\(/u,
   /\.click\s*\(/u,
   /requestSubmit\s*\(/u,
   /\.submit\s*\(/u,

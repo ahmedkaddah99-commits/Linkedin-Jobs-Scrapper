@@ -179,7 +179,6 @@ export interface AtsAdapter {
     applicationPackage: ApplicationPackage,
   ): Promise<FieldMatch[]>;
   plan(match: ApprovedFieldMatch): NativeValueAction | null;
-  fill(match: ApprovedFieldMatch): Promise<FieldExecutionResult>;
   authorizeReplacement(detectedFieldId: string): void;
   upload(request: DocumentUploadRequest): Promise<DocumentUploadResult>;
   validate(form: InspectedApplicationForm): Promise<FormValidationResult>;
@@ -193,7 +192,6 @@ export const ATS_ADAPTER_CAPABILITIES = [
   "inspect",
   "match",
   "plan",
-  "fill",
   "authorizeReplacement",
   "upload",
   "validate",
@@ -629,7 +627,7 @@ function manualActionReason(reason: ManualReason): string {
   return `The control is manual-only: ${reason}.`;
 }
 
-class StandardFactsAdapter implements AtsAdapter {
+export class StandardFactsAdapter implements AtsAdapter {
   readonly version = "0.3.0";
   protected readonly controls = new Map<
     string,
@@ -721,6 +719,18 @@ class StandardFactsAdapter implements AtsAdapter {
     return planFillAction(registered.field, match.proposedValue);
   }
 
+  /**
+   * Exposes the inspected target to the centralized executor only. Adapters
+   * may inspect and plan; they do not own the mutation boundary.
+   */
+  executionTarget(fieldId: string): { element: Element; field: DetectedField } | null {
+    return this.controls.get(fieldId) || null;
+  }
+
+  consumeReplacementAuthorization(fieldId: string): boolean {
+    return this.replacementAuthorizations.delete(fieldId);
+  }
+
   async match(
     form: InspectedApplicationForm,
     applicationPackage: ApplicationPackage,
@@ -788,6 +798,10 @@ class StandardFactsAdapter implements AtsAdapter {
   }
 
   async fill(match: ApprovedFieldMatch): Promise<FieldExecutionResult> {
+    // Compatibility shim for older in-process callers. All mutation is owned
+    // by executeApprovedField; adapters only inspect and plan.
+    return executeApprovedField(this, match);
+    /* istanbul ignore next -- retained only as unreachable legacy source during migration.
     const registered = this.controls.get(match.detectedFieldId);
     if (!registered) {
       return {
@@ -1029,6 +1043,8 @@ class StandardFactsAdapter implements AtsAdapter {
     };
   }
 
+    */
+  }
   canReceiveDocument(fieldId: string): boolean {
     const control = this.controls.get(fieldId)?.element;
     return isInput(control) && control.type === "file" &&
@@ -1113,6 +1129,174 @@ class StandardFactsAdapter implements AtsAdapter {
 
 export class GreenhouseAdapter extends StandardFactsAdapter {
   constructor() { super("greenhouse"); }
+}
+
+/**
+ * The only supported mutation entry point for adapter-planned field actions.
+ * The adapter supplies an inspected target and a declarative action; this
+ * executor performs the write, readback, validation, and sanitized result.
+ */
+export async function executeApprovedField(
+  adapter: StandardFactsAdapter,
+  match: ApprovedFieldMatch,
+): Promise<FieldExecutionResult> {
+  const target = adapter.executionTarget(match.detectedFieldId);
+  if (!target || !target.element.isConnected) {
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      status: "rejected",
+      reasons: ["The inspected control is no longer registered or connected."],
+    };
+  }
+  const control = target.element;
+  const field = target.field;
+  const supportedControl = isInput(control) || isTextarea(control) || isSelect(control);
+  const disabled = supportedControl && control.disabled;
+  if (field.classification !== "fillable" || field.manualReason || !supportedControl || disabled || isHidden(control)) {
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      status: "rejected",
+      reasons: [field.manualReason ? `The inspected control is manual-only: ${field.manualReason}.` : "The inspected control is unsupported, hidden, or disabled."],
+    };
+  }
+  const liveNormalizedLabel = normalizeLabel(controlLabel(control, queryRoot(control)));
+  const liveManualReason = manualReason(control, liveNormalizedLabel);
+  if (fieldType(control) !== field.type || liveNormalizedLabel !== field.normalizedLabel || liveManualReason) {
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      status: "rejected",
+      reasons: [liveManualReason ? `The live control became manual-only: ${liveManualReason}.` : "Only an unchanged, semantically verified control can execute."],
+    };
+  }
+  const action = adapter.plan(match);
+  if (!action) {
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      status: "rejected",
+      reasons: ["The inspected adapter could not express this match as a declarative action."],
+    };
+  }
+  const desiredValue = isInput(control) && control.type === "checkbox"
+    ? String(booleanValue(match.proposedValue))
+    : isInput(control) && control.type === "radio" ? "true" : match.proposedValue;
+  const currentValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
+    ? String(control.checked) : control.value;
+  const replacementAuthorized = adapter.consumeReplacementAuthorization(match.detectedFieldId);
+  const ledger = fillLedger(control.ownerDocument);
+  const priorFill = ledger.get(match.detectedFieldId);
+  if (priorFill && !replacementAuthorized) {
+    const alreadyFilled = currentValue === desiredValue;
+    if (alreadyFilled || priorFill.userModified || priorFill.element === control) {
+      return {
+        detectedFieldId: match.detectedFieldId,
+        fieldLabel: match.fieldLabel,
+        fieldIntent: match.fieldIntent,
+        status: alreadyFilled ? "already_filled" : "preserved_existing",
+        existingValue: field.existingValue == null ? "" : String(field.existingValue),
+        acceptedValue: currentValue,
+        reasons: [alreadyFilled ? "The verified value is already present." : "The current user or portal value was preserved."],
+      };
+    }
+  }
+  if (control.dataset.runrAssistedApplyFilled === "true" && !replacementAuthorized) {
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      fieldIntent: match.fieldIntent,
+      status: currentValue === desiredValue ? "already_filled" : "preserved_existing",
+      existingValue: field.existingValue == null ? "" : String(field.existingValue),
+      acceptedValue: currentValue,
+      reasons: ["A previously filled control changed and was preserved."],
+    };
+  }
+  if (currentValue === desiredValue) {
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      fieldIntent: match.fieldIntent,
+      status: "already_filled",
+      acceptedValue: currentValue,
+      reasons: ["The verified value is already present; no mutation was needed."],
+    };
+  }
+  const hasExistingValue = isInput(control) && control.type === "checkbox"
+    ? control.checked && desiredValue !== "true"
+    : isInput(control) && control.type === "radio"
+      ? control.checked
+      : Boolean(control.value);
+  if (hasExistingValue && !replacementAuthorized) {
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      fieldIntent: match.fieldIntent,
+      status: "preserved_existing",
+      existingValue: currentValue,
+      acceptedValue: currentValue,
+      reasons: ["An existing page, ATS, or user value was preserved."],
+    };
+  }
+  const result = executeNativeValueAction(control.ownerDocument, action, () => control);
+  if (result.status !== "applied") {
+    const validation = inspectControlValidation(control.ownerDocument, match.detectedFieldId, () => control);
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      status: "rejected",
+      acceptedValue: isInput(control) && ["checkbox", "radio"].includes(control.type)
+        ? String(control.checked) : control.value,
+      validationMessage: validation.messages[0],
+      reasons: [result.reason, ...validation.messages],
+    };
+  }
+  control.blur();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let acceptedValue = control instanceof HTMLInputElement && ["checkbox", "radio"].includes(control.type)
+    ? String(control.checked) : control.value;
+  if (acceptedValue !== desiredValue) {
+    const bridgeValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
+      ? desiredValue === "true" : match.proposedValue;
+    const bridgeResult = await requestPageContextSet(control, bridgeValue);
+    if (bridgeResult?.status === "applied") await new Promise((resolve) => setTimeout(resolve, 0));
+    acceptedValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
+      ? String(control.checked) : control.value;
+  }
+  if (acceptedValue !== desiredValue || !control.checkValidity()) {
+    return {
+      detectedFieldId: match.detectedFieldId,
+      fieldLabel: match.fieldLabel,
+      status: acceptedValue === desiredValue ? "rejected" : "mismatch",
+      acceptedValue,
+      validationMessage: isInput(control) || isTextarea(control) ? control.validationMessage : undefined,
+      reasons: ["The live control did not accept the verified value on readback."],
+    };
+  }
+  control.dataset.runrAssistedApplyFilled = "true";
+  ledger.set(match.detectedFieldId, { element: control, acceptedValue, userModified: false });
+  if (!ledgerObservedControls.has(control)) {
+    const observeUserChange = () => {
+      const entry = fillLedger(control.ownerDocument).get(match.detectedFieldId);
+      if (!entry || entry.element !== control) return;
+      const liveValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
+        ? String(control.checked) : control.value;
+      if (liveValue !== entry.acceptedValue) entry.userModified = true;
+    };
+    control.addEventListener("input", observeUserChange);
+    control.addEventListener("change", observeUserChange);
+    ledgerObservedControls.add(control);
+  }
+  return {
+    detectedFieldId: match.detectedFieldId,
+    fieldLabel: match.fieldLabel,
+    fieldIntent: match.fieldIntent,
+    status: "filled",
+    existingValue: field.existingValue == null ? "" : String(field.existingValue),
+    acceptedValue,
+    reasons: ["The centralized executor applied and verified the declarative action."],
+  };
 }
 
 /**
@@ -1390,7 +1574,7 @@ export async function runGreenhouseFixtureProof(
   const approved = matches.find(
     (match): match is ApprovedFieldMatch => match.action === "fill",
   );
-  const execution = approved ? await adapter.fill(approved) : null;
+  const execution = approved ? await executeApprovedField(adapter, approved) : null;
   return {
     ats: "greenhouse",
     fixtureAvailable: true,
@@ -1431,7 +1615,7 @@ export async function runGreenhouseStandardFacts(
     for (const match of matches) {
       if (match.action !== "fill") continue;
       if (replaceFieldIntents.includes(match.fieldIntent)) adapter.authorizeReplacement(match.detectedFieldId);
-      const result = await adapter.fill(match as ApprovedFieldMatch);
+      const result = await executeApprovedField(adapter, match as ApprovedFieldMatch);
       if (!executions.has(match.detectedFieldId)) {
         executions.set(match.detectedFieldId, { ...result, fieldIntent: match.fieldIntent });
       }
@@ -1483,7 +1667,7 @@ export async function runLeverFixtureProof(
   const executions: FieldExecutionResult[] = [];
   for (const match of matches) {
     if (match.action === "fill" && typeof match.proposedValue === "string") {
-      executions.push(await adapter.fill(match as ApprovedFieldMatch));
+      executions.push(await executeApprovedField(adapter, match as ApprovedFieldMatch));
     }
   }
   return { inspection, executions };
@@ -1511,7 +1695,7 @@ export async function runLeverStandardFacts(
     for (const match of matches) {
       if (match.action !== "fill" || typeof match.proposedValue !== "string") continue;
       if (replaceFieldIntents.includes(match.fieldIntent)) adapter.authorizeReplacement(match.detectedFieldId);
-      const result = await adapter.fill(match as ApprovedFieldMatch);
+      const result = await executeApprovedField(adapter, match as ApprovedFieldMatch);
       if (!executions.has(match.detectedFieldId)) {
         executions.set(match.detectedFieldId, { ...result, fieldIntent: match.fieldIntent });
       }

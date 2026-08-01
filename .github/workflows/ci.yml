@@ -50,6 +50,43 @@ jobs:
           python -m pytest -q tests/test_backend_api.py
           -k "assisted_apply or extension_cors or extension_origin or clerk_only_identity"
 
+  backend-full:
+    name: Backend full suite (${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: api
+            tests: tests/test_backend_api.py
+          - shard: non-api
+            tests: tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-linux.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements-linux.txt "pytest>=9,<10" "ruff>=0.8,<1.0"
+
+      - name: Run complete backend shard
+        shell: bash
+        run: |
+          if [[ "${{ matrix.shard }}" == "non-api" ]]; then
+            mapfile -t tests < <(find tests -maxdepth 1 -name 'test_*.py' ! -name 'test_backend_api.py' -print | sort)
+            python -m pytest -q "${tests[@]}"
+          else
+            python -m pytest -q "${{ matrix.tests }}"
+          fi
+
+      - name: Lint backend shard
+        run: python -m ruff check backend tests
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-24.04
