@@ -21,7 +21,7 @@ const DOCUMENTS_REQUEST_TIMEOUT_MS = 60000;
 
 function normalizeDocumentId(document) {
   return String(
-    document?.document_id || document?.asset_id || document?.id || "",
+    document?.asset_id || document?.document_id || document?.id || "",
   ).trim();
 }
 
@@ -217,7 +217,7 @@ export default function CareerEvidencePage() {
       try {
         await request(`/career-profiles/${encodeURIComponent(profileId)}`, {
           method: "PUT",
-          body: JSON.stringify({ metadata: { ...(profile?.metadata || {}), ...updates } }),
+          body: { metadata: { ...(profile?.metadata || {}), ...updates } },
         }, { rawPath: true });
         await refreshProfile().catch(() => undefined);
       } catch {
@@ -831,7 +831,7 @@ function SourceState({ onFileChange, onSourceSelect, selectedSourceIds, sourceDo
             Available sources ({sourceDocuments.length})
           </p>
           {sourceDocuments.slice(0, 5).map((doc) => {
-            const docId = String(doc?.document_id || doc?.asset_id || doc?.id || "").trim();
+            const docId = String(doc?.asset_id || doc?.document_id || doc?.id || "").trim();
             const isSelected = selectedSourceIds.includes(docId);
             return (
               <button
