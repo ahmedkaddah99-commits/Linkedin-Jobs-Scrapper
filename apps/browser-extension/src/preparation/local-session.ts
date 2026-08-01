@@ -15,6 +15,7 @@ export type PreparationLocalStatus =
   | "discarded"
   | "navigation_mismatch"
   | "auth_lost"
+  | "expired"
   | "retry_required"
   | "failed";
 
@@ -51,7 +52,7 @@ export function isPreparationLocalRecord(value: unknown): value is PreparationLo
       !Number.isInteger(value.attempt) || !Number.isInteger(value.completedCount) ||
       !Number.isInteger(value.totalCount) || typeof value.status !== "string" ||
       !activeStatuses.has(value.status as PreparationLocalStatus) &&
-      !["cancelled", "closed", "discarded", "navigation_mismatch", "retry_required", "failed"].includes(value.status) ||
+      !["permission_required", "cancelled", "closed", "discarded", "navigation_mismatch", "auth_lost", "expired", "retry_required", "failed"].includes(value.status) ||
       typeof value.createdAt !== "string" || typeof value.updatedAt !== "string") return false;
   return value.windowId === undefined || Number.isInteger(value.windowId);
 }
@@ -76,7 +77,7 @@ export function hasActivePreparation(record: PreparationLocalRecord | null): boo
 
 export function canRetryPreparation(record: PreparationLocalRecord | null): boolean {
   return record !== null && !hasActivePreparation(record) &&
-    ["permission_required", "closed", "discarded", "navigation_mismatch", "auth_lost", "retry_required", "failed"].includes(record.status) &&
+    ["permission_required", "closed", "discarded", "navigation_mismatch", "auth_lost", "expired", "retry_required", "failed"].includes(record.status) &&
     record.attempt < PREPARATION_MAX_ATTEMPTS;
 }
 

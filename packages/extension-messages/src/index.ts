@@ -67,6 +67,28 @@ export interface ExtensionConnectionState {
   warning?: string;
 }
 
+export type PreparationPanelStatus =
+  | "idle"
+  | "permission_required"
+  | "queued"
+  | "preparing"
+  | "ready_for_review"
+  | "review_activated"
+  | "needs_attention"
+  | "interrupted"
+  | "retry_required"
+  | "auth_lost"
+  | "expired"
+  | "cancelled";
+
+export interface PreparationPanelState {
+  status: PreparationPanelStatus;
+  ats: SupportedAts | null;
+  completedCount: number;
+  totalCount: number;
+  reason?: string;
+}
+
 export interface AssistedApplyPreferenceUpdate {
   permitSensitiveAutofill: boolean;
   permitDemographicAutofill: boolean;
@@ -82,6 +104,10 @@ export type PanelRequest =
   | ({ type: "UPDATE_ASSISTED_APPLY_PREFERENCES" } & AssistedApplyPreferenceUpdate)
   | { type: "BIND_APPLICATION_PACKAGE"; bindingId: string }
   | { type: "GET_BOUND_APPLICATION_PACKAGE" }
+  | { type: "GET_ASSISTED_APPLY_PREPARATION" }
+  | { type: "RETRY_ASSISTED_APPLY_PREPARATION" }
+  | { type: "CANCEL_ASSISTED_APPLY_PREPARATION" }
+  | { type: "ACTIVATE_ASSISTED_APPLY_PREPARATION" }
   | { type: "REFETCH_APPLICATION_PACKAGE"; packageId: string }
   | {
       type: "SAVE_APPLICATION_CORRECTION";
@@ -565,6 +591,7 @@ export interface PanelResponse {
   documentUpload?: DocumentUploadMessage;
   pendingConfirmation?: PendingApplicationConfirmation | null;
   trackerConfirmation?: TrackerConfirmationResult;
+  preparation?: PreparationPanelState;
   permissionGranted?: boolean;
   missingPortalPermissions?: Array<{ portal: "greenhouse" | "lever"; origin: string }>;
   error?: string;
@@ -916,6 +943,7 @@ export function isPanelResponse(value: unknown): value is PanelResponse {
     const hasPendingConfirmation = "pendingConfirmation" in value &&
       (value.pendingConfirmation === null || isPendingApplicationConfirmation(value.pendingConfirmation));
     const hasTrackerConfirmation = isTrackerConfirmationResult(value.trackerConfirmation);
+    const hasPreparation = "preparation" in value && isPreparationPanelState(value.preparation);
     const hasPermissionGranted = "permissionGranted" in value && typeof value.permissionGranted === "boolean";
     const hasMissingPermissions = "missingPortalPermissions" in value &&
       (value.missingPortalPermissions === undefined ||
@@ -924,11 +952,24 @@ export function isPanelResponse(value: unknown): value is PanelResponse {
             (perm.portal === "greenhouse" || perm.portal === "lever") &&
             typeof perm.origin === "string")));
     const nonErrorFields = [hasTabState, hasConnection, hasPackage, hasPackageExecution, hasDocumentUpload,
-      hasPendingConfirmation, hasTrackerConfirmation, hasPermissionGranted, hasMissingPermissions]
+      hasPendingConfirmation, hasTrackerConfirmation, hasPermissionGranted, hasMissingPermissions, hasPreparation]
       .filter(Boolean).length;
     return nonErrorFields >= 1;
   }
   return value.error === undefined || typeof value.error === "string";
+}
+
+function isPreparationPanelState(value: unknown): value is PreparationPanelState {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (!keys.every((key) => ["status", "ats", "completedCount", "totalCount", "reason"].includes(key))) return false;
+  const completedCount = value.completedCount;
+  const totalCount = value.totalCount;
+  return ["idle", "permission_required", "queued", "preparing", "ready_for_review", "review_activated", "needs_attention",
+    "interrupted", "retry_required", "auth_lost", "expired", "cancelled"].includes(String(value.status)) &&
+    isSupportedAts(value.ats) && typeof completedCount === "number" && Number.isInteger(completedCount) && completedCount >= 0 &&
+    typeof totalCount === "number" && Number.isInteger(totalCount) && totalCount >= 0 && completedCount <= totalCount &&
+    (value.reason === undefined || typeof value.reason === "string");
 }
 
 export function isPanelRequest(value: unknown): value is PanelRequest {
@@ -972,6 +1013,10 @@ export function isPanelRequest(value: unknown): value is PanelRequest {
     type === "RUN_GREENHOUSE_FIXTURE_PROOF" ||
     type === "GET_EXTENSION_CONNECTION" ||
     type === "GET_BOUND_APPLICATION_PACKAGE" ||
+    type === "GET_ASSISTED_APPLY_PREPARATION" ||
+    type === "RETRY_ASSISTED_APPLY_PREPARATION" ||
+    type === "CANCEL_ASSISTED_APPLY_PREPARATION" ||
+    type === "ACTIVATE_ASSISTED_APPLY_PREPARATION" ||
     type === "CONNECT_RUNR" ||
     type === "DISCONNECT_RUNR" ||
     type === "GET_PENDING_APPLICATION_CONFIRMATION" ||

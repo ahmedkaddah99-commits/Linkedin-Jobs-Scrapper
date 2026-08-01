@@ -116,6 +116,55 @@ test.afterAll(async () => {
   await context.close();
 });
 
+test("AA-223 renders sanitized lifecycle states and exposes review without submission", async () => {
+  const record = {
+    preparationId: "prep_aa223",
+    packageId: "aapkg_aa223",
+    packageVersion: 1,
+    ats: "greenhouse",
+    applicationUrl: "http://127.0.0.1:4174/greenhouse-application.html",
+    tabId: 999991,
+    status: "permission_required",
+    createdAt: "2026-08-01T12:00:00.000Z",
+    updatedAt: "2026-08-01T12:00:00.000Z",
+    attempt: 1,
+    completedCount: 0,
+    totalCount: 3,
+  };
+  await serviceWorker.evaluate(async (value) => {
+    await chrome.storage.session.set({ "assisted-apply-preparation:local:v1": value });
+  }, record);
+  expect(await serviceWorker.evaluate(async () => chrome.storage.session.get("assisted-apply-preparation:local:v1"))).toMatchObject({
+    "assisted-apply-preparation:local:v1": { status: "permission_required" },
+  });
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await panelPage.reload();
+  const panelPreparation = await panelPage.evaluate(() => chrome.runtime.sendMessage({ type: "GET_ASSISTED_APPLY_PREPARATION" }));
+  expect(panelPreparation).toMatchObject({ ok: true, preparation: { status: "permission_required" } });
+  await expect(panelPage.getByTestId("preparation-lifecycle")).toHaveClass(/preparation-permission_required/);
+  await expect(panelPage.getByRole("button", { name: "Grant portal access" })).toBeVisible();
+  await expect(panelPage.getByText("3 unresolved")).toBeVisible();
+  await expect(panelPage.getByRole("button", { name: /submit/i })).toHaveCount(0);
+
+  await serviceWorker.evaluate(async () => {
+    await chrome.storage.session.set({
+      "assisted-apply-preparation:local:v1": {
+        ...((await chrome.storage.session.get("assisted-apply-preparation:local:v1"))["assisted-apply-preparation:local:v1"] as Record<string, unknown>),
+        status: "ready_for_review",
+        completedCount: 2,
+        totalCount: 3,
+      },
+    });
+  });
+  await panelPage.reload();
+  await expect(panelPage.getByRole("button", { name: "Review filled application" })).toBeVisible();
+  await expect(panelPage.getByText("2 filled")).toBeVisible();
+  await expect(panelPage.getByText("1 unresolved")).toBeVisible();
+  await expect(panelPage.getByRole("button", { name: /submit/i })).toHaveCount(0);
+  await panelPage.close();
+});
+
 test("fills only the empty fixture email and reports verified readback", async () => {
   const fixturePage = await context.newPage();
   await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");

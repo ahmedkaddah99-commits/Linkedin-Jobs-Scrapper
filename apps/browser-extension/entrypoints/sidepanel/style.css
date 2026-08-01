@@ -46,6 +46,7 @@ h2 { font-size: 16px; }
 .boundary,
 .connection-card,
 .package-card,
+.preparation-card,
 .status-card,
 .result-card,
 .manual-card {
@@ -115,6 +116,18 @@ h2 { font-size: 16px; }
 .preference-list small, .locked-policy { color: #657268; font-size: 11px; line-height: 1.4; }
 .locked-policy { border-left: 3px solid #98a49a; padding-left: 8px; }
 .warning { margin-top: 10px; border-radius: 10px; padding: 10px; color: #70420f; background: #fff0d8; font-size: 12px; }
+.preparation-card { border-left: 4px solid #3976a8; }
+.preparation-ready_for_review { border-left-color: #236b3b; }
+.preparation-needs_attention, .preparation-auth_lost, .preparation-expired { border-left-color: #d18a2d; }
+.preparation-interrupted, .preparation-retry_required { border-left-color: #70420f; }
+.preparation-cancelled { border-left-color: #657268; }
+.preparation-copy, .preparation-reason { margin-top: 8px; color: #58635b; font-size: 12px; line-height: 1.45; }
+.preparation-reason { color: #70420f; }
+.preparation-counts { display: flex; gap: 8px; margin-top: 10px; }
+.preparation-counts span { flex: 1; padding: 8px; border: 1px solid #d8e0d8; border-radius: 9px; color: #58635b; font-size: 11px; text-align: center; }
+.preparation-counts strong { display: block; color: #17211a; font-size: 16px; }
+.preparation-actions { flex-wrap: wrap; margin-top: 10px; }
+.preparation-actions button { flex: 1; min-width: 120px; }
 
 .fixture-proof { display: grid; gap: 10px; margin-top: 14px; }
 code { color: #174f2b; font-size: 12px; }

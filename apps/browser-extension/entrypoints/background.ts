@@ -18,6 +18,7 @@ import {
   type ContentRequest,
   type FixtureInspectionMessage,
   type PanelResponse,
+  type PreparationPanelState,
   type AssistedApplyPreparationMessage,
 } from "@runr/extension-messages";
 import { browser, type Browser } from "wxt/browser";
@@ -397,6 +398,64 @@ async function updatePreparationLocalStatus(status: PreparationLocalStatus): Pro
   const updated = { ...record, status, updatedAt: now() };
   await writePreparationLocalRecord(updated);
   return updated;
+}
+
+function preparationPanelState(record: PreparationLocalRecord | null): PreparationPanelState {
+  if (!record) return { status: "idle" as const, ats: null, completedCount: 0, totalCount: 0 };
+  const status = (record.status === "starting" || record.status === "waiting_ready"
+    ? "queued"
+    : record.status === "preparing"
+      ? "preparing"
+      : record.status === "ready_for_review"
+        ? "ready_for_review"
+        : record.status === "review_activated"
+          ? "review_activated"
+        : record.status === "closed" || record.status === "discarded" || record.status === "navigation_mismatch"
+          ? "interrupted"
+          : record.status === "failed"
+            ? "needs_attention"
+            : record.status) as PreparationPanelState["status"];
+  const reason = record.status === "permission_required" ? "Grant portal access, then retry preparation."
+    : record.status === "auth_lost" ? "Reconnect Runr before retrying preparation."
+      : record.status === "closed" ? "The prepared application tab was closed."
+        : record.status === "discarded" ? "The prepared application tab was discarded."
+          : record.status === "navigation_mismatch" ? "The prepared application tab changed location."
+            : record.status === "expired" ? "This preparation expired; retry only with a still-valid package."
+              : record.status === "failed" ? "Preparation needs attention before retry."
+                : undefined;
+  return { status, ats: record.ats, completedCount: record.completedCount, totalCount: record.totalCount, ...(reason ? { reason } : {}) };
+}
+
+async function panelPreparationAction(action: "retry" | "cancel" | "activate") {
+  const record = await readPreparationLocalRecord();
+  if (!record) throw new Error("No local preparation is available; start a new preparation from Runr.");
+  if (action === "activate") {
+    const tab = await browser.tabs.get(record.tabId).catch(() => null);
+    if (!canActivateExactPreparationTab(record, tab)) throw new Error("The exact prepared tab is unavailable; retry is required.");
+    await browser.tabs.update(record.tabId, { active: true });
+    await applyPreparationExtensionAction({ preparationId: record.preparationId, packageId: record.packageId } as Extract<AssistedApplyPreparationMessage, { source: "web" }>, "activate");
+    await updatePreparationLocalStatus("review_activated");
+  } else if (action === "cancel") {
+    await applyPreparationExtensionAction({ preparationId: record.preparationId, packageId: record.packageId } as Extract<AssistedApplyPreparationMessage, { source: "web" }>, "cancel");
+    await updatePreparationLocalStatus("cancelled");
+  } else {
+    if (!canRetryPreparation(record)) throw new Error("Retry is unavailable for this preparation or the bounded attempt limit was reached.");
+    await applyPreparationExtensionAction({ preparationId: record.preparationId, packageId: record.packageId } as Extract<AssistedApplyPreparationMessage, { source: "web" }>, "retry");
+    await writePreparationLocalRecord({ ...record, status: "retry_required", updatedAt: now() });
+    const result = await startPreparationCommand({
+      protocol: ASSISTED_APPLY_PREPARATION_PROTOCOL,
+      protocolVersion: 1,
+      type: "start",
+      source: "web",
+      messageId: `panel-retry-${Date.now()}`,
+      preparationId: record.preparationId,
+      packageId: record.packageId,
+      emittedAt: now(),
+      capabilities: { adapters: ["greenhouse", "lever"], capabilities: ["fill"] },
+    }, { forceNewTab: true, attempt: record.attempt + 1 });
+    if (!result.ok) throw new Error(result.error || "Retry requires attention.");
+  }
+  return preparationPanelState(await readPreparationLocalRecord());
 }
 
 async function applyPreparationExtensionAction(
@@ -902,6 +961,18 @@ export default defineBackground(() => {
       if (message.type === "GET_EXTENSION_CONNECTION") {
         return { ok: true, connection: await connectionService.getConnection() };
       }
+      if (message.type === "GET_ASSISTED_APPLY_PREPARATION") {
+        return { ok: true, preparation: preparationPanelState(await readPreparationLocalRecord()) };
+      }
+      if (message.type === "RETRY_ASSISTED_APPLY_PREPARATION") {
+        return { ok: true, preparation: await panelPreparationAction("retry") };
+      }
+      if (message.type === "CANCEL_ASSISTED_APPLY_PREPARATION") {
+        return { ok: true, preparation: await panelPreparationAction("cancel") };
+      }
+      if (message.type === "ACTIVATE_ASSISTED_APPLY_PREPARATION") {
+        return { ok: true, preparation: await panelPreparationAction("activate") };
+      }
       if (message.type === "CONNECT_RUNR") {
         return { ok: true, connection: await connectionService.connect() };
       }
@@ -923,6 +994,10 @@ export default defineBackground(() => {
       }
       if (message.type === "REQUEST_PORTAL_PERMISSION") {
         const granted = await requestPortalPermission(message.portal);
+        const localPreparation = await readPreparationLocalRecord();
+        if (granted && localPreparation?.status === "permission_required" && localPreparation.ats === message.portal) {
+          await writePreparationLocalRecord({ ...localPreparation, status: "retry_required", updatedAt: now() });
+        }
         return { ok: true, permissionGranted: granted };
       }
       if (message.type === "CHECK_ALL_OPTIONAL_PERMISSIONS") {

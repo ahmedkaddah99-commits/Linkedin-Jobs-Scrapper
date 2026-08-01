@@ -162,6 +162,36 @@ describe("extension message boundaries", () => {
     expect(isPanelRequest(null)).toBe(false);
   });
 
+  it("validates the sanitized preparation panel state and action surface", () => {
+    const statuses = [
+      "permission_required", "queued", "preparing", "ready_for_review", "review_activated",
+      "needs_attention", "interrupted", "retry_required", "auth_lost", "expired", "cancelled",
+    ] as const;
+    for (const status of statuses) {
+      expect(isPanelResponse({
+        ok: true,
+        preparation: { status, ats: "greenhouse", completedCount: 2, totalCount: 3 },
+      })).toBe(true);
+    }
+    expect(isPanelResponse({
+      ok: true,
+      preparation: { status: "needs_attention", ats: "lever", completedCount: 1, totalCount: 2, reason: "manual review required" },
+    })).toBe(true);
+    expect(isPanelResponse({
+      ok: true,
+      preparation: { status: "ready_for_review", ats: "greenhouse", completedCount: 2, totalCount: 3, tabId: 7 },
+    })).toBe(false);
+    expect(isPanelResponse({
+      ok: true,
+      preparation: { status: "ready_for_review", ats: "greenhouse", completedCount: 2, totalCount: 3, candidate: "private" },
+    })).toBe(false);
+    expect(isPanelRequest({ type: "GET_ASSISTED_APPLY_PREPARATION" })).toBe(true);
+    expect(isPanelRequest({ type: "RETRY_ASSISTED_APPLY_PREPARATION" })).toBe(true);
+    expect(isPanelRequest({ type: "CANCEL_ASSISTED_APPLY_PREPARATION" })).toBe(true);
+    expect(isPanelRequest({ type: "ACTIVATE_ASSISTED_APPLY_PREPARATION" })).toBe(true);
+    expect(isPanelRequest({ type: "SUBMIT_ASSISTED_APPLY_PREPARATION" })).toBe(false);
+  });
+
   it("bounds explicit replacement commands to unique field intents", () => {
     const applicationPackage = {
       packageId: "aa08", jobId: "job-aa08", version: 1, schemaVersion: 1,

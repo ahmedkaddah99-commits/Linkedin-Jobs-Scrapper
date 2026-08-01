@@ -8,6 +8,7 @@ import type {
   PackageExecutionMessage,
   PendingApplicationConfirmation,
   PanelRequest,
+  PreparationPanelState,
   TrackerConfirmationResult,
 } from "@runr/extension-messages";
 import { APPLICATION_CORRECTION_SCOPE_OPTIONS, isPanelResponse } from "@runr/extension-messages";
@@ -81,6 +82,7 @@ export default function App() {
   const [documentUpload, setDocumentUpload] = useState<DocumentUploadMessage | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingApplicationConfirmation | null>(null);
   const [trackerConfirmation, setTrackerConfirmation] = useState<TrackerConfirmationResult | null>(null);
+  const [preparation, setPreparation] = useState<PreparationPanelState | null>(null);
   const reviewModel = useMemo(
     () => buildReviewPanelModel(applicationPackage, state, documentUpload),
     [applicationPackage, state, documentUpload],
@@ -100,6 +102,15 @@ export default function App() {
     }
   }, []);
 
+  const loadPreparation = useCallback(async () => {
+    try {
+      const response = await send({ type: "GET_ASSISTED_APPLY_PREPARATION" });
+      setPreparation(response.preparation ?? null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
   useEffect(() => {
     void load(false);
     setConnectionBusy(true);
@@ -114,7 +125,13 @@ export default function App() {
       .then(setApplicationPackage)
       .catch(() => setApplicationPackage(null))
       .finally(() => setPackageBusy(false));
-  }, [load]);
+    void loadPreparation();
+  }, [load, loadPreparation]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => void loadPreparation(), 1000);
+    return () => window.clearInterval(interval);
+  }, [loadPreparation]);
 
   useEffect(() => {
     const refresh = () => void requestPendingConfirmation().then(setPendingConfirmation).catch(() => undefined);
@@ -211,6 +228,35 @@ export default function App() {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setPackageBusy(false);
+    }
+  }
+
+  async function preparationAction(message: Extract<PanelRequest, { type: "RETRY_ASSISTED_APPLY_PREPARATION" | "CANCEL_ASSISTED_APPLY_PREPARATION" | "ACTIVATE_ASSISTED_APPLY_PREPARATION" }>): Promise<void> {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await send(message);
+      setPreparation(response.preparation ?? null);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      await loadPreparation();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function grantPreparationPermission(): Promise<void> {
+    if (!preparation?.ats) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await send({ type: "REQUEST_PORTAL_PERMISSION", portal: preparation.ats });
+      if (!response.permissionGranted) throw new Error("Portal access was denied. Preparation remains paused.");
+      await loadPreparation();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -382,6 +428,17 @@ export default function App() {
           <p className="eyebrow">Application package</p>
           <p>Launch a job from Runr to review and fill this application.</p>
         </section>
+      ) : null}
+
+      {preparation && preparation.status !== "idle" ? (
+        <PreparationLifecycleCard
+          preparation={preparation}
+          busy={busy}
+          onGrant={() => void grantPreparationPermission()}
+          onRetry={() => void preparationAction({ type: "RETRY_ASSISTED_APPLY_PREPARATION" })}
+          onCancel={() => void preparationAction({ type: "CANCEL_ASSISTED_APPLY_PREPARATION" })}
+          onReview={() => void preparationAction({ type: "ACTIVATE_ASSISTED_APPLY_PREPARATION" })}
+        />
       ) : null}
 
       {connection?.status === "connected" && applicationPackage ? (
@@ -562,6 +619,65 @@ export default function App() {
         or final submission capability exists in this build.
       </footer>
     </main>
+  );
+}
+
+function PreparationLifecycleCard({
+  preparation,
+  busy,
+  onGrant,
+  onRetry,
+  onCancel,
+  onReview,
+}: {
+  preparation: PreparationPanelState;
+  busy: boolean;
+  onGrant: () => void;
+  onRetry: () => void;
+  onCancel: () => void;
+  onReview: () => void;
+}) {
+  const statusCopy: Record<PreparationPanelState["status"], string> = {
+    idle: "No preparation is active.",
+    permission_required: "Grant access to the employer portal to continue.",
+    queued: "The application tab is queued and will remain inactive.",
+    preparing: "Runr is inspecting, reconciling, and verifying supported fields.",
+    ready_for_review: "Preparation is complete. Review the inactive tab before taking any action.",
+    review_activated: "The prepared tab is active for your review. No submission occurred.",
+    needs_attention: "Preparation stopped and needs your review.",
+    interrupted: "Preparation was interrupted because the owned tab closed, was discarded, or changed location.",
+    retry_required: "An explicit retry is required. Runr will revalidate state and use a new inactive tab.",
+    auth_lost: "Runr authentication expired. Reconnect before retrying.",
+    expired: "This preparation expired. Use a current package before retrying.",
+    cancelled: "Preparation was cancelled. No application was submitted.",
+  };
+  const canRetry = ["needs_attention", "interrupted", "retry_required", "auth_lost", "expired"].includes(preparation.status);
+  return (
+    <section className={`preparation-card preparation-${preparation.status}`} aria-label="Assisted Apply preparation" data-testid="preparation-lifecycle">
+      <div className="status-heading">
+        <div>
+          <p className="eyebrow">Preparation</p>
+          <h2>Preparation status</h2>
+        </div>
+        <span className="status-chip">{preparation.ats || "unknown ATS"}</span>
+      </div>
+      <p className="preparation-copy">{statusCopy[preparation.status]}</p>
+      {preparation.reason ? <p className="preparation-reason" role="status">{preparation.reason}</p> : null}
+      {preparation.totalCount > 0 ? (
+        <div className="preparation-counts" aria-label="Sanitized preparation counts">
+          <span><strong>{preparation.completedCount}</strong> filled</span>
+          <span><strong>{Math.max(0, preparation.totalCount - preparation.completedCount)}</strong> unresolved</span>
+        </div>
+      ) : null}
+      <div className="button-row preparation-actions">
+        {preparation.status === "permission_required" ? <button type="button" onClick={onGrant} disabled={busy}>Grant portal access</button> : null}
+        {canRetry ? <button type="button" onClick={onRetry} disabled={busy}>Retry preparation</button> : null}
+        {preparation.status === "ready_for_review" ? <button type="button" onClick={onReview} disabled={busy}>Review filled application</button> : null}
+        {["queued", "preparing", "ready_for_review", "permission_required", "needs_attention", "interrupted", "retry_required", "auth_lost", "expired"].includes(preparation.status) ? (
+          <button className="secondary" type="button" onClick={onCancel} disabled={busy}>Cancel preparation</button>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
