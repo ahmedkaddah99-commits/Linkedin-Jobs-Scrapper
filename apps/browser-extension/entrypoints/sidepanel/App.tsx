@@ -14,6 +14,7 @@ import type {
 import { APPLICATION_CORRECTION_SCOPE_OPTIONS, isPanelResponse } from "@runr/extension-messages";
 import { browser } from "wxt/browser";
 import { buildReviewPanelModel, type ReviewFieldRow, type DocumentRow } from "../../src/review/panel-model";
+import { requestPortalPermissionFromUserGesture } from "../../src/permissions/host-permissions";
 
 async function send(message: PanelRequest) {
   const response: unknown = await browser.runtime.sendMessage(message);
@@ -250,8 +251,11 @@ export default function App() {
     setBusy(true);
     setError("");
     try {
+      const permissionGranted = await requestPortalPermissionFromUserGesture(preparation.ats);
       const response = await send({ type: "REQUEST_PORTAL_PERMISSION", portal: preparation.ats });
-      if (!response.permissionGranted) throw new Error("Portal access was denied. Preparation remains paused.");
+      if (!permissionGranted || !response.permissionGranted) {
+        throw new Error("Portal access was denied. Preparation remains paused.");
+      }
       await loadPreparation();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));

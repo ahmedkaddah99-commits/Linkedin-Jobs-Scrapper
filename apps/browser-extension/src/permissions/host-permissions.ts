@@ -86,6 +86,20 @@ export async function requestPortalPermission(
 }
 
 /**
+ * Request portal access directly from an extension-page click handler.
+ *
+ * Chrome requires permissions.request() to retain the initiating user
+ * gesture. Do not route this call through the service worker.
+ */
+export function requestPortalPermissionFromUserGesture(
+  portal: SupportedPortal,
+): Promise<boolean> {
+  const patterns = portalPermissionPatterns(portal);
+  if (patterns.length === 0) return Promise.resolve(true);
+  return browser.permissions.request({ origins: patterns });
+}
+
+/**
  * Requests *all* optional host permission patterns at once.  Returns
  * `true` if all were granted, `false` if any was denied.
  */

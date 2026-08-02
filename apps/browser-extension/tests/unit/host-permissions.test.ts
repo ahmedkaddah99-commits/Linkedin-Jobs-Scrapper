@@ -7,6 +7,7 @@ import {
   hasPortalPermission,
   portalPermissionPatterns,
   requestPortalPermission,
+  requestPortalPermissionFromUserGesture,
   requestAllOptionalHostPermissions,
   missingPortalPermissions,
   recoverRevokedPermission,
@@ -109,6 +110,17 @@ describe("host permission module", () => {
       vi.mocked(fakeBrowser.permissions.request).mockResolvedValue(false);
       const result = await requestPortalPermission("greenhouse");
       expect(result).toBe(false);
+    });
+  });
+
+  describe("requestPortalPermissionFromUserGesture", () => {
+    it("requests directly without a prior permission check", async () => {
+      vi.mocked(fakeBrowser.permissions.request).mockResolvedValue(true);
+      await expect(requestPortalPermissionFromUserGesture("lever")).resolves.toBe(true);
+      expect(fakeBrowser.permissions.contains).not.toHaveBeenCalled();
+      expect(fakeBrowser.permissions.request).toHaveBeenCalledWith({
+        origins: ["https://*.lever.co/*"],
+      });
     });
   });
 

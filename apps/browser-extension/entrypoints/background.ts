@@ -41,8 +41,6 @@ import {
 import {
   hasAllOptionalHostPermissions,
   hasPortalPermission,
-  requestPortalPermission,
-  requestAllOptionalHostPermissions,
   missingPortalPermissions,
 } from "../src/permissions/host-permissions";
 import {
@@ -988,7 +986,9 @@ export default defineBackground(() => {
         return { ok: true, permissionGranted: granted };
       }
       if (message.type === "REQUEST_PORTAL_PERMISSION") {
-        const granted = await requestPortalPermission(message.portal);
+        // The sidepanel owns the user gesture and performs permissions.request().
+        // The service worker only verifies the resulting grant and updates local state.
+        const granted = await hasPortalPermission(message.portal);
         const localPreparation = await readPreparationLocalRecord();
         if (granted && localPreparation?.status === "permission_required" && localPreparation.ats === message.portal) {
           await writePreparationLocalRecord({ ...localPreparation, status: "retry_required", updatedAt: now() });
@@ -1001,7 +1001,7 @@ export default defineBackground(() => {
         return { ok: true, permissionGranted: allGranted, missingPortalPermissions: missing };
       }
       if (message.type === "REQUEST_ALL_OPTIONAL_PERMISSIONS") {
-        const granted = await requestAllOptionalHostPermissions();
+        const granted = await hasAllOptionalHostPermissions();
         const missing = granted ? [] : await missingPortalPermissions();
         return { ok: true, permissionGranted: granted, missingPortalPermissions: missing };
       }
