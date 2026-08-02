@@ -629,105 +629,24 @@ test("AA-08 reinspects dynamic controls, preserves user edits, and recovers afte
   await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
 });
 
-test("connects only on explicit action and preserves then revokes the extension session", async () => {
+test("automatically connects and keeps the side panel compact", async () => {
   const panelPage = await context.newPage();
   await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
 
-  await expect(panelPage.getByTestId("connection-status")).toHaveText("disconnected");
-  await expect.poll(fixtureAuthState).toMatchObject({
-    connectionRequests: 0,
-    authorizationVisits: 0,
-    tokenExchanges: 0,
-    sessionReads: 0,
-    preferenceUpdates: 0,
-    revocationRequests: 0,
-    revocations: 0,
-    activeSessions: 0,
-  });
-
-  await panelPage.getByTestId("connect-runr").click();
   await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
-  await expect(panelPage.getByRole("heading", { name: "Fixture Candidate" })).toBeVisible();
-  await expect.poll(fixtureAuthState).toMatchObject({
-    connectionRequests: 1,
-    authorizationVisits: 1,
-    tokenExchanges: 1,
-    activeSessions: 1,
-  });
-
-  const sensitivePreference = panelPage.getByRole("checkbox", {
-    name: /Permit sensitive-answer autofill/u,
-  });
-  const demographicPreference = panelPage.getByRole("checkbox", {
-    name: /Permit demographic-answer autofill/u,
-  });
-  await expect(sensitivePreference).not.toBeChecked();
-  await expect(demographicPreference).not.toBeChecked();
-  // The checkbox is controlled by the persisted API response. Click it and
-  // wait for that response instead of requiring the DOM state to flip within
-  // Playwright's single check action.
-  await sensitivePreference.click();
-  await expect(sensitivePreference).toBeChecked();
-  await expect.poll(fixtureAuthState).toMatchObject({ preferenceUpdates: 1 });
+  await expect.poll(async () => (await fixtureAuthState()).connectionRequests).toBeGreaterThanOrEqual(1);
+  await expect.poll(async () => (await fixtureAuthState()).authorizationVisits).toBeGreaterThanOrEqual(1);
+  await expect.poll(async () => (await fixtureAuthState()).tokenExchanges).toBeGreaterThanOrEqual(1);
+  await expect.poll(async () => (await fixtureAuthState()).activeSessions).toBeGreaterThanOrEqual(1);
+  await expect(panelPage.getByText("Autofill status")).toBeVisible();
+  await expect(panelPage.getByTestId("connect-runr")).toHaveCount(0);
+  await expect(panelPage.getByText("Optional sensitive-data preferences")).toHaveCount(0);
 
   await stopExtensionWorker(panelPage);
   await panelPage.reload();
   await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
-  await expect(
-    panelPage.getByRole("checkbox", { name: /Permit sensitive-answer autofill/u }),
-  ).toBeChecked();
   await expect.poll(async () => (await fixtureAuthState()).sessionReads).toBeGreaterThanOrEqual(1);
-  await expect.poll(fixtureAuthState).toMatchObject({ activeSessions: 1 });
-
-  const storedBeforeDisconnect = await panelPage.evaluate(async () =>
-    chrome.storage.session.get(null),
-  );
-  const sessionSecretKey = "runr:assisted-apply:session:v1";
-  const storedSecret = storedBeforeDisconnect[sessionSecretKey] as
-    | { sessionToken?: unknown }
-    | undefined;
-  expect(typeof storedSecret?.sessionToken).toBe("string");
-  const sessionToken = String(storedSecret?.sessionToken);
-
-  await panelPage.getByTestId("disconnect-runr").click();
-  await expect.poll(fixtureAuthState).toMatchObject({
-    revocationRequests: 1,
-    revocationInFlight: true,
-    revocations: 0,
-    activeSessions: 1,
-  });
-  const storedDuringRevoke = await panelPage.evaluate(async () =>
-    chrome.storage.session.get(null),
-  );
-  expect(storedDuringRevoke).toHaveProperty(sessionSecretKey);
-
-  await expect(panelPage.getByTestId("connection-status")).toHaveText("disconnected");
-  await expect.poll(fixtureAuthState).toMatchObject({
-    revocationRequests: 1,
-    revocationInFlight: false,
-    revocations: 1,
-    activeSessions: 0,
-  });
-  const storedAfterDisconnect = await panelPage.evaluate(async () =>
-    chrome.storage.session.get(null),
-  );
-  expect(storedAfterDisconnect).not.toHaveProperty(sessionSecretKey);
-
-  const revokedSessionResponse = await panelPage.evaluate(async (token) => {
-    const response = await fetch(
-      "http://127.0.0.1:4174/assisted-apply/extension/session/verify",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: "{}",
-      },
-    );
-    return response.status;
-  }, sessionToken);
-  expect(revokedSessionResponse).toBe(401);
+  await expect.poll(async () => (await fixtureAuthState()).activeSessions).toBeGreaterThanOrEqual(1);
 });
 
 test("binds an opaque package from the permitted Runr web origin to the employer tab", async () => {
@@ -771,7 +690,7 @@ test("binds an opaque package from the permitted Runr web origin to the employer
   await fixturePage.close();
 });
 
-test("starts an inactive Lever preparation, fills and uploads, then activates that exact tab", async () => {
+test("starts an active Lever preparation and fills the exact application tab", async () => {
   for (const page of context.pages()) await page.close();
   await serviceWorker.evaluate(async () => {
     await chrome.storage.session.remove("assisted-apply-preparation:local:v1");
@@ -838,7 +757,7 @@ test("starts an inactive Lever preparation, fills and uploads, then activates th
   const leverTabBeforeReview = await serviceWorker.evaluate(async () =>
     (await chrome.tabs.query({})).find((tab) => tab.url?.endsWith("/lever-application.html")),
   );
-  expect(leverTabBeforeReview?.active).toBe(false);
+  expect(leverTabBeforeReview?.active).toBe(true);
   await expect(leverPage.locator('input[name="name"]')).toHaveValue("Fixture Candidate");
   await expect(leverPage.locator('input[name="email"]')).toHaveValue("fixture.candidate@example.com");
   await expect(leverPage.locator('input[name="phone"]')).toHaveValue("+49 30 000000");
@@ -1169,7 +1088,7 @@ test("AA-09 review panel shows all sections, field evidence, and keyboard-access
   await expect(panelPage.getByTestId("package-portal")).toHaveText("greenhouse");
 
   // Verify Ready, Review, Missing, Manual, Documents sections exist
-  await expect(panelPage.getByRole("heading", { name: "Ready" })).toBeVisible();
+  await expect(panelPage.getByLabel("Application review").getByRole("heading", { name: "Ready" })).toBeVisible();
   await expect(panelPage.getByRole("heading", { name: "Review" })).toBeVisible();
   await expect(panelPage.getByRole("heading", { name: "Missing" })).toBeVisible();
   await expect(panelPage.getByRole("heading", { name: "Manual" })).toBeVisible();

@@ -55,15 +55,13 @@ test("Edge: fixture email fill", async () => {
   await panelPage.close(); await fixturePage.close();
 });
 
-test("Edge: connect/disconnect", async () => {
+test("Edge: auto-connect keeps the side panel compact", async () => {
   for (const page of context.pages()) await page.close();
   const panelPage = await context.newPage();
   await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-  await expect(panelPage.getByTestId("connection-status")).toHaveText("disconnected");
-  await panelPage.getByTestId("connect-runr").click();
   await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
-  await panelPage.getByTestId("disconnect-runr").click();
-  await expect(panelPage.getByTestId("connection-status")).toHaveText("disconnected");
+  await expect(panelPage.getByTestId("connect-runr")).toHaveCount(0);
+  await expect(panelPage.getByText("Optional sensitive-data preferences")).toHaveCount(0);
   await panelPage.close();
 });
 

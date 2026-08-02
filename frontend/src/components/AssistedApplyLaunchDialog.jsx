@@ -17,13 +17,14 @@ function profileSummary(profile) {
   ].filter(([, value]) => String(value || "").trim());
 }
 
-export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile, request, row }) {
+export default function AssistedApplyLaunchDialog({ autoStart = false, onClose, onLaunched, profile, request, row }) {
   const [confirmed, setConfirmed] = useState(false);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
   const [state, setState] = useState({ loading: false, message: "", error: "" });
   const [preparation, setPreparation] = useState(null);
   const [extensionStatus, setExtensionStatus] = useState("");
   const documentSelectionInitialized = useRef(false);
+  const autoLaunchStarted = useRef(false);
   const preparationEnabled = isAssistedApplyPreparationEnabled();
   const preparationUi = preparationUiModel(preparation, extensionStatus);
   const { data: documentsPayload, loading: documentsLoading, error: documentsError } = useApiResource(
@@ -71,8 +72,8 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
     );
   }
 
-  async function launch() {
-    if (!confirmed || state.loading) return;
+  async function launch(documentIds = selectedDocumentIds, bypassConfirmation = false) {
+    if ((!confirmed && !bypassConfirmation) || state.loading) return;
     if (!preparationEnabled) {
       setState({ loading: false, message: "", error: "Assisted Apply preparation is not enabled in this environment yet." });
       return;
@@ -89,7 +90,7 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
         body: {
           run_id: row.run_id,
           job_id: row.job_id,
-          document_ids: selectedDocumentIds,
+          document_ids: documentIds,
           confirm_standard_profile: true,
         },
       });
@@ -111,7 +112,7 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
       setExtensionStatus(started.status || "accepted");
       setState({
         loading: false,
-        message: "Preparation started. The employer tab remains inactive until you choose Review filled application.",
+        message: "Application opened. Runr Autofill is preparing the supported fields.",
         error: "",
       });
       onLaunched?.(created);
@@ -128,6 +129,13 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
       });
     }
   }
+
+  useEffect(() => {
+    if (!autoStart || autoLaunchStarted.current || documentsLoading) return;
+    autoLaunchStarted.current = true;
+    setConfirmed(true);
+    void launch(defaultSelectedDocumentIds(documents, row), true);
+  }, [autoStart, documents, documentsLoading, row]);
 
   async function runPreparationAction(type) {
     if (!preparation || state.loading) return;
@@ -186,15 +194,15 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
           ) : (
             <p className="mt-2 text-sm text-on-surface-variant">Runr will use confirmed Career Memory and account facts when it creates the package. Missing facts remain visible for manual review.</p>
           )}
-          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-outline-variant/20 p-4 text-sm text-on-surface">
+          {!autoStart ? <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-outline-variant/20 p-4 text-sm text-on-surface">
             <input checked={confirmed} className="mt-1" onChange={(event) => setConfirmed(event.target.checked)} type="checkbox" />
             <span>I confirm that my saved Runr and Career Memory facts are current for this application.</span>
-          </label>
+          </label> : <p className="mt-4 rounded-2xl bg-primary/5 p-4 text-sm text-primary">Preparing the approved package for this role and opening the employer application.</p>}
         </section>
 
         <section className="mt-5">
           <h3 className="text-sm font-semibold text-on-surface">Documents to offer</h3>
-          <p className="mt-1 text-xs leading-5 text-on-surface-variant">Only application-approved PDF or DOCX files can be offered. The selected file is attached to the inactive employer form and verified before review.</p>
+          <p className="mt-1 text-xs leading-5 text-on-surface-variant">Approved role documents are attached only when the employer upload field is identified and verified.</p>
           {documentsLoading ? <p className="mt-3 text-sm text-on-surface-variant">Loading documents…</p> : null}
           {documentsError ? <p className="mt-3 text-sm text-error">{documentsError}</p> : null}
           {!documentsLoading && !documentsError && !documents.length ? <p className="mt-3 text-sm text-on-surface-variant">No supported documents are available in your Runr library.</p> : null}
@@ -211,12 +219,12 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
           </div>
         </section>
 
-        <div className="mt-7 flex flex-wrap justify-end gap-3">
+        {!autoStart ? <div className="mt-7 flex flex-wrap justify-end gap-3">
           <button className="rounded-full bg-surface-container px-4 py-2.5 text-sm font-semibold text-on-surface" disabled={state.loading} onClick={onClose} type="button">Cancel</button>
           <button className="rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60" disabled={!confirmed || state.loading || !preparationEnabled} onClick={() => void launch()} type="button">
             {state.loading ? "Preparing…" : "Start preparation"}
           </button>
-        </div>
+        </div> : null}
         {!preparationEnabled ? <p className="mt-4 rounded-xl bg-amber-500/10 p-3 text-sm text-amber-700" role="status">Assisted Apply preparation is feature-disabled until the remaining production foundation is complete.</p> : null}
         {preparation ? (
           <section className="mt-4 rounded-xl border border-outline-variant/20 bg-surface-container-low p-4" data-testid="assisted-apply-preparation-status">

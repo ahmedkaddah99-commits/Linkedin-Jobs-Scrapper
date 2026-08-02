@@ -116,7 +116,15 @@ export default function App() {
     void load(false);
     setConnectionBusy(true);
     void requestConnection({ type: "GET_EXTENSION_CONNECTION" })
-      .then(setConnection)
+      .then(async (currentConnection) => {
+        if (currentConnection.status !== "disconnected") {
+          setConnection(currentConnection);
+          return currentConnection;
+        }
+        const connectedConnection = await requestConnection({ type: "CONNECT_RUNR" });
+        setConnection(connectedConnection);
+        return connectedConnection;
+      })
       .catch((nextError: unknown) => {
         setConnectionError(nextError instanceof Error ? nextError.message : String(nextError));
       })
@@ -159,29 +167,6 @@ export default function App() {
     } finally {
       setPackageBusy(false);
     }
-  }
-
-  async function updateConnection(message: PanelRequest): Promise<void> {
-    setConnectionBusy(true);
-    setConnectionError("");
-    try {
-      setConnection(await requestConnection(message));
-    } catch (nextError) {
-      setConnectionError(nextError instanceof Error ? nextError.message : String(nextError));
-    } finally {
-      setConnectionBusy(false);
-    }
-  }
-
-  async function savePreferences(
-    permitSensitiveAutofill: boolean,
-    permitDemographicAutofill: boolean,
-  ): Promise<void> {
-    await updateConnection({
-      type: "UPDATE_ASSISTED_APPLY_PREFERENCES",
-      permitSensitiveAutofill,
-      permitDemographicAutofill,
-    });
   }
 
   async function runFixture(): Promise<void> {
@@ -275,8 +260,8 @@ export default function App() {
       </header>
 
       <section className="boundary" aria-label="Submission boundary">
-        <strong>Review-first by design</strong>
-        <p>Runr may fill supported fields. You review the form and submit it yourself.</p>
+        <strong>Autofill by design</strong>
+        <p>Runr fills approved fields and documents. You review the application and submit it yourself.</p>
       </section>
 
       {pendingConfirmation ? (
@@ -304,101 +289,22 @@ export default function App() {
         </p>
       ) : null}
 
-      <section className="connection-card" aria-busy={connectionBusy}>
+      <section className="connection-card compact-status" aria-busy={connectionBusy}>
         <div className="status-heading">
           <div>
-            <p className="eyebrow">Runr account</p>
-            <h2>
-              {connection?.status === "connected"
-                ? connection.session?.displayName || connection.session?.email || "Connected"
-                : "Connect Assisted Apply"}
-            </h2>
+            <p className="eyebrow">Autofill status</p>
+            <h2>{connection?.status === "connected" ? "Ready" : "Preparing connection"}</h2>
           </div>
-          <span
-            className={`status-chip connection-${connection?.status || "loading"}`}
-            data-testid="connection-status"
-          >
+          <span className={`status-chip connection-${connection?.status || "loading"}`} data-testid="connection-status">
             {connection?.status || "loading"}
           </span>
         </div>
-
-        <div className="capability-disclosure">
-          <p>When connected, Runr can:</p>
-          <ul>
-            <li>Use the reviewed profile answers and documents in your Runr account.</li>
-            <li>Fill supported fields only after you launch an application from Runr.</li>
-            <li>Show uncertain, sensitive, and missing answers for your review.</li>
-          </ul>
-          <p>
-            Runr cannot submit the form, solve CAPTCHA, sign declarations, accept legal terms,
-            or complete assessments.
-          </p>
-        </div>
-
+        <p className="muted">
+          {connection?.status === "connected"
+            ? "Runr is ready to prepare supported applications automatically."
+            : "Runr is preparing its secure account connection. Start an application from Runr to continue."}
+        </p>
         {connectionError ? <p className="error" role="alert">{connectionError}</p> : null}
-        {connection?.warning ? <p className="warning" role="status">{connection.warning}</p> : null}
-
-        {connection?.status === "connected" ? (
-          <>
-            {connection.session?.email && connection.session.displayName ? (
-              <p className="account-detail">{connection.session.email}</p>
-            ) : null}
-            <fieldset className="preference-list" disabled={connectionBusy}>
-              <legend>Optional sensitive-data preferences</legend>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={connection.preferences.permitSensitiveAutofill}
-                  onChange={(event) =>
-                    void savePreferences(
-                      event.currentTarget.checked,
-                      connection.preferences.permitDemographicAutofill,
-                    )
-                  }
-                />
-                <span>
-                  <strong>Permit sensitive-answer autofill</strong>
-                  <small>Runr still applies context, scope, and review policy.</small>
-                </span>
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={connection.preferences.permitDemographicAutofill}
-                  onChange={(event) =>
-                    void savePreferences(
-                      connection.preferences.permitSensitiveAutofill,
-                      event.currentTarget.checked,
-                    )
-                  }
-                />
-                <span>
-                  <strong>Permit demographic-answer autofill</strong>
-                  <small>Off by default and applied only when explicitly enabled.</small>
-                </span>
-              </label>
-              <p className="locked-policy">Legal answers always require your confirmation.</p>
-            </fieldset>
-            <button
-              className="secondary danger"
-              type="button"
-              onClick={() => void updateConnection({ type: "DISCONNECT_RUNR" })}
-              disabled={connectionBusy}
-              data-testid="disconnect-runr"
-            >
-              {connectionBusy ? "DisConnecting���" : "Disconnect from Runr"}
-            </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void updateConnection({ type: "CONNECT_RUNR" })}
-            disabled={connectionBusy}
-            data-testid="connect-runr"
-          >
-            {connectionBusy ? "Connecting���" : "Connect to Runr"}
-          </button>
-        )}
       </section>
 
       {connection?.status === "connected" && applicationPackage ? (
@@ -644,13 +550,13 @@ function PreparationLifecycleCard({
   const statusCopy: Record<PreparationPanelState["status"], string> = {
     idle: "No preparation is active.",
     permission_required: "Grant access to the employer portal to continue.",
-    queued: "The application tab is queued and will remain inactive.",
+    queued: "The application page is opening and will be prepared automatically.",
     preparing: "Runr is inspecting, reconciling, and verifying supported fields.",
-    ready_for_review: "Preparation is complete. Review the inactive tab before taking any action.",
+    ready_for_review: "Preparation is complete. Review the filled application before submitting.",
     review_activated: "The prepared tab is active for your review. No submission occurred.",
     needs_attention: "Preparation stopped and needs your review.",
     interrupted: "Preparation was interrupted because the owned tab closed, was discarded, or changed location.",
-    retry_required: "An explicit retry is required. Runr will revalidate state and use a new inactive tab.",
+    retry_required: "An explicit retry is required. Runr will revalidate the application before continuing.",
     auth_lost: "Runr authentication expired. Reconnect before retrying.",
     expired: "This preparation expired. Use a current package before retrying.",
     cancelled: "Preparation was cancelled. No application was submitted.",

@@ -521,7 +521,7 @@ async function startPreparationCommand(
     if (candidate.id == null || !candidate.url) return false;
     try { return comparableApplicationUrl(candidate.url) === expected; } catch { return false; }
   });
-  if (!tab) tab = await browser.tabs.create({ url: applicationUrl, active: false });
+  if (!tab) tab = await browser.tabs.create({ url: applicationUrl, active: true });
   if (tab.id == null) throw new Error("Runr could not create or resume the application tab.");
   const localRecord: PreparationLocalRecord = {
     preparationId: message.preparationId, packageId: message.packageId, packageVersion: applicationPackage.version,

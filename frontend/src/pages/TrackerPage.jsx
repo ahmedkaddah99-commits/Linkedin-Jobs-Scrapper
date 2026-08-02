@@ -114,7 +114,7 @@ function TrackerCard({ item, onAssistedApply, onUpdate, onDelete, updating }) {
         <div className="flex items-center gap-1.5">
           {onDelete ? (<button className="flex h-7 w-7 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-error/10 hover:text-error" disabled={isBusy} onClick={() => onDelete(item)} title="Delete job" type="button"><span className="material-symbols-outlined text-[16px]">delete</span></button>) : null}
           {isRejected && (<button className="flex h-7 w-7 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary" onClick={() => setNoteOpen((v) => !v)} title="Add rejection note" type="button"><span className="material-symbols-outlined text-[16px]">note_add</span></button>)}
-          {assistedApplyRow ? (<button className="flex h-7 items-center gap-1 rounded-full bg-primary/10 px-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/20" onClick={() => onAssistedApply(assistedApplyRow)} title="Prepare a reviewed Assisted Apply package" type="button"><span className="material-symbols-outlined text-[15px]">auto_awesome</span>Review &amp; Apply</button>) : null}
+          {assistedApplyRow ? (<button className="flex h-7 items-center gap-1 rounded-full bg-primary/10 px-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/20" onClick={() => onAssistedApply({ ...assistedApplyRow, assistedApplyAutoStart: true })} title="Autofill supported application fields" type="button"><span className="material-symbols-outlined text-[15px]">auto_awesome</span>Autofill</button>) : null}
           {item.apply_link && (<a className="flex h-7 w-7 items-center justify-center rounded-full text-on-surface-variant transition-colors hover:bg-surface-container hover:text-primary" href={item.apply_link} rel="noreferrer" target="_blank" title="Open job posting"><span className="material-symbols-outlined text-[16px]">open_in_new</span></a>)}
         </div>
       </div>
@@ -139,8 +139,9 @@ function trackerItemMatchesFilters(item, filters, { ignoreStatus = false } = {})
 
 const TRACKER_RESOURCE_BUTTON_CLASS = "inline-flex min-w-[120px] items-center justify-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors";
 
-function TrackerLink({ href, children }) {
+function TrackerLink({ href, children, onClick }) {
   if (!href) return (<span className={[TRACKER_RESOURCE_BUTTON_CLASS, "cursor-not-allowed bg-surface-container-low text-on-surface-variant/60"].join(" ")}>{children}</span>);
+  if (onClick) return (<button className={[TRACKER_RESOURCE_BUTTON_CLASS, "bg-primary text-white hover:bg-primary/90"].join(" ")} onClick={onClick} type="button">{children}<span className="material-symbols-outlined text-[13px]">auto_awesome</span></button>);
   return (<a className={[TRACKER_RESOURCE_BUTTON_CLASS, "bg-primary/10 text-primary hover:bg-primary/20"].join(" ")} href={href} rel="noreferrer" target="_blank">{children}<span className="material-symbols-outlined text-[13px]">open_in_new</span></a>);
 }
 
@@ -302,11 +303,14 @@ function TrackerResourceCell({ item, onAssistedApply, request }) {
   return (
     <div className="min-w-60 max-w-80 space-y-2">
       <div className="flex flex-wrap gap-2">
-        <TrackerLink href={item.apply_link || item.tracker_table_row?.apply_link}>Apply</TrackerLink>
+        <TrackerLink
+          href={item.apply_link || item.tracker_table_row?.apply_link}
+          onClick={assistedApplyRow ? () => onAssistedApply({ ...assistedApplyRow, assistedApplyAutoStart: true }) : undefined}
+        >Apply</TrackerLink>
         {assistedApplyRow ? (
-          <button className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-primary text-white hover:bg-primary/90`} onClick={() => onAssistedApply(assistedApplyRow)} type="button">
+          <button className={`${TRACKER_RESOURCE_BUTTON_CLASS} bg-primary/10 text-primary hover:bg-primary/20`} onClick={() => onAssistedApply({ ...assistedApplyRow, assistedApplyAutoStart: true })} type="button">
             <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-            Review &amp; Apply
+            Autofill
           </button>
         ) : null}
         {hasDescription ? (
@@ -798,6 +802,7 @@ export default function TrackerPage() {
           profile={settingsData?.profile}
           request={request}
           row={assistedApplyRow}
+          autoStart={Boolean(assistedApplyRow.assistedApplyAutoStart)}
         />
       ) : null}
     </div>
