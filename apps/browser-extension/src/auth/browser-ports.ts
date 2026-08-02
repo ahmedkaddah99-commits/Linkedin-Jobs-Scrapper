@@ -23,6 +23,8 @@ const TOKEN_PATH = "/assisted-apply/extension/token";
 const SESSION_PATH = "/assisted-apply/extension/session";
 const SESSION_VERIFY_PATH = "/assisted-apply/extension/session/verify";
 const PREFERENCES_PATH = "/assisted-apply/extension/preferences";
+const EXTENSION_ORIGIN_HEADER = "X-Runr-Extension-Origin";
+const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/([a-p]{32})$/u;
 
 export class RunrApiError extends Error {
   readonly status: number;
@@ -62,13 +64,16 @@ function safeErrorMessage(value: unknown, fallback: string): string {
 export class RunrAssistedApplyApi implements AssistedApplyApiPort {
   private readonly apiBase: string;
   private readonly fetchPort: FetchPort;
+  private readonly extensionOrigin: string;
 
   constructor(
     apiBase: string,
     fetchPort: FetchPort = globalThis.fetch.bind(globalThis),
+    extensionOrigin: string = runtimeExtensionOrigin(),
   ) {
     this.apiBase = normalizeApiBase(apiBase);
     this.fetchPort = fetchPort;
+    this.extensionOrigin = exactExtensionOrigin(extensionOrigin);
   }
 
   private url(path: string): string {
@@ -82,6 +87,7 @@ export class RunrAssistedApplyApi implements AssistedApplyApiPort {
     sessionToken?: string,
   ): Promise<unknown> {
     const headers = new Headers({ Accept: "application/json" });
+    if (this.extensionOrigin) headers.set(EXTENSION_ORIGIN_HEADER, this.extensionOrigin);
     if (body !== undefined) headers.set("Content-Type", "application/json");
     if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
     const fetchPort = this.fetchPort;
@@ -179,6 +185,19 @@ export class RunrAssistedApplyApi implements AssistedApplyApiPort {
       throw new RunrApiError("Runr returned an invalid document MIME type.", response.status);
     }
     return new Uint8Array(await response.arrayBuffer());
+  }
+}
+
+function exactExtensionOrigin(value: string): string {
+  const origin = String(value || "").trim().replace(/\/$/u, "");
+  return EXTENSION_ORIGIN_PATTERN.test(origin) ? origin : "";
+}
+
+function runtimeExtensionOrigin(): string {
+  try {
+    return exactExtensionOrigin(new URL(browser.runtime.getURL("/")).origin);
+  } catch {
+    return "";
   }
 }
 

@@ -9075,7 +9075,7 @@ def build_handler(
 
         def _cors_headers(self) -> dict[str, str]:
             headers = {
-                "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Runr-Document-Grant",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Runr-Document-Grant, X-Runr-Extension-Origin",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
                 "Access-Control-Max-Age": "600",
                 "Vary": "Origin",
@@ -9276,7 +9276,17 @@ def build_handler(
             return f"{proto}://{host}"
 
         def _request_client_origin(self) -> str:
-            return _normalize_origin_value(str(self.headers.get("Origin") or ""))
+            raw_origin = str(self.headers.get("Origin") or "").strip()
+            if not raw_origin and self._is_assisted_apply_extension_path():
+                # Chrome may omit the browser-controlled Origin on an extension
+                # service-worker request. The extension supplies its exact
+                # runtime origin separately; the downstream session/package
+                # services still enforce that it matches the bound origin.
+                raw_origin = str(self.headers.get("X-Runr-Extension-Origin") or "").strip()
+            normalized = _normalize_origin_value(raw_origin)
+            if self._is_assisted_apply_extension_path() and normalized and not _origin_is_chrome_extension(normalized):
+                return ""
+            return normalized
 
         def _bearer_token(self) -> str:
             return _extract_bearer_token(self.headers.get("Authorization", ""))

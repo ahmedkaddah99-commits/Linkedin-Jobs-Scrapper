@@ -1,23 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useApiResource } from "../hooks/useApiResource";
+import { candidateDocuments, defaultSelectedDocumentIds } from "../lib/assistedApplyDocuments";
 import {
   isAssistedApplyPreparationEnabled,
   normalizePreparationStatus,
   preparationUiModel,
   sendAssistedApplyPreparationCommand,
 } from "../lib/assistedApplyPreparation";
-
-const SUPPORTED_MIME_TYPES = new Set([
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
-function candidateDocuments(documents) {
-  return (documents || []).filter((document) =>
-    String(document?.document_id || "").startsWith("asset::")
-    && SUPPORTED_MIME_TYPES.has(String(document?.content_type || "")),
-  );
-}
 
 function profileSummary(profile) {
   const normalized = profile || {};
@@ -34,6 +23,7 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
   const [state, setState] = useState({ loading: false, message: "", error: "" });
   const [preparation, setPreparation] = useState(null);
   const [extensionStatus, setExtensionStatus] = useState("");
+  const documentSelectionInitialized = useRef(false);
   const preparationEnabled = isAssistedApplyPreparationEnabled();
   const preparationUi = preparationUiModel(preparation, extensionStatus);
   const { data: documentsPayload, loading: documentsLoading, error: documentsError } = useApiResource(
@@ -48,8 +38,9 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
   const facts = useMemo(() => profileSummary(profile), [profile]);
 
   useEffect(() => {
-    const primaryCv = documents.find((document) => String(document.asset_kind || "") === "workspace_cv");
-    if (primaryCv) setSelectedDocumentIds([primaryCv.document_id]);
+    if (documentSelectionInitialized.current || !documents.length) return;
+    documentSelectionInitialized.current = true;
+    setSelectedDocumentIds(defaultSelectedDocumentIds(documents));
   }, [documents]);
 
   useEffect(() => {
@@ -200,10 +191,13 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
 
         <section className="mt-5">
           <h3 className="text-sm font-semibold text-on-surface">Documents to offer</h3>
-          <p className="mt-1 text-xs leading-5 text-on-surface-variant">Only selected PDF or DOCX files are made available to the employer form. You can leave this empty and upload manually.</p>
+          <p className="mt-1 text-xs leading-5 text-on-surface-variant">Only application-approved PDF or DOCX files can be offered. The selected file is attached only after you review the prepared form.</p>
           {documentsLoading ? <p className="mt-3 text-sm text-on-surface-variant">Loading documents…</p> : null}
           {documentsError ? <p className="mt-3 text-sm text-error">{documentsError}</p> : null}
           {!documentsLoading && !documentsError && !documents.length ? <p className="mt-3 text-sm text-on-surface-variant">No supported documents are available in your Runr library.</p> : null}
+          <p className="mt-3 text-sm font-semibold text-on-surface" data-testid="assisted-apply-selected-document-count">
+            Selected for this package: {selectedDocumentIds.filter((id) => documents.some((document) => document.document_id === id)).length}
+          </p>
           <div className="mt-3 space-y-2">
             {documents.map((document) => (
               <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-outline-variant/20 p-3 text-sm" key={document.document_id}>

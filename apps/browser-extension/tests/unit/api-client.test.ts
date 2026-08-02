@@ -13,7 +13,7 @@ describe("fixed Runr Assisted Apply API client", () => {
     const fetchPort = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       jsonResponse({ ok: true }),
     );
-    const api = new RunrAssistedApplyApi("https://api.userunr.com/v1", fetchPort);
+    const api = new RunrAssistedApplyApi("https://api.userunr.com/v1", fetchPort, "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 
     await api.createConnectionRequest({
       code_challenge: "challenge",
@@ -45,6 +45,8 @@ describe("fixed Runr Assisted Apply API client", () => {
     const protectedHeaders = fetchPort.mock.calls.slice(2).map(([, init]) => new Headers(init?.headers));
     expect(protectedHeaders.every((headers) => headers.get("Authorization") === "Bearer session-secret"))
       .toBe(true);
+    expect(publicHeaders.every((headers) => headers.get("X-Runr-Extension-Origin") === "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+      .toBe(true);
     for (const [, init] of fetchPort.mock.calls) {
       expect(init).toMatchObject({ cache: "no-store", credentials: "omit", redirect: "error" });
     }
@@ -58,6 +60,18 @@ describe("fixed Runr Assisted Apply API client", () => {
   it("accepts HTTP only for explicit loopback testing", () => {
     expect(() => new RunrAssistedApplyApi("http://127.0.0.1:4174")).not.toThrow();
     expect(() => new RunrAssistedApplyApi("http://api.userunr.com/v1")).toThrow("HTTPS API");
+  });
+
+  it("rejects a non-extension origin header value", async () => {
+    const fetchPort = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ ok: true }));
+    const api = new RunrAssistedApplyApi("https://api.userunr.com/v1", fetchPort, "https://app.userunr.com");
+    await api.createConnectionRequest({
+      code_challenge: "challenge",
+      state: "state",
+      installation_id: "installation",
+      extension_version: "1.0.0",
+    });
+    expect(new Headers(fetchPort.mock.calls[0]?.[1]?.headers).has("X-Runr-Extension-Origin")).toBe(false);
   });
 
   it("invokes an injected fetch port without rebinding it to the API instance", async () => {

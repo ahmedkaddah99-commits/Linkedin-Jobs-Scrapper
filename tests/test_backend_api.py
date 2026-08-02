@@ -617,6 +617,19 @@ class BackendApiTests(unittest.TestCase):
         handler.headers = {"Origin": "chrome-extension://" + ("b" * 32)}
         self.assertEqual(handler._cors_origin(), "")
 
+    def test_originless_extension_request_can_use_only_the_exact_extension_origin_header(self):
+        extension_origin = "chrome-extension://" + ("a" * 32)
+        handler_class = build_handler(
+            self.app,
+            allowed_extension_origins={extension_origin},
+        )
+        handler = object.__new__(handler_class)
+        handler.path = "/v1/assisted-apply/extension/session/verify"
+        handler.headers = {"X-Runr-Extension-Origin": extension_origin}
+        self.assertEqual(handler._request_client_origin(), extension_origin)
+        handler.headers = {"X-Runr-Extension-Origin": "https://evil.example"}
+        self.assertEqual(handler._request_client_origin(), "")
+
     def test_extension_origin_configuration_rejects_wildcards_and_non_exact_origins(self):
         exact_origin = "chrome-extension://" + ("a" * 32)
         self.assertEqual(_parse_allowed_extension_origins(exact_origin), {exact_origin})
@@ -819,6 +832,17 @@ class BackendApiTests(unittest.TestCase):
             payload={},
         )
         self.assertEqual(originless_status, 400)
+
+        explicit_extension_origin_status, _, _ = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/session/verify",
+            headers={
+                "Authorization": f"Bearer {session_token}",
+                "X-Runr-Extension-Origin": self.extension_origin,
+            },
+            payload={},
+        )
+        self.assertEqual(explicit_extension_origin_status, 200)
 
         legacy_get_status, _, _ = self._request_with_headers(
             "GET",
