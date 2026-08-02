@@ -196,6 +196,11 @@ function isTrackerApplicationCv(document = {}) {
   const hasJobReference = Boolean(String(document.run_id || "").trim() && String(document.job_id || "").trim());
   return hasJobReference && (["generated_cv", "applied_cv"].includes(assetKind) || ["tailored cv", "applied cv"].includes(documentType));
 }
+function isTrackerTailoredCv(document = {}) {
+  const assetKind = String(document.asset_kind || "").trim().toLowerCase();
+  const documentType = String(document.document_type || "").trim().toLowerCase();
+  return isTrackerApplicationCv(document) && (assetKind === "generated_cv" || documentType === "tailored cv");
+}
 function trackerDocumentExportRank(document = {}) {
   const extension = trackerDocumentExtension(document);
   if (extension === "pdf") return 0;
@@ -210,7 +215,9 @@ function canExportTrackerDocument(document = {}) {
   return Boolean(gate.export_anyway_allowed);
 }
 function selectTrackerExportDocuments(documents = []) {
-  const candidates = (Array.isArray(documents) ? documents : []).filter(canExportTrackerDocument);
+  const candidates = (Array.isArray(documents) ? documents : [])
+    .filter(canExportTrackerDocument)
+    .filter(isTrackerTailoredCv);
   const preferred = new Map();
   for (const document of candidates) {
     if (!isTrackerApplicationCv(document)) continue;

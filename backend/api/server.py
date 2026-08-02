@@ -78,6 +78,7 @@ from backend.capabilities.tailored_documents.modes import (
     normalize_cv_generation_mode,
 )
 from backend.capabilities.tailored_documents.application_requirements import detect_application_requirements
+from backend.capabilities.tailored_documents.common import build_custom_document_filename
 from backend.capabilities.tailored_documents.language_rules import LANGUAGE_ALIASES, normalize_cefr_level
 from backend.capabilities.tailored_documents.rendering import get_document_design_options, normalize_cv_template_id
 from backend.bootstrap import create_backend
@@ -5589,6 +5590,36 @@ def _document_file_extension(document: dict) -> str:
     return ""
 
 
+def _custom_generated_document_filename(document: dict, user, *, extension: str) -> str:
+    """Return a short name only for job-specific CVs and motivation letters."""
+    asset_kind = str(document.get("asset_kind") or "").strip().lower()
+    document_type = str(document.get("document_type") or "").strip().lower()
+    is_cv = asset_kind == "generated_cv" or document_type == "tailored cv"
+    is_letter = asset_kind in {"cover_letter", "motivation_letter"} or document_type in {
+        "cover letter",
+        "motivation letter",
+    }
+    if not (is_cv or is_letter):
+        return ""
+
+    related = document.get("related_application") if isinstance(document.get("related_application"), Mapping) else {}
+    role = str(document.get("job_title") or related.get("title") or "").strip()
+    company = str(document.get("company") or related.get("company") or "").strip()
+    if not role or not company:
+        return ""
+
+    profile = dict((getattr(user, "metadata", {}) or {}).get("profile") or {})
+    candidate_name = str(
+        profile.get("name")
+        or profile.get("full_name")
+        or getattr(user, "display_name", "")
+        or str(getattr(user, "email", "") or "").split("@", 1)[0]
+        or "Candidate"
+    ).strip()
+    kind = "CV" if is_cv else "MotivationLetter"
+    return build_custom_document_filename(candidate_name, role, company, kind, extension)
+
+
 def _document_is_application_cv(document: dict) -> bool:
     asset_kind = str(document.get("asset_kind") or "").strip().lower()
     document_type = str(document.get("document_type") or "").strip().lower()
@@ -5662,15 +5693,23 @@ def _resolve_document_selection(
     else:
         raise KeyError(f"Document '{document_id}' not found.")
 
+    fallback_path = Path(fallback_name or "")
+    target_path = Path(file_path or "")
+    resolved_suffix = fallback_path.suffix or target_path.suffix or _document_file_extension(document)
+    custom_name = _custom_generated_document_filename(
+        document,
+        user,
+        extension=resolved_suffix,
+    )
+    if custom_name:
+        return file_path, custom_name
+
     preferred_name = str(document.get("display_name") or document.get("document_name") or "").strip()
     if not preferred_name:
         return file_path, fallback_name
-    fallback_path = Path(fallback_name or "")
-    target_path = Path(file_path or "")
     preferred_path = Path(preferred_name).name or fallback_path.name or "document"
     if Path(preferred_path).suffix:
         return file_path, preferred_path
-    resolved_suffix = fallback_path.suffix or target_path.suffix
     if resolved_suffix:
         return file_path, f"{preferred_path}{resolved_suffix}"
     return file_path, preferred_path

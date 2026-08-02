@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 from backend.config.job_seeker import cfg_str, load_job_seeker_config, normalize_windows_env_path
 from backend.profiles.cv_text import resolve_runtime_cv_docx_path
 
-from .common import sanitize_filename
+from .common import build_custom_document_filename
 from .cv_structuring import normalize_cv_experience_items
 from .generation import format_header_location, normalize_output_language
 
@@ -390,11 +390,16 @@ def create_cv_document(
     except Exception as exc:
         raise RuntimeError("python-docx is required to create Word files. Install: pip install python-docx") from exc
 
-    job_id = str(record.get("job_id", "unknown"))
     title = str(record.get("title", "Untitled"))
     company = str(record.get("company", "Unknown Company"))
     header_location = format_header_location(record)
-    safe_stem = sanitize_filename(f"{candidate_name}_{title}_{company}_{job_id}_CV", max_length=140)
+    safe_filename = build_custom_document_filename(
+        candidate_name,
+        title,
+        company,
+        "CV",
+        ".docx",
+    )
 
     if output_path:
         cv_path = Path(output_path)
@@ -402,7 +407,7 @@ def create_cv_document(
     else:
         target_dir = docs_dir / run_date
         target_dir.mkdir(parents=True, exist_ok=True)
-        cv_path = target_dir / f"{safe_stem}.docx"
+        cv_path = target_dir / safe_filename
 
     template = _resolve_template(cv_template_id)
     color_scheme = _resolve_color_scheme(cv_color_scheme)

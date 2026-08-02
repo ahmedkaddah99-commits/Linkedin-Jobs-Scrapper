@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping
 
 from backend.capabilities.tailored_documents.rendering import convert_docx_to_pdf
+from backend.capabilities.tailored_documents.common import build_custom_document_filename
 from .support import cfg_str, compact_whitespace, load_json_file, load_reusable_packages_config, resolve_path, save_json_file
 
 
@@ -213,15 +214,21 @@ def run_stage5_pipeline(
         assigned_cv_pdf = ""
         pdf_generation_error = ""
         if role_cv_txt and role_cv_txt.exists():
-            assigned_cv_txt_path = package_dir / f"{safe_job_name}_CV.txt"
+            assigned_cv_txt_path = package_dir / build_custom_document_filename(
+                args.candidate_name, title, company, "CV", ".txt"
+            )
             shutil.copyfile(role_cv_txt, assigned_cv_txt_path)
             assigned_cv_txt = str(assigned_cv_txt_path)
         if role_cv_docx and role_cv_docx.exists():
-            assigned_cv_docx_path = package_dir / f"{safe_job_name}_CV.docx"
+            assigned_cv_docx_path = package_dir / build_custom_document_filename(
+                args.candidate_name, title, company, "CV", ".docx"
+            )
             shutil.copyfile(role_cv_docx, assigned_cv_docx_path)
             assigned_cv_docx = str(assigned_cv_docx_path)
         if role_cv_pdf and role_cv_pdf.exists():
-            assigned_cv_pdf_path = package_dir / f"{safe_job_name}_CV.pdf"
+            assigned_cv_pdf_path = package_dir / build_custom_document_filename(
+                args.candidate_name, title, company, "CV", ".pdf"
+            )
             shutil.copyfile(role_cv_pdf, assigned_cv_pdf_path)
             assigned_cv_pdf = str(assigned_cv_pdf_path)
         elif assigned_cv_docx and bool(getattr(args, "generate_pdf", True)):

@@ -3841,8 +3841,8 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(headers.get("Content-Type"), {"application/zip", "application/x-zip-compressed"})
         with zipfile.ZipFile(io.BytesIO(body)) as archive:
-            self.assertEqual(archive.namelist(), ["Tailored CV.pdf"])
-            self.assertEqual(archive.read("Tailored CV.pdf"), b"%PDF-1.4 pdf-content")
+            self.assertEqual(archive.namelist(), ["Admin_Engineer_ACMEAPI_CV.pdf"])
+            self.assertEqual(archive.read("Admin_Engineer_ACMEAPI_CV.pdf"), b"%PDF-1.4 pdf-content")
 
     def test_documents_endpoint_labels_applied_cv_artifacts_truthfully(self):
         status, run_payload = self._request(
@@ -5127,7 +5127,7 @@ class BackendApiTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(body)) as archive:
             self.assertEqual(
                 sorted(archive.namelist()),
-                ["Cover letter.txt", "Standard certificate.pdf"],
+                ["Admin_Engineer_ACMEAPI_MotivationLetter.txt", "Standard certificate.pdf"],
             )
 
         status, explicit_tracker_payload = self._request("GET", "/tracker?explicit_only=true")

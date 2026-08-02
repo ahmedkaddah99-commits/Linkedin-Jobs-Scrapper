@@ -9,6 +9,7 @@ from unittest.mock import patch
 from docx import Document
 
 from backend.capabilities.tailored_documents.application_requirements import detect_application_requirements
+from backend.capabilities.tailored_documents.common import build_custom_document_filename
 from backend.capabilities.tailored_documents.cv_structuring import ensure_structured_cv_fields
 from backend.capabilities.tailored_documents.cv_structuring import extract_cv_strategic_initiatives
 from backend.capabilities.tailored_documents.documents import (
@@ -79,6 +80,50 @@ class TailoredDocumentGenerationTests(unittest.TestCase):
                 "- Built a baseline workflow.",
             ]
         )
+
+    def test_custom_generated_document_filename_is_short_and_keeps_identity(self):
+        filename = build_custom_document_filename(
+            "Alexandria Very Long Candidate Name",
+            "Principal Backend Integrations Software Engineer",
+            "Supermove Global Technology Company",
+            "MotivationLetter",
+            ".docx",
+        )
+
+        self.assertLessEqual(len(filename), 50)
+        self.assertTrue(filename.endswith(".docx"))
+        self.assertIn("Alex", filename)
+        self.assertIn("MotivationLetter", filename)
+
+    def test_default_cv_output_uses_custom_job_filename(self):
+        record = {
+            **self.job,
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [],
+            "cv_skills": ["Python"],
+            "cv_education": [],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record,
+                docs_dir=Path(temp_dir),
+                run_date="2026-08-01",
+                candidate_name="Alex Candidate",
+                candidate_email="alex@example.com",
+                cv_font_name="Calibri",
+                cv_template_id="plain",
+                cv_color_scheme="classic_navy",
+                languages=[],
+                profile_image_path=None,
+                include_profile_image=False,
+                profile_links=[],
+            )
+
+        self.assertLessEqual(len(Path(output_path).name), 50)
+        self.assertIn("AlexCandidate", Path(output_path).name)
+        self.assertIn("SeniorAnalyst", Path(output_path).name)
+        self.assertIn("ACME", Path(output_path).name)
 
     def test_render_payload_repairs_malformed_experience_and_preserves_identity(self):
         malformed_record = {
