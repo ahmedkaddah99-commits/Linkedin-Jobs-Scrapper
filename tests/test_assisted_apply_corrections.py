@@ -2,11 +2,18 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend import create_backend
 from backend.application.assisted_apply_correction_service import AssistedApplyCorrectionService
-from backend.application.assisted_apply_package_service import ApplicationPackageStore
+from backend.application.assisted_apply_package_service import (
+    ApplicationPackageStateError,
+    ApplicationPackageStore,
+)
+
+
+EXTENSION_ORIGIN = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 
 class AssistedApplyCorrectionTests(unittest.TestCase):
@@ -129,3 +136,72 @@ class AssistedApplyCorrectionTests(unittest.TestCase):
                 corrected_value="value",
                 scope="global",
             )
+
+    def test_exact_non_sensitive_question_is_reused_but_sensitive_question_is_rejected(self):
+        original = self.create_package()
+        saved = self.service.save_exact_standard_answer(
+            user_id=self.owner.user_id,
+            package=original,
+            question_label="Why are you interested in this role? *",
+            answer_value="I enjoy building reliable systems.",
+        )
+        self.assertTrue(saved["persisted"])
+
+        future = self.create_package(company="Another", value="Future")
+        self.assertEqual(len(future.standard_answers), 1)
+        self.assertEqual(future.standard_answers[0].label, "why are you interested in this role?")
+        self.assertEqual(future.standard_answers[0].proposed_value, "I enjoy building reliable systems.")
+        self.assertEqual(future.standard_answers[0].source, "scoped_preference")
+        self.assertFalse(future.standard_answers[0].requires_review)
+
+        with self.assertRaisesRegex(ValueError, "Sensitive, legal, or demographic"):
+            self.service.save_exact_standard_answer(
+                user_id=self.owner.user_id,
+                package=original,
+                question_label="Will you require visa sponsorship?",
+                answer_value="No",
+            )
+
+    def test_exact_answer_cannot_replace_an_existing_package_owned_answer(self):
+        package = self.create_package()
+        with self.assertRaisesRegex(ValueError, "already owned"):
+            self.service.save_exact_standard_answer(
+                user_id=self.owner.user_id,
+                package=package,
+                question_label="Preferred name",
+                answer_value="New value",
+            )
+
+    def test_extension_exact_answer_requires_owned_bound_package(self):
+        package = self.create_package()
+        package_service = self.app._assisted_apply_package_service
+        with patch.object(
+            type(package_service._connection_service),
+            "authenticate_session",
+            return_value=(self.owner, SimpleNamespace()),
+        ):
+            with self.assertRaisesRegex(ApplicationPackageStateError, "bound application package"):
+                package_service.save_exact_standard_answer_for_extension(
+                    package_id=package.package_id,
+                    question_label="Why this role?",
+                    answer_value="Because the work is relevant.",
+                    raw_session="session",
+                    extension_origin=EXTENSION_ORIGIN,
+                )
+
+            launched = package_service.launch_package(
+                user_id=self.owner.user_id,
+                package_id=package.package_id,
+            )
+            package_service.bind_package(
+                binding_id=launched.launch_tab_binding_id,
+                extension_origin=EXTENSION_ORIGIN,
+            )
+            result = package_service.save_exact_standard_answer_for_extension(
+                package_id=package.package_id,
+                question_label="Why this role?",
+                answer_value="Because the work is relevant.",
+                raw_session="session",
+                extension_origin=EXTENSION_ORIGIN,
+            )
+        self.assertTrue(result["persisted"])

@@ -1,5 +1,5 @@
 import { requestPageContextSet } from "./page-bridge";
-import { executeNativeValueAction, inspectControlValidation, planFillAction, readControlValue, type NativeValueAction } from "./declarative-actions";
+import { executeComboboxOptionAction, executeNativeValueAction, inspectControlValidation, planFillAction, readControlValue, type NativeValueAction } from "./declarative-actions";
 
 export * from "./telemetry";
 export * from "./declarative-actions";
@@ -255,7 +255,12 @@ export function detectAtsFromUrl(value: string): DetectionResult {
 }
 
 function normalizeLabel(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return value
+    .replace(/[✱*]+/gu, " ")
+    .replace(/\(\s*required\s*\)/giu, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 }
 
 function isInput(control: Element | null | undefined): control is HTMLInputElement {
@@ -477,6 +482,8 @@ const PROFILE_ANSWER_LABELS: Readonly<Record<string, RegExp>> = {
   "candidate.professional_summary": /^(professional\s+summary|summary|profile\s+summary)$/u,
   "candidate.skills": /^(skills|key\s+skills|technical\s+skills)$/u,
   "candidate.languages": /^(languages|language\s+skills)$/u,
+  "candidate.education.institution": /^(school|university|college|institution|school\s+or\s+university)$/u,
+  "candidate.education.degree": /^(degree|degree\s+type|qualification)$/u,
 };
 
 function answerValueForField(field: DetectedField, answer: ApplicationPackageAnswer): string | null {
@@ -731,6 +738,17 @@ export class StandardFactsAdapter implements AtsAdapter {
     const registered = this.controls.get(match.detectedFieldId);
     const approved = this.approvedMatches.get(match.detectedFieldId);
     if (!registered || !approved || approved.fieldIntent !== match.fieldIntent || approved.proposedValue !== match.proposedValue) return null;
+    const control = registered.element;
+    if (this.id === "lever" && match.fieldIntent === "candidate.location" && isInput(control) &&
+        (control.id === "location-input" || control.getAttribute("data-qa") === "location-input")) {
+      return {
+        type: "select_combobox_option",
+        fieldId: registered.field.id,
+        value: match.proposedValue,
+        optionSelector: '.dropdown-results [data-qa="location-option"], .dropdown-results [role="option"], .dropdown-results li, .dropdown-results button',
+        acceptedStateSelector: "#selected-location",
+      };
+    }
     return planFillAction(registered.field, match.proposedValue);
   }
 
@@ -1254,7 +1272,9 @@ export async function executeApprovedField(
       reasons: ["An existing page, ATS, or user value was preserved."],
     };
   }
-  const result = executeNativeValueAction(control.ownerDocument, action, () => control);
+  const result = action.type === "select_combobox_option"
+    ? await executeComboboxOptionAction(control.ownerDocument, action, () => control)
+    : executeNativeValueAction(control.ownerDocument, action, () => control);
   if (result.status !== "applied") {
     const validation = inspectControlValidation(control.ownerDocument, match.detectedFieldId, () => control);
     return {
@@ -1271,7 +1291,7 @@ export async function executeApprovedField(
   await new Promise((resolve) => setTimeout(resolve, 0));
   let acceptedValue = control instanceof HTMLInputElement && ["checkbox", "radio"].includes(control.type)
     ? String(control.checked) : control.value;
-  if (acceptedValue !== desiredValue) {
+  if (acceptedValue !== desiredValue && action.type !== "select_combobox_option") {
     const bridgeValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
       ? desiredValue === "true" : match.proposedValue;
     const bridgeResult = await requestPageContextSet(control, bridgeValue);
@@ -1279,7 +1299,7 @@ export async function executeApprovedField(
     acceptedValue = isInput(control) && ["checkbox", "radio"].includes(control.type)
       ? String(control.checked) : control.value;
   }
-  if (acceptedValue !== desiredValue || !control.checkValidity()) {
+  if ((acceptedValue !== desiredValue && action.type !== "select_combobox_option") || !control.checkValidity()) {
     return {
       detectedFieldId: match.detectedFieldId,
       fieldLabel: match.fieldLabel,

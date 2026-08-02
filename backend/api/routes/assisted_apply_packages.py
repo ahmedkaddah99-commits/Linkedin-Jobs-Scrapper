@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from pathlib import Path
+import re
 from typing import Any, Mapping
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
@@ -17,6 +18,7 @@ _PREPARE_PACKAGE_KEYS = {"run_id", "job_id", "document_ids", "confirm_standard_p
 _BIND_PACKAGE_KEYS = {"binding_id"}
 _DOCUMENT_GRANT_KEYS = {"package_id", "document_id", "adapter", "upload_field_intent"}
 _CORRECTION_KEYS = {"package_id", "field_intent", "corrected_value", "scope"}
+_EXACT_STANDARD_ANSWER_KEYS = {"package_id", "question_label", "answer_value"}
 _OUTCOME_KEYS = {
     "package_id", "package_version", "adapter", "adapter_version",
     "evidence_category", "decision", "uploaded_documents",
@@ -92,6 +94,13 @@ def register_routes(registry: RouteRegistry) -> None:
     )
     registry.exact(
         "POST",
+        ("assisted-apply", "extension", "standard-answers"),
+        _save_exact_standard_answer,
+        auth_required=False,
+        name="assisted_apply.extension.standard_answers.create",
+    )
+    registry.exact(
+        "POST",
         ("assisted-apply", "extension", "application-outcomes"),
         _respond_to_application_outcome,
         auth_required=False,
@@ -154,7 +163,7 @@ def _owned_job_for_package(context: ApiRouteContext, *, user: Any, run_id: str, 
     raise ValueError("The requested job was not found in this run.")
 
 
-def _ready_career_memory(context: ApiRouteContext, user: Any) -> tuple[Any | None, dict[str, Any]]:
+def _ready_career_memory(context: ApiRouteContext, user: Any) -> tuple[Any | None, dict[str, Any], str]:
     """Return the newest approved Career Memory profile and its source CV profile."""
     profiles = context.application.list_career_profiles(user_id=user.user_id)
     career_profile = next(
@@ -162,7 +171,7 @@ def _ready_career_memory(context: ApiRouteContext, user: Any) -> tuple[Any | Non
         None,
     )
     if career_profile is None:
-        return None, {}
+        return None, {}, ""
 
     profile_metadata = dict(getattr(career_profile, "metadata", {}) or {})
     source_asset_ids = [
@@ -183,8 +192,27 @@ def _ready_career_memory(context: ApiRouteContext, user: Any) -> tuple[Any | Non
         metadata = dict((assets.get(asset_id) or {}).get("metadata") or {})
         parsed_profile = metadata.get("parsed_profile")
         if isinstance(parsed_profile, Mapping) and parsed_profile:
-            return career_profile, dict(parsed_profile)
-    return career_profile, {}
+            return career_profile, dict(parsed_profile), str(metadata.get("source_text") or "")
+    return career_profile, {}, ""
+
+
+def _phone_from_source_text(source_text: str) -> str:
+    """Recover a CV phone only when extraction omitted the structured field."""
+    text = str(source_text or "")
+    labelled = re.search(
+        r"(?im)\b(?:phone|mobile|telephone|tel)\s*[:|]?\s*(\+?[0-9][0-9() ./-]{6,}[0-9])",
+        text,
+    )
+    candidates = [labelled.group(1)] if labelled else re.findall(
+        r"(?<![\w-])(\+[1-9][0-9() ./-]{7,}[0-9])(?![\w-])",
+        text,
+    )
+    for candidate in candidates:
+        value = re.sub(r"\s+", " ", candidate).strip(" .,-")
+        digits = re.sub(r"\D", "", value)
+        if 8 <= len(digits) <= 15:
+            return value
+    return ""
 
 
 def _profile_package_sections(
@@ -194,7 +222,7 @@ def _profile_package_sections(
     """Build approved package sections from explicit profile facts and ready Career Memory."""
     profile = dict(getattr(user, "metadata", {}) or {}).get("profile") or {}
     profile = dict(profile) if isinstance(profile, Mapping) else {}
-    career_profile, parsed_profile = _ready_career_memory(context, user)
+    career_profile, parsed_profile, source_text = _ready_career_memory(context, user)
     career_metadata = dict(getattr(career_profile, "metadata", {}) or {}) if career_profile else {}
     provenance = (
         f"career_profile:{career_profile.profile_id}"
@@ -214,7 +242,14 @@ def _profile_package_sections(
     first_name = str(profile.get("first_name") or (name_parts[0] if name_parts else "")).strip()
     last_name = str(profile.get("last_name") or (name_parts[1] if len(name_parts) > 1 else "")).strip()
     email = str(profile.get("email") or parsed_profile.get("email") or getattr(user, "email", "") or "").strip()
-    phone = str(profile.get("phone") or profile.get("phone_number") or "").strip()
+    phone = str(
+        profile.get("phone")
+        or profile.get("phone_number")
+        or parsed_profile.get("phone")
+        or parsed_profile.get("phone_number")
+        or _phone_from_source_text(source_text)
+        or ""
+    ).strip()
     location = str(profile.get("location") or parsed_profile.get("location") or "").strip()
     linkedin_url = str(profile.get("linkedin_url") or parsed_profile.get("linkedin_url") or "").strip()
     github_url = str(profile.get("github_url") or parsed_profile.get("github_url") or "").strip()
@@ -228,6 +263,13 @@ def _profile_package_sections(
     language_values = string_values(profile.get("languages") or parsed_profile.get("languages") or [])
     skills_text = ", ".join(str(item).strip() for item in skills_values if str(item).strip())
     languages_text = ", ".join(str(item).strip() for item in language_values if str(item).strip())
+    raw_education = [
+        dict(item) for item in parsed_profile.get("education") or []
+        if isinstance(item, Mapping)
+    ]
+    primary_education = raw_education[0] if raw_education else {}
+    institution = str(primary_education.get("institution") or "").strip()
+    degree = str(primary_education.get("degree") or primary_education.get("degree_title") or "").strip()
 
     raw_experiences = [
         dict(item)
@@ -259,6 +301,8 @@ def _profile_package_sections(
         ("candidate.professional_summary", "Professional summary", summary, "standard"),
         ("candidate.skills", "Skills", skills_text, "standard"),
         ("candidate.languages", "Languages", languages_text, "standard"),
+        ("candidate.education.institution", "School or university", institution, "standard"),
+        ("candidate.education.degree", "Degree", degree, "standard"),
     ]
     answers = [
         {
@@ -328,8 +372,8 @@ def _profile_package_sections(
             "provenance": provenance,
             "confirmed": True,
         }
-        for item in parsed_profile.get("education") or []
-        if isinstance(item, Mapping) and (str(item.get("institution") or "").strip() or str(item.get("degree") or item.get("degree_title") or "").strip())
+        for item in raw_education
+        if str(item.get("institution") or "").strip() or str(item.get("degree") or item.get("degree_title") or "").strip()
     ]
     skills = [
         {"value": str(item).strip(), "provenance": provenance, "confirmed": True}
@@ -348,14 +392,19 @@ def _profile_package_sections(
     return candidate, answers, experiences, education, skills, languages, warnings
 
 
-def _selected_candidate_documents(user: Any, document_ids: object) -> list[dict[str, Any]]:
+def _selected_candidate_documents(
+    context: ApiRouteContext,
+    user: Any,
+    *,
+    run_id: str,
+    job_id: str,
+    document_ids: object,
+) -> list[dict[str, Any]]:
     requested = [str(item).strip() for item in document_ids or [] if str(item).strip()]
     if len(requested) != len(set(requested)):
         raise ValueError("Each selected document may be used only once.")
     if not requested:
         return []
-    if not all(item.startswith("asset::") for item in requested):
-        raise ValueError("Only documents from your Runr document library may be selected.")
     raw_assets = dict(getattr(user, "metadata", {}) or {}).get("candidate_assets") or []
     assets = {
         str(asset.get("asset_id") or "").strip(): normalize_candidate_asset_descriptor(asset)
@@ -378,6 +427,68 @@ def _selected_candidate_documents(user: Any, document_ids: object) -> list[dict[
         "other_supporting_document": "supporting_document",
     }
     for document_id in requested:
+        if document_id.startswith("artifact::"):
+            parts = document_id.split("::", 2)
+            if len(parts) != 3 or parts[1] != run_id or not parts[2]:
+                raise PermissionError("A selected role document is not associated with this application run.")
+            artifact = context.application.get_artifact(run_id, parts[2])
+            metadata = dict(getattr(artifact, "metadata", {}) or {})
+            if str(metadata.get("job_id") or "").strip() != job_id:
+                raise PermissionError("A selected role document is not associated with this job.")
+            identity = " ".join(
+                str(value or "").strip().casefold()
+                for value in (
+                    getattr(artifact, "artifact_type", ""), metadata.get("artifact_type"),
+                    metadata.get("document_asset_kind"), metadata.get("document_kind"),
+                    metadata.get("document_type"), metadata.get("document_name"),
+                )
+            )
+            document_kind = (
+                "cv" if any(token in identity for token in ("generated_cv", "tailored cv", "cv_pdf", "cv_docx"))
+                else "cover_letter" if any(token in identity for token in ("cover_letter", "cover letter", "motivation_letter", "motivation letter"))
+                else "supporting_document" if any(token in identity for token in ("transcript", "certificate", "supporting_document", "supporting document"))
+                else ""
+            )
+            gate = dict(metadata.get("ats_export_gate") or {})
+            if bool(metadata.get("final_export_blocked")) or str(gate.get("gate_state") or "").casefold() == "blocked":
+                raise ValueError("A selected role document is blocked by its ATS export review.")
+            object_key = str(metadata.get("object_key") or metadata.get("object_storage_key") or "").strip()
+            artifact_path = str(getattr(artifact, "path", "") or "").strip()
+            filename_candidates = [
+                str(metadata.get("file_name") or "").strip(),
+                str(metadata.get("filename") or "").strip(),
+                str(metadata.get("document_name") or "").strip(),
+                Path(artifact_path).name,
+            ]
+            filename = next(
+                (item for item in filename_candidates if Path(item).suffix.casefold() in {".pdf", ".docx"}),
+                next((item for item in filename_candidates if item), ""),
+            )
+            explicit_mime = str(
+                metadata.get("mime_type") or metadata.get("content_type") or metadata.get("object_content_type") or ""
+            ).strip().casefold()
+            suffix = Path(filename or artifact_path).suffix.casefold()
+            mime_type = explicit_mime or (
+                "application/pdf" if suffix == ".pdf"
+                else "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if suffix == ".docx"
+                else ""
+            )
+            expected_suffix = ".pdf" if mime_type == "application/pdf" else ".docx" if mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" else ""
+            if not object_key or not document_kind or not expected_suffix or not filename.casefold().endswith(expected_suffix):
+                raise ValueError("A selected role document is not an available PDF or DOCX application document.")
+            selected.append({
+                "document_id": document_id,
+                "document_version": max(1, int(metadata.get("version") or 1)),
+                "document_kind": document_kind,
+                "asset_id": str(getattr(artifact, "artifact_id", "") or parts[2]),
+                "object_key": object_key,
+                "mime_type": mime_type,
+                "file_name": filename,
+                "sha256_hex": str(metadata.get("content_sha256") or metadata.get("sha256_hex") or "").strip(),
+            })
+            continue
+        if not document_id.startswith("asset::"):
+            raise ValueError("Only owned Runr library or role-generated documents may be selected.")
         asset_id = document_id.removeprefix("asset::")
         asset = assets.get(asset_id)
         if asset is None:
@@ -444,7 +555,13 @@ def _prepare_package(context: ApiRouteContext) -> None:
         raise ValueError("Assisted Apply currently supports Greenhouse and Lever application links only.")
     application_url = _canonical_application_form_url(application_url, portal)
     candidate, answers, experiences, education, skills, languages, warnings = _profile_package_sections(context, user)
-    documents = _selected_candidate_documents(user, payload.get("document_ids") or [])
+    documents = _selected_candidate_documents(
+        context,
+        user,
+        run_id=run_id,
+        job_id=job_id,
+        document_ids=payload.get("document_ids") or [],
+    )
     package = context.application.create_application_package(
         user_id=user.user_id,
         job={
@@ -599,6 +716,22 @@ def _save_correction(context: ApiRouteContext) -> None:
         extension_origin=context.request_client_origin(),
     )
     context.send_json(result, status=HTTPStatus.CREATED if result["persisted"] else HTTPStatus.OK)
+
+
+def _save_exact_standard_answer(context: ApiRouteContext) -> None:
+    payload = _read_strict_object(
+        context,
+        allowed_keys=_EXACT_STANDARD_ANSWER_KEYS,
+        label="exact standard answer",
+    )
+    result = context.application.save_assisted_apply_exact_standard_answer(
+        package_id=str(payload.get("package_id") or "").strip(),
+        question_label=str(payload.get("question_label") or "").strip(),
+        answer_value=str(payload.get("answer_value") or "").strip(),
+        raw_session=context.bearer_token(),
+        extension_origin=context.request_client_origin(),
+    )
+    context.send_json(result, status=HTTPStatus.CREATED)
 
 
 def _respond_to_application_outcome(context: ApiRouteContext) -> None:

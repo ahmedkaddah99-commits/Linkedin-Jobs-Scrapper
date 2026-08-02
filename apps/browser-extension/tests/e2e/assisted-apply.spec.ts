@@ -262,6 +262,7 @@ test("fills package-backed Greenhouse standard facts through the panel and worke
       policy: { permitSensitiveAutofill: true, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
     },
   }));
+  if (!(response as { ok?: boolean }).ok) throw new Error(JSON.stringify(response));
 
   expect(response).toMatchObject({
     ok: true,

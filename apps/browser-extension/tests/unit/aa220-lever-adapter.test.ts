@@ -109,4 +109,84 @@ describe("AA-220 Lever adapter contract", () => {
     expect(document.querySelector<HTMLInputElement>('input[name="website"]')!.value).toBe("https://ada.example");
     expect(document.querySelector<HTMLTextAreaElement>('textarea[name="why"]')!.value).toBe("");
   });
+
+  it("fills the nested controls used by the live Lever application layout", async () => {
+    document.body.innerHTML = `
+      <form>
+        <li class="application-question"><label><div class="application-label">Full name<span class="required">*</span></div><div class="application-field"><input type="text" data-qa="name-input" name="name" required></div></label></li>
+        <li class="application-question"><label><div class="application-label">Email<span class="required">*</span></div><div class="application-field"><input name="email" data-qa="email-input" type="email" required></div></label></li>
+        <li class="application-question"><label><div class="application-label">Phone</div><div class="application-field"><input type="text" data-qa="phone-input" name="phone"></div></label></li>
+        <li class="application-question" data-qa="structured-contact-location-question"><label><div class="application-label">Current location</div><div class="application-field"><input class="location-input" data-qa="location-input" id="location-input" type="text" name="location"><input id="selected-location" type="hidden" name="selectedLocation"><div class="dropdown-results"></div></div></label></li>
+        <li class="application-question"><label><div class="application-label">Current company</div><div class="application-field"><input type="text" data-qa="org-input" name="org"></div></label></li>
+        <li class="application-question"><label><div class="application-label">LinkedIn URL</div><div class="application-field"><input type="text" name="urls[LinkedIn]"></div></label></li>
+        <li class="application-question"><label><div class="application-label">GitHub URL</div><div class="application-field"><input type="text" name="urls[GitHub]"></div></label></li>
+        <li class="application-question"><label><div class="application-label">Portfolio URL</div><div class="application-field"><input type="text" name="urls[Portfolio]"></div></label></li>
+        <li class="application-question"><label><div class="application-label">Other website</div><div class="application-field"><input type="text" name="urls[Other]"></div></label></li>
+        <li class="application-question custom-question"><div><div class="application-label full-width textarea"><div class="text">Why this position?<span class="required">*</span></div></div><div class="application-field full-width required-field"><textarea class="card-field-input" name="cards[question][field]" required></textarea></div></div></li>
+        <button type="submit">Submit application</button>
+      </form>`;
+    const locationInput = document.querySelector<HTMLInputElement>("#location-input")!;
+    locationInput.addEventListener("input", () => {
+      const results = document.querySelector<HTMLElement>(".dropdown-results")!;
+      if (results.childElementCount) return;
+      const option = document.createElement("button");
+      option.type = "button";
+      option.setAttribute("data-qa", "location-option");
+      option.textContent = "Berlin, Germany";
+      option.addEventListener("click", () => {
+        locationInput.value = "Berlin, Germany";
+        document.querySelector<HTMLInputElement>("#selected-location")!.value = "Berlin, Germany";
+      });
+      results.append(option);
+    });
+    const result = await runLeverStandardFacts(
+      document,
+      "https://jobs.lever.co/example/1/apply",
+      "live-lever-package",
+      1,
+      { fullName: "Ada Lovelace", email: "ada@example.com", phone: "+44 20 7946 0958" },
+      [
+        { fieldIntent: "candidate.location", label: "Current location", proposedValue: "Berlin, Germany" },
+        { fieldIntent: "candidate.current_company", label: "Current company", proposedValue: "Analytical Engines" },
+        { fieldIntent: "candidate.linkedin_url", label: "LinkedIn URL", proposedValue: "https://linkedin.example/ada" },
+        { fieldIntent: "candidate.github_url", label: "GitHub URL", proposedValue: "https://github.example/ada" },
+        { fieldIntent: "candidate.portfolio_url", label: "Portfolio URL", proposedValue: "https://portfolio.example/ada" },
+        { fieldIntent: "candidate.website", label: "Other website", proposedValue: "https://ada.example" },
+      ],
+    );
+
+    expect(result.executions.map((item) => [item.fieldIntent, item.status])).toEqual([
+      ["candidate.full_name", "filled"],
+      ["candidate.email", "filled"],
+      ["candidate.phone", "filled"],
+      ["candidate.location", "filled"],
+      ["candidate.current_company", "filled"],
+      ["candidate.linkedin_url", "filled"],
+      ["candidate.github_url", "filled"],
+      ["candidate.portfolio_url", "filled"],
+      ["candidate.website", "filled"],
+    ]);
+    expect(document.querySelector<HTMLTextAreaElement>("textarea.card-field-input")!.value).toBe("");
+    expect(document.querySelector<HTMLInputElement>("#selected-location")!.value).toBe("Berlin, Germany");
+  });
+
+  it("reuses an exact approved non-sensitive question answer", async () => {
+    document.body.innerHTML = `
+      <form>
+        <label>Why this position? *<textarea name="why" required></textarea></label>
+        <button type="submit">Submit application</button>
+      </form>`;
+    const result = await runLeverStandardFacts(
+      document,
+      "https://jobs.lever.co/example/1/apply",
+      "saved-answer-package",
+      1,
+      {},
+      [{ fieldIntent: "question.exact.safe", label: "why this position?", proposedValue: "I enjoy reliable systems." }],
+    );
+    expect(result.executions).toEqual([
+      expect.objectContaining({ fieldIntent: "question.exact.safe", status: "filled" }),
+    ]);
+    expect(document.querySelector<HTMLTextAreaElement>('textarea[name="why"]')!.value).toBe("I enjoy reliable systems.");
+  });
 });

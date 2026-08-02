@@ -309,6 +309,11 @@ class ApplicationPackageService:
             now=now.isoformat(),
         )
         package.answers = self._correction_service.apply_matching(package, package.answers)
+        saved_standard_answers = self._correction_service.saved_standard_answers(package.user_id)
+        existing_standard_intents = {item.field_intent for item in package.standard_answers}
+        package.standard_answers.extend(
+            item for item in saved_standard_answers if item.field_intent not in existing_standard_intents
+        )
         package.refresh_content_hashes()
         self._store.save(package)
         return self._store.get(package.package_id)  # type: ignore[return-value]
@@ -487,6 +492,35 @@ class ApplicationPackageService:
             field_intent=field_intent,
             corrected_value=corrected_value,
             scope=scope,
+        )
+
+    def save_exact_standard_answer_for_extension(
+        self,
+        *,
+        package_id: str,
+        question_label: str,
+        answer_value: str,
+        raw_session: str,
+        extension_origin: str,
+    ) -> dict[str, Any]:
+        user, _connection = self._connection_service.authenticate_session(
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+        package = self._store.get(package_id)
+        if package is None:
+            raise ValueError("Application package not found.")
+        if package.user_id != user.user_id:
+            raise PermissionError("Application package belongs to another user.")
+        if package.status != APPLICATION_PACKAGE_STATUS_BOUND:
+            raise ApplicationPackageStateError(
+                "Exact standard answers require a bound application package."
+            )
+        return self._correction_service.save_exact_standard_answer(
+            user_id=user.user_id,
+            package=package,
+            question_label=question_label,
+            answer_value=answer_value,
         )
 
     def create_document_grant(

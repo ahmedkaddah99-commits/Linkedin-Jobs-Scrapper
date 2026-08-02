@@ -27,7 +27,47 @@ declare global {
     __runrAssistedApplyFixtureBridgeInstalled?: boolean;
     __runrDynamicFormMonitor?: DynamicFormMonitor;
     __runrPossibleSuccessStop?: () => void;
+    __runrDynamicChangeObserver?: MutationObserver;
+    __runrDynamicChangeTimer?: number;
+    __runrAnswerCaptureInstalled?: boolean;
+    __runrAnswerCapturePackageId?: string;
+    __runrAnswerCaptureKnownLabels?: Set<string>;
   }
+}
+
+function normalizedQuestionLabel(value: string): string {
+  return value.replace(/[✱*]+/gu, " ").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function userControlLabel(control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement): string {
+  const explicit = control.id
+    ? Array.from(document.querySelectorAll<HTMLLabelElement>("label")).find((label) => label.htmlFor === control.id) || null
+    : null;
+  return String(explicit?.textContent || control.closest("label")?.textContent || control.getAttribute("aria-label") || "").trim();
+}
+
+function installExactAnswerCapture(packageId: string, knownLabels: string[]): void {
+  window.__runrAnswerCapturePackageId = packageId;
+  window.__runrAnswerCaptureKnownLabels = new Set(knownLabels.map(normalizedQuestionLabel));
+  if (window.__runrAnswerCaptureInstalled) return;
+  document.addEventListener("change", (event) => {
+    const control = event.target;
+    if (!(control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLSelectElement)) return;
+    if (["file", "hidden", "password", "submit", "button"].includes(control.type) || control.dataset.runrAssistedApplyFilled === "true") return;
+    if (control instanceof HTMLInputElement && (control.type === "checkbox" || control.type === "radio") && !control.checked) return;
+    const label = userControlLabel(control);
+    const normalized = normalizedQuestionLabel(label);
+    const value = control.type === "checkbox" ? "Yes" : String(control.value || "").trim();
+    if (!normalized || !value || window.__runrAnswerCaptureKnownLabels?.has(normalized) ||
+        /\b(?:visa|sponsorship|citizen|gender|race|ethnicity|disability|veteran|religion|declaration|certify|signature|terms|salary|compensation)\b/iu.test(normalized)) return;
+    void browser.runtime.sendMessage({
+      type: "ASSISTED_APPLY_SAVE_EXACT_ANSWER",
+      packageId: window.__runrAnswerCapturePackageId,
+      questionLabel: label,
+      answerValue: value,
+    });
+  }, true);
+  window.__runrAnswerCaptureInstalled = true;
 }
 
 function armPossibleSuccessObservation(
@@ -62,6 +102,20 @@ export default defineUnlistedScript(async () => {
     import.meta.env.MODE === "testing" &&
     (isExactGreenhouseFixtureUrl(window.location.href) || isExactLeverFixtureUrl(window.location.href));
   window.__runrDynamicFormMonitor ??= observeDynamicForm(document);
+  if (!window.__runrDynamicChangeObserver) {
+    window.__runrDynamicChangeObserver = new MutationObserver((records) => {
+      const meaningful = records.some((record) => record.type === "childList" &&
+        [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof Element &&
+          (node.matches("form, fieldset, [data-step], [role=tabpanel], input, textarea, select") ||
+            Boolean(node.querySelector?.("form, fieldset, [data-step], [role=tabpanel], input, textarea, select")))));
+      if (!meaningful) return;
+      if (window.__runrDynamicChangeTimer) window.clearTimeout(window.__runrDynamicChangeTimer);
+      window.__runrDynamicChangeTimer = window.setTimeout(() => {
+        void browser.runtime.sendMessage({ type: "ASSISTED_APPLY_DYNAMIC_FORM_CHANGED" });
+      }, 120);
+    });
+    window.__runrDynamicChangeObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
   if (!window.__runrAssistedApplyFixtureBridgeInstalled) {
     browser.runtime.onMessage.addListener((message: unknown) => {
       const validRequest = import.meta.env.MODE === "testing"
@@ -83,6 +137,12 @@ export default defineUnlistedScript(async () => {
       }
       if (request.type === "CONTENT_RUN_GREENHOUSE_APPLICATION_PACKAGE" || request.type === "CONTENT_RUN_LEVER_APPLICATION_PACKAGE") {
         armPossibleSuccessObservation(request);
+        installExactAnswerCapture(
+          request.package.packageId,
+          [...request.package.answers, ...(request.package.standardAnswers || [])]
+            .map((item) => item.label)
+            .filter((label): label is string => typeof label === "string" && label.trim().length > 0),
+        );
         const answer = (intent: string) => request.package.answers.find(
           (item) => item.fieldIntent === intent &&
             (item.source === "profile_verified" || item.source === "scoped_preference") &&
@@ -95,19 +155,22 @@ export default defineUnlistedScript(async () => {
         const runner = request.type === "CONTENT_RUN_LEVER_APPLICATION_PACKAGE"
           ? runLeverStandardFacts
           : runGreenhouseStandardFacts;
+        const approvedAnswers = [...request.package.answers, ...(request.package.standardAnswers || [])]
+          .filter((item, index, items) => items.findIndex((candidate) =>
+            candidate.fieldIntent === item.fieldIntent && candidate.label === item.label) === index);
         return runner(
           document,
           window.location.href,
           request.package.packageId,
           request.package.version,
           {
-            firstName,
-            lastName,
-            fullName: answer("candidate.full_name"),
-            email: answer("candidate.email"),
-            phone: answer("candidate.phone"),
+            firstName: request.package.candidate?.firstName || firstName,
+            lastName: request.package.candidate?.lastName || lastName,
+            fullName: request.package.candidate?.fullName || answer("candidate.full_name"),
+            email: request.package.candidate?.email || answer("candidate.email"),
+            phone: request.package.candidate?.phone || answer("candidate.phone"),
           },
-          request.package.answers
+          approvedAnswers
             .filter((item) =>
               item.source !== "ai_suggestion" && !item.requiresReview &&
               item.confidence >= 0.95 && item.sensitivity !== "legal" &&

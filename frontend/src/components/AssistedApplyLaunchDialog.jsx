@@ -32,16 +32,19 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
     { cacheKey: "assisted-apply:documents", staleMs: 30000, backgroundRefresh: true },
   );
   const documents = useMemo(
-    () => candidateDocuments(documentsPayload?.documents),
-    [documentsPayload],
+    () => candidateDocuments(
+      [...(Array.isArray(row?.documents) ? row.documents : []), ...(documentsPayload?.documents || [])],
+      row,
+    ),
+    [documentsPayload, row],
   );
   const facts = useMemo(() => profileSummary(profile), [profile]);
 
   useEffect(() => {
     if (documentSelectionInitialized.current || !documents.length) return;
     documentSelectionInitialized.current = true;
-    setSelectedDocumentIds(defaultSelectedDocumentIds(documents));
-  }, [documents]);
+    setSelectedDocumentIds(defaultSelectedDocumentIds(documents, row));
+  }, [documents, row]);
 
   useEffect(() => {
     const preparationId = preparation?.preparation_id;

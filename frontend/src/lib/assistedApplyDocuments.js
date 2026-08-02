@@ -18,6 +18,12 @@ const SUPPORTED_ASSET_KINDS = new Set([
   "other_supporting_document",
 ]);
 
+const ROLE_DOCUMENT_KINDS = new Set([
+  "generated_cv", "applied_cv", "cover_letter", "motivation_letter",
+  "academic_transcript", "certification", "language_certificate",
+  "employment_certificate", "supporting_document",
+]);
+
 function normalizedPurposes(document) {
   const metadata = document?.metadata && typeof document.metadata === "object"
     ? document.metadata
@@ -45,35 +51,59 @@ function inferredMimeType(document) {
   return "";
 }
 
-export function isApplicationDocument(document) {
+export function isApplicationDocument(document, role = {}) {
   const assetKind = String(document?.asset_kind || "").trim().toLowerCase();
   const purposes = normalizedPurposes(document);
   const status = String(document?.status || "").trim().toLowerCase();
   const isLegacyReadyWorkspaceCv = assetKind === "workspace_cv"
     && purposes.size === 0
     && (!status || status === "ready");
+  const documentId = String(document?.document_id || "").trim();
+  const roleRunId = String(role?.run_id || "").trim();
+  const roleJobId = String(role?.job_id || "").trim();
+  const roleArtifact = Boolean(roleRunId && roleJobId) && documentId.startsWith("artifact::") &&
+    String(document?.run_id || "").trim() === roleRunId &&
+    String(document?.job_id || "").trim() === roleJobId &&
+    ROLE_DOCUMENT_KINDS.has(assetKind) && !document?.final_export_blocked;
   return Boolean(
-    String(document?.document_id || "").startsWith("asset::")
+    (roleArtifact || (documentId.startsWith("asset::")
       && SUPPORTED_ASSET_KINDS.has(assetKind)
       && (purposes.has("include_in_applications") || isLegacyReadyWorkspaceCv)
-      && !purposes.has("private_never_attach")
+      && !purposes.has("private_never_attach")))
       && inferredMimeType(document),
   );
 }
 
-export function candidateDocuments(documents) {
+export function candidateDocuments(documents, role = {}) {
   const seen = new Set();
   return (Array.isArray(documents) ? documents : []).filter((document) => {
     const documentId = String(document?.document_id || "").trim();
-    if (!isApplicationDocument(document) || seen.has(documentId)) return false;
+    if (!isApplicationDocument(document, role) || seen.has(documentId)) return false;
     seen.add(documentId);
     return true;
   });
 }
 
-export function defaultSelectedDocumentIds(documents) {
-  const candidates = candidateDocuments(documents);
+function documentKind(document) {
+  const kind = String(document?.asset_kind || "").trim().toLowerCase();
+  if (["workspace_cv", "generated_cv", "applied_cv"].includes(kind)) return "cv";
+  if (["cover_letter", "motivation_letter"].includes(kind)) return "cover_letter";
+  return "supporting_document";
+}
+
+function extensionRank(document) {
+  const name = String(document?.file_name || document?.path || document?.display_name || "").toLowerCase();
+  return name.endsWith(".pdf") || String(document?.content_type || "").toLowerCase() === "application/pdf" ? 0 : 1;
+}
+
+export function defaultSelectedDocumentIds(documents, role = {}) {
+  const candidates = candidateDocuments(documents, role);
   if (candidates.length === 1) return [candidates[0].document_id];
-  const primaryCv = candidates.find((document) => String(document.asset_kind || "").trim().toLowerCase() === "workspace_cv");
-  return primaryCv ? [primaryCv.document_id] : [];
+  const roleCvs = candidates.filter((document) => documentKind(document) === "cv" && String(document.document_id).startsWith("artifact::"));
+  const primaryCv = (roleCvs.length ? roleCvs : candidates.filter((document) => documentKind(document) === "cv"))
+    .sort((left, right) => extensionRank(left) - extensionRank(right))[0];
+  return [
+    ...(primaryCv ? [primaryCv.document_id] : []),
+    ...candidates.filter((document) => documentKind(document) !== "cv").map((document) => document.document_id),
+  ];
 }

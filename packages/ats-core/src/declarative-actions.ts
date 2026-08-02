@@ -2,6 +2,7 @@
 
 export type DeclarativeAction =
   | { type: "fill_text" | "fill_rich_text"; fieldId: string; value: string }
+  | { type: "select_combobox_option"; fieldId: string; value: string; optionSelector: string; acceptedStateSelector?: string }
   | { type: "select"; fieldId: string; value: string }
   | { type: "set_date"; fieldId: string; value: string; monthFieldId?: string; yearFieldId?: string; datePickerSelector?: string }
   | { type: "set_checkbox" | "set_radio"; fieldId: string; checked: boolean }
@@ -22,7 +23,7 @@ export type DeclarativePlan = {
 };
 
 export type NativeValueAction = Extract<DeclarativeAction, {
-  type: "fill_text" | "fill_rich_text" | "select" | "set_date" | "set_checkbox" | "set_radio"
+  type: "fill_text" | "fill_rich_text" | "select_combobox_option" | "select" | "set_date" | "set_checkbox" | "set_radio"
 }>;
 
 export type ActionExecution =
@@ -32,7 +33,7 @@ export type ActionExecution =
   | { status: "rejected"; actionType: string; reason: string };
 
 const actionTypes = new Set([
-  "fill_text", "fill_rich_text", "select", "set_date", "set_checkbox", "set_radio",
+  "fill_text", "fill_rich_text", "select_combobox_option", "select", "set_date", "set_checkbox", "set_radio",
   "add_repeatable_section", "upload_document", "propose_intermediate_navigation",
 ]);
 
@@ -43,7 +44,8 @@ function record(value: unknown): value is Record<string, unknown> {
 export function isDeclarativeAction(value: unknown): value is DeclarativeAction {
   if (!record(value) || !actionTypes.has(String(value.type)) || Object.keys(value).some((key) =>
     !["type", "fieldId", "value", "checked", "sectionId", "values", "documentId", "documentVersion",
-      "stepId", "selector", "expectedTransition", "controlKind", "monthFieldId", "yearFieldId", "datePickerSelector"].includes(key))) return false;
+      "stepId", "selector", "expectedTransition", "controlKind", "monthFieldId", "yearFieldId", "datePickerSelector",
+      "optionSelector", "acceptedStateSelector"].includes(key))) return false;
   if (typeof value.type !== "string") return false;
   if (["fill_text", "fill_rich_text", "select", "set_date"].includes(value.type)) {
     if (typeof value.fieldId !== "string" || typeof value.value !== "string") return false;
@@ -51,6 +53,11 @@ export function isDeclarativeAction(value: unknown): value is DeclarativeAction 
     return (value.monthFieldId === undefined && value.yearFieldId === undefined ||
       typeof value.monthFieldId === "string" && typeof value.yearFieldId === "string") &&
       (value.datePickerSelector === undefined || typeof value.datePickerSelector === "string");
+  }
+  if (value.type === "select_combobox_option") {
+    return typeof value.fieldId === "string" && typeof value.value === "string" &&
+      typeof value.optionSelector === "string" && value.optionSelector.length > 0 &&
+      (value.acceptedStateSelector === undefined || typeof value.acceptedStateSelector === "string");
   }
   if (["set_checkbox", "set_radio"].includes(value.type)) {
     return typeof value.fieldId === "string" && typeof value.checked === "boolean";
@@ -226,6 +233,9 @@ export function executeNativeValueAction(
 ): ActionExecution {
   const control = resolveControl(document, action.fieldId, resolve);
   if (!control) return { status: "unresolved", actionType: action.type, reason: "Target control is unsupported, closed, or unavailable." };
+  if (action.type === "select_combobox_option") {
+    return { status: "unresolved", actionType: action.type, reason: "Combobox options require the asynchronous centralized executor." };
+  }
   if (control.tagName.toLowerCase() === "button" || (control.tagName.toLowerCase() === "input" && ["submit", "button", "image", "reset"].includes((control as HTMLInputElement).type))) {
     return { status: "rejected", actionType: action.type, reason: "Terminal or button controls are never executable." };
   }
@@ -252,6 +262,57 @@ export function executeNativeValueAction(
   const written = writeControlValue(document, action.fieldId, expected, resolve);
   if (!written.supported || !written.valid || written.value !== expected) {
     return { status: "unresolved", actionType: action.type, reason: written.messages.join(" ") || "Deterministic readback or validation failed." };
+  }
+  return { status: "applied", actionType: action.type };
+}
+
+export async function executeComboboxOptionAction(
+  document: Document,
+  action: Extract<NativeValueAction, { type: "select_combobox_option" }>,
+  resolve: (fieldId: string) => Element | null = (fieldId) => document.getElementById(fieldId),
+): Promise<ActionExecution> {
+  const control = resolveControl(document, action.fieldId, resolve);
+  if (!(control instanceof HTMLInputElement) || ["submit", "button", "file"].includes(control.type)) {
+    return { status: "unresolved", actionType: action.type, reason: "The declared combobox input is unavailable." };
+  }
+  control.focus();
+  setProperty(control, "value", action.value);
+  emitFrameworkEvents(control);
+  const choose = (): HTMLElement | null => {
+    const options = Array.from(document.querySelectorAll<HTMLElement>(action.optionSelector))
+      .filter((item) => item.getAttribute("aria-disabled") !== "true" && !item.hasAttribute("disabled"));
+    const exact = options.filter((item) => {
+      const label = String(item.getAttribute("data-value") || item.textContent || "").trim().toLowerCase();
+      return label === action.value.trim().toLowerCase();
+    });
+    return exact.length === 1 ? exact[0]! : options.length === 1 ? options[0]! : null;
+  };
+  let option = choose();
+  if (!option) {
+    option = await new Promise<HTMLElement | null>((resolveOption) => {
+      const observer = new MutationObserver(() => {
+        const candidate = choose();
+        if (!candidate) return;
+        observer.disconnect();
+        clearTimeout(timeout);
+        resolveOption(candidate);
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      const timeout = setTimeout(() => { observer.disconnect(); resolveOption(null); }, 2_000);
+    });
+  }
+  if (!option) {
+    control.blur();
+    return { status: "unresolved", actionType: action.type, reason: "The combobox did not expose one deterministic matching option." };
+  }
+  option.click();
+  await Promise.resolve();
+  const accepted = action.acceptedStateSelector
+    ? document.querySelector<HTMLInputElement>(action.acceptedStateSelector)
+    : null;
+  const visibleValue = control.value.trim();
+  if (!visibleValue || (accepted && !accepted.value.trim())) {
+    return { status: "unresolved", actionType: action.type, reason: "The combobox did not retain a verified selected state." };
   }
   return { status: "applied", actionType: action.type };
 }

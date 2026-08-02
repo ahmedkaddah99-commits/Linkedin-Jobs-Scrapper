@@ -591,6 +591,63 @@ class ApplicationPackage:
                 }
                 for answer in self.answers
             ],
+            "candidate": {
+                "firstName": self.candidate.first_name,
+                "lastName": self.candidate.last_name,
+                "fullName": self.candidate.full_name,
+                "email": self.candidate.email,
+                "phone": self.candidate.phone,
+                "source": self.candidate.source,
+                "approved": self.candidate.approved,
+                "provenance": self.candidate.provenance,
+                "contentHash": self.candidate.content_hash,
+            },
+            "experiences": [
+                {
+                    "sourceExperienceId": item.source_experience_id,
+                    "roleTitle": item.role_title,
+                    "company": item.company,
+                    "period": item.period,
+                    "location": item.location,
+                    "bullets": [
+                        {
+                            "bulletId": bullet.bullet_id,
+                            "approvedText": bullet.approved_text,
+                            "sourceExperienceId": bullet.source_experience_id,
+                            "provenanceId": bullet.provenance_id,
+                            "contentHash": bullet.content_hash,
+                        }
+                        for bullet in item.bullets
+                    ],
+                    "contentHash": item.content_hash,
+                }
+                for item in self.experiences
+            ],
+            "education": [
+                {
+                    "institution": item.institution,
+                    "degree": item.degree,
+                    "period": item.period,
+                    "contentHash": item.content_hash,
+                }
+                for item in self.education
+            ],
+            "skills": [{"value": item.value, "contentHash": item.content_hash} for item in self.skills],
+            "languages": [{"value": item.value, "contentHash": item.content_hash} for item in self.languages],
+            "standardAnswers": [
+                {
+                    "fieldIntent": answer.field_intent,
+                    "label": answer.label,
+                    "proposedValue": answer.proposed_value,
+                    "source": answer.source,
+                    "sensitivity": answer.sensitivity,
+                    "scope": answer.scope,
+                    "confidence": answer.confidence,
+                    "requiresReview": answer.requires_review,
+                    "reasons": list(answer.reasons),
+                }
+                for answer in self.standard_answers
+            ],
             "documents": [
                 {
                     "documentId": doc.document_id,

@@ -12,10 +12,12 @@ from unittest.mock import patch
 from backend import create_backend
 from backend.api.routes.assisted_apply_packages import (
     _canonical_application_form_url,
+    _phone_from_source_text,
     _prepare_package,
     _supported_portal,
 )
 from backend.domain.models import (
+    ArtifactRecord,
     CAREER_PROFILE_STATUS_READY_FOR_TAILORING,
     CareerProfile,
     JobRecord,
@@ -234,6 +236,15 @@ class AssistedApplyLaunchPrepareTests(unittest.TestCase):
         self.assertEqual(package.education[0].institution, "Example University")
         self.assertEqual([fact.value for fact in package.skills], ["Python", "Distributed systems"])
         self.assertEqual([fact.value for fact in package.languages], ["English", "German"])
+        extension_payload = package.to_extension_payload()
+        self.assertEqual(extension_payload["candidate"]["fullName"], "Ada Lovelace")
+        self.assertEqual(extension_payload["experiences"][0]["sourceExperienceId"], "exp_current")
+        self.assertEqual(extension_payload["education"][0]["institution"], "Example University")
+        self.assertEqual([item["value"] for item in extension_payload["skills"]], ["Python", "Distributed systems"])
+
+    def test_recovers_only_a_bounded_international_phone_from_cv_source_text(self):
+        self.assertEqual(_phone_from_source_text("Phone: +49 176 12345678\nBerlin"), "+49 176 12345678")
+        self.assertEqual(_phone_from_source_text("Employment: 2021-01 - 2024-08"), "")
 
     def test_accepts_ready_legacy_workspace_docx_stored_as_octet_stream(self):
         docx_bytes = b"PK\x03\x04Runr DOCX fixture"
@@ -273,7 +284,7 @@ class AssistedApplyLaunchPrepareTests(unittest.TestCase):
         self.assertEqual(package.documents[0].file_name, "Ada CV.docx")
 
     def test_refuses_document_identifiers_outside_the_candidate_library(self):
-        with self.assertRaisesRegex(ValueError, "Runr document library"):
+        with self.assertRaisesRegex(PermissionError, "associated with this application run"):
             self._prepare(
                 {
                     "run_id": self.run.id,
@@ -282,6 +293,48 @@ class AssistedApplyLaunchPrepareTests(unittest.TestCase):
                     "confirm_standard_profile": True,
                 }
             )
+
+    def test_accepts_only_owned_exact_job_role_artifacts(self):
+        tailored_bytes = b"%PDF-1.4\n% tailored role CV\n%%EOF\n"
+        object_key = f"runs/{self.run.id}/greenhouse_job_1/tailored-cv.pdf"
+        self.app.object_storage.put(object_key, tailored_bytes, content_type="application/pdf")
+        self.app.upsert_artifact(
+            self.run.id,
+            ArtifactRecord(
+                artifact_id="greenhouse_job_1_cv_pdf",
+                artifact_type="cv_pdf",
+                path="tailored-cv.pdf",
+                metadata={
+                    "job_id": "greenhouse_job_1",
+                    "document_asset_kind": "generated_cv",
+                    "document_name": "Tailored CV.pdf",
+                    "object_key": object_key,
+                    "object_content_type": "application/pdf",
+                    "content_sha256": hashlib.sha256(tailored_bytes).hexdigest(),
+                },
+            ),
+        )
+        _, response = self._prepare({
+            "run_id": self.run.id,
+            "job_id": "greenhouse_job_1",
+            "document_ids": [f"artifact::{self.run.id}::greenhouse_job_1_cv_pdf"],
+            "confirm_standard_profile": True,
+        })
+        package = self.app._assisted_apply_package_service._store.get(response["package_id"])
+        self.assertEqual(package.documents[0].document_kind, "cv")
+        self.assertEqual(package.documents[0].file_name, "Tailored CV.pdf")
+        self.assertEqual(package.documents[0].object_key, object_key)
+
+        artifact = self.app.get_artifact(self.run.id, "greenhouse_job_1_cv_pdf")
+        artifact.metadata["job_id"] = "another-job"
+        self.app.upsert_artifact(self.run.id, artifact)
+        with self.assertRaisesRegex(PermissionError, "associated with this job"):
+            self._prepare({
+                "run_id": self.run.id,
+                "job_id": "greenhouse_job_1",
+                "document_ids": [f"artifact::{self.run.id}::greenhouse_job_1_cv_pdf"],
+                "confirm_standard_profile": True,
+            })
 
     def test_accepts_only_https_hosts_covered_by_extension_permissions(self):
         self.assertEqual(_supported_portal("https://boards.greenhouse.io/acme/jobs/123", "greenhouse"), "greenhouse")

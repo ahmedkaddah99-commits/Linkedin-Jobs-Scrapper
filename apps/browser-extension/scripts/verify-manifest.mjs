@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 const targetBrowser = process.argv[2] || "chrome";
 const outputDirectory = resolve(`.output/${targetBrowser}-mv3`);
 const manifest = JSON.parse(await readFile(join(outputDirectory, "manifest.json"), "utf8"));
+const packageMetadata = JSON.parse(await readFile(resolve("package.json"), "utf8"));
 const reservedExtensionId = "najcdfohhfgbjpbokhmmekkahghfhegp";
 const expectedOptionalHostPermissions = [
   "https://*.lever.co/*",
@@ -19,7 +20,10 @@ assert(manifest.manifest_version === 3, "Expected a Manifest V3 build.");
 assert(typeof manifest.background?.service_worker === "string", "Expected an MV3 service worker.");
 assert(manifest.side_panel?.default_path === "sidepanel.html", "Expected the Runr side panel entrypoint.");
 assert(manifest.action, "Expected an explicit toolbar action.");
-assert(manifest.version === "0.2.0", "Expected store-ready version 0.2.0.");
+assert(
+  manifest.version === packageMetadata.version,
+  `Expected manifest version ${packageMetadata.version}, received ${manifest.version}.`,
+);
 
 if (targetBrowser === "chrome") {
   const publicKeyBytes = Buffer.from(String(manifest.key || ""), "base64");

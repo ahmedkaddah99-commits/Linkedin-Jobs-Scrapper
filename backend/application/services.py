@@ -3185,6 +3185,23 @@ class BackendApplication:
             extension_origin=extension_origin,
         )
 
+    def save_assisted_apply_exact_standard_answer(
+        self,
+        *,
+        package_id: str,
+        question_label: str,
+        answer_value: str,
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.save_exact_standard_answer_for_extension(
+            package_id=package_id,
+            question_label=question_label,
+            answer_value=answer_value,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
     def create_assisted_apply_preparation(self, *, user_id: str, package_id: str):
         return self._assisted_apply_preparation_service.create(user_id=user_id, package_id=package_id)
 

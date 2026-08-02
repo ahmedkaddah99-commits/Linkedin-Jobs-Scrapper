@@ -42,9 +42,27 @@ test("one eligible document is selected by default", () => {
   assert.deepEqual(defaultSelectedDocumentIds([pdf()]), ["asset::cv-1"]);
 });
 
-test("multiple documents default to the workspace CV only", () => {
+test("multiple approved documents default to the CV and attachments", () => {
   assert.deepEqual(
     defaultSelectedDocumentIds([pdf(), pdf({ document_id: "asset::cover", asset_kind: "cover_letter", display_name: "Cover.pdf" })]),
-    ["asset::cv-1"],
+    ["asset::cv-1", "asset::cover"],
   );
+});
+
+test("prefers the exact role tailored PDF and includes role application attachments", () => {
+  const role = { run_id: "run-1", job_id: "job-1" };
+  const documents = [
+    pdf(),
+    pdf({ document_id: "artifact::run-1::cv-docx", run_id: "run-1", job_id: "job-1", asset_kind: "generated_cv", display_name: "Tailored CV.docx", content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }),
+    pdf({ document_id: "artifact::run-1::cv-pdf", run_id: "run-1", job_id: "job-1", asset_kind: "generated_cv", display_name: "Tailored CV.pdf" }),
+    pdf({ document_id: "artifact::run-1::letter", run_id: "run-1", job_id: "job-1", asset_kind: "motivation_letter", display_name: "Motivation letter.pdf" }),
+    pdf({ document_id: "artifact::run-2::foreign", run_id: "run-2", job_id: "job-1", asset_kind: "generated_cv" }),
+  ];
+  const candidates = candidateDocuments(documents, role);
+  assert.deepEqual(candidates.map((item) => item.document_id), [
+    "asset::cv-1", "artifact::run-1::cv-docx", "artifact::run-1::cv-pdf", "artifact::run-1::letter",
+  ]);
+  assert.deepEqual(defaultSelectedDocumentIds(candidates, role), [
+    "artifact::run-1::cv-pdf", "artifact::run-1::letter",
+  ]);
 });

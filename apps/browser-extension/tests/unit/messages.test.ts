@@ -15,6 +15,7 @@ import {
   isAdapterHealthTelemetry,
   AssistedApplyPreparationValidator,
   isAssistedApplyPreparationMessage,
+  isApplicationPackagePayload,
   isRunrWebLaunchRequest,
 } from "@runr/extension-messages";
 
@@ -210,6 +211,32 @@ describe("extension message boundaries", () => {
     expect(isPanelRequest({
       type: "RUN_GREENHOUSE_APPLICATION_PACKAGE", package: applicationPackage,
       replaceFieldIntents: ["application.city;submit"],
+    })).toBe(false);
+  });
+
+  it("validates structured Career Memory sections while retaining v1 compatibility", () => {
+    const legacy = {
+      packageId: "aa-structured", jobId: "job-structured", version: 1, schemaVersion: 1,
+      job: { jobId: "job-structured", title: "Engineer", company: "Acme", portal: "lever", location: "Remote" },
+      answers: [], documents: [], warnings: [],
+      policy: { permitSensitiveAutofill: false, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+    };
+    expect(isApplicationPackagePayload(legacy)).toBe(true);
+    const structured = {
+      ...legacy,
+      candidate: { firstName: "Ada", lastName: "Lovelace", fullName: "Ada Lovelace", email: "ada@example.com", phone: "+49 123", source: "career_memory", approved: true, provenance: "profile:1", contentHash: "hash" },
+      experiences: [{ sourceExperienceId: "exp-1", roleTitle: "Engineer", company: "Acme", period: "2024 - Present", location: "Berlin", bullets: [{ bulletId: "bullet-1", approvedText: "Built reliable systems.", sourceExperienceId: "exp-1", provenanceId: "prov-1", contentHash: "bullet-hash" }], contentHash: "experience-hash" }],
+      education: [{ institution: "Example University", degree: "BSc", period: "2018 - 2021", contentHash: "education-hash" }],
+      skills: [{ value: "TypeScript", contentHash: "skill-hash" }],
+      languages: [{ value: "English", contentHash: "language-hash" }],
+      standardAnswers: [{ fieldIntent: "question.exact.safe", label: "Why this role?", proposedValue: "Reliable systems", source: "scoped_preference", sensitivity: "standard", scope: "global", confidence: 1, requiresReview: false, reasons: [] }],
+    };
+    expect(isApplicationPackagePayload(structured)).toBe(true);
+    const firstExperience = structured.experiences[0]!;
+    const firstBullet = firstExperience.bullets[0]!;
+    expect(isApplicationPackagePayload({
+      ...structured,
+      experiences: [{ ...firstExperience, bullets: [{ ...firstBullet, approvedText: 7 }] }],
     })).toBe(false);
   });
 

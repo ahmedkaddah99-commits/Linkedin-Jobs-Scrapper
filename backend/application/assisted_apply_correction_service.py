@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -26,6 +28,21 @@ from backend.domain.application_package import ApplicationPackage, ApplicationPa
 from backend.repositories.contracts import BackendRepositories
 
 CORRECTION_TTL_DAYS = 365
+EXACT_QUESTION_PREFIX = "question.exact."
+
+
+def normalize_exact_question(value: object) -> str:
+    return " ".join(re.sub(r"[✱*]+", " ", str(value or "")).strip().casefold().split())
+
+
+def is_sensitive_exact_question(value: object) -> bool:
+    normalized = normalize_exact_question(value)
+    return bool(re.search(
+        r"\b(?:work authorization|visa|sponsorship|citizen|citizenship|date of birth|age|gender|sex|race|"
+        r"ethnicity|disability|veteran|religion|marital|salary|compensation|declaration|certify|signature|"
+        r"terms|privacy consent|criminal|conviction)\b",
+        normalized,
+    ))
 
 
 def _utc_now() -> datetime:
@@ -119,6 +136,17 @@ class ApplicationCorrectionStore:
                       AND superseded_at = '' AND expires_at > ?
                     ORDER BY created_at DESC""",
                 (user_id, *field_intents, now.isoformat()),
+            ).fetchall()
+        return [ApplicationCorrection.from_payload(dict(row)) for row in rows]
+
+    def list_active_exact_answers(self, user_id: str, now: datetime) -> list[ApplicationCorrection]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM assisted_apply_corrections
+                   WHERE user_id = ? AND field_intent LIKE ?
+                     AND superseded_at = '' AND expires_at > ?
+                   ORDER BY created_at DESC""",
+                (user_id, f"{EXACT_QUESTION_PREFIX}%", now.isoformat()),
             ).fetchall()
         return [ApplicationCorrection.from_payload(dict(row)) for row in rows]
 
@@ -217,3 +245,62 @@ class AssistedApplyCorrectionService:
                 reasons=[*answer.reasons, f"explicit_user_correction:{correction.scope}"],
             ))
         return result
+
+    def save_exact_standard_answer(
+        self,
+        *,
+        user_id: str,
+        package: ApplicationPackage,
+        question_label: str,
+        answer_value: str,
+    ) -> dict:
+        if package.user_id != str(user_id or "").strip():
+            raise PermissionError("Application package belongs to another user.")
+        label = normalize_exact_question(question_label)
+        value = str(answer_value or "").strip()
+        if not label or len(label) > 300 or not value or len(value) > 5_000:
+            raise ValueError("A bounded question label and answer are required.")
+        if is_sensitive_exact_question(label):
+            raise ValueError("Sensitive, legal, or demographic answers are never saved for automatic reuse.")
+        known_labels = {normalize_exact_question(item.label) for item in [*package.answers, *package.standard_answers]}
+        if label in known_labels:
+            raise ValueError("This answer is already owned by the immutable application package.")
+        digest = hashlib.sha256(label.encode("utf-8")).hexdigest()
+        now = self._now()
+        correction = ApplicationCorrection(
+            correction_id=f"aacorr_{token_urlsafe(24)}",
+            user_id=package.user_id,
+            source_package_id=package.package_id,
+            source_job_id=package.job_id,
+            field_intent=f"{EXACT_QUESTION_PREFIX}{digest}",
+            corrected_value=value,
+            scope=CORRECTION_SCOPE_GLOBAL,
+            scope_key="*",
+            provenance=f"exact_question:{label}",
+            created_at=now.isoformat(),
+            expires_at=(now + timedelta(days=CORRECTION_TTL_DAYS)).isoformat(),
+        )
+        self.store.save(correction)
+        return {"persisted": True, "scope": CORRECTION_SCOPE_GLOBAL, "correction_id": correction.correction_id}
+
+    def saved_standard_answers(self, user_id: str) -> list[ApplicationPackageAnswer]:
+        answers: list[ApplicationPackageAnswer] = []
+        seen: set[str] = set()
+        for correction in self.store.list_active_exact_answers(user_id, self._now()):
+            label = correction.provenance.removeprefix("exact_question:")
+            if not label or correction.field_intent in seen or is_sensitive_exact_question(label):
+                continue
+            seen.add(correction.field_intent)
+            answers.append(ApplicationPackageAnswer.from_payload({
+                "field_intent": correction.field_intent,
+                "label": label,
+                "proposed_value": correction.corrected_value,
+                "source": "scoped_preference",
+                "sensitivity": "standard",
+                "scope": "global",
+                "confidence": 1,
+                "requires_review": False,
+                "reasons": ["Exact non-sensitive question previously answered by the user."],
+                "provenance": correction.provenance,
+            }))
+        return answers

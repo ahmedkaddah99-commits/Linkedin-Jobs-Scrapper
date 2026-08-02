@@ -87,6 +87,29 @@ export function comparableLocalUrl(value: string): string {
   return url.toString().replace(/\/$/u, "");
 }
 
+export function isOwnedPreparationUrl(record: PreparationLocalRecord, value: string): boolean {
+  try {
+    const expected = new URL(record.applicationUrl);
+    const candidate = new URL(value);
+    if (expected.protocol !== "https:" || candidate.protocol !== "https:") {
+      return comparableLocalUrl(candidate.toString()) === comparableLocalUrl(expected.toString());
+    }
+    if (candidate.origin !== expected.origin) return false;
+    const expectedParts = expected.pathname.split("/").filter(Boolean);
+    const candidateParts = candidate.pathname.split("/").filter(Boolean);
+    if (record.ats === "lever") {
+      return expected.hostname.endsWith(".lever.co") && expectedParts.length >= 2 &&
+        candidateParts[0] === expectedParts[0] && candidateParts[1] === expectedParts[1];
+    }
+    const jobIndex = expectedParts.findIndex((part) => part === "jobs");
+    return expected.hostname === "boards.greenhouse.io" && jobIndex >= 0 &&
+      candidateParts[jobIndex] === "jobs" && candidateParts[jobIndex + 1] === expectedParts[jobIndex + 1] &&
+      candidateParts.slice(0, jobIndex).join("/") === expectedParts.slice(0, jobIndex).join("/");
+  } catch {
+    return false;
+  }
+}
+
 export function classifyPreparationTabChange(
   record: PreparationLocalRecord,
   change: { url?: string; discarded?: boolean },
@@ -96,8 +119,7 @@ export function classifyPreparationTabChange(
   const candidate = change.url ?? liveUrl;
   if (!candidate) return null;
   try {
-    return comparableLocalUrl(candidate) === comparableLocalUrl(record.applicationUrl)
-      ? null : "navigation_mismatch";
+    return isOwnedPreparationUrl(record, candidate) ? null : "navigation_mismatch";
   } catch {
     return "navigation_mismatch";
   }
@@ -108,6 +130,6 @@ export function canActivateExactPreparationTab(
   tab: { id?: number; url?: string; discarded?: boolean } | null,
 ): boolean {
   if (!record || record.status !== "ready_for_review" || !tab || tab.id !== record.tabId || tab.discarded) return false;
-  try { return comparableLocalUrl(tab.url ?? "") === comparableLocalUrl(record.applicationUrl); }
+  try { return isOwnedPreparationUrl(record, tab.url ?? ""); }
   catch { return false; }
 }

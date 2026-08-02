@@ -61,6 +61,7 @@ import {
   canRetryPreparation,
   classifyPreparationTabChange,
   hasActivePreparation,
+  isOwnedPreparationUrl,
   readPreparationLocalRecord,
   writePreparationLocalRecord,
   type PreparationLocalRecord,
@@ -544,10 +545,10 @@ async function startPreparationCommand(
   let completedDocuments = 0;
   for (const document of applicationPackage.documents) {
     const upload = await uploadSelectedDocumentOnTab(tab.id, applicationPackage, document.documentId);
-    if (upload.status !== "uploaded") {
+    if (upload.status === "uploaded") completedDocuments += 1;
+    else if (!["unsupported_role", "control_unavailable", "existing_value"].includes(upload.telemetry.errorCategory)) {
       throw new Error("A selected application document could not be attached and verified.");
     }
-    completedDocuments += 1;
   }
   const completedCount = completedFields + completedDocuments;
   const totalCount = Math.max(completedCount, execution.reviewFieldCount ?? completedCount, 1);
@@ -555,6 +556,49 @@ async function startPreparationCommand(
   await reportPreparationProgress(message, "ready_for_review", completedCount, totalCount);
   await writePreparationLocalRecord({ ...(await readPreparationLocalRecord() ?? localRecord), status: "ready_for_review", completedCount, totalCount, updatedAt: now() });
   return { ok: true, preparationId: message.preparationId, packageId: message.packageId, ats: portal, permissionGranted: true, status: "ready_for_review" };
+}
+
+const preparationRefreshes = new Set<number>();
+
+async function refreshOwnedPreparationTab(record: PreparationLocalRecord): Promise<void> {
+  if (preparationRefreshes.has(record.tabId) || !["preparing", "ready_for_review", "review_activated"].includes(record.status)) return;
+  preparationRefreshes.add(record.tabId);
+  const resumeStatus: PreparationLocalStatus = record.status === "review_activated" ? "review_activated" : "ready_for_review";
+  try {
+    const tab = await browser.tabs.get(record.tabId);
+    if (!tab.url || !isOwnedPreparationUrl(record, tab.url) || tab.discarded) return;
+    const applicationPackage = await readTabPackage(record.tabId);
+    if (!applicationPackage || applicationPackage.packageId !== record.packageId || applicationPackage.version !== record.packageVersion) {
+      await updatePreparationLocalStatus("retry_required");
+      return;
+    }
+    await updatePreparationLocalStatus("preparing");
+    const execution = record.ats === "greenhouse"
+      ? await runGreenhousePackageOnTab(record.tabId, applicationPackage)
+      : await runLeverPackageOnTab(record.tabId, applicationPackage);
+    const newlyFilled = execution.executions.filter((result) => result.status === "filled").length;
+    const alreadyUploaded = await readUploadedDocuments(record.tabId);
+    let newlyUploaded = 0;
+    for (const document of applicationPackage.documents) {
+      if (alreadyUploaded.some((item) => item.documentId === document.documentId && item.documentVersion === document.documentVersion)) continue;
+      const upload = await uploadSelectedDocumentOnTab(record.tabId, applicationPackage, document.documentId);
+      if (upload.status === "uploaded") newlyUploaded += 1;
+      else if (!["unsupported_role", "control_unavailable", "existing_value"].includes(upload.telemetry.errorCategory)) {
+        throw new Error("A selected application document could not be attached and verified.");
+      }
+    }
+    const current = await readPreparationLocalRecord();
+    if (!current || current.tabId !== record.tabId) return;
+    const completedCount = current.completedCount + newlyFilled + newlyUploaded;
+    const totalCount = Math.max(current.totalCount, completedCount, execution.reviewFieldCount ?? 0, 1);
+    // The durable backend remains at its review/active state. Page-level
+    // reinspection is browser-local and must not manufacture a second lifecycle.
+    await writePreparationLocalRecord({ ...current, status: resumeStatus, completedCount, totalCount, updatedAt: now() });
+  } catch {
+    await updatePreparationLocalStatus("failed");
+  } finally {
+    preparationRefreshes.delete(record.tabId);
+  }
 }
 
 async function handlePreparationCommand(
@@ -876,12 +920,21 @@ export default defineBackground(() => {
     await browser.sidePanel.setOptions({ tabId: tab.id, path: "sidepanel.html", enabled });
     if (enabled) await browser.sidePanel.open({ tabId: tab.id });
   });
+  void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {
+    console.warn("Runr Assisted Apply could not configure toolbar side-panel behavior.");
+  });
 
   browser.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
     if (!isExactRunrWebSender(sender, runtimeConfig.frontendOrigin)) {
       return undefined;
     }
     if (isWebPreparationCommand(message)) {
+      if (message.type === "start" && sender.tab?.windowId != null) {
+        void browser.sidePanel.open({ windowId: sender.tab.windowId }).catch(() => {
+          // Chrome may not preserve the webpage gesture for external messaging;
+          // preparation remains fully functional with the panel closed.
+        });
+      }
       void handlePreparationCommand(message)
         .then(sendResponse)
         .catch((error: unknown) => sendResponse({
@@ -916,6 +969,32 @@ export default defineBackground(() => {
         (message as { type?: unknown }).type === "ASSISTED_APPLY_CONTENT_READY") {
       const tabId = sender.tab?.id;
       if (sender.id === browser.runtime.id && tabId != null) preparationReadyWaiters.get(tabId)?.();
+      return { ok: true };
+    }
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_DYNAMIC_FORM_CHANGED") {
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0) return undefined;
+      const record = await readPreparationLocalRecord();
+      if (record?.tabId === tabId) void refreshOwnedPreparationTab(record);
+      return { ok: true };
+    }
+    if (message && typeof message === "object" &&
+        (message as { type?: unknown }).type === "ASSISTED_APPLY_SAVE_EXACT_ANSWER") {
+      const value = message as { packageId?: unknown; questionLabel?: unknown; answerValue?: unknown };
+      const tabId = sender.tab?.id;
+      if (sender.id !== browser.runtime.id || tabId == null || sender.frameId !== 0 ||
+          typeof value.packageId !== "string" || typeof value.questionLabel !== "string" ||
+          typeof value.answerValue !== "string" || value.questionLabel.length > 300 || value.answerValue.length > 5_000) return undefined;
+      const applicationPackage = await readTabPackage(tabId);
+      if (!applicationPackage || applicationPackage.packageId !== value.packageId) return undefined;
+      void preparationApiRequest("/assisted-apply/extension/standard-answers", {
+        package_id: value.packageId,
+        question_label: value.questionLabel,
+        answer_value: value.answerValue,
+      }).catch(() => {
+        // Rejected/sensitive answers intentionally remain local to the ATS form.
+      });
       return { ok: true };
     }
     if (import.meta.env.MODE === "testing" && message && typeof message === "object" &&
@@ -1157,6 +1236,9 @@ export default defineBackground(() => {
       if (!record || record.tabId !== tabId) return;
       const status = classifyPreparationTabChange(record, changeInfo, tab.url);
       if (status) await updatePreparationLocalStatus(status);
+      else if (changeInfo.status === "complete" && tab.url && isOwnedPreparationUrl(record, tab.url)) {
+        await refreshOwnedPreparationTab(record);
+      }
     });
   });
 });

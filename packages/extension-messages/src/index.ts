@@ -458,6 +458,36 @@ export interface ApplicationPackagePayload {
   schemaVersion: number;
   job: ApplicationPackageJob;
   answers: ApplicationPackageAnswer[];
+  candidate?: {
+    firstName: string;
+    lastName: string;
+    fullName: string;
+    email: string;
+    phone: string;
+    source: string;
+    approved: boolean;
+    provenance: string;
+    contentHash: string;
+  };
+  experiences?: Array<{
+    sourceExperienceId: string;
+    roleTitle: string;
+    company: string;
+    period: string;
+    location: string;
+    bullets: Array<{
+      bulletId: string;
+      approvedText: string;
+      sourceExperienceId: string;
+      provenanceId: string;
+      contentHash: string;
+    }>;
+    contentHash: string;
+  }>;
+  education?: Array<{ institution: string; degree: string; period: string; contentHash: string }>;
+  skills?: Array<{ value: string; contentHash: string }>;
+  languages?: Array<{ value: string; contentHash: string }>;
+  standardAnswers?: ApplicationPackageAnswer[];
   documents: ApplicationPackageDocumentMeta[];
   warnings: string[];
   policy: {
@@ -794,6 +824,35 @@ export function isApplicationPackagePayload(value: unknown): value is Applicatio
       typeof answer.scope === "string" && typeof answer.confidence === "number" &&
       answer.confidence >= 0 && answer.confidence <= 1 &&
       typeof answer.requiresReview === "boolean" && isStringArray(answer.reasons)) &&
+    (value.candidate === undefined || (isRecord(value.candidate) &&
+      typeof value.candidate.firstName === "string" && typeof value.candidate.lastName === "string" &&
+      typeof value.candidate.fullName === "string" && typeof value.candidate.email === "string" &&
+      typeof value.candidate.phone === "string" && typeof value.candidate.source === "string" &&
+      typeof value.candidate.provenance === "string" && typeof value.candidate.contentHash === "string" &&
+      typeof value.candidate.approved === "boolean")) &&
+    (value.experiences === undefined || (Array.isArray(value.experiences) && value.experiences.length <= 100 &&
+      value.experiences.every((item) => isRecord(item) &&
+        ["sourceExperienceId", "roleTitle", "company", "period", "location", "contentHash"]
+          .every((key) => typeof item[key] === "string") &&
+        Array.isArray(item.bullets) && item.bullets.length <= 100 && item.bullets.every((bullet) => isRecord(bullet) &&
+          ["bulletId", "approvedText", "sourceExperienceId", "provenanceId", "contentHash"]
+            .every((key) => typeof bullet[key] === "string"))))) &&
+    (value.education === undefined || (Array.isArray(value.education) && value.education.length <= 100 &&
+      value.education.every((item) => isRecord(item) &&
+        ["institution", "degree", "period", "contentHash"].every((key) => typeof item[key] === "string")))) &&
+    (value.skills === undefined || (Array.isArray(value.skills) && value.skills.length <= 500 &&
+      value.skills.every((item) => isRecord(item) && typeof item.value === "string" && typeof item.contentHash === "string"))) &&
+    (value.languages === undefined || (Array.isArray(value.languages) && value.languages.length <= 100 &&
+      value.languages.every((item) => isRecord(item) && typeof item.value === "string" && typeof item.contentHash === "string"))) &&
+    (value.standardAnswers === undefined || (Array.isArray(value.standardAnswers) &&
+      value.standardAnswers.every((answer) => isRecord(answer) &&
+        typeof answer.fieldIntent === "string" && typeof answer.label === "string" &&
+        typeof answer.proposedValue === "string" &&
+        ["profile_verified", "scoped_preference", "ai_suggestion"].includes(String(answer.source)) &&
+        ["standard", "personal", "legal", "demographic"].includes(String(answer.sensitivity)) &&
+        typeof answer.scope === "string" && typeof answer.confidence === "number" &&
+        answer.confidence >= 0 && answer.confidence <= 1 && typeof answer.requiresReview === "boolean" &&
+        isStringArray(answer.reasons)))) &&
     Array.isArray(value.documents) && value.documents.every((document) => isRecord(document) &&
       typeof document.documentId === "string" && document.documentId.length > 0 &&
       Number.isInteger(document.documentVersion) && Number(document.documentVersion) > 0 &&
