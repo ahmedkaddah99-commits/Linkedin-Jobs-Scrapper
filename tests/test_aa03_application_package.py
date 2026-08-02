@@ -240,6 +240,38 @@ class ApplicationPackageImmutableTests(unittest.TestCase):
             )
         self.assertEqual(payload["packageId"], package.package_id)
 
+    def test_extension_post_lookup_binds_launched_package(self):
+        """The authenticated extension POST completes the launch/bind handshake."""
+        app = self._create_app()
+        service = app._assisted_apply_package_service
+        uid = "user_extension_bind"
+        app.upsert_user({"user_id": uid, "email": "bind@t.com", "role": "admin", "is_active": True})
+        package = service.create_package(
+            user_id=uid,
+            job={"job_id": "j_bind", "title": "Bind", "company": "BC", "portal": "lever"},
+        )
+
+        with patch.object(
+            type(service._connection_service),
+            "authenticate_session",
+            return_value=(SimpleNamespace(user_id=uid), None),
+        ):
+            launched = service.launch_package(user_id=uid, package_id=package.package_id)
+            payload = service.get_or_bind_package_for_extension(
+                package_id=launched.package_id,
+                raw_session="session-token",
+                extension_origin=EXTENSION_ORIGIN,
+            )
+            rebound_payload = service.get_or_bind_package_for_extension(
+                package_id=launched.package_id,
+                raw_session="session-token",
+                extension_origin=EXTENSION_ORIGIN,
+            )
+
+        self.assertEqual(payload["packageId"], package.package_id)
+        self.assertEqual(rebound_payload["packageId"], package.package_id)
+        self.assertEqual(service._store.get(package.package_id).status, APPLICATION_PACKAGE_STATUS_BOUND)
+
     # ---- Fixed document versions ----
 
     def test_document_version_is_fixed_and_immutable(self):

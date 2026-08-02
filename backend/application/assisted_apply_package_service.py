@@ -431,6 +431,39 @@ class ApplicationPackageService:
             )
         return package.to_extension_payload()
 
+    def get_or_bind_package_for_extension(
+        self,
+        *,
+        package_id: str,
+        raw_session: str,
+        extension_origin: str,
+    ) -> dict[str, Any]:
+        """Authenticate and atomically consume a launched package lookup.
+
+        The preparation protocol carries only opaque package/preparation
+        identities. The extension session is the authority that transitions a
+        launched package to bound; binding IDs remain server-side.
+        """
+        user, _connection = self._connection_service.authenticate_session(
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+        package = self._store.get(package_id)
+        if package is None:
+            raise ValueError("Application package not found.")
+        if package.user_id != user.user_id:
+            raise PermissionError("Application package belongs to another user.")
+        if package.status == APPLICATION_PACKAGE_STATUS_LAUNCHED:
+            package = self.bind_package(
+                binding_id=package.launch_tab_binding_id,
+                extension_origin=extension_origin,
+            )
+        elif package.status != APPLICATION_PACKAGE_STATUS_BOUND:
+            raise ApplicationPackageStateError(
+                f"Package is {package.status}; only launched or bound packages can be retrieved by the extension."
+            )
+        return package.to_extension_payload()
+
     def save_correction_for_extension(
         self,
         *,

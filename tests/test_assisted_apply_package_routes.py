@@ -30,7 +30,7 @@ class _Application:
     def __init__(self):
         self.calls = []
 
-    def get_application_package_for_extension(self, **kwargs):
+    def get_or_bind_application_package_for_extension(self, **kwargs):
         self.calls.append(kwargs)
         return {"packageId": kwargs["package_id"], "version": 1}
 

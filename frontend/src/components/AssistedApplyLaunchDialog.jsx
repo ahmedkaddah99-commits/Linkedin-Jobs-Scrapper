@@ -99,6 +99,10 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
           confirm_standard_profile: true,
         },
       });
+      await request("/assisted-apply/packages/launch", {
+        method: "POST",
+        body: { package_id: prepared.package_id },
+      });
       const created = await request("/assisted-apply/preparations", {
         method: "POST",
         body: { package_id: prepared.package_id },

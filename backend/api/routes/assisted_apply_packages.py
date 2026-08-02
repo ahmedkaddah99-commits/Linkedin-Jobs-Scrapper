@@ -353,11 +353,21 @@ def _get_package_for_extension_post(context: ApiRouteContext) -> None:
     package_id = str(payload.get("package_id") or "").strip()
     if not package_id:
         raise ValueError("package_id is required.")
-    _send_package_for_extension(context, package_id)
+    _send_package_for_extension(context, package_id, bind_launched=True)
 
 
-def _send_package_for_extension(context: ApiRouteContext, package_id: str) -> None:
-    payload = context.application.get_application_package_for_extension(
+def _send_package_for_extension(
+    context: ApiRouteContext,
+    package_id: str,
+    *,
+    bind_launched: bool = False,
+) -> None:
+    get_package = (
+        context.application.get_or_bind_application_package_for_extension
+        if bind_launched
+        else context.application.get_application_package_for_extension
+    )
+    payload = get_package(
         package_id=package_id,
         raw_session=context.bearer_token(),
         extension_origin=context.request_client_origin(),

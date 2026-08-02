@@ -3107,6 +3107,19 @@ class BackendApplication:
             extension_origin=extension_origin,
         )
 
+    def get_or_bind_application_package_for_extension(
+        self,
+        *,
+        package_id: str,
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.get_or_bind_package_for_extension(
+            package_id=package_id,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
     def save_assisted_apply_correction(
         self,
         *,
