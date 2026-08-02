@@ -19,10 +19,11 @@ declare const chrome: {
     session: {
       get(keys?: null | string): Promise<Record<string, unknown>>;
       set(items: Record<string, unknown>): Promise<void>;
+      remove(keys: string | string[]): Promise<void>;
     };
   };
   tabs: {
-    query(queryInfo: Record<string, never>): Promise<Array<{ id?: number; url?: string }>>;
+    query(queryInfo: Record<string, never>): Promise<Array<{ id?: number; url?: string; active?: boolean }>>;
   };
 };
 
@@ -50,6 +51,8 @@ interface FixtureAuthState {
   documentDownloads: number;
   trackerConfirmations: number;
   lastOutcomePayload: Record<string, unknown> | null;
+  preparationReports: Array<Record<string, unknown>>;
+  preparationActions: Array<Record<string, unknown>>;
 }
 
 async function fixtureAuthState(): Promise<FixtureAuthState> {
@@ -685,6 +688,7 @@ test("binds an opaque package from the permitted Runr web origin to the employer
   await fixturePage.goto("http://127.0.0.1:4174/greenhouse-application.html");
   const panelPage = await context.newPage();
   await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await expect(panelPage.getByTestId("connection-status")).not.toHaveText("loading");
   if (await panelPage.getByTestId("connect-runr").isVisible().catch(() => false)) {
     await panelPage.getByTestId("connect-runr").click();
     await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
@@ -719,6 +723,121 @@ test("binds an opaque package from the permitted Runr web origin to the employer
   await fixturePage.close();
 });
 
+test("starts an inactive Lever preparation, fills and uploads, then activates that exact tab", async () => {
+  for (const page of context.pages()) await page.close();
+  await serviceWorker.evaluate(async () => {
+    await chrome.storage.session.remove("assisted-apply-preparation:local:v1");
+  });
+
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await expect(panelPage.getByTestId("connection-status")).not.toHaveText("loading");
+  if (await panelPage.getByTestId("connect-runr").isVisible().catch(() => false)) {
+    await panelPage.getByTestId("connect-runr").click();
+    await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
+  }
+  const runrWebPage = await context.newPage();
+  await runrWebPage.goto("http://127.0.0.1:4174/runr-web-launch.html");
+  await runrWebPage.bringToFront();
+
+  const preparationId = "prep_fixture_live_start";
+  const packageId = "aapkg_fixture_preparation_start";
+  const startMessageId = `msg_start_${Date.now()}`;
+  const startResponse = await runrWebPage.evaluate(
+    async ({ id, preparationId, packageId, startMessageId }) => chrome.runtime.sendMessage(id, {
+      protocol: "runr.assisted_apply.preparation",
+      protocolVersion: 1,
+      type: "start",
+      source: "web",
+      messageId: startMessageId,
+      preparationId,
+      packageId,
+      emittedAt: new Date().toISOString(),
+      capabilities: {
+        adapters: ["greenhouse", "lever"],
+        capabilities: ["fill", "document_attachment"],
+      },
+    }),
+    { id: extensionId, preparationId, packageId, startMessageId },
+  );
+  if (!(startResponse as { ok?: boolean }).ok) {
+    expect(startResponse).toMatchObject({ status: "permission_required" });
+    await panelPage.reload();
+    await panelPage.getByRole("button", { name: "Grant portal access" }).click();
+    const retryResponse = await runrWebPage.evaluate(
+      async ({ id, preparationId, packageId, startMessageId }) => chrome.runtime.sendMessage(id, {
+        protocol: "runr.assisted_apply.preparation",
+        protocolVersion: 1,
+        type: "retry",
+        source: "web",
+        messageId: `msg_retry_${Date.now()}`,
+        preparationId,
+        packageId,
+        emittedAt: new Date().toISOString(),
+        retryOf: startMessageId,
+      }),
+      { id: extensionId, preparationId, packageId, startMessageId },
+    );
+    if (!(retryResponse as { ok?: boolean }).ok) throw new Error(JSON.stringify(retryResponse));
+    expect(retryResponse).toMatchObject({ status: "retrying", ats: "lever" });
+  } else {
+    expect(startResponse).toMatchObject({ status: "ready_for_review", ats: "lever" });
+  }
+
+  const leverPage = context.pages().find((page) => page.url().endsWith("/lever-application.html"));
+  expect(leverPage).toBeDefined();
+  if (!leverPage) throw new Error("The inactive Lever application tab was not created.");
+  const leverTabBeforeReview = await serviceWorker.evaluate(async () =>
+    (await chrome.tabs.query({})).find((tab) => tab.url?.endsWith("/lever-application.html")),
+  );
+  expect(leverTabBeforeReview?.active).toBe(false);
+  await expect(leverPage.locator('input[name="name"]')).toHaveValue("Fixture Candidate");
+  await expect(leverPage.locator('input[name="email"]')).toHaveValue("fixture.candidate@example.com");
+  await expect(leverPage.locator('input[name="phone"]')).toHaveValue("+49 30 000000");
+  expect(await leverPage.locator('#lever-resume').evaluate(
+    (input: HTMLInputElement) => input.files?.[0]?.name,
+  )).toBe("Lever CV.pdf");
+
+  for (const attribute of [
+    "data-submit-clicks", "data-aa201-submit-events", "data-aa201-request-submit-calls",
+    "data-aa201-form-submit-calls", "data-aa201-enter-submissions", "data-aa201-terminal-clicks",
+    "data-aa201-terminal-requests", "data-aa201-success-transitions", "data-aa201-final-navigation",
+  ]) {
+    await expect(leverPage.locator("body")).toHaveAttribute(attribute, "0");
+  }
+  const fixtureState = await fixtureAuthState();
+  const preparationReports = fixtureState.preparationReports.filter(
+    (report) => report.preparation_id === preparationId,
+  );
+  expect(preparationReports.map((report) => report.type)).toEqual(expect.arrayContaining([
+    "accepted", "progress", "ready_for_review",
+  ]));
+  for (const report of preparationReports) {
+    expect(report.result).not.toHaveProperty("reviewId");
+  }
+
+  const reviewResponse = await runrWebPage.evaluate(
+    async ({ id, preparationId, packageId }) => chrome.runtime.sendMessage(id, {
+      protocol: "runr.assisted_apply.preparation",
+      protocolVersion: 1,
+      type: "review_activate",
+      source: "web",
+      messageId: `msg_review_${Date.now()}`,
+      preparationId,
+      packageId,
+      emittedAt: new Date().toISOString(),
+      reviewId: preparationId,
+    }),
+    { id: extensionId, preparationId, packageId },
+  );
+  expect(reviewResponse).toMatchObject({ ok: true, status: "activated" });
+  const leverTabAfterReview = await serviceWorker.evaluate(async () =>
+    (await chrome.tabs.query({})).find((tab) => tab.url?.endsWith("/lever-application.html")),
+  );
+  expect(leverTabAfterReview?.active).toBe(true);
+  await expect(leverPage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
+});
+
 test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", async () => {
   for (const page of context.pages()) await page.close();
   const fixturePage = await context.newPage();
@@ -730,6 +849,7 @@ test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", 
     await panelPage.getByTestId("connect-runr").click();
     await expect(panelPage.getByTestId("connection-status")).toHaveText("connected");
   }
+  const grantBaseline = await fixtureAuthState();
 
   const response = await panelPage.evaluate(() => chrome.runtime.sendMessage({
     type: "UPLOAD_SELECTED_DOCUMENT",
@@ -768,7 +888,10 @@ test("downloads, verifies, and uploads one fixed-version PDF CV to Greenhouse", 
   });
   await expect(fixturePage.locator("body")).toHaveAttribute("data-uploaded-cv", "Candidate CV.pdf");
   await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
-  await expect.poll(fixtureAuthState).toMatchObject({ documentGrants: 1, documentDownloads: 1 });
+  await expect.poll(fixtureAuthState).toMatchObject({
+    documentGrants: grantBaseline.documentGrants + 1,
+    documentDownloads: grantBaseline.documentDownloads + 1,
+  });
   const stored = await serviceWorker.evaluate(() => chrome.storage.session.get(null));
   const serialized = JSON.stringify(stored);
   expect(serialized).not.toContain("aadoc_fixture_");

@@ -22,6 +22,22 @@ test("only application-approved supported assets are candidates", () => {
   assert.deepEqual(documents.map((item) => item.document_id), ["asset::cv-1", "asset::docx"]);
 });
 
+test("admits only a structurally valid legacy workspace CV", () => {
+  const documents = candidateDocuments([
+    pdf({ document_id: "asset::legacy-pdf", metadata: {}, status: "ready" }),
+    pdf({
+      document_id: "asset::legacy-octet-docx",
+      display_name: "Legacy CV.docx",
+      content_type: "application/octet-stream",
+      metadata: {},
+      status: "ready",
+    }),
+    pdf({ document_id: "asset::legacy-processing", metadata: {}, status: "processing" }),
+  ]);
+  assert.deepEqual(documents.map((item) => item.document_id), ["asset::legacy-pdf"]);
+  assert.deepEqual(defaultSelectedDocumentIds(documents), ["asset::legacy-pdf"]);
+});
+
 test("one eligible document is selected by default", () => {
   assert.deepEqual(defaultSelectedDocumentIds([pdf()]), ["asset::cv-1"]);
 });

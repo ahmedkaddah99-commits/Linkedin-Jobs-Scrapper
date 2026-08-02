@@ -31,7 +31,7 @@ function normalizedPurposes(document) {
 
 function inferredMimeType(document) {
   const explicit = String(document?.content_type || document?.mime_type || "").trim().toLowerCase();
-  if (SUPPORTED_MIME_TYPES.has(explicit)) return explicit;
+  if (explicit) return SUPPORTED_MIME_TYPES.has(explicit) ? explicit : "";
   const name = String(document?.file_name || document?.path || document?.display_name || "").trim().toLowerCase();
   if (name.endsWith(".pdf")) return "application/pdf";
   if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -40,11 +40,16 @@ function inferredMimeType(document) {
 
 export function isApplicationDocument(document) {
   const assetKind = String(document?.asset_kind || "").trim().toLowerCase();
+  const purposes = normalizedPurposes(document);
+  const status = String(document?.status || "").trim().toLowerCase();
+  const isLegacyReadyWorkspaceCv = assetKind === "workspace_cv"
+    && purposes.size === 0
+    && (!status || status === "ready");
   return Boolean(
     String(document?.document_id || "").startsWith("asset::")
       && SUPPORTED_ASSET_KINDS.has(assetKind)
-      && normalizedPurposes(document).has("include_in_applications")
-      && !normalizedPurposes(document).has("private_never_attach")
+      && (purposes.has("include_in_applications") || isLegacyReadyWorkspaceCv)
+      && !purposes.has("private_never_attach")
       && inferredMimeType(document),
   );
 }

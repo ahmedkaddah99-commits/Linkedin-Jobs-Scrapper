@@ -10,7 +10,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from backend import create_backend
-from backend.api.routes.assisted_apply_packages import _prepare_package, _supported_portal
+from backend.api.routes.assisted_apply_packages import (
+    _canonical_application_form_url,
+    _prepare_package,
+    _supported_portal,
+)
 from backend.domain.models import JobRecord
 
 
@@ -171,6 +175,20 @@ class AssistedApplyLaunchPrepareTests(unittest.TestCase):
         self.assertEqual(_supported_portal("https://jobs.greenhouse.io/acme/123", "greenhouse"), "")
         self.assertEqual(_supported_portal("http://boards.greenhouse.io/acme/jobs/123", "greenhouse"), "")
         self.assertEqual(_supported_portal("https://example.com/acme/123", "greenhouse"), "")
+
+    def test_freezes_the_deterministic_lever_application_form_url(self):
+        self.assertEqual(
+            _canonical_application_form_url("https://jobs.lever.co/acme/123", "lever"),
+            "https://jobs.lever.co/acme/123/apply",
+        )
+        self.assertEqual(
+            _canonical_application_form_url("https://jobs.lever.co/acme/123/apply?source=runr#form", "lever"),
+            "https://jobs.lever.co/acme/123/apply?source=runr",
+        )
+        self.assertEqual(
+            _canonical_application_form_url("https://boards.greenhouse.io/acme/jobs/123", "greenhouse"),
+            "https://boards.greenhouse.io/acme/jobs/123",
+        )
 
 
 if __name__ == "__main__":

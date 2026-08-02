@@ -580,7 +580,7 @@ export default function App() {
         ) : (
           <p className="muted">
             {state?.ats
-              ? "Portal recognized. Real package-backed filling arrives in a later ticket."
+              ? "Portal recognized. Start preparation from Runr; filling and document verification run on the owned application tab."
               : "Open a supported application page, then refresh this panel."}
           </p>
         )}

@@ -1,8 +1,9 @@
 # Runr Assisted Apply browser extension
 
-The current AA-01/AA-02 slices provide the guarded Chrome MV3 shell, review-only
-side panel, Runr account connection and preference surface, Greenhouse fixture
-inspection, one verified fixture fill, readback, and service-worker recovery.
+The Assisted Apply extension provides the guarded Chrome MV3 shell, review-only
+side panel, Runr account connection, immutable package retrieval, Greenhouse and
+Lever inspection/filling, verified document attachment, and service-worker-safe
+local preparation ownership.
 
 Account connection uses an explicit-click `launchWebAuthFlow` authorization-code
 and PKCE exchange. Pending authorization data and the short-lived extension session
@@ -11,8 +12,10 @@ or receive the session token. The installation identifier is non-secret and stor
 locally. Sensitive and demographic autofill preferences default off, while legal
 answer confirmation cannot be disabled.
 
-The local fixture button remains available only on a document explicitly marked as
-a Runr test fixture. Real package-backed form filling arrives in later tickets.
+Sanitized fixture controls remain testing-only. Production filling starts from a
+reviewed package in Runr, opens the package's application-form URL inactive, fills
+supported fields, verifies selected documents, and activates only the exact owned
+tab for user review. No final-submit action exists.
 
 Commands:
 

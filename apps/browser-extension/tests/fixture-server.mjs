@@ -40,6 +40,8 @@ const counters = {
   lastTelemetry: null,
   trackerConfirmations: 0,
   lastOutcomePayload: null,
+  preparationReports: [],
+  preparationActions: [],
 };
 
 function futureIso(milliseconds) {
@@ -49,7 +51,7 @@ function futureIso(milliseconds) {
 function json(response, status, payload, origin = "") {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
-    "access-control-allow-headers": "Authorization, Content-Type, X-Runr-Document-Grant",
+    "access-control-allow-headers": "Authorization, Content-Type, X-Runr-Document-Grant, X-Runr-Extension-Origin",
     "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
     ...(origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {}),
     "cache-control": "no-store",
@@ -61,7 +63,7 @@ function json(response, status, payload, origin = "") {
 
 function noContent(response, origin = "") {
   response.writeHead(204, {
-    "access-control-allow-headers": "Authorization, Content-Type, X-Runr-Document-Grant",
+    "access-control-allow-headers": "Authorization, Content-Type, X-Runr-Document-Grant, X-Runr-Extension-Origin",
     "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
     ...(origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {}),
     "cache-control": "no-store",
@@ -249,6 +251,42 @@ const server = createServer(async (request, response) => {
       const record = activeRecord(request, response, origin);
       if (!record) return;
       const payload = await readJson(request);
+      if (payload.package_id === "aapkg_fixture_preparation_start") {
+        json(response, 200, {
+          packageId: "aapkg_fixture_preparation_start",
+          jobId: "job_fixture_preparation_start",
+          version: 1,
+          schemaVersion: 1,
+          job: {
+            jobId: "job_fixture_preparation_start",
+            title: "Backend Engineer",
+            company: "Fixture Employer",
+            portal: "lever",
+            url: "http://127.0.0.1:4174/lever-application.html",
+            location: "Remote",
+          },
+          answers: [
+            ["candidate.full_name", "Full name", "Fixture Candidate"],
+            ["candidate.email", "Email", "fixture.candidate@example.com"],
+            ["candidate.phone", "Phone", "+49 30 000000"],
+          ].map(([fieldIntent, label, proposedValue]) => ({
+            fieldIntent, label, proposedValue, source: "profile_verified",
+            sensitivity: "standard", scope: "application", confidence: 1,
+            requiresReview: false, reasons: ["Sanitized fixture value."],
+          })),
+          documents: [{
+            documentId: "lever_cv_version_2", documentVersion: 2,
+            documentKind: "cv", fileName: "Lever CV.pdf", mimeType: "application/pdf",
+          }],
+          warnings: [],
+          policy: {
+            permitSensitiveAutofill: false,
+            permitDemographicAutofill: false,
+            requireLegalAnswerConfirmation: true,
+          },
+        }, origin);
+        return;
+      }
       if (payload.package_id !== "aapkg_fixture_web_launch") {
         json(response, 403, { error: { code: "forbidden", message: "Package rejected." } }, origin);
         return;
@@ -280,6 +318,28 @@ const server = createServer(async (request, response) => {
         },
         origin,
       );
+      return;
+    }
+
+    if (url.pathname === "/assisted-apply/extension/preparations/report" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      const payload = await readJson(request);
+      counters.preparationReports.push(payload);
+      json(response, 200, {
+        preparation_id: payload.preparation_id,
+        package_id: payload.package_id,
+        state: payload.type,
+      }, origin);
+      return;
+    }
+
+    if (url.pathname === "/assisted-apply/extension/preparations/action" && request.method === "POST") {
+      const record = activeRecord(request, response, origin);
+      if (!record) return;
+      const payload = await readJson(request);
+      counters.preparationActions.push(payload);
+      json(response, 200, { ok: true, action: payload.action }, origin);
       return;
     }
 

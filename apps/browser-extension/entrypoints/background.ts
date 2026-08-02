@@ -38,6 +38,7 @@ import {
   isWebPreparationCommand,
   preparationCommandFingerprint,
 } from "../src/preparation/external-command";
+import { preparationProgressResult } from "../src/preparation/report";
 import {
   hasAllOptionalHostPermissions,
   hasPortalPermission,
@@ -342,7 +343,20 @@ async function reportPreparationProgress(
     package_id: message.packageId,
     message_id: `${message.messageId}:${type}`,
     type,
-    result: { status: type, completed, total, ...(type === "ready_for_review" ? { reviewId: message.preparationId } : {}) },
+    result: preparationProgressResult(type, completed, total),
+  });
+}
+
+async function reportPreparationNeedsAttention(
+  message: Extract<AssistedApplyPreparationMessage, { source: "web" }>,
+  code: "document_unavailable" | "navigation_blocked" | "validation_failed",
+): Promise<void> {
+  await preparationApiRequest("/assisted-apply/extension/preparations/report", {
+    preparation_id: message.preparationId,
+    package_id: message.packageId,
+    message_id: `${message.messageId}:needs_attention:${code}`,
+    type: "needs_attention",
+    result: { status: "needs_attention", code },
   });
 }
 
@@ -512,7 +526,7 @@ async function startPreparationCommand(
     preparationId: message.preparationId, packageId: message.packageId, packageVersion: applicationPackage.version,
     ats: portal, applicationUrl, tabId: tab.id, windowId: tab.windowId,
     status: "waiting_ready", createdAt: now(), updatedAt: now(), attempt: options.attempt ?? 1,
-    completedCount: 0, totalCount: applicationPackage.answers.length,
+    completedCount: 0, totalCount: applicationPackage.answers.length + applicationPackage.documents.length,
     lastMessageId: message.messageId,
   };
   await writePreparationLocalRecord(localRecord);
@@ -524,7 +538,17 @@ async function startPreparationCommand(
   const execution = portal === "greenhouse"
     ? await runGreenhousePackageOnTab(tab.id, applicationPackage)
     : await runLeverPackageOnTab(tab.id, applicationPackage);
-  const completedCount = Array.isArray(execution.executions) ? execution.executions.length : 0;
+  const completedFields = execution.executions.filter((result) =>
+    result.status === "filled" || result.status === "already_filled").length;
+  let completedDocuments = 0;
+  for (const document of applicationPackage.documents) {
+    const upload = await uploadSelectedDocumentOnTab(tab.id, applicationPackage, document.documentId);
+    if (upload.status !== "uploaded") {
+      throw new Error("A selected application document could not be attached and verified.");
+    }
+    completedDocuments += 1;
+  }
+  const completedCount = completedFields + completedDocuments;
   await reportPreparationProgress(message, "progress", completedCount, localRecord.totalCount);
   await reportPreparationProgress(message, "ready_for_review", completedCount, localRecord.totalCount);
   await writePreparationLocalRecord({ ...(await readPreparationLocalRecord() ?? localRecord), status: "ready_for_review", completedCount, updatedAt: now() });
@@ -550,7 +574,24 @@ async function handlePreparationCommand(
       if (/connection|session|authenticate/iu.test(text)) {
         await updatePreparationLocalStatus("auth_lost");
         response = { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "auth_lost", error: "Extension authentication is unavailable; explicit retry is required." };
-      } else throw error;
+      } else {
+        const code = /document|upload|grant|attach|hash/iu.test(text)
+          ? "document_unavailable"
+          : /navigat|url|tab|page|portal/iu.test(text)
+            ? "navigation_blocked"
+            : "validation_failed";
+        await updatePreparationLocalStatus("failed");
+        await reportPreparationNeedsAttention(message, code).catch(() => {
+          console.warn("Runr Assisted Apply could not persist a sanitized attention report.");
+        });
+        response = {
+          ok: false,
+          preparationId: message.preparationId,
+          packageId: message.packageId,
+          status: "needs_attention",
+          error: "Preparation stopped safely before review; explicit retry is required.",
+        };
+      }
     }
   } else if (message.type === "retry") {
     const localRecord = await readPreparationLocalRecord();
@@ -670,9 +711,13 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayload, documentId: string) {
-  const tab = await resolveTargetTab();
-  if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
+async function uploadSelectedDocumentOnTab(
+  tabId: number,
+  applicationPackage: ApplicationPackagePayload,
+  documentId: string,
+) {
+  const tab = await browser.tabs.get(tabId);
+  if (tab.id == null) throw new Error("No inspectable browser tab is available.");
   if (applicationPackage.job.portal !== "greenhouse" && applicationPackage.job.portal !== "lever") {
     throw new Error("The selected document is not bound to a supported application portal.");
   }
@@ -745,6 +790,12 @@ async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayl
     bytes.fill(0);
     bytes = new Uint8Array();
   }
+}
+
+async function uploadSelectedDocument(applicationPackage: ApplicationPackagePayload, documentId: string) {
+  const tab = await resolveTargetTab();
+  if (tab?.id == null) throw new Error("No inspectable browser tab is active.");
+  return uploadSelectedDocumentOnTab(tab.id, applicationPackage, documentId);
 }
 
 type InactiveFixtureSpikeRequest = {
@@ -1152,7 +1203,7 @@ type PreparationCommandResponse = {
   packageId?: string;
   ats?: "greenhouse" | "lever";
   permissionGranted?: boolean;
-  status?: "permission_required" | "accepted" | "ready_for_review" | "activated" | "cancelled" | "retrying" | "busy" | "retry_required" | "auth_lost";
+  status?: "permission_required" | "accepted" | "ready_for_review" | "activated" | "cancelled" | "retrying" | "busy" | "retry_required" | "auth_lost" | "needs_attention";
   error?: string;
 };
 

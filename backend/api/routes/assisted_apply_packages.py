@@ -3,7 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from backend.api.routes.assisted_apply import (
     _authenticate_extension_session,
@@ -129,6 +129,18 @@ def _supported_portal(url: str, declared_portal: object) -> str:
     if hostname.endswith(".lever.co"):
         return "lever"
     return ""
+
+
+def _canonical_application_form_url(url: str, portal: str) -> str:
+    """Freeze the provider's deterministic application-form URL in the package."""
+    normalized_url = str(url or "").strip()
+    if portal != "lever":
+        return normalized_url
+    parsed = urlsplit(normalized_url)
+    path = parsed.path.rstrip("/")
+    if not path.casefold().endswith("/apply"):
+        path = f"{path}/apply"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
 
 
 def _owned_job_for_package(context: ApiRouteContext, *, user: Any, run_id: str, job_id: str) -> Any:
@@ -270,6 +282,7 @@ def _prepare_package(context: ApiRouteContext) -> None:
     portal = _supported_portal(application_url, getattr(job, "portal", ""))
     if not portal:
         raise ValueError("Assisted Apply currently supports Greenhouse and Lever application links only.")
+    application_url = _canonical_application_form_url(application_url, portal)
     answers, warnings = _profile_answers_for_package(user)
     documents = _selected_candidate_documents(user, payload.get("document_ids") or [])
     package = context.application.create_application_package(

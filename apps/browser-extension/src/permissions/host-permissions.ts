@@ -57,6 +57,9 @@ export async function hasPortalPermission(
 export function portalPermissionPatterns(
   portal: SupportedPortal,
 ): string[] {
+  if (import.meta.env.MODE === "testing") {
+    return ["http://127.0.0.1/*"];
+  }
   if (portal === "greenhouse") {
     return ["https://boards.greenhouse.io/*"];
   }
