@@ -419,6 +419,7 @@ const server = createServer(async (request, response) => {
       json(response, 201, {
         grantToken,
         expiresAt: futureIso(60 * 1000),
+        uploadFieldIntent: expectedIntent,
         file: {
           documentId: payload.document_id,
           documentVersion: fixtureDocument.documentVersion,
@@ -427,7 +428,6 @@ const server = createServer(async (request, response) => {
           mimeType: fixtureDocument.mimeType,
           size: fixtureDocument.bytes.length,
           sha256Hex: createHash("sha256").update(fixtureDocument.bytes).digest("hex"),
-          uploadFieldIntent: expectedIntent,
         },
       }, origin);
       return;

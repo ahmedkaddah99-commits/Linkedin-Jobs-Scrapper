@@ -22,6 +22,7 @@ export interface FixtureInspectionMessage {
   ats: SupportedAts | null;
   fixtureAvailable: boolean;
   fieldCount: number;
+  reviewFieldCount?: number;
   manualReasons: string[];
 }
 
@@ -685,6 +686,10 @@ export function isFixtureInspectionMessage(value: unknown): value is FixtureInsp
     typeof value.fieldCount === "number" &&
     Number.isInteger(value.fieldCount) &&
     value.fieldCount >= 0 &&
+    (value.reviewFieldCount === undefined || (
+      typeof value.reviewFieldCount === "number" && Number.isInteger(value.reviewFieldCount) &&
+      value.reviewFieldCount >= 0 && value.reviewFieldCount <= value.fieldCount
+    )) &&
     isStringArray(value.manualReasons)
   );
 }

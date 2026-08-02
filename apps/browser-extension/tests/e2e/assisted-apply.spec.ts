@@ -358,6 +358,53 @@ test("fills a Lever package independently of Greenhouse DOM assumptions", async 
   await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
 });
 
+test("fills a production-shaped Lever profile from confirmed Career Memory intents", async () => {
+  for (const page of context.pages()) await page.close();
+  const fixturePage = await context.newPage();
+  await fixturePage.goto("http://127.0.0.1:4174/lever-application.html");
+  const panelPage = await context.newPage();
+  await panelPage.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const facts = [
+    ["candidate.full_name", "Full name", "Ada Lovelace"],
+    ["candidate.email", "Email", "ada@example.com"],
+    ["candidate.location", "Current location", "Berlin, Germany"],
+    ["candidate.current_company", "Current company", "Analytical Engines"],
+    ["candidate.github_url", "GitHub URL", "https://github.com/ada"],
+    ["candidate.linkedin_url", "LinkedIn URL", "https://www.linkedin.com/in/ada"],
+    ["candidate.website", "Website", "https://ada.example"],
+  ].map(([fieldIntent, label, proposedValue]) => ({
+    fieldIntent, label, proposedValue, source: "profile_verified", sensitivity: "standard",
+    scope: "global", confidence: 1, requiresReview: false, reasons: ["Confirmed Career Memory fixture."],
+  }));
+  const response = await panelPage.evaluate((answers) => chrome.runtime.sendMessage({
+    type: "RUN_LEVER_APPLICATION_PACKAGE",
+    package: {
+      packageId: "aa-live-shaped-lever", jobId: "live-shaped-job", version: 1, schemaVersion: 1,
+      job: { jobId: "live-shaped-job", title: "Engineer", company: "Example", portal: "lever", location: "Remote" },
+      answers, documents: [], warnings: [],
+      policy: { permitSensitiveAutofill: false, permitDemographicAutofill: false, requireLegalAnswerConfirmation: true },
+    },
+  }), facts) as { ok: boolean; packageExecution: { executions: Array<{ fieldIntent?: string; status: string }>; reviewFieldCount: number } };
+
+  expect(response.ok).toBe(true);
+  expect(response.packageExecution.executions).toHaveLength(7);
+  expect(response.packageExecution.executions.every((item) => item.status === "filled")).toBe(true);
+  await expect(fixturePage.locator('input[name="location"]')).toHaveValue("Berlin, Germany");
+  await expect(fixturePage.locator('input[name="company"]')).toHaveValue("Analytical Engines");
+  await expect(fixturePage.locator('input[name="github"]')).toHaveValue("https://github.com/ada");
+  await expect(fixturePage.locator('input[name="linkedin"]')).toHaveValue("https://www.linkedin.com/in/ada");
+  await expect(fixturePage.locator('input[name="website"]')).toHaveValue("https://ada.example");
+  await expect(fixturePage.locator('textarea[name="why_company"]')).toHaveValue("");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-submit-events", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-request-submit-calls", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-form-submit-calls", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-enter-submissions", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-terminal-clicks", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-terminal-requests", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-success-transitions", "0");
+  await expect(fixturePage.locator("body")).toHaveAttribute("data-aa201-final-navigation", "0");
+});
+
 test("AA-220 stops Lever preparation at review across rerun and reload", async () => {
   for (const page of context.pages()) await page.close();
   const fixturePage = await context.newPage();

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   LeverAdapter,
+  runLeverStandardFacts,
   planLeverApplication,
   type ApplicationPackage,
 } from "@runr/ats-core";
@@ -72,5 +73,40 @@ describe("AA-220 Lever adapter contract", () => {
     const plan = await planLeverApplication(document, "https://boards.greenhouse.io/example/jobs/1", packageFor());
     expect(plan.actions).toEqual([]);
     expect(plan.stopsAtReview).toBe(true);
+  });
+
+  it("matches confirmed Career Memory facts to common Lever profile controls by intent", async () => {
+    document.body.innerHTML = `
+      <form>
+        <label>Current location <input name="location"></label>
+        <label>Current company <input name="company"></label>
+        <label>GitHub URL <input name="github"></label>
+        <label>Other website <input name="website"></label>
+        <label>Why this company? <textarea name="why"></textarea></label>
+        <button type="submit">Submit application</button>
+      </form>`;
+    const result = await runLeverStandardFacts(
+      document,
+      "https://jobs.lever.co/example/1/apply",
+      "career-memory-package",
+      1,
+      {},
+      [
+        { fieldIntent: "candidate.location", label: "Current location", proposedValue: "Berlin, Germany" },
+        { fieldIntent: "candidate.current_company", label: "Current company", proposedValue: "Analytical Engines" },
+        { fieldIntent: "candidate.github_url", label: "GitHub URL", proposedValue: "https://github.com/ada" },
+        { fieldIntent: "candidate.website", label: "Website", proposedValue: "https://ada.example" },
+      ],
+    );
+
+    expect(result.executions.map((item) => [item.fieldIntent, item.status])).toEqual([
+      ["candidate.location", "filled"],
+      ["candidate.current_company", "filled"],
+      ["candidate.github_url", "filled"],
+      ["candidate.website", "filled"],
+    ]);
+    expect(document.querySelector<HTMLInputElement>('input[name="location"]')!.value).toBe("Berlin, Germany");
+    expect(document.querySelector<HTMLInputElement>('input[name="website"]')!.value).toBe("https://ada.example");
+    expect(document.querySelector<HTMLTextAreaElement>('textarea[name="why"]')!.value).toBe("");
   });
 });

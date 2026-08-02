@@ -13,7 +13,6 @@ import {
   isRunrWebLaunchRequest,
   isTrackerConfirmationResult,
   type ApplicationPackagePayload,
-  type ApplicationPackageDocumentMeta,
   type AssistedApplyTabState,
   type ContentRequest,
   type FixtureInspectionMessage,
@@ -39,6 +38,7 @@ import {
   preparationCommandFingerprint,
 } from "../src/preparation/external-command";
 import { preparationProgressResult } from "../src/preparation/report";
+import { parseDocumentGrant } from "../src/documents/grant-validation";
 import {
   hasAllOptionalHostPermissions,
   hasPortalPermission,
@@ -513,7 +513,7 @@ async function startPreparationCommand(
     await reportPreparationFromExtension(message, "permission_required");
     return { ok: false, preparationId: message.preparationId, packageId: message.packageId, status: "permission_required", permissionGranted: false };
   }
-  await reportPreparationFromExtension(message, "accepted");
+  const acceptedReport = reportPreparationFromExtension(message, "accepted");
   const expected = comparableApplicationUrl(applicationUrl);
   const tabs = await browser.tabs.query({});
   let tab = options.forceNewTab ? undefined : tabs.find((candidate) => {
@@ -534,12 +534,13 @@ async function startPreparationCommand(
   const readyPromise = waitForPreparationTabReady(tab.id, applicationUrl);
   await injectPageRunner(tab.id, true);
   await readyPromise;
+  await acceptedReport;
   await updatePreparationLocalStatus("preparing");
   const execution = portal === "greenhouse"
     ? await runGreenhousePackageOnTab(tab.id, applicationPackage)
     : await runLeverPackageOnTab(tab.id, applicationPackage);
   const completedFields = execution.executions.filter((result) =>
-    result.status === "filled" || result.status === "already_filled").length;
+    result.status === "filled" || result.status === "already_filled" || result.status === "preserved_existing").length;
   let completedDocuments = 0;
   for (const document of applicationPackage.documents) {
     const upload = await uploadSelectedDocumentOnTab(tab.id, applicationPackage, document.documentId);
@@ -549,9 +550,10 @@ async function startPreparationCommand(
     completedDocuments += 1;
   }
   const completedCount = completedFields + completedDocuments;
-  await reportPreparationProgress(message, "progress", completedCount, localRecord.totalCount);
-  await reportPreparationProgress(message, "ready_for_review", completedCount, localRecord.totalCount);
-  await writePreparationLocalRecord({ ...(await readPreparationLocalRecord() ?? localRecord), status: "ready_for_review", completedCount, updatedAt: now() });
+  const totalCount = Math.max(completedCount, execution.reviewFieldCount ?? completedCount, 1);
+  await reportPreparationProgress(message, "progress", completedCount, totalCount);
+  await reportPreparationProgress(message, "ready_for_review", completedCount, totalCount);
+  await writePreparationLocalRecord({ ...(await readPreparationLocalRecord() ?? localRecord), status: "ready_for_review", completedCount, totalCount, updatedAt: now() });
   return { ok: true, preparationId: message.preparationId, packageId: message.packageId, ats: portal, permissionGranted: true, status: "ready_for_review" };
 }
 
@@ -662,44 +664,6 @@ async function currentSessionToken(): Promise<string> {
     throw new Error("Connect the extension to Runr before using a document.");
   }
   return (value as { sessionToken: string }).sessionToken;
-}
-
-function parseDocumentGrant(value: unknown, expected: ApplicationPackageDocumentMeta, expectedUploadFieldIntent: string) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Runr returned an invalid document grant.");
-  }
-  const record = value as Record<string, unknown>;
-  const file = record.file;
-  if (!file || typeof file !== "object" || Array.isArray(file)) {
-    throw new Error("Runr returned invalid document metadata.");
-  }
-  const metadata = file as Record<string, unknown>;
-  if (typeof record.grantToken !== "string" || record.grantToken.length < 20 ||
-      metadata.documentId !== expected.documentId ||
-      !Number.isInteger(metadata.documentVersion) || Number(metadata.documentVersion) < 1 ||
-      metadata.documentVersion !== expected.documentVersion ||
-      metadata.documentKind !== expected.documentKind ||
-      metadata.uploadFieldIntent !== expectedUploadFieldIntent ||
-      metadata.fileName !== expected.fileName ||
-      metadata.mimeType !== expected.mimeType ||
-      !((metadata.mimeType === "application/pdf" && expected.fileName.toLowerCase().endsWith(".pdf")) ||
-        (metadata.mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
-          expected.fileName.toLowerCase().endsWith(".docx"))) ||
-      !Number.isInteger(metadata.size) || Number(metadata.size) < 1 || Number(metadata.size) > 10 * 1024 * 1024 ||
-      typeof metadata.sha256Hex !== "string" || !/^[0-9a-f]{64}$/u.test(metadata.sha256Hex)) {
-    throw new Error("Runr returned invalid document grant metadata.");
-  }
-  return {
-    grantToken: record.grantToken,
-    documentId: metadata.documentId as string,
-    documentVersion: metadata.documentVersion as number,
-    documentKind: expected.documentKind,
-    uploadFieldIntent: metadata.uploadFieldIntent as string,
-    fileName: metadata.fileName as string,
-    mimeType: expected.mimeType,
-    size: metadata.size as number,
-    sha256Hex: metadata.sha256Hex as string,
-  };
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

@@ -31,8 +31,15 @@ function normalizedPurposes(document) {
 
 function inferredMimeType(document) {
   const explicit = String(document?.content_type || document?.mime_type || "").trim().toLowerCase();
-  if (explicit) return SUPPORTED_MIME_TYPES.has(explicit) ? explicit : "";
   const name = String(document?.file_name || document?.path || document?.display_name || "").trim().toLowerCase();
+  if (explicit && SUPPORTED_MIME_TYPES.has(explicit)) return explicit;
+  const assetKind = String(document?.asset_kind || "").trim().toLowerCase();
+  const status = String(document?.status || "").trim().toLowerCase();
+  const canNormalizeLegacyDocx = assetKind === "workspace_cv"
+    && (!status || status === "ready")
+    && (!explicit || explicit === "application/octet-stream")
+    && name.endsWith(".docx");
+  if (explicit && !canNormalizeLegacyDocx) return "";
   if (name.endsWith(".pdf")) return "application/pdf";
   if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   return "";

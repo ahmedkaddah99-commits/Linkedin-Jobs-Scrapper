@@ -15,7 +15,11 @@ from backend.api.routes.assisted_apply_packages import (
     _prepare_package,
     _supported_portal,
 )
-from backend.domain.models import JobRecord
+from backend.domain.models import (
+    CAREER_PROFILE_STATUS_READY_FOR_TAILORING,
+    CareerProfile,
+    JobRecord,
+)
 
 
 PDF_BYTES = b"%PDF-1.4\n% Runr launch package fixture\n%%EOF\n"
@@ -120,6 +124,56 @@ class AssistedApplyLaunchPrepareTests(unittest.TestCase):
         self.assertIsNotNone(context.response)
         return context.response
 
+    def _install_ready_career_memory(self):
+        metadata = dict(self.user.metadata or {})
+        assets = list(metadata.get("candidate_assets") or [])
+        assets[0] = {
+            **assets[0],
+            "metadata": {
+                **dict(assets[0].get("metadata") or {}),
+                "parsed_profile": {
+                    "name": "Ada Lovelace",
+                    "email": "ada@example.com",
+                    "location": "Berlin, Germany",
+                    "linkedin_url": "https://www.linkedin.com/in/ada",
+                    "github_url": "https://github.com/ada",
+                    "website": "https://ada.example",
+                    "summary": "Builds reliable systems.",
+                    "competencies": ["Python", "Distributed systems"],
+                    "languages": ["English", "German"],
+                    "education": [
+                        {"institution": "Example University", "degree_title": "BSc Computer Science", "period": "2018 - 2021"},
+                    ],
+                },
+            },
+        }
+        metadata["candidate_assets"] = assets
+        self.user = self.app.upsert_user({
+            "user_id": self.user.user_id,
+            "email": self.user.email,
+            "display_name": self.user.display_name,
+            "role": self.user.role,
+            "metadata": metadata,
+        })
+        career_profile = CareerProfile.create(user_id=self.user.user_id, name="Primary Career Memory")
+        career_profile.status = CAREER_PROFILE_STATUS_READY_FOR_TAILORING
+        career_profile.metadata = {
+            "source_asset_ids": ["asset_cv_1"],
+            "work_experiences": [
+                {
+                    "experience_id": "exp_current",
+                    "employer": "Analytical Engines",
+                    "job_title": "Software Engineer",
+                    "location": "Berlin",
+                    "start_date": "2024-01",
+                    "end_date": "",
+                    "description": "Built deterministic application systems.",
+                    "status": "active",
+                }
+            ],
+        }
+        self.app.repositories.career_profile_store.upsert_profile(career_profile)
+
     def test_prepares_owned_job_with_confirmed_profile_and_owned_document(self):
         status, response = self._prepare(
             {
@@ -156,6 +210,67 @@ class AssistedApplyLaunchPrepareTests(unittest.TestCase):
                     "confirm_standard_profile": False,
                 }
             )
+
+    def test_ready_career_memory_populates_immutable_package_sections_and_standard_answers(self):
+        self._install_ready_career_memory()
+        _, response = self._prepare(
+            {
+                "run_id": self.run.id,
+                "job_id": "greenhouse_job_1",
+                "document_ids": [],
+                "confirm_standard_profile": True,
+            }
+        )
+        package = self.app._assisted_apply_package_service._store.get(response["package_id"])
+        answers = {answer.field_intent: answer.proposed_value for answer in package.answers}
+        self.assertEqual(answers["candidate.location"], "Berlin, Germany")
+        self.assertEqual(answers["candidate.current_company"], "Analytical Engines")
+        self.assertEqual(answers["candidate.current_title"], "Software Engineer")
+        self.assertEqual(answers["candidate.github_url"], "https://github.com/ada")
+        self.assertEqual(answers["candidate.website"], "https://ada.example")
+        self.assertEqual(package.candidate.provenance, f"career_profile:{package.experiences[0].generation_provenance['profile_id']}")
+        self.assertEqual(package.experiences[0].source_experience_id, "exp_current")
+        self.assertEqual(package.experiences[0].bullets[0].approved_text, "Built deterministic application systems.")
+        self.assertEqual(package.education[0].institution, "Example University")
+        self.assertEqual([fact.value for fact in package.skills], ["Python", "Distributed systems"])
+        self.assertEqual([fact.value for fact in package.languages], ["English", "German"])
+
+    def test_accepts_ready_legacy_workspace_docx_stored_as_octet_stream(self):
+        docx_bytes = b"PK\x03\x04Runr DOCX fixture"
+        object_key = "users/launch/workspace_cv/asset_cv_docx/Ada CV.docx"
+        metadata = dict(self.user.metadata or {})
+        metadata["candidate_assets"] = [
+            {
+                "asset_id": "asset_cv_docx",
+                "asset_kind": "workspace_cv",
+                "display_name": "Ada CV.docx",
+                "object_key": object_key,
+                "mime_type": "application/octet-stream",
+                "metadata": {
+                    "status": "ready",
+                    "content_sha256": hashlib.sha256(docx_bytes).hexdigest(),
+                },
+            }
+        ]
+        self.user = self.app.upsert_user({
+            "user_id": self.user.user_id,
+            "email": self.user.email,
+            "display_name": self.user.display_name,
+            "role": self.user.role,
+            "metadata": metadata,
+        })
+        self.app.object_storage.put(object_key, docx_bytes, content_type="application/octet-stream")
+        _, response = self._prepare(
+            {
+                "run_id": self.run.id,
+                "job_id": "greenhouse_job_1",
+                "document_ids": ["asset::asset_cv_docx"],
+                "confirm_standard_profile": True,
+            }
+        )
+        package = self.app._assisted_apply_package_service._store.get(response["package_id"])
+        self.assertEqual(package.documents[0].mime_type, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        self.assertEqual(package.documents[0].file_name, "Ada CV.docx")
 
     def test_refuses_document_identifiers_outside_the_candidate_library(self):
         with self.assertRaisesRegex(ValueError, "Runr document library"):

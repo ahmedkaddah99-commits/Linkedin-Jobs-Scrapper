@@ -466,8 +466,23 @@ function booleanValue(value: string): boolean | null {
   return null;
 }
 
+const PROFILE_ANSWER_LABELS: Readonly<Record<string, RegExp>> = {
+  "candidate.location": /^(current\s+)?(location|city|city\s+and\s+country|location\s*\(city\))$/u,
+  "candidate.current_company": /^(current\s+)?(company|employer)$/u,
+  "candidate.current_title": /^(current\s+)?(title|job\s+title|role)$/u,
+  "candidate.linkedin_url": /^(linkedin|linkedin\s+(profile|url)|linkedin\s+profile\s+url)$/u,
+  "candidate.github_url": /^(github|github\s+(profile|url)|github\s+profile\s+url)$/u,
+  "candidate.website": /^(website|personal\s+website|website\s+url|other\s+website)$/u,
+  "candidate.portfolio_url": /^(portfolio|portfolio\s+(website|url))$/u,
+  "candidate.professional_summary": /^(professional\s+summary|summary|profile\s+summary)$/u,
+  "candidate.skills": /^(skills|key\s+skills|technical\s+skills)$/u,
+  "candidate.languages": /^(languages|language\s+skills)$/u,
+};
+
 function answerValueForField(field: DetectedField, answer: ApplicationPackageAnswer): string | null {
-  if (!answer.label || normalizeLabel(answer.label) !== field.normalizedLabel) return null;
+  const exactLabel = Boolean(answer.label) && normalizeLabel(answer.label) === field.normalizedLabel;
+  const intentLabel = PROFILE_ANSWER_LABELS[answer.fieldIntent]?.test(field.normalizedLabel) ?? false;
+  if (!exactLabel && !intentLabel) return null;
   const proposed = answer.proposedValue;
   if (field.type === "select") {
     const option = field.options?.find((item) =>
@@ -1514,7 +1529,14 @@ export interface FixtureInspectionResult {
   ats: AtsType | null;
   fixtureAvailable: boolean;
   fieldCount: number;
+  reviewFieldCount?: number;
   manualReasons: ManualReason[];
+}
+
+function reviewFieldCount(form: InspectedApplicationForm): number {
+  return form.fields.filter((field) =>
+    !field.hidden && !field.disabled && field.manualReason !== "final_submission"
+  ).length;
 }
 
 export interface FixtureProofResult extends FixtureInspectionResult {
@@ -1536,6 +1558,7 @@ export async function inspectGreenhouseFixture(
     fixtureAvailable:
       document.documentElement.dataset.runrAssistedApplyFixture === "greenhouse",
     fieldCount: form.fields.length,
+    reviewFieldCount: reviewFieldCount(form),
     manualReasons: Array.from(
       new Set(
         form.fields
@@ -1630,6 +1653,7 @@ export async function runGreenhouseStandardFacts(
       ats: "greenhouse",
       fixtureAvailable: document.documentElement.dataset.runrAssistedApplyFixture === "greenhouse",
       fieldCount: form.fields.length,
+      reviewFieldCount: reviewFieldCount(form),
       manualReasons: Array.from(new Set(form.fields.flatMap((field) => field.manualReason ? [field.manualReason] : []))),
     },
     executions: [...executions.values()],
@@ -1650,6 +1674,7 @@ export async function inspectLeverFixture(
     ats: "lever",
     fixtureAvailable: document.documentElement.dataset.runrAssistedApplyFixture === "lever",
     fieldCount: form.fields.length,
+    reviewFieldCount: reviewFieldCount(form),
     manualReasons: Array.from(new Set(form.fields.map((field) => field.manualReason).filter((reason): reason is ManualReason => Boolean(reason)))),
   };
 }
@@ -1710,6 +1735,7 @@ export async function runLeverStandardFacts(
       ats: "lever",
       fixtureAvailable: document.documentElement.dataset.runrAssistedApplyFixture === "lever",
       fieldCount: form.fields.length,
+      reviewFieldCount: reviewFieldCount(form),
       manualReasons: Array.from(new Set(form.fields.flatMap((field) => field.manualReason ? [field.manualReason] : []))),
     },
     executions: [...executions.values()],

@@ -7,7 +7,7 @@ export default defineConfig({
     name: "Runr Assisted Apply",
     description:
       "Review-first assistance for supported job applications. Runr never submits an application for you.",
-    version: "0.2.0",
+    version: "0.2.1",
     ...(browser === "chrome"
       ? {
           key: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA9vfcDQbZcLIkeK0Y9Ddx89ViTTdSQIOvRIprwztytepFOdyw6AZdGK9wpR3Fo47XiP+0F6OZshp4JQXXPDLWCU1VKPs6CXl7Sh8j7VrdEn9ptLHbFYRPOUjgriR3ZxM5Ad+sEMuF84lMDb8YFDHeqUFjRsit37f97sQuL+1Tl+tGv1uK2CqA3h+t6+MSWj658BVIYWRla9bwhpoGQFgLxIeh4/pbBfaXS8AvcZ9R8UQnieDg6kIqyXZd+JV62UyxagQaLaLiZAmNcKznqMwvDKMxZ24bmQ1A8VKGKFWHGw7bM46SBFQ4yisTkb/xwDbXbyHhLpddlyQULifvr3z3wwIDAQAB",

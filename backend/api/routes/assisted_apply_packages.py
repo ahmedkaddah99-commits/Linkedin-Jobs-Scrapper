@@ -154,27 +154,111 @@ def _owned_job_for_package(context: ApiRouteContext, *, user: Any, run_id: str, 
     raise ValueError("The requested job was not found in this run.")
 
 
-def _profile_answers_for_package(user: Any) -> tuple[list[dict[str, Any]], list[str]]:
+def _ready_career_memory(context: ApiRouteContext, user: Any) -> tuple[Any | None, dict[str, Any]]:
+    """Return the newest approved Career Memory profile and its source CV profile."""
+    profiles = context.application.list_career_profiles(user_id=user.user_id)
+    career_profile = next(
+        (item for item in profiles if str(getattr(item, "status", "")) == "ready_for_tailoring"),
+        None,
+    )
+    if career_profile is None:
+        return None, {}
+
+    profile_metadata = dict(getattr(career_profile, "metadata", {}) or {})
+    source_asset_ids = [
+        str(item).strip()
+        for item in profile_metadata.get("source_asset_ids") or []
+        if str(item).strip()
+    ]
+    baseline_asset_id = str(getattr(career_profile, "baseline_cv_asset_id", "") or "").strip()
+    if baseline_asset_id and baseline_asset_id not in source_asset_ids:
+        source_asset_ids.insert(0, baseline_asset_id)
+
+    assets = {
+        str(item.get("asset_id") or "").strip(): normalize_candidate_asset_descriptor(item)
+        for item in dict(getattr(user, "metadata", {}) or {}).get("candidate_assets") or []
+        if isinstance(item, Mapping)
+    }
+    for asset_id in source_asset_ids:
+        metadata = dict((assets.get(asset_id) or {}).get("metadata") or {})
+        parsed_profile = metadata.get("parsed_profile")
+        if isinstance(parsed_profile, Mapping) and parsed_profile:
+            return career_profile, dict(parsed_profile)
+    return career_profile, {}
+
+
+def _profile_package_sections(
+    context: ApiRouteContext,
+    user: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Build approved package sections from explicit profile facts and ready Career Memory."""
     profile = dict(getattr(user, "metadata", {}) or {}).get("profile") or {}
     profile = dict(profile) if isinstance(profile, Mapping) else {}
+    career_profile, parsed_profile = _ready_career_memory(context, user)
+    career_metadata = dict(getattr(career_profile, "metadata", {}) or {}) if career_profile else {}
+    provenance = (
+        f"career_profile:{career_profile.profile_id}"
+        if career_profile is not None
+        else "user_profile"
+    )
+
     full_name = str(
         profile.get("legal_name")
         or profile.get("full_name")
         or profile.get("name")
+        or parsed_profile.get("name")
         or getattr(user, "display_name", "")
         or ""
     ).strip()
     name_parts = full_name.split(maxsplit=1)
     first_name = str(profile.get("first_name") or (name_parts[0] if name_parts else "")).strip()
     last_name = str(profile.get("last_name") or (name_parts[1] if len(name_parts) > 1 else "")).strip()
-    email = str(profile.get("email") or getattr(user, "email", "") or "").strip()
+    email = str(profile.get("email") or parsed_profile.get("email") or getattr(user, "email", "") or "").strip()
     phone = str(profile.get("phone") or profile.get("phone_number") or "").strip()
+    location = str(profile.get("location") or parsed_profile.get("location") or "").strip()
+    linkedin_url = str(profile.get("linkedin_url") or parsed_profile.get("linkedin_url") or "").strip()
+    github_url = str(profile.get("github_url") or parsed_profile.get("github_url") or "").strip()
+    website = str(profile.get("website") or parsed_profile.get("website") or "").strip()
+    summary = str(profile.get("summary") or parsed_profile.get("summary") or "").strip()
+    def string_values(value: object) -> list[str]:
+        raw_values = value if isinstance(value, (list, tuple, set)) else [value]
+        return [str(item).strip() for item in raw_values if str(item or "").strip()]
+
+    skills_values = string_values(profile.get("competencies") or profile.get("skills") or parsed_profile.get("competencies") or [])
+    language_values = string_values(profile.get("languages") or parsed_profile.get("languages") or [])
+    skills_text = ", ".join(str(item).strip() for item in skills_values if str(item).strip())
+    languages_text = ", ".join(str(item).strip() for item in language_values if str(item).strip())
+
+    raw_experiences = [
+        dict(item)
+        for item in career_metadata.get("work_experiences") or []
+        if isinstance(item, Mapping) and str(item.get("status") or "active") == "active"
+    ]
+    current_experience = next(
+        (
+            item for item in raw_experiences
+            if str(item.get("end_date") or "").strip().casefold() in {"", "current", "present", "now"}
+        ),
+        None,
+    )
+    current_company = str((current_experience or {}).get("employer") or "").strip()
+    current_title = str((current_experience or {}).get("job_title") or "").strip()
+
     values = [
         ("candidate.first_name", "First name", first_name, "standard"),
         ("candidate.last_name", "Last name", last_name, "standard"),
         ("candidate.full_name", "Full name", full_name, "standard"),
         ("candidate.email", "Email", email, "standard"),
         ("candidate.phone", "Phone", phone, "personal"),
+        ("candidate.location", "Current location", location, "standard"),
+        ("candidate.current_company", "Current company", current_company, "standard"),
+        ("candidate.current_title", "Current title", current_title, "standard"),
+        ("candidate.linkedin_url", "LinkedIn URL", linkedin_url, "standard"),
+        ("candidate.github_url", "GitHub URL", github_url, "standard"),
+        ("candidate.website", "Website", website, "standard"),
+        ("candidate.professional_summary", "Professional summary", summary, "standard"),
+        ("candidate.skills", "Skills", skills_text, "standard"),
+        ("candidate.languages", "Languages", languages_text, "standard"),
     ]
     answers = [
         {
@@ -186,17 +270,82 @@ def _profile_answers_for_package(user: Any) -> tuple[list[dict[str, Any]], list[
             "scope": "global",
             "confidence": 1.0,
             "requires_review": False,
+            "provenance": provenance,
             "reasons": ["Confirmed by the candidate in Runr before launch."],
         }
         for field_intent, label, value, sensitivity in values
         if value
     ]
+    candidate = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "full_name": full_name,
+        "email": email,
+        "phone": phone,
+        "source": "confirmed_career_memory" if career_profile else "confirmed_user_profile",
+        "approved": True,
+        "provenance": provenance,
+    }
+    experiences: list[dict[str, Any]] = []
+    for item in raw_experiences:
+        experience_id = str(item.get("experience_id") or "").strip()
+        description = str(item.get("description") or "").strip()
+        bullets = []
+        if description:
+            bullets.append(
+                {
+                    "bullet_id": f"{experience_id}:description" if experience_id else "",
+                    "text": description,
+                    "approved_text": description,
+                    "source_experience_id": experience_id,
+                    "provenance_id": f"{provenance}:{experience_id}" if experience_id else provenance,
+                    "approved": True,
+                }
+            )
+        period = " - ".join(
+            part for part in (
+                str(item.get("start_date") or "").strip(),
+                str(item.get("end_date") or "Present").strip(),
+            ) if part
+        )
+        experiences.append(
+            {
+                "source_experience_id": experience_id,
+                "role_title": str(item.get("job_title") or "").strip(),
+                "company": str(item.get("employer") or "").strip(),
+                "period": period,
+                "location": str(item.get("location") or "").strip(),
+                "bullets": bullets,
+                "generation_provenance": {"source": "career_memory", "profile_id": str(getattr(career_profile, "profile_id", ""))},
+                "provenance_confidence": "full" if experience_id else "reduced",
+            }
+        )
+    education = [
+        {
+            "institution": str(item.get("institution") or "").strip(),
+            "degree": str(item.get("degree") or item.get("degree_title") or "").strip(),
+            "period": str(item.get("period") or "").strip(),
+            "provenance": provenance,
+            "confirmed": True,
+        }
+        for item in parsed_profile.get("education") or []
+        if isinstance(item, Mapping) and (str(item.get("institution") or "").strip() or str(item.get("degree") or item.get("degree_title") or "").strip())
+    ]
+    skills = [
+        {"value": str(item).strip(), "provenance": provenance, "confirmed": True}
+        for item in skills_values if str(item).strip()
+    ]
+    languages = [
+        {"value": str(item).strip(), "provenance": provenance, "confirmed": True}
+        for item in language_values if str(item).strip()
+    ]
+
     warnings = []
     if not answers:
         warnings.append("No confirmed standard profile facts are available; complete the fields manually.")
     if not email:
         warnings.append("No email is saved in your Runr profile.")
-    return answers, warnings
+    return candidate, answers, experiences, education, skills, languages, warnings
 
 
 def _selected_candidate_documents(user: Any, document_ids: object) -> list[dict[str, Any]]:
@@ -241,9 +390,20 @@ def _selected_candidate_documents(user: Any, document_ids: object) -> list[dict[
         file_payload = dict(asset.get("file") or {})
         metadata = dict(asset.get("metadata") or {})
         object_key = str(file_payload.get("object_key") or "").strip()
-        mime_type = str(file_payload.get("mime_type") or "").strip()
-        filename = str(asset.get("display_name") or Path(str(file_payload.get("path") or "")).name or "").strip()
+        mime_type = str(file_payload.get("mime_type") or "").strip().casefold()
+        path_filename = Path(str(file_payload.get("path") or "")).name
+        display_name = str(asset.get("display_name") or "").strip()
+        filename = display_name if Path(display_name).suffix.casefold() in {".pdf", ".docx"} else path_filename
+        filename = str(filename or display_name).strip()
         document_kind = role_by_kind.get(str(asset.get("asset_kind") or "").strip().casefold(), "")
+        asset_status = str(metadata.get("status") or "ready").strip().casefold()
+        if (
+            document_kind == "cv"
+            and asset_status == "ready"
+            and mime_type in {"", "application/octet-stream"}
+            and filename.casefold().endswith(".docx")
+        ):
+            mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         extension = ".pdf" if mime_type == "application/pdf" else ".docx" if mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" else ""
         if not object_key or not document_kind or not extension or not filename.casefold().endswith(extension):
             raise ValueError("A selected document is not a supported PDF or DOCX application document.")
@@ -283,7 +443,7 @@ def _prepare_package(context: ApiRouteContext) -> None:
     if not portal:
         raise ValueError("Assisted Apply currently supports Greenhouse and Lever application links only.")
     application_url = _canonical_application_form_url(application_url, portal)
-    answers, warnings = _profile_answers_for_package(user)
+    candidate, answers, experiences, education, skills, languages, warnings = _profile_package_sections(context, user)
     documents = _selected_candidate_documents(user, payload.get("document_ids") or [])
     package = context.application.create_application_package(
         user_id=user.user_id,
@@ -298,6 +458,11 @@ def _prepare_package(context: ApiRouteContext) -> None:
         answers=answers,
         documents=documents,
         warnings_items=warnings,
+        candidate=candidate,
+        experiences=experiences,
+        education=education,
+        skills=skills,
+        languages=languages,
     )
     context.send_json(
         {

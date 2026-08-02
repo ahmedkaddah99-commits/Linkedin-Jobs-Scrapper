@@ -181,17 +181,17 @@ export default function AssistedApplyLaunchDialog({ onClose, onLaunched, profile
               {facts.map(([label, value]) => <div key={label}><dt className="text-on-surface-variant">{label}</dt><dd className="mt-1 font-medium text-on-surface">{value}</dd></div>)}
             </dl>
           ) : (
-            <p className="mt-2 text-sm text-error">No standard profile facts are saved. You can still open the form, but complete those fields manually.</p>
+            <p className="mt-2 text-sm text-on-surface-variant">Runr will use confirmed Career Memory and account facts when it creates the package. Missing facts remain visible for manual review.</p>
           )}
           <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-outline-variant/20 p-4 text-sm text-on-surface">
             <input checked={confirmed} className="mt-1" onChange={(event) => setConfirmed(event.target.checked)} type="checkbox" />
-            <span>I confirm that these standard profile facts are current for this application.</span>
+            <span>I confirm that my saved Runr and Career Memory facts are current for this application.</span>
           </label>
         </section>
 
         <section className="mt-5">
           <h3 className="text-sm font-semibold text-on-surface">Documents to offer</h3>
-          <p className="mt-1 text-xs leading-5 text-on-surface-variant">Only application-approved PDF or DOCX files can be offered. The selected file is attached only after you review the prepared form.</p>
+          <p className="mt-1 text-xs leading-5 text-on-surface-variant">Only application-approved PDF or DOCX files can be offered. The selected file is attached to the inactive employer form and verified before review.</p>
           {documentsLoading ? <p className="mt-3 text-sm text-on-surface-variant">Loading documents…</p> : null}
           {documentsError ? <p className="mt-3 text-sm text-error">{documentsError}</p> : null}
           {!documentsLoading && !documentsError && !documents.length ? <p className="mt-3 text-sm text-on-surface-variant">No supported documents are available in your Runr library.</p> : null}
