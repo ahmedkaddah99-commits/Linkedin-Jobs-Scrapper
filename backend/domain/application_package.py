@@ -574,6 +574,7 @@ class ApplicationPackage:
                 "title": self.job.title,
                 "company": self.job.company,
                 "portal": self.job.portal,
+                "url": self.job.url,
                 "location": self.job.location,
             },
             "answers": [

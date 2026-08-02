@@ -399,6 +399,8 @@ export interface ApplicationPackageJob {
   title: string;
   company: string;
   portal: "greenhouse" | "lever" | "";
+  /** Canonical HTTPS ATS application URL used to create/retry the preparation tab. */
+  url?: string;
   location: string;
 }
 

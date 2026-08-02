@@ -330,6 +330,7 @@ class ApplicationPackageImmutableTests(unittest.TestCase):
         self.assertEqual(payload["job"]["company"], "Display Corp")
         self.assertEqual(payload["job"]["title"], "Display Role")
         self.assertEqual(payload["job"]["portal"], "greenhouse")
+        self.assertEqual(payload["job"]["url"], package.job.url)
         self.assertEqual(payload["version"], 1)
         self.assertIsInstance(payload["warnings"], list)
         self.assertGreater(len(payload["warnings"]), 0)

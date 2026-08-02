@@ -131,6 +131,10 @@ class AssistedApplyLaunchPrepareTests(unittest.TestCase):
         package = self.app._assisted_apply_package_service._store.get(response["package_id"])
         self.assertIsNotNone(package)
         self.assertEqual(package.job.job_id, "greenhouse_job_1")
+        self.assertEqual(
+            package.to_extension_payload()["job"]["url"],
+            "https://boards.greenhouse.io/acme/jobs/123",
+        )
         self.assertEqual([document.asset_id for document in package.documents], ["asset_cv_1"])
         self.assertEqual([answer.field_intent for answer in package.answers], [
             "candidate.first_name", "candidate.last_name", "candidate.full_name", "candidate.email", "candidate.phone",
