@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { candidateDocuments, defaultSelectedDocumentIds } from "./assistedApplyDocuments.js";
+import { applicationRoleDocuments, candidateDocuments, defaultSelectedDocumentIds } from "./assistedApplyDocuments.js";
 
 const pdf = (overrides = {}) => ({
   document_id: "asset::cv-1",
@@ -65,4 +65,14 @@ test("prefers the exact role tailored PDF and includes role application attachme
   assert.deepEqual(defaultSelectedDocumentIds(candidates, role), [
     "artifact::run-1::cv-pdf", "artifact::run-1::letter",
   ]);
+});
+
+test("Assisted Apply exposes only documents generated for the exact role", () => {
+  const role = { run_id: "run-1", job_id: "job-1" };
+  const documents = [
+    pdf(),
+    pdf({ document_id: "artifact::run-1::cv", run_id: "run-1", job_id: "job-1", asset_kind: "generated_cv", display_name: "Tailored CV.pdf" }),
+    pdf({ document_id: "artifact::run-2::cv", run_id: "run-2", job_id: "job-1", asset_kind: "generated_cv", display_name: "Other role.pdf" }),
+  ];
+  assert.deepEqual(applicationRoleDocuments(documents, role).map((item) => item.document_id), ["artifact::run-1::cv"]);
 });

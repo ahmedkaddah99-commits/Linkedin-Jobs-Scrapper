@@ -84,6 +84,17 @@ export function candidateDocuments(documents, role = {}) {
   });
 }
 
+export function applicationRoleDocuments(documents, role = {}) {
+  const runId = String(role?.run_id || "").trim();
+  const jobId = String(role?.job_id || "").trim();
+  if (!runId || !jobId) return [];
+  return candidateDocuments(documents, role).filter((document) =>
+    String(document?.document_id || "").startsWith("artifact::")
+      && String(document?.run_id || "").trim() === runId
+      && String(document?.job_id || "").trim() === jobId,
+  );
+}
+
 function documentKind(document) {
   const kind = String(document?.asset_kind || "").trim().toLowerCase();
   if (["workspace_cv", "generated_cv", "applied_cv"].includes(kind)) return "cv";

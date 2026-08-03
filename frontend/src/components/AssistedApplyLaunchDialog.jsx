@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useApiResource } from "../hooks/useApiResource";
-import { candidateDocuments, defaultSelectedDocumentIds } from "../lib/assistedApplyDocuments";
+import { applicationRoleDocuments, defaultSelectedDocumentIds } from "../lib/assistedApplyDocuments";
 import {
   isAssistedApplyPreparationEnabled,
   normalizePreparationStatus,
@@ -27,17 +26,9 @@ export default function AssistedApplyLaunchDialog({ autoStart = false, onClose, 
   const autoLaunchStarted = useRef(false);
   const preparationEnabled = isAssistedApplyPreparationEnabled();
   const preparationUi = preparationUiModel(preparation, extensionStatus);
-  const { data: documentsPayload, loading: documentsLoading, error: documentsError } = useApiResource(
-    () => request("/documents?limit=500"),
-    [request],
-    { cacheKey: "assisted-apply:documents", staleMs: 30000, backgroundRefresh: true },
-  );
   const documents = useMemo(
-    () => candidateDocuments(
-      [...(Array.isArray(row?.documents) ? row.documents : []), ...(documentsPayload?.documents || [])],
-      row,
-    ),
-    [documentsPayload, row],
+    () => applicationRoleDocuments(Array.isArray(row?.documents) ? row.documents : [], row),
+    [row],
   );
   const facts = useMemo(() => profileSummary(profile), [profile]);
 
@@ -51,12 +42,17 @@ export default function AssistedApplyLaunchDialog({ autoStart = false, onClose, 
     const preparationId = preparation?.preparation_id;
     if (!preparationId) return undefined;
     let stopped = false;
+    let requestInFlight = false;
     const refresh = async () => {
+      if (stopped || requestInFlight) return;
+      requestInFlight = true;
       try {
         const payload = await request(`/assisted-apply/preparations/${encodeURIComponent(preparationId)}`);
         if (!stopped) setPreparation(normalizePreparationStatus(payload));
       } catch (error) {
         if (!stopped) setState((current) => ({ ...current, error: error?.message || "Unable to read preparation status." }));
+      } finally {
+        requestInFlight = false;
       }
     };
     void refresh();
@@ -131,11 +127,11 @@ export default function AssistedApplyLaunchDialog({ autoStart = false, onClose, 
   }
 
   useEffect(() => {
-    if (!autoStart || autoLaunchStarted.current || documentsLoading) return;
+    if (!autoStart || autoLaunchStarted.current) return;
     autoLaunchStarted.current = true;
     setConfirmed(true);
     void launch(defaultSelectedDocumentIds(documents, row), true);
-  }, [autoStart, documents, documentsLoading, row]);
+  }, [autoStart, documents, row]);
 
   async function runPreparationAction(type) {
     if (!preparation || state.loading) return;
@@ -203,9 +199,7 @@ export default function AssistedApplyLaunchDialog({ autoStart = false, onClose, 
         <section className="mt-5">
           <h3 className="text-sm font-semibold text-on-surface">Documents to offer</h3>
           <p className="mt-1 text-xs leading-5 text-on-surface-variant">Approved role documents are attached only when the employer upload field is identified and verified.</p>
-          {documentsLoading ? <p className="mt-3 text-sm text-on-surface-variant">Loading documents…</p> : null}
-          {documentsError ? <p className="mt-3 text-sm text-error">{documentsError}</p> : null}
-          {!documentsLoading && !documentsError && !documents.length ? <p className="mt-3 text-sm text-on-surface-variant">No supported documents are available in your Runr library.</p> : null}
+          {!documents.length ? <p className="mt-3 text-sm text-on-surface-variant">No role-generated documents are available for this application.</p> : null}
           <p className="mt-3 text-sm font-semibold text-on-surface" data-testid="assisted-apply-selected-document-count">
             Selected for this package: {selectedDocumentIds.filter((id) => documents.some((document) => document.document_id === id)).length}
           </p>
