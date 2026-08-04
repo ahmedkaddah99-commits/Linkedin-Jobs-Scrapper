@@ -17,7 +17,7 @@ export default function SourceDocumentsPanel({
   onChangeField,
   assetKindLabel,
   formatDateTime,
-  manageDocumentsTo = "/documents",
+  manageDocumentsTo = "/career-assets",
 }) {
   const selectedAssets = assetDocuments.filter((item) =>
     selectedAssetIds.includes(String(item.asset_id || "")),

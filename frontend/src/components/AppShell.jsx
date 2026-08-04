@@ -15,7 +15,7 @@ export const careerAssetSections = [
     label: "Asset Library",
     description: "Upload and manage source files.",
     icon: "folder_open",
-    to: "/documents",
+    to: "/career-assets",
   },
   {
     label: "Career Evidence",
@@ -76,7 +76,7 @@ const navItems = [
     icon: "inventory_2",
     to: "/career-evidence",
     matchers: [
-      { path: "/documents", end: false },
+      { path: "/career-assets", end: false },
       { path: "/artifacts", end: false },
       { path: "/career-evidence", end: false },
       { path: "/career-memory", end: false },
@@ -536,7 +536,10 @@ export default function AppShell({ children, muteSidebar = false }) {
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
   const isRunDetail = Boolean(runMatch);
   const routeParent = resolveRouteParent(location);
-  const isJobsExperience = personalizedJobsExperienceEnabled && location.pathname.startsWith("/jobs");
+  const isJobsExperience = location.pathname === "/documents" || (
+    personalizedJobsExperienceEnabled && location.pathname.startsWith("/jobs")
+  );
+  const isDocumentsExperience = location.pathname === "/documents";
   const isCareerAssetsRoute = navItems
     .find((item) => item.label === "Career Assets")
     ?.matchers.some((matcher) => Boolean(matchPath(matcher, location.pathname)));
@@ -637,6 +640,7 @@ export default function AppShell({ children, muteSidebar = false }) {
         muteSidebar ? "app-shell--sidebar-muted" : "",
         isPreviewOnboarding ? "app-shell--preview-onboarding" : "",
         isJobsExperience ? "app-shell--jobs-experience" : "",
+        isDocumentsExperience ? "app-shell--documents-experience" : "",
       ].join(" ")}
       data-sidebar-collapsed={desktopSidebarCollapsed ? "true" : "false"}
     >

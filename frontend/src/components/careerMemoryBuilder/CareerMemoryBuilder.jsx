@@ -29,7 +29,7 @@ export default function CareerMemoryBuilder({
   draft,
   formatDateTime,
   guideTo = "/career-memory/guide",
-  manageDocumentsTo = "/documents",
+  manageDocumentsTo = "/career-assets",
   masterCareerProfileAsset = null,
   onChangeField,
   onSave,

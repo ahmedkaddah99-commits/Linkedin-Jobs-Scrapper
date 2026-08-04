@@ -810,7 +810,7 @@ export default function DocumentsPage() {
                     </button>
                     <Link
                       className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
-                      to="/documents"
+                      to="/career-assets"
                     >
                       Open Career Assets
                     </Link>
@@ -899,7 +899,7 @@ export default function DocumentsPage() {
                     </Link>
                     <Link
                       className="rounded bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface hover:bg-surface-container-high"
-                      to="/documents"
+                      to="/career-assets"
                     >
                       Open Career Assets
                     </Link>

@@ -24,7 +24,7 @@ function toggleInArray(array, item) {
 
 export default function CareerProfileSourceSelector({
   baselineCvAssetId = "",
-  manageDocumentsTo = "/documents",
+  manageDocumentsTo = "/career-assets",
   onCancel,
   onSave,
   profileName = "Career Profile",

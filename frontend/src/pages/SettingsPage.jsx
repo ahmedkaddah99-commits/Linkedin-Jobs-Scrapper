@@ -750,7 +750,7 @@ export default function SettingsPage() {
         </div>
         <Link
           className="inline-flex w-fit items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-          to="/documents"
+          to="/career-assets"
         >
           <span className="material-symbols-outlined text-[18px]">inventory_2</span>
           Career Assets

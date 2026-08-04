@@ -65,7 +65,10 @@ function JobListCard({ isSaved, job, onSave, onSelect, selected }) {
 }
 
 function MatchRing({ score }) {
-  return <div className="jobs-match-ring" style={{ "--match-angle": `${Math.max(18, score) * 3.6}deg` }}><strong>{score}</strong><span>/100</span></div>;
+  const normalizedScore = Number.isFinite(score) ? Math.min(100, Math.max(0, score)) : 0;
+  const scoreColor = `hsl(${normalizedScore * 1.2} 72% 45%)`;
+
+  return <div aria-label={`Match score: ${normalizedScore} out of 100`} className="jobs-match-ring" style={{ "--match-angle": `${normalizedScore * 3.6}deg`, "--match-color": scoreColor }}><strong>{normalizedScore}</strong><span>/100</span></div>;
 }
 
 function InfoRow({ icon, label, children }) {

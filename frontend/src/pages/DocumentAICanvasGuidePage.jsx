@@ -88,7 +88,7 @@ export default function DocumentAICanvasGuidePage() {
       <header className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
         <Link
           className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primary-container"
-          to="/documents?view=memory"
+          to="/career-evidence"
         >
           <span className="material-symbols-outlined text-[18px]">arrow_back</span>
           Back to Career Memory Builder
@@ -205,7 +205,7 @@ export default function DocumentAICanvasGuidePage() {
         </p>
         <Link
           className="mt-5 inline-flex items-center gap-2 rounded bg-primary px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
-          to="/documents?view=memory"
+          to="/career-evidence"
         >
           Open Career Memory Builder
           <span className="material-symbols-outlined text-[16px]">dashboard_customize</span>

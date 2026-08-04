@@ -13,7 +13,7 @@ test("Career Assets navigation opens the canonical guided flow", () => {
 
 test("Career Assets exposes its three main sections on every section page", () => {
   assert.match(appShellSource, /aria-label="Career Assets sections"/);
-  assert.match(appShellSource, /label: "Asset Library",[\s\S]*?to: "\/documents"/);
+  assert.match(appShellSource, /label: "Asset Library",[\s\S]*?to: "\/career-assets"/);
   assert.match(appShellSource, /label: "Career Evidence",[\s\S]*?to: "\/career-evidence"/);
   assert.match(appShellSource, /label: "CV Studio",[\s\S]*?to: "\/cv-studio"/);
 });

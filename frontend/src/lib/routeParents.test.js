@@ -8,8 +8,7 @@ test("resolves Career Assets secondary destinations to the guided flow", () => {
   assert.equal(resolveRouteParent({ pathname: "/career-evidence/profile_1" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/career-memory" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/career-memory/guide" }), "/career-evidence");
-  assert.equal(resolveRouteParent({ pathname: "/documents", search: "?view=memory" }), "/career-evidence");
-  assert.equal(resolveRouteParent({ pathname: "/documents" }), "/career-evidence");
+  assert.equal(resolveRouteParent({ pathname: "/career-assets" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/cv-studio" }), "/career-evidence");
   assert.equal(resolveRouteParent({ pathname: "/tracker/job-descriptions/review_1" }), "/tracker");
   assert.equal(resolveRouteParent({ pathname: "/job-workspaces/run_1/job_1" }), "/workspaces");
