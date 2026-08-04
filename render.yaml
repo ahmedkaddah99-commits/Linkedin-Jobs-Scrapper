@@ -20,6 +20,9 @@ services:
           envVarKey: RENDER_EXTERNAL_HOSTNAME
       - key: VITE_CLERK_PUBLISHABLE_KEY
         sync: false
+      # Frontend-only personalized jobs preview; enabled for Runr verification.
+      - key: VITE_PERSONALIZED_JOBS_EXPERIENCE
+        value: "1"
       # Controlled pilot switch; leave unset/false outside the AA-226 pilot.
       - key: VITE_ENABLE_ASSISTED_APPLY_PREPARATION
         sync: false
