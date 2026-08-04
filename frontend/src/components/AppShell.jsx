@@ -150,6 +150,49 @@ function BrandMark() {
   );
 }
 
+function JobsTopNav({ displayName, isDark, onToggleTheme }) {
+  const links = [
+    { label: "Home", icon: "home", to: "/" },
+    { label: "Matches", icon: "favorite", to: "/jobs" },
+    { label: "Jobs", icon: "work_outline", to: "/jobs" },
+    { label: "Job tracker", icon: "history", to: "/tracker" },
+    { label: "Documents", icon: "description", to: "/documents" },
+    { label: "Services", icon: "share", to: "/workspaces" },
+    { label: "Refer", icon: "group_add", to: "/referrals" },
+  ];
+  const location = useLocation();
+
+  return (
+    <header className="jobs-top-nav">
+      <NavLink className="jobs-top-nav__brand" to="/">
+        <BrandMark />
+        <span>runr.</span>
+      </NavLink>
+      <nav aria-label="Jobs navigation" className="jobs-top-nav__links">
+        {links.map((link) => {
+          const active = link.label === "Jobs"
+            ? location.pathname.startsWith("/jobs")
+            : link.label === "Matches"
+              ? false
+            : link.label === "Home"
+              ? location.pathname === "/"
+              : location.pathname.startsWith(link.to);
+          return <NavLink aria-current={active ? "page" : undefined} className={active ? "is-active" : ""} key={link.label} to={link.to}><span className="material-symbols-outlined">{link.icon}</span>{link.label}{link.label === "Refer" ? <span className="material-symbols-outlined jobs-top-nav__down">expand_more</span> : null}</NavLink>;
+        })}
+      </nav>
+      <div className="jobs-top-nav__utilities">
+        <button aria-label="Announcements" type="button"><span className="material-symbols-outlined">campaign</span></button>
+        <button aria-label="Help" type="button"><span className="material-symbols-outlined">help</span></button>
+        <button aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"} onClick={onToggleTheme} type="button"><span className="material-symbols-outlined">{isDark ? "light_mode" : "dark_mode"}</span></button>
+        <button aria-label="Notifications" type="button"><span className="material-symbols-outlined">notifications</span></button>
+        <div className="jobs-top-nav__divider" />
+        <span className="jobs-top-nav__avatar">{String(displayName || "AK").split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span>
+        <UserButton />
+      </div>
+    </header>
+  );
+}
+
 function HoverLabel({ label }) {
   return <span className="shell-sidebar__tooltip">{label}</span>;
 }
@@ -493,6 +536,7 @@ export default function AppShell({ children, muteSidebar = false }) {
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
   const isRunDetail = Boolean(runMatch);
   const routeParent = resolveRouteParent(location);
+  const isJobsExperience = personalizedJobsExperienceEnabled && location.pathname.startsWith("/jobs");
   const isCareerAssetsRoute = navItems
     .find((item) => item.label === "Career Assets")
     ?.matchers.some((matcher) => Boolean(matchPath(matcher, location.pathname)));
@@ -591,6 +635,7 @@ export default function AppShell({ children, muteSidebar = false }) {
         "app-shell min-h-screen bg-background text-on-surface",
         muteSidebar ? "app-shell--sidebar-muted" : "",
         isPreviewOnboarding ? "app-shell--preview-onboarding" : "",
+        isJobsExperience ? "app-shell--jobs-experience" : "",
       ].join(" ")}
       data-sidebar-collapsed={desktopSidebarCollapsed ? "true" : "false"}
     >
@@ -625,7 +670,7 @@ export default function AppShell({ children, muteSidebar = false }) {
       </aside>
 
       <div className="app-shell__main">
-        <header
+        {isJobsExperience ? <JobsTopNav displayName={shellUser.name} isDark={isDark} onToggleTheme={toggleTheme} /> : <header
           className="top-ribbon top-ribbon--teal sticky top-0 z-30 flex h-16 items-center justify-between overflow-visible border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] transition-all duration-200 md:px-8"
         >
           <div className="flex min-w-0 items-center gap-3">
@@ -744,7 +789,7 @@ export default function AppShell({ children, muteSidebar = false }) {
               </>
             </Show>
           </div>
-        </header>
+        </header>}
 
         {deployUpdateAvailable ? (
           <div
@@ -765,7 +810,7 @@ export default function AppShell({ children, muteSidebar = false }) {
           </div>
         ) : null}
 
-        <main className="w-full px-4 pb-12 pt-6 md:px-8">
+        <main className={isJobsExperience ? "jobs-main-shell" : "w-full px-4 pb-12 pt-6 md:px-8"}>
           {isCareerAssetsRoute ? <CareerAssetsNavigation /> : null}
           {children}
         </main>
