@@ -34,7 +34,9 @@ export default defineConfig({
     side_panel: { default_path: "sidepanel.html" },
     permissions: ["activeTab", "identity", "scripting", "sidePanel", "storage"],
     host_permissions:
-      mode === "testing" ? ["http://127.0.0.1/*"] : ["https://runr-api.onrender.com/*"],
+      mode === "testing"
+        ? ["http://127.0.0.1/*"]
+        : ["https://runr-api.onrender.com/*", "https://www.linkedin.com/*"],
     optional_host_permissions:
       mode === "testing"
         ? ["http://127.0.0.1/*"]

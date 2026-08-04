@@ -860,6 +860,39 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(session_status, 200)
         self.assertEqual(session_payload["session"]["session_id"], request_id)
 
+        sync_status, _, sync_payload = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/linkedin-connections",
+            headers=session_headers,
+            payload={
+                "csv_text": (
+                    "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                    "Jane,Referrer,https://linkedin.com/in/jane-referrer,,ACME,Engineering Manager,01 Jan 2024\n"
+                ),
+            },
+        )
+        self.assertEqual(sync_status, 200)
+        self.assertEqual(sync_payload["summary"]["created"], 1)
+        self.assertNotIn("contacts", sync_payload)
+        self.assertEqual(
+            self.app.list_referral_contacts(self.user.user_id)[0].source_kind,
+            "linkedin_extension",
+        )
+
+        rate_limited_status, _, rate_limited_payload = self._request_with_headers(
+            "POST",
+            "/v1/assisted-apply/extension/linkedin-connections",
+            headers=session_headers,
+            payload={
+                "csv_text": (
+                    "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                    "John,Again,https://linkedin.com/in/john-again,,ACME,Director,01 Jan 2024\n"
+                ),
+            },
+        )
+        self.assertEqual(rate_limited_status, 400)
+        self.assertIn("once per day", rate_limited_payload["error"]["message"])
+
         wrong_session_status, _, _ = self._request_with_headers(
             "POST",
             "/v1/assisted-apply/extension/session/verify",

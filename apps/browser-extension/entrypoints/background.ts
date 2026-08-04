@@ -11,6 +11,7 @@ import {
   isContentRuntimeEvent,
   isPanelRequest,
   isRunrWebLaunchRequest,
+  isRunrWebLinkedInConnectionsRequest,
   isTrackerConfirmationResult,
   type ApplicationPackagePayload,
   type AssistedApplyTabState,
@@ -38,6 +39,7 @@ import {
   preparationCommandFingerprint,
 } from "../src/preparation/external-command";
 import { preparationProgressResult } from "../src/preparation/report";
+import { linkedInConnectionsCsv, type LinkedInConnectionsSnapshot } from "../src/linkedin/connections";
 import { parseDocumentGrant } from "../src/documents/grant-validation";
 import {
   hasAllOptionalHostPermissions,
@@ -199,6 +201,107 @@ async function runGreenhousePackageOnTab(tabId: number, applicationPackage: Appl
     throw new Error("The Greenhouse runner returned an invalid package result.");
   }
   return raw;
+}
+
+const LINKEDIN_CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
+
+function isLinkedInUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" &&
+      (parsed.hostname === "linkedin.com" || parsed.hostname.endsWith(".linkedin.com"));
+  } catch {
+    return false;
+  }
+}
+
+function isLinkedInConnectionsPage(url: string | undefined): boolean {
+  if (!isLinkedInUrl(url)) return false;
+  try {
+    return new URL(url as string).pathname.startsWith("/mynetwork/invite-connect/connections");
+  } catch {
+    return false;
+  }
+}
+
+async function findLinkedInTab(): Promise<Browser.tabs.Tab | null> {
+  const tabs = await browser.tabs.query({ url: ["https://www.linkedin.com/*"] });
+  return tabs.find((tab) => isLinkedInUrl(tab.url)) ?? null;
+}
+
+async function waitForTabToComplete(tabId: number, timeoutMs = 20_000): Promise<Browser.tabs.Tab> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const tab = await browser.tabs.get(tabId);
+    if (tab.status === "complete") return tab;
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+  return browser.tabs.get(tabId);
+}
+
+function isLinkedInConnectionsSnapshot(value: unknown): value is LinkedInConnectionsSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const snapshot = value as { sourceUrl?: unknown; extractedAt?: unknown; rows?: unknown };
+  return typeof snapshot.sourceUrl === "string" &&
+    typeof snapshot.extractedAt === "string" &&
+    Array.isArray(snapshot.rows) &&
+    snapshot.rows.every((row) => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+      const candidate = row as Record<string, unknown>;
+      return ["firstName", "lastName", "profileUrl", "email", "company", "position", "connectedOn"]
+        .every((key) => typeof candidate[key] === "string");
+    });
+}
+
+async function linkedinConnectionsStatus() {
+  const connection = await connectionService.getConnection();
+  const tab = await findLinkedInTab();
+  return {
+    extension_connected: connection.status === "connected",
+    linkedin_tab_open: Boolean(tab),
+  };
+}
+
+async function syncLinkedInConnections() {
+  const connection = await connectionService.getConnection();
+  if (connection.status !== "connected") {
+    throw new Error("Connect the Runr extension before syncing LinkedIn connections.");
+  }
+  const tab = await findLinkedInTab();
+  if (tab?.id == null) {
+    throw new Error("Open LinkedIn in another tab and stay signed in before syncing your network.");
+  }
+
+  let targetTab = tab;
+  if (!isLinkedInConnectionsPage(tab.url)) {
+    const updatedTab = await browser.tabs.update(tab.id, { active: true, url: LINKEDIN_CONNECTIONS_URL });
+    if (!updatedTab || updatedTab.id == null) throw new Error("Runr could not open the LinkedIn connections page.");
+    targetTab = updatedTab;
+    targetTab = await waitForTabToComplete(updatedTab.id);
+  }
+  if (targetTab.id == null) throw new Error("The LinkedIn tab is no longer available.");
+
+  const results = await browser.scripting.executeScript({
+    target: { tabId: targetTab.id },
+    files: ["/linkedin-connections.js"],
+  });
+  const snapshot: unknown = results[0]?.result;
+  if (!isLinkedInConnectionsSnapshot(snapshot)) {
+    throw new Error("Runr could not read the LinkedIn connections page.");
+  }
+  if (!snapshot.rows.length) {
+    throw new Error("No LinkedIn connections were found. Make sure the connections page is loaded and you are signed in.");
+  }
+
+  const api = new RunrAssistedApplyApi(runtimeConfig.apiBaseUrl);
+  const imported = await api.request(
+    "/assisted-apply/extension/linkedin-connections",
+    "POST",
+    { csv_text: linkedInConnectionsCsv(snapshot.rows) },
+    await currentSessionToken(),
+  );
+  return imported;
 }
 
 async function runLeverPackageOnTab(tabId: number, applicationPackage: ApplicationPackagePayload, replaceFieldIntents: string[] = []) {
@@ -947,6 +1050,18 @@ export default defineBackground(() => {
         (message as { protocol?: unknown }).protocol === ASSISTED_APPLY_PREPARATION_PROTOCOL) {
       sendResponse({ ok: false, error: "Runr rejected the invalid or unsupported preparation command." });
       return false;
+    }
+    if (isRunrWebLinkedInConnectionsRequest(message)) {
+      const operation = message.type === "RUNR_WEB_LINKEDIN_CONNECTIONS_STATUS"
+        ? linkedinConnectionsStatus()
+        : syncLinkedInConnections();
+      void operation
+        .then((sync) => sendResponse({ ok: true, sync }))
+        .catch((error: unknown) => sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : "Runr could not sync LinkedIn connections.",
+        }));
+      return true;
     }
     if (!isRunrWebLaunchRequest(message)) return undefined;
     if (import.meta.env.MODE !== "testing" && !message.applicationUrl.startsWith("https://")) {

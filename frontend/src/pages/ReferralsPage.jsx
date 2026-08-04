@@ -4,6 +4,11 @@ import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
+import {
+  LINKEDIN_CONNECTIONS_URL,
+  openLinkedInConnections,
+  syncLinkedInConnections,
+} from "../lib/linkedinSync";
 
 const EMPTY_FORM = {
   name: "",
@@ -19,7 +24,7 @@ const REFERRAL_OUTREACH_STATUSES = [
   "Referral offered",
   "No referral",
 ];
-const LINKEDIN_SOURCE_KINDS = new Set(["linkedin_csv", "linkedin_csv_import"]);
+const LINKEDIN_SOURCE_KINDS = new Set(["linkedin_csv", "linkedin_csv_import", "linkedin_extension"]);
 const REFERRAL_SECTION_OPTIONS = [
   {
     id: "people",
@@ -70,6 +75,143 @@ function ReferralFormField({ label, children, hint = "" }) {
       {children}
       {hint ? <div className="text-xs text-on-surface-variant">{hint}</div> : null}
     </label>
+  );
+}
+
+function LinkedInSyncPanel({ request, refresh, connectionCount }) {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [feedback, setFeedback] = useState({ message: "", error: "" });
+
+  async function loadStatus() {
+    try {
+      const payload = await request("/referrals/import/status");
+      setStatus(payload || {});
+    } catch (statusError) {
+      setFeedback({ message: "", error: statusError.message || "Unable to load LinkedIn sync status." });
+    }
+  }
+
+  useEffect(() => {
+    loadStatus().catch(() => undefined);
+  }, [request]);
+
+  async function handleSync() {
+    setBusy("sync");
+    setFeedback({ message: "", error: "" });
+    try {
+      const extensionResponse = await syncLinkedInConnections();
+      const summary = extensionResponse?.sync?.summary || extensionResponse?.summary || {};
+      await refresh({ showLoading: false });
+      setStatus(extensionResponse?.sync?.sync_status || extensionResponse?.sync_status || null);
+      setFeedback({
+        message: `LinkedIn network synced. ${summary.parsed || 0} connections processed.`,
+        error: "",
+      });
+    } catch (syncError) {
+      setFeedback({ message: "", error: syncError.message || "Unable to sync LinkedIn connections." });
+      await loadStatus().catch(() => undefined);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function handleOpenLinkedIn() {
+    const opened = openLinkedInConnections();
+    setFeedback({
+      message: opened
+        ? "LinkedIn opened in a new tab. Leave that tab open, then return here and sync your network."
+        : "Allow pop-ups for Runr so LinkedIn can open in a new tab.",
+      error: opened ? "" : "Unable to open LinkedIn.",
+    });
+  }
+
+  const canSync = status?.can_sync !== false && !busy;
+  return (
+    <div className="rounded-xl border border-primary/20 bg-primary/5 p-6" data-testid="linkedin-network-sync">
+      <div className="mb-5">
+        <div className="text-xs font-semibold uppercase tracking-wider text-primary">Recommended</div>
+        <h2 className="mt-1 font-headline text-xl font-bold tracking-tight text-on-surface">
+          Sync your LinkedIn network
+        </h2>
+        <p className="mt-1 max-w-2xl text-sm leading-6 text-on-surface-variant">
+          Keep LinkedIn open in this browser and Runr will securely read your connections through the browser extension. No Connections.csv download is required.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined mt-0.5 rounded-lg bg-primary/10 p-2 text-primary">extension</span>
+            <div>
+              <div className="text-sm font-semibold text-on-surface">Install the Runr extension</div>
+              <div className="mt-1 text-sm text-on-surface-variant">It securely reads the LinkedIn tab only when you start a sync.</div>
+            </div>
+          </div>
+          <a
+            className="inline-flex shrink-0 items-center justify-center rounded bg-primary px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+            href="https://chromewebstore.google.com/detail/runr-assisted-apply/najcdfohhfgbjpbokhmmekkahghfhegp"
+            rel="noreferrer"
+            target="_blank"
+          >
+            Install extension
+          </a>
+        </div>
+
+        <div className="flex flex-col gap-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined mt-0.5 rounded-lg bg-primary/10 p-2 text-primary">linkedin</span>
+            <div>
+              <div className="text-sm font-semibold text-on-surface">Authorize LinkedIn access</div>
+              <div className="mt-1 text-sm text-on-surface-variant">Sign in to LinkedIn in this browser and open your connections page.</div>
+            </div>
+          </div>
+          <button
+            className="inline-flex shrink-0 items-center justify-center rounded bg-primary px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+            onClick={handleOpenLinkedIn}
+            type="button"
+          >
+            Open LinkedIn
+            <span className="material-symbols-outlined ml-1 text-[16px]">open_in_new</span>
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined mt-0.5 rounded-lg bg-primary/10 p-2 text-primary">sync</span>
+            <div>
+              <div className="text-sm font-semibold text-on-surface">Sync your connections</div>
+              <div className="mt-1 text-sm text-on-surface-variant">
+                {status?.last_sync_at
+                  ? `Last synced ${formatUpdatedAt(status.last_sync_at)}.`
+                  : `No network sync yet. ${connectionCount || 0} saved connections currently available.`}
+              </div>
+            </div>
+          </div>
+          <button
+            className="inline-flex shrink-0 items-center justify-center rounded bg-primary px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!canSync}
+            onClick={handleSync}
+            type="button"
+          >
+            {busy === "sync" ? "Syncing..." : status?.can_sync === false ? "Try again tomorrow" : "Sync network"}
+          </button>
+        </div>
+      </div>
+
+      {(feedback.message || feedback.error) ? (
+        <div className={["mt-4 text-sm", feedback.error ? "text-error" : "text-primary"].join(" ")} role={feedback.error ? "alert" : undefined}>
+          {feedback.error || feedback.message}
+        </div>
+      ) : null}
+      {status?.next_sync_at && status?.can_sync === false ? (
+        <div className="mt-3 text-xs text-on-surface-variant">Next available sync: {formatUpdatedAt(status.next_sync_at)}.</div>
+      ) : null}
+      <a className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary-container" href={LINKEDIN_CONNECTIONS_URL} rel="noreferrer" target="_blank">
+        Open LinkedIn connections directly
+        <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+      </a>
+    </div>
   );
 }
 
@@ -965,24 +1107,24 @@ export default function ReferralsPage() {
               </div>
             </div>
           ) : (
-            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
-              <div className="mb-5">
-                <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
-                  Import LinkedIn Connections
-                </h2>
-                <p className="mt-1 text-sm text-on-surface-variant">
-                  Upload the LinkedIn connections CSV exactly as LinkedIn gives it to you. Notes before the table are ignored automatically, and the newest upload becomes the current source of truth.
-                </p>
-                <Link
-                  className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary-container"
-                  to="/referrals/linkedin-csv-guide"
-                >
-                  <span className="material-symbols-outlined text-[16px]">help</span>
-                  How to export your LinkedIn connections
-                </Link>
-              </div>
+            <div className="space-y-6">
+              <LinkedInSyncPanel request={request} refresh={refresh} connectionCount={linkedinContacts.length} />
+              <details className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
+                <summary className="cursor-pointer text-sm font-semibold text-on-surface">Use a Connections.csv export instead</summary>
+                <div className="mt-5">
+                  <p className="mt-1 text-sm text-on-surface-variant">
+                    Keep the manual CSV import as a fallback if the browser extension is unavailable. The newest upload remains the current source of truth.
+                  </p>
+                  <Link
+                    className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary-container"
+                    to="/referrals/linkedin-csv-guide"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">help</span>
+                    How to export your LinkedIn connections
+                  </Link>
+                </div>
 
-              <div className="space-y-4">
+                <div className="mt-5 space-y-4">
                 <label className="inline-flex cursor-pointer items-center gap-3 rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low">
                   <span className="material-symbols-outlined text-[18px]">upload_file</span>
                   {importState.fileName ? `Loaded ${importState.fileName}` : "Choose CSV File"}
@@ -1022,12 +1164,12 @@ export default function ReferralsPage() {
                 </ReferralFormField>
               </div>
 
-              {(importState.message || importState.error) ? (
+                {(importState.message || importState.error) ? (
                 <div className={["mt-4 text-sm", importState.error ? "text-error" : "text-primary"].join(" ")}>
                   {importState.error || importState.message}
                 </div>
               ) : null}
-              {importState.summary && !importState.error ? (
+                {importState.summary && !importState.error ? (
                 <div className="mt-3 grid gap-2 text-xs text-on-surface-variant sm:grid-cols-4">
                   <div className="rounded-lg bg-surface-container-low px-3 py-2">
                     Parsed rows: <span className="font-semibold text-on-surface">{importState.summary.parsed || 0}</span>
@@ -1044,7 +1186,7 @@ export default function ReferralsPage() {
                 </div>
               ) : null}
 
-              <div className="mt-6 flex flex-wrap gap-3">
+                <div className="mt-6 flex flex-wrap gap-3">
                 <button
                   className="rounded bg-primary px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={!String(importState.csvText || "").trim() || importState.busy || importState.clearing}
@@ -1061,7 +1203,8 @@ export default function ReferralsPage() {
                 >
                   {importState.clearing ? "Deleting..." : "Delete Imported List"}
                 </button>
-              </div>
+                </div>
+              </details>
             </div>
           )}
         </div>

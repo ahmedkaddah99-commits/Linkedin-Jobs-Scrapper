@@ -547,7 +547,7 @@ def merge_referral_contacts(
     deactivated_count = 0
     if incoming_batch_id:
         for idx, contact in enumerate(merged_contacts):
-            if contact.source_kind not in {"linkedin_csv", "linkedin_csv_import"}:
+            if contact.source_kind not in {"linkedin_csv", "linkedin_csv_import", "linkedin_extension"}:
                 continue
             if _referral_contact_identity(contact) in incoming_identities:
                 continue
@@ -1017,7 +1017,11 @@ def _referral_contact_identity(contact: "ReferralContactRecord") -> str:
 
 
 def _is_linkedin_import_contact(contact: "ReferralContactRecord") -> bool:
-    return str(getattr(contact, "source_kind", "") or "").strip() in {"linkedin_csv", "linkedin_csv_import"}
+    return str(getattr(contact, "source_kind", "") or "").strip() in {
+        "linkedin_csv",
+        "linkedin_csv_import",
+        "linkedin_extension",
+    }
 
 
 def _source_order_for_contact(contact: "ReferralContactRecord") -> int:

@@ -214,6 +214,11 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         self._send_json(_tracker_ats_detail_payload(entry), status=HTTPStatus.OK)
                         return
 
+    if segments == ["referrals", "import", "status"]:
+                        user, _ = self._require_identity()
+                        self._send_json(application.linkedin_sync_status(user.user_id))
+                        return
+
     if segments[:1] == ["tracker"] and len(segments) == 3 and segments[2] == "details":
                         user, _ = self._require_identity()
                         review_id = str(segments[1] or "").strip()

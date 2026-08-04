@@ -17,6 +17,7 @@ import {
   isAssistedApplyPreparationMessage,
   isApplicationPackagePayload,
   isRunrWebLaunchRequest,
+  isRunrWebLinkedInConnectionsRequest,
 } from "@runr/extension-messages";
 
 describe("extension message boundaries", () => {
@@ -161,6 +162,13 @@ describe("extension message boundaries", () => {
     ).toBe(false);
     expect(isPanelRequest({ type: "SUBMIT_APPLICATION" })).toBe(false);
     expect(isPanelRequest(null)).toBe(false);
+  });
+
+  it("accepts only the bounded LinkedIn commands from the first-party web app", () => {
+    expect(isRunrWebLinkedInConnectionsRequest({ type: "RUNR_WEB_LINKEDIN_CONNECTIONS_STATUS" })).toBe(true);
+    expect(isRunrWebLinkedInConnectionsRequest({ type: "RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS" })).toBe(true);
+    expect(isRunrWebLinkedInConnectionsRequest({ type: "RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS", csv_text: "private" })).toBe(false);
+    expect(isRunrWebLinkedInConnectionsRequest({ type: "RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS_UNSAFE" })).toBe(false);
   });
 
   it("validates the sanitized preparation panel state and action surface", () => {

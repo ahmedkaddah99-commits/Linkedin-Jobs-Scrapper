@@ -2474,6 +2474,15 @@ class BackendApplication:
             source_kind=source_kind,
         )
 
+    def linkedin_sync_status(self, user_id: str) -> dict[str, Any]:
+        return self._tracker_application_service.linkedin_sync_status(user_id)
+
+    def sync_linkedin_connections(self, *, user_id: str, csv_text: str) -> dict[str, Any]:
+        return self._tracker_application_service.sync_linkedin_connections(
+            user_id=user_id,
+            csv_text=csv_text,
+        )
+
     def delete_imported_referral_contacts(self, *, user_id: str) -> dict[str, Any]:
         return self._tracker_application_service.delete_imported_referral_contacts(user_id=user_id)
 

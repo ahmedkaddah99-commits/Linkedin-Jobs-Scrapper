@@ -3,23 +3,23 @@ import { Link } from "react-router-dom";
 const steps = [
   {
     title: "Open LinkedIn on desktop",
-    body: "Go to linkedin.com, click your profile photo, then open Settings and Privacy.",
-    path: "LinkedIn > Me > Settings and Privacy",
+    body: "Sign in to LinkedIn in the same browser where you use Runr.",
+    path: "LinkedIn > Sign in",
   },
   {
-    title: "Request your connections file",
-    body: "Open Data Privacy, choose Get a copy of your data, select Connections, then request the archive.",
-    path: "Data Privacy > Get a copy of your data > Connections",
+    title: "Open your LinkedIn connections",
+    body: "The recommended path is to stay signed in to LinkedIn and leave your connections page open while you sync from Runr.",
+    path: "LinkedIn > My Network > Connections",
   },
   {
-    title: "Download Connections.csv",
-    body: "LinkedIn sends an email when the archive is ready. Extract the ZIP and find Connections.csv.",
-    path: "Email from LinkedIn > Download archive > Connections.csv",
+    title: "Install the Runr extension",
+    body: "Runr uses the extension only after you click Sync network. Your LinkedIn credentials never leave the browser.",
+    path: "Runr Referrals > LinkedIn Connections > Install extension",
   },
   {
-    title: "Upload it to Runr",
-    body: "Return to the Referrals page and upload the CSV. Runr finds the real header row and imports valid contacts automatically.",
-    path: "Runr > Referrals > Import LinkedIn Connections",
+    title: "Sync your network",
+    body: "Return to the Referrals page and click Sync network. Runr imports the visible connections and updates your referral matches automatically.",
+    path: "Runr > Referrals > LinkedIn Connections > Sync network",
   },
 ];
 
@@ -45,23 +45,22 @@ export default function LinkedInConnectionsGuidePage() {
           Back to Referrals
         </Link>
         <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
-          LinkedIn CSV Guide
+          LinkedIn connection sync guide
         </div>
         <h1 className="mt-4 font-headline text-[2.5rem] font-extrabold leading-tight tracking-tight text-on-surface">
-          Upload your LinkedIn connections for referral matching
+          Sync your LinkedIn connections for referral matching
         </h1>
         <p className="mt-3 max-w-3xl text-sm leading-7 text-on-surface-variant">
-          Runr does not connect to your LinkedIn account. You download the official LinkedIn
-          Connections.csv file, upload it once, and Runr uses company names to show possible
-          referral contacts on matching jobs.
+          Keep LinkedIn open in the same browser, install the Runr extension, and sync your network
+          directly. Runr uses company names to show possible referral contacts on matching jobs.
         </p>
       </header>
 
       <section className="grid gap-4 md:grid-cols-3">
         {[
-          ["No LinkedIn login", "Runr only reads the CSV you upload."],
-          ["No manual cleanup", "Text before the real header and empty rows are ignored."],
-          ["Current source of truth", "A new upload updates, adds, and removes old LinkedIn contacts."],
+          ["Your login stays private", "Runr reads the open LinkedIn tab through the extension."],
+          ["No manual cleanup", "Runr normalizes the connection data before matching."],
+          ["Current source of truth", "Each sync updates, adds, and removes old LinkedIn contacts."],
         ].map(([title, body]) => (
           <div
             className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5"
@@ -100,9 +99,9 @@ export default function LinkedInConnectionsGuidePage() {
         <div className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-6">
           <h2 className="font-headline text-xl font-bold text-on-surface">What Runr imports</h2>
           <p className="mt-2 text-sm leading-7 text-on-surface-variant">
-            The parser searches for this header row and accepts normal LinkedIn data, including
-            missing emails, commas in names, special characters, profile URLs, job titles, and
-            connected dates.
+            The sync accepts normal LinkedIn connection data, including missing emails, commas in
+            names, special characters, profile URLs, job titles, and connected dates. A Connections.csv
+            export remains available as a fallback on the Referrals page.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {acceptedColumns.map((column) => (
@@ -127,8 +126,8 @@ export default function LinkedInConnectionsGuidePage() {
             className="mt-5 inline-flex items-center gap-2 rounded bg-primary px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
             to="/referrals"
           >
-            Upload Connections.csv
-            <span className="material-symbols-outlined text-[16px]">upload_file</span>
+            Open LinkedIn Connections
+            <span className="material-symbols-outlined text-[16px]">sync</span>
           </Link>
         </div>
       </section>

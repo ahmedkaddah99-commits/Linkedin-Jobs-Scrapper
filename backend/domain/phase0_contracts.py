@@ -175,6 +175,7 @@ REFERRAL_SOURCE_KINDS = [
     "manual",
     "linkedin_csv",
     "linkedin_csv_import",
+    "linkedin_extension",
     "enriched",
 ]
 

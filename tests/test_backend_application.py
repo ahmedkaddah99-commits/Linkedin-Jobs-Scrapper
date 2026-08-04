@@ -1267,6 +1267,35 @@ class BackendApplicationTests(unittest.TestCase):
         )
         self.assertEqual(contacts[0].source_kind, "linkedin_csv")
 
+    def test_linkedin_extension_sync_marks_source_and_is_rate_limited(self):
+        app, _ = self._create_app_with_test_workflow("linkedin_extension_sync")
+        user = app.upsert_user(
+            {
+                "email": "linkedin-sync@example.com",
+                "display_name": "LinkedIn Sync User",
+                "role": "admin",
+            }
+        )
+
+        result = app.sync_linkedin_connections(
+            user_id=user.user_id,
+            csv_text=(
+                "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                "Jane,Referrer,https://linkedin.com/in/jane-referrer,,ACME,Engineering Manager,01 Jan 2024\n"
+            ),
+        )
+        self.assertEqual(result["summary"]["created"], 1)
+        self.assertFalse(result["sync_status"]["can_sync"])
+        self.assertEqual(app.list_referral_contacts(user.user_id)[0].source_kind, "linkedin_extension")
+        with self.assertRaisesRegex(ValueError, "once per day"):
+            app.sync_linkedin_connections(
+                user_id=user.user_id,
+                csv_text=(
+                    "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                    "John,Again,https://linkedin.com/in/john-again,,ACME,Director,01 Jan 2024\n"
+                ),
+            )
+
     def test_queue_worker_retry_and_resource_crud(self):
         app, _ = self._create_app_with_test_workflow("queue_worker_flow")
 

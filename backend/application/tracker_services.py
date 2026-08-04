@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -27,6 +28,8 @@ from backend.repositories.contracts import BackendRepositories
 
 APPLICATION_CONTEXTS_METADATA_KEY = "application_contexts"
 RELEVANT_PEOPLE_DISCOVERY_CONTEXT_KEY = "relevant_people_discovery"
+LINKEDIN_SYNC_METADATA_KEY = "linkedin_connection_sync"
+LINKEDIN_SYNC_INTERVAL = timedelta(days=1)
 
 
 @dataclass(slots=True)
@@ -134,6 +137,55 @@ class TrackerApplicationService:
             "contacts": [contact.to_dict() for contact in refreshed_contacts],
         }
 
+    def linkedin_sync_status(self, user_id: str) -> dict[str, Any]:
+        user = self.repositories.auth_repository.get_user(user_id)
+        metadata = dict((user.metadata or {}).get(LINKEDIN_SYNC_METADATA_KEY) or {})
+        last_sync_at = str(metadata.get("last_sync_at") or "").strip()
+        next_sync_at = ""
+        can_sync = True
+        if last_sync_at:
+            try:
+                last_sync = datetime.fromisoformat(last_sync_at.replace("Z", "+00:00"))
+                if last_sync.tzinfo is None:
+                    last_sync = last_sync.replace(tzinfo=timezone.utc)
+                next_sync = last_sync + LINKEDIN_SYNC_INTERVAL
+                next_sync_at = next_sync.isoformat().replace("+00:00", "Z")
+                can_sync = datetime.now(timezone.utc) >= next_sync
+            except ValueError:
+                last_sync_at = ""
+        return {
+            "can_sync": can_sync,
+            "last_sync_at": last_sync_at,
+            "next_sync_at": next_sync_at,
+            "connection_count": sum(
+                1
+                for contact in self.list_referral_contacts(user_id)
+                if contact.source_kind in {"linkedin_csv", "linkedin_csv_import", "linkedin_extension"}
+                and contact.is_active
+            ),
+        }
+
+    def sync_linkedin_connections(self, *, user_id: str, csv_text: str) -> dict[str, Any]:
+        status = self.linkedin_sync_status(user_id)
+        if not status["can_sync"]:
+            raise ValueError("You can only sync your LinkedIn network once per day. Please try again tomorrow.")
+        result = self.import_referral_contacts(
+            user_id=user_id,
+            csv_text=csv_text,
+            source_kind="linkedin_extension",
+        )
+        user = self.repositories.auth_repository.get_user(user_id)
+        metadata = dict(user.metadata or {})
+        metadata[LINKEDIN_SYNC_METADATA_KEY] = {
+            "last_sync_at": utc_now_iso(),
+            "last_sync_summary": dict(result.get("summary") or {}),
+        }
+        user.metadata = metadata
+        user.updated_at = utc_now_iso()
+        self.repositories.auth_repository.upsert_user(user)
+        result["sync_status"] = self.linkedin_sync_status(user_id)
+        return result
+
     def delete_imported_referral_contacts(
         self,
         *,
@@ -144,7 +196,7 @@ class TrackerApplicationService:
         kept_contacts = [
             contact
             for contact in contacts
-            if contact.source_kind not in {"linkedin_csv", "linkedin_csv_import"}
+            if contact.source_kind not in {"linkedin_csv", "linkedin_csv_import", "linkedin_extension"}
         ]
         deleted_count = len(contacts) - len(kept_contacts)
         if deleted_count:

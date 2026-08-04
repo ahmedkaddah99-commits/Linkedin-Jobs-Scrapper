@@ -68,6 +68,10 @@ export interface ExtensionConnectionState {
   warning?: string;
 }
 
+export interface RunrWebLinkedInConnectionsRequest {
+  type: "RUNR_WEB_LINKEDIN_CONNECTIONS_STATUS" | "RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS";
+}
+
 export type PreparationPanelStatus =
   | "idle"
   | "permission_required"
@@ -1038,6 +1042,12 @@ function isPreparationPanelState(value: unknown): value is PreparationPanelState
     (value.reason === undefined || typeof value.reason === "string");
 }
 
+export interface RunrWebLinkedInConnectionsResponse {
+  ok: boolean;
+  sync?: Record<string, unknown>;
+  error?: string;
+}
+
 export function isPanelRequest(value: unknown): value is PanelRequest {
   if (!isRecord(value)) return false;
   const type = value.type;
@@ -1131,6 +1141,17 @@ export function isApplicationPackageContentRequest(
         ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
           .includes(String(value.mimeType)) &&
         typeof value.base64Bytes === "string" && value.base64Bytes.length > 0));
+}
+
+export function isRunrWebLinkedInConnectionsRequest(
+  value: unknown,
+): value is RunrWebLinkedInConnectionsRequest {
+  if (!isRecord(value)) return false;
+  return (
+    (value.type === "RUNR_WEB_LINKEDIN_CONNECTIONS_STATUS" ||
+      value.type === "RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS") &&
+    Object.keys(value).length === 1
+  );
 }
 
 export function isRunrWebLaunchRequest(value: unknown): value is RunrWebLaunchRequest {
