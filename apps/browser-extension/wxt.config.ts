@@ -36,7 +36,7 @@ export default defineConfig({
     host_permissions:
       mode === "testing"
         ? ["http://127.0.0.1/*"]
-        : ["https://runr-api.onrender.com/*", "https://www.linkedin.com/*"],
+        : ["https://runr-api.onrender.com/*", "https://www.linkedin.com/*", "https://linkedin.com/*"],
     optional_host_permissions:
       mode === "testing"
         ? ["http://127.0.0.1/*"]

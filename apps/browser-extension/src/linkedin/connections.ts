@@ -17,8 +17,12 @@ export interface LinkedInConnectionsSnapshot {
 const PROFILE_PATH_PATTERN = /^\/in\/[^/]+/iu;
 const CARD_SELECTORS = [
   "li.mn-connection-card",
-  ".mn-connection-card",
+  "[class*='mn-connection-card' i]",
   "li[data-view-name*='connection' i]",
+  "[data-view-name*='connection-card' i]",
+  "main [role='listitem']",
+  "main li",
+  "main article",
 ];
 
 function textFrom(element: Element | null | undefined): string {
@@ -29,7 +33,11 @@ function profileUrlFrom(element: Element, origin: string): string {
   const raw = element.getAttribute("href") || "";
   try {
     const parsed = new URL(raw, origin || "https://www.linkedin.com");
-    if (!parsed.hostname.endsWith("linkedin.com") || !PROFILE_PATH_PATTERN.test(parsed.pathname)) {
+    if (
+      parsed.hostname !== "linkedin.com" &&
+      !parsed.hostname.endsWith(".linkedin.com") ||
+      !PROFILE_PATH_PATTERN.test(parsed.pathname)
+    ) {
       return "";
     }
     parsed.search = "";
@@ -57,10 +65,22 @@ function splitOccupation(value: string): { company: string; position: string } {
   return { company: "", position: normalized };
 }
 
+function textLinesFrom(element: Element): string[] {
+  return String(element.textContent || "")
+    .split(/\r?\n/gu)
+    .map((line) => line.replace(/\s+/gu, " ").trim())
+    .filter(Boolean);
+}
+
+function connectedDateFromLines(lines: string[]): string {
+  return lines.find((line) => /\bconnected\s+on\b/iu.test(line))?.replace(/^.*?\bconnected\s+on\s*/iu, "").trim() || "";
+}
+
 function connectionFromCard(card: Element, origin: string): LinkedInConnectionRow | null {
-  const profileAnchor = [...card.querySelectorAll("a[href]")]
+  const profileAnchors = [...card.querySelectorAll("a[href]")]
     .map((anchor) => ({ anchor, url: profileUrlFrom(anchor, origin) }))
-    .find((entry) => entry.url);
+    .filter((entry) => entry.url);
+  const profileAnchor = profileAnchors.find((entry) => textFrom(entry.anchor)) || profileAnchors[0];
   if (!profileAnchor) return null;
 
   const name = textFrom(
@@ -74,10 +94,10 @@ function connectionFromCard(card: Element, origin: string): LinkedInConnectionRo
     card.querySelector(
       ".mn-connection-card__occupation, [data-view-name='connection-card-occupation'], .t-14",
     ),
-  );
+  ) || textLinesFrom(card).find((line) => line !== name && !/\bconnected\s+on\b/iu.test(line)) || "";
   const connectedOn = textFrom(
     card.querySelector("time, .mn-connection-card__connection-date, [data-view-name*='connected' i]"),
-  );
+  ) || connectedDateFromLines(textLinesFrom(card));
   const { firstName, lastName } = splitName(name);
   const { company, position } = splitOccupation(occupation);
   return {
@@ -100,6 +120,10 @@ export function extractLinkedInConnections(
   for (const selector of CARD_SELECTORS) {
     documentRef.querySelectorAll(selector).forEach((card) => cards.add(card));
   }
+  documentRef.querySelectorAll("main a[href*='/in/']").forEach((anchor) => {
+    const card = anchor.closest("li, article, [role='listitem'], [class*='connection-card' i]") || anchor.parentElement;
+    if (card) cards.add(card);
+  });
 
   const rows: LinkedInConnectionRow[] = [];
   const seen = new Set<string>();

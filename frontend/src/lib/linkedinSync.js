@@ -37,3 +37,7 @@ export function openLinkedInConnections() {
 export function syncLinkedInConnections({ runtime = globalThis.chrome?.runtime } = {}) {
   return sendExtensionMessage({ type: "RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS" }, runtime);
 }
+
+export function getLinkedInConnectionsStatus({ runtime = globalThis.chrome?.runtime } = {}) {
+  return sendExtensionMessage({ type: "RUNR_WEB_LINKEDIN_CONNECTIONS_STATUS" }, runtime);
+}

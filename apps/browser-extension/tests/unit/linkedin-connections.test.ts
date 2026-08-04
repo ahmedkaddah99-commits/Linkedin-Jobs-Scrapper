@@ -29,4 +29,29 @@ describe("LinkedIn connections page extraction", () => {
       'Jane,Doe,https://www.linkedin.com/in/jane-doe,,"ACME, Inc.",Engineering Manager,"Connected January 2, 2026"',
     );
   });
+
+  it("falls back to the current LinkedIn list structure when legacy card classes are absent", () => {
+    document.body.innerHTML = `
+      <main>
+        <ul>
+          <li>
+            <a href="https://linkedin.com/in/amira-hassan">Amira Hassan</a>
+            <div>Product Designer</div>
+            <div>Connected on August 4, 2026</div>
+          </li>
+        </ul>
+      </main>
+    `;
+
+    const snapshot = extractLinkedInConnections(document, "https://linkedin.com/mynetwork/invite-connect/connections/");
+    expect(snapshot.rows).toEqual([
+      expect.objectContaining({
+        firstName: "Amira",
+        lastName: "Hassan",
+        profileUrl: "https://linkedin.com/in/amira-hassan",
+        position: "Product Designer",
+        connectedOn: "August 4, 2026",
+      }),
+    ]);
+  });
 });

@@ -204,6 +204,7 @@ async function runGreenhousePackageOnTab(tabId: number, applicationPackage: Appl
 }
 
 const LINKEDIN_CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
+const LINKEDIN_TAB_PATTERNS = ["https://www.linkedin.com/*", "https://linkedin.com/*"];
 
 function isLinkedInUrl(url: string | undefined): boolean {
   if (!url) return false;
@@ -226,7 +227,7 @@ function isLinkedInConnectionsPage(url: string | undefined): boolean {
 }
 
 async function findLinkedInTab(): Promise<Browser.tabs.Tab | null> {
-  const tabs = await browser.tabs.query({ url: ["https://www.linkedin.com/*"] });
+  const tabs = await browser.tabs.query({ url: LINKEDIN_TAB_PATTERNS });
   return tabs.find((tab) => isLinkedInUrl(tab.url)) ?? null;
 }
 
@@ -275,7 +276,7 @@ async function syncLinkedInConnections() {
 
   let targetTab = tab;
   if (!isLinkedInConnectionsPage(tab.url)) {
-    const updatedTab = await browser.tabs.update(tab.id, { active: true, url: LINKEDIN_CONNECTIONS_URL });
+    const updatedTab = await browser.tabs.update(tab.id, { url: LINKEDIN_CONNECTIONS_URL });
     if (!updatedTab || updatedTab.id == null) throw new Error("Runr could not open the LinkedIn connections page.");
     targetTab = updatedTab;
     targetTab = await waitForTabToComplete(updatedTab.id);

@@ -5,6 +5,7 @@ import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
 import {
+  getLinkedInConnectionsStatus,
   LINKEDIN_CONNECTIONS_URL,
   openLinkedInConnections,
   syncLinkedInConnections,
@@ -80,6 +81,7 @@ function ReferralFormField({ label, children, hint = "" }) {
 
 function LinkedInSyncPanel({ request, refresh, connectionCount }) {
   const [status, setStatus] = useState(null);
+  const [extensionStatus, setExtensionStatus] = useState({ state: "checking" });
   const [busy, setBusy] = useState("");
   const [feedback, setFeedback] = useState({ message: "", error: "" });
 
@@ -92,8 +94,18 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
     }
   }
 
+  async function loadExtensionStatus() {
+    try {
+      const response = await getLinkedInConnectionsStatus();
+      setExtensionStatus({ state: "ready", ...(response?.sync || {}) });
+    } catch {
+      setExtensionStatus({ state: "missing" });
+    }
+  }
+
   useEffect(() => {
     loadStatus().catch(() => undefined);
+    loadExtensionStatus().catch(() => undefined);
   }, [request]);
 
   async function handleSync() {
@@ -104,6 +116,7 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
       const summary = extensionResponse?.sync?.summary || extensionResponse?.summary || {};
       await refresh({ showLoading: false });
       setStatus(extensionResponse?.sync?.sync_status || extensionResponse?.sync_status || null);
+      await loadExtensionStatus();
       setFeedback({
         message: `LinkedIn network synced. ${summary.parsed || 0} connections processed.`,
         error: "",
@@ -127,6 +140,7 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
   }
 
   const canSync = status?.can_sync !== false && !busy;
+  const extensionConnected = extensionStatus.state === "ready" && extensionStatus.extension_connected === true;
   return (
     <div className="rounded-xl border border-primary/20 bg-primary/5 p-6" data-testid="linkedin-network-sync">
       <div className="mb-5">
@@ -144,18 +158,35 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
           <div className="flex items-start gap-3">
             <span className="material-symbols-outlined mt-0.5 rounded-lg bg-primary/10 p-2 text-primary">extension</span>
             <div>
-              <div className="text-sm font-semibold text-on-surface">Install the Runr extension</div>
-              <div className="mt-1 text-sm text-on-surface-variant">It securely reads the LinkedIn tab only when you start a sync.</div>
+              <div className="text-sm font-semibold text-on-surface">
+                {extensionStatus.state === "checking"
+                  ? "Checking Runr extension"
+                  : extensionConnected ? "Runr extension connected" : "Install the Runr extension"}
+              </div>
+              <div className="mt-1 text-sm text-on-surface-variant">
+                {extensionStatus.state === "checking"
+                  ? "Checking this browser automatically…"
+                  : extensionConnected
+                    ? "Ready to read your LinkedIn tab when you start a sync."
+                    : "It securely reads the LinkedIn tab only when you start a sync."}
+              </div>
             </div>
           </div>
-          <a
-            className="inline-flex shrink-0 items-center justify-center rounded bg-primary px-3 py-2 text-sm font-medium text-white hover:opacity-90"
-            href="https://chromewebstore.google.com/detail/runr-assisted-apply/najcdfohhfgbjpbokhmmekkahghfhegp"
-            rel="noreferrer"
-            target="_blank"
-          >
-            Install extension
-          </a>
+          {extensionConnected ? (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-3 py-2 text-sm font-medium text-primary">
+              <span className="material-symbols-outlined text-[16px]">check_circle</span>
+              Connected
+            </span>
+          ) : (
+            <a
+              className="inline-flex shrink-0 items-center justify-center rounded bg-primary px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+              href="https://chromewebstore.google.com/detail/runr-assisted-apply/najcdfohhfgbjpbokhmmekkahghfhegp"
+              rel="noreferrer"
+              target="_blank"
+            >
+              Install extension
+            </a>
+          )}
         </div>
 
         <div className="flex flex-col gap-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -199,6 +230,12 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
         </div>
       </div>
 
+      {busy === "sync" ? (
+        <div className="mt-4 flex items-center gap-2 text-sm text-primary" role="status">
+          <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+          Reading LinkedIn connections in the background. Runr will stay open while this finishes…
+        </div>
+      ) : null}
       {(feedback.message || feedback.error) ? (
         <div className={["mt-4 text-sm", feedback.error ? "text-error" : "text-primary"].join(" ")} role={feedback.error ? "alert" : undefined}>
           {feedback.error || feedback.message}

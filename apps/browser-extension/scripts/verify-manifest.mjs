@@ -81,7 +81,7 @@ for (const permission of permissions) {
 
 assert(
   JSON.stringify(manifest.host_permissions || []) ===
-    JSON.stringify(["https://runr-api.onrender.com/*", "https://www.linkedin.com/*"]),
+    JSON.stringify(["https://runr-api.onrender.com/*", "https://www.linkedin.com/*", "https://linkedin.com/*"]),
   "Production host access must be limited to the first-party Runr API and LinkedIn connections origins.",
 );
 assert(
