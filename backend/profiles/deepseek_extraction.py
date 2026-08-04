@@ -9,7 +9,7 @@ from typing import Any
 
 import requests
 
-from backend.profiles.gemini_extraction import _EXTRACTION_JSON_SCHEMA
+from backend.profiles.extraction_schema import _EXTRACTION_JSON_SCHEMA
 
 
 MODEL_ID = "deepseek-chat"

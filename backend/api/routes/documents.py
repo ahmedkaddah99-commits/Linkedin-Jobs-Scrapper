@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
-from backend.capabilities.source_processing.extraction import process_source_bytes
 from backend.domain.phase0_contracts import CAREER_ASSET_KINDS, CAREER_ASSET_PURPOSES
 
 
@@ -173,51 +172,22 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                                 purposes.append("private_never_attach")
                         tags = [asset_kind]
                         is_cv_asset = asset_kind == "workspace_cv"
-                        suffix = Path(filename or "").suffix.lower()
-                        needs_async_extraction = not is_cv_asset and (
-                            suffix == ".pdf"
-                            or suffix in {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
-                        )
-                        if needs_async_extraction:
-                            document_extraction = {
-                                "text": "",
-                                "char_count": 0,
-                                "method": "pending",
-                                "warnings": [],
-                                "pages": [],
-                                "confidence": 0.0,
-                                "status": "uploaded",
-                            }
-                            asset_metadata = extraction_metadata(document_extraction)
-                            asset_metadata["status"] = CV_STATUS_UPLOADED
-                        else:
-                            source_id = f"upload_{filename}"
-                            document_extraction = process_source_bytes(
-                                source_id,
-                                filename,
-                                file_bytes,
-                                allow_ocr=not is_cv_asset,
-                            )
-                            if hasattr(document_extraction, 'to_dict'):
-                                document_extraction = document_extraction.to_dict()
-                            asset_metadata = extraction_metadata(document_extraction)
+                        # Every Asset Library upload is acknowledged immediately. Text extraction,
+                        # OCR, DeepSeek structuring, and CV profile parsing run in the worker.
+                        needs_async_extraction = True
+                        document_extraction = {
+                            "text": "",
+                            "char_count": 0,
+                            "method": "pending",
+                            "warnings": [],
+                            "pages": [],
+                            "confidence": 0.0,
+                            "status": "uploaded",
+                        }
+                        asset_metadata = extraction_metadata(document_extraction)
+                        asset_metadata["status"] = CV_STATUS_UPLOADED
                         asset_metadata["purposes"] = purposes
                         if is_cv_asset:
-                            cv_text = str(document_extraction.get("text") or "")
-                            if not cv_text:
-                                warning = " ".join(str(item) for item in document_extraction.get("warnings") or []).strip()
-                                detail = f" {warning}" if warning else ""
-                                raise ValueError(f"Could not extract any text from uploaded file '{filename}'.{detail}")
-                            extraction = _extract_cv_profile_for_upload(cv_text)
-                            asset_metadata.update({
-                                "parsed_profile": dict(extraction.get("profile") or {}),
-                                "profile_extraction": {
-                                    "provider": str(extraction.get("provider") or ""),
-                                    "model": str(extraction.get("model") or ""),
-                                    "warnings": list(extraction.get("warnings") or []),
-                                    "extracted_at": str(extraction.get("extracted_at") or ""),
-                                },
-                            })
                             tags = (
                                 ["cv", "workspace_cv"]
                                 if asset_kind == "workspace_cv"
@@ -259,6 +229,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             {
                                 "asset": asset,
                                 "job_id": str(processing_run.id if processing_run else ""),
+                                "status": "queued" if processing_run else CV_STATUS_READY,
                                 "status_url": cv_upload_status_url(processing_run.id) if processing_run else "",
                             },
                             status=HTTPStatus.CREATED,

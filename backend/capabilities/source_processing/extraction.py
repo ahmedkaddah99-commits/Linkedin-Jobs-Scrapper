@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from backend.domain.source_processing import (
-    EXTRACTION_METHOD_GEMINI,
     OCR_METHODS,
     SOURCE_STATUS_EXTRACTED,
     SOURCE_STATUS_FAILED,
@@ -43,7 +42,7 @@ def process_source(source_id: str, file_path: str, *, allow_ocr: bool = True) ->
         return record
 
     try:
-        extraction = _try_gemini_or_local(file_name, data, allow_ocr=allow_ocr)
+        extraction = _extract_local_then_deepseek(file_name, data, allow_ocr=allow_ocr)
     except Exception as exc:
         record.status = SOURCE_STATUS_FAILED
         record.error = f"Extraction failed: {exc}"
@@ -107,33 +106,10 @@ def process_source(source_id: str, file_path: str, *, allow_ocr: bool = True) ->
     return record
 
 
-def _try_gemini_or_local(
+def _extract_local_then_deepseek(
     file_name: str, data: bytes, *, allow_ocr: bool = True
 ) -> dict[str, Any]:
-    """Try Gemini extraction first; fall back to local extraction on failure."""
-    try:
-        from backend.profiles.gemini_extraction import extract_with_gemini
-
-        gemini_result = extract_with_gemini(file_name, data)
-        if gemini_result.get("status") != "failed":
-            LOGGER.info(
-                "Gemini extracted %d chars from %s (confidence=%.2f)",
-                gemini_result.get("char_count", 0),
-                file_name,
-                gemini_result.get("confidence", 0.0),
-            )
-            return gemini_result
-        LOGGER.warning(
-            "Gemini extraction succeeded but returned no text for %s; falling back.",
-            file_name,
-        )
-    except Exception as exc:
-        LOGGER.warning(
-            "Gemini extraction failed for %s (%s); falling back to local extraction.",
-            file_name,
-            exc,
-        )
-
+    """Extract file text locally, then optionally structure it with DeepSeek."""
     local_result = extract_document_text(file_name, data, allow_ocr=allow_ocr)
     local_text = str(local_result.get("text") or "").strip()
     if local_text and (os.getenv("DEEPSEEK_API_KEY") or "").strip():
@@ -187,7 +163,7 @@ def run_source_processing_pipeline(
 
 
 def process_source_bytes(source_id: str, file_name: str, data: bytes, *, allow_ocr: bool = True) -> SourceTextRecord:
-    """Process source file bytes (from object storage or upload) through Gemini + local fallback.
+    """Process source file bytes through local extraction plus optional DeepSeek structuring.
 
     Writes bytes to a temp file for disk-based processing, then cleans up.
     """

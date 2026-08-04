@@ -8573,6 +8573,7 @@ def _admin_analytics_snapshot_queries() -> dict[str, str]:
                     runs.user_id AS user_id
                 FROM runs
                 WHERE runs.user_id != ''
+                  AND COALESCE(json_extract(runs.metadata_json, '$.job_type'), '') <> 'cv_upload_processing'
             )
             SELECT
                 users.user_id,

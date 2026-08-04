@@ -3630,6 +3630,40 @@ class BackendApiTests(unittest.TestCase):
             "pdf_native",
         )
 
+    def test_text_docx_and_pptx_uploads_are_acknowledged_before_extraction(self):
+        from docx import Document
+        from pptx import Presentation
+
+        doc = Document()
+        doc.add_paragraph("DOCX background extraction")
+        docx_buffer = io.BytesIO()
+        doc.save(docx_buffer)
+
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        slide.shapes.title.text = "PPTX background extraction"
+        pptx_buffer = io.BytesIO()
+        presentation.save(pptx_buffer)
+
+        uploads = (
+            ("notes.txt", b"TXT background extraction"),
+            ("notes.docx", docx_buffer.getvalue()),
+            ("notes.pptx", pptx_buffer.getvalue()),
+        )
+        for filename, file_bytes in uploads:
+            status, payload = self._multipart_request(
+                f"/documents/upload?asset_kind=uploaded_document&display_name={filename}",
+                "document",
+                filename,
+                file_bytes,
+            )
+            self.assertEqual(status, 201)
+            self.assertTrue(payload["job_id"])
+            self.assertTrue(payload["status_url"])
+            self.assertEqual(payload["status"], "queued")
+            self.assertEqual(payload["asset"]["metadata"]["status"], "queued")
+            self.assertEqual(payload["asset"]["metadata"]["text_extraction"]["method"], "pending")
+
     @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
     def test_documents_endpoint_bulk_export_and_candidate_assets(self):
         status, cv_payload = self._multipart_request(

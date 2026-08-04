@@ -1,9 +1,9 @@
 """CP-039R: Integration tests for the source processing pipeline.
 
-Covers text and image fixtures through the full vertical path:
-upload/bytes -> Gemini processing -> evidence extraction -> persistence.
+ Covers text and image fixtures through the full vertical path:
+ upload/bytes -> local extraction -> DeepSeek structuring -> evidence extraction.
 
-Only mocks at the provider boundary (Gemini API client).
+Only mocks at the DeepSeek provider boundary.
 """
 
 from __future__ import annotations
@@ -11,11 +11,9 @@ from __future__ import annotations
 import base64
 import json
 import os
-import struct
 import unittest
-import zlib
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from backend.capabilities.source_processing.pipeline import (
     build_source_processing_state,
@@ -35,7 +33,7 @@ from backend.domain.candidate_evidence import CandidateEvidence, compute_content
 class TestSourceProcessingPipeline(unittest.TestCase):
     """Tests for process_sources_and_extract_evidence."""
 
-    def _mock_gemini_response(
+    def _mock_deepseek_response(
         self,
         text="Extracted text content.",
         confidence=0.92,
@@ -43,28 +41,31 @@ class TestSourceProcessingPipeline(unittest.TestCase):
         experience_details=None,
         evidence_items=None,
     ):
-        j = json.dumps({
-            "extracted_text": text,
+        return {
+            "text": text,
+            "char_count": len(text),
+            "method": "deepseek",
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "status": "ready",
+            "confidence": confidence,
+            "warnings": [],
+            "pages": [],
             "layout_sections": [],
             "experience_details": experience_details or [],
             "evidence_items": evidence_items or [],
-            "confidence": confidence,
-            "warnings": [],
-        })
-        m = MagicMock()
-        m.text = j
-        return m
+        }
 
     def test_text_source_processed_and_evidence_extracted(self):
-        mr = self._mock_gemini_response(
+        mr = self._mock_deepseek_response(
             "John Doe\nSoftware Engineer at Acme Corp\n"
             "Increased revenue by 30% through process automation.\n",
             0.93,
         )
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            c = MagicMock()
-            cb.return_value = c
-            c.models.generate_content.return_value = mr
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
+            return_value=mr,
+        ):
             result = process_sources_and_extract_evidence([
                 {"asset_id": "txt_1", "file_name": "resume.txt",
                  "file_bytes": b"John Doe\nSoftware Engineer at Acme Corp\n"}
@@ -76,8 +77,8 @@ class TestSourceProcessingPipeline(unittest.TestCase):
             self.assertTrue(ev_dict.get("content_hash"))
             self.assertEqual(ev_dict["status"], "needs_review")
 
-    def test_structured_gemini_output_excludes_cv_chrome_and_maps_real_experience(self):
-        mr = self._mock_gemini_response(
+    def test_structured_deepseek_output_excludes_cv_chrome_and_maps_real_experience(self):
+        mr = self._mock_deepseek_response(
             "Erlangen, Germany\nahmed@example.com\nWORK EXPERIENCE\n"
             "Operations Analyst at Acme GmbH\n"
             "Automated monthly reporting and reduced preparation time by 40%.",
@@ -102,10 +103,10 @@ class TestSourceProcessingPipeline(unittest.TestCase):
                 "source_section": "Work Experience",
             }],
         )
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            client = MagicMock()
-            cb.return_value = client
-            client.models.generate_content.return_value = mr
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
+            return_value=mr,
+        ):
             result = process_sources_and_extract_evidence([{
                 "asset_id": "cv_1",
                 "file_name": "resume.txt",
@@ -123,41 +124,26 @@ class TestSourceProcessingPipeline(unittest.TestCase):
 
 
     def test_pdf_source_multimodal_processed(self):
-        mr = self._mock_gemini_response("Jane Smith, Product Manager.", 0.90)
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            c = MagicMock()
-            cb.return_value = c
-            c.models.generate_content.return_value = mr
+        import fitz
+
+        mr = self._mock_deepseek_response("Jane Smith, Product Manager.", 0.90)
+        document = fitz.open()
+        page = document.new_page()
+        page.insert_text((72, 72), "Jane Smith, Product Manager.")
+        pdf_bytes = document.tobytes()
+        document.close()
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
+            return_value=mr,
+        ):
             result = process_sources_and_extract_evidence([
-                {"asset_id": "pdf_1", "file_name": "cv.pdf", "file_bytes": b"%PDF-1.4 data"}
+                {"asset_id": "pdf_1", "file_name": "cv.pdf", "file_bytes": pdf_bytes}
             ])
         self.assertEqual(result["status"], SOURCE_BATCH_STATUS_COMPLETED)
         src = result["sources"][0]
-        self.assertEqual(src["method"], "gemini")
-        self.assertEqual(src["provider"], "gemini")
+        self.assertEqual(src["method"], "deepseek")
+        self.assertEqual(src["provider"], "deepseek")
         self.assertGreater(len(result["evidence"]), 0)
-
-    def test_image_source_multimodal_processed(self):
-        mr = self._mock_gemini_response("Screenshot: Submit button visible.", 0.88)
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            c = MagicMock()
-            cb.return_value = c
-            c.models.generate_content.return_value = mr
-            sig = b'\x89PNG\r\n\x1a\n'
-            ihdr_d = struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)
-            ihdr_c = zlib.crc32(b'IHDR' + ihdr_d)
-            ihdr = struct.pack('>I', 13) + b'IHDR' + ihdr_d + struct.pack('>I', ihdr_c)
-            idat_d = zlib.compress(b'\x00\xff\xff\xff')
-            idat_c = zlib.crc32(b'IDAT' + idat_d)
-            idat = struct.pack('>I', len(idat_d)) + b'IDAT' + idat_d + struct.pack('>I', idat_c)
-            iend_c = zlib.crc32(b'IEND')
-            iend = struct.pack('>I', 0) + b'IEND' + struct.pack('>I', iend_c)
-            result = process_sources_and_extract_evidence([
-                {"asset_id": "img_1", "file_name": "ss.png",
-                 "file_bytes": sig + ihdr + idat + iend}
-            ])
-        self.assertEqual(result["status"], SOURCE_BATCH_STATUS_COMPLETED)
-        self.assertEqual(result["sources"][0]["method"], "gemini")
 
     def test_empty_file_bytes_produces_empty_status(self):
         result = process_sources_and_extract_evidence([
@@ -166,9 +152,9 @@ class TestSourceProcessingPipeline(unittest.TestCase):
         self.assertEqual(result["sources"][0]["status"], SOURCE_STATUS_EMPTY)
         self.assertEqual(len(result["evidence"]), 0)
 
-    def test_gemini_unavailable_does_not_create_unstructured_evidence(self):
+    def test_deepseek_unavailable_does_not_create_unstructured_evidence(self):
         with patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}), patch(
-            "backend.profiles.gemini_extraction.extract_with_gemini",
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
             side_effect=RuntimeError("API key not configured"),
         ):
             result = process_sources_and_extract_evidence([
@@ -180,7 +166,7 @@ class TestSourceProcessingPipeline(unittest.TestCase):
         self.assertIn("AI structured extraction", src["error"])
         self.assertEqual(result["evidence"], [])
 
-    def test_deepseek_fallback_structures_text_when_gemini_is_unavailable(self):
+    def test_deepseek_structures_text_without_gemini(self):
         deepseek_result = {
             "text": "Alice\nData Scientist\nBuilt an ML pipeline.",
             "char_count": 44,
@@ -204,10 +190,7 @@ class TestSourceProcessingPipeline(unittest.TestCase):
                 "inferred_role": "Data Scientist",
             }],
         }
-        with patch(
-            "backend.profiles.gemini_extraction.extract_with_gemini",
-            side_effect=RuntimeError("Gemini quota exhausted"),
-        ), patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
             "backend.profiles.deepseek_extraction.extract_with_deepseek",
             return_value=deepseek_result,
         ):
@@ -222,11 +205,11 @@ class TestSourceProcessingPipeline(unittest.TestCase):
         self.assertGreater(len(result["evidence"]), 0)
 
     def test_idempotent_no_duplicate_evidence(self):
-        mr = self._mock_gemini_response("Delivered migration project on time.", 0.91)
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            c = MagicMock()
-            cb.return_value = c
-            c.models.generate_content.return_value = mr
+        mr = self._mock_deepseek_response("Delivered migration project on time.", 0.91)
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
+            return_value=mr,
+        ):
             r1 = process_sources_and_extract_evidence([
                 {"asset_id": "id_1", "file_name": "a.txt", "file_bytes": b"Delivered migration."}
             ])
@@ -240,11 +223,11 @@ class TestSourceProcessingPipeline(unittest.TestCase):
         )
 
     def test_multiple_sources_batch(self):
-        mr = self._mock_gemini_response("Team leader with agile experience.", 0.89)
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            c = MagicMock()
-            cb.return_value = c
-            c.models.generate_content.return_value = mr
+        mr = self._mock_deepseek_response("Team leader with agile experience.", 0.89)
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
+            return_value=mr,
+        ):
             result = process_sources_and_extract_evidence([
                 {"asset_id": "a1", "file_name": "d1.txt", "file_bytes": b"Team leader."},
                 {"asset_id": "a2", "file_name": "d2.pdf", "file_bytes": b"%PDF-1.4"},
@@ -281,7 +264,7 @@ class TestSourceProcessingPipeline(unittest.TestCase):
 
 
 class TestSourceProcessingPipelineAPIIntegration(unittest.TestCase):
-    """Integration tests with a real BackendApplication (mocking only Gemini)."""
+    """Integration tests with a real BackendApplication and mocked DeepSeek."""
 
     def setUp(self):
         from backend import create_backend
@@ -345,15 +328,17 @@ class TestSourceProcessingPipelineAPIIntegration(unittest.TestCase):
         return resp.status, json.loads(raw) if raw else {}
 
     def test_process_sources_endpoint_text(self):
-        mr = json.dumps({
-            "extracted_text": "Alice\nData Scientist\nBuilt ML pipeline.",
-            "layout_sections": [], "experience_details": [],
-            "confidence": 0.94, "warnings": [],
-        })
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            c = MagicMock()
-            cb.return_value = c
-            c.models.generate_content.return_value = MagicMock(text=mr)
+        mr = {
+            "text": "Alice\nData Scientist\nBuilt ML pipeline.",
+            "char_count": 39, "layout_sections": [], "experience_details": [],
+            "confidence": 0.94, "warnings": [], "method": "deepseek",
+            "provider": "deepseek", "model": "deepseek-chat", "status": "ready",
+            "pages": [], "evidence_items": [],
+        }
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
+            return_value=mr,
+        ):
             file_b64 = base64.b64encode(b"Alice\nData Scientist\n").decode("utf-8")
             status, payload = self._request("POST", "/evidence-items/process-sources", {
                 "profile_id": "prof_test",
@@ -364,48 +349,22 @@ class TestSourceProcessingPipelineAPIIntegration(unittest.TestCase):
         self.assertGreater(len(payload["evidence"]), 0)
         self.assertIn("state", payload)
 
-    def test_process_sources_endpoint_image(self):
-        mr = json.dumps({
-            "extracted_text": "Application screenshot: Upload CV button.",
-            "layout_sections": [], "experience_details": [],
-            "confidence": 0.85, "warnings": [],
-        })
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            c = MagicMock()
-            cb.return_value = c
-            c.models.generate_content.return_value = MagicMock(text=mr)
-            sig = b'\x89PNG\r\n\x1a\n'
-            ihdr_d = struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)
-            ihdr_c = zlib.crc32(b'IHDR' + ihdr_d)
-            ihdr = struct.pack('>I', 13) + b'IHDR' + ihdr_d + struct.pack('>I', ihdr_c)
-            idat_d = zlib.compress(b'\x00\xff\xff\xff')
-            idat_c = zlib.crc32(b'IDAT' + idat_d)
-            idat = struct.pack('>I', len(idat_d)) + b'IDAT' + idat_d + struct.pack('>I', idat_c)
-            iend_c = zlib.crc32(b'IEND')
-            iend = struct.pack('>I', 0) + b'IEND' + struct.pack('>I', iend_c)
-            png = sig + ihdr + idat + iend
-            file_b64 = base64.b64encode(png).decode("utf-8")
-            status, payload = self._request("POST", "/evidence-items/process-sources", {
-                "sources": [{"asset_id": "img_1", "file_name": "ss.png", "file_bytes": file_b64}],
-            })
-        self.assertEqual(status, 200, payload)
-        self.assertEqual(payload["status"], SOURCE_BATCH_STATUS_COMPLETED)
-        self.assertEqual(payload["sources"][0]["method"], "gemini")
-
     def test_process_sources_empty_payload_rejected(self):
         status, payload = self._request("POST", "/evidence-items/process-sources", {})
         self.assertEqual(status, 422)
 
     def test_process_sources_idempotent(self):
-        mr = json.dumps({
-            "extracted_text": "Bob\nEngineering Manager\nManaged team of 12.",
-            "layout_sections": [], "experience_details": [],
-            "confidence": 0.93, "warnings": [],
-        })
-        with patch("backend.profiles.gemini_extraction._build_client") as cb:
-            c = MagicMock()
-            cb.return_value = c
-            c.models.generate_content.return_value = MagicMock(text=mr)
+        mr = {
+            "text": "Bob\nEngineering Manager\nManaged team of 12.",
+            "char_count": 45, "layout_sections": [], "experience_details": [],
+            "confidence": 0.93, "warnings": [], "method": "deepseek",
+            "provider": "deepseek", "model": "deepseek-chat", "status": "ready",
+            "pages": [], "evidence_items": [],
+        }
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}), patch(
+            "backend.profiles.deepseek_extraction.extract_with_deepseek",
+            return_value=mr,
+        ):
             file_b64 = base64.b64encode(b"Bob\nEngineering Manager\n").decode("utf-8")
             s1, p1 = self._request("POST", "/evidence-items/process-sources", {
                 "profile_id": "prof_test",

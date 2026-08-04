@@ -443,6 +443,35 @@ export default function DocumentsPage() {
     }
   }
 
+  async function monitorDocumentProcessing(statusUrl, fileName) {
+    try {
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1500));
+        const processing = await request(statusUrl);
+        if (processing.status === "ready") {
+          await refreshDocuments().catch(() => undefined);
+          return;
+        }
+        if (processing.status === "failed") {
+          setUploadState((current) => ({
+            ...current,
+            error: processing.error || `Text extraction failed for ${fileName}.`,
+          }));
+          return;
+        }
+      }
+      setUploadState((current) => ({
+        ...current,
+        error: `Text extraction for ${fileName} is still processing.`,
+      }));
+    } catch (processingError) {
+      setUploadState((current) => ({
+        ...current,
+        error: processingError.message || `Could not check extraction status for ${fileName}.`,
+      }));
+    }
+  }
+
   async function uploadDocument(file) {
     setUploadState({ uploading: true, message: "", error: "" });
     try {
@@ -459,34 +488,15 @@ export default function DocumentsPage() {
         method: "POST",
         body: formData,
       });
-      if (response?.status_url) {
-        let extractionReady = false;
-        setUploadState({
-          uploading: true,
-          message: `Uploaded ${file.name}. Extracting searchable text...`,
-          error: "",
-        });
-        for (let attempt = 0; attempt < 80; attempt += 1) {
-          await new Promise((resolve) => window.setTimeout(resolve, 1500));
-          const processing = await request(response.status_url);
-          if (processing.status === "ready") {
-            extractionReady = true;
-            break;
-          }
-          if (processing.status === "failed") {
-            throw new Error(processing.error || "Text extraction failed.");
-          }
-        }
-        if (!extractionReady) {
-          throw new Error("Text extraction is still processing. Refresh Career Assets in a moment.");
-        }
-      }
-      await refreshDocuments().catch(() => undefined);
       setUploadState({
         uploading: false,
-        message: `Uploaded ${file.name} to Career Assets.`,
+        message: `Uploaded ${file.name} to Career Assets. Text extraction continues in the background.`,
         error: "",
       });
+      void refreshDocuments().catch(() => undefined);
+      if (response?.status_url) {
+        void monitorDocumentProcessing(response.status_url, file.name);
+      }
       return response?.asset || null;
     } catch (uploadError) {
       await refreshDocuments().catch(() => undefined);
