@@ -5,6 +5,7 @@ import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
 import { isAdminUser } from "../lib/auth";
 import { currentEntryAssetPath, fetchLatestEntryAssetPath } from "../lib/deployVersion";
+import { personalizedJobsExperienceEnabled } from "../lib/personalizedJobs";
 import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
@@ -103,6 +104,19 @@ const navItems = [
     matchers: [{ path: "/pricing", end: false }],
   },
 ];
+
+const personalizedNavItems = personalizedJobsExperienceEnabled
+  ? [
+    navItems[0],
+    {
+      label: "Jobs",
+      icon: "work_outline",
+      to: "/jobs",
+      matchers: [{ path: "/jobs", end: false }, { path: "/onboarding", end: false }],
+    },
+    ...navItems.slice(1),
+  ]
+  : navItems;
 
 const secondaryTopRibbonItems = [
   {
@@ -453,7 +467,7 @@ function SidebarContents({
       </div>
 
       <nav className="shell-sidebar__nav">
-        {navItems.map((item) => (
+        {personalizedNavItems.map((item) => (
           <SidebarLink collapsed={isCollapsedRail} item={item} key={item.label} onNavigate={onClose} />
         ))}
       </nav>

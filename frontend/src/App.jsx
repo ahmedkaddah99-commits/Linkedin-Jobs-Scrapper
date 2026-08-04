@@ -8,6 +8,7 @@ import { SessionProvider, useSession } from "./context/SessionContext";
 import { QUOTA_EXCEEDED_EVENT } from "./lib/api";
 import { logEvent } from "./lib/analytics";
 import { isAdminUser } from "./lib/auth";
+import { personalizedJobsExperienceEnabled } from "./lib/personalizedJobs";
 import { hasAuthenticatedSession } from "./lib/sessionState";
 
 const AdminPage = lazy(() => import("./pages/AdminPage"));
@@ -32,6 +33,10 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const TrackerPage = lazy(() => import("./pages/TrackerPage"));
 const TrackerAtsPage = lazy(() => import("./pages/TrackerAtsPage"));
 const WorkspacesPage = lazy(() => import("./pages/WorkspacesPage"));
+const PersonalizedJobsPage = lazy(() => import("./pages/PersonalizedJobsPage"));
+const HiddenJobsPage = lazy(() => import("./pages/HiddenJobsPage"));
+const PersonalizedJobDetailPage = lazy(() => import("./pages/PersonalizedJobDetailPage"));
+const PersonalizedOnboardingPage = lazy(() => import("./pages/PersonalizedOnboardingPage"));
 const browserTestMode = import.meta.env.VITE_E2E_AUTH === "1";
 
 function RouteLoadingFallback() {
@@ -194,6 +199,10 @@ function AuthenticatedApp() {
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
+              <Route path="/onboarding" element={personalizedJobsExperienceEnabled ? <PersonalizedOnboardingPage /> : <Navigate replace to="/" />} />
+              <Route path="/jobs" element={personalizedJobsExperienceEnabled ? <PersonalizedJobsPage /> : <Navigate replace to="/" />} />
+              <Route path="/jobs/hidden" element={personalizedJobsExperienceEnabled ? <HiddenJobsPage /> : <Navigate replace to="/" />} />
+              <Route path="/jobs/:jobId" element={personalizedJobsExperienceEnabled ? <PersonalizedJobDetailPage /> : <Navigate replace to="/" />} />
               <Route path="/career-profiles" element={<Navigate replace to="/career-evidence" />} />
               <Route path="/dashboard" element={<Navigate replace to="/" />} />
               <Route path="/workspaces" element={<WorkspacesPage />} />
