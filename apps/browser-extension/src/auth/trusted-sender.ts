@@ -14,11 +14,12 @@ export function isExactSidePanelSender(
 /** Only the configured Runr web origin may request a package-tab binding. */
 export function isExactRunrWebSender(
   sender: RuntimeMessageSender,
-  expectedOrigin: string,
+  expectedOrigin: string | readonly string[],
 ): boolean {
   if (!sender.url) return false;
   try {
-    return new URL(sender.url).origin === expectedOrigin;
+    const allowedOrigins = Array.isArray(expectedOrigin) ? expectedOrigin : [expectedOrigin];
+    return allowedOrigins.includes(new URL(sender.url).origin);
   } catch {
     return false;
   }

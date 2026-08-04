@@ -42,7 +42,9 @@ export default defineConfig({
         ? ["http://127.0.0.1/*"]
         : ["https://boards.greenhouse.io/*", "https://*.lever.co/*"],
     externally_connectable: {
-      matches: mode === "testing" ? ["http://127.0.0.1/*"] : ["https://app.userunr.com/*"],
+      matches: mode === "testing"
+        ? ["http://127.0.0.1/*"]
+        : ["https://app.userunr.com/*", "https://runr-frontend.onrender.com/*"],
     },
   }),
 });

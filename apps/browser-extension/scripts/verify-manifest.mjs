@@ -92,8 +92,8 @@ assert(
 assert(!manifest.content_scripts?.length, "Page code must be injected after a user action.");
 assert(
   JSON.stringify(manifest.externally_connectable) ===
-    JSON.stringify({ matches: ["https://app.userunr.com/*"] }),
-  "External messaging must be limited to the first-party Runr web origin.",
+    JSON.stringify({ matches: ["https://app.userunr.com/*", "https://runr-frontend.onrender.com/*"] }),
+  "External messaging must be limited to the first-party Runr web origins.",
 );
 
 const sourceRoots = [

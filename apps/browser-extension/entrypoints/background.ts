@@ -1028,7 +1028,7 @@ export default defineBackground(() => {
   });
 
   browser.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-    if (!isExactRunrWebSender(sender, runtimeConfig.frontendOrigin)) {
+    if (!isExactRunrWebSender(sender, runtimeConfig.allowedWebOrigins)) {
       return undefined;
     }
     if (isWebPreparationCommand(message)) {
