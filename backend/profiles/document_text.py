@@ -51,6 +51,37 @@ def _extract_xlsx_text(data: bytes) -> str:
         return ""
 
 
+def _extract_pptx_text(data: bytes) -> str:
+    """Extract readable text from PowerPoint slide shapes and tables."""
+    try:
+        from pptx import Presentation
+
+        presentation = Presentation(io.BytesIO(data))
+        lines: list[str] = []
+        for slide_number, slide in enumerate(presentation.slides, start=1):
+            slide_lines: list[str] = []
+            for shape in slide.shapes:
+                if getattr(shape, "has_text_frame", False):
+                    text = "\n".join(
+                        paragraph.text.strip()
+                        for paragraph in shape.text_frame.paragraphs
+                        if paragraph.text.strip()
+                    ).strip()
+                    if text:
+                        slide_lines.append(text)
+                if getattr(shape, "has_table", False):
+                    for row in shape.table.rows:
+                        values = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                        if values:
+                            slide_lines.append(" | ".join(values))
+            if slide_lines:
+                lines.append(f"Slide {slide_number}")
+                lines.extend(slide_lines)
+        return "\n".join(lines).strip()
+    except Exception:
+        return ""
+
+
 def _ocr_image(image: Any) -> str:
     import pytesseract
 
@@ -236,6 +267,8 @@ def extract_document_text(filename: str, data: bytes, *, allow_ocr: bool = True)
             text, method = "", "image_ocr_skipped"
     elif suffix == ".xlsx":
         text, method = _extract_xlsx_text(data), "xlsx"
+    elif suffix == ".pptx":
+        text, method = _extract_pptx_text(data), "pptx"
     elif suffix in _PLAIN_TEXT_SUFFIXES or not suffix:
         text, method = _decode_text(data), "plain_text"
     else:
@@ -255,7 +288,13 @@ def extract_document_text(filename: str, data: bytes, *, allow_ocr: bool = True)
         elif suffix in _IMAGE_SUFFIXES or suffix == ".pdf":
             warnings.append("OCR produced no text. Verify that Pillow, pytesseract, PyMuPDF, and Tesseract OCR are installed.")
         else:
-            warnings.append(f"No text extractor is available for '{suffix or 'unknown'}' files.")
+            if suffix == ".pptx":
+                warnings.append(
+                    "PowerPoint text extraction failed. Verify that python-pptx is installed "
+                    "and the presentation is a readable .pptx file."
+                )
+            else:
+                warnings.append(f"No text extractor is available for '{suffix or 'unknown'}' files.")
     page_confidences = [
         float(page.get("confidence") or 0)
         for page in pages

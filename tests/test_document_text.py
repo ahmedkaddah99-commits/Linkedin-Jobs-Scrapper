@@ -5,6 +5,7 @@ from unittest.mock import patch
 import fitz
 from docx import Document
 from PIL import Image
+from pptx import Presentation
 
 from backend.profiles.document_text import create_word_companion_bytes, extract_document_text, extraction_metadata
 
@@ -66,6 +67,26 @@ class DocumentTextTests(unittest.TestCase):
         self.assertIn("Candidate summary", extraction["text"])
         self.assertIn("Skill | Python", extraction["text"])
         self.assertEqual(extraction["method"], "docx")
+        self.assertEqual(extraction["warnings"], [])
+
+    def test_extracts_pptx_slide_text_and_tables(self):
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        textbox = slide.shapes.add_textbox(0, 0, 4000000, 1000000)
+        textbox.text = "Project impact"
+        table = slide.shapes.add_table(1, 2, 0, 1000000, 4000000, 1000000).table
+        table.cell(0, 0).text = "Metric"
+        table.cell(0, 1).text = "40% faster"
+        output = io.BytesIO()
+        presentation.save(output)
+
+        extraction = extract_document_text("case-study.pptx", output.getvalue())
+
+        self.assertIn("Slide 1", extraction["text"])
+        self.assertIn("Project impact", extraction["text"])
+        self.assertIn("Metric | 40% faster", extraction["text"])
+        self.assertEqual(extraction["method"], "pptx")
+        self.assertEqual(extraction["status"], "ready")
         self.assertEqual(extraction["warnings"], [])
 
     def test_word_companion_contains_extracted_text(self):
