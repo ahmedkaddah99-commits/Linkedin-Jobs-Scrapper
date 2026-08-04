@@ -9,10 +9,22 @@
 export const PERSONALIZED_JOBS_FLAG = "VITE_PERSONALIZED_JOBS_EXPERIENCE";
 export const PREVIEW_DATA_MODE = "synthetic";
 export const PREVIEW_DATA_LABEL = "Preview data";
+export const PERSONALIZED_JOBS_DATA_MODE = "VITE_PERSONALIZED_JOBS_DATA_MODE";
+
+export function resolvePersonalizedJobsDataMode(env = {}) {
+  return String(env[PERSONALIZED_JOBS_DATA_MODE] || PREVIEW_DATA_MODE).trim().toLowerCase() === "real"
+    ? "real"
+    : PREVIEW_DATA_MODE;
+}
+
+export const personalizedJobsDataMode = resolvePersonalizedJobsDataMode(
+  typeof import.meta !== "undefined" ? import.meta.env || {} : {},
+);
 
 export const ONBOARDING_STORAGE_KEY = "runr.personalizedJobs.onboarding";
 export const DISPOSITION_STORAGE_KEY = "runr.personalizedJobs.dispositions";
 export const UPGRADE_DISMISSALS_STORAGE_KEY = "runr.personalizedJobs.upgradeDismissals";
+export const POST_ONBOARDING_OFFER_STORAGE_KEY = "runr.personalizedJobs.postOnboardingOffer";
 
 /** @typedef {"synthetic" | "real"} DataMode */
 /** @typedef {"eligible" | "review" | "ineligible"} EligibilityStatus */

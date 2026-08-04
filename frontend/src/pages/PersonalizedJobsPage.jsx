@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { useSession } from "../context/SessionContext";
 import JobCard from "../components/personalized/JobCard";
 import PreviewBadge from "../components/personalized/PreviewBadge";
 import PreviewUpgradeModal from "../components/personalized/PreviewUpgradeModal";
+import PostOnboardingProOffer from "../components/personalized/PostOnboardingProOffer";
 import {
   PREVIEW_ENTITLEMENTS,
   PREVIEW_FEED_SUMMARY,
@@ -33,15 +35,18 @@ function ValueMetric({ label, value, tone = "blue" }) {
 }
 
 export default function PersonalizedJobsPage() {
+  const { user } = useSession();
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [upgradeFeature, setUpgradeFeature] = useState("");
   const [feedback, setFeedback] = useState(null);
+  const [jobsReadyAt, setJobsReadyAt] = useState(null);
   const { dispositions, hideJob, restoreJob, toggleSaved } = usePreviewDispositions();
   const jobs = useMemo(() => getFeedJobs({ filters, dispositions }), [dispositions, filters]);
   const activeFilterCount = getActivePreviewFilterCount(filters);
 
   useEffect(() => {
     logPersonalizedEvent("jobs_feed_viewed", { route: "/jobs" });
+    setJobsReadyAt(Date.now());
   }, []);
 
   function updateFilter(name, value) {
@@ -79,6 +84,7 @@ export default function PersonalizedJobsPage() {
   }
 
   return <div className="preview-page">
+    <PostOnboardingProOffer feedReady={Boolean(jobsReadyAt)} jobsReadyAt={jobsReadyAt} summary={PREVIEW_FEED_SUMMARY} user={user} />
     <header className="preview-page-header">
       <div>
         <div className="preview-header-kicker"><span className="material-symbols-outlined">sparkles</span>Personalized job search</div>

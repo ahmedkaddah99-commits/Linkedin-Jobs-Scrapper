@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useSession } from "../context/SessionContext";
+import CvCapabilityShowcase from "../components/personalized/CvCapabilityShowcase";
 import PreviewBadge from "../components/personalized/PreviewBadge";
-import { PREVIEW_FEED_SUMMARY, PREVIEW_JOBS } from "../lib/personalizedJobs";
+import { PREVIEW_FEED_SUMMARY, PREVIEW_JOBS, PREVIEW_DATA_MODE, personalizedJobsDataMode } from "../lib/personalizedJobs";
+import { PREVIEW_CV_PROFILE, normalizeCvProcessingStatus, summarizeCvProfile } from "../lib/cvFeatureShowcase";
+import { uploadAndPollCv } from "../lib/cvUpload";
 import { logPersonalizedEvent } from "../lib/personalizedAnalytics";
 import { getNextOnboardingStep, getOnboardingAnswers, getPreviousOnboardingStep, ONBOARDING_STEPS } from "../lib/personalizedOnboarding";
-import { usePersistedOnboarding } from "../lib/personalizedPreviewState";
+import { markPostOnboardingEligible, saveUserOnboardingState, usePersistedOnboarding } from "../lib/personalizedPreviewState";
 
 function Field({ children, label, optional = false }) {
   return <label className="preview-onboarding-field"><span>{label}{optional ? " (optional)" : ""}</span>{children}</label>;
@@ -23,14 +27,198 @@ function GoalsStep({ answers, updateAnswer }) {
   return <><StepIntro step={0} title="What kind of work should Runr look for?">Tell us what you want next. You can change these preferences at any time.</StepIntro><div className="preview-onboarding-form"><Field label="Target job titles"><input autoFocus onChange={(event) => updateAnswer("targetRoles", event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} placeholder="e.g. Product Operations Manager" value={(answers.targetRoles || []).join(", ")} /></Field><Field label="Preferred locations"><input onChange={(event) => updateAnswer("targetLocations", event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} placeholder="e.g. Berlin, Remote in Germany" value={(answers.targetLocations || []).join(", ")} /></Field><div className="preview-onboarding-two-col"><Field label="Work arrangement"><ChipField label="Work arrangement" onToggle={(value) => toggle("workArrangements", value)} options={["Remote", "Hybrid", "On-site"]} selected={answers.workArrangements || []} /></Field><Field label="Seniority"><select onChange={(event) => updateAnswer("seniority", event.target.value)} value={answers.seniority || ""}><option disabled value="">Choose a level</option><option value="entry">Entry level</option><option value="mid">Mid-level</option><option value="senior">Senior</option><option value="lead">Lead</option></select></Field></div><Field label="Employment type"><ChipField label="Employment type" onToggle={(value) => toggle("employmentTypes", value)} options={["Full-time", "Part-time", "Contract"]} selected={answers.employmentTypes || []} /></Field></div></>;
 }
 
-function CvStep({ answers, updateAnswer, onSkip }) {
+function extractProfile(payload) {
+  return payload?.parsed || payload?.asset?.metadata?.parsed_profile || payload?.extraction?.profile || {};
+}
+
+function documentStatus(document) {
+  return normalizeCvProcessingStatus(document?.status || document?.metadata?.status || document?.metadata?.cv_processing?.status);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function CvReadySummary({ summary, onReview, reviewOpen }) {
+  return <section className="cv-ready-summary" aria-labelledby="cv-ready-summary-title"><div className="cv-ready-summary__heading"><div><p className="preview-eyebrow">Extracted profile</p><h3 id="cv-ready-summary-title">Your CV is ready</h3></div><button className="cv-summary-review-button" onClick={onReview} type="button"><span className="material-symbols-outlined">{reviewOpen ? "visibility_off" : "visibility"}</span>{reviewOpen ? "Hide extracted information" : "Review extracted information"}</button></div>{reviewOpen ? <div className="cv-ready-summary__grid"><div><span>Experience</span><strong>{summary.recentRole}</strong><small>{summary.experienceCount ? `${summary.experienceCount} role${summary.experienceCount === 1 ? "" : "s"} found` : "Ready to review"}</small></div><div><span>Education</span><strong>{summary.education}</strong></div><div><span>Skills</span><strong>{summary.skills.length ? summary.skills.join(" · ") : "Skills ready to review"}</strong><small>{summary.skills.length ? `${summary.skills.length} skills shown` : "No skills listed"}</small></div><div><span>Languages</span><strong>{summary.languages.length ? summary.languages.join(" · ") : "Languages ready to review"}</strong></div><div><span>Contact details</span><strong>{summary.contactDetails}</strong></div></div> : <p className="cv-ready-summary__collapsed">Runr has extracted a reviewable profile without exposing your full CV text here.</p>}</section>;
+}
+
+function CvStep({ answers, cvState = {}, onSkip, update, updateAnswer, planId }) {
+  const { isConnected, request } = useSession();
+  const isPreviewMode = personalizedJobsDataMode === PREVIEW_DATA_MODE;
+  const initialPreviewSelected = isPreviewMode && Boolean(cvState.selected || answers.sourceCvName);
+  const [cvStatus, setCvStatus] = useState(() => cvState.status || (initialPreviewSelected ? "ready" : "idle"));
+  const [profile, setProfile] = useState(() => (isPreviewMode && initialPreviewSelected ? PREVIEW_CV_PROFILE : null));
   const [fileName, setFileName] = useState(answers.sourceCvName || "");
-  function chooseFile(event) {
-    const nextName = event.target.files?.[0]?.name || "";
-    setFileName(nextName);
-    if (nextName) updateAnswer("sourceCvName", nextName);
+  const [selectedAssetId, setSelectedAssetId] = useState(cvState.assetId || "");
+  const [existingCvs, setExistingCvs] = useState([]);
+  const [existingLoading, setExistingLoading] = useState(false);
+  const [cvError, setCvError] = useState("");
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [showcaseOpen, setShowcaseOpen] = useState(() => !initialPreviewSelected || !cvState.showcaseVisited);
+  const lastFileRef = useRef(null);
+  const showcaseStartedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const status = normalizeCvProcessingStatus(cvStatus);
+  const summary = useMemo(() => summarizeCvProfile(profile || {}, { dataMode: isPreviewMode ? PREVIEW_DATA_MODE : "real" }), [isPreviewMode, profile]);
+
+  const persistCv = useCallback((updates) => {
+    update((current) => ({ ...current, cv: { ...(current.cv || {}), ...updates } }));
+  }, [update]);
+
+  const startShowcase = useCallback(() => {
+    setShowcaseOpen(true);
+    if (!showcaseStartedRef.current) {
+      showcaseStartedRef.current = true;
+      logPersonalizedEvent("cv_feature_showcase_started", { onboardingStep: "cv", dataMode: isPreviewMode ? PREVIEW_DATA_MODE : "real", extractionStatus: status });
+    }
+  }, [isPreviewMode, status]);
+
+  const handleSceneChange = useCallback((scene) => {
+    persistCv({ showcaseScene: scene });
+  }, [persistCv]);
+
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  useEffect(() => {
+    if (isPreviewMode || !isConnected) return undefined;
+    let active = true;
+    setExistingLoading(true);
+    request("/documents?asset_kind=workspace_cv&limit=100&include_preview_profile=true")
+      .then((payload) => { if (active) setExistingCvs(Array.isArray(payload?.documents) ? payload.documents : []); })
+      .catch(() => { if (active) setExistingCvs([]); })
+      .finally(() => { if (active) setExistingLoading(false); });
+    return () => { active = false; };
+  }, [isConnected, isPreviewMode, request]);
+
+  useEffect(() => {
+    if (initialPreviewSelected && !cvState.showcaseVisited) startShowcase();
+  }, [cvState.showcaseVisited, initialPreviewSelected, startShowcase]);
+
+  function setReady(payload, nextFileName, assetId = "") {
+    const nextProfile = isPreviewMode ? PREVIEW_CV_PROFILE : extractProfile(payload);
+    setProfile(nextProfile);
+    setCvStatus("ready");
+    setCvError("");
+    setSelectedAssetId(assetId || payload?.asset_id || payload?.asset?.asset_id || "");
+    persistCv({ status: "ready", selected: true, assetId: assetId || payload?.asset_id || payload?.asset?.asset_id || "" });
+    logPersonalizedEvent("cv_extraction_completed", { onboardingStep: "cv", dataMode: isPreviewMode ? PREVIEW_DATA_MODE : "real", extractionStatus: "ready" });
+    if (nextFileName) updateAnswer("sourceCvName", nextFileName);
+    startShowcase();
   }
-  return <><StepIntro step={1} title="Bring your main CV">Runr uses your CV to understand your experience, skills and qualifications. You will be able to review the extracted information before it is used.</StepIntro><div className="preview-cv-upload"><input accept=".pdf,.doc,.docx" id="preview-cv-file" onChange={chooseFile} type="file" /><label htmlFor="preview-cv-file"><span className="material-symbols-outlined">upload_file</span><strong>{fileName || "Upload your main CV"}</strong><span>{fileName ? "Preview file selected" : "PDF or DOCX · Optional"}</span></label>{fileName ? <p className="preview-local-label"><span className="material-symbols-outlined text-[14px]">check_circle</span>{fileName} is used only in this local preview.</p> : null}</div><section className="preview-extraction-card"><div className="preview-extraction-card__heading"><span className="material-symbols-outlined">auto_awesome</span><div><p className="preview-eyebrow">Preview extraction</p><h3>What Runr would look for</h3></div><PreviewBadge /></div><p className="preview-extraction-note">This example shows the information you can review before it helps shape your job shortlist.</p><div className="preview-extraction-grid"><div><span>Experience</span><strong>Product and operations leadership</strong></div><div><span>Education</span><strong>Business and information systems</strong></div><div><span>Skills</span><strong>Planning, analytics and process design</strong></div><div><span>Languages</span><strong>English fluent · German conversational</strong></div><div><span>Contact details</span><strong>Kept ready for applications</strong></div></div></section><button className="preview-text-button" onClick={onSkip} type="button">Skip for now</button></>;
+
+  async function uploadFile(file) {
+    if (!file) return;
+    lastFileRef.current = file;
+    setFileName(file.name);
+    updateAnswer("sourceCvName", file.name);
+    setCvError("");
+    setReviewOpen(false);
+    setCvStatus("reading");
+    startShowcase();
+    if (isPreviewMode) {
+      setReady({}, file.name);
+      return;
+    }
+    try {
+      const response = await uploadAndPollCv({
+        request,
+        file,
+        onStatus: (payload) => {
+          if (!mountedRef.current) return;
+          const nextStatus = normalizeCvProcessingStatus(payload.status);
+          setCvStatus(nextStatus === "error" ? "error" : nextStatus);
+        },
+      });
+      if (mountedRef.current) setReady(response, file.name);
+    } catch (error) {
+      if (!mountedRef.current) return;
+      setCvStatus("error");
+      setCvError(error.message || "Unable to read this CV.");
+      logPersonalizedEvent("cv_extraction_failed", { onboardingStep: "cv", dataMode: "real", extractionStatus: "error" });
+    }
+  }
+
+  async function pollExistingCv(document) {
+    const statusUrl = document?.metadata?.cv_processing?.job_id ? `/cv-upload/${encodeURIComponent(document.metadata.cv_processing.job_id)}` : "";
+    if (!statusUrl) return;
+    setCvStatus("reading");
+    startShowcase();
+    try {
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        await delay(1500);
+        const payload = await request(statusUrl);
+        const nextStatus = normalizeCvProcessingStatus(payload?.status);
+        if (nextStatus === "ready") {
+          if (mountedRef.current) setReady(payload, document.display_name, document.asset_id);
+          return;
+        }
+        if (nextStatus === "error") throw new Error(payload?.error || "Unable to finish reading this CV.");
+      }
+      throw new Error("CV processing did not finish. Retry in a moment.");
+    } catch (error) {
+      if (!mountedRef.current) return;
+      setCvStatus("error");
+      setCvError(error.message || "Unable to read this CV.");
+      logPersonalizedEvent("cv_extraction_failed", { onboardingStep: "cv", dataMode: "real", extractionStatus: "error" });
+    }
+  }
+
+  function selectExistingCv(document) {
+    const nextName = document.display_name || document.file_name || "Selected CV";
+    const nextStatus = documentStatus(document);
+    setFileName(nextName);
+    setSelectedAssetId(document.asset_id || "");
+    updateAnswer("sourceCvName", nextName);
+    setCvError("");
+    setReviewOpen(false);
+    if (nextStatus === "ready") {
+      setReady({ parsed: document.preview_profile || document.metadata?.parsed_profile || {} }, nextName, document.asset_id);
+    } else {
+      setCvStatus("reading");
+      startShowcase();
+      void pollExistingCv(document);
+    }
+  }
+
+  function choosePreviewCv() {
+    setFileName(PREVIEW_CV_PROFILE.recentRole ? "Runr preview CV.pdf" : "Preview CV.pdf");
+    updateAnswer("sourceCvName", "Runr preview CV.pdf");
+    setReady({}, "Runr preview CV.pdf");
+  }
+
+  function toggleReview() {
+    setReviewOpen((current) => {
+      const next = !current;
+      if (next) logPersonalizedEvent("cv_extracted_profile_reviewed", { onboardingStep: "cv", dataMode: isPreviewMode ? PREVIEW_DATA_MODE : "real", extractionStatus: "ready" });
+      return next;
+    });
+  }
+
+  function handleShowcaseSkip() {
+    setShowcaseOpen(false);
+    persistCv({ showcaseVisited: true, showcaseSkipped: true });
+  }
+
+  function handleShowcaseComplete() {
+    persistCv({ showcaseVisited: true, showcaseCompleted: true });
+    logPersonalizedEvent("cv_feature_showcase_completed", { onboardingStep: "cv", dataMode: isPreviewMode ? PREVIEW_DATA_MODE : "real", extractionStatus: status });
+  }
+
+  function retry() {
+    if (isPreviewMode) {
+      choosePreviewCv();
+      return;
+    }
+    if (lastFileRef.current) {
+      void uploadFile(lastFileRef.current);
+      return;
+    }
+    const selected = existingCvs.find((item) => item.asset_id === selectedAssetId);
+    if (selected) void pollExistingCv(selected);
+  }
+
+  return <><StepIntro step={1} title="Bring your main CV">Runr uses your CV to understand your experience, skills and qualifications. You will review the extracted information before it is used.</StepIntro><div className="cv-source-picker"><div className="cv-source-picker__upload"><input accept=".pdf,.doc,.docx" id="preview-cv-file" onChange={(event) => uploadFile(event.target.files?.[0])} type="file" /><label htmlFor="preview-cv-file"><span className="material-symbols-outlined">upload_file</span><strong>{fileName || "Upload your main CV"}</strong><span>{isPreviewMode ? "Preview mode · no file is uploaded" : "PDF or DOCX · Runr reads it securely"}</span></label></div>{isPreviewMode ? <button className="cv-preview-select" onClick={choosePreviewCv} type="button"><span className="material-symbols-outlined">auto_awesome</span><span><strong>Use the Runr preview CV</strong><small>Deterministic preview extraction · no production profile write</small></span><span className="material-symbols-outlined">arrow_forward</span></button> : <div className="cv-existing-picker"><div className="cv-existing-picker__heading"><div><p className="preview-eyebrow">Existing CVs</p><h3>{existingLoading ? "Loading your CVs…" : "Choose an existing CV"}</h3></div><span className="material-symbols-outlined">folder_open</span></div>{existingCvs.length ? existingCvs.map((document) => <button className={["cv-existing-item", selectedAssetId === document.asset_id ? "is-selected" : ""].join(" ")} key={document.asset_id} onClick={() => selectExistingCv(document)} type="button"><span className="material-symbols-outlined">{selectedAssetId === document.asset_id ? "check_circle" : "description"}</span><span><strong>{document.display_name || document.file_name}</strong><small>{documentStatus(document) === "ready" ? "Ready to review" : "Still processing"}</small></span></button>) : <p className="cv-existing-empty">No existing CVs yet. Upload one to begin.</p>}</div>}</div>{fileName ? <p className="preview-local-label"><span className="material-symbols-outlined text-[14px]">check_circle</span>{fileName} is selected for this onboarding step.</p> : null}{cvStatus === "error" ? <div className="cv-error-state" role="alert"><span className="material-symbols-outlined">error</span><div><strong>We could not finish reading this CV</strong><p>{cvError || "Retry the extraction to continue."}</p></div><button className="cv-summary-review-button" onClick={retry} type="button">Retry</button></div> : null}{showcaseOpen ? <CvCapabilityShowcase dataMode={isPreviewMode ? PREVIEW_DATA_MODE : "real"} initialScene={cvState.showcaseScene || 0} onComplete={handleShowcaseComplete} onSceneChange={(scene) => persistCv({ showcaseScene: scene })} onSkip={handleShowcaseSkip} planId={planId} processingStatus={status} /> : <button className="cv-replay-button" onClick={startShowcase} type="button"><span className="material-symbols-outlined">play_circle</span>See how Runr uses my profile</button>}{status === "ready" ? <CvReadySummary onReview={toggleReview} reviewOpen={reviewOpen} summary={summary} /> : null}<button className="preview-text-button cv-skip-cv-button" onClick={onSkip} type="button">Skip CV for now</button></>;
 }
 
 function EligibilityStep({ answers, updateAnswer }) {
@@ -49,11 +237,14 @@ function RevealStep({ onViewJobs, onAdjustPreferences }) {
 
 export default function PersonalizedOnboardingPage() {
   const navigate = useNavigate();
-  const { state, update } = usePersistedOnboarding();
+  const { user } = useSession();
+  const userId = String(user?.user_id || user?.clerk_user_id || user?.email || "anonymous").trim();
+  const { state, update } = usePersistedOnboarding(userId);
   const [activeStep, setActiveStep] = useState(Math.min(4, Math.max(0, state.step || 0)));
   const [started, setStarted] = useState(false);
   const [stepError, setStepError] = useState("");
   const answers = useMemo(() => getOnboardingAnswers(state.answers), [state.answers]);
+  const planId = String(user?.plan_id || "none").trim() || "none";
 
   useEffect(() => {
     if (!started) {
@@ -96,7 +287,10 @@ export default function PersonalizedOnboardingPage() {
   }
 
   function finish() {
-    update((current) => ({ ...current, step: 4, completed: true }));
+    markPostOnboardingEligible(userId);
+    const completedState = { ...state, step: 4, completed: true };
+    saveUserOnboardingState(completedState, userId);
+    update(() => completedState);
     logPersonalizedEvent("onboarding_completed", { route: "/onboarding", onboardingStep: "reveal" });
     navigate("/jobs");
   }
@@ -107,7 +301,7 @@ export default function PersonalizedOnboardingPage() {
     update((current) => ({ ...current, step: 0, completed: false }));
   }
 
-  const stepContent = activeStep === 0 ? <GoalsStep answers={answers} updateAnswer={updateAnswer} /> : activeStep === 1 ? <CvStep answers={answers} onSkip={() => goTo(2)} updateAnswer={updateAnswer} /> : activeStep === 2 ? <EligibilityStep answers={answers} updateAnswer={updateAnswer} /> : activeStep === 3 ? <AnswersStep answers={answers} updateAnswer={updateAnswer} /> : <RevealStep onAdjustPreferences={adjustPreferences} onViewJobs={finish} />;
+  const stepContent = activeStep === 0 ? <GoalsStep answers={answers} updateAnswer={updateAnswer} /> : activeStep === 1 ? <CvStep answers={answers} cvState={state.cv} onSkip={() => goTo(2)} planId={planId} update={update} updateAnswer={updateAnswer} /> : activeStep === 2 ? <EligibilityStep answers={answers} updateAnswer={updateAnswer} /> : activeStep === 3 ? <AnswersStep answers={answers} updateAnswer={updateAnswer} /> : <RevealStep onAdjustPreferences={adjustPreferences} onViewJobs={finish} />;
 
-  return <div className="preview-onboarding-page"><header className="preview-onboarding-header"><Link className="preview-onboarding-brand" to="/"><span className="shell-brand-mark"><span /><span /><span /></span><span>runr.</span></Link><div><PreviewBadge /><Link className="preview-onboarding-exit" to="/">Exit onboarding</Link></div></header><div aria-label="Onboarding progress" className="preview-onboarding-progress">{ONBOARDING_STEPS.map((step, index) => <button aria-current={activeStep === index ? "step" : undefined} className={["preview-progress-step", activeStep === index ? "is-active" : "", activeStep > index ? "is-complete" : ""].join(" ")} key={step.id} onClick={() => index <= activeStep && goTo(index)} type="button"><span>{index < activeStep ? <span className="material-symbols-outlined text-[15px]">check</span> : index + 1}</span><small>{step.shortLabel}</small></button>)}</div><main className="preview-onboarding-card"><div className="preview-onboarding-card__content">{stepContent}{stepError ? <p aria-live="polite" className="preview-form-error" role="alert"><span className="material-symbols-outlined">error</span>{stepError}</p> : null}</div>{activeStep < 4 ? <div className="preview-onboarding-footer"><button className="preview-text-button" disabled={activeStep === 0} onClick={() => goTo(getPreviousOnboardingStep(activeStep))} type="button"><span className="material-symbols-outlined text-[17px]">arrow_back</span>Back</button><button className="preview-button preview-button--primary" onClick={() => goTo(getNextOnboardingStep(activeStep))} type="button">Continue <span className="material-symbols-outlined text-[17px]">arrow_forward</span></button></div> : null}</main><p className="preview-onboarding-safe-note"><span className="material-symbols-outlined text-[16px]">lock</span>Your progress is saved locally for this preview. It does not update your production profile.</p></div>;
+  return <div className="preview-onboarding-page"><header className="preview-onboarding-header"><Link className="preview-onboarding-brand" to="/"><span className="shell-brand-mark"><span /><span /><span /></span><span>runr.</span></Link><div><PreviewBadge /><Link className="preview-onboarding-exit" to="/">Exit onboarding</Link></div></header><div aria-label="Onboarding progress" className="preview-onboarding-progress">{ONBOARDING_STEPS.map((step, index) => <button aria-current={activeStep === index ? "step" : undefined} className={["preview-progress-step", activeStep === index ? "is-active" : "", activeStep > index ? "is-complete" : ""].join(" ")} key={step.id} onClick={() => index <= activeStep && goTo(index)} type="button"><span>{index < activeStep ? <span className="material-symbols-outlined text-[15px]">check</span> : index + 1}</span><small>{step.shortLabel}</small></button>)}</div><main className="preview-onboarding-card"><div className="preview-onboarding-card__content">{stepContent}{stepError ? <p aria-live="polite" className="preview-form-error" role="alert"><span className="material-symbols-outlined">error</span>{stepError}</p> : null}</div>{activeStep < 4 ? <div className="preview-onboarding-footer"><button className="preview-text-button" disabled={activeStep === 0} onClick={() => goTo(getPreviousOnboardingStep(activeStep))} type="button"><span className="material-symbols-outlined text-[17px]">arrow_back</span>Back</button><button className="preview-button preview-button--primary" onClick={() => goTo(getNextOnboardingStep(activeStep))} type="button">Continue <span className="material-symbols-outlined text-[17px]">arrow_forward</span></button></div> : null}</main><p className="preview-onboarding-safe-note"><span className="material-symbols-outlined text-[16px]">lock</span>{personalizedJobsDataMode === PREVIEW_DATA_MODE ? "Your progress is saved locally for this preview. It does not update your production profile." : "Your CV is processed through Runr and stays available for your review."}</p></div>;
 }
