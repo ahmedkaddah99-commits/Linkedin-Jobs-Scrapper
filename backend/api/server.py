@@ -3495,6 +3495,7 @@ def _collect_tracker_entries(
     selected_review_id: str = "",
     include_cv_studio_seed: bool = False,
     include_full_details: bool = False,
+    include_resource_details: bool = True,
 ) -> list[dict]:
     """Return all reviews that have been approved or have a tracker_status set.
 
@@ -3521,17 +3522,23 @@ def _collect_tracker_entries(
         if review.decision == "approved" or str((review.metadata or {}).get("tracker_status") or "")
     }
     tracker_runs = [run for run in runs if str(run.id) in tracker_run_ids]
-    artifacts_by_run = _load_artifacts_by_run(application, tracker_runs)
-    application_documents, standard_documents = _index_tracker_documents(
-        _collect_document_entries(
-            application,
-            user,
-            run_records=tracker_runs,
-            workspace_records=workspaces,
-            job_sets_by_run=job_sets_by_run,
-            artifacts_by_run=artifacts_by_run,
+    if include_resource_details:
+        artifacts_by_run = _load_artifacts_by_run(application, tracker_runs)
+        application_documents, standard_documents = _index_tracker_documents(
+            _collect_document_entries(
+                application,
+                user,
+                run_records=tracker_runs,
+                workspace_records=workspaces,
+                job_sets_by_run=job_sets_by_run,
+                artifacts_by_run=artifacts_by_run,
+            )
         )
-    )
+    else:
+        # The board only needs card fields. Loading artifacts and document
+        # indexes here makes the first paint wait on data that is invisible
+        # until a user opens a card.
+        application_documents, standard_documents = {}, []
     entries: list[dict] = []
     entries_by_posting_url: dict[str, int] = {}
     for run in runs:
@@ -3573,18 +3580,21 @@ def _collect_tracker_entries(
                 or job_extra.get("description")
                 or ""
             )
-            document_fields, documents = _tracker_manual_documents_for_job_extra(job_extra)
-            documents = _dedupe_tracker_documents(
-                [
-                    *documents,
-                    *_standard_documents_for_workspace(standard_documents, run.workspace_id),
-                    *application_documents.get((run.id, review.job_id), []),
-                ]
-            )
-            application_requirements = _application_requirement_status(
-                _application_requirements_from_job_payload({**job_extra, **(job.to_dict() if job else {})}),
-                documents=documents,
-            )
+            if include_resource_details:
+                document_fields, documents = _tracker_manual_documents_for_job_extra(job_extra)
+                documents = _dedupe_tracker_documents(
+                    [
+                        *documents,
+                        *_standard_documents_for_workspace(standard_documents, run.workspace_id),
+                        *application_documents.get((run.id, review.job_id), []),
+                    ]
+                )
+                application_requirements = _application_requirement_status(
+                    _application_requirements_from_job_payload({**job_extra, **(job.to_dict() if job else {})}),
+                    documents=documents,
+                )
+            else:
+                document_fields, documents, application_requirements = {}, [], {}
             entry = {
                 "review_id": review.review_id,
                 "run_id": review.run_id,
@@ -3690,15 +3700,19 @@ def _collect_tracker_entries(
             "cv_pdf": "",
             "tailored_cv_docx": "",
             "tailored_cv": "",
-            "documents": list(standard_documents),
+            "documents": list(standard_documents) if include_resource_details else [],
             "updated_at": str(external.get("updated_at") or external.get("created_at") or ""),
             "run_finished_at": "",
             "source_label": (
-                "Assisted Apply" if str(external.get("source") or "") == "assisted_apply" else "Gmail"
+                "Assisted Apply"
+                if str(external.get("source") or "") == "assisted_apply"
+                else "Gmail"
+                if str(external.get("source") or "") == "gmail_detection"
+                else "Manual"
             ),
             "external_application": True,
             "gmail_detection": dict(external.get("gmail_detection") or {}),
-            "application_requirements": _application_requirement_status({}, documents=list(standard_documents)),
+            "application_requirements": _application_requirement_status({}, documents=list(standard_documents)) if include_resource_details else {},
             "application_warnings": [],
             "has_generated_cv": False,
             "placed_in_tracker_at": str(
@@ -3712,7 +3726,7 @@ def _collect_tracker_entries(
             run=None,
             review=None,
             application_status=application_status,
-            documents=list(standard_documents),
+            documents=list(standard_documents) if include_resource_details else [],
             external=external,
             include_full_description=include_full_details,
         )

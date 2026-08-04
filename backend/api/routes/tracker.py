@@ -214,6 +214,27 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         self._send_json(_tracker_ats_detail_payload(entry), status=HTTPStatus.OK)
                         return
 
+    if segments[:1] == ["tracker"] and len(segments) == 3 and segments[2] == "details":
+                        user, _ = self._require_identity()
+                        review_id = str(segments[1] or "").strip()
+                        entry = next(
+                            iter(
+                                _collect_tracker_entries(
+                                    application,
+                                    user,
+                                    max_entries=500,
+                                    selected_review_id=review_id,
+                                    include_full_details=True,
+                                    include_resource_details=True,
+                                )
+                            ),
+                            None,
+                        )
+                        if entry is None:
+                            raise KeyError(f"Tracker review '{review_id}' not found.")
+                        self._send_json(entry, status=HTTPStatus.OK)
+                        return
+
     if segments[:1] == ["tracker"] and len(segments) == 3 and segments[2] == "description":
                         user, _ = self._require_identity()
                         review_id = str(segments[1] or "").strip()
@@ -258,11 +279,13 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         user, _ = self._require_identity()
                         limit = _parse_int_param(query, "limit", default=200, maximum=1000)
                         offset = _parse_int_param(query, "offset", default=0, maximum=100000)
+                        summary_view = str((query.get("view") or [""])[0]).strip().lower() in {"board", "summary"}
                         entries = _collect_tracker_entries(
                             application,
                             user,
                             max_entries=limit + offset + 500,
-                            include_full_details=True,
+                            include_full_details=not summary_view,
+                            include_resource_details=not summary_view,
                         )
                         if _parse_bool_param(query, "explicit_only"):
                             entries = [item for item in entries if bool(item.get("is_explicit_application"))]
@@ -355,6 +378,58 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
     query = context.query
     payload = self._read_json_body()
 
+    if segments == ["tracker", "manual"]:
+                        user, _ = self._require_identity()
+                        title = str(payload.get("title") or "").strip()
+                        company = str(payload.get("company") or "").strip()
+                        if not title or not company:
+                            raise ValueError("title and company are required")
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        application_id = f"external_{uuid4().hex[:16]}"
+                        tracker_status = str(payload.get("tracker_status") or "not_applied").strip().lower()
+                        allowed_statuses = {
+                            "not_applied",
+                            "applied",
+                            "interview_invited",
+                            "offer",
+                            "rejected",
+                            "withdrawn",
+                            "unknown",
+                        }
+                        if tracker_status not in allowed_statuses:
+                            raise ValueError(f"tracker_status must be one of: {sorted(allowed_statuses)}")
+                        manual_application = {
+                            "application_id": application_id,
+                            "review_id": application_id,
+                            "source": "manual",
+                            "title": title,
+                            "company": company,
+                            "location": str(payload.get("location") or "").strip(),
+                            "application_date": str(payload.get("application_date") or "").strip(),
+                            "apply_link": str(payload.get("apply_link") or "").strip(),
+                            "tracker_status": tracker_status,
+                            "application_status": normalize_application_status(tracker_status),
+                            "email_confirmed": False,
+                            "rejection_note": "",
+                            "notes": str(payload.get("notes") or "").strip(),
+                            "placed_in_tracker_at": now_iso,
+                            "created_at": now_iso,
+                            "updated_at": now_iso,
+                        }
+                        applications = _load_external_tracker_applications(user)
+                        applications.append(manual_application)
+                        refreshed_user = _persist_external_tracker_applications(application, user, applications)
+                        entry = next(
+                            (
+                                item
+                                for item in _collect_tracker_entries(application, refreshed_user, selected_review_id=application_id)
+                                if str(item.get("review_id") or "") == application_id
+                            ),
+                            None,
+                        )
+                        self._send_json({"item": entry}, status=HTTPStatus.CREATED)
+                        return
+
     if segments == ["tracker", "email-integration", "detections", "approve"]:
                         user, _ = self._require_identity()
                         current_config = _get_tracker_email_config(user)
@@ -437,7 +512,12 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             {
                                 "approved": approved,
                                 "tracker": {
-                                    "items": _collect_tracker_entries(application, refreshed_user),
+                                "items": _collect_tracker_entries(
+                                    application,
+                                    refreshed_user,
+                                    include_full_details=False,
+                                    include_resource_details=False,
+                                ),
                                     "meta": self._pagination_meta(limit=len(approved), offset=0, returned=len(approved)),
                                 },
                                 "integration": _tracker_email_integration_payload(application, refreshed_user),

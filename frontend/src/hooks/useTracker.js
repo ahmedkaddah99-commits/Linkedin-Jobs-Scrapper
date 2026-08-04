@@ -34,35 +34,36 @@ export function useTracker() {
     error: trackerError,
     refresh: refreshTracker,
     setData: setTrackerData,
-  } = useApiResource(() => request("/tracker", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS }), [request], {
+  } = useApiResource(() => request("/tracker?view=board", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS }), [request], {
     cacheKey: "tracker:items",
     staleMs: 15000,
     backgroundRefresh: true,
   });
   const {
     data: integration,
-    loading: integrationLoading,
-    error: integrationError,
     refresh: refreshIntegration,
     setData: setIntegrationData,
   } = useApiResource(() => request("/tracker/email-integration", { timeoutMs: TRACKER_INTEGRATION_REQUEST_TIMEOUT_MS }), [request], {
+    immediate: false,
     cacheKey: "tracker:email-integration",
     staleMs: 300000,
     backgroundRefresh: true,
   });
   const refresh = useCallback(async (options) => {
-    const [nextTracker, nextIntegration] = await Promise.all([
-      refreshTracker(options),
-      refreshIntegration(options),
-    ]);
-    return { tracker: nextTracker, integration: nextIntegration };
-  }, [refreshIntegration, refreshTracker]);
+    const nextTracker = await refreshTracker(options);
+    return { tracker: nextTracker, integration };
+  }, [integration, refreshTracker]);
+
+  const loadEmailIntegration = useCallback(
+    async (options) => refreshIntegration(options),
+    [refreshIntegration],
+  );
 
   const items = tracker?.items || [];
   const columns = groupByStatus(items);
   const emailIntegration = integration || { providers: [], config: null };
-  const loading = trackerLoading || (!tracker && integrationLoading);
-  const error = trackerError || (!tracker ? integrationError : "");
+  const loading = trackerLoading;
+  const error = trackerError;
 
   function removeDetectionsFromLastSyncResult(detections) {
     const resolvedIds = new Set((detections || []).map(detectionKey).filter(Boolean));
@@ -197,7 +198,7 @@ export function useTracker() {
         method: "POST",
         body: { trigger: "manual" },
       });
-      const tracker = await request("/tracker", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS });
+      const tracker = await request("/tracker?view=board", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS });
       setLastSyncResult(result.result || null);
       setTrackerData(tracker);
       setIntegrationData(result.integration);
@@ -267,6 +268,7 @@ export function useTracker() {
     integrationBusy,
     lastSyncResult,
     refreshEmailIntegration,
+    loadEmailIntegration,
     startGoogleEmailIntegration,
     updateEmailIntegrationSettings,
     syncEmailIntegration,
