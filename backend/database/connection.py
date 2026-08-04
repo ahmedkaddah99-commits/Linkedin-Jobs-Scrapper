@@ -51,6 +51,7 @@ _NON_RETRYABLE_ERROR_MARKERS = (
 )
 
 _TRANSIENT_ERROR_MARKERS = (
+    ("stream already in use", "stale_stream"),
     ("upstream forward", "upstream_forward"),
     ("http 502", "http_502"),
     ("status 502", "http_502"),

@@ -266,7 +266,7 @@ class DatabaseConnectionTests(unittest.TestCase):
         fresh_cursor = Mock(rowcount=-1, lastrowid=None, description=None)
         fresh_connection = Mock()
         stale_connection.execute.side_effect = RuntimeError(
-            'Hrana: `api error: `status=404 Not Found, body={"error":"stream not found: abc:def"}``'
+            'Hrana: `api error: `status=400 Bad Request, body={"error":"Stream already in use: abc:def"}``'
         )
         fresh_connection.execute.return_value = fresh_cursor
         reconnect = Mock(return_value=fresh_connection)
