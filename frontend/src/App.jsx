@@ -176,6 +176,14 @@ function AuthenticatedApp() {
   const userId = String(user?.user_id || user?.email || "").trim();
 
   useEffect(() => {
+    if (!personalizedJobsExperienceEnabled) return;
+    void import("./pages/PersonalizedOnboardingPage");
+    void import("./pages/PersonalizedJobsPage");
+    void import("./pages/HiddenJobsPage");
+    void import("./pages/PersonalizedJobDetailPage");
+  }, []);
+
+  useEffect(() => {
     if (!hasSession) {
       lastTrackedPageRef.current = "";
       return;

@@ -535,6 +535,57 @@ export const PREVIEW_ENTITLEMENTS = Object.freeze({
   multiple_active_searches: { featureKey: "multiple_active_searches", available: false, requiredPlan: "Pro", explanation: "Keep separate personalized searches active for different role families or locations." },
 });
 
+export const PREVIEW_UPGRADE_COPY = Object.freeze({
+  ai_eligibility_filter: {
+    title: "Stop reviewing jobs you cannot apply for",
+    body: "Runr checks language, authorization, location and experience requirements before showing jobs as eligible.",
+    cta: "See Runr Pro",
+  },
+  full_match_explanation: {
+    title: "Understand exactly why this job fits",
+    body: "See which requirements your profile supports, what may be missing and which details Runr could not confirm.",
+    cta: "Unlock match insights",
+  },
+  tailored_cv: {
+    title: "Turn this match into a tailored CV",
+    body: "Runr highlights the experience and skills most relevant to this position while keeping your information truthful.",
+    cta: "Unlock tailored CVs",
+  },
+  tailored_motivation_letter: {
+    title: "Create a letter for this specific opportunity",
+    body: "Runr connects the employer's needs with evidence from your real experience instead of producing a generic letter.",
+    cta: "Unlock motivation letters",
+  },
+  assisted_apply: {
+    title: "Spend less time repeating application details",
+    body: "Runr helps fill supported application forms while keeping you in control of the final submission.",
+    cta: "Unlock Assisted Apply",
+  },
+  multiple_active_searches: {
+    title: "Search for another career direction",
+    body: "Create another saved search for a different role, location or set of preferences.",
+    cta: "Unlock multiple job searches",
+  },
+  scheduled_job_searches: {
+    title: "Keep your job search working in the background",
+    body: "Runr can refresh your saved searches automatically and surface newly discovered opportunities.",
+    cta: "Unlock scheduled searches",
+  },
+  semantic_matching: {
+    title: "Understand exactly why this job fits",
+    body: "See which requirements your profile supports, what may be missing and which details Runr could not confirm.",
+    cta: "Unlock match insights",
+  },
+});
+
+export function getPreviewUpgradeCopy(featureKey) {
+  return PREVIEW_UPGRADE_COPY[featureKey] || {
+    title: "See what Runr can prepare for you",
+    body: "Explore the next step for this job and keep control of every application decision.",
+    cta: "See Runr Pro",
+  };
+}
+
 export function getPreviewEntitlement(featureKey, planId = "free") {
   const entitlement = PREVIEW_ENTITLEMENTS[featureKey] || {
     featureKey,
@@ -595,6 +646,28 @@ export function getFeedJobs({
   });
 }
 
+export function getActivePreviewFilterCount(filters = {}) {
+  return ["query", "location", "workArrangement", "datePosted", "experienceLevel", "salary", "onlyEligible", "sort"]
+    .filter((name) => {
+      if (name === "query") return Boolean(String(filters[name] || "").trim());
+      if (name === "onlyEligible") return Boolean(filters[name]);
+      if (name === "sort") return Boolean(filters[name] && filters[name] !== "best");
+      return Boolean(filters[name] && filters[name] !== "all");
+    }).length;
+}
+
+export function formatPreviewTimestamp(isoDate) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+    timeZoneName: "short",
+  }).format(new Date(isoDate));
+}
+
 export function formatPreviewDate(isoDate, referenceDate = PREVIEW_FEED_SUMMARY.generatedAt) {
   const ageHours = Math.max(0, Math.round((new Date(referenceDate).getTime() - new Date(isoDate).getTime()) / (60 * 60 * 1000)));
   if (ageHours < 1) return "just now";
@@ -602,4 +675,3 @@ export function formatPreviewDate(isoDate, referenceDate = PREVIEW_FEED_SUMMARY.
   const days = Math.round(ageHours / 24);
   return `${days}d ago`;
 }
-

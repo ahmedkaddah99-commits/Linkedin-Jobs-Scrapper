@@ -489,6 +489,7 @@ function SidebarContents({
 export default function AppShell({ children, muteSidebar = false }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const isPreviewOnboarding = location.pathname === "/onboarding";
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
   const isRunDetail = Boolean(runMatch);
   const routeParent = resolveRouteParent(location);
@@ -589,6 +590,7 @@ export default function AppShell({ children, muteSidebar = false }) {
       className={[
         "app-shell min-h-screen bg-background text-on-surface",
         muteSidebar ? "app-shell--sidebar-muted" : "",
+        isPreviewOnboarding ? "app-shell--preview-onboarding" : "",
       ].join(" ")}
       data-sidebar-collapsed={desktopSidebarCollapsed ? "true" : "false"}
     >
@@ -630,7 +632,7 @@ export default function AppShell({ children, muteSidebar = false }) {
             <button
               aria-label="Open navigation"
               className="rounded-full p-2 text-on-surface-variant transition-colors hover:bg-surface-container-low hover:text-primary disabled:pointer-events-none disabled:opacity-40 md:hidden"
-              disabled={muteSidebar}
+              disabled={muteSidebar || isPreviewOnboarding}
               onClick={() => setMobileNavOpen(true)}
               type="button"
             >

@@ -28,7 +28,8 @@ export default function JobCard({ job, isSaved, onSave, onHide }) {
           <p className="preview-job-card__company">{job.company}</p>
         </div>
         <button
-          aria-label={isSaved ? `Unsave ${job.title}` : `Save ${job.title}`}
+            aria-label={isSaved ? `Unsave ${job.title}` : `Save ${job.title}`}
+          aria-pressed={isSaved}
           className={["preview-icon-button", isSaved ? "is-active" : ""].join(" ")}
           onClick={() => onSave(job)}
           title={isSaved ? "Unsave job" : "Save job"}
@@ -40,8 +41,9 @@ export default function JobCard({ job, isSaved, onSave, onHide }) {
 
       <div className="preview-job-card__meta">
         <span><span className="material-symbols-outlined">location_on</span>{job.location}</span>
-        <span><span className="material-symbols-outlined">{job.workArrangement === "remote" ? "wifi" : job.workArrangement === "hybrid" ? "sync_alt" : "business"}</span>{job.workArrangement}</span>
+        <span><span className="material-symbols-outlined">{job.workArrangement === "remote" ? "wifi" : job.workArrangement === "hybrid" ? "sync_alt" : "business"}</span>{job.workArrangement === "onsite" ? "On-site" : job.workArrangement}</span>
         <span><span className="material-symbols-outlined">schedule</span>{formatPreviewDate(job.postedAt)}</span>
+        {job.salary ? <span><span className="material-symbols-outlined">payments</span>{job.salary}</span> : <span><span className="material-symbols-outlined">payments</span>Salary not published</span>}
       </div>
 
       <p className="preview-job-card__summary">{job.descriptionSummary}</p>
@@ -50,6 +52,7 @@ export default function JobCard({ job, isSaved, onSave, onHide }) {
         <div>
           <span className="preview-match-score">{job.matchScore}%</span>
           <span className="preview-match-label">Estimated match</span>
+          <small className="preview-match-context">Based on your current profile</small>
         </div>
         <EligibilityPill job={job} />
       </div>
@@ -61,10 +64,13 @@ export default function JobCard({ job, isSaved, onSave, onHide }) {
         {job.missingQualifications.slice(0, 2).map((reason) => (
           <span className="is-warning" key={reason}><span className="material-symbols-outlined">info</span>{reason}</span>
         ))}
+        {job.uncertainInformation.slice(0, 1).map((reason) => (
+          <span className="is-uncertain" key={reason}><span className="material-symbols-outlined">help_outline</span>{reason}</span>
+        ))}
       </div>
 
       <div className="preview-job-card__footer">
-        <button className="preview-text-button preview-text-button--muted" onClick={() => onHide(job)} type="button">
+        <button aria-label={`Hide ${job.title}`} className="preview-text-button preview-text-button--muted" onClick={() => onHide(job)} title="Hide job from this preview" type="button">
           Hide
         </button>
         <Link className="preview-button preview-button--secondary" to={`/jobs/${job.id}`}>
@@ -78,4 +84,3 @@ export default function JobCard({ job, isSaved, onSave, onHide }) {
     </article>
   );
 }
-

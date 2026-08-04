@@ -3,7 +3,7 @@ import {
   DISPOSITION_STORAGE_KEY,
   ONBOARDING_STORAGE_KEY,
   UPGRADE_DISMISSALS_STORAGE_KEY,
-} from "./personalizedJobs";
+} from "./personalizedJobs.js";
 
 function readJson(key, fallback) {
   if (typeof window === "undefined") return fallback;
@@ -54,6 +54,17 @@ export function saveDispositions(dispositions) {
   return next;
 }
 
+export function restorePreviewDisposition(dispositions, jobId) {
+  const current = dispositions || EMPTY_DISPOSITIONS;
+  const hidden = { ...(current.hidden || {}) };
+  delete hidden[jobId];
+  return {
+    hidden,
+    restored: { ...(current.restored || {}), [jobId]: true },
+    saved: { ...(current.saved || {}) },
+  };
+}
+
 export function loadUpgradeDismissals() {
   return readJson(UPGRADE_DISMISSALS_STORAGE_KEY, {});
 }
@@ -73,18 +84,14 @@ export function usePreviewDispositions() {
       return next;
     });
   }, []);
-  const toggleSaved = useCallback((jobId) => {
-    update((current) => ({ ...current, saved: { ...current.saved, [jobId]: !current.saved[jobId] } }));
+  const toggleSaved = useCallback((jobId, currentValue) => {
+    update((current) => ({ ...current, saved: { ...current.saved, [jobId]: !Boolean(currentValue ?? current.saved[jobId]) } }));
   }, [update]);
   const hideJob = useCallback((jobId) => {
     update((current) => ({ ...current, hidden: { ...current.hidden, [jobId]: true } }));
   }, [update]);
   const restoreJob = useCallback((jobId) => {
-    update((current) => {
-      const hidden = { ...current.hidden };
-      delete hidden[jobId];
-      return { ...current, hidden, restored: { ...current.restored, [jobId]: true } };
-    });
+    update((current) => restorePreviewDisposition(current, jobId));
   }, [update]);
   return { dispositions, toggleSaved, hideJob, restoreJob };
 }
@@ -95,4 +102,3 @@ export function usePersistedOnboarding() {
   const update = useCallback((updater) => setState((current) => (typeof updater === "function" ? updater(current) : updater)), []);
   return { state, setState, update };
 }
-

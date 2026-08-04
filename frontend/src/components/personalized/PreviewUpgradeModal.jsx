@@ -1,12 +1,13 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { getPreviewEntitlement } from "../../lib/personalizedJobs";
+import { getPreviewEntitlement, getPreviewUpgradeCopy } from "../../lib/personalizedJobs";
 import { saveUpgradeDismissal } from "../../lib/personalizedPreviewState";
 import { logPersonalizedEvent } from "../../lib/personalizedAnalytics";
 
 export default function PreviewUpgradeModal({ featureKey, onClose }) {
   const navigate = useNavigate();
   const entitlement = getPreviewEntitlement(featureKey);
+  const copy = getPreviewUpgradeCopy(featureKey);
 
   useEffect(() => {
     if (!featureKey) return undefined;
@@ -30,7 +31,7 @@ export default function PreviewUpgradeModal({ featureKey, onClose }) {
 
   return (
     <div
-      aria-label="Upgrade preview"
+      aria-labelledby="preview-upgrade-title"
       aria-modal="true"
       className="preview-modal-backdrop"
       onKeyDown={(event) => {
@@ -39,18 +40,21 @@ export default function PreviewUpgradeModal({ featureKey, onClose }) {
       role="dialog"
     >
       <div className="preview-upgrade-modal">
+        <button aria-label="Close upgrade message" className="preview-modal-close" onClick={dismiss} type="button">
+          <span className="material-symbols-outlined">close</span>
+        </button>
         <div className="preview-upgrade-modal__icon">
           <span className="material-symbols-outlined">auto_awesome</span>
         </div>
         <p className="preview-eyebrow">Runr Pro</p>
-        <h2>Stop reviewing jobs you cannot apply for</h2>
-        <p className="preview-upgrade-modal__body">{entitlement.explanation}</p>
+        <h2 id="preview-upgrade-title">{copy.title}</h2>
+        <p className="preview-upgrade-modal__body">{copy.body}</p>
         <div className="preview-upgrade-modal__example">
           <span className="material-symbols-outlined">check_circle</span>
           <span>
             <strong>What you would get</strong>
             <br />
-            A clearer next step for every job, before you spend time preparing an application.
+            {entitlement.explanation}
           </span>
         </div>
         <div className="preview-upgrade-modal__actions">
@@ -58,7 +62,7 @@ export default function PreviewUpgradeModal({ featureKey, onClose }) {
             Maybe later
           </button>
           <button className="preview-button preview-button--primary" onClick={seePro} type="button">
-            See Runr Pro
+            {copy.cta}
             <span className="material-symbols-outlined text-[17px]">arrow_forward</span>
           </button>
         </div>
@@ -67,4 +71,3 @@ export default function PreviewUpgradeModal({ featureKey, onClose }) {
     </div>
   );
 }
-
