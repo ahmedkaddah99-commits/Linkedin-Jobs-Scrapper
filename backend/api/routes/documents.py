@@ -33,6 +33,7 @@ def register_routes(registry: RouteRegistry) -> None:
     registry.prefix('POST', ('ats',), _handle_post, auth_required=True, name='documents.ats')
     registry.prefix('POST', ('runs',), _handle_post, auth_required=True, name='documents.run_generation')
     registry.prefix('PUT', ('documents',), _handle_put, auth_required=True, name='documents.documents.put')
+    registry.prefix('DELETE', ('documents',), _handle_delete, auth_required=True, name='documents.documents.delete')
 
 
 def _handle_get(context: ApiRouteContext) -> bool | None:
@@ -512,3 +513,52 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
                         return
 
     return False
+
+
+def _handle_delete(context: ApiRouteContext) -> bool | None:
+    _bind_server_globals()
+    self = context.handler
+    application = context.application
+    segments = list(context.segments)
+
+    if segments[:2] != ["documents", "assets"] or len(segments) != 3:
+        return False
+
+    user, _ = self._require_identity()
+    asset_id = str(segments[2] or "").strip()
+    if not asset_id:
+        raise ValueError("asset_id is required")
+
+    asset = _get_candidate_asset_by_id(user, asset_id)
+    file_payload = dict(asset.get("file") or {})
+    metadata = dict(asset.get("metadata") or {})
+    object_keys = {
+        str(file_payload.get("object_key") or "").strip(),
+        str(metadata.get("word_companion_object_key") or "").strip(),
+    }
+    for object_key in object_keys - {""}:
+        try:
+            application.object_storage.delete(object_key)
+        except Exception:
+            pass
+
+    raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
+    if raw_path:
+        path = Path(raw_path)
+        storage_root = _candidate_asset_storage_dir(user).resolve()
+        try:
+            if path.is_file() and storage_root in path.resolve().parents:
+                path.unlink()
+        except OSError:
+            pass
+
+    assets = _load_candidate_assets(user)
+    remaining = [
+        item for item in assets
+        if str(item.get("asset_id") or "").strip() != asset_id
+    ]
+    if len(remaining) == len(assets):
+        raise KeyError(f"Candidate asset '{asset_id}' not found.")
+    _persist_candidate_assets(application, user, remaining)
+    self._send_no_content(status=HTTPStatus.NO_CONTENT)
+    return True

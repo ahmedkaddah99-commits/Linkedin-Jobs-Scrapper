@@ -150,6 +150,8 @@ export default function DocumentsPage() {
     message: "",
     error: "",
   });
+  const [deletingDocumentId, setDeletingDocumentId] = useState("");
+  const [deleteError, setDeleteError] = useState("");
   const [uploadForm, setUploadForm] = useState({
     assetKind: DEFAULT_UPLOAD_KIND,
     workspaceId: "",
@@ -416,6 +418,31 @@ export default function DocumentsPage() {
     }
   }
 
+  async function deleteDocument(document) {
+    const documentName = document.display_name || "this document";
+    if (!window.confirm(`Delete ${documentName}? This cannot be undone.`)) {
+      return;
+    }
+
+    const assetId = String(document.asset_id || "").trim();
+    if (!assetId) {
+      setDeleteError("This document cannot be deleted because its asset ID is missing.");
+      return;
+    }
+
+    setDeletingDocumentId(document.document_id);
+    setDeleteError("");
+    try {
+      await request(`/documents/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
+      setSelectedDocumentIds((current) => current.filter((id) => id !== document.document_id));
+      await refreshDocuments();
+    } catch (error) {
+      setDeleteError(error.message || `Could not delete ${documentName}.`);
+    } finally {
+      setDeletingDocumentId("");
+    }
+  }
+
   async function uploadDocument(file) {
     setUploadState({ uploading: true, message: "", error: "" });
     try {
@@ -568,6 +595,11 @@ export default function DocumentsPage() {
 
       {activeView === VIEW_LIBRARY ? (
         <div className="space-y-6">
+          {deleteError ? (
+            <div className="rounded-xl border border-red-300/40 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+              {deleteError}
+            </div>
+          ) : null}
           <section className="grid gap-6 xl:grid-cols-[1.2fr_2fr]">
             <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">
               <div className="space-y-2">
@@ -971,6 +1003,14 @@ export default function DocumentsPage() {
                               type="button"
                             >
                               Download
+                            </button>
+                            <button
+                              className="rounded border border-red-300/50 px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              disabled={deletingDocumentId === document.document_id}
+                              onClick={() => deleteDocument(document).catch(() => undefined)}
+                              type="button"
+                            >
+                              {deletingDocumentId === document.document_id ? "Deleting..." : "Delete"}
                             </button>
                           </div>
                         </article>
