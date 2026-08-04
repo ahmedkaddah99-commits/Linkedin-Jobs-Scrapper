@@ -1097,7 +1097,27 @@ html.dark .preview-preparation-tool { background: #0d2037; }
 .preview-preparation-panel__note .material-symbols-outlined { font-size: 0.95rem; }
 
 /* Onboarding --------------------------------------------------------------- */
-.preview-onboarding-page { margin: -1.5rem auto 0; max-width: 900px; padding: 0 0 2rem; }
+.preview-onboarding-page {
+  --preview-ink: #10253d;
+  --preview-muted: #687b91;
+  --preview-line: #dce6f1;
+  --preview-soft: #f3f7fb;
+  --preview-blue: var(--shell-sidebar-cta-bg);
+  --preview-teal: #139d8d;
+  --preview-orange: #d36b35;
+  margin: -1.5rem auto 0;
+  max-width: 900px;
+  padding: 0 0 2rem;
+}
+html.dark .preview-onboarding-page {
+  --preview-ink: #eef5ff;
+  --preview-muted: #a9bbd2;
+  --preview-line: rgba(155, 180, 212, 0.23);
+  --preview-soft: #10243c;
+  --preview-blue: #63ddcb;
+  --preview-teal: #63ddcb;
+  --preview-orange: #ffad83;
+}
 .preview-onboarding-header { align-items: center; display: flex; justify-content: space-between; padding: 0.5rem 0 1.2rem; }
 .preview-onboarding-brand { align-items: center; color: var(--preview-ink); display: inline-flex; font-size: 1.35rem; font-weight: 900; gap: 0.5rem; letter-spacing: -0.08em; text-decoration: none; }
 .preview-onboarding-brand .shell-brand-mark { height: 2.1rem; padding: 0.4rem; width: 2.1rem; }
