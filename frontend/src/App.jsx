@@ -176,12 +176,20 @@ function AuthenticatedApp() {
   const userId = String(user?.user_id || user?.email || "").trim();
 
   useEffect(() => {
-    if (!personalizedJobsExperienceEnabled) return;
-    void import("./pages/PersonalizedOnboardingPage");
-    void import("./pages/PersonalizedJobsPage");
-    void import("./pages/HiddenJobsPage");
-    void import("./pages/PersonalizedJobDetailPage");
-  }, []);
+    if (!personalizedJobsExperienceEnabled || !location.pathname.startsWith("/jobs")) return undefined;
+    const preload = () => {
+      void import("./pages/PersonalizedOnboardingPage");
+      void import("./pages/PersonalizedJobsPage");
+      void import("./pages/HiddenJobsPage");
+      void import("./pages/PersonalizedJobDetailPage");
+    };
+    const idleId = window.requestIdleCallback?.(preload, { timeout: 2000 });
+    const timeoutId = idleId === undefined ? window.setTimeout(preload, 1200) : undefined;
+    return () => {
+      if (idleId !== undefined) window.cancelIdleCallback?.(idleId);
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!hasSession) {

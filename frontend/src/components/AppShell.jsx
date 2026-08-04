@@ -601,10 +601,11 @@ export default function AppShell({ children, muteSidebar = false }) {
     window.addEventListener("focus", checkForNewDeploy);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     const intervalId = window.setInterval(checkForNewDeploy, 120000);
-    checkForNewDeploy();
+    const initialCheckId = window.setTimeout(checkForNewDeploy, 2000);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(initialCheckId);
       window.removeEventListener("focus", checkForNewDeploy);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.clearInterval(intervalId);

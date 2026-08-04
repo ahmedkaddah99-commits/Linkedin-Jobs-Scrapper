@@ -1254,6 +1254,24 @@ class SqliteReviewStore(_SqliteStore):
             )
         return result
 
+    def list_tracker_run_ids(self, run_ids: Iterable[str]) -> set[str]:
+        normalized_run_ids = list(dict.fromkeys(str(run_id or "").strip() for run_id in run_ids))
+        normalized_run_ids = [run_id for run_id in normalized_run_ids if run_id]
+        if not normalized_run_ids:
+            return set()
+        placeholders = ",".join("?" for _ in normalized_run_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                (
+                    "SELECT DISTINCT run_id FROM reviews "
+                    f"WHERE run_id IN ({placeholders}) "
+                    "AND (json_extract(payload_json, '$.decision') = 'approved' "
+                    "OR COALESCE(json_extract(payload_json, '$.metadata.tracker_status'), '') != '')"
+                ),
+                tuple(normalized_run_ids),
+            ).fetchall()
+        return {str(row["run_id"]) for row in rows if str(row["run_id"] or "").strip()}
+
     def list_application_status_history(
         self,
         *,

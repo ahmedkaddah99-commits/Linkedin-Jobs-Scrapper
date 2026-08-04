@@ -425,6 +425,18 @@ class FileReviewStore:
                 result[review.run_id].append(review)
         return result
 
+    def list_tracker_run_ids(self, run_ids: Iterable[str]) -> set[str]:
+        normalized_run_ids = {str(run_id or "").strip() for run_id in run_ids if str(run_id or "").strip()}
+        result: set[str] = set()
+        reviews_by_run = self.list_reviews_for_runs(normalized_run_ids)
+        for run_id, reviews in reviews_by_run.items():
+            for review in reviews:
+                metadata = dict(review.metadata or {})
+                if review.decision == "approved" or str(metadata.get("tracker_status") or "").strip():
+                    result.add(run_id)
+                    break
+        return result
+
     def append_application_status_history(
         self,
         *,

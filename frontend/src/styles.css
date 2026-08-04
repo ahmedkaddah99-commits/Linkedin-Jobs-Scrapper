@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 .material-symbols-outlined {
   font-family: "Material Symbols Outlined";
   font-weight: normal;

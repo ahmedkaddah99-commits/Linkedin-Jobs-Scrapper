@@ -3506,9 +3506,14 @@ def _collect_tracker_entries(
     """
     effective_max = max(50, min(int(max_entries), _TRACKER_ENTRIES_HARD_LIMIT))
     workspaces, runs = _collect_authorized_runs(application, user, max_runs=min(500, effective_max))
+    tracker_runs = runs
+    tracker_run_ids_loader = getattr(application.repositories.review_store, "list_tracker_run_ids", None)
+    if callable(tracker_run_ids_loader):
+        tracker_run_ids = tracker_run_ids_loader(str(run.id) for run in runs)
+        tracker_runs = [run for run in runs if str(run.id) in tracker_run_ids]
     snapshot = _load_run_read_snapshot(
         application,
-        runs,
+        tracker_runs,
         include_reviews=True,
         preserve_job_sets=False,
         review_jobs_only=True,
@@ -3517,11 +3522,10 @@ def _collect_tracker_entries(
     reviews_by_run = snapshot["reviews"]
     tracker_run_ids = {
         str(run.id)
-        for run in runs
+        for run in tracker_runs
         for review in reviews_by_run.get(run.id, [])
         if review.decision == "approved" or str((review.metadata or {}).get("tracker_status") or "")
     }
-    tracker_runs = [run for run in runs if str(run.id) in tracker_run_ids]
     if include_resource_details:
         artifacts_by_run = _load_artifacts_by_run(application, tracker_runs)
         application_documents, standard_documents = _index_tracker_documents(
@@ -3541,7 +3545,7 @@ def _collect_tracker_entries(
         application_documents, standard_documents = {}, []
     entries: list[dict] = []
     entries_by_posting_url: dict[str, int] = {}
-    for run in runs:
+    for run in tracker_runs:
         job_sets = job_sets_by_run.get(run.id, {})
         review_records = reviews_by_run.get(run.id, [])
         # build a fast job lookup
