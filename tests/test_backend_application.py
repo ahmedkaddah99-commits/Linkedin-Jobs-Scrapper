@@ -1296,6 +1296,47 @@ class BackendApplicationTests(unittest.TestCase):
                 ),
             )
 
+    def test_paid_linkedin_extension_sync_is_unlimited(self):
+        app, _ = self._create_app_with_test_workflow("linkedin_extension_paid_sync")
+        user = app.upsert_user(
+            {
+                "email": "linkedin-paid-sync@example.com",
+                "display_name": "Paid LinkedIn Sync User",
+                "role": "admin",
+            }
+        )
+        app.repositories.auth_repository.upsert_subscription(
+            {
+                "subscription_id": "sub_linkedin_paid_sync",
+                "user_id": user.user_id,
+                "plan_id": "momentum",
+                "status": "active",
+                "billing_provider": "creem",
+            }
+        )
+
+        first = app.sync_linkedin_connections(
+            user_id=user.user_id,
+            csv_text=(
+                "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                "Jane,Referrer,https://linkedin.com/in/jane-referrer,,ACME,Engineering Manager,01 Jan 2024\n"
+            ),
+            plan_id=app.get_user_plan_id(user.user_id),
+        )
+        self.assertEqual(first["sync_status"]["sync_limit"], "unlimited")
+        self.assertTrue(first["sync_status"]["can_sync"])
+
+        second = app.sync_linkedin_connections(
+            user_id=user.user_id,
+            csv_text=(
+                "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+                "John,Again,https://linkedin.com/in/john-again,,ACME,Director,01 Jan 2024\n"
+            ),
+            plan_id=app.get_user_plan_id(user.user_id),
+        )
+        self.assertEqual(second["summary"]["created"], 1)
+        self.assertTrue(second["sync_status"]["can_sync"])
+
     def test_queue_worker_retry_and_resource_crud(self):
         app, _ = self._create_app_with_test_workflow("queue_worker_flow")
 

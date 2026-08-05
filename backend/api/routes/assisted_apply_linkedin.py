@@ -24,9 +24,11 @@ def _sync_linkedin_connections(context: ApiRouteContext) -> None:
         label="LinkedIn connections sync",
     )
     csv_text = str(payload.get("csv_text") or "")
+    plan_id = context.application.get_user_plan_id(user.user_id)
     result = context.application.sync_linkedin_connections(
         user_id=user.user_id,
         csv_text=csv_text,
+        plan_id=plan_id,
     )
     # The web app refreshes its own authenticated referral resource after the
     # sync. Do not send the full contact export through the extension bridge.

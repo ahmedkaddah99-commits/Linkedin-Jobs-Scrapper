@@ -21,7 +21,7 @@ from backend.application.run_services import RunLifecycleService
 from backend.application.tracker_services import TrackerApplicationService
 from backend.capabilities.networking import build_relevant_people_discovery
 from backend.capabilities.tailored_documents.manual_urls import normalize_manual_urls
-from backend.config.plans import get_limit, normalize_plan_id
+from backend.config.plans import DEFAULT_PLAN_ID, get_limit, normalize_plan_id
 from backend.config.scrapeops_admin_policy import (
     SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY,
     default_scrapeops_admin_policy,
@@ -2474,13 +2474,30 @@ class BackendApplication:
             source_kind=source_kind,
         )
 
-    def linkedin_sync_status(self, user_id: str) -> dict[str, Any]:
-        return self._tracker_application_service.linkedin_sync_status(user_id)
+    def linkedin_sync_status(self, user_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any]:
+        return self._tracker_application_service.linkedin_sync_status(user_id, plan_id=plan_id)
 
-    def sync_linkedin_connections(self, *, user_id: str, csv_text: str) -> dict[str, Any]:
+    def get_user_plan_id(self, user_id: str, *, fallback_plan_id: str = DEFAULT_PLAN_ID) -> str:
+        lookup = getattr(self.repositories.auth_repository, "get_current_subscription_by_user_id", None)
+        if callable(lookup):
+            try:
+                subscription = lookup(user_id) or {}
+                return normalize_plan_id(subscription.get("plan_id") or fallback_plan_id)
+            except KeyError:
+                pass
+        return normalize_plan_id(fallback_plan_id)
+
+    def sync_linkedin_connections(
+        self,
+        *,
+        user_id: str,
+        csv_text: str,
+        plan_id: str = DEFAULT_PLAN_ID,
+    ) -> dict[str, Any]:
         return self._tracker_application_service.sync_linkedin_connections(
             user_id=user_id,
             csv_text=csv_text,
+            plan_id=plan_id,
         )
 
     def delete_imported_referral_contacts(self, *, user_id: str) -> dict[str, Any]:

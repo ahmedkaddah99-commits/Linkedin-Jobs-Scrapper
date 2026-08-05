@@ -184,9 +184,11 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
             <div>
               <div className="text-sm font-semibold text-on-surface">Sync your connections</div>
               <div className="mt-1 text-sm text-on-surface-variant">
-                {status?.last_sync_at
+                {status?.sync_limit === "unlimited"
+                  ? "Unlimited network syncs are available on your current plan."
+                  : status?.last_sync_at
                   ? `Last synced ${formatUpdatedAt(status.last_sync_at)}.`
-                  : `No network sync yet. ${connectionCount || 0} saved connections currently available.`}
+                  : `Free plan: one network sync per day. ${connectionCount || 0} saved connections currently available.`}
               </div>
             </div>
           </div>

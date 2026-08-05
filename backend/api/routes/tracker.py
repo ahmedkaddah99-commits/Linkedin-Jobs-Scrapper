@@ -215,8 +215,12 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                         return
 
     if segments == ["referrals", "import", "status"]:
-                        user, _ = self._require_identity()
-                        self._send_json(application.linkedin_sync_status(user.user_id))
+                        context = self._auth_context()
+                        plan_id = application.get_user_plan_id(
+                            context.user.user_id,
+                            fallback_plan_id=context.plan_id,
+                        )
+                        self._send_json(application.linkedin_sync_status(context.user.user_id, plan_id=plan_id))
                         return
 
     if segments[:1] == ["tracker"] and len(segments) == 3 and segments[2] == "details":

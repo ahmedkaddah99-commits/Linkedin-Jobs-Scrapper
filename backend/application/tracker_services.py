@@ -24,6 +24,7 @@ from backend.domain.job_identity import canonical_posting_url
 from backend.domain.models import JobRecord, ReferralContactRecord, ReviewRecord, UserRecord, WorkspaceDefinition, utc_now_iso
 from backend.domain.tracker import review_is_actionable_tracker_item
 from backend.repositories.contracts import BackendRepositories
+from backend.config.plans import DEFAULT_PLAN_ID, normalize_plan_id
 
 
 APPLICATION_CONTEXTS_METADATA_KEY = "application_contexts"
@@ -137,13 +138,15 @@ class TrackerApplicationService:
             "contacts": [contact.to_dict() for contact in refreshed_contacts],
         }
 
-    def linkedin_sync_status(self, user_id: str) -> dict[str, Any]:
+    def linkedin_sync_status(self, user_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any]:
         user = self.repositories.auth_repository.get_user(user_id)
+        normalized_plan_id = normalize_plan_id(plan_id)
+        daily_sync_limit = normalized_plan_id == DEFAULT_PLAN_ID
         metadata = dict((user.metadata or {}).get(LINKEDIN_SYNC_METADATA_KEY) or {})
         last_sync_at = str(metadata.get("last_sync_at") or "").strip()
         next_sync_at = ""
         can_sync = True
-        if last_sync_at:
+        if daily_sync_limit and last_sync_at:
             try:
                 last_sync = datetime.fromisoformat(last_sync_at.replace("Z", "+00:00"))
                 if last_sync.tzinfo is None:
@@ -157,6 +160,8 @@ class TrackerApplicationService:
             "can_sync": can_sync,
             "last_sync_at": last_sync_at,
             "next_sync_at": next_sync_at,
+            "plan_id": normalized_plan_id,
+            "sync_limit": "once_per_day" if daily_sync_limit else "unlimited",
             "connection_count": sum(
                 1
                 for contact in self.list_referral_contacts(user_id)
@@ -165,8 +170,14 @@ class TrackerApplicationService:
             ),
         }
 
-    def sync_linkedin_connections(self, *, user_id: str, csv_text: str) -> dict[str, Any]:
-        status = self.linkedin_sync_status(user_id)
+    def sync_linkedin_connections(
+        self,
+        *,
+        user_id: str,
+        csv_text: str,
+        plan_id: str = DEFAULT_PLAN_ID,
+    ) -> dict[str, Any]:
+        status = self.linkedin_sync_status(user_id, plan_id=plan_id)
         if not status["can_sync"]:
             raise ValueError("You can only sync your LinkedIn network once per day. Please try again tomorrow.")
         result = self.import_referral_contacts(
@@ -183,7 +194,7 @@ class TrackerApplicationService:
         user.metadata = metadata
         user.updated_at = utc_now_iso()
         self.repositories.auth_repository.upsert_user(user)
-        result["sync_status"] = self.linkedin_sync_status(user_id)
+        result["sync_status"] = self.linkedin_sync_status(user_id, plan_id=plan_id)
         return result
 
     def delete_imported_referral_contacts(
