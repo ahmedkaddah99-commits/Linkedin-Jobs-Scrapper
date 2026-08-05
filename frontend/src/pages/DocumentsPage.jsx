@@ -21,19 +21,13 @@ function normalizedDocumentValue(document, key) {
 
 function documentTab(document) {
   const assetKind = normalizedDocumentValue(document, "asset_kind");
-  const documentType = normalizedDocumentValue(document, "document_type");
-  if (
-    ["cover_letter", "motivation_letter"].includes(assetKind) ||
-    documentType.includes("cover letter") ||
-    documentType.includes("motivation") ||
-    documentType.includes("anschreiben")
-  ) {
+  const sourceOrigin = normalizedDocumentValue(document, "source_origin");
+  if (sourceOrigin !== "upload") return "";
+  if (assetKind === "workspace_cv") return RESUMES_TAB;
+  if (["cover_letter", "motivation_letter"].includes(assetKind)) {
     return COVER_LETTERS_TAB;
   }
-  if (assetKind === "template" || assetKind === "cover_letter_template") {
-    return TEMPLATES_TAB;
-  }
-  return RESUMES_TAB;
+  return "";
 }
 
 function documentName(document) {
