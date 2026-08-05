@@ -30,10 +30,6 @@ function sendExtensionMessage(message, runtime = globalThis.chrome?.runtime) {
   });
 }
 
-export function openLinkedInConnections() {
-  return Boolean(globalThis.window?.open?.(LINKEDIN_CONNECTIONS_URL, "_blank", "noopener,noreferrer"));
-}
-
 export function syncLinkedInConnections({ runtime = globalThis.chrome?.runtime } = {}) {
   return sendExtensionMessage({ type: "RUNR_WEB_SYNC_LINKEDIN_CONNECTIONS" }, runtime);
 }

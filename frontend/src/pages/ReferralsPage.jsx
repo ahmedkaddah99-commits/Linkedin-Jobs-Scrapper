@@ -7,7 +7,6 @@ import { buildJobWorkspaceRoute } from "../lib/peopleDiscovery";
 import {
   getLinkedInConnectionsStatus,
   LINKEDIN_CONNECTIONS_URL,
-  openLinkedInConnections,
   syncLinkedInConnections,
 } from "../lib/linkedinSync";
 
@@ -129,16 +128,6 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
     }
   }
 
-  function handleOpenLinkedIn() {
-    const opened = openLinkedInConnections();
-    setFeedback({
-      message: opened
-        ? "LinkedIn opened in a new tab. Leave that tab open, then return here and sync your network."
-        : "Allow pop-ups for Runr so LinkedIn can open in a new tab.",
-      error: opened ? "" : "Unable to open LinkedIn.",
-    });
-  }
-
   const canSync = status?.can_sync !== false && !busy;
   const extensionConnected = extensionStatus.state === "ready" && extensionStatus.extension_connected === true;
   return (
@@ -187,24 +176,6 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
               Install extension
             </a>
           )}
-        </div>
-
-        <div className="flex flex-col gap-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <span className="material-symbols-outlined mt-0.5 rounded-lg bg-primary/10 p-2 text-primary">linkedin</span>
-            <div>
-              <div className="text-sm font-semibold text-on-surface">Authorize LinkedIn access</div>
-              <div className="mt-1 text-sm text-on-surface-variant">Sign in to LinkedIn in this browser and open your connections page.</div>
-            </div>
-          </div>
-          <button
-            className="inline-flex shrink-0 items-center justify-center rounded bg-primary px-3 py-2 text-sm font-medium text-white hover:opacity-90"
-            onClick={handleOpenLinkedIn}
-            type="button"
-          >
-            Open LinkedIn
-            <span className="material-symbols-outlined ml-1 text-[16px]">open_in_new</span>
-          </button>
         </div>
 
         <div className="flex flex-col gap-3 rounded-lg border border-outline-variant/20 bg-surface-container-lowest p-4 sm:flex-row sm:items-center sm:justify-between">
