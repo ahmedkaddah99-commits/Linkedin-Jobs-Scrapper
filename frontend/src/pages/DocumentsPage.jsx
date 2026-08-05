@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
 import { formatDateTime, labelize } from "../lib/formatters";
@@ -7,11 +7,13 @@ import { formatDateTime, labelize } from "../lib/formatters";
 const DOCUMENTS_REQUEST_TIMEOUT_MS = 60000;
 const RESUMES_TAB = "resumes";
 const COVER_LETTERS_TAB = "cover_letters";
+const MASTER_CV_TAB = "master_cv";
 const TEMPLATES_TAB = "templates";
 
 const tabs = [
   { id: RESUMES_TAB, label: "Resumes", icon: "description" },
   { id: COVER_LETTERS_TAB, label: "Cover Letters", icon: "article" },
+  { id: MASTER_CV_TAB, label: "Master CV", icon: "auto_awesome" },
   { id: TEMPLATES_TAB, label: "Templates", icon: "dashboard_customize" },
 ];
 
@@ -116,8 +118,10 @@ function EmptyState({ tab, onCreate }) {
 export default function DocumentsPage() {
   const { request, resolvePath } = useSession();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
   const uploadInputRef = useRef(null);
-  const [activeTab, setActiveTab] = useState(RESUMES_TAB);
+  const [activeTab, setActiveTab] = useState(() => requestedTab === COVER_LETTERS_TAB ? COVER_LETTERS_TAB : RESUMES_TAB);
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("All");
   const [selectedIds, setSelectedIds] = useState([]);
@@ -126,6 +130,10 @@ export default function DocumentsPage() {
   const [uploadKind, setUploadKind] = useState("workspace_cv");
   const [uploadState, setUploadState] = useState({ uploading: false, message: "", error: "" });
   const [actionState, setActionState] = useState({ message: "", error: "" });
+
+  useEffect(() => {
+    if (requestedTab === COVER_LETTERS_TAB) setActiveTab(COVER_LETTERS_TAB);
+  }, [requestedTab]);
 
   const {
     data: documentsPayload,
@@ -285,6 +293,10 @@ export default function DocumentsPage() {
     navigate("/cv-studio");
   }
 
+  function createMasterCv() {
+    navigate("/master-cv");
+  }
+
   function answerQuestions() {
     navigate("/career-evidence");
   }
@@ -311,6 +323,7 @@ export default function DocumentsPage() {
       <section aria-label="Create a document" className="documents-action-grid">
         <ActionCard description="Craft and tailor to a job description" icon="description" label="New Resume" onClick={createResume} />
         <ActionCard description="Create and customize with AI" icon="article" label="New Cover Letter" onClick={createCoverLetter} />
+        <ActionCard description="Capture the complete record of your career" icon="auto_awesome" label="Master CV" onClick={createMasterCv} />
         <ActionCard description="Create a reusable cover letter template" icon="dashboard_customize" label="New Template" onClick={createTemplate} />
         <ActionCard description="Generate tailored responses to application questions" icon="question_answer" label="Question Response" onClick={answerQuestions} />
       </section>
@@ -321,6 +334,10 @@ export default function DocumentsPage() {
             className={activeTab === tab.id ? "is-active" : ""}
             key={tab.id}
             onClick={() => {
+              if (tab.id === MASTER_CV_TAB) {
+                navigate("/master-cv");
+                return;
+              }
               setActiveTab(tab.id);
               setSelectedIds([]);
               setSourceFilter("All");

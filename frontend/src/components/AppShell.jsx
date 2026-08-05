@@ -176,6 +176,8 @@ function JobsTopNav({ displayName, isDark, onToggleTheme }) {
               ? false
             : link.label === "Home"
               ? location.pathname === "/"
+              : link.label === "Documents"
+                ? location.pathname === "/documents" || location.pathname === "/master-cv"
               : location.pathname.startsWith(link.to);
           return <NavLink aria-current={active ? "page" : undefined} className={active ? "is-active" : ""} key={link.label} to={link.to}><span className="material-symbols-outlined">{link.icon}</span>{link.label}{link.label === "Refer" ? <span className="material-symbols-outlined jobs-top-nav__down">expand_more</span> : null}</NavLink>;
         })}
@@ -536,10 +538,11 @@ export default function AppShell({ children, muteSidebar = false }) {
   const runMatch = matchPath({ path: "/runs/:runId", end: true }, location.pathname);
   const isRunDetail = Boolean(runMatch);
   const routeParent = resolveRouteParent(location);
-  const isJobsExperience = location.pathname === "/documents" || (
+  const isDocumentsExperience = location.pathname === "/documents" || location.pathname === "/master-cv";
+  const isMasterCvExperience = location.pathname === "/master-cv";
+  const isJobsExperience = isDocumentsExperience || (
     personalizedJobsExperienceEnabled && location.pathname.startsWith("/jobs")
   );
-  const isDocumentsExperience = location.pathname === "/documents";
   const isCareerAssetsRoute = navItems
     .find((item) => item.label === "Career Assets")
     ?.matchers.some((matcher) => Boolean(matchPath(matcher, location.pathname)));
@@ -641,6 +644,7 @@ export default function AppShell({ children, muteSidebar = false }) {
         isPreviewOnboarding ? "app-shell--preview-onboarding" : "",
         isJobsExperience ? "app-shell--jobs-experience" : "",
         isDocumentsExperience ? "app-shell--documents-experience" : "",
+        isMasterCvExperience ? "app-shell--master-cv-experience" : "",
       ].join(" ")}
       data-sidebar-collapsed={desktopSidebarCollapsed ? "true" : "false"}
     >
