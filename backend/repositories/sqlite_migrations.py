@@ -1568,6 +1568,72 @@ def _apply_phase_b_catalog_migration(connection: DatabaseConnection) -> None:
     )
 
 
+def _apply_phase_b_catalog_correctness_migration(connection: DatabaseConnection) -> None:
+    """Add source-scoped identity, lifecycle, replay, and immutability contracts."""
+    _ensure_table_column(connection, "canonical_jobs", "identity_signature", "TEXT NOT NULL DEFAULT ''")
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_canonical_jobs_identity_signature
+            ON canonical_jobs(identity_signature, lifecycle_state, first_seen_at);
+
+        CREATE TABLE IF NOT EXISTS canonical_job_external_ids (
+            external_id_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            external_job_id TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            UNIQUE(source_id, external_job_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_canonical_job_external_ids_job
+            ON canonical_job_external_ids(canonical_job_id, source_id);
+
+        CREATE TABLE IF NOT EXISTS job_source_states (
+            source_state_id TEXT PRIMARY KEY,
+            target_id TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL,
+            external_job_id TEXT NOT NULL,
+            lifecycle_state TEXT NOT NULL DEFAULT 'unknown',
+            absence_count INTEGER NOT NULL DEFAULT 0,
+            grace_attempts INTEGER NOT NULL DEFAULT 3,
+            last_seen_at TEXT NOT NULL DEFAULT '',
+            last_checked_at TEXT NOT NULL DEFAULT '',
+            last_cycle_id TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            UNIQUE(target_id, external_job_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_source_states_job
+            ON job_source_states(canonical_job_id, lifecycle_state, target_id);
+
+        CREATE TABLE IF NOT EXISTS job_source_observation_relationships (
+            relationship_id TEXT PRIMARY KEY,
+            observation_id TEXT NOT NULL,
+            related_observation_id TEXT NOT NULL,
+            relationship_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(observation_id, related_observation_id, relationship_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_source_observation_relationships_observation
+            ON job_source_observation_relationships(observation_id, relationship_type);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_acquisition_job_rejections_replay
+            ON acquisition_job_rejections(request_id, external_job_id, title, reason_code);
+
+        CREATE TRIGGER IF NOT EXISTS trg_job_posting_versions_immutable_update
+        BEFORE UPDATE ON job_posting_versions
+        BEGIN
+            SELECT RAISE(ABORT, 'job_posting_versions are immutable');
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_job_posting_versions_immutable_delete
+        BEFORE DELETE ON job_posting_versions
+        BEGIN
+            SELECT RAISE(ABORT, 'job_posting_versions are immutable');
+        END;
+        """
+    )
+
+
 def _apply_phase_c_personalized_jobs_migration(connection: DatabaseConnection) -> None:
     """Create user-owned preferences, dispositions, events, and evaluations."""
     connection.executescript(
@@ -1916,5 +1982,9 @@ MIGRATIONS = (
         "Store source-backed applicant competition snapshots and freshness metadata.",
         _apply_phase_g_applicant_competition_migration,
     ),
-)
-
+    Migration.from_callable(
+        "039_phase_b_catalog_correctness",
+        "Add source-scoped catalog identity, lifecycle, replay, and immutable-version contracts.",
+        _apply_phase_b_catalog_correctness_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),)

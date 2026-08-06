@@ -213,7 +213,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         now = utc_now_iso()
         with self._connect() as connection:
             current = connection.execute(
-                "SELECT maturity_state, zero_yield_streak, last_state_transition_at "
+                "SELECT maturity_state, zero_yield_streak, last_success_at, last_state_transition_at "
                 "FROM acquisition_targets WHERE target_id = ?",
                 (target_id,),
             ).fetchone()
@@ -223,6 +223,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             streak = (
                 int(current["zero_yield_streak"] or 0) if zero_yield_streak is None else max(0, int(zero_yield_streak))
             )
+            preserved_success = str(current["last_success_at"] or "")
             connection.execute(
                 """
                 UPDATE acquisition_targets
@@ -235,7 +236,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     str(maturity_state),
                     streak,
                     str(attempted_at or now),
-                    str(successful_at or (now if maturity_state in {"candidate", "productive"} else "")),
+                    str(successful_at or preserved_success),
                     now if previous != maturity_state else str(current["last_state_transition_at"] or ""),
                     str(reason or ""),
                     now,
@@ -558,7 +559,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         with self._connect() as connection:
             connection.executemany(
                 """
-                INSERT INTO acquisition_job_rejections (
+                INSERT OR IGNORE INTO acquisition_job_rejections (
                     rejection_id, request_id, cycle_id, task_id, target_id,
                     external_job_id, title, reason_code, observed_at, detail_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -808,6 +809,14 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "duplicates": 0,
             }
             config = _decode(target.get("config_json"), {})
+            absence_grace_attempts = max(
+                1,
+                int(
+                    config.get("absence_grace_attempts")
+                    or config.get("source_absence_grace_attempts")
+                    or 3
+                ),
+            )
             company_name = str(
                 target.get("canonical_company_name")
                 or config.get("canonical_company_name")
@@ -840,7 +849,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 provenance_url=str(target.get("provenance_url") or ""),
             )
             for job in job_rows:
-                external_id = str(job.get("job_id") or job.get("external_job_id") or job.get("url") or "").strip()
+                external_id = str(job.get("job_id") or job.get("external_job_id") or "").strip()
                 title = str(job.get("title") or "").strip()
                 original_url = str(job.get("url") or job.get("link") or job.get("source_url") or "").strip()
                 if not external_id or not title or not original_url:
@@ -850,34 +859,52 @@ class SqliteAcquisitionStore(_SqliteStore):
                     counts["duplicates"] += 1
                     continue
                 seen_external.add(external_id)
+                replay = connection.execute(
+                    """
+                    SELECT observation_id FROM job_source_observations
+                    WHERE target_id=? AND cycle_id=? AND external_job_id=?
+                    LIMIT 1
+                    """,
+                    (target_id, cycle_id, external_id),
+                ).fetchone()
+                if replay is not None:
+                    # A replay is a no-op: do not create observations, versions,
+                    # source aliases, or additional lifecycle transitions.
+                    continue
                 location = str(job.get("location") or job.get("location_raw") or "").strip()
                 identity_key = self._identity_key(company_name, title, location, original_url)
-                canonical = self._find_existing_canonical(
-                    connection,
-                    identity_key=identity_key,
-                    original_url=original_url,
-                    company_id=company_id,
-                    title=title,
-                    location=location,
-                )
+                identity_signature = self._identity_signature(company_name, title, location)
+                canonical = self._external_canonical(connection, target_id, external_id)
+                if canonical is None:
+                    canonical = self._find_existing_canonical(
+                        connection,
+                        identity_key=identity_key,
+                        identity_signature=identity_signature,
+                        original_url=original_url,
+                        company_id=company_id,
+                        title=title,
+                        location=location,
+                    )
                 canonical_was_new = canonical is None
                 if canonical is None:
                     canonical_id = f"canonical_job_{uuid4().hex}"
+                    durable_identity_key = self._unique_identity_key(connection, identity_key)
                     connection.execute(
                         """
                         INSERT INTO canonical_jobs (
                             canonical_job_id, company_id, identity_key, title, location,
-                            canonical_url, lifecycle_state, first_seen_at, last_seen_at,
+                            canonical_url, identity_signature, lifecycle_state, first_seen_at, last_seen_at,
                             last_verified_at, absence_count, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 0, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 0, ?, ?)
                         """,
                         (
                             canonical_id,
                             company_id,
-                            identity_key,
+                            durable_identity_key,
                             title,
                             location,
                             original_url,
+                            identity_signature,
                             now,
                             now,
                             now,
@@ -897,11 +924,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                     connection.execute(
                         """
                         UPDATE canonical_jobs
-                        SET title=?, location=?, canonical_url=?, lifecycle_state='active',
+                        SET title=?, location=?, canonical_url=?, identity_signature=?, lifecycle_state='active',
                             last_seen_at=?, last_verified_at=?, absence_count=0, updated_at=?
                         WHERE canonical_job_id = ?
                         """,
-                        (title, location, original_url, now, now, now, canonical_id),
+                        (title, location, original_url, identity_signature, now, now, now, canonical_id),
                     )
                 connection.execute(
                     """
@@ -910,6 +937,25 @@ class SqliteAcquisitionStore(_SqliteStore):
                     ) VALUES (?, ?, ?, ?, ?)
                     """,
                     (f"job_alias_{uuid4().hex}", canonical_id, original_url, target_id, now),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO canonical_job_external_ids (
+                        external_id_id, canonical_job_id, source_id, external_job_id,
+                        first_seen_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_id, external_job_id) DO UPDATE SET
+                        canonical_job_id=excluded.canonical_job_id,
+                        last_seen_at=excluded.last_seen_at
+                    """,
+                    (
+                        f"external_id_{uuid4().hex}",
+                        canonical_id,
+                        target_id,
+                        external_id,
+                        now,
+                        now,
+                    ),
                 )
                 related = connection.execute(
                     """
@@ -959,6 +1005,62 @@ class SqliteAcquisitionStore(_SqliteStore):
                         now,
                     ),
                 )
+                persisted_observation = connection.execute(
+                    "SELECT observation_id FROM job_source_observations WHERE target_id=? AND cycle_id=? AND external_job_id=?",
+                    (target_id, cycle_id, external_id),
+                ).fetchone()
+                observation_id = str(persisted_observation["observation_id"]) if persisted_observation else observation_id
+                prior_observation = connection.execute(
+                    """
+                    SELECT observation_id, canonical_job_id, target_id
+                    FROM job_source_observations
+                    WHERE canonical_job_id=? AND target_id!=? AND observation_id!=?
+                    ORDER BY observed_at DESC, observation_id DESC LIMIT 1
+                    """,
+                    (canonical_id, target_id, observation_id),
+                ).fetchone()
+                if prior_observation is not None:
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO job_source_observation_relationships (
+                            relationship_id, observation_id, related_observation_id,
+                            relationship_type, created_at
+                        ) VALUES (?, ?, ?, 'duplicate', ?)
+                        """,
+                        (
+                            f"observation_relationship_{uuid4().hex}",
+                            observation_id,
+                            str(prior_observation["observation_id"]),
+                            now,
+                        ),
+                    )
+                    # Keep the cross-source duplicate relationship visible to
+                    # administrators even though the public catalog has one
+                    # canonical posting.  The self edge represents two source
+                    # observations of the same canonical posting.
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO canonical_job_relationships (
+                            relationship_id, canonical_job_id, related_job_id,
+                            relationship_type, created_at
+                        ) VALUES (?, ?, ?, 'duplicate', ?)
+                        """,
+                        (
+                            f"job_duplicate_{uuid4().hex}",
+                            canonical_id,
+                            canonical_id,
+                            now,
+                        ),
+                    )
+                self._upsert_source_state(
+                    connection,
+                    target_id=target_id,
+                    canonical_job_id=canonical_id,
+                    external_job_id=external_id,
+                    cycle_id=cycle_id,
+                    observed_at=now,
+                    grace_attempts=absence_grace_attempts,
+                )
                 self._ensure_version(
                     connection,
                     canonical_id,
@@ -998,47 +1100,57 @@ class SqliteAcquisitionStore(_SqliteStore):
             if complete_snapshot and valid_snapshot:
                 missing_rows = connection.execute(
                     """
-                    SELECT canonical_job_id, external_job_id
-                    FROM job_source_observations
-                    WHERE target_id = ? AND active = 1
-                    GROUP BY canonical_job_id, external_job_id
+                    SELECT source_state_id, canonical_job_id, external_job_id,
+                           absence_count, grace_attempts
+                    FROM job_source_states
+                    WHERE target_id=? AND lifecycle_state IN ('active', 'stale', 'unknown')
                     """,
                     (target_id,),
                 ).fetchall()
+                affected: set[str] = set()
                 for missing in missing_rows:
-                    if str(missing["external_job_id"]) in seen_external:
+                    external_id = str(missing["external_job_id"] or "")
+                    if external_id in seen_external:
                         continue
                     canonical_id = str(missing["canonical_job_id"])
-                    current = connection.execute(
-                        "SELECT absence_count FROM canonical_jobs WHERE canonical_job_id = ?",
-                        (canonical_id,),
-                    ).fetchone()
-                    absence_count = int(current["absence_count"] or 0) + 1 if current else 1
-                    other_source = connection.execute(
-                        """
-                        SELECT 1 FROM job_source_observations
-                        WHERE canonical_job_id = ? AND target_id != ? AND active = 1 LIMIT 1
-                        """,
-                        (canonical_id, target_id),
-                    ).fetchone()
-                    if other_source is not None:
-                        lifecycle = "active"
-                    elif absence_count == 1:
-                        lifecycle = "stale"
-                    elif absence_count == 2:
-                        lifecycle = "possibly_closed"
-                    else:
-                        lifecycle = "closed"
+                    absence_count = int(missing["absence_count"] or 0) + 1
+                    grace = max(1, int(missing["grace_attempts"] or absence_grace_attempts))
+                    lifecycle = "closed" if absence_count >= grace else "stale"
                     connection.execute(
                         """
-                        UPDATE canonical_jobs
-                        SET absence_count=?, lifecycle_state=?, updated_at=?
-                        WHERE canonical_job_id = ?
+                        UPDATE job_source_states
+                        SET absence_count=?, lifecycle_state=?, last_checked_at=?,
+                            last_cycle_id=?, updated_at=?
+                        WHERE source_state_id=?
                         """,
-                        (absence_count, lifecycle, now, canonical_id),
+                        (absence_count, lifecycle, now, cycle_id, now, str(missing["source_state_id"])),
                     )
+                    affected.add(canonical_id)
                     if lifecycle == "closed":
                         counts["closed"] += 1
+                for canonical_id in affected:
+                    self._recompute_lifecycle(connection, canonical_id, now=now)
+            elif not valid_snapshot:
+                # A failed or incomplete source check is unknown, not an
+                # absence.  Never close a posting from an unhealthy source.
+                unknown_rows = connection.execute(
+                    """
+                    SELECT DISTINCT canonical_job_id FROM job_source_states
+                    WHERE target_id=? AND lifecycle_state IN ('active', 'stale')
+                    """,
+                    (target_id,),
+                ).fetchall()
+                for row in unknown_rows:
+                    connection.execute(
+                        """
+                        UPDATE job_source_states
+                        SET lifecycle_state='unknown', last_checked_at=?,
+                            last_cycle_id=?, updated_at=?
+                        WHERE target_id=? AND canonical_job_id=?
+                        """,
+                        (now, cycle_id, now, target_id, str(row["canonical_job_id"])),
+                    )
+                    self._recompute_lifecycle(connection, str(row["canonical_job_id"]), now=now)
             return {**counts, "valid_snapshot": bool(valid_snapshot), "complete_snapshot": bool(complete_snapshot)}
 
         return self._run_transaction(ingest)
@@ -1257,8 +1369,21 @@ class SqliteAcquisitionStore(_SqliteStore):
                 FROM canonical_jobs j
                 JOIN canonical_companies c ON c.company_id = j.company_id
                 LEFT JOIN job_posting_versions v ON v.version_id = j.current_version_id
-                JOIN job_source_observations o ON o.canonical_job_id = j.canonical_job_id
-                WHERE o.target_id IN ({placeholders}) AND o.cycle_id = ? AND j.lifecycle_state = 'active'
+                WHERE j.lifecycle_state != 'closed'
+                  AND (
+                    EXISTS (
+                        SELECT 1 FROM job_source_observations o
+                        WHERE o.canonical_job_id = j.canonical_job_id
+                          AND o.target_id IN ({placeholders}) AND o.cycle_id = ?
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM acquisition_publication_jobs previous_jobs
+                        WHERE previous_jobs.canonical_job_id = j.canonical_job_id
+                          AND previous_jobs.publication_id = (
+                              SELECT publication_id FROM acquisition_publication_head WHERE head_id=1
+                          )
+                    )
+                  )
                 ORDER BY j.title, j.canonical_job_id
                 """,
                 (*target_ids, cycle_id),
@@ -1507,6 +1632,15 @@ class SqliteAcquisitionStore(_SqliteStore):
             payload["detail_requests"] = payload["requests"]
             payload["requested_urls"] = [item["request_url"] for item in payload["requests"]]
             payload["request_count"] = len(payload["requests"])
+            payload["redirect_count"] = sum(
+                1 for item in payload["requests"] if bool((item.get("detail") or {}).get("redirected"))
+            )
+            payload["redirects"] = payload["redirect_count"]
+            payload["request_modes"] = sorted({str(item.get("mode") or "direct") for item in payload["requests"]})
+            payload["direct_proxy_mode"] = (
+                payload["request_modes"][0] if len(payload["request_modes"]) == 1 else payload["request_modes"]
+            )
+            payload["reserved_credits"] = sum(int(item.get("credits_estimated") or 0) for item in payload["requests"])
             payload["actual_credits"] = sum(int(item.get("credits_actual") or 0) for item in payload["requests"])
             payload["jobs_per_request"] = (
                 round(int(payload["task"].get("jobs_observed") or 0) / len(payload["requests"]), 2)
@@ -1536,6 +1670,14 @@ class SqliteAcquisitionStore(_SqliteStore):
             payload["cost_per_new_publication"] = (
                 round(payload["actual_credits"] / payload["jobs_new"], 2) if payload["jobs_new"] else 0
             )
+            payload["yield_per_request"] = round(
+                payload["jobs_observed"] / payload["request_count"], 2
+            ) if payload["request_count"] else 0
+            payload["cost_per_produced_job"] = round(
+                payload["actual_credits"] / payload["jobs_observed"], 2
+            ) if payload["jobs_observed"] else 0
+            payload["last_productive_at"] = str(payload.get("last_success_at") or "")
+            payload["consecutive_zero_yield_attempts"] = int(payload.get("zero_yield_streak") or 0)
             payload["productivity_timestamp"] = (
                 payload.get("last_success_at") if payload.get("maturity_state") == "productive" else ""
             )
@@ -1556,10 +1698,12 @@ class SqliteAcquisitionStore(_SqliteStore):
                        COUNT(*) AS request_count,
                        SUM(r.credits_actual) AS actual_credits,
                        SUM(r.jobs_returned) AS raw_jobs_returned,
+                       SUM(r.credits_estimated) AS reserved_credits,
                        MAX(t.jobs_observed) AS jobs_observed,
                        MAX(t.jobs_new) AS jobs_new,
                        MAX(t.jobs_updated) AS jobs_updated,
                        MAX(t.jobs_rejected) AS jobs_rejected,
+                       MAX(t.jobs_closed) AS jobs_closed,
                        MAX(t.jobs_duplicates) AS jobs_duplicates,
                        MAX(t.jobs_published) AS jobs_published
                 FROM acquisition_requests r
@@ -1570,6 +1714,19 @@ class SqliteAcquisitionStore(_SqliteStore):
                 """,
                 (cycle_id,),
             ).fetchall()
+            redirect_rows = connection.execute(
+                """
+                SELECT target_id, request_url, COUNT(*) AS count
+                FROM acquisition_requests
+                WHERE cycle_id=? AND detail_json LIKE '%\"redirected\":true%'
+                GROUP BY target_id, request_url
+                """,
+                (cycle_id,),
+            ).fetchall()
+        redirect_counts = {
+            (str(row["target_id"]), str(row["request_url"])): int(row["count"] or 0)
+            for row in redirect_rows
+        }
         metrics = []
         for row in rows:
             payload = _dict_row(row)
@@ -1579,11 +1736,13 @@ class SqliteAcquisitionStore(_SqliteStore):
                 {
                     "request_count": int(payload.get("request_count") or 0),
                     "actual_credits": actual_credits,
+                    "reserved_credits": int(payload.get("reserved_credits") or 0),
                     "raw_jobs_returned": int(payload.get("raw_jobs_returned") or 0),
                     "jobs_observed": int(payload.get("jobs_observed") or 0),
                     "jobs_new": jobs_new,
                     "jobs_updated": int(payload.get("jobs_updated") or 0),
                     "jobs_rejected": int(payload.get("jobs_rejected") or 0),
+                    "jobs_closed": int(payload.get("jobs_closed") or 0),
                     "jobs_duplicates": int(payload.get("jobs_duplicates") or 0),
                     "jobs_published": int(payload.get("jobs_published") or 0),
                     "cost_per_new_job": round(actual_credits / jobs_new, 2) if jobs_new else 0,
@@ -1595,7 +1754,13 @@ class SqliteAcquisitionStore(_SqliteStore):
                     "yield_per_request": round(
                         int(payload.get("jobs_observed") or 0) / int(payload.get("request_count") or 1), 2
                     ),
+                    "cost_per_produced_job": round(
+                        actual_credits / int(payload.get("jobs_observed") or 0), 2
+                    ) if int(payload.get("jobs_observed") or 0) else 0,
                 }
+            )
+            payload["redirect_count"] = redirect_counts.get(
+                (str(payload.get("target_id") or ""), str(payload.get("request_url") or "")), 0
             )
             metrics.append(payload)
         return metrics
@@ -1623,10 +1788,64 @@ class SqliteAcquisitionStore(_SqliteStore):
                 LIMIT 1
                 """
             ).fetchone()
+            rejection_rows = connection.execute(
+                """
+                SELECT reason_code, COUNT(*) AS count
+                FROM acquisition_job_rejections
+                WHERE cycle_id=?
+                GROUP BY reason_code ORDER BY reason_code
+                """,
+                (cycle_id,),
+            ).fetchall()
+            redirect_count = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM acquisition_requests
+                WHERE cycle_id=? AND detail_json LIKE '%\"redirected\":true%'
+                """,
+                (cycle_id,),
+            ).fetchone()
+            mode_rows = connection.execute(
+                "SELECT mode, COUNT(*) AS count FROM acquisition_requests WHERE cycle_id=? GROUP BY mode",
+                (cycle_id,),
+            ).fetchall()
+        rejection_reasons = {str(row["reason_code"]): int(row["count"] or 0) for row in rejection_rows}
+        mode_counts = {str(row["mode"] or "direct"): int(row["count"] or 0) for row in mode_rows}
+        observed_jobs = int(cycle.get("jobs_observed") or 0)
+        actual_credits = int(cycle.get("actual_credits") or 0)
         report = {
+            "contract_version": "phase_b_catalog_report_v1",
             "cycle": cycle,
             "targets": targets,
             "source_metrics": source_metrics,
+            "metrics": {
+                "request_count": int(cycle.get("actual_requests") or 0),
+                "redirect_count": int(redirect_count["count"] or 0),
+                "direct_proxy_mode": mode_counts,
+                "reserved_credits": int(cycle.get("reserved_credits") or 0),
+                "actual_credits": actual_credits,
+                "reserved_cost": int(cycle.get("reserved_credits") or 0),
+                "actual_cost": actual_credits,
+                "observed": observed_jobs,
+                "new": int(cycle.get("jobs_new") or 0),
+                "updated": int(cycle.get("jobs_updated") or 0),
+                "duplicate": int(cycle.get("jobs_duplicates") or 0),
+                "rejected": int(cycle.get("jobs_rejected") or 0),
+                "closed": int(cycle.get("jobs_closed") or 0),
+                "published": int(cycle.get("jobs_published") or 0),
+                "yield_per_request": round(
+                    observed_jobs / int(cycle.get("actual_requests") or 1), 2
+                ) if int(cycle.get("actual_requests") or 0) else 0,
+                "cost_per_produced_job": round(actual_credits / observed_jobs, 2) if observed_jobs else 0,
+                "last_productive_time": max(
+                    (str(target.get("last_productive_at") or "") for target in targets),
+                    default="",
+                ),
+                "consecutive_zero_yield_attempts": max(
+                    (int(target.get("consecutive_zero_yield_attempts") or 0) for target in targets),
+                    default=0,
+                ),
+            },
+            "rejection_reasons": rejection_reasons,
             "controls": {
                 "forecasted_requests": int(cycle.get("forecast_requests") or 0),
                 "forecasted_credits": int(cycle.get("forecast_credits") or 0),
@@ -1835,6 +2054,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         connection,
         *,
         identity_key: str,
+        identity_signature: str = "",
         original_url: str,
         company_id: str,
         title: str,
@@ -1843,17 +2063,29 @@ class SqliteAcquisitionStore(_SqliteStore):
         """Resolve URL aliases first, then a strong cross-source signature."""
 
         row = connection.execute(
-            "SELECT * FROM canonical_jobs WHERE identity_key = ?",
+            "SELECT * FROM canonical_jobs WHERE identity_key = ? AND lifecycle_state != 'closed'",
             (identity_key,),
         ).fetchone()
         if row is not None:
             return row
+        if identity_signature:
+            row = connection.execute(
+                """
+                SELECT * FROM canonical_jobs
+                WHERE identity_signature = ? AND lifecycle_state != 'closed'
+                ORDER BY first_seen_at, canonical_job_id
+                LIMIT 1
+                """,
+                (identity_signature,),
+            ).fetchone()
+            if row is not None:
+                return row
         row = connection.execute(
             """
             SELECT j.*
             FROM canonical_jobs j
             JOIN canonical_job_url_aliases a ON a.canonical_job_id = j.canonical_job_id
-            WHERE a.url = ?
+            WHERE a.url = ? AND j.lifecycle_state != 'closed'
             ORDER BY j.updated_at DESC
             LIMIT 1
             """,
@@ -1881,6 +2113,96 @@ class SqliteAcquisitionStore(_SqliteStore):
         if stable_url:
             return f"url:{stable_url}"
         return f"text:{company.casefold()}|{title.casefold()}|{location.casefold()}"
+
+    @staticmethod
+    def _identity_signature(company: str, title: str, location: str) -> str:
+        """Stable candidate identity that does not depend on a URL primary key."""
+
+        parts = (company, title, location)
+        normalized = "|".join(" ".join(str(part or "").casefold().split()) for part in parts)
+        return f"signature:v1:{normalized}"
+
+    @staticmethod
+    def _unique_identity_key(connection, base_key: str) -> str:
+        candidate = str(base_key or "")
+        if not candidate:
+            candidate = "text:unknown"
+        if connection.execute("SELECT 1 FROM canonical_jobs WHERE identity_key=?", (candidate,)).fetchone() is None:
+            return candidate
+        return f"{candidate}:repost:{uuid4().hex}"
+
+    @staticmethod
+    def _external_canonical(connection, source_id: str, external_job_id: str):
+        return connection.execute(
+            """
+            SELECT j.* FROM canonical_job_external_ids e
+            JOIN canonical_jobs j ON j.canonical_job_id = e.canonical_job_id
+            WHERE e.source_id=? AND e.external_job_id=?
+            LIMIT 1
+            """,
+            (source_id, external_job_id),
+        ).fetchone()
+
+    @staticmethod
+    def _upsert_source_state(
+        connection,
+        *,
+        target_id: str,
+        canonical_job_id: str,
+        external_job_id: str,
+        cycle_id: str,
+        observed_at: str,
+        grace_attempts: int,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO job_source_states (
+                source_state_id, target_id, canonical_job_id, external_job_id,
+                lifecycle_state, absence_count, grace_attempts, last_seen_at,
+                last_checked_at, last_cycle_id, updated_at
+            ) VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_id, external_job_id) DO UPDATE SET
+                canonical_job_id=excluded.canonical_job_id,
+                lifecycle_state='active', absence_count=0,
+                grace_attempts=excluded.grace_attempts,
+                last_seen_at=excluded.last_seen_at,
+                last_checked_at=excluded.last_checked_at,
+                last_cycle_id=excluded.last_cycle_id,
+                updated_at=excluded.updated_at
+            """,
+            (
+                f"source_state_{uuid4().hex}",
+                target_id,
+                canonical_job_id,
+                external_job_id,
+                max(1, int(grace_attempts)),
+                observed_at,
+                observed_at,
+                cycle_id,
+                observed_at,
+            ),
+        )
+
+    @staticmethod
+    def _recompute_lifecycle(connection, canonical_job_id: str, *, now: str) -> str:
+        states = connection.execute(
+            "SELECT lifecycle_state FROM job_source_states WHERE canonical_job_id=?",
+            (canonical_job_id,),
+        ).fetchall()
+        values = {str(row["lifecycle_state"] or "unknown") for row in states}
+        if "active" in values:
+            lifecycle = "active"
+        elif "stale" in values:
+            lifecycle = "stale"
+        elif values and values <= {"closed"}:
+            lifecycle = "closed"
+        else:
+            lifecycle = "unknown"
+        connection.execute(
+            "UPDATE canonical_jobs SET lifecycle_state=?, updated_at=? WHERE canonical_job_id=?",
+            (lifecycle, now, canonical_job_id),
+        )
+        return lifecycle
 
     @staticmethod
     def _payload_hash(job: Mapping[str, Any]) -> str:

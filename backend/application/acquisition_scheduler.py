@@ -566,9 +566,14 @@ class PhaseAAcquisitionScheduler:
             counts["rejected"] = int(counts.get("rejected") or 0) + len(rejections)
             attempts = store.get_target_history(target_id).get("attempts") or []
             attempt_number = len(attempts) + 1
-            if credible_evidence:
+            if jobs:
                 state_after = "productive" if connector in {"greenhouse", "lever"} else "candidate"
                 streak = 0
+            elif credible_evidence:
+                # A credible empty listing is useful source evidence, but it
+                # is not productive output and must not reset yield telemetry.
+                state_after = state_before if state_before in {"candidate", "productive"} else "candidate"
+                streak = int(target.get("zero_yield_streak") or 0) + 1
             elif attempt_number >= _as_int(target.get("max_direct_requests"), 3):
                 state_after = "quarantined"
                 streak = int(target.get("zero_yield_streak") or 0) + 1
@@ -580,6 +585,7 @@ class PhaseAAcquisitionScheduler:
                 maturity_state=state_after,
                 reason=str(fetched.get("evidence") or status),
                 zero_yield_streak=streak,
+                successful_at=datetime.now(timezone.utc).isoformat() if jobs else "",
             )
             store.record_attempt(
                 task_id=task_id,

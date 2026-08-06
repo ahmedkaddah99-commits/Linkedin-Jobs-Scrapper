@@ -90,13 +90,14 @@ def _looks_excluded(job: Mapping[str, object]) -> str:
 
 
 def _official_apply_url(job: Mapping[str, object], target: Mapping[str, object]) -> str:
+    # A listing/source URL is not proof of a job-specific application
+    # destination.  Only connector-declared Apply fields may satisfy this
+    # gate; enrichment must never invent an application URL later.
     candidates = (
         job.get("apply_link"),
         job.get("apply_url"),
         job.get("hostedUrl"),
         job.get("absolute_url"),
-        job.get("url"),
-        job.get("link"),
     )
     target_hosts = {
         hostname_for_url(str(target.get(key) or ""))
