@@ -15,6 +15,7 @@ from backend.application.assisted_apply_package_service import (
 from backend.application.assisted_apply_preparation_service import AssistedApplyPreparationService
 from backend.application.assisted_apply_service import AssistedApplyConnectionService
 from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
+from backend.application.company_enrichment import CompanyEnrichmentProvider, CompanyEnrichmentService
 from backend.application.personalized_jobs_service import PersonalizedJobsService
 from backend.application.production_rollout import ProductionRolloutService
 from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
@@ -884,6 +885,7 @@ class BackendApplication:
     _acquisition_scheduler: PhaseAAcquisitionScheduler = field(init=False, repr=False)
     _production_rollout_service: ProductionRolloutService = field(init=False, repr=False)
     _personalized_jobs_service: PersonalizedJobsService = field(init=False, repr=False)
+    _company_enrichment_service: CompanyEnrichmentService = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._workspace_catalog_service = WorkspaceCatalogService(
@@ -931,11 +933,75 @@ class BackendApplication:
             repositories=self.repositories,
             object_storage=self.object_storage,
         )
+        self._company_enrichment_service = CompanyEnrichmentService(
+            repositories=self.repositories,
+            object_storage=self.object_storage,
+            profile_writer=self._personalized_jobs_service.upsert_company_profile,
+        )
 
     def run_due_acquisition(self) -> dict[str, Any] | None:
         """Worker-only entry point for the disabled-by-default Phase A scheduler."""
 
         return self._acquisition_scheduler.run_due_cycle()
+
+    def run_due_company_enrichment(
+        self,
+        *,
+        max_companies: int = 25,
+        concurrency: int = 5,
+        request_budget: int = 25,
+        cycle_key: str = "",
+        force: bool = False,
+        provider: CompanyEnrichmentProvider | None = None,
+    ) -> dict[str, Any]:
+        """Worker-only bounded company enrichment; never called by catalog reads."""
+        enabled = self.repositories.config_store.get_value("acquisition.phase_f.company_enrichment_enabled", False)
+        if not force and str(enabled).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
+            return {"status": "disabled", "reason": "phase_f_company_enrichment_disabled"}
+        previous = self._company_enrichment_service.provider
+        if provider is not None:
+            self._company_enrichment_service.provider = provider
+        try:
+            return self._company_enrichment_service.run_sync(
+                max_companies=max_companies,
+                concurrency=concurrency,
+                request_budget=request_budget,
+                cycle_key=cycle_key,
+                force=force,
+            )
+        finally:
+            self._company_enrichment_service.provider = previous
+
+    async def enrich_company_targets(
+        self,
+        *,
+        max_companies: int = 25,
+        concurrency: int = 5,
+        request_budget: int = 25,
+        cycle_key: str = "",
+        force: bool = False,
+        provider: CompanyEnrichmentProvider | None = None,
+    ) -> dict[str, Any]:
+        """Async worker entry point for bounded fixture/provider adapters."""
+        previous = self._company_enrichment_service.provider
+        if provider is not None:
+            self._company_enrichment_service.provider = provider
+        try:
+            return await self._company_enrichment_service.run(
+                max_companies=max_companies,
+                concurrency=concurrency,
+                request_budget=request_budget,
+                cycle_key=cycle_key,
+                force=force,
+            )
+        finally:
+            self._company_enrichment_service.provider = previous
+
+    def list_company_enrichment_attempts(self, *, company_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.personalized_jobs_store
+        if store is None:
+            return []
+        return store.list_company_enrichment_attempts(company_id=company_id, limit=limit)
 
     def recover_acquisition_cycle(self) -> dict[str, Any] | None:
         """Admin-only recovery entry point; no user/workspace run is created."""
@@ -1043,6 +1109,12 @@ class BackendApplication:
 
     def get_personalized_job_detail(self, user_id: str, posting_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
         return self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
+
+    def process_next_personalized_intelligence(self) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.process_next_intelligence()
+
+    def improve_personalized_resume(self, user_id: str, posting_id: str, *, mode: str = "review", plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any]:
+        return self._personalized_jobs_service.improve_resume(user_id, posting_id, mode=mode, plan_id=plan_id)
 
     def get_personalized_company_detail(self, user_id: str, company_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
         return self._personalized_jobs_service.company_detail(user_id, company_id, plan_id=plan_id)

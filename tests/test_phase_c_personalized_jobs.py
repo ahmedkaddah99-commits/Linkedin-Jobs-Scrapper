@@ -38,8 +38,14 @@ def _seed_catalog(app, *, valid_until: str = "") -> None:
                 "languages": ["German"],
             }
             connection.execute(
-                "INSERT INTO canonical_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (job_id, company_id, f"url:{job_id}", title, location, apply_url, "active", now, now, now, 0, version_id, now, now),
+                """
+                INSERT INTO canonical_jobs (
+                    canonical_job_id, company_id, identity_key, title, location, canonical_url,
+                    lifecycle_state, first_seen_at, last_seen_at, last_verified_at,
+                    absence_count, current_version_id, created_at, updated_at, identity_signature
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (job_id, company_id, f"url:{job_id}", title, location, apply_url, "active", now, now, now, 0, version_id, now, now, f"signature:{job_id}"),
             )
             connection.execute(
                 "INSERT INTO job_posting_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

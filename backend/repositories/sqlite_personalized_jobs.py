@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -173,6 +174,18 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             rows = connection.execute(sql, tuple(params)).fetchall()
         return {str(row["canonical_job_id"]): _row_payload(row) for row in rows}
 
+    def list_dispositions_for_jobs(self, user_id: str, canonical_job_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        job_ids = tuple(dict.fromkeys(str(item) for item in canonical_job_ids if str(item).strip()))
+        if not job_ids:
+            return {}
+        placeholders = ",".join("?" for _ in job_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM personalized_job_dispositions WHERE user_id = ? AND canonical_job_id IN ({placeholders})",
+                (str(user_id), *job_ids),
+            ).fetchall()
+        return {str(row["canonical_job_id"]): _row_payload(row) for row in rows}
+
     def set_disposition(
         self,
         user_id: str,
@@ -283,6 +296,33 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             "updated_at": str(row["updated_at"] or ""),
         }
 
+    def list_evaluations_for_jobs(
+        self,
+        user_id: str,
+        canonical_job_ids: Iterable[str],
+        *,
+        preferences_revision: int = 0,
+        evaluator_version: str = "phase_e_v2",
+    ) -> dict[str, dict[str, Any]]:
+        job_ids = tuple(dict.fromkeys(str(item) for item in canonical_job_ids if str(item).strip()))
+        if not job_ids:
+            return {}
+        placeholders = ",".join("?" for _ in job_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM personalized_job_evaluations
+                WHERE user_id = ? AND preferences_revision = ? AND evaluator_version = ?
+                  AND canonical_job_id IN ({placeholders})
+                ORDER BY updated_at DESC
+                """,
+                (str(user_id), int(preferences_revision), str(evaluator_version), *job_ids),
+            ).fetchall()
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            result.setdefault(str(row["canonical_job_id"]), _row_payload(row))
+        return result
+
     def save_evaluation(
         self,
         user_id: str,
@@ -391,6 +431,163 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             )
         return self.get_description_intelligence(version_id, content_hash=content_hash) or {}
 
+    def get_intelligence_cache(self, key: Mapping[str, Any]) -> dict[str, Any] | None:
+        columns = (
+            "user_id", "canonical_job_id", "job_version_id", "profile_version_id",
+            "cv_version_id", "evidence_version_id", "evaluator_version", "input_hash",
+            "intelligence_kind",
+        )
+        where = " AND ".join(f"{column} = ?" for column in columns)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT * FROM job_intelligence_cache WHERE {where} LIMIT 1",
+                tuple(str(key.get(column) or "") for column in columns),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = _decode(row["payload_json"], {})
+        result = _row_payload(row)
+        result["payload"] = payload if isinstance(payload, dict) else {}
+        return result
+
+    def list_intelligence_cache_entries(
+        self,
+        canonical_job_ids: Iterable[str],
+        *,
+        user_id: str = "",
+        intelligence_kind: str = "",
+    ) -> list[dict[str, Any]]:
+        ids = tuple(dict.fromkeys(str(item) for item in canonical_job_ids if str(item).strip()))
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        predicates = [f"canonical_job_id IN ({placeholders})"]
+        params: list[Any] = list(ids)
+        if user_id:
+            predicates.append("user_id = ?")
+            params.append(str(user_id))
+        if intelligence_kind:
+            predicates.append("intelligence_kind = ?")
+            params.append(str(intelligence_kind))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM job_intelligence_cache WHERE " + " AND ".join(predicates) + " ORDER BY updated_at DESC",
+                tuple(params),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = _row_payload(row)
+            item["payload"] = _decode(row["payload_json"], {})
+            result.append(item)
+        return result
+
+    def enqueue_intelligence(self, key: Mapping[str, Any]) -> dict[str, Any]:
+        now = utc_now_iso()
+        columns = (
+            "cache_id", "user_id", "canonical_job_id", "job_version_id", "profile_version_id",
+            "cv_version_id", "evidence_version_id", "evaluator_version", "input_hash", "intelligence_kind",
+        )
+
+        def write(connection):
+            connection.execute(
+                """
+                INSERT INTO job_intelligence_cache (
+                    cache_id, user_id, canonical_job_id, job_version_id, profile_version_id,
+                    cv_version_id, evidence_version_id, evaluator_version, input_hash,
+                    intelligence_kind, state, payload_json, created_at, updated_at, generated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '{}', ?, ?, '')
+                ON CONFLICT(user_id, canonical_job_id, job_version_id, profile_version_id,
+                    cv_version_id, evidence_version_id, evaluator_version, input_hash, intelligence_kind)
+                DO NOTHING
+                """,
+                tuple(str(key.get(column) or "") for column in columns) + (now, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM job_intelligence_cache WHERE cache_id = ?",
+                (str(key.get("cache_id") or ""),),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("intelligence_cache_insert_failed")
+            connection.execute(
+                """
+                INSERT INTO job_intelligence_queue (cache_id, state, attempts, requested_at)
+                VALUES (?, 'queued', 0, ?)
+                ON CONFLICT(cache_id) DO UPDATE SET
+                    state = CASE WHEN job_intelligence_queue.state = 'completed' THEN job_intelligence_queue.state ELSE 'queued' END,
+                    requested_at = CASE WHEN job_intelligence_queue.state = 'completed' THEN job_intelligence_queue.requested_at ELSE excluded.requested_at END,
+                    last_error = CASE WHEN job_intelligence_queue.state = 'completed' THEN job_intelligence_queue.last_error ELSE '' END
+                """,
+                (str(key.get("cache_id") or ""), now),
+            )
+            return _row_payload(row)
+
+        return self._run_transaction(write)
+
+    def claim_next_intelligence(self) -> dict[str, Any] | None:
+        now = utc_now_iso()
+
+        def write(connection):
+            row = connection.execute(
+                """
+                SELECT c.* FROM job_intelligence_cache c
+                JOIN job_intelligence_queue q ON q.cache_id = c.cache_id
+                WHERE q.state = 'queued' AND c.state = 'pending'
+                ORDER BY q.requested_at, q.cache_id LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            cache_id = str(row["cache_id"])
+            connection.execute(
+                "UPDATE job_intelligence_queue SET state='processing', attempts=attempts+1, claimed_at=? WHERE cache_id=? AND state='queued'",
+                (now, cache_id),
+            )
+            connection.execute("UPDATE job_intelligence_cache SET state='processing', updated_at=? WHERE cache_id=?", (now, cache_id))
+            result = _row_payload(row)
+            result["payload"] = _decode(row["payload_json"], {})
+            return result
+
+        return self._run_transaction(write)
+
+    def complete_intelligence(self, cache_id: str, *, state: str, payload: Mapping[str, Any], error: str = "") -> None:
+        now = utc_now_iso()
+        generated_at = now if state == "available" else ""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE job_intelligence_cache SET state=?, payload_json=?, updated_at=?, generated_at=? WHERE cache_id=?",
+                (str(state), _json(dict(payload)), now, generated_at, str(cache_id)),
+            )
+            connection.execute(
+                "UPDATE job_intelligence_queue SET state=?, completed_at=?, last_error=? WHERE cache_id=?",
+                ("completed" if state in {"available", "failed"} else "queued", now if state in {"available", "failed"} else "", str(error or ""), str(cache_id)),
+            )
+
+    def list_cached_descriptions(self, version_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        ids = tuple(dict.fromkeys(str(item) for item in version_ids if str(item).strip()))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM job_description_intelligence WHERE version_id IN ({placeholders})",
+                ids,
+            ).fetchall()
+        return {
+            str(row["version_id"]): {
+                "version_id": str(row["version_id"] or ""),
+                "canonical_job_id": str(row["canonical_job_id"] or ""),
+                "content_hash": str(row["content_hash"] or ""),
+                "summary": _decode(row["summary_json"], {}),
+                "structured_description": _decode(row["structured_json"], {}),
+                "original_posting": _decode(row["original_json"], {}),
+                "provider": str(row["provider"] or ""),
+                "model": str(row["model"] or ""),
+                "prompt_version": str(row["prompt_version"] or ""),
+                "generated_at": str(row["generated_at"] or ""),
+            }
+            for row in rows
+        }
+
     def get_company_profile(self, company_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -460,6 +657,165 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             )
         return self.get_company_profile(company_id) or {"company_id": company_id, "profile": dict(profile)}
 
+    def list_company_enrichment_targets(self, *, now: str, limit: int = 25) -> list[dict[str, Any]]:
+        """Return distinct canonical companies, never one row per job."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT c.company_id, c.canonical_name, c.entity_kind, c.provenance_url,
+                       p.profile_json, p.logo_object_key, p.logo_source_url,
+                       p.logo_content_hash, p.logo_content_type, p.logo_verified_at,
+                       t.status AS enrichment_status, t.attempt_count,
+                       t.last_success_at, t.next_attempt_at, t.last_error
+                FROM canonical_companies c
+                LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
+                LEFT JOIN company_enrichment_targets t ON t.company_id = c.company_id
+                WHERE (t.next_attempt_at IS NULL OR t.next_attempt_at = '' OR t.next_attempt_at <= ?)
+                  AND (t.lease_expires_at IS NULL OR t.lease_expires_at = '' OR t.lease_expires_at <= ?)
+                ORDER BY CASE WHEN t.last_success_at IS NULL OR t.last_success_at = '' THEN 0 ELSE 1 END,
+                         t.last_success_at, c.company_id
+                LIMIT ?
+                """,
+                (str(now), str(now), max(1, int(limit))),
+            ).fetchall()
+        return [_row_payload(row) for row in rows]
+
+    def claim_company_enrichment_target(
+        self,
+        company_id: str,
+        *,
+        cycle_key: str,
+        lease_owner: str,
+        lease_expires_at: str,
+        now: str,
+    ) -> dict[str, Any] | None:
+        """Atomically claim one company and create its cycle-idempotent attempt."""
+        company_id = str(company_id or "").strip()
+        cycle_key = str(cycle_key or "").strip()
+        if not company_id or not cycle_key:
+            raise ValueError("company_id and cycle_key are required")
+        attempt_id = f"company_enrichment_{uuid4().hex}"
+        idempotency_key = f"company:{company_id}:cycle:{cycle_key}"
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO company_enrichment_targets (
+                    company_id, status, updated_at
+                ) VALUES (?, 'pending', ?)
+                ON CONFLICT(company_id) DO NOTHING
+                """,
+                (company_id, str(now)),
+            )
+            existing = connection.execute(
+                "SELECT * FROM company_enrichment_attempts WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                return None
+            claimed = connection.execute(
+                """
+                UPDATE company_enrichment_targets
+                SET status='running', lease_owner=?, lease_expires_at=?,
+                    attempt_count=attempt_count+1, last_attempt_at=?,
+                    last_error='', updated_at=?
+                WHERE company_id=?
+                  AND (lease_expires_at='' OR lease_expires_at IS NULL OR lease_expires_at <= ?)
+                """,
+                (str(lease_owner), str(lease_expires_at), str(now), str(now), company_id, str(now)),
+            )
+            if claimed.rowcount != 1:
+                return None
+            connection.execute(
+                """
+                INSERT INTO company_enrichment_attempts (
+                    attempt_id, company_id, cycle_key, idempotency_key, status, started_at
+                ) VALUES (?, ?, ?, ?, 'running', ?)
+                """,
+                (attempt_id, company_id, cycle_key, idempotency_key, str(now)),
+            )
+            row = connection.execute(
+                """
+                SELECT c.company_id, c.canonical_name, c.entity_kind, c.provenance_url,
+                       p.profile_json, p.logo_object_key, p.logo_source_url,
+                       p.logo_content_hash, p.logo_content_type, p.logo_verified_at,
+                       ? AS attempt_id, ? AS cycle_key
+                FROM canonical_companies c
+                LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
+                WHERE c.company_id=?
+                """,
+                (attempt_id, cycle_key, company_id),
+            ).fetchone()
+        return _row_payload(row) if row is not None else None
+
+    def finish_company_enrichment_attempt(
+        self,
+        attempt_id: str,
+        *,
+        status: str,
+        request_count: int,
+        cost_units: float,
+        fields_available: int,
+        fields_written: int,
+        logo_cached: bool,
+        yield_payload: Mapping[str, Any] | None = None,
+        error_code: str = "",
+        error_message: str = "",
+        next_attempt_at: str = "",
+        now: str,
+    ) -> dict[str, Any]:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE company_enrichment_attempts
+                SET status=?, request_count=?, cost_units=?, fields_available=?, fields_written=?,
+                    logo_cached=?, yield_json=?, error_code=?, error_message=?, finished_at=?
+                WHERE attempt_id=?
+                """,
+                (
+                    str(status), max(0, int(request_count)), max(0.0, float(cost_units)),
+                    max(0, int(fields_available)), max(0, int(fields_written)), int(bool(logo_cached)),
+                    _json(dict(yield_payload or {})), str(error_code or ""), str(error_message or "")[:1000],
+                    str(now), str(attempt_id),
+                ),
+            )
+            attempt = connection.execute(
+                "SELECT company_id FROM company_enrichment_attempts WHERE attempt_id=?",
+                (str(attempt_id),),
+            ).fetchone()
+            if attempt is None:
+                raise KeyError(f"Company enrichment attempt '{attempt_id}' not found.")
+            connection.execute(
+                """
+                UPDATE company_enrichment_targets
+                SET status=?, lease_owner='', lease_expires_at='',
+                    last_success_at=CASE WHEN ?='succeeded' THEN ? ELSE last_success_at END,
+                    next_attempt_at=?, last_error=?, updated_at=?
+                WHERE company_id=?
+                """,
+                (
+                    "ready" if str(status) == "succeeded" else "failed",
+                    str(status), str(now), str(next_attempt_at or ""),
+                    str(error_message or "")[:1000], str(now), str(attempt["company_id"]),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM company_enrichment_attempts WHERE attempt_id=?",
+                (str(attempt_id),),
+            ).fetchone()
+        return _row_payload(row) if row is not None else {}
+
+    def list_company_enrichment_attempts(self, *, company_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM company_enrichment_attempts"
+        params: list[Any] = []
+        if str(company_id or "").strip():
+            sql += " WHERE company_id=?"
+            params.append(str(company_id).strip())
+        sql += " ORDER BY started_at DESC, attempt_id DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        with self._connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        return [_row_payload(row) for row in rows]
+
     def list_published_job_rows(self) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
         with self._connect() as connection:
             publication = connection.execute(
@@ -475,6 +831,237 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 return None, []
             rows = connection.execute(self._published_jobs_sql(), (str(publication["publication_id"]),)).fetchall()
         return _row_payload(publication), [_row_payload(row) for row in rows]
+
+    def get_current_publication(self) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT p.publication_id, p.cycle_id, p.status, p.published_at, p.valid_until
+                FROM acquisition_publications p
+                JOIN acquisition_publication_head h ON h.publication_id = p.publication_id
+                WHERE h.head_id = 1 AND p.status = 'valid' LIMIT 1
+                """
+            ).fetchone()
+        return _row_payload(row) if row is not None else None
+
+    @staticmethod
+    def _feed_filter_sql(filters: Mapping[str, Any] | None) -> tuple[list[str], list[Any]]:
+        filters = dict(filters or {})
+        predicates: list[str] = []
+        params: list[Any] = []
+        text_expr = "LOWER(COALESCE(catalog.title, '') || ' ' || COALESCE(catalog.company, '') || ' ' || COALESCE(catalog.location, '') || ' ' || COALESCE(catalog.version_location, '') || ' ' || COALESCE(catalog.description, '') || ' ' || COALESCE(catalog.version_payload_json, ''))"
+        for term in filters.get("search_text") or []:
+            predicates.append(f"{text_expr} LIKE ?")
+            params.append(f"%{str(term).casefold()}%")
+
+        field_exprs = {
+            "role": ["catalog.title", "json_extract(catalog.version_payload_json, '$.role')", "json_extract(catalog.version_payload_json, '$.roles')", "json_extract(catalog.version_payload_json, '$.role_category')", "json_extract(catalog.version_payload_json, '$.job_category')", "json_extract(catalog.version_payload_json, '$.function')"],
+            "category": ["json_extract(catalog.version_payload_json, '$.category')", "json_extract(catalog.version_payload_json, '$.categories')", "json_extract(catalog.version_payload_json, '$.job_category')", "json_extract(catalog.version_payload_json, '$.role_category')", "json_extract(catalog.version_payload_json, '$.function')"],
+            "location": ["catalog.location", "catalog.version_location", "json_extract(catalog.version_payload_json, '$.location')"],
+            "work_arrangement": ["json_extract(catalog.version_payload_json, '$.work_arrangement')", "json_extract(catalog.version_payload_json, '$.workplace')", "json_extract(catalog.version_payload_json, '$.workplace_type')", "json_extract(catalog.version_payload_json, '$.remote_type')"],
+            "employment_type": ["json_extract(catalog.version_payload_json, '$.employment_type')", "json_extract(catalog.version_payload_json, '$.job_type')", "json_extract(catalog.version_payload_json, '$.type')"],
+            "experience_level": ["json_extract(catalog.version_payload_json, '$.experience_level')", "json_extract(catalog.version_payload_json, '$.seniority')", "json_extract(catalog.version_payload_json, '$.level')"],
+            "language": ["json_extract(catalog.version_payload_json, '$.languages')", "json_extract(catalog.version_payload_json, '$.language_requirements')", "json_extract(catalog.version_payload_json, '$.required_languages')"],
+            "work_authorization": ["json_extract(catalog.version_payload_json, '$.work_authorization')", "json_extract(catalog.version_payload_json, '$.authorization')", "json_extract(catalog.version_payload_json, '$.work_permit')"],
+            "sponsorship": ["json_extract(catalog.version_payload_json, '$.sponsorship')", "json_extract(catalog.version_payload_json, '$.visa_sponsorship')", "json_extract(catalog.version_payload_json, '$.sponsors_h1b')"],
+            "company_stage": ["json_extract(catalog.version_payload_json, '$.company_stage')"],
+            "education": ["json_extract(catalog.version_payload_json, '$.education')", "json_extract(catalog.version_payload_json, '$.education_level')", "json_extract(catalog.version_payload_json, '$.degree')", "json_extract(catalog.version_payload_json, '$.required_education')"],
+            "preferred_major": ["json_extract(catalog.version_payload_json, '$.preferred_major')", "json_extract(catalog.version_payload_json, '$.preferred_majors')", "json_extract(catalog.version_payload_json, '$.major')", "json_extract(catalog.version_payload_json, '$.majors')"],
+            "security_clearance": ["json_extract(catalog.version_payload_json, '$.security_clearance')", "json_extract(catalog.version_payload_json, '$.clearance')"],
+            "lifting_requirement": ["json_extract(catalog.version_payload_json, '$.lifting_requirement')", "json_extract(catalog.version_payload_json, '$.physical_requirement')", "json_extract(catalog.version_payload_json, '$.lifting')"],
+            "industry": ["json_extract(catalog.company_profile_json, '$.fields.industry.value')", "json_extract(catalog.version_payload_json, '$.industry')", "json_extract(catalog.version_payload_json, '$.company_industry')"],
+            "company_size": ["json_extract(catalog.company_profile_json, '$.fields.company_size.value')", "json_extract(catalog.version_payload_json, '$.company_size')", "json_extract(catalog.version_payload_json, '$.size')"],
+            "funding_stage": ["json_extract(catalog.company_profile_json, '$.fields.funding_stage.value')", "json_extract(catalog.version_payload_json, '$.funding_stage')"],
+        }
+        for field, requested in filters.items():
+            values = [str(item).strip().casefold() for item in (requested if isinstance(requested, (list, tuple, set)) else [requested]) if str(item).strip()]
+            if not values or field in {"include_hidden", "use_saved_search", "hidden_companies", "sort", "search_text"}:
+                continue
+            if field == "company":
+                predicates.append("LOWER(catalog.company) IN (" + ",".join("?" for _ in values) + ")")
+                params.extend(values)
+            elif field in field_exprs:
+                expressions = [f"LOWER(COALESCE({expr}, ''))" for expr in field_exprs[field]]
+                predicates.append("(" + " OR ".join(" OR ".join(f"{expr} LIKE ?" for expr in expressions) for _ in values) + ")")
+                params.extend(f"%{value.replace('-', ' ')}%" for value in values for _ in expressions)
+            elif field in {"salary_min", "salary_max"}:
+                path = "$.salary.max" if field == "salary_min" else "$.salary.min"
+                operator = ">=" if field == "salary_min" else "<="
+                predicates.append(f"CAST(json_extract(catalog.version_payload_json, '{path}') AS REAL) {operator} ?")
+                params.append(float(values[0]))
+            elif field in {"funding_min", "funding_max"}:
+                operator = ">=" if field == "funding_min" else "<="
+                predicates.append(f"CAST(json_extract(catalog.company_profile_json, '$.fields.total_funding.value') AS REAL) {operator} ?")
+                params.append(float(values[0]))
+            elif field in {"founded_year_min", "founded_year_max", "funding_year_min", "funding_year_max"}:
+                source = "founded_year" if field.startswith("founded") else "funding_year"
+                path = "$.fields.founded_year.value" if source == "founded_year" else "$.fields.funding_year.value"
+                operator = ">=" if field.endswith("_min") else "<="
+                predicates.append(f"CAST(json_extract(catalog.company_profile_json, '{path}') AS INTEGER) {operator} ?")
+                params.append(int(float(values[0])))
+            elif field == "posted_within_days":
+                cutoff = datetime.now(timezone.utc) - timedelta(days=int(float(values[0])))
+                predicates.append("COALESCE(json_extract(catalog.version_payload_json, '$.posted_at'), json_extract(catalog.version_payload_json, '$.published_at'), json_extract(catalog.version_payload_json, '$.date_posted')) >= ?")
+                params.append(cutoff.isoformat())
+        for company in filters.get("hidden_companies") or []:
+            predicates.append("LOWER(catalog.company) NOT LIKE ?")
+            params.append(f"%{str(company).casefold()}%")
+        return predicates, params
+
+    def _feed_scope_sql(self) -> str:
+        return f"""
+            SELECT catalog.*, COALESCE(d.state, 'none') AS user_state,
+                   COALESCE(d.updated_at, '') AS user_state_updated_at
+            FROM ({self._published_jobs_sql()}) AS catalog
+            LEFT JOIN personalized_job_dispositions d
+              ON d.canonical_job_id = catalog.canonical_job_id AND d.user_id = ?
+        """
+
+    @staticmethod
+    def _priority_sql() -> str:
+        return "COALESCE(CAST(json_extract(page.evaluation_payload, '$.match_intelligence.v2.score') AS REAL), CAST(json_extract(page.evaluation_payload, '$.match_intelligence.score') AS REAL), 0.0)"
+
+    def query_published_jobs(
+        self,
+        user_id: str,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        limit: int = 25,
+        cursor: Mapping[str, Any] | None = None,
+        include_hidden: bool = False,
+        hidden_only: bool = False,
+    ) -> dict[str, Any]:
+        limit = max(1, min(100, int(limit)))
+        with self._connect() as connection:
+            publication = connection.execute(
+                """
+                SELECT p.publication_id, p.cycle_id, p.status, p.published_at, p.valid_until
+                FROM acquisition_publications p
+                JOIN acquisition_publication_head h ON h.publication_id = p.publication_id
+                WHERE h.head_id = 1 AND p.status = 'valid' LIMIT 1
+                """
+            ).fetchone()
+            if publication is None:
+                return {"publication": None, "rows": [], "total": 0}
+            publication_payload = _row_payload(publication)
+            predicates, filter_params = self._feed_filter_sql(filters)
+            # Filters are applied to the outer ``page`` alias.  Keep the
+            # catalog-qualified expressions for the scoped subquery builder,
+            # then bind them to the visible query alias here.
+            predicates = [predicate.replace("catalog.", "page.") for predicate in predicates]
+            if hidden_only:
+                predicates.append("page.user_state = 'hidden'")
+            elif not include_hidden:
+                predicates.append("page.user_state != 'hidden'")
+            sort_mode = str((filters or {}).get("sort") or "newest").casefold()
+            if sort_mode not in {"newest", "priority", "best"}:
+                sort_mode = "newest"
+            sort_expr = "COALESCE(NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''), '')"
+            page_source = f"""
+                SELECT scoped.*,
+                       (SELECT e.payload_json FROM personalized_job_evaluations e
+                        WHERE e.user_id = ? AND e.canonical_job_id = scoped.canonical_job_id
+                          AND e.job_version_id = scoped.current_version_id
+                          AND e.evaluator_version = 'phase_e_v2'
+                        ORDER BY e.updated_at DESC LIMIT 1) AS evaluation_payload
+                FROM ({self._feed_scope_sql()}) AS scoped
+            """
+            if sort_mode in {"priority", "best"}:
+                source = f"SELECT page.*, {self._priority_sql()} AS priority_score FROM ({page_source}) AS page"
+                order_sql = "priority_score DESC, " + sort_expr + " DESC, page.canonical_job_id DESC"
+            else:
+                source = f"SELECT page.*, 0.0 AS priority_score FROM ({page_source}) AS page"
+                order_sql = sort_expr + " DESC, page.canonical_job_id DESC"
+            predicates = [f"({item})" for item in predicates]
+            count_where_sql = " AND ".join(predicates) if predicates else "1=1"
+            count_filter_params = list(filter_params)
+            if cursor:
+                if sort_mode in {"priority", "best"}:
+                    predicates.append("(page.priority_score < ? OR (page.priority_score = ? AND page.canonical_job_id < ?))")
+                    filter_params.extend([float(cursor.get("priority") or 0), float(cursor.get("priority") or 0), str(cursor.get("canonical_job_id") or "")])
+                else:
+                    predicates.append(f"({sort_expr} < ? OR ({sort_expr} = ? AND page.canonical_job_id < ?))")
+                    filter_params.extend([str(cursor.get("sort") or ""), str(cursor.get("sort") or ""), str(cursor.get("canonical_job_id") or "")])
+            where_sql = " AND ".join(predicates) if predicates else "1=1"
+            count_sql = f"SELECT COUNT(*) AS total FROM ({source}) AS page WHERE {count_where_sql}"
+            count_params = [str(user_id), str(publication["publication_id"]), str(user_id), *count_filter_params]
+            total = int(connection.execute(count_sql, tuple(count_params)).fetchone()["total"] or 0)
+            rows_sql = f"SELECT page.* FROM ({source}) AS page WHERE {where_sql} ORDER BY {order_sql} LIMIT ?"
+            rows_params = [str(user_id), str(publication["publication_id"]), str(user_id), *filter_params, limit + 1]
+            rows = connection.execute(rows_sql, tuple(rows_params)).fetchall()
+        return {
+            "publication": publication_payload,
+            "rows": [_row_payload(row) for row in rows],
+            "total": total,
+            "sort_mode": sort_mode,
+        }
+
+    def list_hidden_published_jobs(self, user_id: str, *, limit: int = 25, cursor: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return self.query_published_jobs(user_id, limit=limit, cursor=cursor, hidden_only=True, include_hidden=True)
+
+    def get_published_company_page(self, company_id: str, user_id: str, *, limit: int = 25) -> dict[str, Any]:
+        limit = max(1, min(50, int(limit)))
+        with self._connect() as connection:
+            publication_id = self._head_publication_id(connection)
+            if not publication_id:
+                return {"company": None, "rows": [], "total": 0}
+            company = connection.execute(
+                """
+                SELECT c.*, p.profile_json AS company_profile_json,
+                       p.logo_object_key, p.logo_source_url, p.logo_content_hash,
+                       p.logo_content_type, p.logo_verified_at, p.updated_at AS profile_updated_at
+                FROM canonical_companies c
+                LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
+                WHERE c.company_id = ?
+                """,
+                (str(company_id),),
+            ).fetchone()
+            if company is None:
+                return {"company": None, "rows": [], "total": 0}
+            base = self._published_jobs_sql()
+            scope = f"""
+                SELECT catalog.*, COALESCE(d.state, 'none') AS user_state
+                FROM ({base}) AS catalog
+                LEFT JOIN personalized_job_dispositions d
+                  ON d.canonical_job_id = catalog.canonical_job_id AND d.user_id = ?
+                WHERE catalog.company_id = ? AND COALESCE(d.state, 'none') != 'hidden'
+            """
+            total = int(connection.execute(f"SELECT COUNT(*) AS total FROM ({scope})", (publication_id, user_id, company_id)).fetchone()["total"] or 0)
+            rows = connection.execute(
+                f"SELECT * FROM ({scope}) ORDER BY title, canonical_job_id LIMIT ?",
+                (publication_id, user_id, company_id, limit + 1),
+            ).fetchall()
+        return {"company": _row_payload(company), "rows": [_row_payload(row) for row in rows], "total": total}
+
+    def get_published_filter_capabilities(self) -> dict[str, bool]:
+        capability_exprs = {
+            "salary": "json_extract(catalog.version_payload_json, '$.salary') IS NOT NULL",
+            "language": "json_extract(catalog.version_payload_json, '$.languages') IS NOT NULL OR json_extract(catalog.version_payload_json, '$.language_requirements') IS NOT NULL",
+            "work_authorization": "json_extract(catalog.version_payload_json, '$.work_authorization') IS NOT NULL",
+            "sponsorship": "json_extract(catalog.version_payload_json, '$.sponsorship') IS NOT NULL",
+            "industry": "json_extract(catalog.company_profile_json, '$.fields.industry.value') IS NOT NULL OR json_extract(catalog.version_payload_json, '$.industry') IS NOT NULL",
+            "company_size": "json_extract(catalog.company_profile_json, '$.fields.company_size.value') IS NOT NULL OR json_extract(catalog.version_payload_json, '$.company_size') IS NOT NULL",
+            "company_stage": "json_extract(catalog.version_payload_json, '$.company_stage') IS NOT NULL",
+            "funding_stage": "json_extract(catalog.company_profile_json, '$.fields.funding_stage.value') IS NOT NULL OR json_extract(catalog.version_payload_json, '$.funding_stage') IS NOT NULL",
+            "funding_range": "json_extract(catalog.company_profile_json, '$.fields.total_funding.value') IS NOT NULL",
+            "founded_year": "json_extract(catalog.company_profile_json, '$.fields.founded_year.value') IS NOT NULL",
+            "funding_year": "json_extract(catalog.company_profile_json, '$.fields.funding_year.value') IS NOT NULL",
+            "education": "json_extract(catalog.version_payload_json, '$.education') IS NOT NULL",
+            "preferred_major": "json_extract(catalog.version_payload_json, '$.preferred_major') IS NOT NULL",
+            "security_clearance": "json_extract(catalog.version_payload_json, '$.security_clearance') IS NOT NULL",
+            "lifting_requirement": "json_extract(catalog.version_payload_json, '$.lifting_requirement') IS NOT NULL",
+            "posting_recency": "COALESCE(catalog.last_verified_at, '') != ''",
+            "hidden_companies": "COALESCE(catalog.company, '') != ''",
+        }
+        with self._connect() as connection:
+            publication_id = self._head_publication_id(connection)
+            if not publication_id:
+                return {key: False for key in capability_exprs}
+            result = connection.execute(
+                "SELECT " + ", ".join(f"MAX(CASE WHEN {expr} THEN 1 ELSE 0 END) AS {key}" for key, expr in capability_exprs.items()) + f" FROM ({self._published_jobs_sql()}) AS catalog",
+                (publication_id,),
+            ).fetchone()
+        return {key: bool(int(result[key] or 0)) for key in capability_exprs}
 
     def get_published_job_row(self, canonical_job_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:

@@ -10,7 +10,6 @@ from backend.repositories.document_payloads import (
     prepare_user_payload,
     prepare_workspace_payload,
 )
-
 if TYPE_CHECKING:
     from backend.database.connection import DatabaseConnection
 
@@ -1749,6 +1748,51 @@ def _apply_phase_f_company_profiles_migration(connection: DatabaseConnection) ->
     )
 
 
+def _apply_phase_f_company_enrichment_migration(connection: DatabaseConnection) -> None:
+    """Track bounded company-target enrichment work independently of jobs."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS company_enrichment_targets (
+            company_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'pending',
+            lease_owner TEXT NOT NULL DEFAULT '',
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at TEXT NOT NULL DEFAULT '',
+            last_success_at TEXT NOT NULL DEFAULT '',
+            next_attempt_at TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_enrichment_targets_due
+            ON company_enrichment_targets(next_attempt_at, last_success_at, company_id);
+
+        CREATE TABLE IF NOT EXISTS company_enrichment_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            company_id TEXT NOT NULL,
+            cycle_key TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            cost_units REAL NOT NULL DEFAULT 0,
+            fields_available INTEGER NOT NULL DEFAULT 0,
+            fields_written INTEGER NOT NULL DEFAULT 0,
+            logo_cached INTEGER NOT NULL DEFAULT 0,
+            yield_json TEXT NOT NULL DEFAULT '{}',
+            error_code TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL DEFAULT '',
+            UNIQUE(company_id, cycle_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_enrichment_attempts_company
+            ON company_enrichment_attempts(company_id, started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_company_enrichment_attempts_cycle
+            ON company_enrichment_attempts(cycle_key, status);
+        """
+    )
+
+
 def _apply_phase_g_applicant_competition_migration(connection: DatabaseConnection) -> None:
     """Store source-backed applicant observations without changing catalog visibility."""
     connection.executescript(
@@ -1777,6 +1821,49 @@ def _apply_phase_g_applicant_competition_migration(connection: DatabaseConnectio
             ON job_applicant_snapshots(canonical_job_id, observed_at DESC, snapshot_id DESC);
         CREATE INDEX IF NOT EXISTS idx_job_applicant_snapshots_source_observation
             ON job_applicant_snapshots(source_observation_id);
+        """
+    )
+
+
+def _apply_phase_e_async_intelligence_migration(connection: DatabaseConnection) -> None:
+    """Store immutable intelligence keys and work awaiting a worker."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS job_intelligence_cache (
+            cache_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL DEFAULT '',
+            canonical_job_id TEXT NOT NULL,
+            job_version_id TEXT NOT NULL,
+            profile_version_id TEXT NOT NULL DEFAULT '',
+            cv_version_id TEXT NOT NULL DEFAULT '',
+            evidence_version_id TEXT NOT NULL DEFAULT '',
+            evaluator_version TEXT NOT NULL,
+            input_hash TEXT NOT NULL,
+            intelligence_kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            generated_at TEXT NOT NULL DEFAULT '',
+            UNIQUE (
+                user_id, canonical_job_id, job_version_id, profile_version_id,
+                cv_version_id, evidence_version_id, evaluator_version, input_hash,
+                intelligence_kind
+            )
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_intelligence_cache_lookup
+            ON job_intelligence_cache(user_id, canonical_job_id, intelligence_kind, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS job_intelligence_queue (
+            cache_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            requested_at TEXT NOT NULL,
+            claimed_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_intelligence_queue_state
+            ON job_intelligence_queue(state, requested_at, cache_id);
         """
     )
 
@@ -1983,8 +2070,22 @@ MIGRATIONS = (
         _apply_phase_g_applicant_competition_migration,
     ),
     Migration.from_callable(
+        "038_phase_e_async_intelligence",
+        "Add immutable intelligence cache keys and asynchronous precompute work.",
+        _apply_phase_e_async_intelligence_migration,
+    ),
+    Migration.from_callable(
         "039_phase_b_catalog_correctness",
         "Add source-scoped catalog identity, lifecycle, replay, and immutable-version contracts.",
         _apply_phase_b_catalog_correctness_migration,
         dependencies=(_table_columns, _ensure_table_column),
-    ),)
+    ),
+    ),
+    Migration.from_callable(
+        "040_phase_f_company_enrichment",
+        "Track bounded, idempotent company-target enrichment attempts and yield.",
+        _apply_phase_f_company_enrichment_migration,
+    ),
+)
+
+

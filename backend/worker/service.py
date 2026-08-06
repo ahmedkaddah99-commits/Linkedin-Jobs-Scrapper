@@ -53,6 +53,7 @@ class WorkerService:
     lease_seconds: int = 60
     poll_interval_seconds: float = 5.0
     scheduled_run_check_interval_seconds: float = 60.0
+    company_enrichment_check_interval_seconds: float = 300.0
     slow_task_warning_seconds: float = 300.0
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("backend.worker.service"))
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
@@ -199,6 +200,18 @@ class WorkerService:
                 ),
             )
 
+        # Personalized job intelligence has its own durable queue.  It is
+        # deliberately processed before run claims so GET requests can only
+        # enqueue pending work and never execute a model inline.
+        if isinstance(self.application, BackendApplication):
+            intelligence_result = self.application.process_next_personalized_intelligence()
+            if intelligence_result is not None:
+                self.logger.info(
+                    "worker_intelligence_task_complete",
+                    extra=self._log_extra(task_name="personalized_job_intelligence", cache_id=intelligence_result.get("cache_id")),
+                )
+                return intelligence_result
+
         try:
             claimed_run = self.application.claim_next_queued_run(
                 worker_id=self.worker_id,
@@ -297,6 +310,7 @@ class WorkerService:
         processed = 0
         last_maintenance_check = 0.0
         last_scheduled_run_check: float | None = None
+        last_company_enrichment_check: float | None = None
         loop_started_at = time.perf_counter()
         self.logger.info(
             "worker_loop_start",
@@ -379,6 +393,30 @@ class WorkerService:
                             )
                         else:
                             self._log_acquisition_result(acquisition_result)
+                should_check_company_enrichment = (
+                    last_company_enrichment_check is None
+                    or now - last_company_enrichment_check
+                    >= max(1.0, float(self.company_enrichment_check_interval_seconds))
+                )
+                if should_check_company_enrichment and isinstance(self.application, BackendApplication):
+                    last_company_enrichment_check = now
+                    try:
+                        enrichment_result = self.application.run_due_company_enrichment()
+                    except BaseException as exc:
+                        if not _is_handled_worker_failure(exc):
+                            raise
+                        self.logger.exception(
+                            "worker_company_enrichment_failed",
+                            extra=self._log_extra(task_name="scheduled_company_enrichment"),
+                        )
+                    else:
+                        self.logger.info(
+                            "worker_company_enrichment_complete",
+                            extra=self._log_extra(
+                                task_name="scheduled_company_enrichment",
+                                **{key: value for key, value in (enrichment_result or {}).items() if key != "cycle_key"},
+                            ),
+                        )
                 try:
                     run = self.process_next(
                         auto_retry_failed=auto_retry_failed,

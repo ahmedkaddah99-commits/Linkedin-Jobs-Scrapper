@@ -13,6 +13,7 @@ posting text, and is used when an AI provider is not configured or fails.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -25,6 +26,7 @@ SUMMARY_PROMPT_VERSION = "phase_e_summary_v1"
 MATCH_V1_VERSION = "phase_e_v1"
 MATCH_V2_VERSION = "phase_e_v2"
 MATCH_EVALUATOR_NAME = "runr_match_intelligence"
+INTELLIGENCE_CACHE_VERSION = "phase_e_cache_v1"
 
 _BULLET_RE = re.compile(r"^(?:[-*•‣▪◦]|\d+[.)])\s+")
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9+#./-]*", re.IGNORECASE)
@@ -352,6 +354,26 @@ def build_description_intelligence(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_preserved_original_posting(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the employer payload without generating or rewriting any text."""
+    payload = _payload(row)
+    raw_description = row.get("description")
+    if raw_description in (None, ""):
+        raw_description = payload.get("description")
+    return {
+        "version_id": _text(row.get("current_version_id")),
+        "version_number": int(row.get("version_number") or 0) or None,
+        "content_hash": _text(row.get("content_hash")),
+        "title": _first_nonempty(row.get("title"), payload.get("title")),
+        "location": _first_nonempty(row.get("version_location"), row.get("location"), payload.get("location")),
+        "description": str(raw_description) if raw_description is not None else "",
+        "canonical_url": _text(row.get("canonical_url")) or None,
+        "apply_url": _text(row.get("apply_url")) or None,
+        "observed_at": _text(row.get("observation_observed_at")) or None,
+        "preserved": True,
+    }
+
+
 def _tokens(value: Any) -> set[str]:
     result: set[str] = set()
     for token in _TOKEN_RE.findall(_text(value).casefold().replace("&", " and ")):
@@ -463,15 +485,75 @@ def _profile_context(user_id: str, preferences_record: Mapping[str, Any] | None,
     profile_version_id = _text(metadata.get("profile_version_id")) or (
         f"{profile_id or 'profile'}:{_text(profile_payload.get('updated_at')) or 'unknown'}:r{version_revision}"
     )
+    evidence_payload = [
+        {key: item.get(key) for key in ("id", "text", "status", "source")}
+        for item in evidence
+    ]
+    evidence_version_id = _text(metadata.get("evidence_version_id")) or hashlib.sha256(
+        json.dumps(evidence_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+    cv_version_id = _text(metadata.get("cv_version_id") or metadata.get("cv_hash") or metadata.get("source_cv_hash")) or profile_version_id
     return {
         "profile_id": profile_id or "unconfigured",
         "revision": version_revision,
         "version_id": profile_version_id,
+        "cv_version_id": cv_version_id,
+        "evidence_version_id": evidence_version_id,
         "updated_at": _text(profile_payload.get("updated_at")),
         "text": re.sub(r"\s+", " ", " ".join(text_parts)).strip(),
         "evidence": evidence,
         "preferences": preferences,
     }
+
+
+def _cache_hash(payload: Mapping[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def build_intelligence_cache_key(
+    row: Mapping[str, Any],
+    *,
+    intelligence_kind: str,
+    user_id: str = "",
+    profile: Mapping[str, Any] | None = None,
+    evaluator_version: str,
+    description: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Build the complete immutable cache identity used by reads and workers."""
+    profile = profile or {}
+    job_version_id = _text(row.get("current_version_id"))
+    base = {
+        "cache_version": INTELLIGENCE_CACHE_VERSION,
+        "user_id": _text(user_id) if intelligence_kind == "match" else "",
+        "canonical_job_id": _text(row.get("canonical_job_id")),
+        "job_version_id": job_version_id,
+        "profile_version_id": _text(profile.get("version_id")) if intelligence_kind == "match" else "",
+        "cv_version_id": _text(profile.get("cv_version_id")) if intelligence_kind == "match" else "",
+        "evidence_version_id": _text(profile.get("evidence_version_id")) if intelligence_kind == "match" else "",
+        "evaluator_version": _text(evaluator_version),
+        "intelligence_kind": _text(intelligence_kind),
+    }
+    input_payload = {
+        **base,
+        "content_hash": _text(row.get("content_hash")),
+        "title": _text(row.get("title")),
+        "description": _text(row.get("description")),
+        "profile_text": _text(profile.get("text")),
+        "profile_evidence": profile.get("evidence") or [],
+        "preferences": profile.get("preferences") or {},
+        # Match identity must not change when a pending summary becomes
+        # available.  The immutable posting version and summary evaluator
+        # version are the relevant description inputs; generated payload
+        # state is not.
+        "description_intelligence": (
+            {"prompt_version": _text((description or {}).get("prompt_version"))}
+            if intelligence_kind == "match"
+            else (description or {})
+        ),
+    }
+    base["input_hash"] = _cache_hash(input_payload)
+    base["cache_id"] = _cache_hash(base)
+    return base
 
 
 def _requirement_result(requirement: Mapping[str, str], *, profile: Mapping[str, Any], version: str) -> tuple[bool, float, dict[str, Any] | None, str | None]:
@@ -628,6 +710,8 @@ __all__ = [
     "MATCH_V2_VERSION",
     "SUMMARY_PROMPT_VERSION",
     "build_description_intelligence",
+    "build_preserved_original_posting",
     "build_match_intelligence",
+    "build_intelligence_cache_key",
     "_profile_context",
 ]

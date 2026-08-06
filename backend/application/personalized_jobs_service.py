@@ -6,25 +6,34 @@ import json
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from backend.application.personalized_jobs_intelligence import (
     MATCH_V1_VERSION,
     MATCH_V2_VERSION,
+    SUMMARY_PROMPT_VERSION,
     _profile_context,
     build_description_intelligence,
+    build_intelligence_cache_key,
     build_match_intelligence,
+    build_preserved_original_posting,
 )
-from backend.acquisition.phase_g import build_applicant_competition, build_priority
 from backend.config.plans import DEFAULT_PLAN_ID, normalize_plan_id
 from backend.domain.personalized_jobs_contracts import CandidateSearchPreferences
 from backend.domain.models import utc_now_iso
 from backend.repositories.contracts import BackendRepositories
 from backend.application.production_rollout import catalog_user_access
+from backend.application.company_logo import cache_logo, deterministic_monogram, validate_logo
 
 
 EVALUATOR_VERSION = MATCH_V2_VERSION
-EVALUATION_STATES = {"loading", "available", "stale", "partial", "unavailable"}
+EVALUATION_STATES = {"loading", "pending", "available", "stale", "partial", "unavailable"}
 _MISSING = object()
+_PUBLIC_INTERNAL_KEYS = {
+    "source_ats", "source_observation_id", "observation_url", "original_url",
+    "provenance_url", "provenance", "internal_provenance", "source_identifier",
+    "workspace_id", "run_id", "target_id", "cycle_id", "task_id",
+}
 
 
 def _text(value: Any) -> str:
@@ -71,6 +80,48 @@ def _parse_json(value: Any) -> dict[str, Any]:
             return {}
         return dict(decoded) if isinstance(decoded, Mapping) else {}
     return {}
+
+
+def _public_clean(value: Any) -> Any:
+    """Remove catalog provenance and source identifiers from public payloads."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): _public_clean(item)
+            for key, item in value.items()
+            if str(key).casefold() not in _PUBLIC_INTERNAL_KEYS
+        }
+    if isinstance(value, list):
+        return [_public_clean(item) for item in value]
+    if isinstance(value, tuple):
+        return [_public_clean(item) for item in value]
+    return value
+
+
+def _pending_description() -> dict[str, Any]:
+    return _public_clean({
+        "state": "pending",
+        "summary": {},
+        "structured_description": {},
+        "original_posting": {},
+        "provider": None,
+        "model": None,
+        "prompt_version": None,
+    })
+    return projection
+
+
+def _pending_match() -> dict[str, Any]:
+    return {"state": "pending", "score": None, "v1": {"state": "pending"}, "v2": {"state": "pending"}}
+
+
+def _approved_apply_url(row: Mapping[str, Any]) -> str | None:
+    value = _text(row.get("apply_url"))
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    if value == _text(row.get("observation_url")):
+        return None
+    return value
 
 
 def _alias(payload: Mapping[str, Any], *names: str) -> Any:
@@ -348,6 +399,7 @@ _COMPANY_FIELD_ALIASES = {
     "company_size": ("company_size", "size", "employees"),
     "headquarters": ("headquarters", "company_headquarters", "hq"),
     "founded_year": ("founded_year", "company_founded_year", "founded"),
+    "company_stage": ("company_stage", "stage", "company_lifecycle_stage"),
     "funding_stage": ("funding_stage", "company_funding_stage"),
     "total_funding": ("total_funding", "total_funding_amount", "funding"),
     "funding_year": ("funding_year", "last_funding_year"),
@@ -385,7 +437,7 @@ def _company_profile_fields(row: Mapping[str, Any]) -> dict[str, dict[str, Any]]
         else:
             record = {}
         value = record.get("value")
-        if value in (None, "", []) and field == "logo":
+        if value in (None, "", []) and field == "logo" and _text(row.get("company_logo_object_key")):
             value = _text(row.get("company_logo_source_url")) or None
         if value in (None, "", []):
             value = _alias(company_payload, *aliases) or _alias(payload, *aliases)
@@ -396,7 +448,9 @@ def _company_profile_fields(row: Mapping[str, Any]) -> dict[str, dict[str, Any]]
             record = {
                 "value": value if value not in (None, "", []) else None,
                 "state": "known" if known else "unknown",
+                "status": "known" if known else "unknown",
                 "provenance": {"source": source if known else "", "url": provenance_url if known else ""},
+                "observed_at": verified_at if known else "",
                 "verified_at": verified_at if known else "",
             }
         else:
@@ -404,6 +458,8 @@ def _company_profile_fields(row: Mapping[str, Any]) -> dict[str, dict[str, Any]]
             record.setdefault("state", "known" if value not in (None, "", []) else "unknown")
             record.setdefault("provenance", {})
             record.setdefault("verified_at", "")
+            record.setdefault("observed_at", "")
+            record.setdefault("status", record.get("state") or "unknown")
             if _is_unknown_value(record.get("value")):
                 record["value"] = None
                 record["state"] = "unknown"
@@ -458,7 +514,7 @@ def _job_projection(
     salary = _salary(payload)
     title = _text(row.get("title") or payload.get("title"))
     location = _text(row.get("location") or row.get("version_location") or payload.get("location"))
-    apply_url = _text(row.get("apply_url")) or None
+    apply_url = _approved_apply_url(row)
     canonical_url = _text(row.get("canonical_url")) or None
     arrangement = _normalize_arrangement(_value(payload, row, "work_arrangement", "workplace", "workplace_type", "remote_type"))
     employment = _value(payload, row, "employment_type", "job_type", "type")
@@ -467,7 +523,7 @@ def _job_projection(
     languages = _unique_strings(_value(payload, row, "languages", "language_requirements", "required_languages")) or None
     authorization = _value(payload, row, "work_authorization", "authorization", "work_permit", "visa_requirement")
     sponsorship = _value(payload, row, "sponsorship", "visa_sponsorship", "sponsors_h1b")
-    return {
+    projection = _public_clean({
         "posting_id": str(row.get("canonical_job_id") or ""),
         "canonical_job_id": str(row.get("canonical_job_id") or ""),
         "company_id": str(row.get("company_id") or ""),
@@ -511,6 +567,7 @@ def _job_projection(
         "structured_description": dict((description_intelligence or {}).get("structured_description") or {}),
         "original_posting": dict((description_intelligence or {}).get("original_posting") or {}),
         "description_intelligence": {
+            "state": _text((description_intelligence or {}).get("state")) or "unknown",
             "provider": _text((description_intelligence or {}).get("provider")) or None,
             "model": _text((description_intelligence or {}).get("model")) or None,
             "prompt_version": _text((description_intelligence or {}).get("prompt_version")) or None,
@@ -518,7 +575,8 @@ def _job_projection(
         "match_intelligence": dict(match_intelligence or {}),
         "applicant_intelligence": _user_applicant_projection(applicant_intelligence),
         "priority": dict(priority or {"state": "unknown", "score": None}),
-    }
+    })
+    return projection
 
 
 def _job_filter_values(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -543,7 +601,7 @@ def _job_filter_values(row: Mapping[str, Any]) -> dict[str, Any]:
         "company": [projection.get("company")] if projection.get("company") else [],
         "industry": _unique_strings(profile_value("industry", "industry", "company_industry") or company_characteristics.get("industry")),
         "company_size": _unique_strings(profile_value("company_size", "company_size", "size") or company_characteristics.get("size")),
-        "company_stage": _unique_strings(_value(payload, row, "company_stage") or company_characteristics.get("stage")),
+        "company_stage": _unique_strings(profile_value("company_stage", "company_stage", "stage") or _value(payload, row, "company_stage") or company_characteristics.get("stage")),
         "funding_stage": _unique_strings(profile_value("funding_stage", "funding_stage") or company_characteristics.get("funding_stage")),
         "education": _unique_strings(_requirement_value(payload, "education", "education_level", "degree", "required_education")),
         "preferred_major": _unique_strings(_requirement_value(payload, "preferred_major", "preferred_majors", "major", "majors")),
@@ -551,7 +609,7 @@ def _job_filter_values(row: Mapping[str, Any]) -> dict[str, Any]:
         "lifting_requirement": _unique_strings(_requirement_value(payload, "lifting_requirement", "physical_requirement", "physical_requirements", "lifting")),
         "language": _unique_strings(projection.get("languages")),
         "work_authorization": _unique_strings(projection.get("work_authorization")),
-        "sponsorship": _unique_strings(projection.get("sponsorship")),
+        "sponsorship": _unique_strings(profile_value("sponsorship", "sponsorship", "visa_sponsorship", "sponsors_h1b") or projection.get("sponsorship")),
         "salary": _salary(payload),
         "total_funding": profile_value("total_funding", "total_funding", "total_funding_amount", "funding"),
         "founded_year": profile_value("founded_year", "founded_year", "company_founded_year", "founded"),
@@ -706,54 +764,58 @@ class PersonalizedJobsService:
                 sanitized["provenance"] = {**dict(provenance), "source": "verified source"}
                 fields[field] = sanitized
         logo_object_key = _text(row.get("company_logo_object_key"))
-        logo_url = _text(row.get("company_logo_source_url")) or _text((fields.get("logo") or {}).get("value"))
-        if logo_object_key and self.object_storage is not None:
-            signer = getattr(self.object_storage, "signed_download_url", None)
-            if callable(signer):
-                try:
-                    logo_url = str(signer(logo_object_key, expires_in_seconds=900))
-                except Exception:
-                    logo_url = logo_url or ""
+        logo_url = _text(row.get("company_logo_source_url")) if logo_object_key else ""
         logo_record = dict(fields.get("logo") or {})
         if logo_url:
             logo_record["value"] = logo_url
             logo_record["state"] = "known"
         fields["logo"] = logo_record
-        return {
-            "schema_version": "phase_f_v1",
+        return _public_clean({
+            "schema_version": "phase_f_v2",
             "fields": fields,
             "logo_url": logo_url or None,
             "logo_cached": bool(logo_object_key),
+            "monogram": deterministic_monogram(_text(row.get("company")) or _text(row.get("canonical_name"))),
             "profile_updated_at": _text(row.get("profile_updated_at")),
-        }
+        })
 
-    def _description_intelligence(self, row: Mapping[str, Any]) -> dict[str, Any]:
-        version_id = _text(row.get("current_version_id"))
-        content_hash = _text(row.get("content_hash"))
-        cached = self.store.get_description_intelligence(version_id, content_hash=content_hash) if version_id else None
-        if cached is not None:
-            result = dict(cached)
-            original = result.get("original_posting")
-            if isinstance(original, Mapping):
-                public_original = dict(original)
-                for internal_key in ("source_ats", "source_observation_id", "observation_url"):
-                    public_original.pop(internal_key, None)
-                result["original_posting"] = public_original
-            return result
-        generated = build_description_intelligence(row)
-        if not version_id:
-            return generated
-        return self.store.save_description_intelligence(
-            version_id=version_id,
-            canonical_job_id=_text(row.get("canonical_job_id")),
-            content_hash=content_hash,
-            summary=generated.get("summary") or {},
-            structured_description=generated.get("structured_description") or {},
-            original_posting=generated.get("original_posting") or {},
-            provider=_text(generated.get("provider")),
-            model=_text(generated.get("model")),
-            prompt_version=_text(generated.get("prompt_version")),
+    @staticmethod
+    def _cache_entry_for_key(key: Mapping[str, Any], entries: Iterable[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+        fields = (
+            "user_id", "canonical_job_id", "job_version_id", "profile_version_id",
+            "cv_version_id", "evidence_version_id", "evaluator_version", "input_hash",
+            "intelligence_kind",
         )
+        wanted = tuple(str(key.get(field) or "") for field in fields)
+        for entry in entries:
+            if tuple(str(entry.get(field) or "") for field in fields) == wanted:
+                return entry
+        return None
+
+    def _description_intelligence(
+        self,
+        row: Mapping[str, Any],
+        *,
+        cache_entries: Iterable[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        original = build_preserved_original_posting(row)
+        key = build_intelligence_cache_key(
+            row,
+            intelligence_kind="description",
+            evaluator_version=SUMMARY_PROMPT_VERSION,
+        )
+        cached = self._cache_entry_for_key(key, cache_entries or ()) if cache_entries is not None else (self.store.get_intelligence_cache(key) if self.store is not None else None)
+        if cached is not None and _text(cached.get("state")) == "available":
+            result = dict(cached.get("payload") or {})
+            result["state"] = "available"
+            result["original_posting"] = _public_clean(result.get("original_posting") or original)
+            return _public_clean(result)
+        if self.store is not None:
+            self.store.enqueue_intelligence(key)
+        pending = _pending_description()
+        pending["original_posting"] = _public_clean(original)
+        pending["prompt_version"] = SUMMARY_PROMPT_VERSION
+        return pending
 
     def _match_intelligence(
         self,
@@ -763,52 +825,174 @@ class PersonalizedJobsService:
         preferences_record: Mapping[str, Any] | None,
         *,
         state: str,
+        cache_entries: Iterable[Mapping[str, Any]] | None = None,
+        evaluation_record: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        job_id = _text(row.get("canonical_job_id"))
-        version_id = _text(row.get("current_version_id"))
-        revision = int((preferences_record or {}).get("revision") or 0)
+        evaluation_payload = evaluation_record.get("payload") if isinstance(evaluation_record, Mapping) else None
+        if isinstance(evaluation_payload, str):
+            evaluation_payload = _parse_json(evaluation_payload)
+        cached_match = evaluation_payload.get("match_intelligence") if isinstance(evaluation_payload, Mapping) else None
+        if isinstance(cached_match, Mapping):
+            result = dict(cached_match)
+            result["state"] = _text(evaluation_record.get("state")) or state
+            return _public_clean(result)
         profile = _profile_context(
             user_id,
             preferences_record,
             getattr(self.repositories, "career_profile_store", None),
         )
         cached_versions: dict[str, Mapping[str, Any]] = {}
+        missing_keys: list[dict[str, str]] = []
         for evaluator_version in (MATCH_V1_VERSION, MATCH_V2_VERSION):
-            cached = self.store.get_evaluation(
-                user_id,
-                job_id,
-                job_version_id=version_id,
-                preferences_revision=revision,
+            key = build_intelligence_cache_key(
+                row,
+                intelligence_kind="match",
+                user_id=user_id,
+                profile=profile,
                 evaluator_version=evaluator_version,
+                description=description_intelligence,
             )
-            payload = (cached or {}).get("payload") if cached else None
-            cached_intelligence = payload.get("match_intelligence") if isinstance(payload, Mapping) else None
-            if isinstance(cached_intelligence, Mapping):
-                profile_version = cached_intelligence.get("profile_version")
-                if isinstance(profile_version, Mapping) and _text(profile_version.get("id")) == _text(profile.get("version_id")):
+            cached = self._cache_entry_for_key(key, cache_entries or ()) if cache_entries is not None else (self.store.get_intelligence_cache(key) if self.store is not None else None)
+            if cached is not None and _text(cached.get("state")) == "available":
+                cached_intelligence = (cached.get("payload") or {}).get("match_intelligence")
+                if isinstance(cached_intelligence, Mapping):
                     cached_versions[evaluator_version] = cached_intelligence
+            else:
+                missing_keys.append(key)
+        if self.store is not None:
+            for key in missing_keys:
+                self.store.enqueue_intelligence(key)
         if len(cached_versions) == 2:
             match = dict(cached_versions[MATCH_V2_VERSION])
             match["state"] = state
             return match
+        job_version = {
+            "canonical_job_id": _text(row.get("canonical_job_id")),
+            "id": _text(row.get("current_version_id")),
+            "number": int(row.get("version_number") or 0) or None,
+            "content_hash": _text(row.get("content_hash")),
+        }
+        pending_score = lambda evaluator: {
+            "score": None,
+            "score_scale": "0-100",
+            "status": "pending",
+            "evaluator": {"name": "runr_match_intelligence", "version": evaluator},
+            "job_version": job_version,
+            "profile_version": {
+                "id": _text(profile.get("version_id")),
+                "profile_id": _text(profile.get("profile_id")),
+                "cv_version_id": _text(profile.get("cv_version_id")),
+                "evidence_version_id": _text(profile.get("evidence_version_id")),
+            },
+            "formula": "pending",
+        }
+        return {
+            "state": "pending",
+            "v1": dict(cached_versions.get(MATCH_V1_VERSION) or pending_score(MATCH_V1_VERSION)),
+            "v2": dict(cached_versions.get(MATCH_V2_VERSION) or pending_score(MATCH_V2_VERSION)),
+            "difference": {"score_delta": None, "summary": "Scores are being precomputed from this job version and your current evidence."},
+            "evaluator": {"name": "runr_match_intelligence", "versions": [MATCH_V1_VERSION, MATCH_V2_VERSION]},
+            "profile_version": {"id": _text(profile.get("version_id")), "cv_version_id": _text(profile.get("cv_version_id")), "evidence_version_id": _text(profile.get("evidence_version_id"))},
+            "job_version": job_version,
+            "evaluated_at": None,
+            "improve_resume": {"free_explanations": [], "rewriting_available": False, "tailored_documents_available": False},
+        }
 
-        match = build_match_intelligence(row, description_intelligence, profile)
-        match["state"] = state
-        for evaluator_version in (MATCH_V1_VERSION, MATCH_V2_VERSION):
-            self.store.save_evaluation(
-                user_id,
-                job_id,
-                job_version_id=version_id,
-                preferences_revision=revision,
-                evaluator_version=evaluator_version,
-                state=state,
-                payload={
-                    "state": state,
-                    "match_intelligence": match,
-                    "match_version": evaluator_version,
-                },
-            )
-        return match
+    def process_next_intelligence(self) -> dict[str, Any] | None:
+        """Worker-only entry point; GET paths never call this method."""
+        if self.store is None:
+            return None
+        queued = self.store.claim_next_intelligence()
+        if queued is None:
+            return None
+        cache_id = _text(queued.get("cache_id"))
+        row = self.store.get_published_job_row(_text(queued.get("canonical_job_id")))
+        if row is None:
+            self.store.complete_intelligence(cache_id, state="failed", payload={}, error="job_version_not_found")
+            return {"cache_id": cache_id, "state": "failed"}
+        kind = _text(queued.get("intelligence_kind"))
+        try:
+            if kind == "description":
+                generated = build_description_intelligence(row)
+                self.store.complete_intelligence(cache_id, state="available", payload=generated)
+                # Keep the original Phase E description projection populated
+                # for existing readers; generation still happens only here,
+                # in the worker boundary.
+                self.store.save_description_intelligence(
+                    version_id=_text(row.get("current_version_id")),
+                    canonical_job_id=_text(row.get("canonical_job_id")),
+                    content_hash=_text(row.get("content_hash")),
+                    summary=generated.get("summary") or {},
+                    structured_description=generated.get("structured_description") or {},
+                    original_posting=generated.get("original_posting") or {},
+                    provider=_text(generated.get("provider")),
+                    model=_text(generated.get("model")),
+                    prompt_version=_text(generated.get("prompt_version")),
+                )
+            elif kind == "match":
+                preferences = self.get_preferences(_text(queued.get("user_id")))
+                profile = _profile_context(_text(queued.get("user_id")), preferences, getattr(self.repositories, "career_profile_store", None))
+                description_key = build_intelligence_cache_key(row, intelligence_kind="description", evaluator_version=SUMMARY_PROMPT_VERSION)
+                description_cache = self.store.get_intelligence_cache(description_key)
+                description = (description_cache or {}).get("payload") if description_cache else None
+                if not isinstance(description, Mapping):
+                    description = build_description_intelligence(row)
+                match = build_match_intelligence(row, description, profile)
+                self.store.complete_intelligence(cache_id, state="available", payload={"match_intelligence": match})
+            else:
+                self.store.complete_intelligence(cache_id, state="failed", payload={}, error="unknown_intelligence_kind")
+        except Exception as exc:
+            self.store.complete_intelligence(cache_id, state="failed", payload={}, error=str(exc))
+        return {"cache_id": cache_id, "state": "available" if kind in {"description", "match"} else "failed"}
+
+    @staticmethod
+    def _apply_plan_entitlements(match: Mapping[str, Any], plan_id: str) -> dict[str, Any]:
+        result = dict(match)
+        review = dict(result.get("improve_resume") or {})
+        result["improve_resume"] = {
+            **review,
+            "review_available": True,
+            "rewriting_available": normalize_plan_id(plan_id) != DEFAULT_PLAN_ID,
+            "tailored_documents_available": normalize_plan_id(plan_id) != DEFAULT_PLAN_ID,
+            "required_plan": "Runr Pro",
+        }
+        result["entitlements"] = {
+            "match_scores": {"free": True, "pro": True},
+            "evidence_review": {"free": True, "pro": True},
+            "rewriting": {"free": False, "pro": True},
+            "tailored_documents": {"free": False, "pro": True},
+        }
+        return result
+
+    def improve_resume(self, user_id: str, posting_id: str, *, mode: str = "review", plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any]:
+        detail = self.detail(user_id, posting_id, plan_id=plan_id)
+        if detail is None:
+            raise KeyError("job_not_found")
+        match = detail.get("match_intelligence") if isinstance(detail.get("match_intelligence"), Mapping) else {}
+        evidence = {
+            "matched_keywords": list((match.get("v2") or {}).get("matched_keywords") or []),
+            "missing_keywords": list((match.get("v2") or {}).get("missing_keywords") or []),
+            "matched_requirements": list((match.get("v2") or {}).get("matched_requirements") or []),
+            "unproven_requirements": list((match.get("v2") or {}).get("unproven_requirements") or []),
+            "apparent_non_matches": list((match.get("v2") or {}).get("apparent_non_matches") or []),
+            "v1_v2_difference": dict(match.get("difference") or {}),
+            "matched_evidence": list((match.get("v2") or {}).get("matched_evidence") or []),
+        }
+        if _text(mode).casefold() in {"rewrite", "generate", "tailored"}:
+            if normalize_plan_id(plan_id) == DEFAULT_PLAN_ID:
+                raise PermissionError("runr_pro_required_for_rewriting")
+            return {
+                "state": "queued",
+                "entitlement": {"available": True, "plan": "Runr Pro"},
+                "evidence": evidence,
+                "generation": {"state": "queued", "message": "Tailored document generation has been queued for the worker."},
+            }
+        return {
+            "state": _text(match.get("state")) or "pending",
+            "entitlement": {"available": True, "plan": "Free" if normalize_plan_id(plan_id) == DEFAULT_PLAN_ID else "Runr Pro"},
+            "evidence": evidence,
+            "guardrail": "Use only evidence you can truthfully support; never claim unsupported experience.",
+        }
 
     def get_preferences(self, user_id: str) -> dict[str, Any] | None:
         return self.store.get_preferences(user_id) if self.store is not None else None
@@ -868,118 +1052,81 @@ class PersonalizedJobsService:
 
         if self.store is None:
             return self._empty_feed(effective_filters, state="unavailable")
-        publication, rows = self.store.list_published_job_rows()
+        result = self.store.query_published_jobs(
+            user_id,
+            filters=effective_filters,
+            limit=limit,
+            cursor=cursor_payload,
+            include_hidden=include_hidden,
+            hidden_only=hidden_only,
+        )
+        publication = result.get("publication")
         if publication is None:
             return self._empty_feed(effective_filters, state="unavailable")
-
         catalog_state = self._publication_state(publication)
-        dispositions = self.store.list_dispositions(user_id)
-        candidates: list[tuple[Mapping[str, Any], list[str]]] = []
-        unknown_count = 0
-        for row in rows:
-            disposition = dispositions.get(str(row.get("canonical_job_id")))
-            is_hidden = _text((disposition or {}).get("state")) == "hidden"
-            if hidden_only and not is_hidden:
-                continue
-            if is_hidden and not include_hidden and not hidden_only:
-                continue
-            matched, unknown = _matches(row, effective_filters)
-            if not matched:
-                continue
-            unknown_count += len(unknown)
-            candidates.append((row, unknown))
-
-        if sort_mode in {"priority", "best"}:
-            for row, unknown in candidates:
-                description = self._description_intelligence(row)
-                match = self._match_intelligence(
-                    user_id,
-                    row,
-                    description,
-                    preferences_record,
-                    state=catalog_state if catalog_state in EVALUATION_STATES else "partial",
-                )
-                competition = build_applicant_competition(row, include_pro=True)
-                row["_phase_g_priority_score"] = build_priority(row, match, competition).get("score")
-            candidates.sort(
-                key=lambda item: (
-                    float(item[0].get("_phase_g_priority_score") or 0),
-                    _text(item[0].get("last_verified_at") or item[0].get("first_seen_at")),
-                    _text(item[0].get("canonical_job_id")),
-                ),
-                reverse=True,
-            )
-        else:
-            candidates.sort(
-                key=lambda item: (
-                    _text(item[0].get("last_verified_at") or item[0].get("first_seen_at")),
-                    _text(item[0].get("canonical_job_id")),
-                ),
-                reverse=True,
-            )
-        matched_total = len(candidates)
-        if cursor_payload is not None:
-            candidates = [
-                item for item in candidates
-                if self._after_cursor(item[0], cursor_payload)
-            ]
-        page = candidates[:limit]
-        has_more = len(candidates) > limit
-        next_cursor = ""
+        rows = list(result.get("rows") or [])
+        has_more = len(rows) > limit
+        page = rows[:limit]
         if has_more and page:
-            last = page[-1][0]
-            next_cursor = _cursor_encode(
-                {
-                    "fingerprint": fingerprint,
-                    "sort_mode": sort_mode,
-                    "sort": _text(last.get("last_verified_at") or last.get("first_seen_at")),
-                    "priority": last.get("_phase_g_priority_score"),
-                    "canonical_job_id": _text(last.get("canonical_job_id")),
-                }
-            )
-        state = catalog_state
-        if state == "available" and (not preferences_record or unknown_count):
-            state = "partial"
-        enriched_page: list[tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any], dict[str, Any]]] = []
-        for row, unknown in page:
-            job_id = str(row.get("canonical_job_id") or "")
-            disposition = dispositions.get(job_id)
-            evaluation_status = "not_evaluated" if not preferences_record and not effective_filters else ("uncertain" if unknown else "eligible")
-            description_intelligence = self._description_intelligence(row)
+            last = page[-1]
+            next_cursor = _cursor_encode({
+                "fingerprint": fingerprint,
+                "sort_mode": sort_mode,
+                "sort": _text(last.get("last_verified_at") or last.get("first_seen_at")),
+                "priority": last.get("priority_score"),
+                "canonical_job_id": _text(last.get("canonical_job_id")),
+            })
+        else:
+            next_cursor = ""
+        job_ids = [str(row.get("canonical_job_id") or "") for row in page]
+        dispositions = self.store.list_dispositions_for_jobs(user_id, job_ids)
+        cache_entries = self.store.list_intelligence_cache_entries(job_ids, intelligence_kind="description")
+        match_entries = self.store.list_intelligence_cache_entries(job_ids, user_id=user_id, intelligence_kind="match")
+        evaluation_records = self.store.list_evaluations_for_jobs(
+            user_id,
+            job_ids,
+            preferences_revision=int((preferences_record or {}).get("revision") or 0),
+            evaluator_version=MATCH_V2_VERSION,
+        )
+        state = catalog_state if catalog_state in EVALUATION_STATES else "partial"
+        jobs: list[dict[str, Any]] = []
+        for row in page:
+            description_intelligence = self._description_intelligence(row, cache_entries=cache_entries)
             match_intelligence = self._match_intelligence(
                 user_id,
                 row,
                 description_intelligence,
                 preferences_record,
-                state=state if state in EVALUATION_STATES else "partial",
+                state=state,
+                cache_entries=match_entries,
+                evaluation_record=evaluation_records.get(str(row.get("canonical_job_id"))),
             )
+            evaluation_status = "not_evaluated" if not preferences_record and not effective_filters else ("pending" if _text(match_intelligence.get("state")) == "pending" else "eligible")
             evaluation = {
-                "state": state if state in EVALUATION_STATES else "partial",
+                "state": state,
                 "status": evaluation_status,
-                "unknown_fields": sorted(set(unknown)),
+                "unknown_fields": [],
                 "evaluator_version": EVALUATOR_VERSION,
                 "match_intelligence": match_intelligence,
             }
-            enriched_page.append((row, description_intelligence, match_intelligence, evaluation))
-        jobs = [
-            _job_projection(
+            priority_state = "available" if _text(match_intelligence.get("state")) != "pending" else "pending"
+            priority = {"state": priority_state, "score": float(row.get("priority_score") or 0) if priority_state == "available" else None}
+            jobs.append(_job_projection(
                 row,
                 dispositions.get(str(row.get("canonical_job_id"))),
                 evaluation,
                 description_intelligence,
                 match_intelligence,
                 self._company_profile(row),
-                build_applicant_competition(row, include_pro=include_pro),
-                build_priority(row, match_intelligence, build_applicant_competition(row, include_pro=True)),
-            )
-            for row, description_intelligence, match_intelligence, evaluation in enriched_page
-        ]
+                {"state": "unknown", "visibility": "pro"},
+                priority,
+            ))
         return {
             "jobs": jobs,
-            "total": matched_total,
+            "total": int(result.get("total") or 0),
             "next_cursor": next_cursor or None,
             "filters": effective_filters,
-            "filter_capabilities": _filter_capabilities(rows),
+            "filter_capabilities": self.store.get_published_filter_capabilities(),
             "evaluation": {
                 "state": state,
                 "supported_states": sorted(EVALUATION_STATES),
@@ -1002,37 +1149,34 @@ class PersonalizedJobsService:
         row = self.store.get_published_job_row(posting_id)
         if row is None:
             return None
-        disposition = self.store.list_dispositions(user_id).get(posting_id)
+        disposition = self.store.list_dispositions_for_jobs(user_id, [posting_id]).get(posting_id)
         preferences = self.get_preferences(user_id)
-        evaluation = self.store.get_evaluation(
-            user_id,
-            posting_id,
-            job_version_id=_text(row.get("current_version_id")),
-            preferences_revision=int((preferences or {}).get("revision") or 0),
-            evaluator_version=EVALUATOR_VERSION,
-        )
-        if evaluation is None:
-            publication, _ = self.store.list_published_job_rows()
-            fallback_state = self._publication_state(publication) if publication is not None else "unavailable"
-            evaluation = {
-                "state": "stale" if fallback_state == "stale" else "loading",
-                "status": "not_evaluated",
-                "evaluator_version": EVALUATOR_VERSION,
-            }
-        publication, _ = self.store.list_published_job_rows()
+        publication = self.store.get_current_publication()
         catalog_state = self._publication_state(publication) if publication is not None else "unavailable"
-        evaluation_state = _text(evaluation.get("state")) or catalog_state
-        description_intelligence = self._description_intelligence(row)
+        cache_entries = self.store.list_intelligence_cache_entries([posting_id], intelligence_kind="description")
+        match_entries = self.store.list_intelligence_cache_entries([posting_id], user_id=user_id, intelligence_kind="match")
+        description_intelligence = self._description_intelligence(row, cache_entries=cache_entries)
         match_intelligence = self._match_intelligence(
             user_id,
             row,
             description_intelligence,
             preferences,
-            state=evaluation_state if evaluation_state in EVALUATION_STATES else "partial",
+            state=catalog_state if catalog_state in EVALUATION_STATES else "partial",
+            cache_entries=match_entries,
+            evaluation_record=self.store.get_evaluation(
+                user_id,
+                posting_id,
+                job_version_id=_text(row.get("current_version_id")),
+                preferences_revision=int((preferences or {}).get("revision") or 0),
+                evaluator_version=MATCH_V2_VERSION,
+            ),
         )
-        evaluation_payload = dict(evaluation.get("payload", evaluation))
-        evaluation_payload["state"] = evaluation_state
-        evaluation_payload["evaluator_version"] = EVALUATOR_VERSION
+        match_intelligence = self._apply_plan_entitlements(match_intelligence, plan_id)
+        evaluation_payload = {
+            "state": catalog_state if catalog_state in EVALUATION_STATES else "partial",
+            "status": "pending" if _text(match_intelligence.get("state")) == "pending" else "available",
+            "evaluator_version": EVALUATOR_VERSION,
+        }
         evaluation_payload["match_intelligence"] = match_intelligence
         return _job_projection(
             row,
@@ -1041,8 +1185,8 @@ class PersonalizedJobsService:
             description_intelligence,
             match_intelligence,
             self._company_profile(row),
-            build_applicant_competition(row, include_pro=normalize_plan_id(plan_id) != DEFAULT_PLAN_ID),
-            build_priority(row, match_intelligence, build_applicant_competition(row, include_pro=True)),
+            {"state": "unknown", "visibility": "pro"},
+            {"state": "pending", "score": None},
         )
 
     def _company_job_projection(
@@ -1055,16 +1199,10 @@ class PersonalizedJobsService:
         include_pro: bool = False,
     ) -> dict[str, Any]:
         description_intelligence = self._description_intelligence(row)
-        match_intelligence = self._match_intelligence(
-            user_id,
-            row,
-            description_intelligence,
-            preferences,
-            state="available",
-        )
+        match_intelligence = _pending_match()
         evaluation = {
             "state": "available",
-            "status": "not_evaluated",
+            "status": "pending",
             "evaluator_version": EVALUATOR_VERSION,
             "match_intelligence": match_intelligence,
         }
@@ -1075,8 +1213,8 @@ class PersonalizedJobsService:
             description_intelligence,
             match_intelligence,
             self._company_profile(row),
-            build_applicant_competition(row, include_pro=include_pro),
-            build_priority(row, match_intelligence, build_applicant_competition(row, include_pro=True)),
+            {"state": "unknown", "visibility": "pro"},
+            {"state": "pending", "score": None},
         )
 
     def upsert_company_profile(
@@ -1092,6 +1230,14 @@ class PersonalizedJobsService:
         if self.store is None:
             raise RuntimeError("personalized_jobs_store_unavailable")
         raw = payload.get("fields") if isinstance(payload.get("fields"), Mapping) else payload
+        existing = self.store.get_company_profile(str(company_id)) or {}
+        existing_profile = existing.get("profile") if isinstance(existing.get("profile"), Mapping) else {}
+        existing_fields = existing_profile.get("fields") if isinstance(existing_profile, Mapping) else {}
+        existing_fields = existing_fields if isinstance(existing_fields, Mapping) else {}
+        payload_source = _text(payload.get("source")) if isinstance(payload, Mapping) else ""
+        payload_url = _text(payload.get("provenance_url")) if isinstance(payload, Mapping) else ""
+        payload_observed = _text(payload.get("observed_at")) if isinstance(payload, Mapping) else ""
+        payload_verified = _text(payload.get("verified_at")) if isinstance(payload, Mapping) else ""
         fields: dict[str, Any] = {}
         for field in _COMPANY_FIELD_ALIASES:
             value = raw.get(field) if isinstance(raw, Mapping) else None
@@ -1102,47 +1248,54 @@ class PersonalizedJobsService:
                 record["state"] = "known" if record["value"] is not None and not _is_unknown_value(record["value"]) and str(record.get("state") or "") != "unknown" else "unknown"
                 provenance = record.get("provenance") if isinstance(record.get("provenance"), Mapping) else {}
                 record["provenance"] = {
-                    "source": _text(provenance.get("source")) or (_text(payload.get("source")) if isinstance(payload, Mapping) else ""),
-                    "url": _text(provenance.get("url")) or (_text(payload.get("provenance_url")) if isinstance(payload, Mapping) else ""),
+                    "source": _text(provenance.get("source")) or payload_source,
+                    "url": _text(provenance.get("url")) or payload_url,
                 }
-                record["verified_at"] = _text(record.get("verified_at")) or (_text(payload.get("verified_at")) if isinstance(payload, Mapping) else "")
+                record["observed_at"] = _text(record.get("observed_at")) or payload_observed
+                record["verified_at"] = _text(record.get("verified_at")) or payload_verified
+                record["status"] = "known" if record["state"] == "known" else "unknown"
             else:
                 known = value not in (None, "", []) and not _is_unknown_value(value)
                 record = {
                     "value": value if known else None,
                     "state": "known" if known else "unknown",
+                    "status": "known" if known else "unknown",
                     "provenance": {
-                        "source": _text(payload.get("source")) if isinstance(payload, Mapping) else "",
-                        "url": _text(payload.get("provenance_url")) if isinstance(payload, Mapping) else "",
+                        "source": payload_source,
+                        "url": payload_url,
                     },
-                    "verified_at": _text(payload.get("verified_at")) if isinstance(payload, Mapping) else "",
+                    "observed_at": payload_observed,
+                    "verified_at": payload_verified,
+                    "unknown_reason": "not_verified" if not known else "",
                 }
+            old = existing_fields.get(field)
+            old_known = isinstance(old, Mapping) and str(old.get("state") or "") == "known" and old.get("value") not in (None, "", [])
+            if not (record.get("state") == "known" and record.get("value") not in (None, "", [])) and old_known:
+                record = dict(old)
             fields[field] = record
-        profile = {"schema_version": "phase_f_v1", "fields": fields}
+        profile = {"schema_version": "phase_f_v2", "fields": fields}
         logo_object_key = ""
         logo_hash = ""
         logo_verified_at = ""
-        if logo_bytes:
-            logo_hash = hashlib.sha256(bytes(logo_bytes)).hexdigest()
-            logo_verified_at = _text(payload.get("verified_at")) if isinstance(payload, Mapping) else ""
+        if logo_bytes is not None:
+            validated_logo = validate_logo(bytes(logo_bytes), logo_content_type)
+            logo_hash = validated_logo.content_hash
+            logo_verified_at = payload_verified
             logo_verified_at = logo_verified_at or utc_now_iso()
-            extension = {"image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg"}.get(str(logo_content_type).lower(), "png")
-            logo_object_key = f"catalog/company-logos/{str(company_id).strip()}/{logo_hash[:24]}.{extension}"
-            if self.object_storage is None or not callable(getattr(self.object_storage, "put", None)):
-                raise RuntimeError("company_logo_storage_unavailable")
-            self.object_storage.put(
-                logo_object_key,
-                bytes(logo_bytes),
-                content_type=str(logo_content_type or "image/png"),
-                metadata={"company_id": str(company_id), "asset_kind": "canonical_company_logo", "content_sha256": logo_hash},
-            )
+            logo_object_key, _ = cache_logo(self.object_storage, str(company_id), validated_logo)
             fields["logo"] = {
                 "value": logo_source_url or logo_object_key,
                 "state": "known",
+                "status": "known",
                 "provenance": {"source": _text(payload.get("source")) or "official_employer_source", "url": logo_source_url},
+                "observed_at": payload_observed or logo_verified_at,
                 "verified_at": logo_verified_at,
             }
             profile["fields"] = fields
+        elif isinstance(existing.get("logo_content_hash"), str):
+            logo_object_key = _text(existing.get("logo_object_key"))
+            logo_hash = _text(existing.get("logo_content_hash"))
+            logo_verified_at = _text(existing.get("logo_verified_at"))
         return self.store.upsert_company_profile(
             str(company_id),
             profile,
@@ -1157,22 +1310,25 @@ class PersonalizedJobsService:
         self._assert_catalog_access(user_id)
         if self.store is None:
             return None
-        company, rows = self.store.get_published_company_rows(company_id)
+        result = self.store.get_published_company_page(company_id, user_id, limit=25)
+        company = result.get("company")
+        rows = list(result.get("rows") or [])[:25]
         if company is None:
             return None
-        dispositions = self.store.list_dispositions(user_id)
-        preferences = self.get_preferences(user_id)
-        jobs = [
-            self._company_job_projection(
-                user_id,
+        jobs: list[dict[str, Any]] = []
+        for row in rows:
+            description_intelligence = _pending_description()
+            match_intelligence = _pending_match()
+            jobs.append(_job_projection(
                 row,
-                dispositions,
-                preferences,
-                include_pro=normalize_plan_id(plan_id) != DEFAULT_PLAN_ID,
-            )
-            for row in rows
-            if _text((dispositions.get(str(row.get("canonical_job_id"))) or {}).get("state")) != "hidden"
-        ]
+                {"state": _text(row.get("user_state")) or "none"},
+                {"state": "available", "status": "pending", "evaluator_version": EVALUATOR_VERSION, "match_intelligence": match_intelligence},
+                description_intelligence,
+                match_intelligence,
+                self._company_profile(row),
+                {"state": "unknown", "visibility": "pro"},
+                {"state": "pending", "score": None},
+            ))
         profile_row = dict(rows[0]) if rows else dict(company)
         if company.get("company_profile_json") not in (None, ""):
             profile_row["company_profile_json"] = company.get("company_profile_json")
@@ -1183,7 +1339,7 @@ class PersonalizedJobsService:
         characteristics = {
             "industry": _company_profile_value(fields, "industry"),
             "size": _company_profile_value(fields, "company_size"),
-            "stage": None,
+            "stage": _company_profile_value(fields, "company_stage"),
             "funding_stage": _company_profile_value(fields, "funding_stage"),
             "founded_year": _company_profile_value(fields, "founded_year"),
             "headquarters": _company_profile_value(fields, "headquarters"),
@@ -1194,16 +1350,17 @@ class PersonalizedJobsService:
                 characteristics["stage"] = _alias(payload, "company_stage")
             if characteristics["industry"] is None:
                 characteristics["industry"] = _alias(payload, "industry", "company_industry")
-        return {
+        return _public_clean({
             "company_id": str(company.get("company_id") or company_id),
             "name": _text(company.get("canonical_name")) or None,
             "entity_kind": _text(company.get("entity_kind")) or "unknown",
-            "provenance_url": _text(company.get("provenance_url")) or None,
             "profile": profile,
             "characteristics": characteristics,
             "jobs": jobs,
-            "job_count": len(jobs),
-        }
+            "job_count": int(result.get("total") or 0),
+            "jobs_returned": len(jobs),
+            "jobs_truncated": int(result.get("total") or 0) > len(jobs),
+        })
 
     def set_state(self, user_id: str, posting_id: str, state: str, *, reason_code: str = "") -> dict[str, Any]:
         if self.store is None or self.store.get_published_job_row(posting_id) is None:
@@ -1211,7 +1368,7 @@ class PersonalizedJobsService:
         state = _norm(state).replace(" ", "_")
         if state not in {"saved", "hidden", "none", "applied"}:
             raise ValueError("invalid_job_state")
-        current = self.store.list_dispositions(user_id).get(posting_id)
+        current = self.store.list_dispositions_for_jobs(user_id, [posting_id]).get(posting_id)
         disposition = self.store.set_disposition(user_id, posting_id, state=state, reason_code=reason_code)
         event_name = {"saved": "job_saved", "hidden": "job_hidden", "none": "job_restored", "applied": "job_applied"}[state]
         self.store.record_event(user_id, event_name=event_name, canonical_job_id=posting_id, reason_code=reason_code, payload={"previous_state": _text((current or {}).get("state")) or "none"})
@@ -1231,15 +1388,29 @@ class PersonalizedJobsService:
         self._assert_catalog_access(user_id)
         if self.store is None:
             return self._empty_feed({}, state="unavailable")
-        hidden_ids = list(self.store.list_dispositions(user_id, states=("hidden",)).keys())
-        jobs: list[dict[str, Any]] = []
-        for job_id in hidden_ids:
-            detail = self.detail(user_id, job_id)
-            if detail is not None:
-                jobs.append(detail)
-            else:
-                jobs.append({"posting_id": job_id, "canonical_job_id": job_id, "user_state": "hidden", "data_available": False, "evaluation": {"state": "stale", "status": "not_evaluated"}})
-        return {"jobs": jobs[: max(1, min(100, int(limit)))], "total": len(jobs), "next_cursor": None, "evaluation": {"state": "available", "supported_states": sorted(EVALUATION_STATES)}}
+        limit = max(1, min(100, int(limit)))
+        fingerprint = _filter_fingerprint({}, user_id=user_id, hidden_only=True)
+        cursor_payload = _cursor_decode(cursor) if cursor else None
+        if cursor_payload is not None and cursor_payload.get("fingerprint") != fingerprint:
+            raise ValueError("cursor_filter_mismatch")
+        result = self.store.list_hidden_published_jobs(user_id, limit=limit, cursor=cursor_payload)
+        rows = list(result.get("rows") or [])
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        next_cursor = None
+        if has_more and page:
+            last = page[-1]
+            next_cursor = _cursor_encode({"fingerprint": fingerprint, "sort": _text(last.get("last_verified_at") or last.get("first_seen_at")), "canonical_job_id": _text(last.get("canonical_job_id"))})
+        job_ids = [str(row.get("canonical_job_id") or "") for row in page]
+        descriptions = self.store.list_intelligence_cache_entries(job_ids, intelligence_kind="description")
+        matches = self.store.list_intelligence_cache_entries(job_ids, user_id=user_id, intelligence_kind="match")
+        preferences = self.get_preferences(user_id)
+        jobs = []
+        for row in page:
+            description = self._description_intelligence(row, cache_entries=descriptions)
+            match = self._match_intelligence(user_id, row, description, preferences, state="available", cache_entries=matches)
+            jobs.append(_job_projection(row, {"state": "hidden"}, {"state": "available", "status": "pending", "evaluator_version": EVALUATOR_VERSION, "match_intelligence": match}, description, match, self._company_profile(row), {"state": "unknown", "visibility": "pro"}, {"state": "pending", "score": None}))
+        return {"jobs": jobs, "total": int(result.get("total") or 0), "next_cursor": next_cursor, "evaluation": {"state": "available", "supported_states": sorted(EVALUATION_STATES)}}
 
     @staticmethod
     def _publication_state(publication: Mapping[str, Any]) -> str:

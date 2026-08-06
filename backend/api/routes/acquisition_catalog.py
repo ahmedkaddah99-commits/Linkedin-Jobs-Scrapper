@@ -127,12 +127,21 @@ def _handle_job_action(context: ApiRouteContext) -> bool | None:
             result = context.application.set_personalized_job_state(user_id, posting_id, "applied", reason_code=_text(body.get("reason_code")))
         elif action == "report":
             result = context.application.report_personalized_job(user_id, posting_id, reason_code=_text(body.get("reason_code")), payload=body)
+        elif action == "improve-resume":
+            result = context.application.improve_personalized_resume(
+                user_id,
+                posting_id,
+                mode=_text(body.get("mode") or "review"),
+                plan_id=_plan_id(context, user_id),
+            )
         else:
             return False
     except KeyError:
         return _error(context, 404, "job_not_found", "Job is not available in the shared catalog")
     except ValueError as exc:
         return _error(context, 400, "invalid_job_action", str(exc))
+    except PermissionError as exc:
+        return _error(context, 403, "runr_pro_required", str(exc))
     context.send_json(result)
     return True
 
