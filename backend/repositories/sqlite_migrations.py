@@ -1251,6 +1251,469 @@ def _apply_evidence_storage_migration(connection: DatabaseConnection) -> None:
         """
     )
 
+
+def _apply_phase_a_acquisition_migration(connection: DatabaseConnection) -> None:
+    """Create system-owned Phase A acquisition and catalog storage."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_targets (
+            target_id TEXT PRIMARY KEY,
+            target_kind TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            canonical_target_url TEXT NOT NULL,
+            provenance_url TEXT NOT NULL DEFAULT '',
+            request_url TEXT NOT NULL,
+            connector TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            source_token TEXT NOT NULL DEFAULT '',
+            policy_version TEXT NOT NULL,
+            maturity_state TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            publication_enabled INTEGER NOT NULL DEFAULT 0,
+            max_direct_requests INTEGER NOT NULL DEFAULT 3,
+            request_mode TEXT NOT NULL DEFAULT 'direct',
+            zero_yield_streak INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at TEXT NOT NULL DEFAULT '',
+            last_success_at TEXT NOT NULL DEFAULT '',
+            last_state_transition_at TEXT NOT NULL DEFAULT '',
+            state_transition_reason TEXT NOT NULL DEFAULT '',
+            config_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_targets_state
+            ON acquisition_targets(maturity_state, enabled);
+
+        CREATE TABLE IF NOT EXISTS acquisition_cycles (
+            cycle_id TEXT PRIMARY KEY,
+            window_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            lease_owner TEXT NOT NULL DEFAULT '',
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            scheduled_at TEXT NOT NULL,
+            started_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            forecast_requests INTEGER NOT NULL DEFAULT 0,
+            forecast_credits INTEGER NOT NULL DEFAULT 0,
+            reserved_requests INTEGER NOT NULL DEFAULT 0,
+            reserved_credits INTEGER NOT NULL DEFAULT 0,
+            actual_requests INTEGER NOT NULL DEFAULT 0,
+            actual_credits INTEGER NOT NULL DEFAULT 0,
+            jobs_observed INTEGER NOT NULL DEFAULT 0,
+            jobs_new INTEGER NOT NULL DEFAULT 0,
+            jobs_updated INTEGER NOT NULL DEFAULT 0,
+            jobs_unchanged INTEGER NOT NULL DEFAULT 0,
+            jobs_closed INTEGER NOT NULL DEFAULT 0,
+            jobs_rejected INTEGER NOT NULL DEFAULT 0,
+            jobs_duplicates INTEGER NOT NULL DEFAULT 0,
+            jobs_published INTEGER NOT NULL DEFAULT 0,
+            publication_id TEXT NOT NULL DEFAULT '',
+            error_code TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_cycles_status
+            ON acquisition_cycles(status, scheduled_at DESC);
+
+        CREATE TABLE IF NOT EXISTS acquisition_tasks (
+            task_id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            lease_owner TEXT NOT NULL DEFAULT '',
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            complete_snapshot INTEGER NOT NULL DEFAULT 0,
+            valid_snapshot INTEGER NOT NULL DEFAULT 0,
+            credible_evidence INTEGER NOT NULL DEFAULT 0,
+            requests_avoided INTEGER NOT NULL DEFAULT 0,
+            credits_avoided INTEGER NOT NULL DEFAULT 0,
+            jobs_observed INTEGER NOT NULL DEFAULT 0,
+            jobs_new INTEGER NOT NULL DEFAULT 0,
+            jobs_updated INTEGER NOT NULL DEFAULT 0,
+            jobs_unchanged INTEGER NOT NULL DEFAULT 0,
+            jobs_closed INTEGER NOT NULL DEFAULT 0,
+            jobs_rejected INTEGER NOT NULL DEFAULT 0,
+            jobs_duplicates INTEGER NOT NULL DEFAULT 0,
+            error_code TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(cycle_id, target_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_tasks_claim
+            ON acquisition_tasks(cycle_id, status, created_at);
+
+        CREATE TABLE IF NOT EXISTS acquisition_target_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            cycle_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            complete_snapshot INTEGER NOT NULL DEFAULT 0,
+            valid_snapshot INTEGER NOT NULL DEFAULT 0,
+            credible_evidence INTEGER NOT NULL DEFAULT 0,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            credits_actual INTEGER NOT NULL DEFAULT 0,
+            jobs_found INTEGER NOT NULL DEFAULT 0,
+            state_before TEXT NOT NULL DEFAULT '',
+            state_after TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            error_code TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            completed_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_target_attempts_target
+            ON acquisition_target_attempts(target_id, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS acquisition_requests (
+            request_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            cycle_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            request_url TEXT NOT NULL,
+            method TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            request_kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            provider_status INTEGER NOT NULL DEFAULT 0,
+            credits_estimated INTEGER NOT NULL DEFAULT 0,
+            credits_actual INTEGER NOT NULL DEFAULT 0,
+            jobs_returned INTEGER NOT NULL DEFAULT 0,
+            resolved_url TEXT NOT NULL DEFAULT '',
+            detail_json TEXT NOT NULL DEFAULT '{}',
+            started_at TEXT NOT NULL,
+            completed_at TEXT NOT NULL DEFAULT '',
+            error_code TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_requests_target
+            ON acquisition_requests(target_id, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS acquisition_budget_reservations (
+            reservation_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            cycle_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            request_limit INTEGER NOT NULL DEFAULT 0,
+            credit_limit INTEGER NOT NULL DEFAULT 0,
+            requests_reserved INTEGER NOT NULL DEFAULT 0,
+            credits_reserved INTEGER NOT NULL DEFAULT 0,
+            requests_actual INTEGER NOT NULL DEFAULT 0,
+            credits_actual INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            reconciled_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS canonical_companies (
+            company_id TEXT PRIMARY KEY,
+            canonical_name TEXT NOT NULL,
+            entity_kind TEXT NOT NULL DEFAULT 'employer',
+            provenance_url TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(canonical_name, entity_kind)
+        );
+
+        CREATE TABLE IF NOT EXISTS canonical_jobs (
+            canonical_job_id TEXT PRIMARY KEY,
+            company_id TEXT NOT NULL,
+            identity_key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            location TEXT NOT NULL DEFAULT '',
+            canonical_url TEXT NOT NULL DEFAULT '',
+            lifecycle_state TEXT NOT NULL DEFAULT 'active',
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            last_verified_at TEXT NOT NULL DEFAULT '',
+            absence_count INTEGER NOT NULL DEFAULT 0,
+            current_version_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_canonical_jobs_lifecycle
+            ON canonical_jobs(lifecycle_state, last_verified_at DESC);
+
+        CREATE TABLE IF NOT EXISTS canonical_job_url_aliases (
+            alias_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(canonical_job_id, url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_canonical_job_url_aliases_url
+            ON canonical_job_url_aliases(url);
+
+        CREATE TABLE IF NOT EXISTS canonical_job_relationships (
+            relationship_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            related_job_id TEXT NOT NULL,
+            relationship_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(canonical_job_id, related_job_id, relationship_type)
+        );
+
+        CREATE TABLE IF NOT EXISTS job_source_observations (
+            observation_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            cycle_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            external_job_id TEXT NOT NULL,
+            original_url TEXT NOT NULL DEFAULT '',
+            apply_url TEXT NOT NULL DEFAULT '',
+            source_ats TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            observed_at TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(target_id, cycle_id, external_job_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_source_observations_lookup
+            ON job_source_observations(target_id, external_job_id, observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS job_posting_versions (
+            version_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            apply_url TEXT NOT NULL DEFAULT '',
+            source_observation_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(canonical_job_id, version_number)
+        );
+
+        CREATE TABLE IF NOT EXISTS acquisition_publications (
+            publication_id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL DEFAULT '[]',
+            published_at TEXT NOT NULL,
+            valid_until TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS acquisition_publication_jobs (
+            publication_id TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL,
+            PRIMARY KEY(publication_id, canonical_job_id)
+        );
+        """
+    )
+
+
+def _apply_phase_a_publication_head_migration(connection: DatabaseConnection) -> None:
+    """Add a singleton pointer for the currently served valid publication."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_publication_head (
+            head_id INTEGER PRIMARY KEY CHECK (head_id = 1),
+            publication_id TEXT NOT NULL UNIQUE,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+
+def _apply_phase_a_published_jobs_migration(connection: DatabaseConnection) -> None:
+    """Keep per-target published-job counts on durable acquisition tasks."""
+    _ensure_table_column(connection, "acquisition_tasks", "jobs_published", "INTEGER NOT NULL DEFAULT 0")
+
+
+def _apply_phase_a_request_state_migration(connection: DatabaseConnection) -> None:
+    """Add write-ahead dispatch and uncertain-outcome metadata."""
+    _ensure_table_column(connection, "acquisition_requests", "dispatch_started_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "acquisition_requests", "latency_ms", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_table_column(connection, "acquisition_requests", "recovery_state", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(
+        connection,
+        "acquisition_requests",
+        "uncertain_external_outcome",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+
+
+def _apply_phase_b_catalog_migration(connection: DatabaseConnection) -> None:
+    """Add durable Phase B rejection evidence without changing Phase A tables."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_job_rejections (
+            rejection_id TEXT PRIMARY KEY,
+            request_id TEXT NOT NULL,
+            cycle_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            external_job_id TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            reason_code TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            detail_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_job_rejections_target
+            ON acquisition_job_rejections(target_id, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_job_rejections_request
+            ON acquisition_job_rejections(request_id);
+        """
+    )
+
+
+def _apply_phase_c_personalized_jobs_migration(connection: DatabaseConnection) -> None:
+    """Create user-owned preferences, dispositions, events, and evaluations."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS personalized_search_preferences (
+            user_id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL DEFAULT '',
+            revision INTEGER NOT NULL DEFAULT 1,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS personalized_saved_searches (
+            saved_search_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL DEFAULT 'Default search',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            is_default INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS personalized_job_dispositions (
+            user_id TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL,
+            state TEXT NOT NULL,
+            source_of_change TEXT NOT NULL DEFAULT 'user',
+            reason_code TEXT NOT NULL DEFAULT '',
+            applied_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, canonical_job_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_personalized_dispositions_user_state
+            ON personalized_job_dispositions(user_id, state, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS personalized_job_events (
+            event_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL DEFAULT '',
+            event_name TEXT NOT NULL,
+            reason_code TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            occurred_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_personalized_events_user_time
+            ON personalized_job_events(user_id, occurred_at DESC);
+
+        CREATE TABLE IF NOT EXISTS personalized_job_evaluations (
+            user_id TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL,
+            job_version_id TEXT NOT NULL DEFAULT '',
+            preferences_revision INTEGER NOT NULL DEFAULT 0,
+            evaluator_version TEXT NOT NULL,
+            state TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (
+                user_id, canonical_job_id, job_version_id,
+                preferences_revision, evaluator_version
+            )
+        );
+        CREATE INDEX IF NOT EXISTS idx_personalized_evaluations_user_job
+            ON personalized_job_evaluations(user_id, canonical_job_id, updated_at DESC);
+        """
+    )
+
+
+def _apply_phase_e_job_intelligence_migration(connection: DatabaseConnection) -> None:
+    """Cache description intelligence against immutable job versions."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS job_description_intelligence (
+            version_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL DEFAULT '',
+            summary_json TEXT NOT NULL DEFAULT '{}',
+            structured_json TEXT NOT NULL DEFAULT '{}',
+            original_json TEXT NOT NULL DEFAULT '{}',
+            provider TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            prompt_version TEXT NOT NULL DEFAULT '',
+            generated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_description_intelligence_job
+            ON job_description_intelligence(canonical_job_id, generated_at DESC);
+        """
+    )
+
+
+def _apply_phase_f_company_profiles_migration(connection: DatabaseConnection) -> None:
+    """Store shared company enrichment without making it a job visibility gate."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS canonical_company_profiles (
+            company_id TEXT PRIMARY KEY,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            logo_object_key TEXT NOT NULL DEFAULT '',
+            logo_source_url TEXT NOT NULL DEFAULT '',
+            logo_content_hash TEXT NOT NULL DEFAULT '',
+            logo_content_type TEXT NOT NULL DEFAULT '',
+            logo_verified_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_canonical_company_profiles_updated
+            ON canonical_company_profiles(updated_at DESC);
+        """
+    )
+
+
+def _apply_phase_g_applicant_competition_migration(connection: DatabaseConnection) -> None:
+    """Store source-backed applicant observations without changing catalog visibility."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS job_applicant_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            source_observation_id TEXT NOT NULL UNIQUE,
+            source_ats TEXT NOT NULL DEFAULT '',
+            applicant_count_exact INTEGER,
+            applicant_count_min INTEGER,
+            applicant_count_max INTEGER,
+            applicant_count_label TEXT NOT NULL DEFAULT '',
+            posting_time TEXT NOT NULL DEFAULT '',
+            first_seen_at TEXT NOT NULL DEFAULT '',
+            last_verified_at TEXT NOT NULL DEFAULT '',
+            observed_at TEXT NOT NULL,
+            apply_method TEXT NOT NULL DEFAULT '',
+            easy_apply_marker INTEGER NOT NULL DEFAULT 0,
+            freshness_status TEXT NOT NULL DEFAULT 'unknown',
+            provenance_url TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_applicant_snapshots_job_time
+            ON job_applicant_snapshots(canonical_job_id, observed_at DESC, snapshot_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_job_applicant_snapshots_source_observation
+            ON job_applicant_snapshots(source_observation_id);
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -1405,6 +1868,53 @@ MIGRATIONS = (
         "028_assisted_apply_document_grant_intents",
         "Bind one-time document grants to adapter-declared upload field intents.",
         _apply_assisted_apply_document_grant_intents_migration,
+    ),
+    Migration.from_callable(
+        "029_phase_a_acquisition",
+        "Create system-owned Phase A acquisition, canonical catalog, and publication storage.",
+        _apply_phase_a_acquisition_migration,
+    ),
+    Migration.from_callable(
+        "030_phase_a_publication_head",
+        "Create the singleton valid-publication head for the Phase A catalog.",
+        _apply_phase_a_publication_head_migration,
+    ),
+    Migration.from_callable(
+        "031_phase_a_published_jobs",
+        "Add per-target published-job counts to Phase A acquisition tasks.",
+        _apply_phase_a_published_jobs_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "032_phase_a_request_state",
+        "Add write-ahead dispatch and uncertain-outcome request metadata.",
+        _apply_phase_a_request_state_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "033_phase_b_catalog",
+        "Add durable Phase B normalization rejection evidence.",
+        _apply_phase_b_catalog_migration,
+    ),
+    Migration.from_callable(
+        "034_phase_c_personalized_jobs",
+        "Create user-scoped personalized jobs state and evaluation storage.",
+        _apply_phase_c_personalized_jobs_migration,
+    ),
+    Migration.from_callable(
+        "035_phase_e_job_intelligence",
+        "Cache version-keyed job summaries and structured descriptions.",
+        _apply_phase_e_job_intelligence_migration,
+    ),
+    Migration.from_callable(
+        "036_phase_f_company_profiles",
+        "Store provenance-aware canonical company enrichment and logo metadata.",
+        _apply_phase_f_company_profiles_migration,
+    ),
+    Migration.from_callable(
+        "037_phase_g_applicant_competition",
+        "Store source-backed applicant competition snapshots and freshness metadata.",
+        _apply_phase_g_applicant_competition_migration,
     ),
 )
 

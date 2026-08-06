@@ -6,10 +6,12 @@ from pathlib import Path
 from backend.adapters import register_stage_adapters
 from backend.application import BackendApplication
 from backend.connectors.job_boards import list_portal_strategy_ids
-from backend.database import initialize_database
+from backend.database import database_target_info, initialize_database
 from backend.orchestration import BackendRegistries, ComponentDescriptor, Registry, StageEngine
 from backend.repositories import (
     BackendRepositories,
+    SqliteAcquisitionStore,
+    SqlitePersonalizedJobsStore,
     FileAnalyticsStore,
     FileAuthRepository,
     FileCareerProfileStore,
@@ -272,6 +274,8 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             config_store=FileConfigStore(base_path),
             career_profile_store=FileCareerProfileStore(base_path),
             evidence_store=None,
+            acquisition_store=None,
+            personalized_jobs_store=None,
 
 
         )
@@ -292,6 +296,8 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             source_policy_store=SqliteSourcePolicyStore(db_path),
             career_profile_store=SqliteCareerProfileStore(db_path),
             evidence_store=SqliteEvidenceStore(db_path),
+            acquisition_store=SqliteAcquisitionStore(db_path),
+            personalized_jobs_store=SqlitePersonalizedJobsStore(db_path),
 
 
         )
@@ -303,8 +309,11 @@ def create_backend(
     base_dir: str | Path = ".backend_data",
     *,
     storage_backend: str = "sqlite",
+    test_mode: bool = False,
 ) -> BackendApplication:
     base_path = Path(base_dir)
+    if test_mode or _is_test_context():
+        _assert_test_database_boundary(base_path, storage_backend=storage_backend)
     repositories = _build_repositories(base_path, storage_backend=storage_backend)
     storage_environment = dict(os.environ)
     object_storage_backend = str(storage_environment.get("OBJECT_STORAGE_BACKEND") or "local").strip().lower()
@@ -337,3 +346,39 @@ def create_backend(
     )
     stage_engine.event_emitter = application.emit_event
     return application
+
+
+def _assert_test_database_boundary(base_path: Path, *, storage_backend: str) -> None:
+    """Fail before repository construction if a test could reach production storage."""
+
+    test_signals = {
+        str(os.environ.get("RUNR_TEST_MODE") or "").strip().casefold() in {"1", "true", "yes", "on"},
+        str(os.environ.get("RUNR_ENV") or "").strip().casefold() in {"test", "testing"},
+        bool(str(os.environ.get("PYTEST_CURRENT_TEST") or "").strip()),
+    }
+    if not any(test_signals):
+        raise RuntimeError("Test bootstrap requires RUNR_TEST_MODE=1 or RUNR_ENV=test.")
+    info = database_target_info(_resolve_sqlite_path(base_path))
+    if bool(info.get("remote_required")) or bool(info.get("remote_configured")):
+        raise RuntimeError("Test bootstrap rejected remote/production database configuration.")
+    if str(os.environ.get("DATABASE_BACKEND") or "sqlite").strip().casefold() == "turso":
+        raise RuntimeError("Test bootstrap rejected DATABASE_BACKEND=turso.")
+    if str(os.environ.get("RUNR_ENV") or "").strip().casefold() in {"prod", "production"}:
+        raise RuntimeError("Test bootstrap rejected production runtime configuration.")
+    if str(os.environ.get("RUNR_ACQUISITION_LIVE_NETWORK_ENABLED") or "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        raise RuntimeError("Test bootstrap rejected live acquisition network authorization.")
+    if storage_backend == "sqlite" and base_path.resolve() == Path(".backend_data").resolve():
+        raise RuntimeError("Test bootstrap requires an explicit isolated SQLite path.")
+
+
+def _is_test_context() -> bool:
+    return (
+        str(os.environ.get("RUNR_TEST_MODE") or "").strip().casefold() in {"1", "true", "yes", "on"}
+        or str(os.environ.get("RUNR_ENV") or "").strip().casefold() in {"test", "testing"}
+        or bool(str(os.environ.get("PYTEST_CURRENT_TEST") or "").strip())
+    )

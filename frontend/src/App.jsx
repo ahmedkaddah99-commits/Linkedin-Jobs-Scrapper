@@ -8,7 +8,7 @@ import { SessionProvider, useSession } from "./context/SessionContext";
 import { QUOTA_EXCEEDED_EVENT } from "./lib/api";
 import { logEvent } from "./lib/analytics";
 import { isAdminUser } from "./lib/auth";
-import { personalizedJobsExperienceEnabled } from "./lib/personalizedJobs";
+import { personalizedJobsDataMode, personalizedJobsExperienceEnabled } from "./lib/personalizedJobsConfig";
 import { hasAuthenticatedSession } from "./lib/sessionState";
 
 const AdminPage = lazy(() => import("./pages/AdminPage"));
@@ -180,7 +180,9 @@ function AuthenticatedApp() {
   useEffect(() => {
     if (!personalizedJobsExperienceEnabled || !location.pathname.startsWith("/jobs")) return undefined;
     const preload = () => {
-      void import("./pages/PersonalizedOnboardingPage");
+      if (personalizedJobsDataMode !== "real") {
+        void import("./pages/PersonalizedOnboardingPage");
+      }
       void import("./pages/PersonalizedJobsPage");
       void import("./pages/HiddenJobsPage");
       void import("./pages/PersonalizedJobDetailPage");
@@ -217,7 +219,7 @@ function AuthenticatedApp() {
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
-              <Route path="/onboarding" element={personalizedJobsExperienceEnabled ? <PersonalizedOnboardingPage /> : <Navigate replace to="/" />} />
+              <Route path="/onboarding" element={personalizedJobsExperienceEnabled && personalizedJobsDataMode !== "real" ? <PersonalizedOnboardingPage /> : <Navigate replace to="/jobs" />} />
               <Route path="/jobs" element={personalizedJobsExperienceEnabled ? <PersonalizedJobsPage /> : <Navigate replace to="/" />} />
               <Route path="/jobs/hidden" element={personalizedJobsExperienceEnabled ? <HiddenJobsPage /> : <Navigate replace to="/" />} />
               <Route path="/jobs/:jobId" element={personalizedJobsExperienceEnabled ? <PersonalizedJobDetailPage /> : <Navigate replace to="/" />} />

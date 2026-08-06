@@ -1,11 +1,119 @@
 # Runr Jobs acquisition audit and revised implementation plan
 
-Status: audit complete; implementation intentionally not started.
+Status: Phase A implementation complete; later phases intentionally not started.
+
+Phase A acceptance safety defaults: `acquisition.phase_a.scheduler_enabled=false`,
+`kill_switch=true`, `global_enabled=false`, `connector_validation_enabled=false`,
+`publication_enabled=false`, `allow_proxy=false`, and
+`ai_enrichment_enabled=false`. Every target is disabled unless its explicit
+`acquisition.phase_a.target.<target_id>.enabled` setting is enabled.
 
 This document updates the Jobs-page integration plan after tracing the current
 repository. It is deliberately repository-specific. The current branch was
 left unchanged except for this report; existing user changes in the worktree
 were not touched.
+
+## Recorded decisions — 2026-08-05
+
+The following product and architecture decisions are now closed. They are
+implementation constraints, not open questions.
+
+### Employer pilot manifest
+
+The controlled technical-validation manifest is:
+
+| Target | Kind | Repository URL | Initial maturity | Production state |
+| --- | --- | --- | --- | --- |
+| Siemens Industry Software | `employer_career_site` | `https://www.siemens.com/en-us/company/jobs` | `unproven` | disabled until probe and Apply validation |
+| BASF | `employer_career_site` | `https://basf.jobs/` | `unproven` | disabled until probe and Apply validation |
+| Bosch | `employer_career_site` | `https://jobs.bosch.de/` | `unproven` | direct bounded probe only; provenance `https://www.bosch.de/karriere/` |
+| Deutsche Post/DHL | `employer_career_site` | `https://careers.dhl.com/eu/de` | `unproven` | disabled until probe and Apply validation |
+| adidas | `employer_career_site` | `https://careers.adidas-group.com/` | `unproven` | disabled until probe and Apply validation |
+
+ABB, Continental, and Infineon are explicitly excluded from the initial
+pilot. All five entries are approved only for controlled technical validation.
+Each begins with one to three inexpensive direct requests, no AI,
+no broad crawl, and no ScrapeOps escalation solely because a response is
+empty. The probe stops when there is no credible job-listing evidence. Every
+request, result, credit, rejection, and produced job is recorded.
+
+The Bosch decision is now resolved: `https://jobs.bosch.de/` is the canonical
+job portal and `https://www.bosch.de/karriere/` is retained as provenance.
+Tracking parameters are stripped from durable target URLs while functional
+locale parameters remain.
+
+### Connector-validation tenants
+
+Greenhouse and Lever validation use these exact public endpoints. They are
+connector fixtures/controlled tests, not additions to the five-employer pilot:
+
+| Provider | Public tenant | List endpoint | Token | Policy |
+| --- | --- | --- | --- | --- |
+| Greenhouse | `https://job-boards.greenhouse.io/n26` | `https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true` | `n26` | public documented API; conservative rate and cache policy |
+| Lever | `https://jobs.lever.co/qonto` | `https://api.lever.co/v0/postings/qonto?mode=json` | `qonto` | public published-postings API; conservative rate and cache policy |
+
+The manifest records the relevant documentation links:
+
+- Greenhouse: <https://developers.greenhouse.io/job-board.html>
+- Lever: <https://github.com/lever/postings-api>
+
+Public access is not treated as unlimited permission. The connector tests
+must use conservative rates, conditional requests/caching where supported,
+bounded retries, clear identification where appropriate, terms review, no
+application submission, no candidate-data collection, and no aggressive crawl
+beyond the documented listing endpoints.
+
+### Product, entitlement, and asset decisions
+
+- Public positioning: “A massive, continuously refreshed catalog of
+  high-quality jobs from leading employers and major job platforms—all
+  searchable and prioritized inside Runr.”
+- Coverage clarification: “Runr collects eligible jobs from supported
+  employers, ATS platforms and approved job sources. Coverage varies by
+  source, location and availability.”
+- Runr must never claim to contain every job on the internet.
+- Free and Runr Pro both receive visible numeric v1 and v2 match scores,
+  selectable version controls, basic matched/missing information, and the
+  difference explanation.
+- Runr Pro may gate resume rewriting, tailored documents, application
+  preparation, Assisted Apply, and other paid preparation capabilities. It
+  must not gate access to either score.
+- One validated logo is cached per canonical company in R2 and reused across
+  all jobs. Conditional refresh and a deterministic monogram fallback are
+  required.
+- The empty/unverified hiring-team state uses one reusable, noticeable,
+  diverse Runr illustration or controlled asset set. It never represents real
+  employer people, names, biographies, links, or counts.
+
+### Free/Runr Pro entitlement table
+
+| Capability | Free | Runr Pro |
+| --- | --- | --- |
+| Shared Jobs catalog, search, basic filters, pagination | Included | Included |
+| Save, hide, restore, report, and basic saved search | Included | Included |
+| Runr Summary, Structured Description, Original Posting | Included | Included |
+| v1 numeric match score and basic evidence | Included | Included |
+| v2 numeric match score and basic evidence | Included | Included |
+| v1/v2 selector, definitions, matched/missing explanation | Included | Included |
+| Improve Resume evidence review | Included | Included |
+| Resume rewriting and tailored CV/motivation letter generation | Not included | Included |
+| Application preparation and Assisted Apply | Not included | Included |
+| Basic posting date and current-verification state | Included | Included |
+| Exact first-seen intelligence and advanced freshness | Not included | Included |
+| Applicant intelligence and competition score | Not included | Included |
+| Advanced freshness filters and ranking | Not included | Included |
+| Company funding intelligence | Not included | Included |
+| Advanced saved-search notifications | Not included | Included |
+
+The table describes feature access only. Numeric quotas remain configurable
+and unapproved until the Creem audit is complete.
+
+### Creem decision
+
+Creem products and subscriptions must not be mutated yet. A read-only audit
+must precede the smallest safe migration to Free and Runr Pro. The audit is
+required for billing migration and paywall activation only; it does not block
+catalog schema, acquisition, Jobs API, matching, or Jobs UI implementation.
 
 ## Executive decision
 
@@ -773,6 +881,19 @@ Keep the existing connector retry/cancellation callbacks and make each source
 result independently durable so one source failure does not discard successful
 sources.
 
+The first source manifest is the recorded Siemens/BASF/Bosch/DHL/adidas
+manifest above. All five targets are eligible for controlled technical
+validation. The manifest must retain target
+kind, display name, canonical URL, connector, maturity state, enabled state,
+policy version, and disabled reason; it must not silently substitute ABB,
+Continental, or Infineon.
+
+The first connector fixtures are N26 Greenhouse and Qonto Lever. Their public
+listing endpoints are used only to validate list normalization, pagination,
+conditional requests, retry ceilings, application-method classification, and
+direct employer/ATS URL handling. They do not enter the employer pilot or
+perform application submission.
+
 ### 4. Build the shared repository and lifecycle model
 
 Use the SQLite migration/repository conventions to add the minimum durable
@@ -861,6 +982,19 @@ Add persistent evaluation rows keyed by posting version, profile/CV/evidence
 version, evaluator version, and input hash. A missing or stale evaluation must
 be represented explicitly; it must not silently become a fabricated score.
 
+Both v1 and v2 are Free and Runr Pro capabilities. v1 is deterministic
+ATS-style keyword and explicit-requirement matching. v2 is semantic and
+evidence-aware, but its final score is still calculated by a versioned
+deterministic formula. Both scores require frozen job/profile/evaluator inputs,
+stable cache keys, matched and missing evidence, and a visible explanation of
+the difference. No arbitrary AI-confidence percentage is part of the contract.
+
+`Improve Resume` first returns matched keywords, missing keywords, matched
+requirements, unproven requirements, apparent non-matches, and v1/v2
+differences. Resume rewriting and tailored-document generation remain separate
+entitlements and must never instruct a candidate to claim an unsupported
+qualification.
+
 ### 8. Add the authenticated personalized Jobs API
 
 Create `backend/api/routes/personalized_jobs.py` and register it from
@@ -915,6 +1049,47 @@ retry behavior; stale worker recovery remains the first recovery layer. Admin
 recovery may retry a failed source/cycle through the trusted internal path but
 must not be callable by Jobs-page users.
 
+### 11. Preserve the confirmed logo and hiring-artwork policies
+
+Add a canonical-company logo asset boundary. Store one validated logo in R2
+and reuse it for every posting from that company. Persist the original URL,
+source/provenance, content hash, MIME type, dimensions, fetch time, verification
+time, R2 object key, and refresh state. Use conditional refresh and a
+deterministic monogram when no safe official asset is available. Do not fetch
+the same logo per job or per daily cycle.
+
+The unverified hiring-team state uses one reusable, noticeable, diverse Runr
+illustration or a small controlled Runr asset set. It must not contain names,
+biographies, fake links, fake counts, or claims that the people work for the
+selected employer. Replace it only when verified and authorized hiring-contact
+data exists.
+
+### 12. Complete the read-only Creem audit before billing migration
+
+Do not change Creem products, subscriptions, checkout, or webhooks during the
+catalog implementation. The audit must record:
+
+- every active product ID and price ID;
+- product name, currency, amount, interval, and active/archived state;
+- the backend entitlement or legacy plan granted by each product;
+- current interpretation of `launch`, `momentum`, `scale`, and the `pro` alias;
+- active subscriber counts per product, when accessible;
+- trial, cancelled, past-due, and scheduled-cancellation behavior;
+- checkout-session inputs;
+- webhook event types and payload fields;
+- renewal and plan-change database updates;
+- Creem’s product replacement, archiving, and migration behavior.
+
+The smallest later migration is one canonical internal `runr_pro` entitlement
+and one user-facing Runr Pro plan. Existing subscribers retain service, legacy
+product IDs continue mapping to compatibility entitlements, and no existing
+subscription is cancelled, silently moved, or replaced. New pricing and
+numeric quotas remain unapproved until the audit is complete.
+
+The Creem audit blocks only final billing migration and production paywall
+activation. Catalog schema, acquisition, Jobs API, Jobs UI, logos, and both
+match-score versions may proceed before it.
+
 ## Required tests before enabling real mode
 
 - Scheduler claims one UTC window exactly once under two worker instances.
@@ -924,6 +1099,16 @@ must not be callable by Jobs-page users.
   readable and report freshness/degraded metadata.
 - Global/source/cycle ScrapeOps reservations are atomic, kill-switch-aware,
   reconciled, bounded, and idempotent under duplicate callbacks.
+- The Siemens, BASF, Bosch, DHL, and adidas candidate probes stop after one to three
+  cheap requests when no credible listing evidence exists, never invoke AI on
+  the first probe, and never escalate to ScrapeOps solely because of an empty
+  response.
+- The Bosch manifest entry uses the resolved canonical portal and provenance;
+  ABB, Continental, and Infineon cannot enter the initial pilot.
+- N26 Greenhouse normalization uses board token `n26` and the documented
+  public list endpoint; Qonto Lever normalization uses site token `qonto` and
+  the documented public postings endpoint. Both tests enforce rate, retry,
+  caching, no candidate-data collection, and no submission behavior.
 - Replayed observations do not duplicate postings, versions, or usage rows.
 - Stable external IDs, URL aliases, reposts, duplicate relationships, and
   source-specific missing-job grace periods are correct.
@@ -935,6 +1120,15 @@ must not be callable by Jobs-page users.
   policy; worker/admin scopes are enforced and audited.
 - Deterministic filters precede expensive evaluation; evaluator/version cache
   invalidation is correct; absent scores remain absent.
+- Free and Runr Pro can select and view both v1 and v2 numeric scores. Score
+  explanations, matched/missing evidence, frozen-input stability, and
+  `Improve Resume` safety are tested independently of paid document features.
+- A company logo is fetched once, validated, hashed, cached in R2, reused by
+  multiple jobs, conditionally refreshed, and safely replaced by a monogram
+  fallback when invalid or unavailable.
+- The hiring-team illustration has no employer identity claims, names, links,
+  biographies, or fake counts and is structurally distinct from verified
+  hiring-contact data.
 - API pagination, empty, partial, stale, and failure contracts are stable.
 - Synthetic mode remains fixture-only; real mode has no fixture leakage and no
   local disposition leakage.
@@ -944,6 +1138,9 @@ must not be callable by Jobs-page users.
 - Existing workspace runs, quick apply, worker processing, and document flows
   retain their current tests and behavior unless deliberately restricted by
   the trust-boundary change.
+- The Creem audit is read-only and records product/price IDs, entitlement
+  mapping, subscriber state, checkout inputs, webhook payloads, renewal/plan
+  changes, and migration capabilities without mutating production billing.
 
 Per repository instructions, Python tests may only run after verifying
 `.venv\Scripts\python.exe --version` reports Python 3.12.7. This report does
@@ -981,14 +1178,24 @@ must leave the preceding boundary and tests intact:
 3. Add the system principal, `SystemAcquisitionScheduler`, and cycle/source
    claims while keeping real acquisition disabled.
 4. Add reservation/reconciliation/kill-switch governance and admin metrics.
-5. Run one approved source through the scheduler into the shared repository.
-6. Verify canonicalization, lifecycle, stale snapshot, and recovery behavior.
-7. Add the shared read API, preferences, deterministic filters, dispositions,
-   eligibility, and cached matching in independent vertical slices.
-8. Add the real frontend provider and onboarding integration behind the existing
-   data-mode flag; retain synthetic mode as the default.
-9. Add further approved sources one at a time after operational validation.
-10. Run end-to-end security/failure tests, then controlled rollout and monitor
+5. Add the corrected Siemens/BASF/Bosch/DHL/adidas manifest, keeping employer
+   targets disabled for publication until validation succeeds.
+6. Run controlled probes for Siemens, BASF, Bosch, DHL, and adidas; record request,
+   credit, rejection, yield, enumeration, and direct-Apply evidence.
+7. Add N26 Greenhouse and Qonto Lever connector fixtures and validate their
+   documented public list endpoints without submission or candidate-data
+   collection.
+8. Verify canonicalization, lifecycle, stale snapshot, and recovery behavior.
+9. Add the shared read API, preferences, deterministic filters, dispositions,
+   eligibility, and both cached match versions in independent vertical slices.
+10. Add the real frontend provider and onboarding integration behind the
+    existing data-mode flag; retain synthetic mode as the default.
+11. Add logos, the neutral hiring-team artwork state, and free-access v1/v2
+    score explanations before any paid document gating.
+12. Add further approved sources one at a time after operational validation.
+13. Complete the read-only Creem audit; activate the later billing migration
+    only after product/price/subscriber compatibility is understood.
+14. Run end-to-end security/failure tests, then controlled rollout and monitor
     freshness, source success, duplicate rate, and provider usage.
 
 ## Expected files to change during implementation
@@ -997,6 +1204,10 @@ This list is a plan, not a claim that these files were changed in this audit.
 
 - `backend/application/acquisition_scheduler.py`: global 24-hour cycle claim
   and system-run enqueueing.
+- `backend/config/jobs_acquisition_manifest.json`: the Siemens, BASF, Bosch,
+  Deutsche Post/DHL, and adidas candidate targets plus N26 Greenhouse and
+  Qonto Lever connector-validation tenants, with policy, maturity, enabled,
+  documentation, and disabled-reason fields.
 - `backend/application/run_services.py`, `backend/application/services.py`,
   `backend/domain/models.py`: system run kind/principal and lifecycle seam.
 - `backend/worker/service.py`: scheduler invocation and heartbeat.
@@ -1008,9 +1219,20 @@ This list is a plan, not a claim that these files were changed in this audit.
 - `backend/acquisition/*` or equivalent source adapter modules and
   `backend/adapters/stage_adapters.py`: server-controlled observation
   ingestion, source isolation, and canonical upsert calls.
+- `backend/connectors/application_method_classifier.py`,
+  `backend/connectors/company_logo_resolver.py`, and the canonical company
+  repository: direct-Apply gating, logo validation, R2 caching, provenance,
+  and conditional refresh.
+- `backend/application/job_matching_service.py`,
+  `backend/domain/job_matching.py`, and evaluation repositories: stable Free
+  and Runr Pro v1/v2 scoring, evidence explanations, cache keys, and safe
+  `Improve Resume` output.
 - `backend/config/scrapeops_admin_policy.py` and
   `backend/integrations/scrapeops.py`: policy, reservation, kill switch, and
   usage idempotency.
+- Existing billing routes/configuration and a later entitlement migration:
+  read-only Creem audit first, then legacy-product compatibility mapping to
+  `runr_pro`; no second checkout or webhook path.
 - `backend/api/routes/__init__.py`, new `backend/api/routes/personalized_jobs.py`,
   and existing workspace/admin route modules: read API and trust restrictions.
 - `frontend/src/lib/personalizedJobs.js` or a new provider module,
@@ -1024,7 +1246,7 @@ This list is a plan, not a claim that these files were changed in this audit.
   `docs/security/runr_data_ownership.md`: update preview status, persistence
   ownership, and system-run boundary once implementation lands.
 
-## Unresolved Runr-team decisions
+## Retired Runr-team decisions (superseded by recorded decisions)
 
 1. Should the system-owned acquisition run reuse the existing `RunRecord` with
    a reserved internal workspace/run kind, or should cycle execution have a
@@ -1040,6 +1262,37 @@ This list is a plan, not a claim that these files were changed in this audit.
 6. Should “save search” remain a preference mutation, or should it be removed
    until multiple saved preference sets are supported?
 
-Implementation should begin only after this audit and the above boundary/
-source decisions are reviewed. No code implementation was performed as part
-of this plan update.
+These historical questions are superseded by the recorded decisions above and
+are retained only to preserve the audit trail. They are not implementation
+gates or follow-up questions.
+
+## Final status and genuine remaining blockers
+
+The six decision groups in the recorded-decision section are closed and must
+not be reopened during implementation:
+
+- the employer pilot is Siemens, BASF, Bosch, Deutsche Post/DHL, and adidas;
+- Greenhouse validation is N26 and Lever validation is Qonto;
+- the approved public positioning and coverage clarification are fixed;
+- Free and Runr Pro both receive v1 and v2 numeric match scores;
+- Creem is read-only until the billing audit and compatibility migration plan;
+- R2 logo caching and neutral hiring-team artwork are fixed policies.
+
+The genuine remaining blockers are operational rather than architectural:
+
+1. The Phase A employer probes are intentionally bounded and do not yet
+   establish production publication eligibility. Bosch uses the resolved
+   canonical portal/provenance decision recorded above.
+2. The read-only Creem audit requires access to the existing production
+   configuration, Creem product/price data, active subscriber state, and
+   webhook history. Missing credentials or dashboard/API access must be
+   reported as unavailable; product IDs, prices, quotas, and subscriber counts
+   must not be guessed.
+3. Production enablement of the five employer targets still
+   depends on measured probe results, direct-Apply resolution, source policy,
+   and cost ceilings. This is an execution gate, not a reason to delay schema,
+   scheduler, connector fixtures, Jobs API, UI, matching, or logo work.
+
+Phase A runtime implementation is complete for the centralized acquisition
+tracer bullet. The shared catalog API, frontend, matching, logos, billing,
+and other Phase B work remain deferred by decision.

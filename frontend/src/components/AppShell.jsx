@@ -5,7 +5,10 @@ import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
 import { isAdminUser } from "../lib/auth";
 import { currentEntryAssetPath, fetchLatestEntryAssetPath } from "../lib/deployVersion";
-import { personalizedJobsExperienceEnabled } from "../lib/personalizedJobs";
+import {
+  personalizedJobsExperienceEnabled,
+  retireLegacyJobsNavigation,
+} from "../lib/personalizedJobsConfig";
 import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
@@ -118,6 +121,10 @@ const personalizedNavItems = personalizedJobsExperienceEnabled
   ]
   : navItems;
 
+const userNavItems = retireLegacyJobsNavigation
+  ? personalizedNavItems.filter((item) => !["Workspaces", "Runs"].includes(item.label))
+  : personalizedNavItems;
+
 const secondaryTopRibbonItems = [
   {
     label: "Pricing",
@@ -157,7 +164,7 @@ function JobsTopNav({ displayName, isDark, onToggleTheme }) {
     { label: "Jobs", icon: "work_outline", to: "/jobs" },
     { label: "Job tracker", icon: "history", to: "/tracker" },
     { label: "Documents", icon: "description", to: "/documents" },
-    { label: "Services", icon: "share", to: "/workspaces" },
+    { label: "Services", icon: "share", to: "/referrals" },
     { label: "Refer", icon: "group_add", to: "/referrals" },
   ];
   const location = useLocation();
@@ -462,6 +469,7 @@ function TopRibbonDisclosure({ items }) {
 function SidebarContents({
   collapsed = false,
   isDesktop = false,
+  isAdmin = false,
   onClose,
   onStartRun,
   onToggleCollapse,
@@ -498,7 +506,7 @@ function SidebarContents({
           ) : null}
         </div>
 
-        <button
+        {isAdmin ? <button
           aria-label={isCollapsedRail ? "Start New Run" : undefined}
           className={["shell-primary-action", isCollapsedRail ? "is-collapsed" : ""].join(" ")}
           onClick={handleStartRun}
@@ -508,11 +516,11 @@ function SidebarContents({
           <span className="material-symbols-outlined shell-primary-action__icon">add</span>
           {!isCollapsedRail ? <span>Start New Run</span> : null}
           {isCollapsedRail ? <HoverLabel label="Start New Run" /> : null}
-        </button>
+        </button> : null}
       </div>
 
       <nav className="shell-sidebar__nav">
-        {personalizedNavItems.map((item) => (
+        {(isAdmin ? personalizedNavItems : userNavItems).map((item) => (
           <SidebarLink collapsed={isCollapsedRail} item={item} key={item.label} onNavigate={onClose} />
         ))}
       </nav>
@@ -664,6 +672,7 @@ export default function AppShell({ children, muteSidebar = false }) {
         ].join(" ")}
       >
         <SidebarContents
+          isAdmin={isAdmin}
           onClose={() => setMobileNavOpen(false)}
           onStartRun={() => navigate("/workspaces")}
         />
@@ -672,6 +681,7 @@ export default function AppShell({ children, muteSidebar = false }) {
       <aside className="app-shell__desktop-sidebar shell-sidebar hidden flex-col md:flex">
         <SidebarContents
           collapsed={desktopSidebarCollapsed}
+          isAdmin={isAdmin}
           isDesktop
           onStartRun={() => navigate("/workspaces")}
           onToggleCollapse={() => setDesktopSidebarCollapsed((currentValue) => !currentValue)}

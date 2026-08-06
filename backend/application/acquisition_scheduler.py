@@ -1,0 +1,647 @@
+from __future__ import annotations
+
+import logging
+import os
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Callable, Mapping
+
+from backend.acquisition.manifest import load_phase_a_manifest
+from backend.acquisition.network_policy import (
+    AcquisitionNetworkPolicyError,
+    hostname_for_url,
+    require_phase_a_network_permission,
+)
+from backend.connectors.ats_router import fetch_ats_snapshot
+from backend.connectors.bounded_probe import fetch_bounded_probe
+from backend.acquisition.phase_b import PHASE_B_DEFAULT_CONFIG, normalize_phase_b_jobs
+from backend.acquisition.phase_g import portal_audit_gate
+from backend.application.production_rollout import build_rollout_health, phase_i_config
+
+
+LOGGER = logging.getLogger("backend.acquisition.phase_a")
+
+
+class AcquisitionDispatchBlockedError(RuntimeError):
+    """The request was reserved but the pre-dispatch policy rejected it."""
+
+
+class AcquisitionUncertainOutcomeError(RuntimeError):
+    """An external call may have occurred and requires explicit recovery."""
+
+
+class AcquisitionRecoveryRequiredError(RuntimeError):
+    """Durable request state exists but a later persistence boundary failed."""
+
+
+PHASE_A_DEFAULT_CONFIG: dict[str, Any] = {
+    "scheduler_enabled": False,
+    "kill_switch": True,
+    "global_enabled": False,
+    "connector_validation_enabled": False,
+    "publication_enabled": False,
+    "allow_proxy": False,
+    "ai_enrichment_enabled": False,
+    "global_request_ceiling": 100,
+    "cycle_request_ceiling": 16,
+    "cycle_credit_ceiling": 0,
+}
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().casefold() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+@dataclass(slots=True)
+class PhaseAAcquisitionScheduler:
+    repositories: Any
+    event_emitter: Callable[..., None] | None = None
+    requester: Callable[..., Any] | None = None
+    failure_injector: Callable[[str], None] | None = None
+    lease_owner: str = "system-acquisition"
+    lease_seconds: int = 300
+
+    def _config(self, key: str, default: Any = None) -> Any:
+        store = getattr(self.repositories, "config_store", None)
+        getter = getattr(store, "get_value", None)
+        if not callable(getter):
+            return default
+        return getter(key, default)
+
+    def _phase_a_config(self, name: str) -> Any:
+        return self._config(f"acquisition.phase_a.{name}", PHASE_A_DEFAULT_CONFIG[name])
+
+    def _phase_b_config(self, name: str) -> Any:
+        return self._config(f"acquisition.phase_b.{name}", PHASE_B_DEFAULT_CONFIG[name])
+
+    def _phase_i_config(self, name: str, default: Any = None) -> Any:
+        return phase_i_config(getattr(self.repositories, "config_store", None), name, default)
+
+    def _configured_manifest(self) -> list[dict[str, Any]]:
+        manifest = load_phase_a_manifest()
+        connector_validation_enabled = _as_bool(self._phase_a_config("connector_validation_enabled"))
+        proxy_allowed = _as_bool(self._phase_a_config("allow_proxy"))
+        rollout_enabled = _as_bool(self._phase_i_config("rollout_enabled", False))
+        production_source_id = str(self._phase_i_config("production_source_id", "") or "").strip()
+        additional_source_ids = {
+            str(item).strip()
+            for item in (self._phase_i_config("additional_source_ids", []) or [])
+            if str(item).strip()
+        }
+        target_request_ceilings = dict(self._phase_i_config("target_request_ceilings", {}) or {})
+        production_publication_enabled = _as_bool(self._phase_i_config("production_publication_enabled", False))
+        for target in manifest:
+            target_id = str(target["target_id"])
+            target_enabled = _as_bool(self._config(f"acquisition.phase_a.target.{target_id}.enabled", False))
+            if rollout_enabled and target_id not in {production_source_id, *additional_source_ids}:
+                target_enabled = False
+            disabled_reason = str(target.get("disabled_reason") or "phase_a_target_disabled_by_default")
+            if target.get("target_kind") == "ats_connector_validation" and not connector_validation_enabled:
+                target_enabled = False
+                disabled_reason = "connector_validation_disabled_by_default"
+            if str(target.get("request_mode") or "direct") != "direct" and not proxy_allowed:
+                target_enabled = False
+                disabled_reason = "proxy_permission_disabled_by_default"
+            if target_id in target_request_ceilings:
+                target["max_direct_requests"] = max(1, _as_int(target_request_ceilings[target_id], 1))
+            if rollout_enabled:
+                target["publication_enabled"] = bool(
+                    production_publication_enabled
+                    and target_enabled
+                    and target_id in {production_source_id, *additional_source_ids}
+                )
+            target["enabled"] = target_enabled
+            target["disabled_reason"] = "" if target_enabled else disabled_reason
+        return manifest
+
+    def _emit(self, event_name: str, **payload: Any) -> None:
+        if not callable(self.event_emitter):
+            return
+        self.event_emitter(event_name, source="system_acquisition", payload=payload)
+
+    def _failpoint(self, name: str) -> None:
+        if callable(self.failure_injector):
+            self.failure_injector(name)
+
+    @staticmethod
+    def _requester_is_fixture() -> bool:
+        return bool(os.environ.get("PYTEST_CURRENT_TEST")) or str(os.environ.get("RUNR_ENV") or "").strip().casefold() in {
+            "test",
+            "testing",
+        }
+
+    def run_due_cycle(self, *, now: datetime | None = None, force: bool = False) -> dict[str, Any] | None:
+        store = getattr(self.repositories, "acquisition_store", None)
+        if store is None:
+            return None
+        recovered = store.recover_dispatching_requests()
+        if recovered:
+            cycle_ids = {str(item.get("cycle_id") or "") for item in recovered if item.get("cycle_id")}
+            cycle_id = next(iter(cycle_ids), "")
+            self._emit(
+                "acquisition_recovery_required",
+                cycle_id=cycle_id,
+                recovered_requests=len(recovered),
+            )
+            report = store.get_cycle_report(cycle_id) if cycle_id else {"status": "recovery_required"}
+            report["status"] = "recovery_required"
+            report["recovered_requests"] = recovered
+            return report
+        if _as_bool(self._phase_a_config("kill_switch")):
+            self._emit("acquisition_kill_switch_activated", reason="configured_kill_switch")
+            return {"status": "kill_switch"}
+        if not force and not _as_bool(self._phase_a_config("scheduler_enabled")):
+            return None
+        if not _as_bool(self._phase_a_config("global_enabled")):
+            return {"status": "disabled"}
+        if _as_bool(self._phase_a_config("ai_enrichment_enabled")):
+            self._emit("acquisition_ai_enrichment_blocked", reason="phase_a_ai_enrichment_not_implemented")
+            return {"status": "disabled", "reason": "phase_a_ai_enrichment_not_implemented"}
+
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        current = current.astimezone(timezone.utc)
+        scheduled_at = current.isoformat()
+        window_key = f"phase_a:{current.strftime('%Y-%m-%d')}"
+        manifest = self._configured_manifest()
+        store.ensure_targets(manifest)
+        allow_recheck = _as_bool(self._config("acquisition.phase_a.allow_quarantined_recheck", False))
+        targets = []
+        for target in store.list_targets(include_disabled=False):
+            if not allow_recheck and str(target.get("maturity_state") or "") in {"quarantined", "disabled"}:
+                continue
+            if not allow_recheck and str(target.get("target_kind") or "") == "employer_career_site":
+                attempts = store.get_target_history(str(target["target_id"])).get("attempts") or []
+                if len(attempts) >= _as_int(target.get("max_direct_requests"), 3):
+                    continue
+            targets.append(target)
+            self._emit_stale_alert_if_needed(target)
+        if not targets:
+            self._emit("acquisition_cycle_failed", reason="no_enabled_targets")
+            return {"status": "no_targets"}
+
+        cycle = store.claim_due_cycle(
+            window_key=window_key,
+            lease_owner=self.lease_owner,
+            scheduled_at=scheduled_at,
+            lease_seconds=self.lease_seconds,
+            force=force,
+        )
+        if cycle is None:
+            return None
+        cycle_id = str(cycle["cycle_id"])
+        global_request_ceiling = _as_int(self._phase_a_config("global_request_ceiling"), 100)
+        cycle_request_ceiling = min(
+            _as_int(self._phase_a_config("cycle_request_ceiling"), 16),
+            global_request_ceiling,
+        )
+        forecast_requests = sum(min(_as_int(target.get("max_direct_requests"), 3), 1) for target in targets)
+        store.set_cycle_forecast(cycle_id, requests=min(forecast_requests, cycle_request_ceiling), credits=0)
+        store.ensure_cycle_tasks(cycle_id, targets)
+
+        completed = 0
+        failures = 0
+        recovery_required = False
+        recovery_reason = ""
+        valid_target_ids: list[str] = []
+        while True:
+            task = store.claim_next_task(
+                cycle_id=cycle_id,
+                lease_owner=self.lease_owner,
+                lease_seconds=self.lease_seconds,
+            )
+            if task is None:
+                break
+            target_id = str(task["target_id"])
+            target = store.get_target(target_id)
+            if completed >= cycle_request_ceiling:
+                failures += 1
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="budget_exhausted",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code="cycle_request_ceiling",
+                    error_message="Global Phase A cycle request ceiling reached.",
+                )
+                self._emit("acquisition_budget_exhausted", cycle_id=cycle_id, target_id=target_id)
+                continue
+            try:
+                result = self._execute_target(cycle_id=cycle_id, task=task, target=target)
+                completed += 1
+                if bool(result.get("valid_snapshot")) and bool(target.get("publication_enabled")):
+                    valid_target_ids.append(target_id)
+                if str(result.get("status") or "") in {"failed", "blocked", "budget_exhausted"}:
+                    failures += 1
+            except AcquisitionRecoveryRequiredError as exc:
+                failures += 1
+                recovery_required = True
+                recovery_reason = str(exc)[:500]
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="recovery_required",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code="recovery_required",
+                    error_message=recovery_reason,
+                )
+                self._emit("acquisition_recovery_required", cycle_id=cycle_id, target_id=target_id)
+                break
+            except AcquisitionUncertainOutcomeError as exc:
+                failures += 1
+                recovery_required = True
+                recovery_reason = str(exc)[:500]
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="recovery_required",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code="uncertain_external_outcome",
+                    error_message=recovery_reason,
+                )
+                self._emit("acquisition_recovery_required", cycle_id=cycle_id, target_id=target_id)
+                break
+            except AcquisitionDispatchBlockedError as exc:
+                failures += 1
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="blocked",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code="dispatch_blocked",
+                    error_message=str(exc)[:500],
+                )
+                self._emit("acquisition_source_blocked", cycle_id=cycle_id, target_id=target_id)
+            except Exception as exc:
+                failures += 1
+                LOGGER.exception("phase_a_target_failed", extra={"target_id": target_id, "cycle_id": cycle_id})
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="failed",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code=type(exc).__name__.casefold(),
+                    error_message=str(exc)[:500],
+                )
+                self._emit(
+                    "acquisition_source_failed", cycle_id=cycle_id, target_id=target_id, reason=type(exc).__name__
+                )
+
+        if recovery_required:
+            store.complete_cycle(
+                cycle_id,
+                status="recovery_required",
+                error_code="recovery_required",
+                error_message=recovery_reason or "Phase A cycle requires explicit recovery.",
+            )
+            return store.get_cycle_report(cycle_id)
+
+        publication_id = ""
+        publication_enabled = _as_bool(self._phase_a_config("publication_enabled"))
+        if publication_enabled and valid_target_ids:
+            try:
+                self._failpoint("during_publication_creation")
+                publication_id = store.publish_valid_snapshot(cycle_id=cycle_id, valid_target_ids=valid_target_ids)
+            except BaseException as exc:
+                store.complete_cycle(
+                    cycle_id,
+                    status="recovery_required",
+                    error_code="publication_recovery_required",
+                    error_message=str(exc)[:500],
+                )
+                raise
+        cycle_status = "degraded" if failures else "completed"
+        store.complete_cycle(cycle_id, status=cycle_status, publication_id=publication_id)
+        if failures:
+            self._emit("acquisition_catalog_degraded", cycle_id=cycle_id, failed_targets=failures)
+        health = build_rollout_health(getattr(self.repositories, "config_store", None), store)
+        for alert in health.get("alerts") or []:
+            self._emit("production_rollout_alert", cycle_id=cycle_id, **dict(alert))
+        return store.get_cycle_report(cycle_id)
+
+    def recover_cycle(self) -> dict[str, Any] | None:
+        """Protected admin recovery entry point; kill switch still wins."""
+
+        return self.run_due_cycle(force=True)
+
+    def validate_target(self, target_id: str, *, validation_key: str = "") -> dict[str, Any]:
+        """Run exactly one explicitly requested Phase B target.
+
+        This path is admin/worker-only at the API boundary.  It never consults
+        the daily scheduler window and never loops over the manifest.
+        """
+
+        store = getattr(self.repositories, "acquisition_store", None)
+        if store is None:
+            raise ValueError("Phase B validation requires sqlite storage support.")
+        if _as_bool(self._phase_a_config("kill_switch")):
+            return {"status": "kill_switch", "target_id": str(target_id)}
+        if not _as_bool(self._phase_b_config("controlled_validation_enabled")):
+            return {"status": "disabled", "reason": "phase_b_controlled_validation_disabled"}
+        manifest = {str(item["target_id"]): dict(item) for item in load_phase_a_manifest()}
+        normalized_target_id = str(target_id or "").strip()
+        if normalized_target_id not in manifest:
+            raise KeyError(f"Phase B target '{target_id}' is not in the server-owned manifest.")
+        target = manifest[normalized_target_id]
+        # A controlled validation is a single explicit source run.  The source
+        # is enabled for this run only; publication remains staging-only.
+        target["enabled"] = True
+        target["publication_enabled"] = False
+        target["disabled_reason"] = ""
+        store.ensure_targets([target])
+        target = store.get_target(normalized_target_id)
+        now = datetime.now(timezone.utc)
+        run_key = str(validation_key or f"{now.isoformat()}:{normalized_target_id}")
+        cycle = store.claim_due_cycle(
+            window_key=f"phase_b:{normalized_target_id}:{run_key}",
+            lease_owner=self.lease_owner,
+            scheduled_at=now.isoformat(),
+            lease_seconds=self.lease_seconds,
+            force=False,
+        )
+        if cycle is None:
+            return {"status": "already_claimed", "target_id": normalized_target_id}
+        cycle_id = str(cycle["cycle_id"])
+        store.set_cycle_forecast(cycle_id, requests=1, credits=0)
+        store.ensure_cycle_tasks(cycle_id, [target])
+        task = store.claim_next_task(cycle_id=cycle_id, lease_owner=self.lease_owner, lease_seconds=self.lease_seconds)
+        if task is None:
+            store.complete_cycle(cycle_id, status="failed", error_code="task_claim_failed")
+            return store.get_cycle_report(cycle_id)
+        try:
+            result = self._execute_target(cycle_id=cycle_id, task=task, target=target)
+            publication_id = ""
+            if bool(result.get("valid_snapshot")) and _as_bool(self._phase_b_config("staging_publication_enabled")):
+                publication_id = store.publish_staging_snapshot(
+                    cycle_id=cycle_id,
+                    valid_target_ids=[normalized_target_id],
+                )
+            cycle_status = "degraded" if str(result.get("status") or "") in {"failed", "blocked"} else "completed"
+            store.complete_cycle(cycle_id, status=cycle_status, publication_id=publication_id)
+        except AcquisitionRecoveryRequiredError as exc:
+            store.complete_task(
+                str(task["task_id"]),
+                status="recovery_required",
+                result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                error_code="recovery_required",
+                error_message=str(exc)[:500],
+            )
+            store.complete_cycle(cycle_id, status="recovery_required", error_code="recovery_required", error_message=str(exc)[:500])
+        except AcquisitionUncertainOutcomeError as exc:
+            store.complete_task(
+                str(task["task_id"]),
+                status="recovery_required",
+                result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                error_code="uncertain_external_outcome",
+                error_message=str(exc)[:500],
+            )
+            store.complete_cycle(cycle_id, status="recovery_required", error_code="uncertain_external_outcome", error_message=str(exc)[:500])
+        except AcquisitionDispatchBlockedError as exc:
+            store.complete_task(
+                str(task["task_id"]),
+                status="blocked",
+                result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                error_code="dispatch_blocked",
+                error_message=str(exc)[:500],
+            )
+            store.complete_cycle(cycle_id, status="blocked", error_code="dispatch_blocked", error_message=str(exc)[:500])
+        except Exception as exc:
+            LOGGER.exception("phase_b_target_failed", extra={"target_id": normalized_target_id, "cycle_id": cycle_id})
+            store.complete_task(
+                str(task["task_id"]),
+                status="failed",
+                result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                error_code=type(exc).__name__.casefold(),
+                error_message=str(exc)[:500],
+            )
+            store.complete_cycle(cycle_id, status="failed", error_code=type(exc).__name__.casefold(), error_message=str(exc)[:500])
+        return store.get_cycle_report(cycle_id)
+
+    def _execute_target(self, *, cycle_id: str, task: Mapping[str, Any], target: Mapping[str, Any]) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        target_id = str(target["target_id"])
+        task_id = str(task["task_id"])
+        portal_audit = portal_audit_gate(target)
+        if portal_audit.get("required") and not portal_audit.get("approved"):
+            raise AcquisitionDispatchBlockedError(
+                "phase_g_portal_audit_not_passed:" + ",".join(portal_audit.get("missing") or [])
+            )
+        idempotency_key = f"phase_a:{cycle_id}:{target_id}:attempt:{int(task.get('attempt_count') or 1)}"
+        phase_i_target_credits = dict(self._phase_i_config("target_credit_ceilings", {}) or {})
+        configured_credit_limits = [
+            _as_int(self._phase_a_config("cycle_credit_ceiling"), 0),
+            _as_int(phase_i_target_credits.get(target_id), 0),
+        ]
+        credit_limits = [limit for limit in configured_credit_limits if limit > 0]
+        request = store.reserve_request(
+            cycle_id=cycle_id,
+            task_id=task_id,
+            target_id=target_id,
+            request_url=str(target["request_url"]),
+            method="GET",
+            mode=str(target.get("request_mode") or "direct"),
+            request_kind="listing_probe" if target.get("target_kind") == "employer_career_site" else "ats_listing",
+            idempotency_key=idempotency_key,
+            credits_estimated=0,
+            request_limit=_as_int(target.get("max_direct_requests"), 3),
+            credit_limit=min(credit_limits) if credit_limits else 0,
+        )
+        request_id = str(request["request_id"])
+        state_before = str(target.get("maturity_state") or "unproven")
+        dispatch_started = False
+        request_persisted = False
+        try:
+            self._failpoint("after_durable_dispatch")
+            if str(target.get("request_mode") or "direct").casefold() != "direct":
+                raise AcquisitionNetworkPolicyError("phase_a_request_mode_not_permitted")
+            allowed_hosts = {
+                hostname_for_url(str(target.get("request_url") or "")),
+                hostname_for_url(str(target.get("canonical_target_url") or "")),
+            }
+            require_phase_a_network_permission(
+                request_url=str(target["request_url"]),
+                canonical_url=str(target.get("canonical_target_url") or target["request_url"]),
+                requester_injected=self.requester is not None and self._requester_is_fixture(),
+                allowed_hosts=allowed_hosts,
+            )
+            store.mark_request_dispatching(request_id)
+            self._failpoint("before_dispatch")
+            dispatch_started = True
+            started = time.perf_counter()
+            connector = str(target.get("connector") or "")
+            if connector in {"greenhouse", "lever"}:
+                fetched = fetch_ats_snapshot(
+                    str(target.get("canonical_target_url") or target["request_url"]),
+                    connector,
+                    requester=self.requester,
+                )
+            else:
+                fetched = fetch_bounded_probe(str(target["request_url"]), requester=self.requester)
+            latency_ms = max(0, round((time.perf_counter() - started) * 1000))
+            self._failpoint("after_response_before_result_persistence")
+            resolved_url = str(fetched.get("resolved_url") or fetched.get("request_url") or target["request_url"])
+            resolved_host = hostname_for_url(resolved_url)
+            if resolved_host not in allowed_hosts:
+                raise AcquisitionNetworkPolicyError("phase_a_redirect_hostname_not_allowlisted")
+            raw_jobs = list(fetched.get("jobs") or [])
+            normalized = normalize_phase_b_jobs(raw_jobs, target)
+            jobs = list(normalized.get("accepted") or [])
+            rejections = list(normalized.get("rejected") or [])
+            complete_snapshot = bool(fetched.get("complete_snapshot"))
+            credible_evidence = bool(fetched.get("credible_evidence"))
+            valid_snapshot = complete_snapshot and credible_evidence
+            status = str(fetched.get("status") or "completed")
+            request_status = "completed" if status == "completed" else status
+            store.complete_request(
+                request_id,
+                status=request_status,
+                provider_status=_as_int(fetched.get("status_code"), 0),
+                credits_actual=0,
+                jobs_returned=len(raw_jobs),
+                resolved_url=resolved_url,
+                latency_ms=latency_ms,
+                detail={
+                    "evidence": str(fetched.get("evidence") or ""),
+                    "redirected": bool(fetched.get("redirected")),
+                    "resolved_ats": str(fetched.get("resolved_ats") or ""),
+                    "accepted_jobs": len(jobs),
+                    "rejected_jobs": len(rejections),
+                    "rejections": rejections,
+                },
+                error_code="" if status == "completed" else status,
+                error_message=str(fetched.get("error") or "")[:500],
+            )
+            request_persisted = True
+            store.record_job_rejections(
+                request_id=request_id,
+                cycle_id=cycle_id,
+                task_id=task_id,
+                target_id=target_id,
+                rejections=rejections,
+            )
+            self._failpoint("during_observation_persistence")
+            counts = store.ingest_snapshot(
+                cycle_id=cycle_id,
+                task_id=task_id,
+                target_id=target_id,
+                jobs=jobs,
+                complete_snapshot=complete_snapshot,
+                valid_snapshot=valid_snapshot,
+            )
+            counts["rejected"] = int(counts.get("rejected") or 0) + len(rejections)
+            attempts = store.get_target_history(target_id).get("attempts") or []
+            attempt_number = len(attempts) + 1
+            if credible_evidence:
+                state_after = "productive" if connector in {"greenhouse", "lever"} else "candidate"
+                streak = 0
+            elif attempt_number >= _as_int(target.get("max_direct_requests"), 3):
+                state_after = "quarantined"
+                streak = int(target.get("zero_yield_streak") or 0) + 1
+            else:
+                state_after = state_before
+                streak = int(target.get("zero_yield_streak") or 0) + (1 if not jobs else 0)
+            store.update_target_state(
+                target_id,
+                maturity_state=state_after,
+                reason=str(fetched.get("evidence") or status),
+                zero_yield_streak=streak,
+            )
+            store.record_attempt(
+                task_id=task_id,
+                cycle_id=cycle_id,
+                target_id=target_id,
+                attempt_number=attempt_number,
+                status=status,
+                complete_snapshot=complete_snapshot,
+                valid_snapshot=valid_snapshot,
+                credible_evidence=credible_evidence,
+                request_count=1,
+                credits_actual=0,
+                jobs_found=len(jobs),
+                state_before=state_before,
+                state_after=state_after,
+                reason=str(fetched.get("evidence") or status),
+                error_code="" if status == "completed" else status,
+                error_message=str(fetched.get("error") or "")[:500],
+            )
+            result = {
+                **counts,
+                "status": status,
+                "complete_snapshot": complete_snapshot,
+                "valid_snapshot": valid_snapshot,
+                "credible_evidence": credible_evidence,
+                "requests_avoided": 0,
+                "credits_avoided": 0,
+            }
+            store.complete_task(
+                task_id,
+                status=status if status not in {"blocked", "failed"} else status,
+                result=result,
+                error_code="" if status == "completed" else status,
+                error_message=str(fetched.get("error") or "")[:500],
+            )
+            return result
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            if request_persisted:
+                raise AcquisitionRecoveryRequiredError(
+                    "Request outcome is durable but a later Phase A persistence boundary failed."
+                ) from exc
+            if dispatch_started:
+                store.complete_request(
+                    request_id,
+                    status="uncertain",
+                    uncertain_external_outcome=True,
+                    recovery_state="recovery_required",
+                    error_code="uncertain_external_outcome",
+                    error_message="External acquisition may have occurred before persistence completed.",
+                )
+                raise AcquisitionUncertainOutcomeError(
+                    "External acquisition outcome is uncertain; explicit recovery is required."
+                ) from exc
+            store.complete_request(
+                request_id,
+                status="blocked",
+                recovery_state="not_dispatched",
+                error_code="dispatch_blocked",
+                error_message=str(exc)[:500],
+            )
+            raise AcquisitionDispatchBlockedError("Phase A dispatch was rejected before the external call.") from exc
+
+    def _emit_stale_alert_if_needed(self, target: Mapping[str, Any]) -> None:
+        last_success = str(target.get("last_success_at") or "").strip()
+        if not last_success:
+            return
+        try:
+            observed = datetime.fromisoformat(last_success.replace("Z", "+00:00"))
+            if observed.tzinfo is None:
+                observed = observed.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds() / 3600
+        except ValueError:
+            return
+        stale_limit = _as_int(self._phase_i_config("stale_catalog_alert_hours", 48), 48)
+        if age_hours > stale_limit:
+            self._emit(
+                "acquisition_catalog_stale",
+                target_id=str(target.get("target_id") or ""),
+                age_hours=round(age_hours, 2),
+                threshold_hours=stale_limit,
+            )
+
+
+__all__ = [
+    "AcquisitionDispatchBlockedError",
+    "AcquisitionRecoveryRequiredError",
+    "AcquisitionUncertainOutcomeError",
+    "PHASE_A_DEFAULT_CONFIG",
+    "PhaseAAcquisitionScheduler",
+]

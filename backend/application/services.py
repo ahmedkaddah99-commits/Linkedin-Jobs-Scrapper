@@ -14,6 +14,9 @@ from backend.application.assisted_apply_package_service import (
 )
 from backend.application.assisted_apply_preparation_service import AssistedApplyPreparationService
 from backend.application.assisted_apply_service import AssistedApplyConnectionService
+from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
+from backend.application.personalized_jobs_service import PersonalizedJobsService
+from backend.application.production_rollout import ProductionRolloutService
 from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
 from backend.application.domain_services import IdentityAccessService, WorkspaceCatalogService
 from backend.application.quota import get_usage_snapshot
@@ -39,7 +42,6 @@ from backend.connectors.company_career_sites import (
 from backend.domain.assisted_apply import AssistedApplyConnectionRecord, AssistedApplyPreferences
 from backend.domain.models import (
     CareerProfile,
-
     RUN_STATUS_CANCEL_REQUESTED,
     RUN_STATUS_CANCELLED,
     RUN_STATUS_COMPLETED,
@@ -205,7 +207,9 @@ def _workspace_run_schedule_payload(workspace: WorkspaceDefinition) -> dict[str,
 
 def _is_builder_created_workspace(workspace: WorkspaceDefinition) -> bool:
     metadata = dict(workspace.metadata or {})
-    return str(metadata.get("builder_mode") or "").strip() == "scratch" or bool(metadata.get("workspace_configuration_v2"))
+    return str(metadata.get("builder_mode") or "").strip() == "scratch" or bool(
+        metadata.get("workspace_configuration_v2")
+    )
 
 
 def _builder_workspace_flow_id(workspace: WorkspaceDefinition) -> str:
@@ -331,9 +335,7 @@ def _builder_workspace_cv_asset_field_errors(
         ]
 
     bound_workspace_id = str(
-        asset.get("workspace_binding", {}).get("workspace_id")
-        or asset.get("workspace_id")
-        or ""
+        asset.get("workspace_binding", {}).get("workspace_id") or asset.get("workspace_id") or ""
     ).strip()
     if bound_workspace_id and bound_workspace_id != workspace.id:
         return [
@@ -380,11 +382,7 @@ def _builder_workspace_run_preflight_field_errors(
     object_storage: Any = None,
 ) -> list[dict[str, str]]:
     saved_asset_id = _workspace_cv_asset_id(workspace)
-    asset_id = str(
-        (run_plan_settings or {}).get("workspace_cv_asset_id")
-        or saved_asset_id
-        or ""
-    ).strip()
+    asset_id = str((run_plan_settings or {}).get("workspace_cv_asset_id") or saved_asset_id or "").strip()
     if asset_id and saved_asset_id and asset_id != saved_asset_id:
         return [
             _field_error(
@@ -434,14 +432,8 @@ def _builder_workspace_validation_report(
     settings: Mapping[str, Any],
 ) -> dict[str, Any]:
     catalog = workspace_builder_catalog().to_dict()
-    catalog_sources = {
-        str(item["id"]): set(item.get("compatible_flows") or [])
-        for item in catalog["sources"]
-    }
-    catalog_modules = {
-        str(item["id"]): set(item.get("compatible_flows") or [])
-        for item in catalog["modules"]
-    }
+    catalog_sources = {str(item["id"]): set(item.get("compatible_flows") or []) for item in catalog["sources"]}
+    catalog_modules = {str(item["id"]): set(item.get("compatible_flows") or []) for item in catalog["modules"]}
     field_errors: list[dict[str, str]] = []
     valid_source_ids: list[str] = []
 
@@ -601,9 +593,10 @@ def _validate_builder_workspace_payload(payload: Mapping[str, Any], *, workspace
         settings=dict(payload.get("settings") or {}),
     )
     settings = dict(payload.get("settings") or {})
-    if flow_id == "tailored_documents" and not str(
-        settings.get("workspace_cv_asset_id") or payload.get("workspace_cv_asset_id") or ""
-    ).strip():
+    if (
+        flow_id == "tailored_documents"
+        and not str(settings.get("workspace_cv_asset_id") or payload.get("workspace_cv_asset_id") or "").strip()
+    ):
         report["field_errors"] = _dedupe_field_errors(
             [
                 *(report.get("field_errors") or []),
@@ -655,9 +648,7 @@ def _validate_builder_workspace_definition(
                 ),
             ]
         )
-    if sorted(_builder_workspace_enabled_module_ids(workspace)) != sorted(
-        _builder_workspace_module_ids(workspace)
-    ):
+    if sorted(_builder_workspace_enabled_module_ids(workspace)) != sorted(_builder_workspace_module_ids(workspace)):
         report["field_errors"] = _dedupe_field_errors(
             [
                 *(report.get("field_errors") or []),
@@ -890,6 +881,9 @@ class BackendApplication:
     _assisted_apply_preparation_service: AssistedApplyPreparationService = field(init=False, repr=False)
     _tracker_application_service: TrackerApplicationService = field(init=False, repr=False)
     _run_lifecycle_service: RunLifecycleService = field(init=False, repr=False)
+    _acquisition_scheduler: PhaseAAcquisitionScheduler = field(init=False, repr=False)
+    _production_rollout_service: ProductionRolloutService = field(init=False, repr=False)
+    _personalized_jobs_service: PersonalizedJobsService = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._workspace_catalog_service = WorkspaceCatalogService(
@@ -898,9 +892,7 @@ class BackendApplication:
             validate_workspace=self._validate_workspace_definition,
         )
         self._identity_access_service = IdentityAccessService(repositories=self.repositories)
-        self._assisted_apply_connection_service = AssistedApplyConnectionService(
-            repositories=self.repositories
-        )
+        self._assisted_apply_connection_service = AssistedApplyConnectionService(repositories=self.repositories)
         self._assisted_apply_package_service = ApplicationPackageService(
             repositories=self.repositories,
             object_storage=self.object_storage,
@@ -926,6 +918,218 @@ class BackendApplication:
             enqueue_due_scheduled_runs=self.enqueue_due_scheduled_runs,
             object_storage=self.object_storage,
         )
+        self._acquisition_scheduler = PhaseAAcquisitionScheduler(
+            repositories=self.repositories,
+            event_emitter=self.emit_event,
+            lease_owner="system-acquisition",
+        )
+        self._production_rollout_service = ProductionRolloutService(
+            repositories=self.repositories,
+            event_emitter=self.emit_event,
+        )
+        self._personalized_jobs_service = PersonalizedJobsService(
+            repositories=self.repositories,
+            object_storage=self.object_storage,
+        )
+
+    def run_due_acquisition(self) -> dict[str, Any] | None:
+        """Worker-only entry point for the disabled-by-default Phase A scheduler."""
+
+        return self._acquisition_scheduler.run_due_cycle()
+
+    def recover_acquisition_cycle(self) -> dict[str, Any] | None:
+        """Admin-only recovery entry point; no user/workspace run is created."""
+
+        return self._acquisition_scheduler.recover_cycle()
+
+    def decide_acquisition_request_recovery(
+        self,
+        request_id: str,
+        *,
+        decision: str,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Acquisition recovery requires sqlite storage support.")
+        return store.decide_uncertain_request(request_id, decision=decision, reason=reason)
+
+    def list_acquisition_cycles(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return []
+        return store.list_cycles(limit=limit, offset=offset)
+
+    def get_acquisition_cycle_report(self, cycle_id: str) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Acquisition reporting requires sqlite storage support.")
+        return store.get_cycle_report(cycle_id)
+
+    def get_acquisition_cycle_source_metrics(self, cycle_id: str) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        if store is None or not hasattr(store, "get_cycle_source_metrics"):
+            return []
+        return store.get_cycle_source_metrics(cycle_id)
+
+    def get_latest_acquisition_report(self) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return None
+        return store.get_latest_report()
+
+    def get_production_rollout_status(self) -> dict[str, Any]:
+        return self._production_rollout_service.status()
+
+    def configure_production_rollout(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._production_rollout_service.configure(payload)
+
+    def advance_production_rollout(self, stage: str) -> dict[str, Any]:
+        return self._production_rollout_service.advance(stage)
+
+    def get_production_rollout_health(self) -> dict[str, Any]:
+        return self._production_rollout_service.status()["health"]
+
+    def get_public_acquisition_catalog(self, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return {"jobs": [], "total": 0, "publication": None, "freshness": "unpublished"}
+        return store.get_public_catalog(limit=limit, offset=offset)
+
+    # Phase C: all methods below read the already-published shared catalog and
+    # user-owned state. They deliberately do not call the acquisition scheduler.
+    def get_personalized_jobs(
+        self,
+        user_id: str,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        cursor: str = "",
+        limit: int = 25,
+        include_hidden: bool = False,
+        hidden_only: bool = False,
+        plan_id: str = DEFAULT_PLAN_ID,
+    ) -> dict[str, Any]:
+        return self._personalized_jobs_service.feed(
+            user_id,
+            filters=filters,
+            cursor=cursor,
+            limit=limit,
+            include_hidden=include_hidden,
+            hidden_only=hidden_only,
+            plan_id=plan_id,
+        )
+
+    def get_personalized_preferences(self, user_id: str) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.get_preferences(user_id)
+
+    def save_personalized_preferences(
+        self,
+        user_id: str,
+        payload: Mapping[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        return self._personalized_jobs_service.upsert_preferences(
+            user_id,
+            payload,
+            expected_revision=expected_revision,
+        )
+
+    def get_personalized_saved_search(self, user_id: str) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.get_saved_search(user_id)
+
+    def save_personalized_saved_search(self, user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._personalized_jobs_service.upsert_saved_search(user_id, payload)
+
+    def get_personalized_job_detail(self, user_id: str, posting_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
+
+    def get_personalized_company_detail(self, user_id: str, company_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.company_detail(user_id, company_id, plan_id=plan_id)
+
+    def upsert_personalized_company_profile(
+        self,
+        company_id: str,
+        payload: Mapping[str, Any],
+        *,
+        logo_bytes: bytes | None = None,
+        logo_source_url: str = "",
+        logo_content_type: str = "image/png",
+    ) -> dict[str, Any]:
+        """Worker/admin enrichment hook; never exposed through user Jobs routes."""
+        return self._personalized_jobs_service.upsert_company_profile(
+            company_id,
+            payload,
+            logo_bytes=logo_bytes,
+            logo_source_url=logo_source_url,
+            logo_content_type=logo_content_type,
+        )
+
+    def set_personalized_job_state(
+        self,
+        user_id: str,
+        posting_id: str,
+        state: str,
+        *,
+        reason_code: str = "",
+    ) -> dict[str, Any]:
+        return self._personalized_jobs_service.set_state(
+            user_id,
+            posting_id,
+            state,
+            reason_code=reason_code,
+        )
+
+    def report_personalized_job(self, user_id: str, posting_id: str, *, reason_code: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return self._personalized_jobs_service.report(
+            user_id,
+            posting_id,
+            reason_code=reason_code,
+            payload=payload,
+        )
+
+    def report_personalized_filter(self, user_id: str, *, reason_code: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return self._personalized_jobs_service.report_filter(user_id, reason_code=reason_code, payload=payload)
+
+    def get_hidden_personalized_jobs(self, user_id: str, *, limit: int = 25, cursor: str = "") -> dict[str, Any]:
+        return self._personalized_jobs_service.hidden(user_id, limit=limit, cursor=cursor)
+
+    def validate_phase_b_target(self, target_id: str, *, validation_key: str = "") -> dict[str, Any]:
+        """Admin/worker-only single-target Phase B validation."""
+
+        return self._acquisition_scheduler.validate_target(target_id, validation_key=validation_key)
+
+    def get_staging_acquisition_catalog(
+        self,
+        *,
+        publication_id: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None or not hasattr(store, "get_staging_catalog"):
+            return {"jobs": [], "total": 0, "publication": None, "freshness": "unpublished"}
+        return store.get_staging_catalog(publication_id=publication_id, limit=limit, offset=offset)
+
+    def promote_staging_acquisition_catalog(self, publication_id: str) -> str:
+        store = self.repositories.acquisition_store
+        if store is None or not hasattr(store, "promote_staging_publication"):
+            raise ValueError("Staging catalog promotion requires sqlite storage support.")
+        if not bool(self._acquisition_scheduler._phase_b_config("promotion_enabled")):
+            raise ValueError("Phase B catalog promotion is disabled.")
+        return store.promote_staging_publication(publication_id)
+
+    def list_acquisition_cycle_targets(self, cycle_id: str) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return []
+        return store.list_cycle_targets(cycle_id)
+
+    def get_acquisition_target_history(self, target_id: str) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Acquisition reporting requires sqlite storage support.")
+        return store.get_target_history(target_id)
 
     def _validate_workspace_definition(
         self,
@@ -1277,7 +1481,13 @@ class BackendApplication:
 
             mode_bucket = by_mode.setdefault(
                 request_mode,
-                {"request_mode": request_mode, "requests": 0, "billed_requests": 0, "runner_credits": 0, "native_credits": 0},
+                {
+                    "request_mode": request_mode,
+                    "requests": 0,
+                    "billed_requests": 0,
+                    "runner_credits": 0,
+                    "native_credits": 0,
+                },
             )
             mode_bucket["requests"] += 1
             mode_bucket["runner_credits"] += runner_credits
@@ -1358,8 +1568,12 @@ class BackendApplication:
                 "occurred_to": str(occurred_to or "").strip(),
             },
             "totals": totals,
-            "by_request_mode": sorted(by_mode.values(), key=lambda item: (-int(item["runner_credits"]), str(item["request_mode"]))),
-            "by_domain": sorted(by_domain.values(), key=lambda item: (-int(item["runner_credits"]), str(item["domain"]))),
+            "by_request_mode": sorted(
+                by_mode.values(), key=lambda item: (-int(item["runner_credits"]), str(item["request_mode"]))
+            ),
+            "by_domain": sorted(
+                by_domain.values(), key=lambda item: (-int(item["runner_credits"]), str(item["domain"]))
+            ),
             "by_run": sorted(by_run.values(), key=lambda item: (-int(item["runner_credits"]), str(item["run_id"]))),
         }
 
@@ -1484,8 +1698,7 @@ class BackendApplication:
     ) -> list[dict[str, Any]]:
         if not str(occurred_from or "").strip():
             occurred_from = (
-                datetime.now(timezone.utc)
-                .replace(hour=0, minute=0, second=0, microsecond=0)
+                datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
                 - timedelta(days=max(1, int(days)) - 1)
             ).isoformat()
         events = self._scrapeops_event_rows(
@@ -1522,8 +1735,7 @@ class BackendApplication:
 
     def get_scrapeops_reconciliation_history(self, *, days: int = 30) -> list[dict[str, Any]]:
         occurred_from = (
-            datetime.now(timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
+            datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             - timedelta(days=max(1, int(days)) - 1)
         ).isoformat()
         events = self._list_named_analytics_events(
@@ -1551,8 +1763,7 @@ class BackendApplication:
 
     def get_scrapeops_alert_history(self, *, days: int = 30, limit: int = 50) -> dict[str, Any]:
         occurred_from = (
-            datetime.now(timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
+            datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             - timedelta(days=max(1, int(days)) - 1)
         ).isoformat()
         events = self._list_named_analytics_events(
@@ -1638,7 +1849,11 @@ class BackendApplication:
                     "message": "ScrapeOps account is out of credits.",
                 }
             )
-        elif account_state.get("available") and low_remaining_threshold > 0 and int(account_usage.get("remaining") or 0) <= low_remaining_threshold:
+        elif (
+            account_state.get("available")
+            and low_remaining_threshold > 0
+            and int(account_usage.get("remaining") or 0) <= low_remaining_threshold
+        ):
             alerts.append(
                 {
                     "alert_type": "low_remaining_credits",
@@ -1777,10 +1992,18 @@ class BackendApplication:
         effective_settings = dict(payload.get("settings") or {})
         for key, value in dict(report.get("derived_runtime_defaults") or {}).items():
             current_value = effective_settings.get(key)
-            if key not in effective_settings or current_value is None or current_value == "" or current_value == [] or current_value == {}:
+            if (
+                key not in effective_settings
+                or current_value is None
+                or current_value == ""
+                or current_value == []
+                or current_value == {}
+            ):
                 effective_settings[key] = value
 
-        locality_mode = str(effective_settings.get("company_site_locality_mode") or "local_preferred").strip() or "local_preferred"
+        locality_mode = (
+            str(effective_settings.get("company_site_locality_mode") or "local_preferred").strip() or "local_preferred"
+        )
         account_state = _scrapeops_account_state()
         admin_policy = self.get_scrapeops_admin_policy()
         active_domain_policies = [
@@ -1857,7 +2080,11 @@ class BackendApplication:
                 remaining_runner_credits = dict(policy_snapshot.get("runner_credits_per_month") or {}).get("remaining")
                 details.append(
                     "Remaining monthly runner credits: "
-                    + ("Unlimited" if int(remaining_runner_credits or 0) == -1 else str(int(remaining_runner_credits or 0)))
+                    + (
+                        "Unlimited"
+                        if int(remaining_runner_credits or 0) == -1
+                        else str(int(remaining_runner_credits or 0))
+                    )
                 )
             source_field_errors = list(result.get("field_errors") or [])
             status = str(result.get("status") or "valid")
@@ -1944,9 +2171,7 @@ class BackendApplication:
 
         workspace = self.repositories.workspace_repository.get_workspace(workspace_id)
         automation_flow = str(
-            workspace.metadata.get("automation_flow")
-            or workspace.settings.get("automation_flow")
-            or ""
+            workspace.metadata.get("automation_flow") or workspace.settings.get("automation_flow") or ""
         ).strip()
         if automation_flow and automation_flow != "tailored_documents":
             raise ValueError("Quick apply requires a tailored-documents workspace.")
@@ -2020,7 +2245,9 @@ class BackendApplication:
         existing_schedule = (existing_workspace.metadata or {}).get(WORKSPACE_RUN_SCHEDULE_METADATA_KEY)
         if isinstance(existing_schedule, dict):
             workspace.metadata = dict(workspace.metadata or {})
-            workspace.metadata[WORKSPACE_RUN_SCHEDULE_METADATA_KEY] = _workspace_run_schedule_payload(existing_workspace)
+            workspace.metadata[WORKSPACE_RUN_SCHEDULE_METADATA_KEY] = _workspace_run_schedule_payload(
+                existing_workspace
+            )
         self.upsert_workflow_template(workflow_template)
         return self.upsert_workspace(workspace)
 
@@ -2098,9 +2325,7 @@ class BackendApplication:
             try:
                 owner_user_id = str(workspace.owner_user_id or "").strip()
                 if not owner_user_id:
-                    raise ValueError(
-                        f"Workspace '{workspace.id}' has no owner and cannot enqueue scheduled runs."
-                    )
+                    raise ValueError(f"Workspace '{workspace.id}' has no owner and cannot enqueue scheduled runs.")
                 run = self.enqueue_run(
                     workspace.id,
                     requested_by=SCHEDULED_RUN_REQUESTED_BY,
@@ -2149,10 +2374,9 @@ class BackendApplication:
                 if job.job_id == job_id:
                     return job.to_dict()
         for key, value in self.repositories.job_store.load_all_blobs(run_id).items():
-            if not (
-                str(key).endswith("_rejected")
-                or str(key).endswith("_dropped_duplicates")
-            ) or not isinstance(value, list):
+            if not (str(key).endswith("_rejected") or str(key).endswith("_dropped_duplicates")) or not isinstance(
+                value, list
+            ):
                 continue
             for item in value:
                 if isinstance(item, dict) and str(item.get("job_id") or "") == job_id:
@@ -2216,18 +2440,13 @@ class BackendApplication:
         )
         job_sets = self.list_job_sets(run_id)
         existing_reviews_by_job = {
-            review.job_id: review
-            for review in self.list_reviews(run_id=run_id, limit=100000, offset=0)
+            review.job_id: review for review in self.list_reviews(run_id=run_id, limit=100000, offset=0)
         }
 
         for set_key in review_job_set_keys:
             for job in job_sets.get(set_key, []):
                 existing_review = existing_reviews_by_job.get(job.job_id)
-                if (
-                    existing_review
-                    and existing_review.status == "approved"
-                    and existing_review.decision == "approved"
-                ):
+                if existing_review and existing_review.status == "approved" and existing_review.decision == "approved":
                     continue
                 if existing_review and existing_review.decision == "rejected":
                     continue
@@ -2264,9 +2483,7 @@ class BackendApplication:
                         "status": "approved",
                         "decision": "approved",
                         "reviewer": (
-                            existing_review.reviewer
-                            if existing_review and existing_review.reviewer
-                            else reviewer
+                            existing_review.reviewer if existing_review and existing_review.reviewer else reviewer
                         ),
                         "notes": existing_review.notes if existing_review else "",
                         "job_set_key": set_key,
@@ -2429,6 +2646,7 @@ class BackendApplication:
             profile.baseline_cv_source_version = str(payload["baseline_cv_source_version"] or "").strip()
         if "status" in payload:
             from backend.domain.models import CAREER_PROFILE_STATUSES
+
             status = str(payload["status"] or "").strip()
             if status in CAREER_PROFILE_STATUSES:
                 profile.status = status
@@ -2615,6 +2833,7 @@ class BackendApplication:
             person_id=person_id,
             status=status,
         )
+
     def list_api_tokens(
         self,
         *,
@@ -2835,6 +3054,7 @@ class BackendApplication:
 
     def _get_job_for_run(self, *, run_id: str, job_id: str) -> JobRecord:
         return self._tracker_application_service.get_job_for_run(run_id=run_id, job_id=job_id)
+
     def get_run(self, run_id: str) -> RunRecord:
         return self._run_lifecycle_service.get_run(run_id)
 
@@ -3077,6 +3297,7 @@ class BackendApplication:
 
     def _refresh_run_job_keys(self, run_id: str) -> None:
         self._run_lifecycle_service.refresh_run_job_keys(run_id)
+
     # --- AA-03: Application Package delegation ---
 
     def create_application_package(
@@ -3166,7 +3387,14 @@ class BackendApplication:
         )
 
     def create_assisted_apply_document_grant(
-        self, *, package_id: str, document_id: str, adapter: str = "", upload_field_intent: str = "", raw_session: str, extension_origin: str
+        self,
+        *,
+        package_id: str,
+        document_id: str,
+        adapter: str = "",
+        upload_field_intent: str = "",
+        raw_session: str,
+        extension_origin: str,
     ):
         return self._assisted_apply_package_service.create_document_grant(
             package_id=package_id,
@@ -3177,9 +3405,7 @@ class BackendApplication:
             extension_origin=extension_origin,
         )
 
-    def consume_assisted_apply_document_grant(
-        self, *, raw_grant: str, raw_session: str, extension_origin: str
-    ):
+    def consume_assisted_apply_document_grant(self, *, raw_grant: str, raw_session: str, extension_origin: str):
         return self._assisted_apply_package_service.consume_document_grant(
             raw_grant=raw_grant,
             raw_session=raw_session,
@@ -3245,5 +3471,7 @@ class BackendApplication:
 
     def act_on_assisted_apply_preparation(self, *, user_id: str, preparation_id: str, action: str):
         return self._assisted_apply_preparation_service.apply_action(
-            user_id=user_id, preparation_id=preparation_id, action=action,
+            user_id=user_id,
+            preparation_id=preparation_id,
+            action=action,
         )

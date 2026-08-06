@@ -19,6 +19,11 @@ services:
       # Frontend-only personalized jobs preview; enabled for Runr verification.
       - key: VITE_PERSONALIZED_JOBS_EXPERIENCE
         value: "1"
+      # Real catalog and legacy-navigation retirement are separately gated by Phase I.
+      - key: VITE_PERSONALIZED_JOBS_DATA_MODE
+        value: "synthetic"
+      - key: VITE_REPLACE_LEGACY_JOBS_NAV
+        value: "0"
       # Controlled pilot switch; leave unset/false outside the AA-226 pilot.
       - key: VITE_ENABLE_ASSISTED_APPLY_PREPARATION
         sync: false

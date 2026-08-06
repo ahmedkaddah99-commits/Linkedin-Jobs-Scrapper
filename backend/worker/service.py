@@ -338,6 +338,25 @@ class WorkerService:
                 )
                 if should_check_scheduled_runs:
                     last_scheduled_run_check = now
+                    if isinstance(self.application, BackendApplication):
+                        try:
+                            acquisition_result = self.application.run_due_acquisition()
+                        except BaseException as exc:
+                            if not _is_handled_worker_failure(exc):
+                                raise
+                            self.logger.exception(
+                                "worker_acquisition_cycle_failed",
+                                extra=self._log_extra(task_name="scheduled_acquisition"),
+                            )
+                        else:
+                            if acquisition_result:
+                                self.logger.info(
+                                    "worker_acquisition_cycle_complete",
+                                    extra=self._log_extra(
+                                        task_name="scheduled_acquisition",
+                                        acquisition_status=str(acquisition_result.get("cycle", {}).get("status") or acquisition_result.get("status") or ""),
+                                    ),
+                                )
                 try:
                     run = self.process_next(
                         auto_retry_failed=auto_retry_failed,

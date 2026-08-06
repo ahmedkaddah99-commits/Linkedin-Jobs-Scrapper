@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote, urlparse
 
@@ -122,52 +123,117 @@ def _normalize_lever_job(job: dict[str, Any], company_slug: str) -> dict[str, An
     }
 
 
-def fetch_ats_jobs(url: str, ats: str) -> list[dict]:
+def fetch_ats_snapshot(
+    url: str,
+    ats: str,
+    *,
+    requester: Callable[..., Any] | None = None,
+    timeout_seconds: int = ATS_REQUEST_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Fetch one bounded public ATS listing snapshot with request metadata."""
+
+    request = requester or requests.get
     normalized_ats = str(ats or "").strip().casefold()
     if normalized_ats == "greenhouse":
         board_token = _greenhouse_board_token(url)
         if not board_token:
             LOGGER.warning("Unable to derive a Greenhouse board token from %s; falling through to proxy.", url)
-            return []
+            return {
+                "jobs": [],
+                "status": "invalid_target",
+                "complete_snapshot": False,
+                "credible_evidence": False,
+                "request_url": url,
+            }
+        request_url = f"https://boards-api.greenhouse.io/v1/boards/{quote(board_token, safe='')}/jobs?content=true"
         try:
-            response = requests.get(
-                f"https://boards-api.greenhouse.io/v1/boards/{quote(board_token, safe='')}/jobs",
-                params={"content": "true"},
-                timeout=ATS_REQUEST_TIMEOUT_SECONDS,
-            )
+            response = request(request_url, timeout=timeout_seconds, allow_redirects=False)
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             LOGGER.warning("Greenhouse API request failed for %s; falling through to proxy: %s", url, exc)
-            return []
+            return {
+                "jobs": [],
+                "status": "failed",
+                "complete_snapshot": False,
+                "credible_evidence": False,
+                "request_url": request_url,
+                "error": str(exc),
+            }
         jobs = payload.get("jobs") if isinstance(payload, dict) else []
-        return [_normalize_greenhouse_job(job, board_token) for job in jobs or [] if isinstance(job, dict)]
+        return {
+            "jobs": [_normalize_greenhouse_job(job, board_token) for job in jobs or [] if isinstance(job, dict)],
+            "status": "completed",
+            "status_code": int(getattr(response, "status_code", 200) or 200),
+            "complete_snapshot": isinstance(payload, dict) and isinstance(payload.get("jobs"), list),
+            "credible_evidence": isinstance(payload, dict) and isinstance(payload.get("jobs"), list),
+            "request_url": request_url,
+            "resolved_url": str(getattr(response, "url", "") or request_url),
+            "redirected": str(getattr(response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
+        }
 
     if normalized_ats == "lever":
         company_slug = _lever_company_slug(url)
         if not company_slug:
             LOGGER.warning("Unable to derive a Lever company slug from %s; falling through to proxy.", url)
-            return []
+            return {
+                "jobs": [],
+                "status": "invalid_target",
+                "complete_snapshot": False,
+                "credible_evidence": False,
+                "request_url": url,
+            }
+        request_url = f"https://api.lever.co/v0/postings/{quote(company_slug, safe='')}?mode=json"
         try:
-            response = requests.get(
-                f"https://api.lever.co/v0/postings/{quote(company_slug, safe='')}",
-                timeout=ATS_REQUEST_TIMEOUT_SECONDS,
-            )
+            response = request(request_url, timeout=timeout_seconds, allow_redirects=False)
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             LOGGER.warning("Lever API request failed for %s; falling through to proxy: %s", url, exc)
-            return []
+            return {
+                "jobs": [],
+                "status": "failed",
+                "complete_snapshot": False,
+                "credible_evidence": False,
+                "request_url": request_url,
+                "error": str(exc),
+            }
         postings = payload if isinstance(payload, list) else []
-        return [_normalize_lever_job(job, company_slug) for job in postings if isinstance(job, dict)]
+        return {
+            "jobs": [_normalize_lever_job(job, company_slug) for job in postings if isinstance(job, dict)],
+            "status": "completed",
+            "status_code": int(getattr(response, "status_code", 200) or 200),
+            "complete_snapshot": isinstance(payload, list),
+            "credible_evidence": isinstance(payload, list),
+            "request_url": request_url,
+            "resolved_url": str(getattr(response, "url", "") or request_url),
+            "redirected": str(getattr(response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
+        }
 
     if normalized_ats in {"workday", "personio", "recruitee", "smartrecruiters"}:
-        LOGGER.info("ATS detected but structured API not yet implemented - will fall through to proxy: %s (%s)", url, normalized_ats)
-    return []
+        LOGGER.info(
+            "ATS detected but structured API not yet implemented - will fall through to proxy: %s (%s)",
+            url,
+            normalized_ats,
+        )
+    return {
+        "jobs": [],
+        "status": "unsupported",
+        "complete_snapshot": False,
+        "credible_evidence": False,
+        "request_url": url,
+    }
+
+
+def fetch_ats_jobs(url: str, ats: str) -> list[dict]:
+    """Backward-compatible list-only adapter used by existing user-owned flows."""
+
+    return list(fetch_ats_snapshot(url, ats).get("jobs") or [])
 
 
 __all__ = [
     "ATS_REQUEST_TIMEOUT_SECONDS",
     "detect_ats",
+    "fetch_ats_snapshot",
     "fetch_ats_jobs",
 ]

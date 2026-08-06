@@ -1,9 +1,11 @@
 from .contracts import (
+    AcquisitionStoreProtocol,
     AnalyticsStoreProtocol,
     ArtifactStoreProtocol,
     AuthRepositoryProtocol,
     BackendRepositories,
     CareerProfileStoreProtocol,
+    PersonalizedJobsStoreProtocol,
 
     EvidenceStoreProtocol,
 
@@ -47,12 +49,16 @@ from .sqlite_backed import (
     SqliteWorkerStore,
     SqliteWorkspaceRepository,
 )
+from .sqlite_acquisition import SqliteAcquisitionStore
+from .sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 
 __all__ = [
+    "AcquisitionStoreProtocol",
     "AnalyticsStoreProtocol",
     "ArtifactStoreProtocol",
     "AuthRepositoryProtocol",
     "CareerProfileStoreProtocol",
+    "PersonalizedJobsStoreProtocol",
 
     "BackendRepositories",
     FileCareerProfileStore,
@@ -74,6 +80,8 @@ __all__ = [
     "SecretStoreProtocol",
     "SourcePolicyStoreProtocol",
     "SqliteAnalyticsStore",
+    "SqliteAcquisitionStore",
+    "SqlitePersonalizedJobsStore",
     "SqliteAuthRepository",
     "SqliteArtifactStore",
     "SqliteConfigStore",

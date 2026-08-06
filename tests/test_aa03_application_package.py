@@ -84,7 +84,7 @@ class ApplicationPackageImmutableTests(unittest.TestCase):
             {"OBJECT_STORAGE_LOCAL_ROOT": str(Path(self.temp_dir.name) / "objects")},
             clear=False,
         ):
-            return create_backend()
+            return create_backend(Path(self.temp_dir.name), storage_backend="sqlite", test_mode=True)
 
     def _make_job(self, **overrides):
         base = {"job_id": "job_test_001", "title": "Test Engineer", "company": "Test Corp", "portal": "greenhouse", "url": "", "location": "Remote"}

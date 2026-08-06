@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 import pytest
+import requests
 
 
 _SAFE_TEST_ENV = {
     "RUNR_ENV": "test",
+    "RUNR_TEST_MODE": "1",
+    "RUNR_ACQUISITION_LIVE_NETWORK_ENABLED": "false",
     "DATABASE_BACKEND": "sqlite",
     "TURSO_DATABASE_URL": "",
     "TURSO_AUTH_TOKEN": "",
@@ -51,3 +55,18 @@ def _reset_career_profile_memory_stores():
     yield
     for reset in resetters:
         reset()
+
+
+@pytest.fixture(autouse=True)
+def _forbid_non_loopback_http(monkeypatch):
+    """Make an accidental unmocked outbound HTTP call fail at the test boundary."""
+
+    real_request = requests.sessions.Session.request
+
+    def guarded_request(session, method, url, *args, **kwargs):
+        hostname = (urlsplit(str(url or "")).hostname or "").casefold().rstrip(".")
+        if hostname not in {"localhost", "localhost.localdomain", "127.0.0.1", "::1"}:
+            raise AssertionError(f"unmocked non-loopback HTTP request blocked: {hostname or 'invalid-host'}")
+        return real_request(session, method, url, *args, **kwargs)
+
+    monkeypatch.setattr(requests.sessions.Session, "request", guarded_request)

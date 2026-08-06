@@ -407,6 +407,11 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         target_plan_id = normalize_plan_id(payload.get("plan_id") or DEFAULT_PLAN_ID)
                         if target_plan_id == DEFAULT_PLAN_ID:
                             raise ValueError("Checkout is only available for paid plans.")
+                        config_store = getattr(getattr(application, "repositories", None), "config_store", None)
+                        get_config = getattr(config_store, "get_value", None)
+                        checkout_gate = get_config("acquisition.phase_i.checkout_gate_enabled", None) if callable(get_config) else None
+                        if checkout_gate is not None and str(checkout_gate).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
+                            raise PermissionError("Runr Pro checkout is not enabled for this rollout stage.")
                         plan = get_plan(target_plan_id)
                         product_id = str(plan.get("creem_product_id") or "").strip()
                         if not product_id:
