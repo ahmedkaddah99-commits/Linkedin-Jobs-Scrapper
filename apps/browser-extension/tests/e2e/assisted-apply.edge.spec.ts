@@ -181,7 +181,7 @@ test("Edge: review panel", async () => {
   });
   await panelPage.reload();
   await expect(panelPage.getByText("Engineer")).toBeVisible({ timeout: 5000 });
-  await expect(panelPage.getByRole("heading", { name: "Ready" })).toBeVisible();
+  await expect(panelPage.getByLabel("Application review").getByRole("heading", { name: "Ready" })).toBeVisible();
   await expect(panelPage.getByRole("heading", { name: "Documents" })).toBeVisible();
   await expect(fixturePage.locator("body")).toHaveAttribute("data-submit-clicks", "0");
   await panelPage.close(); await fixturePage.close();
