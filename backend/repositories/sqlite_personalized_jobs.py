@@ -919,7 +919,28 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
 
     @staticmethod
     def _priority_sql() -> str:
-        return "COALESCE(CAST(json_extract(page.evaluation_payload, '$.match_intelligence.v2.score') AS REAL), CAST(json_extract(page.evaluation_payload, '$.match_intelligence.score') AS REAL), 0.0)"
+        fit = "COALESCE(CAST(json_extract(page.evaluation_payload, '$.match_intelligence.v2.score') AS REAL), CAST(json_extract(page.evaluation_payload, '$.match_intelligence.score') AS REAL), 50.0)"
+        observed = "COALESCE(NULLIF(page.applicant_latest_observed_at, ''), NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''))"
+        freshness = (
+            "CASE WHEN " + observed + " IS NULL THEN 50.0 "
+            "WHEN (julianday('now') - julianday(" + observed + ")) <= 0 THEN 100.0 "
+            "WHEN (julianday('now') - julianday(" + observed + ")) * 24 >= 240 THEN 0.0 "
+            "ELSE MAX(0.0, 100.0 - (((julianday('now') - julianday(" + observed + ")) * 24) / 2.4)) END"
+        )
+        competition = (
+            "CASE WHEN page.applicant_latest_freshness_status = 'stale' THEN 50.0 "
+            "WHEN page.applicant_latest_exact IS NOT NULL AND page.applicant_latest_exact <= 25 THEN 90.0 "
+            "WHEN page.applicant_latest_exact IS NOT NULL AND page.applicant_latest_exact <= 75 THEN 75.0 "
+            "WHEN page.applicant_latest_exact IS NOT NULL AND page.applicant_latest_exact <= 150 THEN 55.0 "
+            "WHEN page.applicant_latest_exact IS NOT NULL AND page.applicant_latest_exact <= 300 THEN 35.0 "
+            "WHEN page.applicant_latest_exact IS NOT NULL THEN 15.0 "
+            "WHEN page.applicant_latest_min IS NOT NULL AND page.applicant_latest_min <= 25 THEN 90.0 "
+            "WHEN page.applicant_latest_min IS NOT NULL AND page.applicant_latest_min <= 75 THEN 75.0 "
+            "WHEN page.applicant_latest_min IS NOT NULL AND page.applicant_latest_min <= 150 THEN 55.0 "
+            "WHEN page.applicant_latest_min IS NOT NULL AND page.applicant_latest_min <= 300 THEN 35.0 "
+            "WHEN page.applicant_latest_min IS NOT NULL THEN 15.0 ELSE 50.0 END"
+        )
+        return f"(({fit} * 0.60) + ({freshness} * 0.20) + ({competition} * 0.20))"
 
     def query_published_jobs(
         self,
@@ -1151,8 +1172,10 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 aps.observed_at AS applicant_latest_observed_at,
                 aps.apply_method AS applicant_latest_apply_method,
                 aps.easy_apply_marker AS applicant_latest_easy_apply_marker,
-                aps.freshness_status AS applicant_latest_freshness_status,
-                aps.provenance_url AS applicant_latest_provenance_url,
+                 aps.freshness_status AS applicant_latest_freshness_status,
+                 aps.provenance_url AS applicant_latest_provenance_url,
+                 aps.apply_url AS applicant_latest_apply_url,
+                 aps.source_provenance AS applicant_latest_source_provenance,
                 (
                     SELECT COUNT(*) FROM job_applicant_snapshots s
                     WHERE s.canonical_job_id = j.canonical_job_id

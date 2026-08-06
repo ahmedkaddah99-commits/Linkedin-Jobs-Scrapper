@@ -1,8 +1,8 @@
-"""Phase G applicant competition and prioritization primitives.
+"""Phase G applicant-intelligence boundary and deterministic ranking primitives.
 
-This module is deliberately source-agnostic.  It accepts only explicit applicant
-fields from a connector payload, keeps ranges as ranges, and treats portal
-connectors as blocked until their audit record is complete.
+Applicant intelligence is deliberately inactive in production until a source
+decision is documented and approved.  These normalizers preserve explicit
+evidence, represent missing values as unknown, and never persist raw payloads.
 """
 
 from __future__ import annotations
@@ -13,13 +13,8 @@ from typing import Any, Mapping
 
 
 _APPLICANT_KEYS = (
-    "applicant_count",
-    "applicants",
-    "num_applicants",
-    "applicantCount",
-    "applicant_count_text",
-    "applicant_count_label",
-    "applicants_range",
+    "applicant_count", "applicants", "num_applicants", "applicantCount",
+    "applicant_count_text", "applicant_count_label", "applicants_range",
     "applicant_count_range",
 )
 _PORTAL_TARGET_KINDS = {"portal", "job_board", "job_board_collection", "portal_connector"}
@@ -31,6 +26,28 @@ _AUDIT_FIELDS = {
     "data_quality": ("data_quality_passed", "quality_passed", "data_quality_audit_passed"),
 }
 
+PHASE_G_POLICY_VERSION = "phase_g_applicant_intelligence_v1"
+PRIORITY_FORMULA_VERSION = "phase_g_priority_v1"
+PRIORITY_WEIGHTS = {"user_fit": 0.60, "freshness": 0.20, "competition": 0.20}
+
+# Deliberately not configurable at runtime.  The initial audit must not activate
+# any applicant source in production.
+PHASE_G_PRODUCTION_ACTIVATED = False
+
+# Structured job feeds are not applicant-count sources.  These decisions are
+# evidence-backed defaults, not a connector allow-list.
+APPLICANT_SOURCE_DECISIONS: dict[str, dict[str, Any]] = {
+    "linkedin": {"decision": "blocked", "reason": "authorization_unavailable_and_terms_risk"},
+    "indeed": {"decision": "blocked", "reason": "authorization_and_cost_billing_unverified"},
+    "glassdoor": {"decision": "blocked", "reason": "authorization_and_field_quality_unverified"},
+    "stepstone": {"decision": "blocked", "reason": "authorization_and_field_quality_unverified"},
+    "ziprecruiter": {"decision": "blocked", "reason": "authorization_and_field_quality_unverified"},
+    "careerjet": {"decision": "blocked", "reason": "authorization_and_field_quality_unverified"},
+    "greenhouse": {"decision": "blocked", "reason": "no_applicant_count_field"},
+    "lever": {"decision": "blocked", "reason": "no_applicant_count_field"},
+    "arbeitsagentur": {"decision": "blocked", "reason": "no_applicant_count_field"},
+}
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -40,6 +57,11 @@ def _integer(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
     try:
+        if isinstance(value, float) and not value.is_integer():
+            return None
+        text = str(value).strip()
+        if "." in text and not text.endswith(".0"):
+            return None
         number = int(float(value))
     except (TypeError, ValueError):
         return None
@@ -60,11 +82,7 @@ def _iso_epoch(value: Any) -> float | None:
 
 
 def parse_applicant_count(value: Any) -> dict[str, Any] | None:
-    """Parse an explicit source count without inventing precision.
-
-    ``exact`` is set only when the source gives an exact number.  Text such as
-    ``over 100 applicants`` becomes a lower-bounded range instead.
-    """
+    """Parse explicit exact/range evidence without inventing precision."""
 
     label = ""
     exact: int | None = None
@@ -88,7 +106,7 @@ def parse_applicant_count(value: Any) -> dict[str, Any] | None:
         if not label:
             return None
         normalized = label.casefold().replace(",", "")
-        range_match = re.search(r"(\d+)\s*(?:-|–|—|to)\s*(\d+)", normalized)
+        range_match = re.search(r"(\d+)\s*(?:[-\u2013\u2014]|to)\s*(\d+)", normalized)
         lower_match = re.search(r"(?:over|more than|at least)\s*(\d+)|\b(\d+)\s*\+", normalized)
         exact_match = re.search(r"\b(\d+)\b", normalized)
         if range_match:
@@ -127,6 +145,19 @@ def explicit_applicant_count(job: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def has_applicant_evidence(job: Mapping[str, Any]) -> bool:
+    if explicit_applicant_count(job) is not None:
+        return True
+    competition = job.get("competition")
+    return any(
+        key in job and job.get(key) not in (None, "", [])
+        for key in _APPLICANT_KEYS
+    ) or (
+        isinstance(competition, Mapping)
+        and any(key in competition and competition.get(key) not in (None, "", []) for key in _APPLICANT_KEYS)
+    )
+
+
 def is_portal_target(target: Mapping[str, Any]) -> bool:
     kind = _text(target.get("target_kind")).casefold()
     connector = _text(target.get("connector")).casefold()
@@ -134,11 +165,7 @@ def is_portal_target(target: Mapping[str, Any]) -> bool:
 
 
 def portal_audit_gate(target: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the explicit Phase G gate for portal sources.
-
-    Employer career sites and official ATS connectors are not portal sources and
-    remain governed by their existing Phase A/B controls.
-    """
+    """Return the explicit legacy portal gate; it does not approve Phase G."""
 
     if not is_portal_target(target):
         return {"required": False, "approved": True, "missing": []}
@@ -163,24 +190,79 @@ def portal_audit_gate(target: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def applicant_source_decision(target: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the current documented decision for a connector."""
+
+    connector = _text(target.get("connector")).casefold()
+    decision = dict(APPLICANT_SOURCE_DECISIONS.get(
+        connector,
+        {"decision": "blocked", "reason": "source_not_audited"},
+    ))
+    decision.update({"connector": connector, "policy_version": PHASE_G_POLICY_VERSION})
+    return decision
+
+
+def applicant_source_gate(target: Mapping[str, Any]) -> dict[str, Any]:
+    """Enforce the hard initial-audit boundary for applicant observations."""
+
+    config = target.get("config") if isinstance(target.get("config"), Mapping) else {}
+    audit = config.get("phase_g_applicant_audit") or {}
+    if not isinstance(audit, Mapping):
+        audit = {}
+    decision = applicant_source_decision(target)
+    missing = [] if decision.get("decision") == "approved" else [str(decision.get("reason") or "source_blocked")]
+    if not PHASE_G_PRODUCTION_ACTIVATED:
+        missing.append("production_activation_disabled")
+    for field in (
+        "authorization_documented", "data_quality_documented", "request_cost_documented",
+        "unattended_behavior_documented", "observation_timestamp_documented",
+        "official_apply_destination_documented", "no_candidate_data_documented",
+    ):
+        if audit.get(field) not in (True, 1, "1", "true", "passed", "pass", "approved"):
+            missing.append(field)
+    return {
+        "approved": not missing,
+        "required": True,
+        "missing": sorted(set(missing)),
+        "policy_version": PHASE_G_POLICY_VERSION,
+        "decision": decision,
+        "audited_at": _text(audit.get("audited_at") or audit.get("verified_at")),
+    }
+
+
 def normalize_applicant_snapshot(
     job: Mapping[str, Any],
     *,
     observed_at: str,
     source_ats: str = "",
     provenance_url: str = "",
+    source_provenance: str = "",
     first_seen_at: str = "",
     last_verified_at: str = "",
 ) -> dict[str, Any] | None:
+    """Normalize one approved-source observation, including unknown values."""
+
+    if _iso_epoch(observed_at) is None:
+        return None
     count = explicit_applicant_count(job)
-    apply_method = _text(job.get("application_method") or job.get("apply_method") or "direct_apply")
+    apply_method = _text(job.get("application_method") or job.get("apply_method")) or "unknown"
     marker = bool(job.get("easy_apply") or job.get("quick_apply") or job.get("easy_apply_marker"))
     if apply_method.casefold() in {"easy_apply", "quick_apply", "quick apply", "easy apply"}:
         marker = True
-    if count is None and not marker:
-        return None
     posting_time = _text(job.get("posted_at") or job.get("published_at") or job.get("date_posted"))
-    freshness = freshness_status(observed_at)
+    apply_url = _text(job.get("apply_url") or job.get("apply_link"))
+    source_value = _text(source_provenance or provenance_url)
+    # Explicit allow-list: no candidate identity or application-data payload can
+    # cross this boundary even if a connector accidentally returns it.
+    safe_payload = {
+        "applicant_count": count,
+        "application_method": apply_method,
+        "apply_url": apply_url,
+        "posted_at": posting_time,
+        "observed_at": _text(observed_at),
+        "source_ats": _text(source_ats),
+        "source_provenance": source_value,
+    }
     return {
         "exact": count.get("exact") if count else None,
         "min": count.get("min") if count else None,
@@ -191,19 +273,24 @@ def normalize_applicant_snapshot(
         "last_verified_at": _text(last_verified_at or observed_at),
         "observed_at": _text(observed_at),
         "apply_method": apply_method,
+        "apply_url": apply_url,
         "easy_apply_marker": marker,
-        "freshness_status": freshness,
+        "freshness_status": freshness_status(observed_at),
         "source_ats": _text(source_ats),
         "provenance_url": _text(provenance_url),
-        "payload": dict(job),
+        "source_provenance": source_value,
+        "payload": safe_payload,
     }
 
 
-def freshness_status(observed_at: Any) -> str:
+def freshness_status(observed_at: Any, *, as_of: Any = None) -> str:
     epoch = _iso_epoch(observed_at)
     if epoch is None:
         return "unknown"
-    age_hours = max(0.0, (datetime.now(timezone.utc).timestamp() - epoch) / 3600)
+    as_of_epoch = _iso_epoch(as_of) if as_of is not None else datetime.now(timezone.utc).timestamp()
+    if as_of_epoch is None:
+        as_of_epoch = datetime.now(timezone.utc).timestamp()
+    age_hours = max(0.0, (as_of_epoch - epoch) / 3600)
     if age_hours <= 30:
         return "fresh"
     if age_hours <= 72:
@@ -214,8 +301,7 @@ def freshness_status(observed_at: Any) -> str:
 def _range_value(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
     if snapshot.get("exact") is not None:
         return None
-    minimum = snapshot.get("min")
-    maximum = snapshot.get("max")
+    minimum, maximum = snapshot.get("min"), snapshot.get("max")
     if minimum is None and maximum is None:
         return None
     return {"min": minimum, "max": maximum, "label": _text(snapshot.get("label")) or None}
@@ -241,10 +327,8 @@ def _competition_score(snapshot: Mapping[str, Any]) -> tuple[int | None, str]:
 
 def build_applicant_competition(row: Mapping[str, Any], *, include_pro: bool = False) -> dict[str, Any]:
     latest = {
-        "exact": row.get("applicant_latest_exact"),
-        "min": row.get("applicant_latest_min"),
-        "max": row.get("applicant_latest_max"),
-        "label": row.get("applicant_latest_label"),
+        "exact": row.get("applicant_latest_exact"), "min": row.get("applicant_latest_min"),
+        "max": row.get("applicant_latest_max"), "label": row.get("applicant_latest_label"),
         "observed_at": row.get("applicant_latest_observed_at"),
         "posting_time": row.get("applicant_latest_posting_time"),
         "first_seen_at": row.get("applicant_latest_first_seen_at"),
@@ -254,24 +338,18 @@ def build_applicant_competition(row: Mapping[str, Any], *, include_pro: bool = F
         "freshness_status": row.get("applicant_latest_freshness_status"),
         "source_ats": row.get("applicant_latest_source_ats"),
         "provenance_url": row.get("applicant_latest_provenance_url"),
+        "apply_url": row.get("applicant_latest_apply_url"),
     }
     if latest["observed_at"] in (None, ""):
         return {
-            "state": "unknown",
-            "visibility": "pro",
-            "latest": None,
-            "first_observed": None,
+            "state": "unknown", "visibility": "pro", "latest": None, "first_observed": None,
             "change": {"state": "unknown", "reason": "no_reliable_snapshot"},
-            "freshness": {"state": "unknown", "observed_at": None},
-            "apply_method": None,
-            "easy_apply_marker": False,
-            "pro": None,
+            "freshness": {"state": "unknown", "observed_at": None, "observation_age_hours": None},
+            "apply_method": None, "easy_apply_marker": False, "provenance": None, "pro": None,
         }
     first = {
-        "exact": row.get("applicant_first_exact"),
-        "min": row.get("applicant_first_min"),
-        "max": row.get("applicant_first_max"),
-        "label": row.get("applicant_first_label"),
+        "exact": row.get("applicant_first_exact"), "min": row.get("applicant_first_min"),
+        "max": row.get("applicant_first_max"), "label": row.get("applicant_first_label"),
         "observed_at": row.get("applicant_first_observed_at"),
     }
     exact_delta = None
@@ -281,64 +359,58 @@ def build_applicant_competition(row: Mapping[str, Any], *, include_pro: bool = F
         exact_delta = int(latest["exact"]) - int(first["exact"])
         if int(first["exact"]) != 0:
             growth_rate = exact_delta / int(first["exact"])
-        first_epoch = _iso_epoch(first["observed_at"])
-        latest_epoch = _iso_epoch(latest["observed_at"])
+        first_epoch, latest_epoch = _iso_epoch(first["observed_at"]), _iso_epoch(latest["observed_at"])
         if first_epoch is not None and latest_epoch is not None:
             days_elapsed = max(0.0, (latest_epoch - first_epoch) / 86400)
     change = (
         {"state": "available", "delta": exact_delta, "growth_rate": growth_rate, "days_elapsed": days_elapsed}
-        if exact_delta is not None
-        else {"state": "unknown", "reason": "range_only_or_missing_first_exact_count"}
+        if exact_delta is not None else {"state": "unknown", "reason": "range_only_or_missing_first_exact_count"}
     )
+    current_freshness = freshness_status(latest["observed_at"])
+    observation_epoch = _iso_epoch(latest["observed_at"])
+    observation_age_hours = round(max(0.0, (datetime.now(timezone.utc).timestamp() - observation_epoch) / 3600), 2) if observation_epoch is not None else None
     score, confidence = _competition_score(latest)
+    if current_freshness == "stale":
+        score, confidence = None, "stale"
+    has_count = latest["exact"] is not None or latest["min"] is not None or latest["max"] is not None
     public_latest = {
         "count": latest["exact"] if include_pro else None,
-        "range": _range_value(latest),
-        "label": _text(latest["label"]) or None,
-        "observed_at": _text(latest["observed_at"]) or None,
+        "range": _range_value(latest) if include_pro else None,
+        "label": _text(latest["label"]) if include_pro and has_count else None,
+        "observed_at": _text(latest["observed_at"]) if include_pro else None,
     }
     public_first = {
         "count": first["exact"] if include_pro else None,
-        "range": _range_value(first),
-        "label": _text(first["label"]) or None,
-        "observed_at": _text(first["observed_at"]) or None,
+        "range": _range_value(first) if include_pro else None,
+        "label": _text(first["label"]) if include_pro else None,
+        "observed_at": _text(first["observed_at"]) if include_pro else None,
     }
-    result = {
-        "state": "available",
-        "visibility": "pro",
-        "latest": public_latest,
-        "first_observed": public_first,
+    result: dict[str, Any] = {
+        "state": "available" if has_count else "unknown", "visibility": "pro",
+        "latest": public_latest, "first_observed": public_first,
         "change": change if include_pro else {"state": "pro_only"},
         "freshness": {
-            "state": _text(latest["freshness_status"]) or freshness_status(latest["observed_at"]),
-            "observed_at": _text(latest["observed_at"]) or None,
-            "last_verified_at": _text(latest["last_verified_at"]) or None,
+            "state": current_freshness if include_pro else "pro_only",
+            "observed_at": _text(latest["observed_at"]) if include_pro else None,
+            "last_verified_at": _text(latest["last_verified_at"]) if include_pro else None,
+            "observation_age_hours": observation_age_hours if include_pro else None,
         },
-        "posting_time": _text(latest["posting_time"]) or None,
-        "apply_method": _text(latest["apply_method"]) or "unknown",
-        "easy_apply_marker": bool(latest["easy_apply_marker"]),
-        "provenance": {
-            "source": _text(latest["source_ats"]) or "unknown",
-            "url": _text(latest["provenance_url"]) or None,
-        },
+        "posting_time": _text(latest["posting_time"]) if include_pro else None,
+        "apply_method": _text(latest["apply_method"]) if include_pro else None,
+        "easy_apply_marker": bool(latest["easy_apply_marker"]) if include_pro else False,
+        "provenance": {"source": "verified source", "url": _text(latest["provenance_url"]) or None} if include_pro else None,
         "pro": None,
     }
     if include_pro:
         alerts: list[dict[str, Any]] = []
         if score is not None and score >= 75:
             alerts.append({"type": "low_competition", "priority": "normal"})
-        if result["freshness"]["state"] == "fresh":
+        if current_freshness == "fresh":
             alerts.append({"type": "recently_verified", "priority": "normal"})
-        if change.get("state") == "available" and (change.get("delta") or 0) < 0:
-            alerts.append({"type": "applicant_count_decreased", "priority": "low"})
         result["pro"] = {
-            "latest_count": latest["exact"],
-            "latest_range": _range_value(latest),
-            "first_observed_count": first["exact"],
-            "first_observed_range": _range_value(first),
-            "change": change,
-            "competition_score": score,
-            "competition_score_confidence": confidence,
+            "latest_count": latest["exact"], "latest_range": _range_value(latest),
+            "first_observed_count": first["exact"], "first_observed_range": _range_value(first),
+            "change": change, "competition_score": score, "competition_score_confidence": confidence,
             "low_competition": score is not None and score >= 75,
             "snapshot_count": int(row.get("applicant_snapshot_count") or 0),
             "opportunity_alerts": alerts,
@@ -347,7 +419,7 @@ def build_applicant_competition(row: Mapping[str, Any], *, include_pro: bool = F
 
 
 def build_priority(row: Mapping[str, Any], match: Mapping[str, Any], competition: Mapping[str, Any]) -> dict[str, Any]:
-    """Build a deterministic, explainable ordering score from known evidence."""
+    """Build the versioned score; missing applicant data remains neutral."""
 
     v2 = match.get("v2") if isinstance(match.get("v2"), Mapping) else match
     fit = v2.get("score") if isinstance(v2, Mapping) else None
@@ -355,79 +427,41 @@ def build_priority(row: Mapping[str, Any], match: Mapping[str, Any], competition
         fit_score = max(0.0, min(100.0, float(fit)))
     except (TypeError, ValueError):
         fit_score = 50.0
-    verified = _iso_epoch(row.get("last_verified_at") or row.get("first_seen_at"))
+    observed = row.get("applicant_latest_observed_at") or row.get("last_verified_at") or row.get("first_seen_at")
+    observed_epoch = _iso_epoch(observed)
     freshness_score = 50.0
-    if verified is not None:
-        age_hours = max(0.0, (datetime.now(timezone.utc).timestamp() - verified) / 3600)
+    if observed_epoch is not None:
+        age_hours = max(0.0, (datetime.now(timezone.utc).timestamp() - observed_epoch) / 3600)
         freshness_score = max(0.0, 100.0 - min(100.0, age_hours / 2.4))
-    non_matches = len(v2.get("apparent_non_matches") or []) if isinstance(v2, Mapping) else 0
-    unproven = len(v2.get("unproven_requirements") or []) if isinstance(v2, Mapping) else 0
-    eligibility_score = max(0.0, 100.0 - non_matches * 35.0 - unproven * 10.0)
-    payload = row.get("version_payload_json")
-    if isinstance(payload, str):
-        try:
-            import json
-            payload = json.loads(payload)
-        except (TypeError, ValueError):
-            payload = {}
-    payload = payload if isinstance(payload, Mapping) else {}
-    auth = payload.get("work_authorization") or payload.get("authorization") or payload.get("work_permit")
-    language = payload.get("languages") or payload.get("language_requirements") or payload.get("required_languages")
-    authorization_score = 100.0 if auth not in (None, "", [], {}) else 50.0
-    language_score = 100.0 if language not in (None, "", [], {}) else 70.0
-    sponsorship = payload.get("sponsorship") or payload.get("visa_sponsorship") or payload.get("sponsors_h1b")
-    sponsorship_score = 100.0 if sponsorship not in (None, "", [], {}) else 50.0
-    non_match_text = " ".join(str(item) for item in (v2.get("apparent_non_matches") or [])) if isinstance(v2, Mapping) else ""
-    if "sponsor" in non_match_text.casefold() or "visa" in non_match_text.casefold():
-        sponsorship_score = 0.0
-    method = _text(competition.get("apply_method")).casefold()
-    apply_method_score = 100.0 if method in {"direct_apply", "official_ats", "employer_site"} else 40.0
-    pro = competition.get("pro") if isinstance(competition.get("pro"), Mapping) else {}
-    competition_score = pro.get("competition_score")
-    if competition_score is None:
-        competition_score = 50.0
-    change = pro.get("change") if isinstance(pro.get("change"), Mapping) else {}
-    growth_rate = change.get("growth_rate") if change.get("state") == "available" else None
-    try:
-        growth_score = max(0.0, min(100.0, 100.0 - max(0.0, float(growth_rate)) * 100.0))
-    except (TypeError, ValueError):
-        growth_score = 50.0
+    latest = {"exact": row.get("applicant_latest_exact"), "min": row.get("applicant_latest_min"), "max": row.get("applicant_latest_max")}
+    competition_score, competition_confidence = _competition_score(latest)
+    freshness_state = competition.get("freshness", {}).get("state") if isinstance(competition.get("freshness"), Mapping) else ""
+    if freshness_state == "stale" or _text(row.get("applicant_latest_freshness_status")).casefold() == "stale":
+        competition_score, competition_confidence = None, "stale"
+    competition_score = 50.0 if competition_score is None else float(competition_score)
     score = round(
-        fit_score * 0.32
-        + freshness_score * 0.14
-        + float(competition_score) * 0.13
-        + growth_score * 0.06
-        + eligibility_score * 0.14
-        + authorization_score * 0.07
-        + language_score * 0.04
-        + sponsorship_score * 0.04
-        + apply_method_score * 0.06,
+        fit_score * PRIORITY_WEIGHTS["user_fit"]
+        + freshness_score * PRIORITY_WEIGHTS["freshness"]
+        + competition_score * PRIORITY_WEIGHTS["competition"],
         2,
     )
     return {
         "score": score,
-        "state": "partial" if fit is None or verified is None else "available",
+        "state": "partial" if fit is None or observed_epoch is None else "available",
+        "formula_version": PRIORITY_FORMULA_VERSION,
         "components": {
-            "user_fit": round(fit_score, 2),
-            "freshness": round(freshness_score, 2),
-            "competition": competition_score,
-            "applicant_growth": round(growth_score, 2),
-            "eligibility": round(eligibility_score, 2),
-            "work_authorization": authorization_score,
-            "language_requirements": language_score,
-            "sponsorship": sponsorship_score,
-            "apply_method": apply_method_score,
+            "user_fit": round(fit_score, 2), "freshness": round(freshness_score, 2),
+            "competition": round(competition_score, 2), "competition_confidence": competition_confidence,
+            "weights": dict(PRIORITY_WEIGHTS),
         },
     }
 
 
 __all__ = [
-    "build_applicant_competition",
-    "build_priority",
-    "explicit_applicant_count",
-    "freshness_status",
-    "is_portal_target",
-    "normalize_applicant_snapshot",
-    "parse_applicant_count",
+    "APPLICANT_SOURCE_DECISIONS", "PHASE_G_POLICY_VERSION", "PHASE_G_PRODUCTION_ACTIVATED",
+    "PRIORITY_FORMULA_VERSION", "PRIORITY_WEIGHTS", "applicant_source_decision",
+    "applicant_source_gate", "build_applicant_competition", "build_priority",
+    "explicit_applicant_count", "freshness_status", "has_applicant_evidence",
+    "is_portal_target", "normalize_applicant_snapshot", "parse_applicant_count",
     "portal_audit_gate",
 ]

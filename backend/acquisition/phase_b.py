@@ -13,6 +13,7 @@ from collections.abc import Iterable, Mapping
 from urllib.parse import urlsplit
 
 from backend.acquisition.network_policy import hostname_for_url
+from backend.acquisition.phase_g import is_portal_target
 
 
 PHASE_B_DEFAULT_CONFIG = {
@@ -134,7 +135,11 @@ def normalize_phase_b_jobs(
     rejected: list[dict[str, object]] = []
     seen_external: set[str] = set()
     target_config = dict(target.get("config") or {})
-    employer = _text(target.get("canonical_company_name") or target_config.get("canonical_company_name") or target.get("display_name"))
+    # A portal is an acquisition target only.  Its display name (for example,
+    # "LinkedIn Germany") must never become the canonical employer.
+    employer = _text(target.get("canonical_company_name") or target_config.get("canonical_company_name"))
+    if not is_portal_target(target):
+        employer = employer or _text(target.get("display_name"))
     connector = _text(target.get("connector")).casefold()
     target_host = hostname_for_url(str(target.get("canonical_target_url") or ""))
     for raw in jobs:

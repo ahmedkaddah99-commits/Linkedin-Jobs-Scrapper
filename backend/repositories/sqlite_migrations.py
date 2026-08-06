@@ -1814,6 +1814,8 @@ def _apply_phase_g_applicant_competition_migration(connection: DatabaseConnectio
             easy_apply_marker INTEGER NOT NULL DEFAULT 0,
             freshness_status TEXT NOT NULL DEFAULT 'unknown',
             provenance_url TEXT NOT NULL DEFAULT '',
+            apply_url TEXT NOT NULL DEFAULT '',
+            source_provenance TEXT NOT NULL DEFAULT '',
             payload_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL
         );
@@ -1865,6 +1867,17 @@ def _apply_phase_e_async_intelligence_migration(connection: DatabaseConnection) 
         CREATE INDEX IF NOT EXISTS idx_job_intelligence_queue_state
             ON job_intelligence_queue(state, requested_at, cache_id);
         """
+    )
+
+
+def _apply_phase_g_applicant_boundary_migration(connection: DatabaseConnection) -> None:
+    """Add explicit apply/provenance columns to the append-only snapshot table."""
+
+    _ensure_table_column(connection, "job_applicant_snapshots", "apply_url", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "job_applicant_snapshots", "source_provenance", "TEXT NOT NULL DEFAULT ''")
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_applicant_snapshots_observation "
+        "ON job_applicant_snapshots(source_observation_id)"
     )
 
 MIGRATIONS = (
@@ -2085,6 +2098,12 @@ MIGRATIONS = (
         "040_phase_f_company_enrichment",
         "Track bounded, idempotent company-target enrichment attempts and yield.",
         _apply_phase_f_company_enrichment_migration,
+    ),
+    Migration.from_callable(
+        "041_phase_g_applicant_boundary",
+        "Add explicit official-apply and internal-provenance fields for inactive applicant snapshots.",
+        _apply_phase_g_applicant_boundary_migration,
+        dependencies=(_table_columns, _ensure_table_column),
     ),
 )
 

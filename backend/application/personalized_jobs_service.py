@@ -24,6 +24,7 @@ from backend.domain.models import utc_now_iso
 from backend.repositories.contracts import BackendRepositories
 from backend.application.production_rollout import catalog_user_access
 from backend.application.company_logo import cache_logo, deterministic_monogram, validate_logo
+from backend.acquisition.phase_g import build_applicant_competition, build_priority
 
 
 EVALUATOR_VERSION = MATCH_V2_VERSION
@@ -1035,8 +1036,10 @@ class PersonalizedJobsService:
         sort_mode = _text(effective_filters.get("sort") or "newest").casefold()
         if sort_mode not in {"newest", "priority", "best"}:
             sort_mode = "newest"
-        effective_filters["sort"] = sort_mode
         include_pro = normalize_plan_id(plan_id) != DEFAULT_PLAN_ID
+        if not include_pro and sort_mode in {"priority", "best"}:
+            sort_mode = "newest"
+        effective_filters["sort"] = sort_mode
         fingerprint = _filter_fingerprint(effective_filters, user_id=user_id, hidden_only=hidden_only)
         cursor_payload = _cursor_decode(cursor) if cursor else None
         if cursor_payload is not None and cursor_payload.get("fingerprint") != fingerprint:
@@ -1101,8 +1104,8 @@ class PersonalizedJobsService:
                 "evaluator_version": EVALUATOR_VERSION,
                 "match_intelligence": match_intelligence,
             }
-            priority_state = "available" if _text(match_intelligence.get("state")) != "pending" else "pending"
-            priority = {"state": priority_state, "score": float(row.get("priority_score") or 0) if priority_state == "available" else None}
+            applicant_intelligence = build_applicant_competition(row, include_pro=include_pro)
+            priority = build_priority(row, match_intelligence, applicant_intelligence)
             jobs.append(_job_projection(
                 row,
                 dispositions.get(str(row.get("canonical_job_id"))),
@@ -1110,7 +1113,7 @@ class PersonalizedJobsService:
                 description_intelligence,
                 match_intelligence,
                 self._company_profile(row),
-                {"state": "unknown", "visibility": "pro"},
+                applicant_intelligence,
                 priority,
             ))
         return {
@@ -1170,6 +1173,8 @@ class PersonalizedJobsService:
             "evaluator_version": EVALUATOR_VERSION,
         }
         evaluation_payload["match_intelligence"] = match_intelligence
+        include_pro = normalize_plan_id(plan_id) != DEFAULT_PLAN_ID
+        applicant_intelligence = build_applicant_competition(row, include_pro=include_pro)
         return _job_projection(
             row,
             disposition,
@@ -1177,7 +1182,7 @@ class PersonalizedJobsService:
             description_intelligence,
             match_intelligence,
             self._company_profile(row),
-            {"state": "unknown", "visibility": "pro"},
+            applicant_intelligence,
             {"state": "pending", "score": None},
         )
 
@@ -1401,7 +1406,8 @@ class PersonalizedJobsService:
         for row in page:
             description = self._description_intelligence(row, cache_entries=descriptions)
             match = self._match_intelligence(user_id, row, description, preferences, state="available", cache_entries=matches)
-            jobs.append(_job_projection(row, {"state": "hidden"}, {"state": "available", "status": "pending", "evaluator_version": EVALUATOR_VERSION, "match_intelligence": match}, description, match, self._company_profile(row), {"state": "unknown", "visibility": "pro"}, {"state": "pending", "score": None}))
+            applicant_intelligence = build_applicant_competition(row, include_pro=False)
+            jobs.append(_job_projection(row, {"state": "hidden"}, {"state": "available", "status": "pending", "evaluator_version": EVALUATOR_VERSION, "match_intelligence": match}, description, match, self._company_profile(row), applicant_intelligence, {"state": "pending", "score": None}))
         return {"jobs": jobs, "total": int(result.get("total") or 0), "next_cursor": next_cursor, "evaluation": {"state": "available", "supported_states": sorted(EVALUATION_STATES)}}
 
     @staticmethod
