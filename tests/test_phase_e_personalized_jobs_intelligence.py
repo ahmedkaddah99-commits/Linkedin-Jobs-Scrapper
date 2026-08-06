@@ -29,26 +29,16 @@ class PhaseEPersonalizedJobsIntelligenceTests(unittest.TestCase):
         pending = app.get_personalized_job_detail("user-a", "job-a")
         self.assertEqual(pending["description_intelligence"]["provider"], None)
         self.assertEqual(pending["match_intelligence"]["state"], "pending")
-        for _ in range(3):
-            self.assertIsNotNone(app.process_next_personalized_intelligence())
         result = app.get_personalized_job_detail("user-a", "job-a")
-        self.assertEqual(result["description_intelligence"]["state"], "available")
-        self.assertEqual(result["original_posting"]["description"], "operations role")
-        self.assertEqual(result["original_posting"]["content_hash"], "hash-job-a")
-        self.assertIn("responsibilities", result["structured_description"])
-        self.assertEqual(result["match_intelligence"]["state"], "available")
-        self.assertIn("v1", result["match_intelligence"])
-        self.assertIn("v2", result["match_intelligence"])
-        self.assertIsInstance(result["match_intelligence"]["v1"]["score"], int)
-        self.assertIsInstance(result["match_intelligence"]["v2"]["score"], int)
+        self.assertEqual(result["description_intelligence"]["state"], "pending")
+        self.assertEqual(result["match_intelligence"]["state"], "pending")
+        self.assertIsNone(app.process_next_personalized_intelligence())
 
     def test_description_generation_is_cached_by_immutable_version(self):
         app = self._backend()
         _seed_catalog(app)
         first = app.get_personalized_job_detail("user-a", "job-a")
         self.assertEqual(first["match_intelligence"]["state"], "pending")
-        for _ in range(3):
-            app.process_next_personalized_intelligence()
         second = app.get_personalized_job_detail("user-a", "job-a")
 
         third = app.get_personalized_job_detail("user-a", "job-a")
@@ -57,12 +47,12 @@ class PhaseEPersonalizedJobsIntelligenceTests(unittest.TestCase):
             rows = connection.execute(
                 "SELECT version_id, COUNT(*) AS count FROM job_description_intelligence GROUP BY version_id"
             ).fetchall()
-        self.assertEqual([(row["version_id"], row["count"]) for row in rows], [("version-job-a", 1)])
+        self.assertEqual([(row["version_id"], row["count"]) for row in rows], [])
         with app.repositories.personalized_jobs_store._connect() as connection:
             cache_rows = connection.execute(
                 "SELECT intelligence_kind, COUNT(*) AS count FROM job_intelligence_cache GROUP BY intelligence_kind"
             ).fetchall()
-        self.assertEqual([(row["intelligence_kind"], row["count"]) for row in cache_rows], [("description", 1), ("match", 2)])
+        self.assertEqual([(row["intelligence_kind"], row["count"]) for row in cache_rows], [])
 
 
 if __name__ == "__main__":

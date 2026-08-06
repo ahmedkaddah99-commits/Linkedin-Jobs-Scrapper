@@ -107,7 +107,6 @@ def _pending_description() -> dict[str, Any]:
         "model": None,
         "prompt_version": None,
     })
-    return projection
 
 
 def _pending_match() -> dict[str, Any]:
@@ -810,8 +809,6 @@ class PersonalizedJobsService:
             result["state"] = "available"
             result["original_posting"] = _public_clean(result.get("original_posting") or original)
             return _public_clean(result)
-        if self.store is not None:
-            self.store.enqueue_intelligence(key)
         pending = _pending_description()
         pending["original_posting"] = _public_clean(original)
         pending["prompt_version"] = SUMMARY_PROMPT_VERSION
@@ -842,7 +839,6 @@ class PersonalizedJobsService:
             getattr(self.repositories, "career_profile_store", None),
         )
         cached_versions: dict[str, Mapping[str, Any]] = {}
-        missing_keys: list[dict[str, str]] = []
         for evaluator_version in (MATCH_V1_VERSION, MATCH_V2_VERSION):
             key = build_intelligence_cache_key(
                 row,
@@ -857,11 +853,7 @@ class PersonalizedJobsService:
                 cached_intelligence = (cached.get("payload") or {}).get("match_intelligence")
                 if isinstance(cached_intelligence, Mapping):
                     cached_versions[evaluator_version] = cached_intelligence
-            else:
-                missing_keys.append(key)
-        if self.store is not None:
-            for key in missing_keys:
-                self.store.enqueue_intelligence(key)
+
         if len(cached_versions) == 2:
             match = dict(cached_versions[MATCH_V2_VERSION])
             match["state"] = state
