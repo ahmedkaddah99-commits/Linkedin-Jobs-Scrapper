@@ -13,7 +13,12 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from backend.acquisition.manifest import load_phase_a_manifest
-from backend.config.plans import PLAN_ORDER, get_plan
+from backend.config.plans import (
+    RUNR_PRO_PLAN_ID,
+    get_legacy_product_ids,
+    get_plan,
+    get_runr_pro_product_ids,
+)
 
 
 PHASE_I_STAGES = (
@@ -284,7 +289,11 @@ class ProductionRolloutService:
             },
             "creem_products_configured": {
                 "passed": bool(_text(os.getenv("CREEM_API_KEY")) and _text(os.getenv("CREEM_WEBHOOK_SECRET")))
-                and all(bool(_text(get_plan(plan_id).get("creem_product_id"))) for plan_id in PLAN_ORDER),
+                and bool(_text(os.getenv("CREEM_RUNR_PRO_PRODUCT_ID")))
+                and len(get_runr_pro_product_ids()) == len(get_plan(RUNR_PRO_PLAN_ID).get("offers", [])),
+                "canonical_plan_id": RUNR_PRO_PLAN_ID,
+                "canonical_product_ids": get_runr_pro_product_ids(),
+                "legacy_compatibility_product_ids": get_legacy_product_ids(),
             },
         }
 

@@ -1,154 +1,27 @@
-# Creem Remaining Steps
+# Creem Phase H remaining steps
 
-Delete this file once every item below is complete and verified.
+The code migration is complete, but external Creem setup remains environment-specific. See [`docs/deployment/creem_phase_h_audit.md`](docs/deployment/creem_phase_h_audit.md) for the read-only audit and compatibility record.
 
-## 1. Create Creem Test Products
+## Test mode setup
 
-- Open Creem in developer/test mode.
-- Create a recurring SaaS product for `Launch`.
-  - Price: `EUR 15/month`
-  - Copy the test product ID.
-- Create a recurring SaaS product for `Momentum`.
-  - Price: `EUR 25/month`
-  - Copy the test product ID.
-- Create a recurring SaaS product for `Scale`.
-  - Price: `EUR 79/month`
-  - Copy the test product ID.
+Create these three active test products in Creem. The current test API key can list products but returned HTTP 403 for product creation, and the available browser session was not authenticated to the Creem dashboard.
 
-## 2. Configure Local Environment
+| Offer | Amount | Billing | Environment variable |
+| --- | ---: | --- | --- |
+| Runr Pro — 1 week | USD 19.99 total | one-time | `CREEM_RUNR_PRO_WEEKLY_PRODUCT_ID` |
+| Runr Pro — 1 month | USD 39.99 | recurring monthly | `CREEM_RUNR_PRO_MONTHLY_PRODUCT_ID` |
+| Runr Pro — 3 months | USD 89.99 | recurring every three months | `CREEM_RUNR_PRO_QUARTERLY_PRODUCT_ID` |
 
-Add the test values to `user_config/.env` or your active local env file:
+Set `CREEM_RUNR_PRO_PRODUCT_ID` to the monthly product ID, and keep the legacy `CREEM_LAUNCH_PRODUCT_ID`, `CREEM_MOMENTUM_PRODUCT_ID`, and `CREEM_SCALE_PRODUCT_ID` values unchanged while existing subscribers remain active.
 
-```env
-CREEM_API_KEY=creem_test_...
-CREEM_WEBHOOK_SECRET=...
-CREEM_LAUNCH_PRODUCT_ID=prod_...
-CREEM_MOMENTUM_PRODUCT_ID=prod_...
-CREEM_SCALE_PRODUCT_ID=prod_...
-```
+## Webhook and loop verification
 
-Do not use live Creem values until the full test checkout and webhook loop works.
+1. Apply or verify the existing Creem billing database migration.
+2. Register `https://<api-host>/v1/webhooks/creem` in Creem test mode.
+3. Subscribe to `checkout.completed`, `subscription.active`, `subscription.trialing`, `subscription.paid`, `subscription.update`, `subscription.scheduled_cancel`, `subscription.past_due`, `subscription.paused`, `subscription.resumed`, `subscription.renewed`, `subscription.expired`, and `subscription.canceled`.
+4. Run test checkout for each recurring offer with Creem's test card `4242 4242 4242 4242`.
+5. Verify signed return, webhook sync, `/billing/subscription` (`plan_id=runr_pro`), stored customer/subscription IDs, and the portal.
+6. Verify scheduled cancellation and past-due retain access, while paused/canceled/expired return the effective entitlement to `free`; verify a paid/active/resumed event restores Pro.
+7. Run the focused Python and frontend checks from the project instructions.
 
-## 3. Apply Database Migration
-
-From PowerShell in the repo root:
-
-```powershell
-cd "C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper"
-.venv\Scripts\python.exe -m backend.database.migrate
-```
-
-Optional status check:
-
-```powershell
-.venv\Scripts\python.exe -m backend.database.migrate --status
-```
-
-Confirm migration `012_creem_billing` is applied.
-
-## 4. Expose API For Webhook Testing
-
-Creem needs a public HTTPS URL for webhooks.
-
-Use either:
-
-- Render staging API URL, if deployed.
-- A tunnel such as ngrok/cloudflared pointing to the local API.
-
-Webhook URL:
-
-```text
-https://<your-api-host>/v1/webhooks/creem
-```
-
-## 5. Register Creem Webhook
-
-In Creem test mode, register the webhook URL above and subscribe to:
-
-- `checkout.completed`
-- `subscription.active`
-- `subscription.paid`
-- `subscription.update`
-- `subscription.scheduled_cancel`
-- `subscription.canceled`
-- `subscription.expired`
-- `subscription.past_due`
-- `subscription.paused`
-
-Copy the webhook signing secret into `CREEM_WEBHOOK_SECRET`.
-
-## 6. Test Checkout End To End
-
-- Start the app/API normally.
-- Sign in as a test user.
-- Start checkout for `Launch`, `Momentum`, or `Scale`.
-- Use Creem test card:
-
-```text
-4242 4242 4242 4242
-```
-
-After payment, verify:
-
-- The user is redirected back to the app.
-- The pricing page shows a payment-success message with the subscribed plan.
-- `/billing/subscription` shows `billing_provider=creem`.
-- `plan_id` is `launch`, `momentum`, or `scale`.
-- `creem_customer_id` is present.
-- Clerk user metadata reflects the paid plan.
-
-## 7. Test Portal And Cancellation
-
-- Open the customer billing portal from the app.
-- Confirm Settings shows the subscribed plan and a `Manage billing` button.
-- Confirm the portal loads for the Creem customer.
-- Cancel the test subscription.
-- Confirm webhook handling removes paid access and returns the user to `No subscription`.
-- Confirm local subscription status updates.
-
-## 8. Run Verification Commands
-
-Use PowerShell from the repo root:
-
-```powershell
-$env:TURSO_DATABASE_URL=""
-$env:TURSO_AUTH_TOKEN=""
-.venv\Scripts\python.exe -m pytest tests/test_backend_api.py -k "promo_code or billing_checkout or creem_webhook" -q
-.venv\Scripts\python.exe -m pytest tests/test_database_migrations.py tests/test_env_config.py -q
-npm --prefix frontend run check
-```
-
-## 9. Production Cutover
-
-Only do this after all test-mode checks pass.
-
-- Create or confirm live Creem `Launch`, `Momentum`, and `Scale` products.
-- Set live Render env vars:
-
-```env
-CREEM_API_KEY=creem_...
-CREEM_WEBHOOK_SECRET=...
-CREEM_LAUNCH_PRODUCT_ID=prod_...
-CREEM_MOMENTUM_PRODUCT_ID=prod_...
-CREEM_SCALE_PRODUCT_ID=prod_...
-```
-
-- Register the production webhook:
-
-```text
-https://api.<your-domain>/v1/webhooks/creem
-```
-
-- Run one small live checkout before submitting business details.
-
-## 10. Before Submitting Business Details
-
-Confirm these are ready:
-
-- Pricing is final and matches the app.
-- Refund/cancellation policy is public and accurate.
-- Terms and privacy policy are public and accurate.
-- Production webhook is registered and tested.
-- Live checkout, paid plan sync, billing portal, and cancellation all work.
-
-After this checklist is complete, delete `CREEM_REMAINING_STEPS.md`.
+Never configure live product IDs or create a live charge as part of this checklist without explicit approval.

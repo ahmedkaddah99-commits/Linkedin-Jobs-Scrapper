@@ -605,7 +605,11 @@ export function getPreviewEntitlement(featureKey, planId = "free") {
     requiredPlan: "Pro",
     explanation: "This preview feature is available on Runr Pro.",
   };
-  const paidPlan = ["pro", "scale", "momentum"].includes(String(planId || "").trim().toLowerCase());
+  const normalizedPlanId = String(planId || "").trim().toLowerCase();
+  const canonicalPlanId = ["runr_pro", "pro", "launch", "momentum", "scale", "business"].includes(normalizedPlanId)
+    ? "runr_pro"
+    : "free";
+  const paidPlan = canonicalPlanId === "runr_pro";
   return { ...entitlement, available: entitlement.available || paidPlan };
 }
 

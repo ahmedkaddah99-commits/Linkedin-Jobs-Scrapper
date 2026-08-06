@@ -228,7 +228,7 @@ class PersonalizedFeatureKey(StrEnum):
     ADVANCED_APPLICATION_INSIGHTS = "advanced_application_insights"
 
 
-CANONICAL_PLAN_IDS = ("none", "launch", "momentum", "scale")
+CANONICAL_PLAN_IDS = ("free", "runr_pro")
 
 FRONTEND_PERSONALIZED_FEATURE_KEY_MAP = {
     "ai_eligibility_filter": PersonalizedFeatureKey.AI_ELIGIBILITY_FILTERING.value,

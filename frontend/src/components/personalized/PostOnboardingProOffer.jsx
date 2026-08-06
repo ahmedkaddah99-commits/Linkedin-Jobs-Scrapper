@@ -116,7 +116,7 @@ function RunrProOfferModal({ dataMode, open, plans, summary, loadingPlans, onClo
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [checkoutError, setCheckoutError] = useState("");
   const paidPlans = useMemo(
-    () => plans.filter((plan) => String(plan.plan_id || "").trim() && Number(plan.price_eur) > 0),
+    () => plans.filter((plan) => String(plan.plan_id || "").trim() === "runr_pro"),
     [plans],
   );
 
@@ -272,10 +272,10 @@ export default function PostOnboardingProOffer({ feedReady, jobsReadyAt, summary
     ? plansPayload.plans
     : personalizedJobsDataMode === "synthetic" ? PREVIEW_PRO_PLANS : [];
   const effectiveLoadingPlans = personalizedJobsDataMode === "real" && loadingPlans;
-  const currentPlanId = String(subscriptionPayload?.plan_id || user?.plan_id || "none").trim() || "none";
+  const currentPlanId = String(subscriptionPayload?.plan_id || user?.plan_id || "free").trim() || "free";
   const isPaid = isPaidPlan(currentPlanId);
   const billingReady = personalizedJobsDataMode === "synthetic"
-    || (!loadingSubscription && (!subscriptionError || String(user?.plan_id || "none") !== "none"));
+    || (!loadingSubscription && (!subscriptionError || String(user?.plan_id || "free") !== "free"));
   const eligible = onboardingState.completed && offerState.eligible && !offerState.offerShown && !offerState.offerDismissed && !offerState.upgradeCtaSelected && !isPaid;
   const notificationCopy = getNotificationCopy(summary, personalizedJobsDataMode);
 

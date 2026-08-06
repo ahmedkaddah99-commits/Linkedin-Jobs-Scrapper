@@ -11,6 +11,7 @@ from backend.api.routes.assisted_apply import (
     _read_strict_object,
 )
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
+from backend.config.plans import has_runr_pro_access
 from backend.domain import normalize_candidate_asset_descriptor
 
 _CREATE_PACKAGE_KEYS = {"job", "answers", "documents", "warnings"}
@@ -108,8 +109,20 @@ def register_routes(registry: RouteRegistry) -> None:
     )
 
 
+def _require_runr_pro(context: ApiRouteContext, user_id: str) -> None:
+    resolver = getattr(context.application, "get_user_plan_id", None)
+    if not callable(resolver):
+        # Small route doubles used by protocol tests predate billing context;
+        # the real BackendApplication always exposes this resolver.
+        return
+    plan_id = resolver(user_id)
+    if not has_runr_pro_access(plan_id):
+        raise PermissionError("runr_pro_required_for_assisted_apply")
+
+
 def _create_package(context: ApiRouteContext) -> None:
     user, _ = context.require_clerk_identity()
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys=_CREATE_PACKAGE_KEYS,
@@ -535,6 +548,7 @@ def _selected_candidate_documents(
 
 def _prepare_package(context: ApiRouteContext) -> None:
     user, _ = context.require_clerk_identity()
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys=_PREPARE_PACKAGE_KEYS,
@@ -595,6 +609,7 @@ def _prepare_package(context: ApiRouteContext) -> None:
 
 def _launch_package(context: ApiRouteContext) -> None:
     user, _ = context.require_clerk_identity()
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys={"package_id"},
@@ -616,6 +631,8 @@ def _launch_package(context: ApiRouteContext) -> None:
 
 
 def _bind_package(context: ApiRouteContext) -> None:
+    user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys=_BIND_PACKAGE_KEYS,
@@ -630,6 +647,7 @@ def _bind_package(context: ApiRouteContext) -> None:
 
 def _get_package_for_extension(context: ApiRouteContext) -> None:
     user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
     package_id = str(
         list(context.query.get("package_id") or [""])[0]
     ).strip()
@@ -639,7 +657,8 @@ def _get_package_for_extension(context: ApiRouteContext) -> None:
 
 
 def _get_package_for_extension_post(context: ApiRouteContext) -> None:
-    _authenticate_extension_session(context)
+    user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys={"package_id"},
@@ -671,6 +690,8 @@ def _send_package_for_extension(
 
 
 def _create_document_grant(context: ApiRouteContext) -> None:
+    user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys=_DOCUMENT_GRANT_KEYS,
@@ -688,6 +709,8 @@ def _create_document_grant(context: ApiRouteContext) -> None:
 
 
 def _download_document_grant(context: ApiRouteContext) -> None:
+    user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
     _read_strict_object(context, allowed_keys=set(), label="document download")
     file_bytes, metadata = context.application.consume_assisted_apply_document_grant(
         raw_grant=str(context.handler.headers.get("X-Runr-Document-Grant") or "").strip(),
@@ -702,6 +725,8 @@ def _download_document_grant(context: ApiRouteContext) -> None:
 
 
 def _save_correction(context: ApiRouteContext) -> None:
+    user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys=_CORRECTION_KEYS,
@@ -719,6 +744,8 @@ def _save_correction(context: ApiRouteContext) -> None:
 
 
 def _save_exact_standard_answer(context: ApiRouteContext) -> None:
+    user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys=_EXACT_STANDARD_ANSWER_KEYS,
@@ -735,6 +762,8 @@ def _save_exact_standard_answer(context: ApiRouteContext) -> None:
 
 
 def _respond_to_application_outcome(context: ApiRouteContext) -> None:
+    user, _connection = _authenticate_extension_session(context)
+    _require_runr_pro(context, user.user_id)
     payload = _read_strict_object(
         context,
         allowed_keys=_OUTCOME_KEYS,

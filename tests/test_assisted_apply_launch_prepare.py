@@ -84,6 +84,15 @@ class AssistedApplyLaunchPrepareTests(unittest.TestCase):
                 },
             }
         )
+        self.app.repositories.auth_repository.upsert_subscription(
+            {
+                "subscription_id": "sub_phase_h_assisted_apply",
+                "user_id": self.user.user_id,
+                "plan_id": "runr_pro",
+                "status": "active",
+                "billing_provider": "creem",
+            }
+        )
         self.app.object_storage.put(
             "users/launch/workspace_cv/asset_cv_1/Ada CV.pdf",
             PDF_BYTES,

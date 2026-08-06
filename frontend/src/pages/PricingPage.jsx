@@ -33,6 +33,13 @@ function formatDateTime(value) {
   });
 }
 
+function normalizeBillingPlanId(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["launch", "momentum", "scale", "pro", "business", "runr_pro"].includes(normalized)
+    ? "runr_pro"
+    : "free";
+}
+
 function buildFeatureRows(plans) {
   const keys = Object.keys(
     plans.reduce((accumulator, plan) => ({ ...accumulator, ...(plan.quotas || {}) }), {}),
@@ -47,6 +54,7 @@ export default function PricingPage() {
   const { request, refreshSession, user } = useSession();
   const [searchParams, setSearchParams] = useSearchParams();
   const [actionState, setActionState] = useState({ loadingPlanId: "", managing: false, error: "" });
+  const [selectedOfferId, setSelectedOfferId] = useState("one_month");
   const [checkoutConfirmationState, setCheckoutConfirmationState] = useState("idle");
   const [checkoutConfirmationError, setCheckoutConfirmationError] = useState("");
   const [promoCode, setPromoCode] = useState("");
@@ -72,20 +80,26 @@ export default function PricingPage() {
   });
 
   const plans = Array.isArray(plansPayload?.plans) ? plansPayload.plans : [];
-  const currentPlanId = String(subscriptionPayload?.plan_id || user?.plan_id || "none").trim() || "none";
+  const currentPlanId = normalizeBillingPlanId(subscriptionPayload?.plan_id || user?.plan_id);
   const checkoutState = String(searchParams.get("checkout") || "").trim();
   const checkoutPlanId = String(searchParams.get("plan_id") || "").trim();
+  const checkoutOfferId = String(searchParams.get("offer_id") || "one_month").trim();
   const checkoutQueryString = searchParams.toString();
   const hasSignedCheckoutReturn = checkoutQueryString.includes("signature=");
   const checkoutPlan = plans.find((plan) => String(plan.plan_id || "").trim() === checkoutPlanId);
   const currentPlan = plans.find((plan) => String(plan.plan_id || "").trim() === currentPlanId);
   const currentPlanName = String(currentPlan?.display_name || subscriptionPayload?.plan?.display_name || currentPlanId).trim();
-  const checkoutPlanName = String(checkoutPlan?.display_name || checkoutPlanId || currentPlanName).trim();
+  const checkoutOffer = checkoutPlan?.offers?.find((offer) => String(offer.offer_id || "") === checkoutOfferId);
+  const checkoutPlanName = String(
+    checkoutPlan && checkoutOffer
+      ? `${checkoutPlan.display_name} · ${checkoutOffer.display_name}`
+      : checkoutPlan?.display_name || checkoutPlanId || currentPlanName,
+  ).trim();
   const showCheckoutSuccess = checkoutState === "success";
   const checkoutConfirmed = showCheckoutSuccess && checkoutPlanId && currentPlanId === checkoutPlanId;
   const checkoutSynced = checkoutConfirmed || checkoutConfirmationState === "confirmed";
   const subscriptionDetails = subscriptionPayload?.subscription || {};
-  const subscriptionStatus = String(subscriptionDetails.status || (currentPlanId === "none" ? "inactive" : "active")).trim();
+  const subscriptionStatus = String(subscriptionDetails.status || (currentPlanId === "free" ? "inactive" : "active")).trim();
   const displayedSubscriptionStatus = checkoutSynced
     ? subscriptionStatus
     : hasSignedCheckoutReturn
@@ -135,7 +149,7 @@ export default function PricingPage() {
       }
       for (let attempt = 0; attempt < 10; attempt += 1) {
         const payload = await refreshSubscription().catch(() => null);
-        const nextPlanId = String(payload?.plan_id || "").trim();
+        const nextPlanId = normalizeBillingPlanId(payload?.plan_id);
         if (checkoutPlanId && nextPlanId === checkoutPlanId) {
           await refreshSession().catch(() => undefined);
           if (!cancelled) {
@@ -164,13 +178,14 @@ export default function PricingPage() {
     showCheckoutSuccess,
   ]);
 
-  async function handleUpgrade(planId) {
+  async function handleUpgrade(planId, offerId = "one_month") {
     setActionState({ loadingPlanId: planId, managing: false, error: "" });
     try {
       const payload = await request("/billing/checkout", {
         method: "POST",
         body: {
           plan_id: planId,
+          offer_id: offerId,
           promo_code: promoCode.trim().toUpperCase(),
           source_page: "/pricing",
         },
@@ -334,8 +349,8 @@ export default function PricingPage() {
       </section>
 
       {isLoading ? (
-        <div className="grid gap-6 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, index) => (
+        <div className="grid gap-6 lg:grid-cols-2">
+          {Array.from({ length: 2 }).map((_, index) => (
             <div
               className="h-[20rem] animate-pulse rounded-[2rem] border border-outline-variant/20 bg-surface-container-low"
               key={`pricing-skeleton-${index + 1}`}
@@ -343,12 +358,17 @@ export default function PricingPage() {
           ))}
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-6 lg:grid-cols-2">
           {plans.map((plan) => {
             const planId = String(plan.plan_id || "").trim();
             const isCurrentPlan = planId === currentPlanId;
-            const isPaidPlan = Number(plan.price_eur || 0) > 0;
+            const isPaidPlan = planId === "runr_pro";
             const planQuotas = plan.quotas || {};
+            const offers = Array.isArray(plan.offers) ? plan.offers : [];
+            const activeOfferId = offers.some((offer) => String(offer.offer_id || "") === selectedOfferId)
+              ? selectedOfferId
+              : String(offers[0]?.offer_id || "one_month");
+            const activeOffer = offers.find((offer) => String(offer.offer_id || "") === activeOfferId);
             return (
               <section
                 className={[
@@ -366,9 +386,11 @@ export default function PricingPage() {
                       <p className="text-sm font-semibold text-on-surface">{plan.display_name}</p>
                       <div className="mt-3 flex items-end gap-2">
                         <span className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
-                          €{plan.price_eur}
+                          {activeOffer ? `$${Number(activeOffer.price || 0).toFixed(2)}` : "$0.00"}
                         </span>
-                        <span className="pb-1 text-sm text-on-surface-variant">/ month</span>
+                        <span className="pb-1 text-sm text-on-surface-variant">
+                          {activeOffer?.billing_type === "onetime" ? "total" : "every period"}
+                        </span>
                       </div>
                     </div>
                     {isCurrentPlan ? (
@@ -390,6 +412,32 @@ export default function PricingPage() {
                   </div>
 
                   <div className="mt-7 flex flex-col gap-3">
+                    {isPaidPlan && offers.length ? (
+                      <div className="grid grid-cols-3 gap-2" role="group" aria-label="Runr Pro duration">
+                        {offers.map((offer) => {
+                          const offerId = String(offer.offer_id || "");
+                          const isSelected = offerId === activeOfferId;
+                          return (
+                            <button
+                              className={[
+                                "rounded-xl border px-2 py-2 text-xs font-semibold transition-colors",
+                                isSelected
+                                  ? "border-primary bg-primary/10 text-primary"
+                                  : "border-outline-variant/20 text-on-surface-variant hover:bg-surface-container-low",
+                              ].join(" ")}
+                              key={offerId}
+                              onClick={() => setSelectedOfferId(offerId)}
+                              type="button"
+                            >
+                              {offer.display_name}
+                              <span className="mt-1 block text-[11px] font-normal">
+                                ${Number(offer.price || 0).toFixed(2)}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                     {isCurrentPlan && isPaidPlan ? (
                       <button
                         className="rounded-full bg-primary px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
@@ -404,7 +452,7 @@ export default function PricingPage() {
                       <button
                         className="rounded-full bg-primary px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={Boolean(actionState.loadingPlanId)}
-                        onClick={() => handleUpgrade(planId)}
+                        onClick={() => handleUpgrade(planId, activeOfferId)}
                         type="button"
                       >
                         {actionState.loadingPlanId === planId ? "Preparing checkout..." : `Upgrade to ${plan.display_name}`}

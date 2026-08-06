@@ -12,11 +12,11 @@ const quotaLabels = {
 };
 
 function upgradeLabelForPlan(planId) {
-  return String(planId || "").trim() === "momentum" ? "Upgrade to Scale" : "Upgrade to Momentum";
+  return "Upgrade to Runr Pro";
 }
 
 function targetPlanIdForPlan(planId) {
-  return String(planId || "").trim() === "momentum" ? "scale" : "momentum";
+  return "runr_pro";
 }
 
 export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) {
@@ -89,7 +89,7 @@ export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) 
         <div className="bg-[linear-gradient(135deg,rgba(var(--color-primary),0.16),rgba(var(--color-tertiary),0.08))] px-7 py-6">
           <p className="text-xs font-bold uppercase tracking-[0.28em] text-primary">Upgrade required</p>
           <h2 className="mt-3 font-headline text-3xl font-extrabold tracking-tight text-on-surface">
-            You&apos;ve reached your {quotaLabel} limit on the {String(quotaEvent.plan_id || "none").toUpperCase()} plan.
+            You&apos;ve reached your {quotaLabel} limit on the Free plan.
           </h2>
         </div>
 

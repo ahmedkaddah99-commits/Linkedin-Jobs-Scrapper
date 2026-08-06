@@ -260,8 +260,10 @@ class PersonalizedJobsContractsTests(unittest.TestCase):
             FRONTEND_PERSONALIZED_FEATURE_KEY_MAP["multiple_active_searches"],
             "multiple_job_searches",
         )
-        self.assertEqual(set(CANONICAL_PLAN_IDS), {"none", "launch", "momentum", "scale"})
-        self.assertEqual(canonical_plan_id("scale"), "scale")
+        self.assertEqual(set(CANONICAL_PLAN_IDS), {"free", "runr_pro"})
+        self.assertEqual(canonical_plan_id("runr_pro"), "runr_pro")
+        with self.assertRaises(ContractValidationError):
+            canonical_plan_id("scale")
         with self.assertRaises(ContractValidationError):
             canonical_plan_id("Pro")
 

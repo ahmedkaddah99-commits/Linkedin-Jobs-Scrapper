@@ -412,14 +412,28 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         checkout_gate = get_config("acquisition.phase_i.checkout_gate_enabled", None) if callable(get_config) else None
                         if checkout_gate is not None and str(checkout_gate).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
                             raise PermissionError("Runr Pro checkout is not enabled for this rollout stage.")
-                        plan = get_plan(target_plan_id)
-                        product_id = str(plan.get("creem_product_id") or "").strip()
-                        if not product_id:
-                            raise ValueError(f"Creem product id is not configured for plan '{target_plan_id}'.")
                         source_page = str(payload.get("source_page") or payload.get("sourcePage") or "").strip()
                         promo_code = str(payload.get("promo_code") or payload.get("promoCode") or "").strip().upper()
                         if promo_code:
                             promo_code = _normalize_promo_code(promo_code)
+                        plan = get_plan(target_plan_id)
+                        offer_id = str(payload.get("offer_id") or payload.get("duration_id") or "one_month").strip().lower()
+                        offer = get_runr_pro_offer(offer_id) if target_plan_id == "runr_pro" else None
+                        if (
+                            target_plan_id == "runr_pro"
+                            and offer_id == "one_month"
+                            and not str((offer or {}).get("creem_product_id") or "").strip()
+                        ):
+                            # Compatibility for callers/tests that inject the old single-product plan shape.
+                            offer = {
+                                "offer_id": "one_month",
+                                "creem_product_id": str(plan.get("creem_product_id") or "").strip(),
+                            }
+                        if offer is None:
+                            raise ValueError(f"Unknown Runr Pro offer '{offer_id}'.")
+                        product_id = str(offer.get("creem_product_id") or "").strip()
+                        if not product_id:
+                            raise ValueError(f"Creem product id is not configured for Runr Pro offer '{offer_id}'.")
                         checkout_url = get_creem_checkout_url(
                             context.user.user_id,
                             product_id,
@@ -428,10 +442,12 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             discount_code=promo_code,
                             custom_data={
                                 "plan_id": target_plan_id,
+                                "offer_id": offer_id,
+                                "product_id": product_id,
                                 "source_page": source_page,
                                 "clerk_user_id": context.clerk_user_id,
                             },
-                            redirect_url=f"{self._frontend_origin()}/pricing?checkout=success&plan_id={target_plan_id}",
+                            redirect_url=f"{self._frontend_origin()}/pricing?checkout=success&plan_id={target_plan_id}&offer_id={offer_id}",
                         )
                         application.emit_event(
                             "checkout_started",
@@ -442,6 +458,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             payload={
                                 "user_id": context.user.user_id,
                                 "target_plan_id": target_plan_id,
+                                "offer_id": offer_id,
                                 "current_plan_id": context.plan_id,
                                 "source_page": source_page,
                                 "promo_code_present": bool(promo_code),

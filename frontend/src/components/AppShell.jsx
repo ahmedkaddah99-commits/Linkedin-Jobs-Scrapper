@@ -626,18 +626,13 @@ export default function AppShell({ children, muteSidebar = false }) {
     };
   }, []);
 
-  const normalizedPlanId = String(
-    user?.plan_id || clerkUser?.publicMetadata?.plan_id || "none",
-  ).trim().toLowerCase() || "none";
-  const planBadgeLabel = normalizedPlanId === "free"
-    ? "Free"
-    : normalizedPlanId === "scale"
-    ? "Scale"
-    : normalizedPlanId === "momentum"
-      ? "Momentum"
-      : normalizedPlanId === "launch"
-        ? "Launch"
-        : "Choose plan";
+  const rawPlanId = String(
+    user?.plan_id || clerkUser?.publicMetadata?.plan_id || "free",
+  ).trim().toLowerCase() || "free";
+  const normalizedPlanId = ["runr_pro", "pro", "launch", "momentum", "scale", "business"].includes(rawPlanId)
+    ? "runr_pro"
+    : "free";
+  const planBadgeLabel = normalizedPlanId === "runr_pro" ? "Runr Pro" : "Free";
   const shellUser = {
     name: user?.display_name || user?.email || "",
     subtitle: user?.email || "",

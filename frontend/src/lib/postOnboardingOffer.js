@@ -4,16 +4,27 @@ export const POST_ONBOARDING_NOTIFICATION_DELAY_MS = 350;
 export const POST_ONBOARDING_MODAL_DELAY_MS = 850;
 export const POST_ONBOARDING_NOTIFICATION_DURATION_MS = 8000;
 
-// Mirrors the current backend billing catalog for the synthetic preview.
-// A live /billing/plans response replaces these values when available.
 export const PREVIEW_PRO_PLANS = Object.freeze([
-  Object.freeze({ plan_id: "launch", display_name: "Launch", price_eur: 15 }),
-  Object.freeze({ plan_id: "momentum", display_name: "Momentum", price_eur: 25 }),
-  Object.freeze({ plan_id: "scale", display_name: "Scale", price_eur: 79 }),
+  Object.freeze({
+    plan_id: "runr_pro",
+    display_name: "Runr Pro",
+    offers: Object.freeze([
+      Object.freeze({ offer_id: "one_week", display_name: "1 week", price: 19.99, currency: "USD" }),
+      Object.freeze({ offer_id: "one_month", display_name: "1 month", price: 39.99, currency: "USD" }),
+      Object.freeze({ offer_id: "three_months", display_name: "3 months", price: 89.99, currency: "USD" }),
+    ]),
+  }),
 ]);
 
+export function normalizeOfferPlanId(planId) {
+  const normalized = String(planId || "").trim().toLowerCase();
+  return ["runr_pro", "pro", "launch", "momentum", "scale", "business"].includes(normalized)
+    ? "runr_pro"
+    : "free";
+}
+
 export function isPaidPlan(planId) {
-  return !["", "none", "free"].includes(String(planId || "").trim().toLowerCase());
+  return normalizeOfferPlanId(planId) === "runr_pro";
 }
 
 export function getPersonalValueSummary(summary, dataMode) {
@@ -45,7 +56,13 @@ export function getOfferEligibility({ onboardingState, offerState, planId, featu
 }
 
 export function getPlanPriceLabel(plan) {
+  const offers = Array.isArray(plan?.offers) ? plan.offers : [];
+  if (offers.length) {
+    return offers
+      .map((offer) => `USD ${Number(offer.price || 0).toFixed(2)} / ${offer.display_name || "period"}`)
+      .join(" · ");
+  }
   const price = Number(plan?.price_eur);
   if (!Number.isFinite(price)) return "Price unavailable";
-  return `€${price.toLocaleString()} / month`;
+  return `EUR ${price.toLocaleString()} / month`;
 }

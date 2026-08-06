@@ -244,7 +244,7 @@ export default function PersonalizedOnboardingPage() {
   const [started, setStarted] = useState(false);
   const [stepError, setStepError] = useState("");
   const answers = useMemo(() => getOnboardingAnswers(state.answers), [state.answers]);
-  const planId = String(user?.plan_id || "none").trim() || "none";
+  const planId = String(user?.plan_id || "free").trim() || "free";
 
   useEffect(() => {
     if (!started) {

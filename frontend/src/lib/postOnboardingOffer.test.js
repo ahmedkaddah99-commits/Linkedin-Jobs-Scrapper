@@ -10,10 +10,10 @@ import {
 
 test("the offer requires completed onboarding and an eligible unclaimed state", () => {
   const offerState = { eligible: true, offerShown: false, offerDismissed: false, upgradeCtaSelected: false };
-  assert.equal(getOfferEligibility({ onboardingState: { completed: false }, offerState, planId: "none" }), false);
-  assert.equal(getOfferEligibility({ onboardingState: { completed: true }, offerState, planId: "none" }), true);
-  assert.equal(getOfferEligibility({ onboardingState: { completed: true }, offerState: { ...offerState, offerShown: true }, planId: "none" }), false);
-  assert.equal(getOfferEligibility({ onboardingState: { completed: true }, offerState, planId: "momentum" }), false);
+  assert.equal(getOfferEligibility({ onboardingState: { completed: false }, offerState, planId: "free" }), false);
+  assert.equal(getOfferEligibility({ onboardingState: { completed: true }, offerState, planId: "free" }), true);
+  assert.equal(getOfferEligibility({ onboardingState: { completed: true }, offerState: { ...offerState, offerShown: true }, planId: "free" }), false);
+  assert.equal(getOfferEligibility({ onboardingState: { completed: true }, offerState, planId: "runr_pro" }), false);
 });
 
 test("personal value copy is deterministic and labels preview data", () => {
@@ -27,9 +27,18 @@ test("personal value copy is deterministic and labels preview data", () => {
   assert.equal(getPersonalValueSummary(summary, "real").isPreview, false);
 });
 
-test("paid plans and billing prices are never invented by the offer helpers", () => {
-  assert.equal(isPaidPlan("none"), false);
+test("paid plans and billing prices are canonical and provider-backed", () => {
+  assert.equal(isPaidPlan("free"), false);
+  assert.equal(isPaidPlan("runr_pro"), true);
   assert.equal(isPaidPlan("momentum"), true);
-  assert.equal(getPlanPriceLabel({ price_eur: 25 }), "€25 / month");
+  assert.equal(
+    getPlanPriceLabel({
+      offers: [
+        { display_name: "1 month", price: 39.99 },
+        { display_name: "3 months", price: 89.99 },
+      ],
+    }),
+    "USD 39.99 / 1 month · USD 89.99 / 3 months",
+  );
   assert.equal(getPlanPriceLabel({}), "Price unavailable");
 });

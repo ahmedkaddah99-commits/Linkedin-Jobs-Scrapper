@@ -526,7 +526,7 @@ class BackendApiTests(unittest.TestCase):
             context = _resolve_auth_context(self.app, token)
 
         self.assertEqual(context.user.user_id, self.user.user_id)
-        self.assertEqual(context.plan_id, "scale")
+        self.assertEqual(context.plan_id, "runr_pro")
         subscription_lookup.assert_not_called()
 
     def test_clerk_auth_context_cache_reuses_resolved_context_for_same_token(self):
@@ -2928,7 +2928,7 @@ class BackendApiTests(unittest.TestCase):
     def test_admin_scrapeops_policy_can_be_saved_and_loaded(self):
         policy_payload = {
             "plan_policies": {
-                "none": {
+                "free": {
                     "runner_credits_per_month": 150,
                     "company_sites_per_run": 3,
                     "runner_credits_per_run": 40,
@@ -2966,7 +2966,7 @@ class BackendApiTests(unittest.TestCase):
 
         status, saved = self._request("PUT", "/admin/scrapeops/policy", policy_payload)
         self.assertEqual(status, 200)
-        self.assertEqual(saved["plan_policies"]["none"]["company_sites_per_run"], 3)
+        self.assertEqual(saved["plan_policies"]["free"]["company_sites_per_run"], 3)
         self.assertEqual(saved["user_overrides"][0]["user_id"], self.user.user_id)
         self.assertEqual(saved["domain_policies"][0]["policy_id"], "workday_basic_first")
         self.assertEqual(saved["alert_policy"]["cadence_hours"], 4)
@@ -4704,7 +4704,7 @@ class BackendApiTests(unittest.TestCase):
             self.assertNotIn("promo_code", checkout_mock.call_args.kwargs["custom_data"])
             self.assertEqual(
                 checkout_mock.call_args.kwargs["redirect_url"],
-                "https://app.userunr.com/pricing?checkout=success&plan_id=momentum",
+                "https://app.userunr.com/pricing?checkout=success&plan_id=runr_pro&offer_id=one_month",
             )
 
         event_rows = self.app.repositories.analytics_store.query_rows(
@@ -4713,7 +4713,7 @@ class BackendApiTests(unittest.TestCase):
         matching_payloads = [
             item
             for item in (json.loads(row["payload_json"]) for row in event_rows)
-            if item.get("target_plan_id") == "momentum"
+            if item.get("target_plan_id") == "runr_pro"
         ]
         self.assertTrue(matching_payloads)
         event_payload = matching_payloads[-1]
@@ -4773,9 +4773,9 @@ class BackendApiTests(unittest.TestCase):
 
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["plan_id"], "momentum")
+        self.assertEqual(payload["plan_id"], "runr_pro")
         subscription = self.app.repositories.auth_repository.get_current_subscription_by_user_id(checkout_user.user_id)
-        self.assertEqual(subscription["plan_id"], "momentum")
+        self.assertEqual(subscription["plan_id"], "runr_pro")
         self.assertEqual(subscription["creem_subscription_id"], "sub_123")
 
     def test_creem_webhook_active_subscription_updates_local_subscription(self):
@@ -4827,7 +4827,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(subscription["billing_provider"], "creem")
         self.assertEqual(subscription["creem_subscription_id"], "sub_creem_123")
         self.assertEqual(subscription["creem_customer_id"], "cust_creem_123")
-        self.assertEqual(subscription["plan_id"], "momentum")
+        self.assertEqual(subscription["plan_id"], "runr_pro")
 
         event_rows = self.app.repositories.analytics_store.query_rows(
             "SELECT event_name, payload_json FROM analytics_events WHERE event_name = 'subscription_started'"

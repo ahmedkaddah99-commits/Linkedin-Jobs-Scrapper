@@ -91,6 +91,9 @@ from backend.config.plans import (
     get_plan,
     get_plan_for_product_id,
     get_quota,
+    get_runr_pro_offer,
+    get_runr_pro_product_ids,
+    has_runr_pro_access,
     list_plans,
     normalize_plan_id,
 )
@@ -7691,6 +7694,14 @@ def _subscription_response_payload(
 ) -> dict[str, object]:
     subscription_record = _lookup_subscription_record(application, user_id) or {}
     normalized_plan_id = normalize_plan_id(subscription_record.get("plan_id") or plan_id)
+    subscription_status = str(subscription_record.get("status") or "").strip().lower()
+    if normalized_plan_id != DEFAULT_PLAN_ID and subscription_status and subscription_status not in {
+        "active",
+        "trialing",
+        "scheduled_cancel",
+        "past_due",
+    }:
+        normalized_plan_id = DEFAULT_PLAN_ID
     return {
         "plan_id": normalized_plan_id,
         "plan": get_plan(normalized_plan_id),
@@ -7721,26 +7732,11 @@ def _subscription_response_payload(
 
 
 def _configured_paid_plan_product_ids() -> list[str]:
-    product_ids: list[str] = []
-    for plan_id in PLANS:
-        plan = get_plan(plan_id)
-        if int(plan.get("price_eur") or 0) <= 0:
-            continue
-        product_id = str(plan.get("creem_product_id") or "").strip()
-        if product_id and product_id not in product_ids:
-            product_ids.append(product_id)
-    return product_ids
+    return get_runr_pro_product_ids()
 
 
 def _configured_paid_plan_labels() -> str:
-    labels: list[str] = []
-    for plan_id, plan in PLANS.items():
-        if int(plan.get("price_eur") or 0) <= 0:
-            continue
-        label = str(plan.get("display_name") or plan_id).strip() or plan_id
-        if label not in labels:
-            labels.append(label)
-    return ", ".join(labels) if labels else "Paid plans"
+    return str(get_plan("runr_pro").get("display_name") or "Runr Pro")
 
 
 def _normalize_promo_code(value: Any) -> str:
@@ -8267,6 +8263,8 @@ def _handle_creem_webhook_event(
         "checkout.completed": "active",
         "subscription.active": "active",
         "subscription.paid": "active",
+        "subscription.renewed": "active",
+        "subscription.resumed": "active",
         "subscription.trialing": "trialing",
         "subscription.update": "active",
         "subscription.scheduled_cancel": "scheduled_cancel",
@@ -8313,6 +8311,8 @@ def _handle_creem_webhook_event(
         "subscription.active": "subscription_started",
         "subscription.trialing": "subscription_started",
         "subscription.paid": "subscription_paid",
+        "subscription.renewed": "subscription_renewed",
+        "subscription.resumed": "subscription_resumed",
         "subscription.update": "subscription_changed",
         "subscription.scheduled_cancel": "subscription_scheduled_cancel",
         "subscription.past_due": "subscription_past_due",
@@ -8339,7 +8339,14 @@ def _handle_creem_webhook_event(
         payload=payload,
     )
 
-    grant_access_events = {"checkout.completed", "subscription.active", "subscription.trialing", "subscription.paid"}
+    grant_access_events = {
+        "checkout.completed",
+        "subscription.active",
+        "subscription.trialing",
+        "subscription.paid",
+        "subscription.renewed",
+        "subscription.resumed",
+    }
     revoke_access_events = {"subscription.canceled", "subscription.expired", "subscription.paused"}
     if event_name in grant_access_events:
         if clerk_user_id:

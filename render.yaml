@@ -90,6 +90,14 @@ services:
         sync: false
       - key: CREEM_WEBHOOK_SECRET
         sync: false
+      - key: CREEM_RUNR_PRO_PRODUCT_ID
+        sync: false
+      - key: CREEM_RUNR_PRO_WEEKLY_PRODUCT_ID
+        sync: false
+      - key: CREEM_RUNR_PRO_MONTHLY_PRODUCT_ID
+        sync: false
+      - key: CREEM_RUNR_PRO_QUARTERLY_PRODUCT_ID
+        sync: false
       - key: CREEM_LAUNCH_PRODUCT_ID
         sync: false
       - key: CREEM_MOMENTUM_PRODUCT_ID

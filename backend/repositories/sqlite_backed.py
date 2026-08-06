@@ -1932,7 +1932,7 @@ class SqliteAuthRepository(_SqliteStore):
                 (
                     subscription_id,
                     str(payload.get("user_id") or "").strip(),
-                    str(payload.get("plan_id") or "none").strip() or "none",
+                    str(payload.get("plan_id") or "free").strip() or "free",
                     str(payload.get("status") or "active").strip() or "active",
                     str(payload.get("billing_provider") or "creem").strip() or "creem",
                     str(payload.get("creem_subscription_id") or "").strip(),

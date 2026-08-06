@@ -732,11 +732,11 @@ export default function SettingsPage() {
   const account = draft?.account || {};
   const hasProfilePhoto = Boolean(String(profile.photo_data_url || profile.avatar_url || "").trim());
   const usageQuotas = subscriptionData?.usage?.quotas || {};
-  const currentPlanId = String(subscriptionData?.plan_id || "none").trim() || "none";
-  const currentPlanName = String(subscriptionData?.plan?.display_name || "No subscription").trim() || "No subscription";
+  const currentPlanId = String(subscriptionData?.plan_id || "free").trim() || "free";
+  const currentPlanName = String(subscriptionData?.plan?.display_name || "Free").trim() || "Free";
   const subscriptionDetails = subscriptionData?.subscription || {};
   const hasBillingPortalAccess =
-    currentPlanId !== "none" || Boolean(String(subscriptionData?.subscription?.creem_customer_id || "").trim());
+    currentPlanId !== "free" || Boolean(String(subscriptionData?.subscription?.creem_customer_id || "").trim());
   const scrapeopsPolicy = subscriptionData?.scrapeops_usage?.policy || {};
 
   return (

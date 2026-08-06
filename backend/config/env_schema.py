@@ -127,20 +127,40 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "backend",
         "description": "Optional Creem API base URL override. Test keys otherwise use https://test-api.creem.io/v1 automatically.",
     },
+    "CREEM_RUNR_PRO_PRODUCT_ID": {
+        "required": False,
+        "scope": "backend",
+        "description": "Primary Creem product id for the canonical Runr Pro plan; use the monthly product for compatibility.",
+    },
+    "CREEM_RUNR_PRO_WEEKLY_PRODUCT_ID": {
+        "required": False,
+        "scope": "backend",
+        "description": "Creem product id for the Runr Pro 1-week offer.",
+    },
+    "CREEM_RUNR_PRO_MONTHLY_PRODUCT_ID": {
+        "required": False,
+        "scope": "backend",
+        "description": "Creem product id for the Runr Pro 1-month offer.",
+    },
+    "CREEM_RUNR_PRO_QUARTERLY_PRODUCT_ID": {
+        "required": False,
+        "scope": "backend",
+        "description": "Creem product id for the Runr Pro 3-month offer.",
+    },
     "CREEM_LAUNCH_PRODUCT_ID": {
         "required": False,
         "scope": "backend",
-        "description": "Creem product id for the Launch plan.",
+        "description": "Legacy Creem Launch product id retained for subscriber compatibility.",
     },
     "CREEM_MOMENTUM_PRODUCT_ID": {
         "required": False,
         "scope": "backend",
-        "description": "Creem product id for the Momentum plan.",
+        "description": "Legacy Creem Momentum product id retained for subscriber compatibility.",
     },
     "CREEM_SCALE_PRODUCT_ID": {
         "required": False,
         "scope": "backend",
-        "description": "Creem product id for the Scale plan.",
+        "description": "Legacy Creem Scale product id retained for subscriber compatibility.",
     },
     "APP_FRONTEND_ORIGIN": {
         "required": False,
