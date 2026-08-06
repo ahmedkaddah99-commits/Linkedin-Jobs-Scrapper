@@ -14,7 +14,7 @@ import {
   toPersonalizedJobsFilterPayload,
   unknownCompanyCharacteristics,
 } from "../../lib/personalizedJobsApi";
-import unverifiedCompanyTeam from "../../assets/company-enrichment-team.png";
+import unverifiedCompanyTeam from "../../assets/company-enrichment-team.svg";
 
 const CATEGORY_OPTIONS = [
   "Operations & Strategy",
@@ -119,7 +119,7 @@ function intelligenceValues(value) {
 function IntelligenceList({ empty = "Unknown", items, evidence = false }) {
   const values = intelligenceValues(items).map((item) => {
     if (!evidence || !item || typeof item !== "object") return String(item);
-    return `${item.requirement || "Requirement"}: ${item.evidence || "Evidence unavailable"}`;
+    return `${item.requirement || "Requirement"}: ${item.evidence || item.reason || "Evidence unavailable"}`;
   }).filter(Boolean);
   return values.length ? <ul className="jobs-intelligence-list">{values.map((value, index) => <li key={`${value}-${index}`}>{value}</li>)}</ul> : <p className="jobs-unknown-value">{empty}</p>;
 }
@@ -188,7 +188,7 @@ function ImproveResumeReview({ job, result, onClose, onRewrite, busy }) {
   return <div className="jobs-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section aria-labelledby="improve-resume-title" aria-modal="true" className="jobs-improve-modal" role="dialog">
     <header><div><p className="jobs-eyebrow">Evidence review</p><h2 id="improve-resume-title">Improve Resume</h2></div><button aria-label="Close evidence review" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
     <p>Review what your current profile supports before making any change. Never claim experience you cannot verify.</p>
-    <div className="jobs-intelligence-grid">{[["Matched keywords", "matched_keywords"], ["Missing keywords", "missing_keywords"], ["Matched requirements", "matched_requirements"], ["Unproven requirements", "unproven_requirements"], ["Apparent non-matches", "apparent_non_matches"], ["Matched evidence", "matched_evidence"]].map(([label, key]) => <div className="jobs-intelligence-card" key={key}><strong>{label}</strong><IntelligenceList evidence={key === "matched_evidence"} items={value(key)} /></div>)}</div>
+    <div className="jobs-intelligence-grid">{[["Matched keywords", "matched_keywords"], ["Missing keywords", "missing_keywords"], ["Matched requirements", "matched_requirements"], ["Unproven requirements", "unproven_requirements"], ["Apparent non-matches", "apparent_non_matches"], ["Matched evidence", "matched_evidence"], ["Missing evidence", "missing_evidence"]].map(([label, key]) => <div className="jobs-intelligence-card" key={key}><strong>{label}</strong><IntelligenceList evidence={key === "matched_evidence" || key === "missing_evidence"} items={value(key)} /></div>)}</div>
     <div className="jobs-match-difference"><strong>v1/v2 differences</strong><span>{evidence.v1_v2_difference?.summary || match.difference?.summary || "Pending until both deterministic evaluators finish."}</span></div>
     <footer><button className="jobs-outline-button" onClick={onClose} type="button">Close review</button>{canRewrite ? <button className="jobs-primary-button" disabled={busy} onClick={onRewrite} type="button">{busy ? "Queuing…" : "Create tailored resume"}</button> : <span className="jobs-pro-gate">Tailored rewriting is available in Runr Pro.</span>}</footer>
   </section></div>;

@@ -1113,6 +1113,10 @@ class BackendApplication:
     def process_next_personalized_intelligence(self) -> dict[str, Any] | None:
         return self._personalized_jobs_service.process_next_intelligence()
 
+    def enqueue_personalized_job_intelligence(self, user_id: str, posting_id: str) -> dict[str, Any]:
+        """Worker/precompute entry point; never called by a Jobs or Company GET."""
+        return self._personalized_jobs_service.enqueue_intelligence_for_job(user_id, posting_id)
+
     def improve_personalized_resume(self, user_id: str, posting_id: str, *, mode: str = "review", plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any]:
         return self._personalized_jobs_service.improve_resume(user_id, posting_id, mode=mode, plan_id=plan_id)
 

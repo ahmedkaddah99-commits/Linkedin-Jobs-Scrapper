@@ -21,7 +21,7 @@ const job = {
   match_intelligence: {
     state: "available",
     v1: { score: 62, matched_keywords: ["SQL"], missing_keywords: ["German"], matched_requirements: ["SQL"], unproven_requirements: ["German"], apparent_non_matches: [], formula: { requirement_coverage: 0.6, keyword_coverage: 0.4 } },
-    v2: { score: 78, matched_keywords: ["SQL"], missing_keywords: ["German"], matched_requirements: ["SQL"], unproven_requirements: ["German"], apparent_non_matches: [], matched_evidence: [{ requirement: "SQL", evidence: "Built SQL reports" }], formula: { semantic_requirement_coverage: 0.45, evidence_coverage: 0.2 } },
+    v2: { score: 78, matched_keywords: ["SQL"], missing_keywords: ["German"], matched_requirements: ["SQL"], unproven_requirements: ["German"], apparent_non_matches: [], matched_evidence: [{ requirement: "SQL", evidence: "Built SQL reports" }], missing_evidence: [{ requirement: "German", reason: "No verified language evidence" }], formula: { semantic_requirement_coverage: 0.45, evidence_coverage: 0.2 } },
     difference: { score_delta: 16, summary: "v2 found evidence-aware support that exact ATS matching did not count." },
     improve_resume: { review_available: true, rewriting_available: false, tailored_documents_available: false },
   },
@@ -34,6 +34,8 @@ const job = {
 };
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/v1/dashboard", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) }));
+  await page.route("**/v1/analytics/events", (route) => route.fulfill({ status: 204, body: "" }));
   await page.route("**/v1/personalized-jobs/saved-search", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ filters: {} }) }));
   await page.route("**/v1/personalized-jobs?**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ jobs: [job], total: 1, evaluation: { state: "available" }, filter_capabilities: {} }) }));
   await page.route("**/v1/personalized-jobs/job-a", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(job) }));
@@ -47,6 +49,7 @@ test("desktop job intelligence selector and Free evidence review are accessible"
   await expect(page.getByLabel(/v1 score 62; v2 score 78/)).toBeVisible();
   await page.getByRole("button", { name: /Improve resume/ }).click();
   await expect(page.getByRole("dialog", { name: "Improve Resume" })).toContainText("Matched keywords");
+  await expect(page.getByRole("dialog", { name: "Improve Resume" })).toContainText("Missing evidence");
   await expect(page.getByRole("dialog")).toContainText("Never claim experience you cannot verify");
   await page.screenshot({ path: `screenshots/phase-e-job-intelligence-${testInfo.project.name}.png`, fullPage: true });
 });

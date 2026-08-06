@@ -304,6 +304,12 @@ export function companyProfileField(profile = {}, name, fallback = "Unknown") {
   return { value: value || fallback, state: value ? "known" : "unknown", provenance: record.provenance || {}, verifiedAt: text(record.verified_at) };
 }
 
+export function companyProfileIsUnverified(profile = {}) {
+  const fields = profile?.fields && typeof profile.fields === "object" ? profile.fields : profile;
+  const names = ["website", "industry", "company_size", "headquarters", "founded_year", "company_stage", "funding_stage", "total_funding", "funding_year", "benefits", "sponsorship", "leadership_type"];
+  return names.every((name) => text(fields?.[name]?.state).toLowerCase() !== "known");
+}
+
 export function filtersFromSavedSearch(payload = {}) {
   const saved = payload?.filters && typeof payload.filters === "object" ? payload.filters : {};
   return {

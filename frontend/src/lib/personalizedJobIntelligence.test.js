@@ -10,9 +10,10 @@ test("match selector exposes both named deterministic versions", () => {
 });
 
 test("Free evidence review includes every required review category", () => {
-  const review = buildEvidenceReview({ v2: { matched_keywords: ["SQL"], missing_keywords: ["German"], matched_requirements: ["Reporting"], unproven_requirements: ["Degree"], apparent_non_matches: ["Visa"], matched_evidence: [{ requirement: "Reporting", evidence: "Built reports" }] }, difference: { score_delta: 8, summary: "Semantic support" } });
-  assert.deepEqual(Object.keys(review), ["matched_keywords", "missing_keywords", "matched_requirements", "unproven_requirements", "apparent_non_matches", "matched_evidence", "v1_v2_difference"]);
+  const review = buildEvidenceReview({ v2: { matched_keywords: ["SQL"], missing_keywords: ["German"], matched_requirements: ["Reporting"], unproven_requirements: ["Degree"], apparent_non_matches: ["Visa"], matched_evidence: [{ requirement: "Reporting", evidence: "Built reports" }], missing_evidence: [{ requirement: "Degree", reason: "No verified evidence" }] }, difference: { score_delta: 8, summary: "Semantic support" } });
+  assert.deepEqual(Object.keys(review), ["matched_keywords", "missing_keywords", "matched_requirements", "unproven_requirements", "apparent_non_matches", "matched_evidence", "missing_evidence", "v1_v2_difference"]);
   assert.equal(review.v1_v2_difference.score_delta, 8);
+  assert.equal(review.missing_evidence[0].requirement, "Degree");
 });
 
 test("rewriting is unavailable to Free and available to Pro", () => {

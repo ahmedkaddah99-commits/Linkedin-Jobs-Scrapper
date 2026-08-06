@@ -12,10 +12,12 @@ from backend.application.personalized_jobs_intelligence import (
     MATCH_V1_VERSION,
     MATCH_V2_VERSION,
     SUMMARY_PROMPT_VERSION,
+    TAILORED_DOCUMENT_VERSION,
     _profile_context,
     build_description_intelligence,
     build_intelligence_cache_key,
     build_match_intelligence,
+    build_tailored_document,
     build_preserved_original_posting,
 )
 from backend.config.plans import DEFAULT_PLAN_ID, normalize_plan_id
@@ -815,6 +817,60 @@ class PersonalizedJobsService:
         pending["prompt_version"] = SUMMARY_PROMPT_VERSION
         return pending
 
+    def enqueue_intelligence_for_job(self, user_id: str, posting_id: str) -> dict[str, Any]:
+        """Queue description and match work from a worker/precompute boundary.
+
+        Jobs and Company GET handlers must remain read-only with respect to
+        intelligence generation. Publication workers or an explicit admin
+        precompute job call this method instead.
+        """
+        if self.store is None:
+            return {"state": "unavailable", "cache_ids": []}
+        row = self.store.get_published_job_row(posting_id)
+        if row is None:
+            raise KeyError("job_not_found")
+        keys: list[dict[str, str]] = [
+            build_intelligence_cache_key(
+                row,
+                intelligence_kind="description",
+                evaluator_version=SUMMARY_PROMPT_VERSION,
+            )
+        ]
+        preferences = self.get_preferences(user_id)
+        profile = _profile_context(
+            user_id,
+            preferences,
+            getattr(self.repositories, "career_profile_store", None),
+        )
+        keys.extend(
+            build_intelligence_cache_key(
+                row,
+                intelligence_kind="match",
+                user_id=user_id,
+                profile=profile,
+                evaluator_version=evaluator_version,
+                description={"prompt_version": SUMMARY_PROMPT_VERSION},
+            )
+            for evaluator_version in (MATCH_V1_VERSION, MATCH_V2_VERSION)
+        )
+        queued: list[str] = []
+        available: list[str] = []
+        for key in keys:
+            cached = self.store.get_intelligence_cache(key)
+            if cached is not None and _text(cached.get("state")) == "available":
+                available.append(_text(key.get("cache_id")))
+                continue
+            self.store.enqueue_intelligence(key)
+            queued.append(_text(key.get("cache_id")))
+        return {
+            "state": "available" if not queued else "queued",
+            "canonical_job_id": _text(row.get("canonical_job_id")),
+            "job_version_id": _text(row.get("current_version_id")),
+            "cache_ids": queued + available,
+            "queued_cache_ids": queued,
+            "available_cache_ids": available,
+        }
+
     def _match_intelligence(
         self,
         user_id: str,
@@ -932,11 +988,22 @@ class PersonalizedJobsService:
                     description = build_description_intelligence(row)
                 match = build_match_intelligence(row, description, profile)
                 self.store.complete_intelligence(cache_id, state="available", payload={"match_intelligence": match})
+            elif kind == "tailored_document":
+                preferences = self.get_preferences(_text(queued.get("user_id")))
+                profile = _profile_context(_text(queued.get("user_id")), preferences, getattr(self.repositories, "career_profile_store", None))
+                description_key = build_intelligence_cache_key(row, intelligence_kind="description", evaluator_version=SUMMARY_PROMPT_VERSION)
+                description_cache = self.store.get_intelligence_cache(description_key)
+                description = (description_cache or {}).get("payload") if description_cache else None
+                if not isinstance(description, Mapping):
+                    description = build_description_intelligence(row)
+                match = build_match_intelligence(row, description, profile)
+                generated = build_tailored_document(row, profile, match)
+                self.store.complete_intelligence(cache_id, state="available", payload={"generation": generated})
             else:
                 self.store.complete_intelligence(cache_id, state="failed", payload={}, error="unknown_intelligence_kind")
         except Exception as exc:
             self.store.complete_intelligence(cache_id, state="failed", payload={}, error=str(exc))
-        return {"cache_id": cache_id, "state": "available" if kind in {"description", "match"} else "failed"}
+        return {"cache_id": cache_id, "state": "available" if kind in {"description", "match", "tailored_document"} else "failed"}
 
     @staticmethod
     def _apply_plan_entitlements(match: Mapping[str, Any], plan_id: str) -> dict[str, Any]:
@@ -970,15 +1037,39 @@ class PersonalizedJobsService:
             "apparent_non_matches": list((match.get("v2") or {}).get("apparent_non_matches") or []),
             "v1_v2_difference": dict(match.get("difference") or {}),
             "matched_evidence": list((match.get("v2") or {}).get("matched_evidence") or []),
+            "missing_evidence": list((match.get("v2") or {}).get("missing_evidence") or []),
         }
         if _text(mode).casefold() in {"rewrite", "generate", "tailored"}:
             if normalize_plan_id(plan_id) == DEFAULT_PLAN_ID:
                 raise PermissionError("runr_pro_required_for_rewriting")
+            row = self.store.get_published_job_row(posting_id) if self.store is not None else None
+            if row is None:
+                raise KeyError("job_not_found")
+            preferences = self.get_preferences(user_id)
+            profile = _profile_context(user_id, preferences, getattr(self.repositories, "career_profile_store", None))
+            key = build_intelligence_cache_key(
+                row,
+                intelligence_kind="tailored_document",
+                user_id=user_id,
+                profile=profile,
+                evaluator_version=TAILORED_DOCUMENT_VERSION,
+                description={"prompt_version": SUMMARY_PROMPT_VERSION},
+            )
+            cached = self.store.get_intelligence_cache(key)
+            if cached is not None and _text(cached.get("state")) == "available":
+                generation = (cached.get("payload") or {}).get("generation") or {}
+                return {
+                    "state": "available",
+                    "entitlement": {"available": True, "plan": "Runr Pro"},
+                    "evidence": evidence,
+                    "generation": generation,
+                }
+            self.store.enqueue_intelligence(key)
             return {
                 "state": "queued",
                 "entitlement": {"available": True, "plan": "Runr Pro"},
                 "evidence": evidence,
-                "generation": {"state": "queued", "message": "Tailored document generation has been queued for the worker."},
+                "generation": {"state": "queued", "cache_id": key["cache_id"], "message": "Tailored document generation has been queued for the worker."},
             }
         return {
             "state": _text(match.get("state")) or "pending",

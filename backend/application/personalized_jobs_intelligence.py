@@ -25,6 +25,7 @@ from typing import Any
 SUMMARY_PROMPT_VERSION = "phase_e_summary_v1"
 MATCH_V1_VERSION = "phase_e_v1"
 MATCH_V2_VERSION = "phase_e_v2"
+TAILORED_DOCUMENT_VERSION = "phase_e_tailored_document_v1"
 MATCH_EVALUATOR_NAME = "runr_match_intelligence"
 INTELLIGENCE_CACHE_VERSION = "phase_e_cache_v1"
 
@@ -524,12 +525,12 @@ def build_intelligence_cache_key(
     job_version_id = _text(row.get("current_version_id"))
     base = {
         "cache_version": INTELLIGENCE_CACHE_VERSION,
-        "user_id": _text(user_id) if intelligence_kind == "match" else "",
+        "user_id": _text(user_id) if intelligence_kind in {"match", "tailored_document"} else "",
         "canonical_job_id": _text(row.get("canonical_job_id")),
         "job_version_id": job_version_id,
-        "profile_version_id": _text(profile.get("version_id")) if intelligence_kind == "match" else "",
-        "cv_version_id": _text(profile.get("cv_version_id")) if intelligence_kind == "match" else "",
-        "evidence_version_id": _text(profile.get("evidence_version_id")) if intelligence_kind == "match" else "",
+        "profile_version_id": _text(profile.get("version_id")) if intelligence_kind in {"match", "tailored_document"} else "",
+        "cv_version_id": _text(profile.get("cv_version_id")) if intelligence_kind in {"match", "tailored_document"} else "",
+        "evidence_version_id": _text(profile.get("evidence_version_id")) if intelligence_kind in {"match", "tailored_document"} else "",
         "evaluator_version": _text(evaluator_version),
         "intelligence_kind": _text(intelligence_kind),
     }
@@ -547,7 +548,7 @@ def build_intelligence_cache_key(
         # state is not.
         "description_intelligence": (
             {"prompt_version": _text((description or {}).get("prompt_version"))}
-            if intelligence_kind == "match"
+            if intelligence_kind in {"match", "tailored_document"}
             else (description or {})
         ),
     }
@@ -611,6 +612,7 @@ def _evaluate(
     unproven: list[str] = []
     apparent_non_matches: list[str] = []
     matched_evidence: list[dict[str, Any]] = []
+    missing_evidence: list[dict[str, str]] = []
     weighted_total = 0.0
     weighted_matched = 0.0
     for requirement in requirement_rows:
@@ -624,8 +626,16 @@ def _evaluate(
                 matched_evidence.append(evidence)
             else:
                 unproven.append(requirement["text"])
+                missing_evidence.append({
+                    "requirement": requirement["text"],
+                    "reason": "No linked verified evidence supports this requirement.",
+                })
         else:
             missing_keywords.append(requirement["text"])
+            missing_evidence.append({
+                "requirement": requirement["text"],
+                "reason": "No matching profile evidence was found.",
+            })
             if requirement["requiredness"] == "essential" and re.search(r"\b(must|required|need|degree|authorization|visa|fluent|native)\b", requirement["text"], re.IGNORECASE):
                 apparent_non_matches.append(requirement["text"])
             elif unproven_text:
@@ -666,6 +676,7 @@ def _evaluate(
         "missing_keywords": all_missing,
         "matched_requirements": list(dict.fromkeys(matched_requirements)),
         "matched_evidence": matched_evidence,
+        "missing_evidence": missing_evidence,
         "unproven_requirements": list(dict.fromkeys(unproven)),
         "apparent_non_matches": list(dict.fromkeys(apparent_non_matches)),
         "formula": formula,
@@ -704,14 +715,38 @@ def build_match_intelligence(row: Mapping[str, Any], intelligence: Mapping[str, 
     }
 
 
+def build_tailored_document(row: Mapping[str, Any], profile: Mapping[str, Any], match: Mapping[str, Any]) -> dict[str, Any]:
+    """Build a truthful, evidence-grounded tailored resume payload in the worker."""
+    v2 = match.get("v2") if isinstance(match.get("v2"), Mapping) else {}
+    evidence = [item for item in (v2.get("matched_evidence") or []) if isinstance(item, Mapping)]
+    highlights = [_text(item.get("text")) for item in evidence if _text(item.get("text"))]
+    return {
+        "document_type": "tailored_resume",
+        "state": "available",
+        "label": "Generated tailored resume",
+        "title": _text(row.get("title")),
+        "summary": "Tailored only from matched, verified candidate evidence; review before sending.",
+        "highlights": highlights[:8],
+        "matched_keywords": list(v2.get("matched_keywords") or []),
+        "missing_keywords": list(v2.get("missing_keywords") or []),
+        "unproven_requirements": list(v2.get("unproven_requirements") or []),
+        "guardrail": "Never claim unsupported experience, qualifications, authorization, salary, language, or requirements.",
+        "evaluator_version": TAILORED_DOCUMENT_VERSION,
+        "profile_version_id": _text(profile.get("version_id")),
+        "job_version_id": _text(row.get("current_version_id")),
+    }
+
+
 __all__ = [
     "MATCH_EVALUATOR_NAME",
     "MATCH_V1_VERSION",
     "MATCH_V2_VERSION",
+    "TAILORED_DOCUMENT_VERSION",
     "SUMMARY_PROMPT_VERSION",
     "build_description_intelligence",
     "build_preserved_original_posting",
     "build_match_intelligence",
+    "build_tailored_document",
     "build_intelligence_cache_key",
     "_profile_context",
 ]

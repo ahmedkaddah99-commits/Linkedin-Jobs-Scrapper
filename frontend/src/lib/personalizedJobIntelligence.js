@@ -17,6 +17,7 @@ export function buildEvidenceReview(match = {}) {
     unproven_requirements: Array.isArray(score.unproven_requirements) ? score.unproven_requirements : [],
     apparent_non_matches: Array.isArray(score.apparent_non_matches) ? score.apparent_non_matches : [],
     matched_evidence: Array.isArray(score.matched_evidence) ? score.matched_evidence : [],
+    missing_evidence: Array.isArray(score.missing_evidence) ? score.missing_evidence : [],
     v1_v2_difference: match.difference || { score_delta: null, summary: "Pending until both evaluators finish." },
   };
 }
