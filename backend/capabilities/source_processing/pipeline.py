@@ -1,6 +1,6 @@
 """CP-039R: Source processing pipeline — vertical path from upload to evidence.
 
-Takes source asset IDs, processes through local extraction + DeepSeek, extracts
+Takes source asset IDs, processes through Gemini with local/DeepSeek fallback, extracts
 canonical CandidateEvidence, and persists with idempotency guarantees.
 
 Exposes a synchronous processing function and batch status tracking
@@ -191,7 +191,7 @@ def process_sources_and_extract_evidence(
     profile_id: str = "",
     timeout_seconds: float = DEFAULT_POLL_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Process sources through local extraction plus DeepSeek and extract CandidateEvidence.
+    """Process sources through Gemini with local/DeepSeek fallback and extract CandidateEvidence.
 
     Args:
         sources: List of dicts with asset_id, file_bytes, file_name.
@@ -267,7 +267,7 @@ def process_sources_and_extract_evidence(
             source_status["char_count"] = record.char_count
             source_status["status"] = record.status
 
-            if record.provider != "deepseek":
+            if record.provider not in {"gemini", "deepseek"}:
                 source_status["status"] = SOURCE_STATUS_FAILED
                 source_status["error"] = (
                     "AI structured extraction is temporarily unavailable. "
