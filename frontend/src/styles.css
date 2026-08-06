@@ -2106,6 +2106,19 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
 .jobs-company-data-status { color: var(--jobs-muted); font-size: 0.68rem; margin-left: auto; margin-top: 0.45rem; }
 .jobs-company-catalog-facts { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-top: 0.8rem; }
 .jobs-company-catalog-facts span { background: var(--jobs-soft); border: 1px solid var(--jobs-line); border-radius: 999px; color: #4e6878; font-size: 0.7rem; padding: 0.45rem 0.65rem; }
+.jobs-evaluation-card { background: #fff; border-radius: 0.7rem; padding: 0.9rem; }
+.jobs-ats-summary { align-items: center; display: flex; gap: 0.8rem; }
+.jobs-ats-score { align-items: center; aspect-ratio: 1; background: conic-gradient(#ef3d68 var(--ats-score), #e8edf2 0); border-radius: 50%; display: flex; flex: 0 0 4.25rem; justify-content: center; position: relative; }
+.jobs-ats-score::before { background: #fff; border-radius: 50%; content: ""; inset: 0.52rem; position: absolute; }
+.jobs-ats-score strong { color: #243746; font-size: 1.15rem; position: relative; z-index: 1; }
+.jobs-ats-copy strong, .jobs-ats-copy span { display: block; }
+.jobs-ats-copy strong { color: #1b3446; font-size: 0.82rem; }
+.jobs-ats-copy span { color: #6d7f8c; font-size: 0.7rem; margin-top: 0.22rem; }
+.jobs-ats-missing { border-top: 1px solid var(--jobs-line); margin-top: 0.8rem; padding-top: 0.7rem; }
+.jobs-ats-missing strong { color: #344b5a; display: block; font-size: 0.68rem; }
+.jobs-ats-missing > div { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.45rem; }
+.jobs-ats-missing span { background: #fff0f3; border-radius: 999px; color: #a44b5f; font-size: 0.64rem; padding: 0.25rem 0.45rem; }
+.jobs-evaluation-card .jobs-improve-button { margin-top: 0.75rem; }
 .jobs-outline-button--disabled { color: #8798a3; cursor: default; }
 .jobs-full-posting { padding-top: 1.25rem; }
 .jobs-full-posting__metadata { border-bottom: 1px solid var(--jobs-line); display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); padding-bottom: 1.25rem; }

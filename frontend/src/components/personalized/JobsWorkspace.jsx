@@ -154,40 +154,20 @@ function CompetitionPanel({ job }) {
   </section>;
 }
 
-function MatchVersionCard({ label, match }) {
-  const score = Number.isFinite(Number(match?.score)) ? Number(match.score) : null;
-  return <article className="jobs-intelligence-card">
-    <div className="jobs-intelligence-card__header"><div><strong>{label}</strong><span>{match?.evaluator?.version || "Unknown evaluator"}</span></div><b>{score === null ? "Unknown" : `${score}/100`}</b></div>
-    <p>{match?.explanation || "Unknown"}</p>
-    <div className="jobs-intelligence-columns">
-      <div><strong>Matched keywords</strong><IntelligenceList items={match?.matched_keywords} /></div>
-      <div><strong>Missing keywords</strong><IntelligenceList items={match?.missing_keywords} /></div>
-      <div><strong>Matched evidence</strong><IntelligenceList evidence items={match?.matched_evidence} /></div>
-      <div><strong>Unproven requirements</strong><IntelligenceList items={match?.unproven_requirements} /></div>
-      <div><strong>Apparent non-matches</strong><IntelligenceList items={match?.apparent_non_matches} /></div>
-    </div>
-  </article>;
-}
-
 function EvaluationPanel({ job }) {
   const evaluation = job.evaluation || {};
   const match = job.matchIntelligence || {};
   const state = String(match.state || evaluation.state || "unknown");
-  const unknownFields = job.evaluationUnknownFields;
-  const [showImprove, setShowImprove] = useState(false);
-  const versions = match.evaluator?.versions || [];
-  const profileVersion = match.profile_version || {};
-  const jobVersion = match.job_version || job.descriptionVersion || {};
+  const scoreMatch = match.v1 || match.v2 || {};
+  const score = Number.isFinite(Number(scoreMatch.score)) ? Number(scoreMatch.score) : null;
+  const missing = intelligenceValues(scoreMatch.missing_keywords).map(String).filter(Boolean).slice(0, 6);
   return <section className={["jobs-match-card", "jobs-evaluation-card", `jobs-evaluation-card--${state}`].join(" ")}>
-    <div className="jobs-match-card__top"><div className="jobs-evaluation-icon"><Icon>{state === "available" ? "verified" : state === "loading" ? "progress_activity" : "help"}</Icon></div><div><strong>Match intelligence</strong><p>{state === "available" ? "Free v1 and v2 evaluations use your profile and this job version." : `Evaluation ${state}. Scores remain unknown until the required data is available.`}</p>{unknownFields.length ? <p className="jobs-evaluation-unknown">Unknown: {unknownFields.join(", ")}</p> : null}</div></div>
-    {state === "available" || match.v1 || match.v2 ? <>
-      <div className="jobs-intelligence-grid"><MatchVersionCard label="v1 · ATS-style match" match={match.v1} /><MatchVersionCard label="v2 · Semantic & evidence-aware" match={match.v2} /></div>
-      <div className="jobs-match-difference"><strong>Difference between v1 and v2</strong><span>{match.difference?.summary || "Unknown"}</span><b>{Number.isFinite(Number(match.difference?.score_delta)) ? `${Number(match.difference.score_delta) > 0 ? "+" : ""}${match.difference.score_delta} points` : "Unknown"}</b></div>
-      <button className="jobs-text-link jobs-improve-button" onClick={() => setShowImprove((value) => !value)} type="button">Improve Resume <Icon>{showImprove ? "expand_less" : "arrow_forward"}</Icon></button>
-      {showImprove ? <div className="jobs-improvement"><strong>Truthful improvement guidance</strong><IntelligenceList items={job.improveResume?.free_explanations} /><p>Runr can explain gaps for Free users. Rewriting and tailored-document creation remain Runr Pro capabilities.</p></div> : null}
-      <div className="jobs-match-provenance"><span>Evaluator: {match.evaluator?.name || "Unknown"} {versions.length ? `(${versions.join(", ")})` : ""}</span><span>Profile: {profileVersion.id || "Unknown"}</span><span>Job version: {jobVersion.id || `v${job.version || "?"}`}</span></div>
-    </> : <p className="jobs-evaluation-unknown">Numeric match intelligence is Unknown for this state.</p>}
-    <div className="jobs-match-card__versions"><span>v{job.version || "?"}</span><span>{state}</span></div>
+    <div className="jobs-ats-summary">
+      <div className="jobs-ats-score" style={{ "--ats-score": `${score ?? 0}%` }}><strong>{score ?? "—"}</strong></div>
+      <div className="jobs-ats-copy"><strong>Resume match</strong><span>{score === null ? "Not available" : score >= 70 ? "Good match" : "Low match"}</span></div>
+    </div>
+    {missing.length ? <div className="jobs-ats-missing"><strong>{missing.length} missing {missing.length === 1 ? "keyword" : "keywords"}</strong><div>{missing.map((value, index) => <span key={`${value}-${index}`}>{value}</span>)}</div></div> : null}
+    {score !== null ? <Link className="jobs-text-link jobs-improve-button" to="/cv-studio">Improve resume <Icon>arrow_forward</Icon></Link> : null}
   </section>;
 }
 

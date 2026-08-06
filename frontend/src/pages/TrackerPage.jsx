@@ -1009,11 +1009,10 @@ function ResumeScore({ ats, loading }) {
     );
   const score = ats.score?.best || 0;
   return (
-    <div>
-      <h3 className="text-xl font-bold text-[#18314b]">Resume score</h3>
-      <div className="mt-6 flex flex-wrap items-center gap-8">
+    <div className="max-w-xl">
+      <div className="flex items-center gap-5">
         <div
-          className="flex h-36 w-36 items-center justify-center rounded-full border-[15px] border-[#e8eef4] text-4xl font-bold text-[#18314b]"
+          className="flex h-24 w-24 items-center justify-center rounded-full border-[10px] border-[#e8eef4] text-3xl font-bold text-[#18314b]"
           style={{ borderLeftColor: score < 70 ? "#e83f68" : "#1b9a68" }}
         >
           {score}
@@ -1022,18 +1021,14 @@ function ResumeScore({ ats, loading }) {
           <p className="font-bold text-[#18314b]">
             {ats.score?.gate_state === "passed" ? "Good match" : "Needs review"}
           </p>
-          <p className="mt-2 max-w-sm text-sm leading-6 text-[#6e8294]">
-            This score is the persisted ATS assessment for the tailored
-            document.
-          </p>
         </div>
       </div>
       {ats.criteria?.missing?.length ? (
-        <div className="mt-7 rounded-md bg-[#fff4f4] p-4 text-sm text-[#b53c4c]">
-          <b>Missing requirements</b>
-          <ul className="mt-2 list-disc space-y-1 pl-5">
+        <div className="mt-5 rounded-md border border-[#f0dfe3] bg-[#fff8f9] p-3 text-sm text-[#b53c4c]">
+          <b>{ats.criteria.missing.length} missing {ats.criteria.missing.length === 1 ? "keyword" : "keywords"}</b>
+          <ul className="mt-2 flex flex-wrap gap-2">
             {ats.criteria.missing.map((value) => (
-              <li key={value}>{value}</li>
+              <li className="rounded-full bg-[#fdecef] px-2.5 py-1 text-xs" key={value}>{value}</li>
             ))}
           </ul>
         </div>
