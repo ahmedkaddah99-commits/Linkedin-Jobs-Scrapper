@@ -95,6 +95,13 @@ class PhaseASchedulerTests(unittest.TestCase):
             catalog = app.get_public_acquisition_catalog()
             self.assertEqual(catalog["jobs"], [])
             self.assertEqual(catalog["freshness"], "unpublished")
+            events = app.repositories.analytics_store.query_rows(
+                "SELECT event_name, payload_json FROM analytics_events ORDER BY occurred_at ASC"
+            )
+            event_names = [row["event_name"] for row in events]
+            self.assertIn("acquisition_cycle_claimed", event_names)
+            self.assertEqual(event_names.count("acquisition_target_executed"), 7)
+            self.assertIn("acquisition_cycle_completed", event_names)
             target_report = {item["target_id"]: item for item in report["targets"]}
             self.assertEqual(target_report["n26_greenhouse"]["maturity_state"], "productive")
             self.assertEqual(target_report["qonto_lever"]["maturity_state"], "productive")
@@ -102,6 +109,10 @@ class PhaseASchedulerTests(unittest.TestCase):
             self.assertEqual(target_report["n26_greenhouse"]["requests"][0]["status"], "completed")
             self.assertEqual(target_report["n26_greenhouse"]["task"]["jobs_new"], 1)
             self.assertIsNone(app.run_due_acquisition())
+            events = app.repositories.analytics_store.query_rows(
+                "SELECT event_name FROM analytics_events ORDER BY occurred_at ASC"
+            )
+            self.assertIn("acquisition_scheduler_noop", [row["event_name"] for row in events])
 
 
 if __name__ == "__main__":

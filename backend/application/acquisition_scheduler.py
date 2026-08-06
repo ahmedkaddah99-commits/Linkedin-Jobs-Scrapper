@@ -160,12 +160,14 @@ class PhaseAAcquisitionScheduler:
             report["recovered_requests"] = recovered
             return report
         if _as_bool(self._phase_a_config("kill_switch")):
-            self._emit("acquisition_kill_switch_activated", reason="configured_kill_switch")
+            self._emit("acquisition_scheduler_kill_switch_blocked", reason="configured_kill_switch")
             return {"status": "kill_switch"}
         if not force and not _as_bool(self._phase_a_config("scheduler_enabled")):
-            return None
+            self._emit("acquisition_scheduler_disabled", reason="phase_a_scheduler_disabled")
+            return {"status": "scheduler_disabled", "reason": "phase_a_scheduler_disabled"}
         if not _as_bool(self._phase_a_config("global_enabled")):
-            return {"status": "disabled"}
+            self._emit("acquisition_scheduler_disabled", reason="phase_a_global_disabled")
+            return {"status": "disabled", "reason": "phase_a_global_disabled"}
         if _as_bool(self._phase_a_config("ai_enrichment_enabled")):
             self._emit("acquisition_ai_enrichment_blocked", reason="phase_a_ai_enrichment_not_implemented")
             return {"status": "disabled", "reason": "phase_a_ai_enrichment_not_implemented"}
@@ -190,8 +192,8 @@ class PhaseAAcquisitionScheduler:
             targets.append(target)
             self._emit_stale_alert_if_needed(target)
         if not targets:
-            self._emit("acquisition_cycle_failed", reason="no_enabled_targets")
-            return {"status": "no_targets"}
+            self._emit("acquisition_scheduler_noop", reason="no_enabled_targets")
+            return {"status": "no_op", "reason": "no_enabled_targets"}
 
         cycle = store.claim_due_cycle(
             window_key=window_key,
@@ -201,8 +203,10 @@ class PhaseAAcquisitionScheduler:
             force=force,
         )
         if cycle is None:
+            self._emit("acquisition_scheduler_noop", reason="window_already_claimed", window_key=window_key)
             return None
         cycle_id = str(cycle["cycle_id"])
+        self._emit("acquisition_cycle_claimed", cycle_id=cycle_id, window_key=window_key)
         global_request_ceiling = _as_int(self._phase_a_config("global_request_ceiling"), 100)
         cycle_request_ceiling = min(
             _as_int(self._phase_a_config("cycle_request_ceiling"), 16),
@@ -241,6 +245,12 @@ class PhaseAAcquisitionScheduler:
             try:
                 result = self._execute_target(cycle_id=cycle_id, task=task, target=target)
                 completed += 1
+                self._emit(
+                    "acquisition_target_executed",
+                    cycle_id=cycle_id,
+                    target_id=target_id,
+                    status=str(result.get("status") or ""),
+                )
                 if bool(result.get("valid_snapshot")) and bool(target.get("publication_enabled")):
                     valid_target_ids.append(target_id)
                 if str(result.get("status") or "") in {"failed", "blocked", "budget_exhausted"}:
@@ -302,6 +312,11 @@ class PhaseAAcquisitionScheduler:
                 error_code="recovery_required",
                 error_message=recovery_reason or "Phase A cycle requires explicit recovery.",
             )
+            self._emit(
+                "acquisition_cycle_recovery_required",
+                cycle_id=cycle_id,
+                reason=recovery_reason or "explicit_recovery_required",
+            )
             return store.get_cycle_report(cycle_id)
 
         publication_id = ""
@@ -317,9 +332,21 @@ class PhaseAAcquisitionScheduler:
                     error_code="publication_recovery_required",
                     error_message=str(exc)[:500],
                 )
+                self._emit(
+                    "acquisition_cycle_recovery_required",
+                    cycle_id=cycle_id,
+                    reason="publication_recovery_required",
+                )
                 raise
         cycle_status = "degraded" if failures else "completed"
         store.complete_cycle(cycle_id, status=cycle_status, publication_id=publication_id)
+        self._emit(
+            "acquisition_cycle_completed",
+            cycle_id=cycle_id,
+            status=cycle_status,
+            completed_targets=completed,
+            failed_targets=failures,
+        )
         if failures:
             self._emit("acquisition_catalog_degraded", cycle_id=cycle_id, failed_targets=failures)
         health = build_rollout_health(getattr(self.repositories, "config_store", None), store)

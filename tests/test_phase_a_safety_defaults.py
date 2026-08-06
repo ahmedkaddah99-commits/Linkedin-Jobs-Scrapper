@@ -9,6 +9,17 @@ from backend.worker import WorkerService
 
 
 class PhaseASafetyDefaultTests(unittest.TestCase):
+    def test_disabled_scheduler_poll_is_distinct_and_creates_no_cycle(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.phase_a.kill_switch", False)
+
+            self.assertEqual(
+                app.run_due_acquisition(),
+                {"status": "scheduler_disabled", "reason": "phase_a_scheduler_disabled"},
+            )
+            self.assertEqual(app.list_acquisition_cycles(), [])
+
     def test_application_and_worker_defaults_cannot_contact_acquisition_sources(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = create_backend(Path(temporary_directory), storage_backend="sqlite")

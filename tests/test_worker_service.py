@@ -418,6 +418,57 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(scheduled_scan_flags, [True, True])
         application.stop_worker.assert_called_once_with(worker.worker_id)
 
+    def test_worker_acquisition_kill_switch_poll_is_not_logged_as_cycle_complete(self):
+        app = self._create_app("worker_acquisition_kill_switch_logging")
+        logger = Mock()
+        worker = WorkerService(
+            application=app,
+            worker_id="worker_acquisition_kill_switch",
+            poll_interval_seconds=0.01,
+            logger=logger,
+        )
+
+        def stop_after_poll(**_kwargs):
+            worker.stop()
+            return None
+
+        with patch.object(WorkerService, "process_next", side_effect=stop_after_poll):
+            self.assertEqual(worker.run_loop(), 0)
+
+        messages = [call.args[0] for call in (*logger.info.call_args_list, *logger.warning.call_args_list)]
+        self.assertIn("worker_acquisition_scheduler_poll", messages)
+        self.assertIn("worker_acquisition_kill_switch_blocked", messages)
+        self.assertNotIn("worker_acquisition_cycle_complete", messages)
+
+    def test_worker_acquisition_noop_poll_is_not_logged_as_cycle_complete(self):
+        app = self._create_app("worker_acquisition_noop_logging")
+        for key, value in {
+            "acquisition.phase_a.kill_switch": False,
+            "acquisition.phase_a.scheduler_enabled": True,
+            "acquisition.phase_a.global_enabled": True,
+        }.items():
+            app.repositories.config_store.set_value(key, value)
+        logger = Mock()
+        worker = WorkerService(
+            application=app,
+            worker_id="worker_acquisition_noop",
+            poll_interval_seconds=0.01,
+            logger=logger,
+        )
+
+        def stop_after_poll(**_kwargs):
+            worker.stop()
+            return None
+
+        with patch.object(WorkerService, "process_next", side_effect=stop_after_poll):
+            self.assertEqual(worker.run_loop(), 0)
+
+        messages = [call.args[0] for call in (*logger.info.call_args_list, *logger.warning.call_args_list)]
+        self.assertIn("worker_acquisition_scheduler_poll", messages)
+        self.assertIn("worker_acquisition_scheduler_noop", messages)
+        self.assertNotIn("worker_acquisition_cycle_complete", messages)
+        self.assertEqual(app.list_acquisition_cycles(), [])
+
     def test_stale_worker_recovery_requeues_running_run(self):
         app = self._create_app("worker_service_recovery")
         run = app.enqueue_run("worker_workspace", requested_by="test-stale")

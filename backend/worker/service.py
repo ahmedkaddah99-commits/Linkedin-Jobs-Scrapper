@@ -122,6 +122,35 @@ class WorkerService:
             },
         )
 
+    def _log_acquisition_result(self, result: dict[str, Any] | None) -> None:
+        cycle = result.get("cycle") if isinstance(result, dict) else None
+        cycle = cycle if isinstance(cycle, dict) else {}
+        cycle_id = str(cycle.get("cycle_id") or "").strip()
+        status = str(cycle.get("status") or (result or {}).get("status") or "").strip()
+        extra = self._log_extra(
+            task_name="scheduled_acquisition",
+            acquisition_status=status or "no_op",
+            acquisition_cycle_ran=bool(cycle_id),
+            acquisition_cycle_id=cycle_id,
+        )
+        self.logger.info("worker_acquisition_scheduler_poll", extra=extra)
+
+        if not cycle_id:
+            if status == "kill_switch":
+                self.logger.warning("worker_acquisition_kill_switch_blocked", extra=extra)
+            elif status in {"disabled", "scheduler_disabled"}:
+                self.logger.info("worker_acquisition_scheduler_disabled", extra=extra)
+            else:
+                self.logger.info("worker_acquisition_scheduler_noop", extra=extra)
+            return
+
+        if status == "recovery_required":
+            self.logger.warning("worker_acquisition_cycle_recovery_required", extra=extra)
+        elif status in {"completed", "degraded"}:
+            self.logger.info("worker_acquisition_cycle_complete", extra=extra)
+        else:
+            self.logger.error("worker_acquisition_cycle_failed", extra=extra)
+
     def heartbeat(self, *, status: str = WORKER_STATUS_IDLE, current_run_id: str = ""):
         return self.application.heartbeat_worker(
             worker_id=self.worker_id,
@@ -349,14 +378,7 @@ class WorkerService:
                                 extra=self._log_extra(task_name="scheduled_acquisition"),
                             )
                         else:
-                            if acquisition_result:
-                                self.logger.info(
-                                    "worker_acquisition_cycle_complete",
-                                    extra=self._log_extra(
-                                        task_name="scheduled_acquisition",
-                                        acquisition_status=str(acquisition_result.get("cycle", {}).get("status") or acquisition_result.get("status") or ""),
-                                    ),
-                                )
+                            self._log_acquisition_result(acquisition_result)
                 try:
                     run = self.process_next(
                         auto_retry_failed=auto_retry_failed,
