@@ -51,6 +51,9 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "cycles"] and segments[4] == "report":
         context.send_json(application.get_acquisition_cycle_report(segments[3]))
         return True
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "cycles"] and segments[4] == "evidence":
+        context.send_json(application.get_production_rollout_evidence(segments[3]))
+        return True
     if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "targets"] and segments[4] == "history":
         context.send_json(application.get_acquisition_target_history(segments[3]))
         return True

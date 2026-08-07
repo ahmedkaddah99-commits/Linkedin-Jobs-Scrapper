@@ -574,6 +574,8 @@ class PhaseAAcquisitionScheduler:
                 # is not productive output and must not reset yield telemetry.
                 state_after = state_before if state_before in {"candidate", "productive"} else "candidate"
                 streak = int(target.get("zero_yield_streak") or 0) + 1
+                if attempt_number >= _as_int(target.get("max_direct_requests"), 3):
+                    state_after = "quarantined"
             elif attempt_number >= _as_int(target.get("max_direct_requests"), 3):
                 state_after = "quarantined"
                 streak = int(target.get("zero_yield_streak") or 0) + 1

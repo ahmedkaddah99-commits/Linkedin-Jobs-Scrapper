@@ -55,6 +55,80 @@ class PhaseIProductionRolloutTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source_measured"):
             app.advance_production_rollout("one_source_production")
 
+    def test_controlled_source_transition_breaks_circular_productivity_gate(self):
+        app = self._backend()
+        app.configure_production_rollout(
+            {
+                "production_source_id": "qonto_lever",
+                "earlier_phases_accepted": True,
+                "apply_quality_verified": True,
+            }
+        )
+        status = app.advance_production_rollout("one_source_production")
+        self.assertEqual(status["stage"], "one_source_production")
+        self.assertTrue(status["gates"]["controlled_source_enabled"]["passed"])
+        self.assertFalse(status["gates"]["source_measured"]["passed"])
+        self.assertTrue(app.repositories.config_store.get_value("acquisition.phase_a.target.qonto_lever.enabled"))
+        self.assertTrue(app.repositories.config_store.get_value("acquisition.phase_b.controlled_validation_enabled"))
+        self.assertFalse(app.repositories.config_store.get_value("acquisition.phase_a.global_enabled", False))
+        self.assertFalse(app.repositories.config_store.get_value("acquisition.phase_a.scheduler_enabled", False))
+
+    def test_staging_evidence_is_durable_and_never_submits(self):
+        app = self._backend()
+        app.configure_production_rollout(
+            {
+                "production_source_id": "qonto_lever",
+                "earlier_phases_accepted": True,
+                "apply_quality_verified": True,
+            }
+        )
+        app.advance_production_rollout("one_source_production")
+
+        class _Response:
+            status_code = 200
+            text = ""
+
+            def __init__(self, url, payload):
+                self.url = url
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        def requester(url, **_kwargs):
+            return _Response(
+                url,
+                [
+                    {
+                        "id": "qonto-job-1",
+                        "text": "Operations Analyst",
+                        "hostedUrl": "https://jobs.lever.co/qonto/qonto-job-1",
+                        "categories": {"location": "Paris"},
+                    }
+                ],
+            )
+
+        app._acquisition_scheduler.requester = requester
+        controlled = app.validate_phase_b_target("qonto_lever", validation_key="phase-i-controlled")
+        self.assertEqual(controlled["cycle"]["status"], "completed")
+        self.assertEqual(controlled["publication"]["publication_id"], "")
+        self.assertTrue(app.get_production_rollout_status()["gates"]["source_productive"]["passed"])
+
+        app.advance_production_rollout("staging_publication")
+        staged = app.validate_phase_b_target("qonto_lever", validation_key="phase-i-staging")
+        evidence = app.get_production_rollout_evidence(staged["cycle"]["cycle_id"])
+        self.assertEqual(evidence["evidence"]["schema_version"], "phase_i_production_evidence_v1")
+        self.assertEqual(evidence["evidence"]["targets"][0]["host"], "api.lever.co")
+        self.assertEqual(evidence["evidence"]["requests"][0]["provider_status"], 200)
+        self.assertTrue(evidence["evidence"]["official_apply_validation"]["validated_without_submission"])
+        self.assertFalse(evidence["evidence"]["official_apply_validation"]["submission_performed"])
+        self.assertIsNone(evidence["evidence"]["publication_head_before"])
+        self.assertIsNone(evidence["evidence"]["publication_head_after"])
+        self.assertEqual(app.get_production_rollout_status()["stage"], "staging_publication")
+
 
 if __name__ == "__main__":
     unittest.main()

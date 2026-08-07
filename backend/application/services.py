@@ -1038,6 +1038,9 @@ class BackendApplication:
             return []
         return store.get_cycle_source_metrics(cycle_id)
 
+    def get_production_rollout_evidence(self, cycle_id: str) -> dict[str, Any]:
+        return self._production_rollout_service.evidence_report(cycle_id)
+
     def get_latest_acquisition_report(self) -> dict[str, Any] | None:
         store = self.repositories.acquisition_store
         if store is None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit
 
 from backend.acquisition.manifest import load_phase_a_manifest
 from backend.config.plans import (
@@ -50,6 +51,7 @@ PHASE_I_DEFAULT_CONFIG: dict[str, Any] = {
     "cycle_credit_ceiling": 0,
     "target_request_ceilings": {},
     "target_credit_ceilings": {},
+    "credit_unit_cost_usd": 0.0,
     "earlier_phases_accepted": False,
     "apply_quality_verified": False,
     "catalog_inspection_approved": False,
@@ -75,6 +77,13 @@ def _bool(value: Any, default: bool = False) -> bool:
 def _int(value: Any, default: int) -> int:
     try:
         return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _float(value: Any, default: float) -> float:
+    try:
+        return max(0.0, float(value))
     except (TypeError, ValueError):
         return default
 
@@ -266,12 +275,34 @@ class ProductionRolloutService:
         staging_ready = bool(staging.get("publication"))
         cohorts_ready = bool(_list(phase_i_config(self.config_store, "internal_cohort_user_ids", [])))
         selected_ready = bool(_list(phase_i_config(self.config_store, "selected_cohort_user_ids", [])))
+        additional_sources = _list(phase_i_config(self.config_store, "additional_source_ids", []))
+        additional_sources_ready = bool(additional_sources)
+        source_id = _text(source.get("source_id"))
+        target_enabled = bool(target.get("enabled")) or _bool(
+            self._phase_a_value(f"target.{source_id}.enabled", False)
+        )
+        controlled_source_enabled = (
+            target_enabled
+            and not _bool(phase_i_config(self.config_store, "production_publication_enabled", False))
+            and not _bool(self._phase_a_value("global_enabled", False))
+            and not _bool(self._phase_a_value("scheduler_enabled", False))
+            and not _bool(self._phase_a_value("publication_enabled", False))
+            and not _bool(self._phase_a_value("kill_switch", True))
+        )
+        daily_scheduler_enabled = (
+            _bool(phase_i_config(self.config_store, "production_publication_enabled", False))
+            and _bool(self._phase_a_value("global_enabled", False))
+            and _bool(self._phase_a_value("scheduler_enabled", False))
+            and _bool(self._phase_a_value("publication_enabled", False))
+            and not _bool(self._phase_a_value("kill_switch", True))
+        )
         evidence = {
             name: _bool(phase_i_config(self.config_store, name, False)) for name in _EVIDENCE_KEYS
         }
         return {
             "earlier_phases_accepted": {"passed": evidence["earlier_phases_accepted"]},
             "source_configured": {"passed": bool(source.get("source_id")), "source_id": source.get("source_id")},
+            "controlled_source_enabled": {"passed": controlled_source_enabled},
             "source_measured": {"passed": measured, "request_count": len(requests), "attempt_count": len(attempts)},
             "source_productive": {"passed": productive, "maturity_state": _text(target.get("maturity_state")) or "unknown"},
             "cost_measured": {
@@ -281,11 +312,25 @@ class ProductionRolloutService:
             "apply_quality_verified": {"passed": evidence["apply_quality_verified"]},
             "source_fresh": {"passed": freshness_ok, "age_hours": freshness_age},
             "staging_ready": {"passed": staging_ready},
+            "staging_publication_enabled": {
+                "passed": _bool(self._phase_b_value("staging_publication_enabled", False)),
+            },
             "catalog_inspection_approved": {"passed": evidence["catalog_inspection_approved"]},
             "internal_cohort_configured": {"passed": cohorts_ready},
             "selected_cohort_configured": {"passed": selected_ready},
             "cohort_gate_enabled": {
                 "passed": _bool(phase_i_config(self.config_store, "user_cohort_gate_enabled", False)),
+            },
+            "additional_sources_configured": {
+                "passed": additional_sources_ready,
+                "source_ids": additional_sources,
+            },
+            "production_publication_enabled": {
+                "passed": _bool(phase_i_config(self.config_store, "production_publication_enabled", False)),
+            },
+            "daily_scheduler_enabled": {"passed": daily_scheduler_enabled},
+            "checkout_gate_enabled": {
+                "passed": _bool(phase_i_config(self.config_store, "checkout_gate_enabled", False)),
             },
             "creem_products_configured": {
                 "passed": bool(_text(os.getenv("CREEM_API_KEY")) and _text(os.getenv("CREEM_WEBHOOK_SECRET")))
@@ -320,6 +365,9 @@ class ProductionRolloutService:
                 "cycle_credits": _int(phase_i_config(self.config_store, "cycle_credit_ceiling", 0), 0),
                 "target_requests": dict(phase_i_config(self.config_store, "target_request_ceilings", {}) or {}),
                 "target_credits": dict(phase_i_config(self.config_store, "target_credit_ceilings", {}) or {}),
+                "credit_unit_cost_usd": _float(
+                    phase_i_config(self.config_store, "credit_unit_cost_usd", 0.0), 0.0
+                ),
             },
             "source": {
                 "target": source.get("target"),
@@ -329,6 +377,12 @@ class ProductionRolloutService:
             "gates": self._gates(),
             "health": health,
         }
+
+    def _phase_a_value(self, name: str, default: Any = None) -> Any:
+        return _config(self.config_store, f"acquisition.phase_a.{name}", default)
+
+    def _phase_b_value(self, name: str, default: Any = None) -> Any:
+        return _config(self.config_store, f"acquisition.phase_b.{name}", default)
 
     def configure(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         manifest_ids = {str(item["target_id"]) for item in load_phase_a_manifest()}
@@ -357,6 +411,10 @@ class ProductionRolloutService:
             "stale_catalog_alert_hours": max(1, _int(payload.get("stale_catalog_alert_hours"), _int(phase_i_config(self.config_store, "stale_catalog_alert_hours", 48), 48))),
             "failed_cycle_alert_threshold": max(1, _int(payload.get("failed_cycle_alert_threshold"), _int(phase_i_config(self.config_store, "failed_cycle_alert_threshold", 1), 1))),
             "failed_cycle_alert_window_hours": max(1, _int(payload.get("failed_cycle_alert_window_hours"), _int(phase_i_config(self.config_store, "failed_cycle_alert_window_hours", 48), 48))),
+            "credit_unit_cost_usd": _float(
+                payload.get("credit_unit_cost_usd"),
+                _float(phase_i_config(self.config_store, "credit_unit_cost_usd", 0.0), 0.0),
+            ),
         }
         for name, value in values.items():
             _set_config(self.config_store, f"acquisition.phase_i.{name}", value)
@@ -364,6 +422,78 @@ class ProductionRolloutService:
             if name in payload:
                 _set_config(self.config_store, f"acquisition.phase_i.{name}", _bool(payload.get(name)))
         return self.status()
+
+    def evidence_report(self, cycle_id: str) -> dict[str, Any]:
+        """Return the durable, admin-only evidence bundle for one cycle."""
+
+        if self.acquisition_store is None:
+            raise ValueError("Production rollout evidence requires sqlite storage support.")
+        report = self.acquisition_store.get_cycle_report(str(cycle_id))
+        cycle = dict(report.get("cycle") or {})
+        metrics = dict(report.get("metrics") or {})
+        targets = list(report.get("targets") or [])
+        request_rows: list[dict[str, Any]] = []
+        target_urls: list[dict[str, Any]] = []
+        for target in targets:
+            requests = list(target.get("requests") or [])
+            request_rows.extend(requests)
+            for request in requests:
+                url = str(request.get("request_url") or "")
+                target_urls.append(
+                    {
+                        "target_id": str(target.get("target_id") or ""),
+                        "url": url,
+                        "host": str(urlsplit(url).hostname or ""),
+                        "mode": str(request.get("mode") or ""),
+                    }
+                )
+        unit_cost = _float(phase_i_config(self.config_store, "credit_unit_cost_usd", 0.0), 0.0)
+        report["evidence"] = {
+            "schema_version": "phase_i_production_evidence_v1",
+            "deployed_commit": next(
+                (
+                    _text(os.getenv(name))
+                    for name in ("RUNR_DEPLOY_COMMIT", "RENDER_GIT_COMMIT", "COMMIT_SHA", "GIT_COMMIT")
+                    if _text(os.getenv(name))
+                ),
+                "unknown",
+            ),
+            "cycle_window": {
+                "cycle_id": _text(cycle.get("cycle_id")),
+                "window_key": _text(cycle.get("window_key")),
+                "scheduled_at": _text(cycle.get("scheduled_at")),
+                "started_at": _text(cycle.get("started_at")),
+                "completed_at": _text(cycle.get("completed_at")),
+            },
+            "targets": target_urls,
+            "requests": request_rows,
+            "credits_and_cost": {
+                "reserved_credits": int(metrics.get("reserved_credits") or 0),
+                "actual_credits": int(metrics.get("actual_credits") or 0),
+                "credit_unit_cost_usd": unit_cost,
+                "estimated_reserved_cost_usd": round(int(metrics.get("reserved_credits") or 0) * unit_cost, 4),
+                "estimated_actual_cost_usd": round(int(metrics.get("actual_credits") or 0) * unit_cost, 4),
+            },
+            "counts": {
+                key: int(metrics.get(key) or 0)
+                for key in ("observed", "new", "updated", "duplicate", "rejected", "closed", "published")
+            },
+            "rejection_reasons": dict(report.get("rejection_reasons") or {}),
+            "yield_and_cost": {
+                key: metrics.get(key)
+                for key in ("yield_per_request", "cost_per_produced_job")
+            },
+            "official_apply_validation": {
+                "validated_without_submission": True,
+                "submission_performed": False,
+                "accepted_job_count": int(metrics.get("observed") or 0),
+                "rejected_job_count": int(metrics.get("rejected") or 0),
+                "method": "phase_b_official_apply_destination_gate",
+            },
+            "publication_head_before": report.get("publication", {}).get("head_before"),
+            "publication_head_after": report.get("publication", {}).get("head_after"),
+        }
+        return report
 
     def advance(self, requested_stage: str) -> dict[str, Any]:
         requested = _text(requested_stage)
@@ -376,14 +506,29 @@ class ProductionRolloutService:
             raise ValueError(f"Phase I must advance one stage at a time from '{current}'.")
         gates = self._gates()
         requirements = {
-            "one_source_production": ("earlier_phases_accepted", "source_configured", "source_measured", "source_productive", "cost_measured", "apply_quality_verified"),
-            "staging_publication": ("source_fresh",),
+            "one_source_production": ("earlier_phases_accepted", "source_configured", "apply_quality_verified"),
+            "staging_publication": (
+                "controlled_source_enabled",
+                "source_measured",
+                "source_productive",
+                "cost_measured",
+                "apply_quality_verified",
+                "source_fresh",
+            ),
             "internal_cohort": ("staging_ready", "catalog_inspection_approved", "internal_cohort_configured", "cohort_gate_enabled"),
             "selected_cohort": ("internal_cohort_configured", "selected_cohort_configured", "cohort_gate_enabled"),
-            "source_expansion": ("selected_cohort_configured", "cohort_gate_enabled"),
-            "daily_scheduler": ("source_productive", "selected_cohort_configured", "cost_measured", "cohort_gate_enabled"),
-            "pro_checkout": ("creem_products_configured",),
-            "complete": ("selected_cohort_configured", "source_productive", "creem_products_configured"),
+            "source_expansion": ("selected_cohort_configured", "cohort_gate_enabled", "additional_sources_configured"),
+            "daily_scheduler": (
+                "source_productive",
+                "source_fresh",
+                "cost_measured",
+                "staging_ready",
+                "catalog_inspection_approved",
+                "selected_cohort_configured",
+                "cohort_gate_enabled",
+            ),
+            "pro_checkout": ("daily_scheduler_enabled", "creem_products_configured"),
+            "complete": ("daily_scheduler_enabled", "checkout_gate_enabled", "selected_cohort_configured", "source_productive", "creem_products_configured"),
         }.get(requested, ())
         missing = [name for name in requirements if not bool(gates.get(name, {}).get("passed"))]
         if missing:
@@ -410,6 +555,9 @@ class ProductionRolloutService:
             )
             if _text(source_manifest.get("target_kind")) == "ats_connector_validation":
                 _set_config(self.config_store, "acquisition.phase_a.connector_validation_enabled", True)
+            _set_config(self.config_store, "acquisition.phase_b.controlled_validation_enabled", True)
+            _set_config(self.config_store, "acquisition.phase_b.staging_publication_enabled", False)
+            _set_config(self.config_store, "acquisition.phase_a.kill_switch", False)
         if requested == "staging_publication":
             _set_config(self.config_store, "acquisition.phase_b.staging_publication_enabled", True)
         if requested == "source_expansion":

@@ -368,68 +368,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
     payload = self._read_json_body()
 
     if segments == ["career-url-discovery", "run"]:
-                        self._require_scope(TOKEN_SCOPE_RUNS_WRITE)
-                        source = str(payload.get("source") or "regular").strip().lower()
-                        if source not in {"regular", "phd", "all"}:
-                            raise ValueError("Choose regular companies, universities/PhD, or all sources.")
-                        raw_limit = payload.get("limit")
-                        limit = 25 if raw_limit in {None, ""} else int(raw_limit)
-                        limit = max(0, min(5000, limit))
-                        offset = max(0, int(payload.get("offset") or 0))
-                        discovery_args = SimpleNamespace(
-                            source=source,
-                            input=str(payload.get("input") or ""),
-                            input_format="auto",
-                            company_name_column="",
-                            homepage_url_column="",
-                            homepage_url="",
-                            domain="",
-                            company_name="",
-                            limit=limit,
-                            offset=offset,
-                            timeout_seconds=max(5, min(60, int(payload.get("timeout_seconds") or 20))),
-                            shallow_crawl_pages=max(0, min(20, int(payload.get("shallow_crawl_pages") or 8))),
-                            use_rendered_fallback=bool(payload.get("use_rendered_fallback") or False),
-                            allow_domain_guessing=False,
-                            output_json=str(payload.get("output_json") or ""),
-                            output_company_sites=str(payload.get("output_company_sites") or ""),
-                            save_mysql=bool(payload.get("save_mysql") or False),
-                            mysql_host=str(payload.get("mysql_host") or ""),
-                            mysql_port=int(payload.get("mysql_port") or 0),
-                            mysql_user=str(payload.get("mysql_user") or ""),
-                            mysql_password=str(payload.get("mysql_password") or ""),
-                            mysql_database=str(payload.get("mysql_database") or ""),
-                            mysql_table=str(payload.get("mysql_table") or ""),
-                        )
-                        result = run_career_url_discovery(discovery_args)
-                        compact_results = []
-                        for item in result.get("results", []):
-                            compact_results.append(
-                                {
-                                    "company_name": item.get("company_name", ""),
-                                    "homepage_url": item.get("homepage_url", ""),
-                                    "primary_career_url": item.get("primary_career_url", ""),
-                                    "secondary_candidate_urls": item.get("secondary_candidate_urls", []),
-                                    "ats_type": item.get("ats_type", ""),
-                                    "confidence_score": item.get("confidence_score", 0),
-                                    "crawl_status": item.get("crawl_status", ""),
-                                    "validation_evidence": item.get("validation_evidence", []),
-                                }
-                            )
-                        self._send_json(
-                            {
-                                "processed": result.get("processed", 0),
-                                "found": result.get("found", 0),
-                                "not_found": result.get("not_found", 0),
-                                "saved_list_path": result.get("output_company_sites", ""),
-                                "details_path": result.get("output_json", ""),
-                                "company_site_entries": result.get("company_site_entries", 0),
-                                "mysql_rows_saved": result.get("mysql_rows_saved", 0),
-                                "results": compact_results,
-                            },
-                            status=HTTPStatus.OK,
-                        )
-                        return
+                        raise PermissionError("Career URL discovery is disabled on the production API.")
 
     if segments == ["workspaces"]:
                         user, _ = self._require_scope(TOKEN_SCOPE_WORKSPACES_WRITE)
