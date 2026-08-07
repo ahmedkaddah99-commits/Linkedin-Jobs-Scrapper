@@ -13,6 +13,9 @@ from .base import InvalidObjectKeyError, ObjectNotFoundError, StoredObject
 from .keys import normalize_object_key
 
 
+_OBJECT_DIGEST_HEX_LENGTH = 32
+
+
 class LocalObjectStorage:
     def __init__(
         self,
@@ -37,12 +40,16 @@ class LocalObjectStorage:
     def _path_for(self, key: str) -> tuple[str, Path]:
         normalized_key = normalize_object_key(key)
         digest = hashlib.sha256(normalized_key.encode("utf-8")).hexdigest()
-        path = (self.root / digest[:2] / digest[2:4] / digest).resolve()
+        path = (self.root / digest[:2] / digest[2:4] / digest[4:_OBJECT_DIGEST_HEX_LENGTH]).resolve()
         try:
             path.relative_to(self.root)
         except ValueError as exc:
             raise InvalidObjectKeyError("Object key resolves outside the storage root") from exc
         return normalized_key, path
+
+    def _legacy_digest_path_for(self, normalized_key: str) -> Path:
+        digest = hashlib.sha256(normalized_key.encode("utf-8")).hexdigest()
+        return (self.root / digest[:2] / digest[2:4] / digest).resolve()
 
     def _legacy_path_for(self, normalized_key: str) -> Path:
         return (self.root / Path(*normalized_key.split("/"))).resolve()
@@ -50,12 +57,14 @@ class LocalObjectStorage:
     def _existing_path_for(self, normalized_key: str, path: Path) -> Path:
         if path.is_file():
             return path
-        legacy_path = self._legacy_path_for(normalized_key)
-        try:
-            legacy_path.relative_to(self.root)
-        except ValueError as exc:
-            raise InvalidObjectKeyError("Object key resolves outside the storage root") from exc
-        return legacy_path
+        for legacy_path in (self._legacy_digest_path_for(normalized_key), self._legacy_path_for(normalized_key)):
+            try:
+                legacy_path.relative_to(self.root)
+            except ValueError as exc:
+                raise InvalidObjectKeyError("Object key resolves outside the storage root") from exc
+            if legacy_path.is_file():
+                return legacy_path
+        return path
 
     def put(
         self,
@@ -99,7 +108,7 @@ class LocalObjectStorage:
 
     def delete(self, key: str) -> None:
         normalized_key, path = self._path_for(key)
-        paths = [path, self._legacy_path_for(normalized_key)]
+        paths = [path, self._legacy_digest_path_for(normalized_key), self._legacy_path_for(normalized_key)]
         for candidate in paths:
             try:
                 candidate.unlink()
