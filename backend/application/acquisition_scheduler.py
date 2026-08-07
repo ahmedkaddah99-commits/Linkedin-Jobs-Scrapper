@@ -427,8 +427,9 @@ class PhaseAAcquisitionScheduler:
         store = getattr(self.repositories, "acquisition_store", None)
         if store is None:
             raise ValueError("Admin imports require sqlite/Turso acquisition storage.")
-        if _as_bool(self._phase_a_config("kill_switch")):
-            return {"status": "blocked", "reason": "acquisition_kill_switch", "import": dict(import_payload)}
+        # Admin imports are governed by the separate admin-import switch at the
+        # application boundary. The Phase-A kill switch protects the scheduled
+        # acquisition loop and must not block an explicitly requested admin run.
         manifest = {str(item["target_id"]): dict(item) for item in load_phase_a_manifest()}
         source_ids = [str(item).strip() for item in (import_payload.get("source_ids") or []) if str(item).strip()]
         scope = dict(import_payload.get("scope") or {})
