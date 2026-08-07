@@ -717,6 +717,7 @@ def plan_company_site_scope(
     target_country_codes: Any = None,
     target_cities: Any = None,
     locality_mode: str = LOCALITY_MODE_LOCAL_PREFERRED,
+    allow_foreign_entrypoints: bool = False,
     max_sites_per_run: int = -1,
     domain_policies: Any = None,
 ) -> CompanySiteScopePlan:
@@ -751,7 +752,7 @@ def plan_company_site_scope(
             "matched_foreign_countries": list(signal.get("matched_foreign_countries") or []),
             "domain_policy_id": str(site_policy.get("policy_id") or ""),
         }
-        if site_country_codes and signal["signal"] == "foreign":
+        if site_country_codes and signal["signal"] == "foreign" and not allow_foreign_entrypoints:
             skipped_sites.append(
                 {
                     **enriched_entry,
@@ -1467,6 +1468,7 @@ def _collect_job_candidates_for_site(
     locality_mode: str,
     target_country_codes: list[str],
     target_cities: list[str],
+    allow_foreign_entrypoints: bool = False,
     max_job_links_per_site: int,
     academic_mode: bool = False,
     usage_callback=None,
@@ -1587,7 +1589,7 @@ def _collect_job_candidates_for_site(
             target_country_codes=target_country_codes,
             target_cities=target_cities,
         )
-        if target_country_codes and signal["signal"] == "foreign":
+        if target_country_codes and signal["signal"] == "foreign" and not allow_foreign_entrypoints:
             skipped_reasons.append(
                 {
                     "url": str(candidate.get("url") or ""),
@@ -1707,6 +1709,7 @@ def scrape_company_career_sites(
     target_cities: Any = None,
     posted_within_days: int = 0,
     locality_mode: str = LOCALITY_MODE_LOCAL_PREFERRED,
+    allow_foreign_entrypoints: bool = False,
     site_request_modes: tuple[str, ...] = DEFAULT_SITE_REQUEST_MODES,
     job_detail_request_modes: tuple[str, ...] = DEFAULT_JOB_DETAIL_REQUEST_MODES,
     domain_policies: Any = None,
@@ -1728,6 +1731,7 @@ def scrape_company_career_sites(
         target_country_codes=target_country_codes,
         target_cities=target_cities,
         locality_mode=locality_mode,
+        allow_foreign_entrypoints=allow_foreign_entrypoints,
         max_sites_per_run=max_sites_per_run,
         domain_policies=domain_policies,
     )
@@ -2037,6 +2041,7 @@ def scrape_company_career_sites(
                 locality_mode=site_locality_mode,
                 target_country_codes=site_target_country_codes,
                 target_cities=normalized_target_cities,
+                allow_foreign_entrypoints=allow_foreign_entrypoints,
                 max_job_links_per_site=max_job_links_per_site,
                 academic_mode=academic_mode,
                 usage_callback=on_site_usage_event,

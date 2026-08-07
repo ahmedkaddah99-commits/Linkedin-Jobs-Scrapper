@@ -711,6 +711,7 @@ class PhaseAAcquisitionScheduler:
                         keywords=scope.get("keywords") or [],
                         target_country_codes=[scope.get("country")] if scope.get("country") else [],
                         target_cities=scope.get("cities") or [],
+                        allow_foreign_entrypoints=bool(target_config.get("admin_import_id")),
                         max_sites_per_run=1,
                         max_job_links_per_site=max(1, _as_int(scope.get("max_pages"), 20) * 25),
                         run_credit_budget=max(0, _as_int(scope.get("max_credits"), 0)),

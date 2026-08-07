@@ -9,6 +9,7 @@ from backend.api.routes import build_route_registry
 from backend.api.routes.registry import ApiRouteContext
 from backend.bootstrap import create_backend
 from backend.connectors.ats_router import fetch_ats_snapshot
+from backend.connectors.company_career_sites import plan_company_site_scope
 
 
 class _Response:
@@ -42,6 +43,24 @@ class _AdminHandler:
 
 
 class AdminJobImportDashboardTests(unittest.TestCase):
+    def test_global_admin_entrypoint_is_not_rejected_by_locale_path(self):
+        site = {"company_name": "Siemens Industry Software", "url": "https://www.siemens.com/en-us/company/jobs"}
+
+        default_plan = plan_company_site_scope(
+            company_sites=[site],
+            target_country_codes=["Germany"],
+        )
+        admin_plan = plan_company_site_scope(
+            company_sites=[site],
+            target_country_codes=["Germany"],
+            allow_foreign_entrypoints=True,
+        )
+
+        self.assertEqual(default_plan.selected_sites, [])
+        self.assertEqual(default_plan.skipped_sites[0]["skip_reason"], "foreign_market_site")
+        self.assertEqual(len(admin_plan.selected_sites), 1)
+        self.assertEqual(admin_plan.selected_sites[0]["url"], "https://siemens.com/en-us/company/jobs")
+
     def test_siemens_is_available_for_admin_imports_and_cost_is_bounded(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = create_backend(Path(temporary_directory), storage_backend="sqlite")
