@@ -4672,6 +4672,7 @@ class BackendApiTests(unittest.TestCase):
             self.assertEqual(unauthorized_payload["error"]["code"], "forbidden")
 
     def test_billing_checkout_accepts_valid_promo_code_without_logging_raw_code(self):
+        self.app.repositories.config_store.set_value("acquisition.phase_i.checkout_gate_enabled", True)
         with (
             patch(
                 "backend.api.server.get_plan",
@@ -4721,6 +4722,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertNotIn("promo_code", event_payload)
 
     def test_billing_checkout_rejects_invalid_promo_code_format(self):
+        self.app.repositories.config_store.set_value("acquisition.phase_i.checkout_gate_enabled", True)
         with patch(
             "backend.api.server.get_plan",
             return_value={

@@ -1,6 +1,7 @@
 # ruff: noqa: F821
 from __future__ import annotations
 
+from backend.application.production_rollout import phase_i_config
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
 
@@ -408,9 +409,8 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         if target_plan_id == DEFAULT_PLAN_ID:
                             raise ValueError("Checkout is only available for paid plans.")
                         config_store = getattr(getattr(application, "repositories", None), "config_store", None)
-                        get_config = getattr(config_store, "get_value", None)
-                        checkout_gate = get_config("acquisition.phase_i.checkout_gate_enabled", None) if callable(get_config) else None
-                        if checkout_gate is not None and str(checkout_gate).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
+                        checkout_gate = phase_i_config(config_store, "checkout_gate_enabled", False)
+                        if str(checkout_gate).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
                             raise PermissionError("Runr Pro checkout is not enabled for this rollout stage.")
                         source_page = str(payload.get("source_page") or payload.get("sourcePage") or "").strip()
                         promo_code = str(payload.get("promo_code") or payload.get("promoCode") or "").strip().upper()
