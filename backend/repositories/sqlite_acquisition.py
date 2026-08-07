@@ -1551,9 +1551,13 @@ class SqliteAcquisitionStore(_SqliteStore):
                 raise KeyError(f"Staging publication '{publication_id}' not found.")
             if str(row["status"] or "") != "staging":
                 raise ValueError("Only a staging publication can be promoted.")
+            previous = connection.execute(
+                "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+            ).fetchone()
+            previous_id = str(previous["publication_id"] or "") if previous is not None else ""
             connection.execute(
-                "UPDATE acquisition_publications SET status='valid' WHERE publication_id=?",
-                (publication_id,),
+                "UPDATE acquisition_publications SET status='valid', previous_publication_id=? WHERE publication_id=?",
+                (previous_id, publication_id),
             )
             connection.execute(
                 """
@@ -1933,6 +1937,608 @@ class SqliteAcquisitionStore(_SqliteStore):
             "attempts": [_dict_row(row) for row in attempts],
             "requests": [self._request_payload(_dict_row(row)) for row in requests],
         }
+
+    # Admin Job Import dashboard -----------------------------------------
+
+    @staticmethod
+    def _admin_import_payload(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        payload = _dict_row(row) if hasattr(row, "keys") else dict(row)
+        for field, default in (("source_ids_json", []), ("scope_json", {}), ("plan_json", {})):
+            raw = payload.pop(field, "")
+            decoded = _decode(raw, default)
+            payload[field.removesuffix("_json")] = decoded
+        return payload
+
+    def create_job_import(
+        self,
+        *,
+        idempotency_key: str,
+        requested_by: str,
+        source_ids: Iterable[str],
+        scope: Mapping[str, Any],
+        plan: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        normalized_key = str(idempotency_key or "").strip()
+        if not normalized_key:
+            raise ValueError("idempotency_key is required")
+        now = utc_now_iso()
+        import_id = f"job_import_{uuid4().hex}"
+        source_values = [str(item).strip() for item in source_ids if str(item).strip()]
+
+        def write(connection):
+            existing = connection.execute(
+                "SELECT * FROM admin_job_imports WHERE idempotency_key=?",
+                (normalized_key,),
+            ).fetchone()
+            if existing is not None:
+                return self._admin_import_payload(existing)
+            connection.execute(
+                """
+                INSERT INTO admin_job_imports (
+                    import_id, idempotency_key, status, requested_by, source_ids_json,
+                    scope_json, plan_json, created_at, updated_at
+                ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    import_id,
+                    normalized_key,
+                    str(requested_by or ""),
+                    _json(source_values),
+                    _json(dict(scope)),
+                    _json(dict(plan)),
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, 'import_queued', ?, ?)
+                """,
+                (f"admin_audit_{uuid4().hex}", import_id, str(requested_by or ""), _json({"plan": dict(plan)}), now),
+            )
+            return self._admin_import_payload(
+                connection.execute("SELECT * FROM admin_job_imports WHERE import_id=?", (import_id,)).fetchone()
+            )
+
+        return self._run_transaction(write) or {}
+
+    def get_job_import(self, import_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM admin_job_imports WHERE import_id=?", (str(import_id or ""),)).fetchone()
+        return self._admin_import_payload(row)
+
+    def list_job_imports(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM admin_job_imports ORDER BY created_at DESC, import_id DESC LIMIT ? OFFSET ?",
+                (max(1, min(200, int(limit))), max(0, int(offset))),
+            ).fetchall()
+        return [item for row in rows if (item := self._admin_import_payload(row)) is not None]
+
+    def claim_next_job_import(self, *, lease_owner: str = "runr-worker") -> dict[str, Any] | None:
+        now = utc_now_iso()
+
+        def claim(connection):
+            row = connection.execute(
+                "SELECT * FROM admin_job_imports WHERE status='queued' ORDER BY created_at, import_id LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return None
+            updated = connection.execute(
+                """
+                UPDATE admin_job_imports
+                SET status='running', started_at=?, updated_at=?, error_code='', error_message=?
+                WHERE import_id=? AND status='queued'
+                """,
+                (now, now, str(lease_owner or ""), str(row["import_id"])),
+            )
+            if updated.rowcount != 1:
+                return None
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, 'import_claimed', ?, ?)
+                """,
+                (f"admin_audit_{uuid4().hex}", str(row["import_id"]), str(lease_owner or ""), _json({}), now),
+            )
+            return self._admin_import_payload(
+                connection.execute("SELECT * FROM admin_job_imports WHERE import_id=?", (str(row["import_id"]),)).fetchone()
+            )
+
+        return self._run_transaction(claim)
+
+    def attach_job_import_cycle(self, import_id: str, cycle_id: str) -> None:
+        now = utc_now_iso()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE admin_job_imports SET cycle_id=?, updated_at=? WHERE import_id=?",
+                (str(cycle_id or ""), now, str(import_id or "")),
+            )
+
+    def complete_job_import(
+        self,
+        import_id: str,
+        *,
+        status: str,
+        cycle_id: str = "",
+        error_code: str = "",
+        error_message: str = "",
+    ) -> dict[str, Any] | None:
+        now = utc_now_iso()
+        finished = now if status in {"completed", "failed", "blocked", "needs_attention"} else ""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE admin_job_imports
+                SET status=?, cycle_id=CASE WHEN ? != '' THEN ? ELSE cycle_id END,
+                    error_code=?, error_message=?, completed_at=CASE WHEN ? != '' THEN ? ELSE completed_at END,
+                    updated_at=?
+                WHERE import_id=?
+                """,
+                (
+                    str(status or "needs_attention"),
+                    str(cycle_id or ""),
+                    str(cycle_id or ""),
+                    str(error_code or ""),
+                    str(error_message or "")[:500],
+                    finished,
+                    finished,
+                    now,
+                    str(import_id or ""),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, '', 'import_completed', ?, ?)
+                """,
+                (
+                    f"admin_audit_{uuid4().hex}",
+                    str(import_id or ""),
+                    _json({"status": str(status or ""), "cycle_id": str(cycle_id or ""), "error_code": str(error_code or "")}),
+                    now,
+                ),
+            )
+        return self.get_job_import(import_id)
+
+    def _review_job_payload(self, row: Mapping[str, Any], *, rejected: bool = False) -> dict[str, Any]:
+        payload = _dict_row(row) if hasattr(row, "keys") else dict(row)
+        raw_payload = _decode(payload.pop("version_payload_json", payload.pop("detail_json", "{}")), {})
+        if not isinstance(raw_payload, Mapping):
+            raw_payload = {}
+        payload["source_payload"] = dict(raw_payload)
+        payload["rejected"] = bool(rejected)
+        payload["review_state"] = "not_accepted" if rejected else "needs_review"
+        decision = str(payload.get("decision") or "").strip()
+        if decision in {"approved", "not_accepted"}:
+            payload["review_state"] = decision
+        if payload.get("is_live"):
+            payload["review_state"] = "already_live"
+        payload["is_publishable"] = bool(
+            not rejected
+            and decision == "approved"
+            and str(payload.get("apply_url") or "").startswith("https://")
+            and str(payload.get("lifecycle_state") or "") in {"active", "stale", "reposted"}
+        )
+        warnings: list[str] = []
+        if not str(payload.get("description") or "").strip():
+            warnings.append("description_missing")
+        if not str(payload.get("location") or "").strip():
+            warnings.append("location_missing")
+        if not str(payload.get("company_profile_json") or "").strip():
+            warnings.append("company_information_pending")
+        payload["quality_warnings"] = warnings
+        return payload
+
+    def list_review_jobs(
+        self,
+        *,
+        import_id: str = "",
+        status: str = "needs_review",
+        search: str = "",
+        source_id: str = "",
+        location: str = "",
+        missing: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        normalized_import_id = str(import_id or "").strip()
+        predicates = ["i.import_id = ?"] if normalized_import_id else ["i.import_id = (SELECT import_id FROM admin_job_imports WHERE cycle_id=o.cycle_id ORDER BY created_at DESC LIMIT 1)"]
+        params: list[Any] = [normalized_import_id] if normalized_import_id else []
+        if search:
+            predicates.append("LOWER(c.canonical_name || ' ' || j.title || ' ' || j.location || ' ' || v.description || ' ' || v.payload_json) LIKE ?")
+            params.append(f"%{str(search).casefold()}%")
+        if source_id:
+            predicates.append("o.target_id = ?")
+            params.append(str(source_id))
+        if location:
+            predicates.append("LOWER(j.location) LIKE ?")
+            params.append(f"%{str(location).casefold()}%")
+        query = f"""
+            SELECT j.canonical_job_id, j.company_id, c.canonical_name AS company,
+                   c.provenance_url AS company_provenance_url, p.profile_json AS company_profile_json,
+                   j.identity_key, j.title, j.location, j.canonical_url, j.lifecycle_state,
+                   j.first_seen_at, j.last_seen_at, j.last_verified_at, j.current_version_id,
+                   v.version_number, v.description, v.location AS version_location, v.apply_url,
+                   v.source_observation_id, v.payload_json AS version_payload_json,
+                   o.target_id AS source_id, o.external_job_id, o.original_url, o.source_ats,
+                   o.observed_at, d.decision, d.reason_code, d.actor_user_id, d.created_at AS decision_at,
+                   EXISTS (
+                       SELECT 1 FROM acquisition_publication_jobs pj
+                       JOIN acquisition_publication_head ph ON ph.publication_id=pj.publication_id AND ph.head_id=1
+                       WHERE pj.canonical_job_id=j.canonical_job_id
+                   ) AS is_live
+            FROM job_source_observations o
+            JOIN admin_job_imports i ON i.cycle_id=o.cycle_id
+            JOIN canonical_jobs j ON j.canonical_job_id=o.canonical_job_id
+            JOIN canonical_companies c ON c.company_id=j.company_id
+            LEFT JOIN canonical_company_profiles p ON p.company_id=c.company_id
+            LEFT JOIN job_posting_versions v ON v.version_id=j.current_version_id
+            LEFT JOIN admin_job_review_decisions d
+              ON d.import_id=i.import_id AND d.canonical_job_id=j.canonical_job_id
+            WHERE {' AND '.join(predicates)}
+            GROUP BY j.canonical_job_id, i.import_id
+            ORDER BY COALESCE(v.created_at, o.observed_at) DESC, j.canonical_job_id
+        """
+        with self._connect() as connection:
+            accepted_rows = connection.execute(query, tuple(params)).fetchall()
+            rejection_predicates = ["i.import_id = ?"] if normalized_import_id else ["i.import_id = (SELECT import_id FROM admin_job_imports WHERE cycle_id=r.cycle_id ORDER BY created_at DESC LIMIT 1)"]
+            rejection_params: list[Any] = [normalized_import_id] if normalized_import_id else []
+            if search:
+                rejection_predicates.append("LOWER(COALESCE(t.display_name, '') || ' ' || r.title || ' ' || r.reason_code) LIKE ?")
+                rejection_params.append(f"%{str(search).casefold()}%")
+            if source_id:
+                rejection_predicates.append("r.target_id = ?")
+                rejection_params.append(str(source_id))
+            rejection_rows = connection.execute(
+                f"""
+                SELECT '' AS canonical_job_id, '' AS company_id, t.display_name AS company,
+                       '' AS company_provenance_url, '' AS company_profile_json,
+                       '' AS identity_key, r.title, '' AS location, '' AS canonical_url,
+                       'rejected' AS lifecycle_state, r.observed_at AS first_seen_at,
+                       r.observed_at AS last_seen_at, r.observed_at AS last_verified_at,
+                       '' AS current_version_id, 0 AS version_number, '' AS description,
+                       '' AS version_location, '' AS apply_url, '' AS source_observation_id,
+                       r.detail_json, r.target_id AS source_id, r.external_job_id,
+                       '' AS original_url, '' AS source_ats, r.observed_at, 'not_accepted' AS decision,
+                       r.reason_code, '' AS actor_user_id, r.observed_at AS decision_at, 0 AS is_live
+                FROM acquisition_job_rejections r
+                JOIN admin_job_imports i ON i.cycle_id=r.cycle_id
+                LEFT JOIN acquisition_targets t ON t.target_id=r.target_id
+                WHERE {' AND '.join(rejection_predicates)}
+                ORDER BY r.observed_at DESC, r.rejection_id
+                """,
+                tuple(rejection_params),
+            ).fetchall()
+        rows = [self._review_job_payload(row) for row in accepted_rows]
+        rows.extend(self._review_job_payload(row, rejected=True) for row in rejection_rows)
+        if missing:
+            wanted = {item.strip().casefold() for item in str(missing).split(",") if item.strip()}
+            rows = [
+                row for row in rows
+                if any(
+                    (field == "description" and not str(row.get("description") or "").strip())
+                    or (field == "location" and not str(row.get("location") or "").strip())
+                    or (field in {"company", "company_information"} and not str(row.get("company_profile_json") or "").strip())
+                    or (field in {"apply_url", "apply"} and not str(row.get("apply_url") or "").strip())
+                    for field in wanted
+                )
+            ]
+        if status and status != "all":
+            rows = [row for row in rows if row.get("review_state") == status]
+        start = max(0, int(offset))
+        page = rows[start : start + max(1, min(200, int(limit)))]
+        return {"jobs": page, "total": len(rows), "limit": max(1, int(limit)), "offset": start}
+
+    def record_job_review_decision(
+        self,
+        *,
+        import_id: str,
+        canonical_job_id: str,
+        decision: str,
+        actor_user_id: str,
+        reason_code: str = "",
+    ) -> dict[str, Any]:
+        normalized_decision = str(decision or "").strip().casefold()
+        if normalized_decision in {"approve", "approved"}:
+            normalized_decision = "approved"
+        elif normalized_decision in {"reject", "rejected", "not_accepted"}:
+            normalized_decision = "not_accepted"
+        else:
+            raise ValueError("Decision must be approve or reject.")
+        now = utc_now_iso()
+        import_payload = self.get_job_import(import_id)
+        if not import_payload:
+            raise KeyError(f"Import '{import_id}' not found.")
+        with self._connect() as connection:
+            exists = connection.execute(
+                """
+                SELECT 1 FROM job_source_observations
+                WHERE cycle_id=? AND canonical_job_id=? LIMIT 1
+                """,
+                (str(import_payload.get("cycle_id") or ""), str(canonical_job_id)),
+            ).fetchone()
+            if exists is None:
+                raise KeyError(f"Job '{canonical_job_id}' is not part of import '{import_id}'.")
+            connection.execute(
+                """
+                INSERT INTO admin_job_review_decisions (
+                    decision_id, import_id, canonical_job_id, decision, reason_code,
+                    actor_user_id, created_at, undone_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, '')
+                ON CONFLICT(import_id, canonical_job_id) DO UPDATE SET
+                    decision=excluded.decision, reason_code=excluded.reason_code,
+                    actor_user_id=excluded.actor_user_id, created_at=excluded.created_at, undone_at=''
+                """,
+                (
+                    f"admin_decision_{uuid4().hex}",
+                    str(import_id),
+                    str(canonical_job_id),
+                    normalized_decision,
+                    str(reason_code or ""),
+                    str(actor_user_id or ""),
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, 'review_decision', ?, ?)
+                """,
+                (
+                    f"admin_audit_{uuid4().hex}",
+                    str(import_id),
+                    str(actor_user_id or ""),
+                    _json({"canonical_job_id": str(canonical_job_id), "decision": normalized_decision, "reason_code": str(reason_code or "")}),
+                    now,
+                ),
+            )
+        reviewed = self.list_review_jobs(import_id=import_id, status="all", limit=200, offset=0).get("jobs", [])
+        return next(
+            (item for item in reviewed if str(item.get("canonical_job_id") or "") == str(canonical_job_id)),
+            {},
+        )
+
+    def undo_job_review_decision(self, *, import_id: str, canonical_job_id: str, actor_user_id: str) -> None:
+        now = utc_now_iso()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE admin_job_review_decisions SET decision='', undone_at=?, actor_user_id=?, created_at=? WHERE import_id=? AND canonical_job_id=?",
+                (now, str(actor_user_id or ""), now, str(import_id), str(canonical_job_id)),
+            )
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, 'review_decision_undone', ?, ?)
+                """,
+                (f"admin_audit_{uuid4().hex}", str(import_id), str(actor_user_id or ""), _json({"canonical_job_id": str(canonical_job_id)}), now),
+            )
+
+    def _publication_snapshot_rows(self, connection, canonical_job_ids: Iterable[str]) -> list[dict[str, Any]]:
+        ids = tuple(dict.fromkeys(str(item) for item in canonical_job_ids if str(item).strip()))
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        rows = connection.execute(
+            f"""
+            SELECT j.canonical_job_id, c.canonical_name AS company, j.title, j.location,
+                   j.canonical_url, COALESCE(v.apply_url, '') AS apply_url,
+                   j.lifecycle_state, j.current_version_id, v.description,
+                   v.payload_json AS source_payload
+            FROM canonical_jobs j
+            JOIN canonical_companies c ON c.company_id=j.company_id
+            LEFT JOIN job_posting_versions v ON v.version_id=j.current_version_id
+            WHERE j.canonical_job_id IN ({placeholders})
+            ORDER BY j.title, j.canonical_job_id
+            """,
+            ids,
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = _dict_row(row)
+            item["source_payload"] = _decode(item.get("source_payload"), {})
+            result.append(item)
+        return result
+
+    def create_job_import_preview(self, import_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
+        import_payload = self.get_job_import(import_id)
+        if not import_payload:
+            raise KeyError(f"Import '{import_id}' not found.")
+        cycle_id = str(import_payload.get("cycle_id") or "")
+        if not cycle_id:
+            raise ValueError("Import has not completed yet.")
+        now = utc_now_iso()
+        with self._connect() as connection:
+            current = connection.execute(
+                "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+            ).fetchone()
+            previous_publication_id = str(current["publication_id"] or "") if current is not None else ""
+            current_ids = []
+            if previous_publication_id:
+                current_ids = [
+                    str(row["canonical_job_id"])
+                    for row in connection.execute(
+                        "SELECT canonical_job_id FROM acquisition_publication_jobs WHERE publication_id=?",
+                        (previous_publication_id,),
+                    ).fetchall()
+                ]
+            approved_ids = [
+                str(row["canonical_job_id"])
+                for row in connection.execute(
+                    """
+                    SELECT d.canonical_job_id
+                    FROM admin_job_review_decisions d
+                    JOIN job_source_observations o ON o.canonical_job_id=d.canonical_job_id AND o.cycle_id=?
+                    WHERE d.import_id=? AND d.decision='approved'
+                    """,
+                    (cycle_id, str(import_id)),
+                ).fetchall()
+            ]
+            canonical_ids = tuple(dict.fromkeys([*current_ids, *approved_ids]))
+            snapshot = self._publication_snapshot_rows(connection, canonical_ids)
+            existing = connection.execute(
+                "SELECT publication_id FROM acquisition_publications WHERE cycle_id=? AND status='staging' LIMIT 1",
+                (cycle_id,),
+            ).fetchone()
+            publication_id = str(existing["publication_id"] or "") if existing is not None else f"acq_review_{uuid4().hex}"
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO acquisition_publications (
+                        publication_id, cycle_id, status, snapshot_json, published_at,
+                        valid_until, previous_publication_id
+                    ) VALUES (?, ?, 'staging', ?, ?, '', ?)
+                    """,
+                    (publication_id, cycle_id, _json(snapshot), now, previous_publication_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE acquisition_publications SET snapshot_json=?, previous_publication_id=? WHERE publication_id=?",
+                    (_json(snapshot), previous_publication_id, publication_id),
+                )
+                connection.execute("DELETE FROM acquisition_publication_jobs WHERE publication_id=?", (publication_id,))
+            connection.executemany(
+                "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
+                [(publication_id, item) for item in canonical_ids],
+            )
+            connection.execute(
+                "UPDATE admin_job_imports SET preview_publication_id=?, updated_at=? WHERE import_id=?",
+                (publication_id, now, str(import_id)),
+            )
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, 'publication_preview_created', ?, ?)
+                """,
+                (
+                    f"admin_audit_{uuid4().hex}",
+                    str(import_id),
+                    str(actor_user_id or ""),
+                    _json({"publication_id": publication_id, "jobs": len(snapshot)}),
+                    now,
+                ),
+            )
+        return self.get_job_import_preview(publication_id) or {}
+
+    def get_job_import_preview(self, publication_id: str = "") -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT publication_id, cycle_id, status, snapshot_json, published_at, valid_until, previous_publication_id FROM acquisition_publications WHERE publication_id=?",
+                (str(publication_id or ""),),
+            ).fetchone()
+        if row is None:
+            return None
+        snapshot = _decode(row["snapshot_json"], [])
+        return {
+            "publication_id": str(row["publication_id"] or ""),
+            "cycle_id": str(row["cycle_id"] or ""),
+            "status": str(row["status"] or ""),
+            "published_at": str(row["published_at"] or ""),
+            "valid_until": str(row["valid_until"] or ""),
+            "previous_publication_id": str(row["previous_publication_id"] or ""),
+            "jobs": snapshot if isinstance(snapshot, list) else [],
+            "total": len(snapshot) if isinstance(snapshot, list) else 0,
+        }
+
+    def publish_job_import_preview(self, publication_id: str, *, actor_user_id: str = "") -> str:
+        promoted = self.promote_staging_publication(publication_id)
+        now = utc_now_iso()
+        with self._connect() as connection:
+            import_row = connection.execute(
+                "SELECT import_id FROM admin_job_imports WHERE preview_publication_id=?",
+                (str(publication_id),),
+            ).fetchone()
+            import_id = str(import_row["import_id"] or "") if import_row is not None else ""
+            if import_id:
+                connection.execute(
+                    "UPDATE admin_job_imports SET status='published', publication_id=?, updated_at=? WHERE import_id=?",
+                    (str(publication_id), now, import_id),
+                )
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, 'publication_published', ?, ?)
+                """,
+                (f"admin_audit_{uuid4().hex}", import_id, str(actor_user_id or ""), _json({"publication_id": str(publication_id)}), now),
+            )
+        return promoted
+
+    def undo_last_job_publication(self, *, actor_user_id: str = "") -> dict[str, Any]:
+        now = utc_now_iso()
+
+        def undo(connection):
+            current = connection.execute(
+                """
+                SELECT p.publication_id, p.previous_publication_id
+                FROM acquisition_publications p
+                JOIN acquisition_publication_head h ON h.publication_id=p.publication_id AND h.head_id=1
+                WHERE p.status='valid' LIMIT 1
+                """
+            ).fetchone()
+            if current is None or not str(current["previous_publication_id"] or ""):
+                return {"status": "nothing_to_undo"}
+            previous_id = str(current["previous_publication_id"])
+            previous = connection.execute(
+                "SELECT publication_id, status FROM acquisition_publications WHERE publication_id=?",
+                (previous_id,),
+            ).fetchone()
+            if previous is None:
+                return {"status": "needs_attention", "reason": "previous_publication_missing"}
+            connection.execute("UPDATE acquisition_publications SET status='undone' WHERE publication_id=?", (str(current["publication_id"]),))
+            connection.execute(
+                "UPDATE acquisition_publications SET status='valid' WHERE publication_id=?",
+                (previous_id,),
+            )
+            connection.execute(
+                "UPDATE acquisition_publication_head SET publication_id=?, updated_at=? WHERE head_id=1",
+                (previous_id, now),
+            )
+            import_row = connection.execute(
+                "SELECT import_id FROM admin_job_imports WHERE publication_id=? OR preview_publication_id=? ORDER BY created_at DESC LIMIT 1",
+                (str(current["publication_id"]), str(current["publication_id"])),
+            ).fetchone()
+            import_id = str(import_row["import_id"] or "") if import_row is not None else ""
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, 'publication_undone', ?, ?)
+                """,
+                (f"admin_audit_{uuid4().hex}", import_id, str(actor_user_id or ""), _json({"from": str(current["publication_id"]), "to": previous_id}), now),
+            )
+            return {"status": "undone", "restored_publication_id": previous_id, "undone_publication_id": str(current["publication_id"])}
+
+        return self._run_transaction(undo)
+
+    def list_job_import_audit_events(self, *, import_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        predicates = []
+        params: list[Any] = []
+        if str(import_id or "").strip():
+            predicates.append("import_id=?")
+            params.append(str(import_id))
+        sql = "SELECT * FROM admin_job_audit_events"
+        if predicates:
+            sql += " WHERE " + " AND ".join(predicates)
+        sql += " ORDER BY created_at DESC, event_id DESC LIMIT ?"
+        params.append(max(1, min(500, int(limit))))
+        with self._connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        result = []
+        for row in rows:
+            item = _dict_row(row)
+            item["payload"] = _decode(item.pop("payload_json", "{}"), {})
+            result.append(item)
+        return result
 
     @staticmethod
     def _target_payload(row: dict[str, Any]) -> dict[str, Any]:

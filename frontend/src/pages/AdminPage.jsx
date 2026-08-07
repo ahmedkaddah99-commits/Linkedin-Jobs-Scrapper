@@ -174,6 +174,13 @@ export default function AdminPage() {
         </div>
         <div className="flex flex-wrap gap-3">
           <Link
+            className="inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            to="/admin/job-import"
+          >
+            <span className="material-symbols-outlined text-[18px]">work_history</span>
+            Job Import dashboard
+          </Link>
+          <Link
             className="inline-flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
             to="/admin/scrapeops"
           >

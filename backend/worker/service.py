@@ -200,6 +200,18 @@ class WorkerService:
                 ),
             )
 
+        if isinstance(self.application, BackendApplication):
+            admin_import_result = self.application.process_next_admin_job_import(worker_id=self.worker_id)
+            if admin_import_result is not None:
+                self.logger.info(
+                    "worker_admin_job_import_complete",
+                    extra=self._log_extra(
+                        task_name="admin_job_import",
+                        import_id=str((admin_import_result.get("import") or {}).get("import_id") or ""),
+                    ),
+                )
+                return admin_import_result
+
         # Personalized job intelligence has its own durable queue.  It is
         # deliberately processed before run claims so GET requests can only
         # enqueue pending work and never execute a model inline.

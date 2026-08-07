@@ -129,6 +129,7 @@ def fetch_ats_snapshot(
     *,
     requester: Callable[..., Any] | None = None,
     timeout_seconds: int = ATS_REQUEST_TIMEOUT_SECONDS,
+    max_pages: int = 1,
 ) -> dict[str, Any]:
     """Fetch one bounded public ATS listing snapshot with request metadata."""
 
@@ -146,10 +147,26 @@ def fetch_ats_snapshot(
                 "request_url": url,
             }
         request_url = f"https://boards-api.greenhouse.io/v1/boards/{quote(board_token, safe='')}/jobs?content=true"
+        jobs: list[dict[str, Any]] = []
+        last_response = None
+        total_expected = 0
+        pages_fetched = 0
         try:
-            response = request(request_url, timeout=timeout_seconds, allow_redirects=False)
-            response.raise_for_status()
-            payload = response.json()
+            for page in range(max(1, min(20, int(max_pages))), 0, -1):
+                page_number = max(1, min(20, int(max_pages))) - page + 1
+                page_url = request_url if page_number == 1 else f"{request_url}&page={page_number}"
+                response = request(page_url, timeout=timeout_seconds, allow_redirects=False)
+                response.raise_for_status()
+                payload = response.json()
+                last_response = response
+                page_jobs = payload.get("jobs") if isinstance(payload, dict) else []
+                page_jobs = [item for item in (page_jobs or []) if isinstance(item, dict)]
+                jobs.extend(page_jobs)
+                pages_fetched += 1
+                meta = payload.get("meta") if isinstance(payload, dict) else {}
+                total_expected = int(meta.get("total") or 0) if isinstance(meta, dict) else 0
+                if not page_jobs or (total_expected and len(jobs) >= total_expected) or len(page_jobs) < 100:
+                    break
         except (requests.RequestException, ValueError) as exc:
             LOGGER.warning("Greenhouse API request failed for %s; falling through to proxy: %s", url, exc)
             return {
@@ -159,17 +176,18 @@ def fetch_ats_snapshot(
                 "credible_evidence": False,
                 "request_url": request_url,
                 "error": str(exc),
+                "pages_fetched": pages_fetched,
             }
-        jobs = payload.get("jobs") if isinstance(payload, dict) else []
         return {
             "jobs": [_normalize_greenhouse_job(job, board_token) for job in jobs or [] if isinstance(job, dict)],
             "status": "completed",
-            "status_code": int(getattr(response, "status_code", 200) or 200),
-            "complete_snapshot": isinstance(payload, dict) and isinstance(payload.get("jobs"), list),
-            "credible_evidence": isinstance(payload, dict) and isinstance(payload.get("jobs"), list),
+            "status_code": int(getattr(last_response, "status_code", 200) or 200),
+            "complete_snapshot": pages_fetched > 0,
+            "credible_evidence": pages_fetched > 0,
             "request_url": request_url,
-            "resolved_url": str(getattr(response, "url", "") or request_url),
-            "redirected": str(getattr(response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
+            "resolved_url": str(getattr(last_response, "url", "") or request_url),
+            "redirected": str(getattr(last_response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
+            "pages_fetched": pages_fetched,
         }
 
     if normalized_ats == "lever":
@@ -184,10 +202,21 @@ def fetch_ats_snapshot(
                 "request_url": url,
             }
         request_url = f"https://api.lever.co/v0/postings/{quote(company_slug, safe='')}?mode=json"
+        postings: list[dict[str, Any]] = []
+        last_response = None
+        pages_fetched = 0
         try:
-            response = request(request_url, timeout=timeout_seconds, allow_redirects=False)
-            response.raise_for_status()
-            payload = response.json()
+            for page_number in range(1, max(1, min(20, int(max_pages))) + 1):
+                page_url = request_url if page_number == 1 else f"{request_url}&skip={100 * (page_number - 1)}"
+                response = request(page_url, timeout=timeout_seconds, allow_redirects=False)
+                response.raise_for_status()
+                payload = response.json()
+                last_response = response
+                page_postings = payload if isinstance(payload, list) else []
+                postings.extend(item for item in page_postings if isinstance(item, dict))
+                pages_fetched += 1
+                if len(page_postings) < 100:
+                    break
         except (requests.RequestException, ValueError) as exc:
             LOGGER.warning("Lever API request failed for %s; falling through to proxy: %s", url, exc)
             return {
@@ -197,17 +226,18 @@ def fetch_ats_snapshot(
                 "credible_evidence": False,
                 "request_url": request_url,
                 "error": str(exc),
+                "pages_fetched": pages_fetched,
             }
-        postings = payload if isinstance(payload, list) else []
         return {
             "jobs": [_normalize_lever_job(job, company_slug) for job in postings if isinstance(job, dict)],
             "status": "completed",
-            "status_code": int(getattr(response, "status_code", 200) or 200),
-            "complete_snapshot": isinstance(payload, list),
-            "credible_evidence": isinstance(payload, list),
+            "status_code": int(getattr(last_response, "status_code", 200) or 200),
+            "complete_snapshot": pages_fetched > 0,
+            "credible_evidence": pages_fetched > 0,
             "request_url": request_url,
-            "resolved_url": str(getattr(response, "url", "") or request_url),
-            "redirected": str(getattr(response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
+            "resolved_url": str(getattr(last_response, "url", "") or request_url),
+            "redirected": str(getattr(last_response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
+            "pages_fetched": pages_fetched,
         }
 
     if normalized_ats in {"workday", "personio", "recruitee", "smartrecruiters"}:

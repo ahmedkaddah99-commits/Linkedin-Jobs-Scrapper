@@ -64,6 +64,41 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _admin_scope_for_target(target: Mapping[str, Any]) -> dict[str, Any]:
+    config = target.get("config")
+    return dict(config.get("admin_scope") or {}) if isinstance(config, Mapping) else {}
+
+
+def _admin_scope_matches(job: Mapping[str, Any], scope: Mapping[str, Any]) -> bool:
+    """Apply only explicit, source-observed filters; missing facts stay unknown."""
+
+    if bool(scope.get("full_source_import")):
+        return True
+    searchable = " ".join(
+        str(job.get(key) or "")
+        for key in ("title", "description", "full_description", "department", "category", "job_category", "function")
+    ).casefold()
+    keywords = [str(item).strip().casefold() for item in (scope.get("keywords") or []) if str(item).strip()]
+    if keywords and not all(keyword in searchable for keyword in keywords):
+        return False
+    for field in ("department", "category"):
+        value = str(scope.get(field) or "").strip().casefold()
+        if value and value not in searchable:
+            return False
+    location = " ".join(str(job.get(key) or "") for key in ("location", "location_raw", "city", "country")).casefold()
+    cities = [str(item).strip().casefold() for item in (scope.get("cities") or []) if str(item).strip()]
+    if cities and not any(city in location for city in cities):
+        return False
+    country = str(scope.get("country") or "").strip().casefold()
+    if country and country not in location:
+        return False
+    if bool(scope.get("remote")):
+        work_style = " ".join(str(job.get(key) or "") for key in ("work_arrangement", "workplace", "remote_type", "location")).casefold()
+        if "remote" not in work_style and "home office" not in work_style:
+            return False
+    return True
+
+
 @dataclass(slots=True)
 class PhaseAAcquisitionScheduler:
     repositories: Any
@@ -381,6 +416,120 @@ class PhaseAAcquisitionScheduler:
 
         return self.run_due_cycle(force=True)
 
+    def run_controlled_import(self, import_payload: Mapping[str, Any], *, worker_id: str = "runr-worker") -> dict[str, Any]:
+        """Execute one durable admin import through the normal worker boundary.
+
+        Publication is deliberately excluded here. The review service creates a
+        staging snapshot only after administrator decisions, and a separate
+        explicit publish action moves the public head.
+        """
+
+        store = getattr(self.repositories, "acquisition_store", None)
+        if store is None:
+            raise ValueError("Admin imports require sqlite/Turso acquisition storage.")
+        if _as_bool(self._phase_a_config("kill_switch")):
+            return {"status": "blocked", "reason": "acquisition_kill_switch", "import": dict(import_payload)}
+        manifest = {str(item["target_id"]): dict(item) for item in load_phase_a_manifest()}
+        source_ids = [str(item).strip() for item in (import_payload.get("source_ids") or []) if str(item).strip()]
+        scope = dict(import_payload.get("scope") or {})
+        targets: list[dict[str, Any]] = []
+        for source_id in source_ids:
+            if source_id not in manifest:
+                raise KeyError(f"Unsupported import source '{source_id}'.")
+            target = dict(manifest[source_id])
+            connector = str(target.get("connector") or "").casefold()
+            target["enabled"] = True
+            target["publication_enabled"] = False
+            target["disabled_reason"] = ""
+            target["config"] = {
+                **dict(target.get("config") or {}),
+                "admin_import_id": str(import_payload.get("import_id") or ""),
+                "admin_import_method": "direct" if connector in {"greenhouse", "lever"} else "web",
+                "admin_scope": scope,
+            }
+            if connector not in {"greenhouse", "lever"}:
+                target["connector"] = "company_career_sites"
+                target["request_mode"] = "scrapeops"
+            targets.append(target)
+        store.ensure_targets(targets)
+        now = datetime.now(timezone.utc)
+        import_id = str(import_payload.get("import_id") or "")
+        cycle = store.claim_due_cycle(
+            window_key=f"admin_import:{str(import_payload.get('idempotency_key') or import_id)}",
+            lease_owner=worker_id,
+            scheduled_at=now.isoformat(),
+            lease_seconds=self.lease_seconds,
+            force=False,
+        )
+        if cycle is None:
+            existing = store.list_cycles(limit=100, offset=0)
+            for item in existing:
+                if str(item.get("window_key") or "") == f"admin_import:{str(import_payload.get('idempotency_key') or import_id)}":
+                    return store.get_cycle_report(str(item["cycle_id"]))
+            return {"status": "already_claimed", "import_id": import_id}
+        cycle_id = str(cycle["cycle_id"])
+        store.attach_job_import_cycle(import_id, cycle_id)
+        store.set_cycle_forecast(
+            cycle_id,
+            requests=min(
+                max(1, int((import_payload.get("plan") or {}).get("maximum_requests") or len(targets))),
+                max(1, _as_int(scope.get("max_requests"), 100)),
+            ),
+            credits=max(0, int((import_payload.get("plan") or {}).get("maximum_credits") or 0)),
+        )
+        store.ensure_cycle_tasks(cycle_id, targets)
+        failures = 0
+        for _ in targets:
+            task = store.claim_next_task(cycle_id=cycle_id, lease_owner=worker_id, lease_seconds=self.lease_seconds)
+            if task is None:
+                break
+            target = store.get_target(str(task["target_id"]))
+            try:
+                result = self._execute_target(cycle_id=cycle_id, task=task, target=target)
+                if str(result.get("status") or "") in {"failed", "blocked", "budget_exhausted"}:
+                    failures += 1
+            except AcquisitionRecoveryRequiredError as exc:
+                failures += 1
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="recovery_required",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code="recovery_required",
+                    error_message=str(exc)[:500],
+                )
+                break
+            except AcquisitionUncertainOutcomeError as exc:
+                failures += 1
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="recovery_required",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code="uncertain_external_outcome",
+                    error_message=str(exc)[:500],
+                )
+                break
+            except AcquisitionDispatchBlockedError as exc:
+                failures += 1
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="blocked",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code="dispatch_blocked",
+                    error_message=str(exc)[:500],
+                )
+            except Exception as exc:
+                failures += 1
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="failed",
+                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    error_code=type(exc).__name__.casefold(),
+                    error_message=str(exc)[:500],
+                )
+        status = "degraded" if failures else "completed"
+        store.complete_cycle(cycle_id, status=status)
+        return store.get_cycle_report(cycle_id)
+
     def validate_target(self, target_id: str, *, validation_key: str = "") -> dict[str, Any]:
         """Run exactly one explicitly requested Phase B target.
 
@@ -509,29 +658,79 @@ class PhaseAAcquisitionScheduler:
         request_persisted = False
         try:
             self._failpoint("after_durable_dispatch")
-            if str(target.get("request_mode") or "direct").casefold() != "direct":
+            request_mode = str(target.get("request_mode") or "direct").casefold()
+            target_config = dict(target.get("config") or {})
+            admin_import = bool(str(target_config.get("admin_import_id") or "").strip())
+            if request_mode != "direct" and not (
+                admin_import and _as_bool(self._config("acquisition.admin_imports.allow_proxy", False))
+            ):
                 raise AcquisitionNetworkPolicyError("phase_a_request_mode_not_permitted")
             allowed_hosts = {
                 hostname_for_url(str(target.get("request_url") or "")),
                 hostname_for_url(str(target.get("canonical_target_url") or "")),
             }
-            require_phase_a_network_permission(
-                request_url=str(target["request_url"]),
-                canonical_url=str(target.get("canonical_target_url") or target["request_url"]),
-                requester_injected=self.requester is not None and self._requester_is_fixture(),
-                allowed_hosts=allowed_hosts,
-            )
+            if request_mode == "direct":
+                require_phase_a_network_permission(
+                    request_url=str(target["request_url"]),
+                    canonical_url=str(target.get("canonical_target_url") or target["request_url"]),
+                    requester_injected=self.requester is not None and self._requester_is_fixture(),
+                    allowed_hosts=allowed_hosts,
+                )
             store.mark_request_dispatching(request_id)
             self._failpoint("before_dispatch")
             dispatch_started = True
             started = time.perf_counter()
             connector = str(target.get("connector") or "")
+            usage_events: list[dict[str, Any]] = []
             if connector in {"greenhouse", "lever"}:
                 fetched = fetch_ats_snapshot(
                     str(target.get("canonical_target_url") or target["request_url"]),
                     connector,
                     requester=self.requester,
+                    max_pages=max(1, _as_int(_admin_scope_for_target(target).get("max_pages"), 1)),
                 )
+            elif connector == "company_career_sites":
+                from backend.connectors.company_career_sites import scrape_company_career_sites
+
+                scope = _admin_scope_for_target(target)
+                site = {
+                    "company_name": str(target.get("display_name") or target_id),
+                    "url": str(target.get("canonical_target_url") or target.get("request_url") or ""),
+                }
+                try:
+                    jobs, source_log = scrape_company_career_sites(
+                        company_sites=[site],
+                        source_type="company",
+                        keywords=scope.get("keywords") or [],
+                        target_country_codes=[scope.get("country")] if scope.get("country") else [],
+                        target_cities=scope.get("cities") or [],
+                        max_sites_per_run=1,
+                        max_job_links_per_site=max(1, _as_int(scope.get("max_pages"), 20) * 25),
+                        run_credit_budget=max(0, _as_int(scope.get("max_credits"), 0)),
+                        usage_callback=usage_events.append,
+                    )
+                    failures = list(source_log.get("errors") or []) if isinstance(source_log, Mapping) else []
+                    fetched = {
+                        "jobs": list(jobs or []),
+                        "status": "completed" if not failures else "degraded",
+                        "status_code": 200 if not failures else 207,
+                        "complete_snapshot": not failures,
+                        "credible_evidence": bool(jobs) or not failures,
+                        "request_url": str(target.get("request_url") or ""),
+                        "resolved_url": str(target.get("canonical_target_url") or ""),
+                        "source_log": source_log,
+                    }
+                except Exception as exc:
+                    fetched = {
+                        "jobs": [],
+                        "status": "failed",
+                        "status_code": 0,
+                        "complete_snapshot": False,
+                        "credible_evidence": False,
+                        "request_url": str(target.get("request_url") or ""),
+                        "error": str(exc),
+                        "source_log": {"errors": [str(exc)]},
+                    }
             else:
                 fetched = fetch_bounded_probe(str(target["request_url"]), requester=self.requester)
             latency_ms = max(0, round((time.perf_counter() - started) * 1000))
@@ -540,6 +739,10 @@ class PhaseAAcquisitionScheduler:
             resolved_host = hostname_for_url(resolved_url)
             if resolved_host not in allowed_hosts:
                 raise AcquisitionNetworkPolicyError("phase_a_redirect_hostname_not_allowlisted")
+            # Scope filters are intentionally retained in the import record and
+            # applied by the server-side review query. This keeps every source
+            # observation visible to the administrator, including jobs whose
+            # location or category is unknown.
             raw_jobs = list(fetched.get("jobs") or [])
             normalized = normalize_phase_b_jobs(raw_jobs, target)
             jobs = list(normalized.get("accepted") or [])
@@ -553,7 +756,7 @@ class PhaseAAcquisitionScheduler:
                 request_id,
                 status=request_status,
                 provider_status=_as_int(fetched.get("status_code"), 0),
-                credits_actual=0,
+                credits_actual=sum(int(item.get("runner_credits") or item.get("native_credits") or 0) for item in usage_events),
                 jobs_returned=len(raw_jobs),
                 resolved_url=resolved_url,
                 latency_ms=latency_ms,
@@ -564,6 +767,9 @@ class PhaseAAcquisitionScheduler:
                     "accepted_jobs": len(jobs),
                     "rejected_jobs": len(rejections),
                     "rejections": rejections,
+                    "pages_fetched": int(fetched.get("pages_fetched") or 1),
+                    "usage_events": usage_events,
+                    "source_log": fetched.get("source_log") or {},
                 },
                 error_code="" if status == "completed" else status,
                 error_message=str(fetched.get("error") or "")[:500],
