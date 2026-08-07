@@ -433,6 +433,7 @@ class PhaseAAcquisitionScheduler:
         manifest = {str(item["target_id"]): dict(item) for item in load_phase_a_manifest()}
         source_ids = [str(item).strip() for item in (import_payload.get("source_ids") or []) if str(item).strip()]
         scope = dict(import_payload.get("scope") or {})
+        plan = dict(import_payload.get("plan") or {})
         targets: list[dict[str, Any]] = []
         for source_id in source_ids:
             if source_id not in manifest:
@@ -446,6 +447,7 @@ class PhaseAAcquisitionScheduler:
                 **dict(target.get("config") or {}),
                 "admin_import_id": str(import_payload.get("import_id") or ""),
                 "admin_import_method": "direct" if connector in {"greenhouse", "lever"} else "web",
+                "admin_import_allow_proxy": bool(plan.get("admin_import_allow_proxy")),
                 "admin_scope": scope,
             }
             if connector not in {"greenhouse", "lever"}:
@@ -473,10 +475,10 @@ class PhaseAAcquisitionScheduler:
         store.set_cycle_forecast(
             cycle_id,
             requests=min(
-                max(1, int((import_payload.get("plan") or {}).get("maximum_requests") or len(targets))),
+                max(1, int(plan.get("maximum_requests") or len(targets))),
                 max(1, _as_int(scope.get("max_requests"), 100)),
             ),
-            credits=max(0, int((import_payload.get("plan") or {}).get("maximum_credits") or 0)),
+            credits=max(0, int(plan.get("maximum_credits") or 0)),
         )
         store.ensure_cycle_tasks(cycle_id, targets)
         failures = 0
@@ -663,7 +665,11 @@ class PhaseAAcquisitionScheduler:
             target_config = dict(target.get("config") or {})
             admin_import = bool(str(target_config.get("admin_import_id") or "").strip())
             if request_mode != "direct" and not (
-                admin_import and _as_bool(self._config("acquisition.admin_imports.allow_proxy", False))
+                admin_import
+                and (
+                    _as_bool(self._config("acquisition.admin_imports.allow_proxy", False))
+                    or _as_bool(target_config.get("admin_import_allow_proxy"))
+                )
             ):
                 raise AcquisitionNetworkPolicyError("phase_a_request_mode_not_permitted")
             allowed_hosts = {
