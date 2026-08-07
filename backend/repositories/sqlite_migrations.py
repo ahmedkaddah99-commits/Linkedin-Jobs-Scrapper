@@ -1814,8 +1814,6 @@ def _apply_phase_g_applicant_competition_migration(connection: DatabaseConnectio
             easy_apply_marker INTEGER NOT NULL DEFAULT 0,
             freshness_status TEXT NOT NULL DEFAULT 'unknown',
             provenance_url TEXT NOT NULL DEFAULT '',
-            apply_url TEXT NOT NULL DEFAULT '',
-            source_provenance TEXT NOT NULL DEFAULT '',
             payload_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL
         );
