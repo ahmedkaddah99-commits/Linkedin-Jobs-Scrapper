@@ -28,7 +28,14 @@ def _seed_catalog(app):
             "languages": ["German"],
         }
         connection.execute(
-            "INSERT INTO canonical_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO canonical_jobs (
+                canonical_job_id, company_id, identity_key, title, location,
+                canonical_url, lifecycle_state, first_seen_at, last_seen_at,
+                last_verified_at, absence_count, current_version_id, created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             (
                 "job-a",
                 "company-a",
@@ -141,13 +148,19 @@ class PhaseFCompanyProfileTests(unittest.TestCase):
 
         self.assertEqual(result["total"], 1)
         self.assertEqual(industry["value"], "Enterprise Software")
-        self.assertEqual(industry["provenance"]["url"], "https://acme.example/about")
         self.assertEqual(industry["verified_at"], "2026-08-05T10:00:00+00:00")
         self.assertEqual(profile["fields"]["sponsorship"]["state"], "unknown")
         self.assertTrue(profile["logo_cached"])
         self.assertIn("/catalog/company-logos/company-a/", profile["logo_url"])
         self.assertTrue(result["filter_capabilities"]["industry"])
         self.assertTrue(result["filter_capabilities"]["funding_range"])
+
+        stored = app.repositories.personalized_jobs_store.get_company_profile("company-a")
+        self.assertEqual(
+            stored["profile"]["fields"]["industry"]["provenance"]["url"],
+            "https://acme.example/about",
+        )
+        self.assertNotIn("provenance", repr(result).casefold())
 
 
 if __name__ == "__main__":

@@ -440,9 +440,7 @@ def _company_profile_fields(row: Mapping[str, Any]) -> dict[str, dict[str, Any]]
         else:
             record = {}
         value = record.get("value")
-        if value in (None, "", []) and field == "logo" and _text(row.get("company_logo_object_key")):
-            value = _text(row.get("company_logo_source_url")) or None
-        if value in (None, "", []):
+        if value in (None, "", []) and field != "logo":
             value = _alias(company_payload, *aliases) or _alias(payload, *aliases)
         if _is_unknown_value(value):
             value = None
@@ -767,7 +765,14 @@ class PersonalizedJobsService:
                 sanitized["provenance"] = {**dict(provenance), "source": "verified source"}
                 fields[field] = sanitized
         logo_object_key = _text(row.get("company_logo_object_key"))
-        logo_url = _text(row.get("company_logo_source_url")) if logo_object_key else ""
+        logo_url = ""
+        if logo_object_key and self.object_storage is not None:
+            signer = getattr(self.object_storage, "signed_download_url", None)
+            if callable(signer):
+                try:
+                    logo_url = str(signer(logo_object_key, expires_in_seconds=900))
+                except Exception:
+                    logo_url = ""
         logo_record = dict(fields.get("logo") or {})
         if logo_url:
             logo_record["value"] = logo_url
