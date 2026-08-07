@@ -4721,6 +4721,18 @@ class BackendApiTests(unittest.TestCase):
         self.assertTrue(event_payload["promo_code_present"])
         self.assertNotIn("promo_code", event_payload)
 
+    def test_billing_checkout_defaults_to_disabled_when_rollout_gate_is_unconfigured(self):
+        with patch("backend.api.server.get_creem_checkout_url") as checkout_mock:
+            status, payload = self._request(
+                "POST",
+                "/billing/checkout",
+                {"plan_id": "momentum", "offer_id": "one_month"},
+            )
+
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+        checkout_mock.assert_not_called()
+
     def test_billing_checkout_rejects_invalid_promo_code_format(self):
         self.app.repositories.config_store.set_value("acquisition.phase_i.checkout_gate_enabled", True)
         with patch(
