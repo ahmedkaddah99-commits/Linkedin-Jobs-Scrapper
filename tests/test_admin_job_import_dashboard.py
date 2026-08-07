@@ -42,6 +42,22 @@ class _AdminHandler:
 
 
 class AdminJobImportDashboardTests(unittest.TestCase):
+    def test_siemens_is_available_for_admin_imports_and_cost_is_bounded(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            siemens = next(item for item in app.list_admin_job_import_sources() if item["id"] == "siemens")
+
+            self.assertEqual(siemens["status"], "ready")
+            self.assertEqual(siemens["reason"], "")
+
+            plan = app.plan_admin_job_import(
+                source_ids=["siemens"],
+                scope={"country": "Germany", "max_credits": 1000},
+            )
+            self.assertTrue(plan["can_start"])
+            self.assertTrue(plan["estimated_cost"]["known"])
+            self.assertEqual(plan["estimated_cost"]["currency"], "ScrapeOps credits")
+
     def test_greenhouse_pagination_is_bounded_and_durable(self):
         calls = []
         first_page = [
