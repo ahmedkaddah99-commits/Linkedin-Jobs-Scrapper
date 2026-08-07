@@ -127,6 +127,7 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                 raise ValueError("Import pause control is unavailable.")
             config_store.set_value("acquisition.admin_imports.kill_switch", paused)
             config_store.set_value("acquisition.admin_imports.enabled", not paused)
+            config_store.set_value("acquisition.admin_imports.allow_proxy", not paused)
             context.send_json({"paused": paused, "status": "Paused" if paused else "Ready"})
             return True
     except PermissionError as exc:

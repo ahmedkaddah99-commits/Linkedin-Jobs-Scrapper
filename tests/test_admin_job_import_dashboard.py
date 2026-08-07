@@ -245,6 +245,7 @@ class AdminJobImportDashboardTests(unittest.TestCase):
         self.assertTrue(registry.dispatch(context, auth_required=True))
         application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.kill_switch", False)
         application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.enabled", True)
+        application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.allow_proxy", True)
 
 
 if __name__ == "__main__":
