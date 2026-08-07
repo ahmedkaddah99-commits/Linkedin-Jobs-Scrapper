@@ -975,7 +975,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             elif not include_hidden:
                 predicates.append("page.user_state != 'hidden'")
             sort_mode = str((filters or {}).get("sort") or "newest").casefold()
-            if sort_mode not in {"newest", "priority", "best"}:
+            if sort_mode not in {"newest", "priority", "best", "least_competitive"}:
                 sort_mode = "newest"
             sort_expr = "COALESCE(NULLIF(page.last_verified_at, ''), NULLIF(page.first_seen_at, ''), '')"
             page_source = f"""
@@ -990,8 +990,12 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             if sort_mode in {"priority", "best"}:
                 source = f"SELECT page.*, {self._priority_sql()} AS priority_score FROM ({page_source}) AS page"
                 order_sql = "priority_score DESC, " + sort_expr + " DESC, page.canonical_job_id DESC"
+            elif sort_mode == "least_competitive":
+                competition_expr = "COALESCE(page.applicant_latest_exact, page.applicant_latest_min, 2147483647)"
+                source = f"SELECT page.*, 0.0 AS priority_score, {competition_expr} AS competition_score FROM ({page_source}) AS page"
+                order_sql = "competition_score ASC, " + sort_expr + " DESC, page.canonical_job_id DESC"
             else:
-                source = f"SELECT page.*, 0.0 AS priority_score FROM ({page_source}) AS page"
+                source = f"SELECT page.*, 0.0 AS priority_score, 2147483647 AS competition_score FROM ({page_source}) AS page"
                 order_sql = sort_expr + " DESC, page.canonical_job_id DESC"
             predicates = [f"({item})" for item in predicates]
             count_where_sql = " AND ".join(predicates) if predicates else "1=1"
@@ -1000,6 +1004,11 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 if sort_mode in {"priority", "best"}:
                     predicates.append("(page.priority_score < ? OR (page.priority_score = ? AND page.canonical_job_id < ?))")
                     filter_params.extend([float(cursor.get("priority") or 0), float(cursor.get("priority") or 0), str(cursor.get("canonical_job_id") or "")])
+                elif sort_mode == "least_competitive":
+                    predicates.append(f"(page.competition_score > ? OR (page.competition_score = ? AND ({sort_expr} < ? OR ({sort_expr} = ? AND page.canonical_job_id < ?))))")
+                    competition = int(cursor.get("competition") or 2147483647)
+                    cursor_sort = str(cursor.get("sort") or "")
+                    filter_params.extend([competition, competition, cursor_sort, cursor_sort, str(cursor.get("canonical_job_id") or "")])
                 else:
                     predicates.append(f"({sort_expr} < ? OR ({sort_expr} = ? AND page.canonical_job_id < ?))")
                     filter_params.extend([str(cursor.get("sort") or ""), str(cursor.get("sort") or ""), str(cursor.get("canonical_job_id") or "")])

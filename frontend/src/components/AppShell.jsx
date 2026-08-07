@@ -5,10 +5,7 @@ import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
 import { isAdminUser } from "../lib/auth";
 import { currentEntryAssetPath, fetchLatestEntryAssetPath } from "../lib/deployVersion";
-import {
-  personalizedJobsExperienceEnabled,
-  retireLegacyJobsNavigation,
-} from "../lib/personalizedJobsConfig";
+import { personalizedJobsExperienceEnabled } from "../lib/personalizedJobsConfig";
 import { requestRouteNavigation, resolveRouteParent } from "../lib/routeParents";
 
 const DESKTOP_SIDEBAR_STORAGE_KEY = "runr.sidebarCollapsed";
@@ -38,7 +35,7 @@ const navItems = [
   {
     label: "Dashboard",
     icon: "dashboard",
-    to: "/",
+    to: "/dashboard",
     matchers: [
       { path: "/", end: true },
       { path: "/dashboard", end: true },
@@ -121,9 +118,7 @@ const personalizedNavItems = personalizedJobsExperienceEnabled
   ]
   : navItems;
 
-const userNavItems = retireLegacyJobsNavigation
-  ? personalizedNavItems.filter((item) => !["Workspaces", "Runs"].includes(item.label))
-  : personalizedNavItems;
+const userNavItems = personalizedNavItems;
 
 const secondaryTopRibbonItems = [
   {
@@ -157,15 +152,15 @@ function BrandMark() {
   );
 }
 
-function JobsTopNav({ displayName, isDark, onToggleTheme }) {
+function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme }) {
   const links = [
     { label: "Home", icon: "home", to: "/" },
-    { label: "Matches", icon: "favorite", to: "/jobs" },
+    { label: "Matches", icon: "favorite", to: "/matches" },
     { label: "Jobs", icon: "work_outline", to: "/jobs" },
     { label: "Job tracker", icon: "history", to: "/tracker" },
     { label: "Documents", icon: "description", to: "/documents" },
-    { label: "Services", icon: "share", to: "/referrals" },
-    { label: "Refer", icon: "group_add", to: "/referrals" },
+    { label: "Services", icon: "share", to: "/services" },
+    { label: "Refer", icon: "group_add", to: "/refer" },
   ];
   const location = useLocation();
 
@@ -180,7 +175,7 @@ function JobsTopNav({ displayName, isDark, onToggleTheme }) {
           const active = link.label === "Jobs"
             ? location.pathname.startsWith("/jobs")
             : link.label === "Matches"
-              ? false
+              ? location.pathname.startsWith("/matches")
             : link.label === "Home"
               ? location.pathname === "/"
               : link.label === "Documents"
@@ -190,12 +185,13 @@ function JobsTopNav({ displayName, isDark, onToggleTheme }) {
         })}
       </nav>
       <div className="jobs-top-nav__utilities">
+        <button aria-label="Open Runr workspace menu" onClick={onOpenWorkspaceMenu} title="Dashboard, workspaces, runs and tools" type="button"><span className="material-symbols-outlined">apps</span></button>
         <button aria-label="Announcements" type="button"><span className="material-symbols-outlined">campaign</span></button>
         <button aria-label="Help" type="button"><span className="material-symbols-outlined">help</span></button>
         <button aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"} onClick={onToggleTheme} type="button"><span className="material-symbols-outlined">{isDark ? "light_mode" : "dark_mode"}</span></button>
         <button aria-label="Notifications" type="button"><span className="material-symbols-outlined">notifications</span></button>
         <div className="jobs-top-nav__divider" />
-        <span className="jobs-top-nav__avatar">{String(displayName || "AK").split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span>
+        <NavLink aria-label="Open profile" className="jobs-top-nav__avatar" to="/profile">{String(displayName || "AK").split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</NavLink>
         <UserButton />
       </div>
     </header>
@@ -548,9 +544,8 @@ export default function AppShell({ children, muteSidebar = false }) {
   const routeParent = resolveRouteParent(location);
   const isDocumentsExperience = location.pathname === "/documents" || location.pathname === "/master-cv";
   const isMasterCvExperience = location.pathname === "/master-cv";
-  const isJobsExperience = isDocumentsExperience || (
-    personalizedJobsExperienceEnabled && location.pathname.startsWith("/jobs")
-  );
+  const productRoutes = ["/", "/matches", "/jobs", "/tracker", "/documents", "/master-cv", "/services", "/refer", "/profile"];
+  const isJobsExperience = productRoutes.some((route) => route === "/" ? location.pathname === "/" : location.pathname === route || location.pathname.startsWith(`${route}/`));
   const isCareerAssetsRoute = navItems
     .find((item) => item.label === "Career Assets")
     ?.matchers.some((matcher) => Boolean(matchPath(matcher, location.pathname)));
@@ -683,8 +678,15 @@ export default function AppShell({ children, muteSidebar = false }) {
         />
       </aside>
 
+      {isJobsExperience ? <>
+        <button aria-label="Close workspace menu" className={["jobs-workspace-menu__backdrop", mobileNavOpen ? "is-open" : ""].join(" ")} onClick={() => setMobileNavOpen(false)} type="button" />
+        <aside aria-label="Runr workspace menu" className={["jobs-workspace-menu", mobileNavOpen ? "is-open" : ""].join(" ")}>
+          <SidebarContents isAdmin={isAdmin} onClose={() => setMobileNavOpen(false)} onStartRun={() => navigate("/workspaces")} />
+        </aside>
+      </> : null}
+
       <div className="app-shell__main">
-        {isJobsExperience ? <JobsTopNav displayName={shellUser.name} isDark={isDark} onToggleTheme={toggleTheme} /> : <header
+        {isJobsExperience ? <JobsTopNav displayName={shellUser.name} isDark={isDark} onOpenWorkspaceMenu={() => setMobileNavOpen(true)} onToggleTheme={toggleTheme} /> : <header
           className="top-ribbon top-ribbon--teal sticky top-0 z-30 flex h-16 items-center justify-between overflow-visible border-b border-outline-variant/10 bg-background/95 px-4 py-4 backdrop-blur-[20px] transition-all duration-200 md:px-8"
         >
           <div className="flex min-w-0 items-center gap-3">

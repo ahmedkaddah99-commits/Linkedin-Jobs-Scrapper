@@ -19,6 +19,7 @@ const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConn
 const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const HomePage = lazy(() => import("./pages/HomePage"));
 const CareerEvidencePage = lazy(() => import("./pages/CareerEvidencePage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
 const DocumentsPage = lazy(() => import("./pages/DocumentsPage"));
@@ -219,13 +220,15 @@ function AuthenticatedApp() {
         <RouteErrorBoundary key={`${location.pathname}${location.search}`}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
-              <Route path="/" element={<DashboardPage />} />
+              <Route path="/" element={<HomePage />} />
+              <Route path="/home" element={<Navigate replace to="/" />} />
               <Route path="/onboarding" element={personalizedJobsExperienceEnabled && personalizedJobsDataMode !== "real" ? <PersonalizedOnboardingPage /> : <Navigate replace to="/jobs" />} />
               <Route path="/jobs" element={personalizedJobsExperienceEnabled ? <PersonalizedJobsPage /> : <Navigate replace to="/" />} />
+              <Route path="/matches" element={personalizedJobsExperienceEnabled ? <PersonalizedJobsPage /> : <Navigate replace to="/" />} />
               <Route path="/jobs/hidden" element={personalizedJobsExperienceEnabled ? <HiddenJobsPage /> : <Navigate replace to="/" />} />
               <Route path="/jobs/:jobId" element={personalizedJobsExperienceEnabled ? <PersonalizedJobDetailPage /> : <Navigate replace to="/" />} />
               <Route path="/career-profiles" element={<Navigate replace to="/career-evidence" />} />
-              <Route path="/dashboard" element={<Navigate replace to="/" />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/workspaces" element={<WorkspacesPage />} />
               <Route path="/quick-apply" element={<QuickApplyPage />} />
               <Route path="/runs" element={<RunsPage />} />
@@ -246,8 +249,11 @@ function AuthenticatedApp() {
               <Route path="/cv-studio" element={<CvStudioPage />} />
               <Route path="/artifacts" element={<Navigate replace to="/career-assets" />} />
               <Route path="/referrals" element={<ReferralsPage />} />
+              <Route path="/services" element={<ReferralsPage />} />
+              <Route path="/refer" element={<ReferralsPage />} />
               <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/profile" element={<SettingsPage />} />
               <Route path="/settings/assisted-apply" element={<AssistedApplyConnectionPage />} />
               <Route path="/pricing" element={<PricingPage />} />
               <Route

@@ -12,7 +12,7 @@ const TEMPLATES_TAB = "templates";
 
 const tabs = [
   { id: RESUMES_TAB, label: "Resumes", icon: "description" },
-  { id: COVER_LETTERS_TAB, label: "Cover Letters", icon: "article" },
+  { id: COVER_LETTERS_TAB, label: "Motivation Letters", icon: "article" },
   { id: MASTER_CV_TAB, label: "Master CV", icon: "auto_awesome" },
   { id: TEMPLATES_TAB, label: "Templates", icon: "dashboard_customize" },
 ];
@@ -92,8 +92,8 @@ function ActionCard({ description, icon, label, onClick }) {
 function EmptyState({ tab, onCreate }) {
   const copy = tab === COVER_LETTERS_TAB
     ? {
-      title: "Create your first cover letter!",
-      body: "Get started with a personalized cover letter that highlights your qualifications.",
+      title: "Create your first motivation letter!",
+      body: "Get started with a personalized motivation letter that highlights your qualifications.",
     }
     : tab === TEMPLATES_TAB
       ? {
@@ -322,7 +322,7 @@ export default function DocumentsPage() {
 
       <section aria-label="Create a document" className="documents-action-grid">
         <ActionCard description="Craft and tailor to a job description" icon="description" label="New Resume" onClick={createResume} />
-        <ActionCard description="Create and customize with AI" icon="article" label="New Cover Letter" onClick={createCoverLetter} />
+        <ActionCard description="Create and customize with AI" icon="article" label="New Motivation Letter" onClick={createCoverLetter} />
         <ActionCard description="Capture the complete record of your career" icon="auto_awesome" label="Master CV" onClick={createMasterCv} />
         <ActionCard description="Create a reusable cover letter template" icon="dashboard_customize" label="New Template" onClick={createTemplate} />
         <ActionCard description="Generate tailored responses to application questions" icon="question_answer" label="Question Response" onClick={answerQuestions} />
@@ -382,7 +382,7 @@ export default function DocumentsPage() {
         {activeTab !== TEMPLATES_TAB ? (
           <div className="documents-table-wrap">
             <div className="documents-table__head">
-              <label className="documents-checkbox-cell"><input aria-label="Select all visible documents" checked={allVisibleSelected} onChange={toggleAllVisible} type="checkbox" /><span> {activeTab === COVER_LETTERS_TAB ? "COVER LETTER NAME" : "RESUME NAME"}</span></label>
+              <label className="documents-checkbox-cell"><input aria-label="Select all visible documents" checked={allVisibleSelected} onChange={toggleAllVisible} type="checkbox" /><span> {activeTab === COVER_LETTERS_TAB ? "MOTIVATION LETTER NAME" : "RESUME NAME"}</span></label>
               <span>CREATED</span>
               <span>LAST EDITED</span>
               <span>ACTIONS</span>
@@ -422,7 +422,7 @@ export default function DocumentsPage() {
         <div className="documents-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreviewDocument(null); }}>
           <section aria-label={`${documentName(previewDocument)} preview`} aria-modal="true" className="documents-preview-modal" role="dialog">
             <header className="documents-preview-modal__header">
-              <div className="documents-preview-modal__title"><span className="documents-preview-modal__icon"><Icon>description</Icon></span><div><h2>{documentTab(previewDocument) === COVER_LETTERS_TAB ? "Cover Letter Preview" : "Resume Preview"}</h2><p>Review your document before using it for an application.</p></div></div>
+              <div className="documents-preview-modal__title"><span className="documents-preview-modal__icon"><Icon>description</Icon></span><div><h2>{documentTab(previewDocument) === COVER_LETTERS_TAB ? "Motivation Letter Preview" : "Resume Preview"}</h2><p>Review your document before using it for an application.</p></div></div>
               <button aria-label="Close preview" className="documents-preview-close" onClick={() => setPreviewDocument(null)} type="button"><Icon>close</Icon></button>
             </header>
             <div className="documents-preview-modal__body">

@@ -1179,7 +1179,7 @@ class PersonalizedJobsService:
             effective_filters.update(normalize_filters(saved["filters"]))
         effective_filters.update(explicit_filters)
         sort_mode = _text(effective_filters.get("sort") or "newest").casefold()
-        if sort_mode not in {"newest", "priority", "best"}:
+        if sort_mode not in {"newest", "priority", "best", "least_competitive"}:
             sort_mode = "newest"
         include_pro = normalize_plan_id(plan_id) != DEFAULT_PLAN_ID
         if not include_pro and sort_mode in {"priority", "best"}:
@@ -1214,6 +1214,7 @@ class PersonalizedJobsService:
                 "sort_mode": sort_mode,
                 "sort": _text(last.get("last_verified_at") or last.get("first_seen_at")),
                 "priority": last.get("priority_score"),
+                "competition": last.get("competition_score"),
                 "canonical_job_id": _text(last.get("canonical_job_id")),
             })
         else:
@@ -1598,6 +1599,14 @@ class PersonalizedJobsService:
 
     @staticmethod
     def _after_cursor(row: Mapping[str, Any], cursor: Mapping[str, Any]) -> bool:
+        if _text(cursor.get("sort_mode")) == "least_competitive":
+            row_score = int(row.get("applicant_latest_exact") or row.get("applicant_latest_min") or 2_147_483_647)
+            cursor_score = int(cursor.get("competition") or 2_147_483_647)
+            row_sort = _text(row.get("last_verified_at") or row.get("first_seen_at"))
+            cursor_sort = _text(cursor.get("sort"))
+            job_id = _text(row.get("canonical_job_id"))
+            cursor_id = _text(cursor.get("canonical_job_id"))
+            return row_score > cursor_score or (row_score == cursor_score and (row_sort < cursor_sort or (row_sort == cursor_sort and job_id < cursor_id)))
         if _text(cursor.get("sort_mode")) in {"priority", "best"}:
             try:
                 row_score = float(row.get("_phase_g_priority_score") or 0)
