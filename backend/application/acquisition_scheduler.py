@@ -95,6 +95,8 @@ class PhaseAAcquisitionScheduler:
                 return False
             if name in forced_values:
                 return forced_values[name]
+        if name.startswith("target."):
+            return self._config(f"acquisition.phase_a.{name}", False)
         return self._config(f"acquisition.phase_a.{name}", PHASE_A_DEFAULT_CONFIG[name])
 
     def _phase_b_config(self, name: str) -> Any:
@@ -124,7 +126,7 @@ class PhaseAAcquisitionScheduler:
         production_publication_enabled = _as_bool(self._phase_i_config("production_publication_enabled", False))
         for target in manifest:
             target_id = str(target["target_id"])
-            target_enabled = _as_bool(self._config(f"acquisition.phase_a.target.{target_id}.enabled", False))
+            target_enabled = _as_bool(self._phase_a_config(f"target.{target_id}.enabled"))
             if rollout_enabled and target_id not in {production_source_id, *additional_source_ids}:
                 target_enabled = False
             disabled_reason = str(target.get("disabled_reason") or "phase_a_target_disabled_by_default")
