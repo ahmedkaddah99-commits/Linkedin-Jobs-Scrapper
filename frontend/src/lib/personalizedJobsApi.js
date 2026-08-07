@@ -36,6 +36,33 @@ function text(value) {
   return String(value ?? "").trim();
 }
 
+const INTERNAL_JOB_KEYS = new Set([
+  "source",
+  "source_ats",
+  "source_observation_id",
+  "observation_url",
+  "original_url",
+  "provenance_url",
+  "provenance",
+  "internal_provenance",
+  "source_identifier",
+  "canonical_url",
+  "description_version",
+  "version_id",
+  "content_hash",
+  "observed_at",
+]);
+
+function stripInternalJobFields(value) {
+  if (Array.isArray(value)) return value.map(stripInternalJobFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !INTERNAL_JOB_KEYS.has(String(key).toLowerCase()))
+      .map(([key, item]) => [key, stripInternalJobFields(item)]),
+  );
+}
+
 function firstValue(value) {
   if (Array.isArray(value)) return text(value[0]);
   return text(value);
@@ -219,23 +246,24 @@ export function evaluationLabel(evaluation = {}) {
 }
 
 export function toPersonalizedJobView(job = {}) {
-  const id = text(job.canonical_job_id || job.posting_id);
-  const company = unknown(job.company, "Unknown company");
-  const experienceLevel = unknown(job.experience_level);
-  const workArrangement = normalizeArrangement(job.work_arrangement);
-  const description = text(job.description);
-  const evaluation = job.evaluation && typeof job.evaluation === "object" ? job.evaluation : {};
-  const runrSummary = job.runr_summary && typeof job.runr_summary === "object" ? job.runr_summary : {};
-  const structuredDescription = job.structured_description && typeof job.structured_description === "object" ? job.structured_description : {};
-  const originalPosting = job.original_posting && typeof job.original_posting === "object" ? job.original_posting : {};
-  const matchIntelligence = job.match_intelligence && typeof job.match_intelligence === "object"
-    ? job.match_intelligence
+  const safeJob = stripInternalJobFields(job);
+  const id = text(safeJob.canonical_job_id || safeJob.posting_id);
+  const company = unknown(safeJob.company, "Unknown company");
+  const experienceLevel = unknown(safeJob.experience_level);
+  const workArrangement = normalizeArrangement(safeJob.work_arrangement);
+  const description = text(safeJob.description);
+  const evaluation = safeJob.evaluation && typeof safeJob.evaluation === "object" ? safeJob.evaluation : {};
+  const runrSummary = safeJob.runr_summary && typeof safeJob.runr_summary === "object" ? safeJob.runr_summary : {};
+  const structuredDescription = safeJob.structured_description && typeof safeJob.structured_description === "object" ? safeJob.structured_description : {};
+  const originalPosting = safeJob.original_posting && typeof safeJob.original_posting === "object" ? safeJob.original_posting : {};
+  const matchIntelligence = safeJob.match_intelligence && typeof safeJob.match_intelligence === "object"
+    ? safeJob.match_intelligence
     : (evaluation.match_intelligence && typeof evaluation.match_intelligence === "object" ? evaluation.match_intelligence : {});
-  const companyDetail = job.company_detail && typeof job.company_detail === "object" ? job.company_detail : {};
+  const companyDetail = safeJob.company_detail && typeof safeJob.company_detail === "object" ? safeJob.company_detail : {};
   const companyProfile = companyDetail.profile && typeof companyDetail.profile === "object" ? companyDetail.profile : {};
-  const languages = Array.isArray(job.languages) ? job.languages.map(text).filter(Boolean) : [];
+  const languages = Array.isArray(safeJob.languages) ? safeJob.languages.map(text).filter(Boolean) : [];
   const unknownFields = Array.isArray(evaluation.unknown_fields) ? evaluation.unknown_fields.map(text).filter(Boolean) : [];
-  const applicantIntelligence = job.applicant_intelligence && typeof job.applicant_intelligence === "object" ? job.applicant_intelligence : {};
+  const applicantIntelligence = safeJob.applicant_intelligence && typeof safeJob.applicant_intelligence === "object" ? safeJob.applicant_intelligence : {};
   const latestApplicants = applicantIntelligence.latest && typeof applicantIntelligence.latest === "object" ? applicantIntelligence.latest : {};
   const proApplicants = applicantIntelligence.pro && typeof applicantIntelligence.pro === "object" ? applicantIntelligence.pro : null;
   const exactApplicantCount = proApplicants?.latest_count;
@@ -243,41 +271,39 @@ export function toPersonalizedJobView(job = {}) {
     ? `${Number(exactApplicantCount).toLocaleString()} applicants`
     : text(latestApplicants.label) || (applicantIntelligence.state === "available" ? "Applicant data available in Runr Pro" : "Unknown");
   return {
-    ...job,
+    ...safeJob,
     id,
     company,
     companyDetail,
     companyProfile,
-    title: unknown(job.title, "Untitled job"),
-    location: unknown(job.location),
+    title: unknown(safeJob.title, "Untitled job"),
+    location: unknown(safeJob.location),
     experienceLevel,
     workArrangement,
-    employmentType: unknown(job.employment_type),
-    category: unknown(job.category),
+    employmentType: unknown(safeJob.employment_type),
+    category: unknown(safeJob.category),
     description,
     descriptionSummary: descriptionSummary(description),
-    salaryLabel: formatSalary(job.salary),
+    salaryLabel: formatSalary(safeJob.salary),
     languages,
-    postedAt: job.posted_at || job.first_seen_at || job.last_verified_at || "",
-    source: "Official listing",
-    applyUrl: text(job.apply_url),
-    canonicalUrl: text(job.canonical_url),
-    lifecycleState: unknown(job.lifecycle_state),
-    userState: text(job.user_state) || "none",
+    postedAt: safeJob.posted_at || safeJob.first_seen_at || safeJob.last_verified_at || "",
+    lastVerifiedAt: safeJob.last_verified_at || "",
+    applyUrl: text(safeJob.apply_url),
+    lifecycleState: unknown(safeJob.lifecycle_state),
+    userState: text(safeJob.user_state) || "none",
     evaluation,
     evaluationLabel: evaluationLabel(evaluation),
     evaluationUnknownFields: unknownFields,
     runrSummary,
     structuredDescription,
     originalPosting,
-    descriptionVersion: job.description_version && typeof job.description_version === "object" ? job.description_version : {},
-    descriptionIntelligence: job.description_intelligence && typeof job.description_intelligence === "object" ? job.description_intelligence : {},
+    descriptionIntelligence: safeJob.description_intelligence && typeof safeJob.description_intelligence === "object" ? safeJob.description_intelligence : {},
     matchIntelligence,
     applicantIntelligence,
     applicantLabel,
     applicantFreshness: text(applicantIntelligence.freshness?.state) || "unknown",
     applicantApplyMethod: text(applicantIntelligence.apply_method) || "unknown",
-    priority: job.priority && typeof job.priority === "object" ? job.priority : { state: "unknown", score: null },
+    priority: safeJob.priority && typeof safeJob.priority === "object" ? safeJob.priority : { state: "unknown", score: null },
     improveResume: matchIntelligence.improve_resume && typeof matchIntelligence.improve_resume === "object" ? matchIntelligence.improve_resume : {},
     dataMode: "real",
   };

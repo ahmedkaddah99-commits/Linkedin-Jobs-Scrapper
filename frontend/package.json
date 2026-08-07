@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test",
+    "test": "node --test \"src/**/*.test.js\"",
+    "test:production-build": "npm run build && node --test scripts/production-build.test.mjs",
     "test:e2e": "playwright test",
     "check": "npm run test && eslint src --max-warnings=0 && vite build",
     "build": "vite build",

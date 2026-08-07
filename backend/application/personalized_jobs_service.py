@@ -36,6 +36,7 @@ _PUBLIC_INTERNAL_KEYS = {
     "source_ats", "source_observation_id", "observation_url", "original_url",
     "provenance_url", "provenance", "internal_provenance", "source_identifier",
     "workspace_id", "run_id", "target_id", "cycle_id", "task_id",
+    "canonical_url", "description_version", "version_id", "content_hash", "observed_at",
 }
 
 

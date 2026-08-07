@@ -63,7 +63,7 @@ function JobListCard({ isSaved, job, onSave, onSelect, selected }) {
   const arrangement = job.workArrangement === "onsite" ? "On-site" : job.workArrangement === "unknown" ? "Unknown" : job.workArrangement;
   return <article className={["jobs-list-card", selected ? "is-selected" : ""].join(" ")}>
     <button className="jobs-list-card__select" onClick={onSelect} type="button">
-      <div className="jobs-list-card__company"><CompanyMark company={job.company} monogram={job.companyProfile?.monogram} /><span>{job.company}</span><span className="jobs-list-card__source">{job.source}</span></div>
+      <div className="jobs-list-card__company"><CompanyMark company={job.company} monogram={job.companyProfile?.monogram} /><span>{job.company}</span></div>
       <strong>{job.title}</strong>
       <div className="jobs-list-card__meta">
         <span><Icon>calendar_month</Icon>{job.experienceLevel}</span>
@@ -99,15 +99,19 @@ function ReferralSection({ onOpenNetwork }) {
 }
 
 function CatalogStateBanner({ error, feed, loading }) {
-  const state = loading && !feed ? "loading" : String(feed?.evaluation?.state || "unavailable");
+  const hasPendingIntelligence = Array.isArray(feed?.jobs) && feed.jobs.some((job) => (
+    String(job?.match_intelligence?.state || job?.evaluation?.match_intelligence?.state || "").toLowerCase() === "pending"
+  ));
+  const state = loading && !feed ? "loading" : error ? "failure" : hasPendingIntelligence ? "partial" : String(feed?.evaluation?.state || "unavailable");
   const labels = {
     loading: "Loading the shared jobs catalog…",
     partial: "Some job fields are unknown. Runr is showing only verified values.",
     stale: "The shared catalog is stale. Results remain visible with their last verification time.",
     unavailable: "The shared jobs catalog is currently unavailable.",
+    failure: "The shared jobs catalog could not be loaded.",
   };
   if (!error && state === "available") return null;
-  return <div className={["jobs-catalog-state", `jobs-catalog-state--${state}`].join(" ")} role={error ? "alert" : "status"}><Icon>{state === "available" ? "info" : state === "loading" ? "progress_activity" : "cloud_off"}</Icon><span>{error || labels[state] || "Catalog state is unknown."}</span></div>;
+  return <div className={["jobs-catalog-state", `jobs-catalog-state--${state}`].join(" ")} role={error || state === "failure" ? "alert" : "status"}><Icon>{state === "loading" ? "progress_activity" : state === "partial" ? "hourglass_top" : "cloud_off"}</Icon><span>{error || labels[state] || "Catalog state is unknown."}</span></div>;
 }
 
 function intelligenceValues(value) {
@@ -146,7 +150,7 @@ function CompetitionPanel({ job }) {
     ? `${Number(change.delta) >= 0 ? "+" : ""}${change.delta} applicants since first observation`
     : "Trend unknown until two exact observations are available.";
   return <section className="jobs-section jobs-competition-panel">
-    <div className="jobs-section__heading"><div><h3>Applicant competition</h3><p>Only explicit source observations are shown.</p></div><span className="jobs-data-badge">{pro ? "Pro" : "Verified source"}</span></div>
+    <div className="jobs-section__heading"><div><h3>Applicant competition</h3><p>Only explicitly reported applicant counts are shown.</p></div><span className="jobs-data-badge">{pro ? "Pro" : "Verified"}</span></div>
     <div className="jobs-summary-grid">
       <div><strong>Latest applicants</strong><span>{job.applicantLabel}</span></div>
       <div><strong>Freshness</strong><span>{job.applicantFreshness === "unknown" ? "Unknown" : job.applicantFreshness}</span></div>
@@ -221,15 +225,15 @@ function StructuredDescription({ job }) {
 
 function OriginalPosting({ job }) {
   const original = job.originalPosting || {};
-  return <section className="jobs-section jobs-original-posting"><div className="jobs-section__heading"><div><h3>Original Posting</h3><p className="jobs-original-posting__note">Preserved verbatim from the employer source for job version {original.version_number || job.version || "Unknown"}.</p></div><span className="jobs-data-badge">Employer source</span></div><DescriptionBlock description={original.description} /></section>;
+  return <section className="jobs-section jobs-original-posting"><div className="jobs-section__heading"><div><h3>Original Posting</h3><p className="jobs-original-posting__note">Original job text, preserved for this role.</p></div><span className="jobs-data-badge">Original job text</span></div><DescriptionBlock description={original.description} /></section>;
 }
 
 function FullPostingPanel({ job }) {
   return <section className="jobs-full-posting">
-    <div className="jobs-full-posting__metadata"><InfoRow icon="category" label="Category">{job.category}</InfoRow><InfoRow icon="language" label="Languages">{job.languages.length ? job.languages.join(", ") : "Unknown"}</InfoRow><InfoRow icon="verified_user" label="Work authorization">{job.work_authorization || "Unknown"}</InfoRow><InfoRow icon="business_center" label="Sponsorship">{job.sponsorship || "Unknown"}</InfoRow><InfoRow icon="schedule" label="Lifecycle">{job.lifecycleState}</InfoRow><InfoRow icon="update" label="Last verified">{formatJobDate(job.last_verified_at)}</InfoRow></div>
+    <div className="jobs-full-posting__metadata"><InfoRow icon="category" label="Category">{job.category}</InfoRow><InfoRow icon="language" label="Languages">{job.languages.length ? job.languages.join(", ") : "Unknown"}</InfoRow><InfoRow icon="verified_user" label="Work authorization">{job.work_authorization || "Unknown"}</InfoRow><InfoRow icon="business_center" label="Sponsorship">{job.sponsorship || "Unknown"}</InfoRow><InfoRow icon="schedule" label="Lifecycle">{job.lifecycleState}</InfoRow><InfoRow icon="update" label="Last verified">{formatJobDate(job.lastVerifiedAt)}</InfoRow></div>
     <StructuredDescription job={job} />
     <OriginalPosting job={job} />
-    <div className="jobs-source-links"><span>Source links</span>{job.canonicalUrl ? <a href={job.canonicalUrl} rel="noreferrer" target="_blank">Canonical job <Icon>open_in_new</Icon></a> : <span>Canonical job: Unknown</span>}{job.observationUrl ? <a href={job.observationUrl} rel="noreferrer" target="_blank">Observation <Icon>open_in_new</Icon></a> : null}</div>
+    <p className="jobs-apply-note">Apply opens only the verified employer or official ATS destination for this job.</p>
   </section>;
 }
 
@@ -251,7 +255,7 @@ function CompanyOverview({ company, job, onOpenNetwork }) {
   const benefits = field("benefits");
   const sponsorship = field("sponsorship");
   const unverified = companyProfileIsUnverified(profile);
-  const sourceUrl = website.state === "known" ? website.value : detail.provenance_url || job.companyDetail?.provenance_url;
+  const sourceUrl = website.state === "known" ? website.value : "";
   const logoUrl = profile.logo_url || profile.fields?.logo?.value || "";
   return <div className="jobs-company-overview">
     <div className="jobs-company-overview__hero"><CompanyMark company={detail.name || job.company} large logoUrl={logoUrl} monogram={profile.monogram} /><div><h2>{detail.name || job.company}</h2><div className="jobs-company-actions">{sourceUrl ? <a className="jobs-outline-button" href={sourceUrl} rel="noreferrer" target="_blank"><Icon>language</Icon>Website</a> : <span className="jobs-outline-button jobs-outline-button--disabled"><Icon>language</Icon>Website unknown</span>}</div></div><span className="jobs-company-data-status">Verified company data only</span></div>
@@ -269,12 +273,12 @@ function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprov
   const skills = Array.isArray(job.skills) ? job.skills.filter(Boolean) : [];
   return <div className="jobs-overview-grid">
     <main className="jobs-overview-main">
-      <div className="jobs-detail-heading"><span className="jobs-season-pill">{formatJobDate(job.postedAt)}</span><h1>{job.title}</h1><p>{job.company} · {job.source}</p><div className="jobs-detail-heading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button aria-label="Share job" className="jobs-round-button" onClick={() => navigator.clipboard?.writeText(job.canonicalUrl || job.applyUrl || window.location.href)} type="button"><Icon>share</Icon></button><button aria-label="Report job" className="jobs-round-button" onClick={onReport} type="button"><Icon>flag</Icon></button><button aria-label={job.userState === "hidden" ? "Restore job" : "Hide job"} className={["jobs-round-button", job.userState === "hidden" ? "is-selected" : ""].join(" ")} onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon></button></div></div>
+      <div className="jobs-detail-heading"><span className="jobs-season-pill">{formatJobDate(job.postedAt)}</span><h1>{job.title}</h1><p>{job.company}</p><div className="jobs-detail-heading__actions"><button className="jobs-outline-button" onClick={onPrepare} type="button"><Icon>auto_awesome</Icon>Prepare</button><button aria-label="Share job" className="jobs-round-button" onClick={() => navigator.clipboard?.writeText(window.location.href)} type="button"><Icon>share</Icon></button><button aria-label="Report job" className="jobs-round-button" onClick={onReport} type="button"><Icon>flag</Icon></button><button aria-label={job.userState === "hidden" ? "Restore job" : "Hide job"} className={["jobs-round-button", job.userState === "hidden" ? "is-selected" : ""].join(" ")} onClick={onHide} type="button"><Icon>{job.userState === "hidden" ? "visibility" : "visibility_off"}</Icon></button></div></div>
       <div className="jobs-company-inline"><CompanyMark company={job.company} large monogram={job.companyProfile?.monogram} /><div><h2>{job.company}</h2><p>{job.companyDetail?.entity_kind || "Employer"} · {job.location}</p></div></div>
       <p className="jobs-role-summary">{job.descriptionSummary}</p>
       <div className="jobs-info-grid"><InfoRow icon="payments" label="Salary">{job.salaryLabel}</InfoRow><InfoRow icon="work_history" label="Job type">{job.employmentType}</InfoRow><InfoRow icon="location_on" label="Location">{job.location}</InfoRow><InfoRow icon={job.workArrangement === "remote" ? "wifi" : "business"} label="Workplace">{arrangement}</InfoRow></div>
-      <section className="jobs-section"><div className="jobs-section__heading"><div><h3>Category</h3><p>How this role is grouped</p></div></div><div className="jobs-category-card"><Icon>category</Icon><div><strong>{job.category}</strong><span>Source category</span></div><small>Verified</small></div></section>
-      <section className="jobs-section"><div className="jobs-section__heading"><div><h3>Required skills</h3><p>Skills explicitly provided by the source</p></div></div><div className="jobs-skill-list">{skills.length ? skills.map((skill) => <span key={skill}><Icon>check_circle</Icon>{skill}</span>) : <span><Icon>help</Icon>Unknown</span>}</div></section>
+      <section className="jobs-section"><div className="jobs-section__heading"><div><h3>Category</h3><p>How this role is grouped</p></div></div><div className="jobs-category-card"><Icon>category</Icon><div><strong>{job.category}</strong><span>Role category</span></div><small>Verified</small></div></section>
+      <section className="jobs-section"><div className="jobs-section__heading"><div><h3>Required skills</h3><p>Skills explicitly listed for this role</p></div></div><div className="jobs-skill-list">{skills.length ? skills.map((skill) => <span key={skill}><Icon>check_circle</Icon>{skill}</span>) : <span><Icon>help</Icon>Unknown</span>}</div></section>
       <ReferralSection onOpenNetwork={onOpenNetwork} />
       <JobDescription job={job} />
     </main>
@@ -340,6 +344,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [preparing, setPreparing] = useState(searchParams.get("prepare") === "1");
   const [feedback, setFeedback] = useState("");
   const [busyAction, setBusyAction] = useState("");
+  const [feedAttempt, setFeedAttempt] = useState(0);
 
   const rawJobs = Array.isArray(feed?.jobs) ? feed.jobs : [];
   const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
@@ -384,7 +389,11 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       }
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [filters, isConnected, request]);
+  }, [feedAttempt, filters, isConnected, request]);
+
+  function retryFeed() {
+    setFeedAttempt((attempt) => attempt + 1);
+  }
 
   useEffect(() => {
     if (!isConnected || !routeJobId) return undefined;
@@ -571,6 +580,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       {activeFilterCount ? <button className="jobs-search-link jobs-search-link--muted" onClick={clearFilters} type="button">Clear all filters</button> : null}
     </section>
     <CatalogStateBanner error={feedError} feed={feed} loading={loading} />
+    {feedError && !feed ? <div className="jobs-feedback" role="alert"><Icon>cloud_off</Icon><span>Jobs are temporarily unavailable. Runr could not read the published catalog.</span><button className="jobs-outline-button" onClick={retryFeed} type="button">Retry</button></div> : null}
     {feedback ? <div className="jobs-feedback" role="status"><Icon>check_circle</Icon>{feedback}<button aria-label="Dismiss" onClick={() => setFeedback("")} type="button"><Icon>close</Icon></button></div> : null}
     <div className={["jobs-workspace", showMobileList ? "jobs-workspace--mobile-list" : "", isMobile && routeJobId ? "jobs-workspace--mobile-detail" : ""].join(" ")}>
       {!isMobile || showMobileList ? <aside className="jobs-list-panel"><div className="jobs-list-panel__header"><strong>Showing {jobs.length} of {feed?.total ?? 0} jobs</strong><label><span className="jobs-switch"><input checked={filters.sort === "newest"} onChange={(event) => updateFilter("sort", event.target.checked ? "newest" : "best")} type="checkbox" /><span /></span>Most recent</label></div><div className="jobs-list-panel__body">{loading && !feed ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading jobs</strong></div> : jobs.length ? <>{jobs.map((job) => <JobListCard isSaved={job.userState === "saved"} job={job} key={job.id} onSave={saveJob} onSelect={() => selectJob(job)} selected={selectedJob?.id === job.id} />)}{feed?.next_cursor ? <button className="jobs-load-more" disabled={loadingMore} onClick={loadMore} type="button">{loadingMore ? "Loading…" : "Load more jobs"}</button> : null}</> : <div className="jobs-empty"><Icon>search_off</Icon><strong>No jobs match</strong><span>Clear a filter to see more roles.</span><button className="jobs-outline-button" onClick={clearFilters} type="button">Clear filters</button></div>}</div></aside> : null}
