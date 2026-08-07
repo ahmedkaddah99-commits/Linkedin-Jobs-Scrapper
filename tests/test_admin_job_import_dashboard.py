@@ -229,6 +229,23 @@ class AdminJobImportDashboardTests(unittest.TestCase):
         self.assertEqual(handler.payload, (200, {"imports": {"status": "Paused"}}))
         application.get_admin_job_import_overview.assert_called_once_with()
 
+    def test_job_import_resume_switch_enables_imports(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.repositories.config_store = Mock()
+        handler = _AdminHandler({"paused": False})
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="POST",
+            segments=("admin", "job-import", "pause"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.kill_switch", False)
+        application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.enabled", True)
+
 
 if __name__ == "__main__":
     unittest.main()
