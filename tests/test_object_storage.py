@@ -87,6 +87,31 @@ class ObjectKeyTests(unittest.TestCase):
 
 
 class LocalObjectStorageTests(unittest.TestCase):
+    def test_local_storage_keeps_atomic_put_paths_under_windows_limit(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            padding = max(1, 195 - len(str(base)))
+            storage = LocalObjectStorage(base / ("r" * padding))
+            key = "private/users/user_1/documents/document_1/cv.pdf"
+
+            _normalized_key, object_path = storage._path_for(key)
+            self.assertLess(len(str(object_path)), 260)
+            self.assertEqual(storage.put(key, b"long-root-content").size, 17)
+            self.assertEqual(storage.get(key), b"long-root-content")
+
+    def test_local_storage_reads_and_deletes_previous_full_digest_layout(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage = LocalObjectStorage(temporary_directory)
+            key = "private/users/user_1/documents/document_1/legacy.pdf"
+            legacy_path = storage._legacy_digest_path_for(key)
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_bytes(b"legacy-content")
+
+            self.assertTrue(storage.exists(key))
+            self.assertEqual(storage.get(key), b"legacy-content")
+            storage.delete(key)
+            self.assertFalse(legacy_path.exists())
+
     def test_local_storage_supports_full_object_lifecycle(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             storage = LocalObjectStorage(temporary_directory)

@@ -70,8 +70,13 @@ def _seed_catalog(app):
             ),
         )
         connection.execute(
-            "INSERT INTO acquisition_publications VALUES (?, ?, ?, ?, ?, ?)",
-            ("publication-f", "cycle-f", "valid", "[]", now, ""),
+            """
+            INSERT INTO acquisition_publications (
+                publication_id, cycle_id, status, snapshot_json, published_at,
+                valid_until, previous_publication_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("publication-f", "cycle-f", "valid", "[]", now, "", ""),
         )
         connection.execute(
             "INSERT INTO acquisition_publication_jobs VALUES (?, ?)",
@@ -136,7 +141,7 @@ class PhaseFCompanyProfileTests(unittest.TestCase):
                 "benefits": ["Learning budget"],
                 "sponsorship": "unknown",
             },
-            logo_bytes=b"verified-logo",
+            logo_bytes=b'<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="#0d628c"/></svg>',
             logo_source_url="https://acme.example/logo.svg",
             logo_content_type="image/svg+xml",
         )

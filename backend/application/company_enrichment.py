@@ -9,10 +9,16 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from backend.application.company_logo import LogoValidationError, ValidatedLogo, cache_logo, validate_logo
+from backend.application.company_logo import (
+    LogoValidationError,
+    assert_public_official_host,
+    cache_logo,
+    validate_logo,
+    validate_official_url,
+)
 from backend.domain.models import utc_now_iso
 
 
@@ -35,6 +41,17 @@ UNKNOWN_REASON = "not_verified_from_authoritative_company_source"
 
 class CompanyEnrichmentProvider(Protocol):
     async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+
+class _SafeOfficialRedirectHandler(HTTPRedirectHandler):
+    def __init__(self, *, approved_host: str):
+        super().__init__()
+        self.approved_host = approved_host
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        target = validate_official_url(urljoin(request.full_url, newurl), approved_host=self.approved_host)
+        assert_public_official_host(urlparse(target).hostname or "")
+        return super().redirect_request(request, fp, code, msg, headers, target)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,10 +81,31 @@ class OfficialWebsiteProvider:
         self.max_html_bytes = max(32_000, int(max_html_bytes))
 
     @staticmethod
-    def _fetch(url: str, *, timeout_seconds: int, max_bytes: int) -> tuple[bytes, str, str, Mapping[str, str]]:
-        request = Request(url, headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "text/html,application/xhtml+xml"})
-        with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - worker-only, bounded official URL fetch
-            return bytes(response.read(max_bytes + 1)), str(response.headers.get("content-type") or ""), str(response.url or url), dict(response.headers.items())
+    def _fetch(
+        url: str,
+        *,
+        timeout_seconds: int,
+        max_bytes: int,
+        approved_host: str = "",
+    ) -> tuple[bytes, str, str, Mapping[str, str]]:
+        safe_url = validate_official_url(url, approved_host=approved_host)
+        assert_public_official_host(urlparse(safe_url).hostname or "")
+        request = Request(safe_url, headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "text/html,application/xhtml+xml"})
+        opener = build_opener(_SafeOfficialRedirectHandler(approved_host=approved_host))
+        with opener.open(request, timeout=timeout_seconds) as response:  # noqa: S310 - worker-only, bounded official URL fetch
+            final_url = validate_official_url(str(response.url or safe_url), approved_host=approved_host)
+            assert_public_official_host(urlparse(final_url).hostname or "")
+            headers = dict(response.headers.items())
+            try:
+                declared_size = int(str(headers.get("Content-Length") or "").strip())
+            except ValueError:
+                declared_size = 0
+            if declared_size > max_bytes:
+                raise LogoValidationError("official_response_too_large")
+            body = bytes(response.read(max_bytes + 1))
+            if len(body) > max_bytes:
+                raise LogoValidationError("official_response_too_large")
+            return body, str(headers.get("content-type") or ""), final_url, headers
 
     @staticmethod
     def _json_ld(html: str) -> Mapping[str, Any]:
@@ -131,11 +169,18 @@ class OfficialWebsiteProvider:
     async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]:
         del conditional
         source_url = str(company.get("provenance_url") or "").strip()
-        parsed = urlparse(source_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        try:
+            source_url = validate_official_url(source_url)
+        except LogoValidationError:
             return {"fields": {}, "source": "official_company_website", "provenance_url": source_url, "request_count": 0}
+        parsed = urlparse(source_url)
+        source_host = parsed.hostname or ""
         body, content_type, final_url, headers = await asyncio.to_thread(
-            self._fetch, source_url, timeout_seconds=self.timeout_seconds, max_bytes=self.max_html_bytes
+            self._fetch,
+            source_url,
+            timeout_seconds=self.timeout_seconds,
+            max_bytes=self.max_html_bytes,
+            approved_host=source_host,
         )
         if len(body) > self.max_html_bytes or "html" not in content_type.casefold():
             return {"fields": {}, "source": "official_company_website", "provenance_url": final_url, "request_count": 1}
@@ -151,13 +196,17 @@ class OfficialWebsiteProvider:
             "cost_units": 0.0,
         }
         logo_url = data.get("logo") if isinstance(data.get("logo"), str) else ""
-        logo_parsed = urlparse(str(logo_url))
-        source_host = parsed.hostname or ""
-        logo_host = logo_parsed.hostname or ""
-        same_official_host = bool(source_host and logo_host and (logo_host.casefold() == source_host.casefold() or logo_host.casefold().endswith("." + source_host.casefold())))
-        if logo_url and logo_parsed.scheme in {"http", "https"} and same_official_host:
+        try:
+            safe_logo_url = validate_official_url(logo_url, approved_host=source_host) if logo_url else ""
+        except LogoValidationError:
+            safe_logo_url = ""
+        if safe_logo_url:
             logo_body, logo_type, logo_final_url, _ = await asyncio.to_thread(
-                self._fetch, str(logo_url), timeout_seconds=self.timeout_seconds, max_bytes=2 * 1024 * 1024
+                self._fetch,
+                safe_logo_url,
+                timeout_seconds=self.timeout_seconds,
+                max_bytes=2 * 1024 * 1024,
+                approved_host=source_host,
             )
             result.update({"logo_bytes": logo_body, "logo_content_type": logo_type, "logo_source_url": logo_final_url, "request_count": 2})
         del headers

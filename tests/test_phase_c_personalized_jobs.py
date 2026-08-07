@@ -52,8 +52,13 @@ def _seed_catalog(app, *, valid_until: str = "") -> None:
                 (version_id, job_id, 1, f"hash-{job_id}", title, payload["description"], location, apply_url, f"observation-{job_id}", json.dumps(payload), now),
             )
         connection.execute(
-            "INSERT INTO acquisition_publications VALUES (?, ?, ?, ?, ?, ?)",
-            ("publication-c", "cycle-c", "valid", "[]", now, valid_until),
+            """
+            INSERT INTO acquisition_publications (
+                publication_id, cycle_id, status, snapshot_json, published_at,
+                valid_until, previous_publication_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("publication-c", "cycle-c", "valid", "[]", now, valid_until, ""),
         )
         connection.executemany(
             "INSERT INTO acquisition_publication_jobs VALUES (?, ?)",
