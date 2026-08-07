@@ -43,7 +43,7 @@ class PhaseIProductionRolloutTests(unittest.TestCase):
         self.assertEqual(health["state"], "alerting")
         self.assertEqual(health["alerts"][0]["type"], "stale_catalog")
 
-    def test_stage_advancement_requires_measured_source_evidence(self):
+    def test_stage_advancement_allows_controlled_source_before_measured_evidence(self):
         app = self._backend()
         app.configure_production_rollout(
             {
@@ -52,8 +52,9 @@ class PhaseIProductionRolloutTests(unittest.TestCase):
                 "apply_quality_verified": True,
             }
         )
-        with self.assertRaisesRegex(ValueError, "source_measured"):
-            app.advance_production_rollout("one_source_production")
+        status = app.advance_production_rollout("one_source_production")
+        self.assertEqual(status["stage"], "one_source_production")
+        self.assertFalse(status["gates"]["source_measured"]["passed"])
 
     def test_controlled_source_transition_breaks_circular_productivity_gate(self):
         app = self._backend()

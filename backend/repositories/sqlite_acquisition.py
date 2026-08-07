@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from backend.domain.models import utc_now_iso, utc_plus_seconds
 from backend.acquisition.phase_g import (
+    applicant_source_gate,
+    has_applicant_evidence,
     is_portal_target,
     normalize_applicant_snapshot,
     portal_audit_gate,
@@ -794,6 +796,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "connector": str(target["connector"] or ""),
                 "config": _decode(target["config_json"], {}),
             }
+            applicant_gate = applicant_source_gate(target_for_gate)
             if is_portal_target(target_for_gate):
                 audit = portal_audit_gate(target_for_gate)
                 if not audit["approved"]:
@@ -807,6 +810,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "closed": 0,
                 "rejected": 0,
                 "duplicates": 0,
+                "applicant_snapshots_blocked": 0,
             }
             config = _decode(target.get("config_json"), {})
             absence_grace_attempts = max(
@@ -1087,7 +1091,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     ),
                     last_verified_at=now,
                 )
-                if applicant_snapshot is not None:
+                if applicant_snapshot is not None and applicant_gate["approved"]:
                     self._ensure_applicant_snapshot(
                         connection,
                         canonical_job_id=canonical_id,
@@ -1095,6 +1099,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                         snapshot=applicant_snapshot,
                         now=now,
                     )
+                elif has_applicant_evidence(job):
+                    counts["applicant_snapshots_blocked"] += 1
                 counts["observed"] += 1
 
             if complete_snapshot and valid_snapshot:

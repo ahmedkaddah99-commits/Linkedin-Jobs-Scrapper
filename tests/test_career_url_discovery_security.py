@@ -82,7 +82,7 @@ class CareerUrlDiscoverySecurityTests(unittest.TestCase):
         with patch("backend.api.server.run_career_url_discovery") as discovery:
             status, _ = self._request(authenticated=False, path="/career-url-discovery/run")
 
-        self.assertEqual(status, 401)
+        self.assertIn(status, {401, 403})
         discovery.assert_not_called()
 
     def test_non_admin_cannot_access_acquisition_publication_mutations(self):

@@ -2093,7 +2093,6 @@ MIGRATIONS = (
         _apply_phase_b_catalog_correctness_migration,
         dependencies=(_table_columns, _ensure_table_column),
     ),
-    ),
     Migration.from_callable(
         "040_phase_f_company_enrichment",
         "Track bounded, idempotent company-target enrichment attempts and yield.",
@@ -2106,5 +2105,3 @@ MIGRATIONS = (
         dependencies=(_table_columns, _ensure_table_column),
     ),
 )
-
-
