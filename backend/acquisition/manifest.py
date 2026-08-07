@@ -35,6 +35,7 @@ PHASE_A_TARGETS: tuple[dict[str, object], ...] = (
         "maturity_state": "unproven",
         "enabled": False,
         "disabled_reason": "phase_a_target_disabled_by_default",
+        "admin_import_enabled": True,
         "publication_enabled": False,
         "max_direct_requests": 3,
         "request_mode": "direct",

@@ -81,11 +81,12 @@ class AdminJobImportService:
             target_id = _text(target.get("target_id"))
             connector = _text(target.get("connector")).casefold()
             official = connector in {"greenhouse", "lever"}
+            admin_import_enabled = official or _bool(target.get("admin_import_enabled"))
             method = "direct" if official else "scrapeops"
             source_type = "Official source" if official else "Web import"
             target_url = _text(target.get("request_url") or target.get("canonical_target_url"))
-            source_status = "ready" if official else "source_paused"
-            reason = "" if official else _text(target.get("disabled_reason") or "Source validation required")
+            source_status = "ready" if admin_import_enabled else "source_paused"
+            reason = "" if admin_import_enabled else _text(target.get("disabled_reason") or "Source validation required")
             sources.append(
                 {
                     "id": target_id,
@@ -213,10 +214,14 @@ class AdminJobImportService:
             "likely_credits": likely_credits,
             "maximum_credits": max_credits,
             "estimated_cost": {
-                "known": not bool(max_credits),
-                "currency": "USD",
-                "maximum": 0 if not max_credits else None,
-                "note": "Direct official sources have no ScrapeOps charge. A paid source requires a server-configured cost ceiling before it can run.",
+                "known": not paid_cost_data_missing,
+                "currency": "ScrapeOps credits" if max_credits else "USD",
+                "maximum": max_credits,
+                "note": (
+                    "Direct official sources have no ScrapeOps charge."
+                    if not max_credits
+                    else "Estimate is bounded by the selected or server-configured ScrapeOps credit ceiling."
+                ),
             },
             "limit_errors": limit_errors,
             "can_start": not limit_errors,
