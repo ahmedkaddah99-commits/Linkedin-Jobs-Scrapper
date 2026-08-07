@@ -242,6 +242,8 @@ class AdminJobImportService:
         plan = self.plan_import(source_ids=source_ids, scope_payload=scope_payload)
         if not plan["can_start"]:
             raise ValueError("Import plan is outside the server-enforced limits: " + ", ".join(plan["limit_errors"]))
+        plan["admin_import_execution_enabled"] = True
+        plan["admin_import_allow_proxy"] = True
         return self.repositories.acquisition_store.create_job_import(
             idempotency_key=idempotency_key,
             requested_by=requested_by,
@@ -258,7 +260,9 @@ class AdminJobImportService:
         if queued is None:
             return None
         import_id = _text(queued.get("import_id"))
-        if self.imports_paused():
+        queued_plan = queued.get("plan") if isinstance(queued.get("plan"), Mapping) else {}
+        queued_execution_enabled = _bool(queued_plan.get("admin_import_execution_enabled"))
+        if self.imports_paused() and not queued_execution_enabled:
             return store.complete_job_import(
                 import_id,
                 status="blocked",
