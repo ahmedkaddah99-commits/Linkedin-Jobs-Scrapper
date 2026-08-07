@@ -136,6 +136,18 @@ class PhaseCPersonalizedJobsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             app.get_personalized_jobs("user-a", filters={"location": ["Berlin"]}, cursor=all_jobs["next_cursor"], limit=1)
 
+    def test_card_view_omits_detail_payload_until_job_is_opened(self):
+        app = self._backend()
+        _seed_catalog(app)
+
+        result = app.get_personalized_jobs("user-a", card_view=True)
+
+        self.assertEqual(len(result["jobs"]), 2)
+        self.assertNotIn("description", result["jobs"][0])
+        self.assertNotIn("match_intelligence", result["jobs"][0])
+        self.assertEqual(result["jobs"][0]["title"], "Finance Analyst")
+        self.assertEqual(app.get_personalized_job_detail("user-a", "job-a")["description"], "operations role")
+
     def test_missing_catalog_and_expired_publication_are_explicit(self):
         app = self._backend()
         self.assertEqual(app.get_personalized_jobs("user-a")["evaluation"]["state"], "unavailable")

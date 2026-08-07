@@ -80,7 +80,7 @@ function normalizeArrangement(value) {
   return normalized || "unknown";
 }
 
-export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeHidden = false, limit = 25 } = {}) {
+export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeHidden = false, limit = 25, omitSort = false, view = "cards" } = {}) {
   const params = new URLSearchParams();
   const values = {
     q: filters.query,
@@ -114,10 +114,12 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     sort: filters.sort === "best" ? "priority" : filters.sort,
   };
   Object.entries(values).forEach(([key, value]) => {
+    if (key === "sort" && omitSort) return;
     if (text(value)) params.set(key, text(value));
   });
   if (cursor) params.set("cursor", cursor);
   params.set("limit", String(Math.max(1, Math.min(100, Number(limit) || 25))));
+  if (view) params.set("view", text(view));
   if (includeHidden) params.set("include_hidden", "true");
   return params.toString();
 }

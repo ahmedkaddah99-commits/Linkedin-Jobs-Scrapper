@@ -183,6 +183,7 @@ def _send_feed(context: ApiRouteContext) -> bool:
             include_hidden=_bool_query(context.query, "include_hidden", False),
             hidden_only=False,
             plan_id=_plan_id(context, user_id),
+            card_view=_query_value(context.query, "view").casefold() == "cards",
         )
     )
     return True

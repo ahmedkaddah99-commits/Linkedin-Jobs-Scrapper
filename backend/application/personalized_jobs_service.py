@@ -580,6 +580,53 @@ def _job_projection(
     return projection
 
 
+def _job_card_projection(
+    row: Mapping[str, Any],
+    disposition: Mapping[str, Any] | None,
+    *,
+    evaluation_state: str,
+    evaluation_status: str,
+    unknown_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return only fields required to render a paginated job card."""
+
+    payload = _payload_for_row(row)
+    title = _text(row.get("title") or payload.get("title"))
+    location = _text(row.get("location") or row.get("version_location") or payload.get("location"))
+    arrangement = _normalize_arrangement(_value(payload, row, "work_arrangement", "workplace", "workplace_type", "remote_type"))
+    employment = _value(payload, row, "employment_type", "job_type", "type")
+    experience = _value(payload, row, "experience_level", "seniority", "level")
+    category = _value(payload, row, "category", "job_category", "role_category", "function")
+    languages = _unique_strings(_value(payload, row, "languages", "language_requirements", "required_languages")) or None
+    return {
+        "posting_id": str(row.get("canonical_job_id") or ""),
+        "canonical_job_id": str(row.get("canonical_job_id") or ""),
+        "company_id": str(row.get("company_id") or ""),
+        "company": _text(row.get("company")) or None,
+        "title": title or None,
+        "location": location or None,
+        "work_arrangement": arrangement,
+        "employment_type": _text(employment) or None,
+        "experience_level": _text(experience) or None,
+        "category": _text(category) or None,
+        "languages": languages,
+        "posted_at": _text(_value(payload, row, "posted_at", "published_at", "date_posted")) or None,
+        "first_seen_at": _text(row.get("first_seen_at")) or None,
+        "last_verified_at": _text(row.get("last_verified_at")) or None,
+        "canonical_url": _text(row.get("canonical_url")) or None,
+        "apply_url": _approved_apply_url(row) or None,
+        "user_state": _text((disposition or {}).get("state")) or "none",
+        "evaluation": {
+            "state": evaluation_state,
+            "status": evaluation_status,
+            "unknown_fields": sorted(set(unknown_fields or [])),
+            "evaluator_version": EVALUATOR_VERSION,
+        },
+        "applicant_intelligence": {"state": "unknown", "visibility": "pro"},
+        "priority": {"state": "unknown", "score": None},
+    }
+
+
 def _job_filter_values(row: Mapping[str, Any]) -> dict[str, Any]:
     payload = _payload_for_row(row)
     projection = _job_projection(row, None, {})
@@ -1119,6 +1166,7 @@ class PersonalizedJobsService:
         include_hidden: bool = False,
         hidden_only: bool = False,
         plan_id: str = DEFAULT_PLAN_ID,
+        card_view: bool = False,
     ) -> dict[str, Any]:
         self._assert_catalog_access(user_id)
         limit = max(1, min(100, int(limit)))
@@ -1172,6 +1220,41 @@ class PersonalizedJobsService:
             next_cursor = ""
         job_ids = [str(row.get("canonical_job_id") or "") for row in page]
         dispositions = self.store.list_dispositions_for_jobs(user_id, job_ids)
+        state = catalog_state if catalog_state in EVALUATION_STATES else "partial"
+        if card_view:
+            jobs = [
+                _job_card_projection(
+                    row,
+                    dispositions.get(str(row.get("canonical_job_id"))),
+                    evaluation_state=state,
+                    evaluation_status=(
+                        "not_evaluated"
+                        if not preferences_record and not effective_filters
+                        else "eligible"
+                    ),
+                )
+                for row in page
+            ]
+            return {
+                "jobs": jobs,
+                "total": int(result.get("total") or 0),
+                "next_cursor": next_cursor or None,
+                "filters": effective_filters,
+                "filter_capabilities": self.store.get_published_filter_capabilities(),
+                "evaluation": {
+                    "state": state,
+                    "supported_states": sorted(EVALUATION_STATES),
+                    "catalog_state": catalog_state,
+                    "preferences_revision": int((preferences_record or {}).get("revision") or 0),
+                    "evaluated_at": _text(publication.get("published_at")) or None,
+                },
+                "publication": {
+                    "publication_id": _text(publication.get("publication_id")),
+                    "cycle_id": _text(publication.get("cycle_id")),
+                    "published_at": _text(publication.get("published_at")),
+                    "valid_until": _text(publication.get("valid_until")),
+                },
+            }
         cache_entries = self.store.list_intelligence_cache_entries(job_ids, intelligence_kind="description")
         match_entries = self.store.list_intelligence_cache_entries(job_ids, user_id=user_id, intelligence_kind="match")
         evaluation_records = self.store.list_evaluations_for_jobs(
@@ -1180,7 +1263,6 @@ class PersonalizedJobsService:
             preferences_revision=int((preferences_record or {}).get("revision") or 0),
             evaluator_version=MATCH_V2_VERSION,
         )
-        state = catalog_state if catalog_state in EVALUATION_STATES else "partial"
         jobs: list[dict[str, Any]] = []
         for row in page:
             description_intelligence = self._description_intelligence(row, cache_entries=cache_entries)

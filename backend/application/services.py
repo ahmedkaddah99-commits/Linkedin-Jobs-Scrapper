@@ -1160,6 +1160,7 @@ class BackendApplication:
         include_hidden: bool = False,
         hidden_only: bool = False,
         plan_id: str = DEFAULT_PLAN_ID,
+        card_view: bool = False,
     ) -> dict[str, Any]:
         return self._personalized_jobs_service.feed(
             user_id,
@@ -1169,6 +1170,7 @@ class BackendApplication:
             include_hidden=include_hidden,
             hidden_only=hidden_only,
             plan_id=plan_id,
+            card_view=card_view,
         )
 
     def get_personalized_preferences(self, user_id: str) -> dict[str, Any] | None:
