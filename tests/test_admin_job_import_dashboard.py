@@ -94,9 +94,9 @@ class AdminJobImportDashboardTests(unittest.TestCase):
     def test_import_review_publish_undo_and_failed_import_are_offline_and_idempotent(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = create_backend(Path(temporary_directory), storage_backend="sqlite")
-            app.repositories.config_store.set_value("acquisition.phase_a.kill_switch", False)
             app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
             app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
             responses = {"job-1": True, "job-2": True}
             requests_seen = []
 
