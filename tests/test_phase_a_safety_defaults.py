@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,6 +66,30 @@ class PhaseASafetyDefaultTests(unittest.TestCase):
                 app.run_due_acquisition(),
                 {"status": "disabled", "reason": "phase_a_ai_enrichment_not_implemented"},
             )
+
+    def test_private_test_deployment_overrides_persisted_live_flags(self):
+        with tempfile.TemporaryDirectory() as temporary_directory, patch.dict(
+            os.environ, {"RUNR_PRIVATE_TEST_DEPLOYMENT": "true"}, clear=False
+        ):
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            for key, value in {
+                "acquisition.phase_a.kill_switch": False,
+                "acquisition.phase_a.global_enabled": True,
+                "acquisition.phase_a.scheduler_enabled": True,
+                "acquisition.phase_a.publication_enabled": True,
+                "acquisition.phase_a.allow_proxy": True,
+                "acquisition.phase_i.rollout_enabled": True,
+                "acquisition.phase_i.production_publication_enabled": True,
+                "acquisition.phase_i.checkout_gate_enabled": True,
+            }.items():
+                app.repositories.config_store.set_value(key, value)
+
+            self.assertEqual(app.run_due_acquisition(), {"status": "kill_switch"})
+            self.assertFalse(any(target["enabled"] for target in app._acquisition_scheduler._configured_manifest()))
+            status = app.get_production_rollout_status()
+            self.assertEqual(status["stage"], "preflight")
+            self.assertFalse(status["rollout_enabled"])
+            self.assertFalse(status["gates"]["checkout_gate_enabled"]["passed"])
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ from backend.connectors.ats_router import fetch_ats_snapshot
 from backend.connectors.bounded_probe import fetch_bounded_probe
 from backend.acquisition.phase_b import PHASE_B_DEFAULT_CONFIG, normalize_phase_b_jobs
 from backend.acquisition.phase_g import portal_audit_gate
-from backend.application.production_rollout import build_rollout_health, phase_i_config
+from backend.application.production_rollout import build_rollout_health, phase_i_config, private_test_deployment_enabled
 
 
 LOGGER = logging.getLogger("backend.acquisition.phase_a")
@@ -81,9 +81,29 @@ class PhaseAAcquisitionScheduler:
         return getter(key, default)
 
     def _phase_a_config(self, name: str) -> Any:
+        if private_test_deployment_enabled():
+            forced_values = {
+                "scheduler_enabled": False,
+                "kill_switch": True,
+                "global_enabled": False,
+                "connector_validation_enabled": False,
+                "publication_enabled": False,
+                "allow_proxy": False,
+                "ai_enrichment_enabled": False,
+            }
+            if name.startswith("target."):
+                return False
+            if name in forced_values:
+                return forced_values[name]
         return self._config(f"acquisition.phase_a.{name}", PHASE_A_DEFAULT_CONFIG[name])
 
     def _phase_b_config(self, name: str) -> Any:
+        if private_test_deployment_enabled() and name in {
+            "controlled_validation_enabled",
+            "staging_publication_enabled",
+            "promotion_enabled",
+        }:
+            return False
         return self._config(f"acquisition.phase_b.{name}", PHASE_B_DEFAULT_CONFIG[name])
 
     def _phase_i_config(self, name: str, default: Any = None) -> Any:

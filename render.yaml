@@ -46,6 +46,12 @@ services:
     envVars:
       - key: RUNR_ENV
         value: production
+      - key: RUNR_PRIVATE_TEST_DEPLOYMENT
+        value: "true"
+      - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
+        value: "false"
+      - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
+        value: "false"
       - key: DATABASE_BACKEND
         value: turso
       - key: RUNR_STORAGE_BACKEND
@@ -129,6 +135,12 @@ services:
     envVars:
       - key: RUNR_ENV
         value: production
+      - key: RUNR_PRIVATE_TEST_DEPLOYMENT
+        value: "true"
+      - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
+        value: "false"
+      - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
+        value: "false"
       - key: DATABASE_BACKEND
         value: turso
       - key: RUNR_STORAGE_BACKEND

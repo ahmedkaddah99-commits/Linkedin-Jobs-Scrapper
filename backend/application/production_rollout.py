@@ -65,6 +65,12 @@ _EVIDENCE_KEYS = {
     "catalog_inspection_approved",
 }
 
+PRIVATE_TEST_DEPLOYMENT_ENV = "RUNR_PRIVATE_TEST_DEPLOYMENT"
+
+
+def private_test_deployment_enabled() -> bool:
+    return _bool(os.getenv(PRIVATE_TEST_DEPLOYMENT_ENV), False)
+
 
 def _bool(value: Any, default: bool = False) -> bool:
     if value is None:
@@ -133,6 +139,20 @@ def _history(config_store: Any) -> list[dict[str, Any]]:
 
 def phase_i_config(config_store: Any, name: str, default: Any = None) -> Any:
     fallback = PHASE_I_DEFAULT_CONFIG.get(name, default)
+    if private_test_deployment_enabled():
+        forced_values = {
+            "rollout_enabled": False,
+            "stage": "preflight",
+            "production_source_id": "",
+            "additional_source_ids": [],
+            "internal_cohort_user_ids": [],
+            "selected_cohort_user_ids": [],
+            "user_cohort_gate_enabled": False,
+            "production_publication_enabled": False,
+            "checkout_gate_enabled": False,
+        }
+        if name in forced_values:
+            return forced_values[name]
     return _config(config_store, f"acquisition.phase_i.{name}", fallback)
 
 
@@ -379,9 +399,29 @@ class ProductionRolloutService:
         }
 
     def _phase_a_value(self, name: str, default: Any = None) -> Any:
+        if private_test_deployment_enabled():
+            forced_values = {
+                "kill_switch": True,
+                "scheduler_enabled": False,
+                "global_enabled": False,
+                "connector_validation_enabled": False,
+                "publication_enabled": False,
+                "allow_proxy": False,
+                "ai_enrichment_enabled": False,
+            }
+            if name.startswith("target."):
+                return False
+            if name in forced_values:
+                return forced_values[name]
         return _config(self.config_store, f"acquisition.phase_a.{name}", default)
 
     def _phase_b_value(self, name: str, default: Any = None) -> Any:
+        if private_test_deployment_enabled() and name in {
+            "controlled_validation_enabled",
+            "staging_publication_enabled",
+            "promotion_enabled",
+        }:
+            return False
         return _config(self.config_store, f"acquisition.phase_b.{name}", default)
 
     def configure(self, payload: Mapping[str, Any]) -> dict[str, Any]:
