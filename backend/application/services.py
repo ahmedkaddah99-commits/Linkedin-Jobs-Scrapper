@@ -15,6 +15,7 @@ from backend.application.assisted_apply_package_service import (
 from backend.application.assisted_apply_preparation_service import AssistedApplyPreparationService
 from backend.application.assisted_apply_service import AssistedApplyConnectionService
 from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
+from backend.application.admin_job_import import AdminJobImportService
 from backend.application.company_enrichment import CompanyEnrichmentProvider, CompanyEnrichmentService
 from backend.application.personalized_jobs_service import PersonalizedJobsService
 from backend.application.production_rollout import ProductionRolloutService
@@ -883,6 +884,7 @@ class BackendApplication:
     _tracker_application_service: TrackerApplicationService = field(init=False, repr=False)
     _run_lifecycle_service: RunLifecycleService = field(init=False, repr=False)
     _acquisition_scheduler: PhaseAAcquisitionScheduler = field(init=False, repr=False)
+    _admin_job_import_service: AdminJobImportService = field(init=False, repr=False)
     _production_rollout_service: ProductionRolloutService = field(init=False, repr=False)
     _personalized_jobs_service: PersonalizedJobsService = field(init=False, repr=False)
     _company_enrichment_service: CompanyEnrichmentService = field(init=False, repr=False)
@@ -925,6 +927,10 @@ class BackendApplication:
             event_emitter=self.emit_event,
             lease_owner="system-acquisition",
         )
+        self._admin_job_import_service = AdminJobImportService(
+            repositories=self.repositories,
+            scheduler=self._acquisition_scheduler,
+        )
         self._production_rollout_service = ProductionRolloutService(
             repositories=self.repositories,
             event_emitter=self.emit_event,
@@ -943,6 +949,83 @@ class BackendApplication:
         """Worker-only entry point for the disabled-by-default Phase A scheduler."""
 
         return self._acquisition_scheduler.run_due_cycle()
+
+    def list_admin_job_import_sources(self) -> list[dict[str, Any]]:
+        return self._admin_job_import_service.list_sources()
+
+    def plan_admin_job_import(self, *, source_ids: list[str], scope: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return self._admin_job_import_service.plan_import(source_ids=source_ids, scope_payload=scope)
+
+    def start_admin_job_import(
+        self,
+        *,
+        requested_by: str,
+        idempotency_key: str,
+        source_ids: list[str],
+        scope: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._admin_job_import_service.start_import(
+            requested_by=requested_by,
+            idempotency_key=idempotency_key,
+            source_ids=source_ids,
+            scope_payload=scope,
+        )
+
+    def process_next_admin_job_import(self, *, worker_id: str = "runr-worker") -> dict[str, Any] | None:
+        return self._admin_job_import_service.process_next_import(worker_id=worker_id)
+
+    def get_admin_job_import_overview(self) -> dict[str, Any]:
+        return self._admin_job_import_service.overview()
+
+    def list_admin_job_imports(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_job_imports(limit=limit, offset=offset) if store is not None else []
+
+    def get_admin_job_import(self, import_id: str) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.get_job_import(import_id) if store is not None else None
+
+    def list_admin_review_jobs(self, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.list_review_jobs(**kwargs) if store is not None else {"jobs": [], "total": 0}
+
+    def decide_admin_review_job(self, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Admin review requires sqlite/Turso acquisition storage.")
+        return store.record_job_review_decision(**kwargs)
+
+    def undo_admin_review_decision(self, **kwargs: Any) -> None:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Admin review requires sqlite/Turso acquisition storage.")
+        store.undo_job_review_decision(**kwargs)
+
+    def preview_admin_job_import(self, import_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication preview requires sqlite/Turso acquisition storage.")
+        return store.create_job_import_preview(import_id, actor_user_id=actor_user_id)
+
+    def publish_admin_job_import(self, publication_id: str, *, actor_user_id: str = "") -> str:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication requires sqlite/Turso acquisition storage.")
+        return store.publish_job_import_preview(publication_id, actor_user_id=actor_user_id)
+
+    def undo_admin_job_publication(self, *, actor_user_id: str = "") -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication undo requires sqlite/Turso acquisition storage.")
+        return store.undo_last_job_publication(actor_user_id=actor_user_id)
+
+    def get_admin_job_import_preview(self, publication_id: str = "") -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.get_job_import_preview(publication_id) if store is not None else None
+
+    def list_admin_job_import_history(self, *, import_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_job_import_audit_events(import_id=import_id, limit=limit) if store is not None else []
 
     def run_due_company_enrichment(
         self,

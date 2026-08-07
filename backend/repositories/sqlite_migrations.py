@@ -1880,6 +1880,61 @@ def _apply_phase_g_applicant_boundary_migration(connection: DatabaseConnection) 
         "ON job_applicant_snapshots(source_observation_id)"
     )
 
+
+def _apply_admin_job_import_dashboard_migration(connection: DatabaseConnection) -> None:
+    """Create durable admin import, review, publication and audit state."""
+
+    _ensure_table_column(connection, "acquisition_publications", "previous_publication_id", "TEXT NOT NULL DEFAULT ''")
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS admin_job_imports (
+            import_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            requested_by TEXT NOT NULL DEFAULT '',
+            source_ids_json TEXT NOT NULL DEFAULT '[]',
+            scope_json TEXT NOT NULL DEFAULT '{}',
+            plan_json TEXT NOT NULL DEFAULT '{}',
+            cycle_id TEXT NOT NULL DEFAULT '',
+            preview_publication_id TEXT NOT NULL DEFAULT '',
+            publication_id TEXT NOT NULL DEFAULT '',
+            error_code TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            started_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_job_imports_status
+            ON admin_job_imports(status, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS admin_job_review_decisions (
+            decision_id TEXT PRIMARY KEY,
+            import_id TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL,
+            decision TEXT NOT NULL DEFAULT '',
+            reason_code TEXT NOT NULL DEFAULT '',
+            actor_user_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            undone_at TEXT NOT NULL DEFAULT '',
+            UNIQUE(import_id, canonical_job_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_job_review_decisions_job
+            ON admin_job_review_decisions(canonical_job_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS admin_job_audit_events (
+            event_id TEXT PRIMARY KEY,
+            import_id TEXT NOT NULL DEFAULT '',
+            actor_user_id TEXT NOT NULL DEFAULT '',
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_job_audit_events_import
+            ON admin_job_audit_events(import_id, created_at DESC);
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2102,6 +2157,12 @@ MIGRATIONS = (
         "041_phase_g_applicant_boundary",
         "Add explicit official-apply and internal-provenance fields for inactive applicant snapshots.",
         _apply_phase_g_applicant_boundary_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "042_admin_job_import_dashboard",
+        "Create durable admin job import, review, publication and audit state.",
+        _apply_admin_job_import_dashboard_migration,
         dependencies=(_table_columns, _ensure_table_column),
     ),
 )

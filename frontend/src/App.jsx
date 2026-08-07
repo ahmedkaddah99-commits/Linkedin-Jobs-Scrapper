@@ -14,6 +14,7 @@ import { hasAuthenticatedSession } from "./lib/sessionState";
 const AdminPage = lazy(() => import("./pages/AdminPage"));
 const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
 const AdminScrapeOpsPage = lazy(() => import("./pages/AdminScrapeOpsPage"));
+const AdminJobImportPage = lazy(() => import("./pages/AdminJobImportPage"));
 const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
 const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
 
@@ -270,6 +271,14 @@ function AuthenticatedApp() {
                 element={(
                   <RequireAdminRoute>
                     <AdminScrapeOpsPage />
+                  </RequireAdminRoute>
+                )}
+              />
+              <Route
+                path="/admin/job-import"
+                element={(
+                  <RequireAdminRoute>
+                    <AdminJobImportPage />
                   </RequireAdminRoute>
                 )}
               />
