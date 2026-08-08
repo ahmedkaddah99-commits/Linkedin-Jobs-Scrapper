@@ -16,6 +16,7 @@ const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
 const AdminScrapeOpsPage = lazy(() => import("./pages/AdminScrapeOpsPage"));
 const AdminJobImportPage = lazy(() => import("./pages/AdminJobImportPage"));
 const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
+const ApplyExtensionSetupPage = lazy(() => import("./pages/ApplyExtensionSetupPage"));
 const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
@@ -250,12 +251,13 @@ function AuthenticatedApp() {
               <Route path="/cv-studio" element={<CvStudioPage />} />
               <Route path="/artifacts" element={<Navigate replace to="/career-assets" />} />
               <Route path="/referrals" element={<ReferralsPage />} />
-              <Route path="/services" element={<ReferralsPage />} />
+              <Route path="/services" element={<Navigate replace to="/refer" />} />
               <Route path="/refer" element={<ReferralsPage />} />
               <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/profile" element={<ProfilePage />} />
               <Route path="/settings/assisted-apply" element={<AssistedApplyConnectionPage />} />
+              <Route path="/apply-extension" element={<ApplyExtensionSetupPage />} />
               <Route path="/pricing" element={<PricingPage />} />
               <Route
                 path="/admin"

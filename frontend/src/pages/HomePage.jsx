@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useState } from "react";
 import { useSession } from "../context/SessionContext";
 
 function Icon({ children }) {
@@ -10,10 +11,12 @@ const setupSteps = [
   ["Upload your primary resume", "Used for matching and resume tailoring", "/documents", true],
   ["Add job preferences", "Target roles, locations, salary, and work setup", "/profile?section=preferences", false],
   ["Complete experience evidence", "Add skills and quantified outcomes for stronger v2 matching", "/profile?section=experience", false],
+  ["Connect LinkedIn for referrals", "Find people at companies you want to join", "/referrals/linkedin-csv-guide", false],
+  ["Set up the Apply extension", "Autofill applications from your Runr profile", "/apply-extension", false],
 ];
 
 const focusItems = [
-  ["Complete your job preferences", "Improve ranking across Matches and Jobs.", "/profile?section=preferences", "5 min"],
+  ["Complete your job preferences", "Improve ranking across Matches and Jobs.", "/profile?section=preferences", "Continue"],
   ["Review your strongest matches", "Prioritize jobs using v1 and v2 evidence.", "/matches", "View matches"],
   ["Follow up on active applications", "Keep your application pipeline moving.", "/tracker", "Open tracker"],
 ];
@@ -26,16 +29,17 @@ const freshMatches = [
 
 export default function HomePage() {
   const { user } = useSession();
+  const [setupOpen, setSetupOpen] = useState(true);
   const displayName = String(user?.display_name || user?.email || "there").split(/[ @]/)[0];
   return <div className="runr-home">
     <header className="runr-home__hero">
       <div><span className="runr-eyebrow">Your search, today</span><h1>Good to see you, {displayName}</h1><p>Build one complete profile, then use it to discover, evaluate, and prepare stronger applications.</p></div>
-      <div><Link className="runr-button runr-button--secondary" to="/profile"><Icon>person</Icon>Complete profile</Link><Link className="runr-button" to="/jobs"><Icon>search</Icon>Find jobs</Link></div>
+      <div><button aria-expanded={setupOpen} className="runr-button runr-button--secondary" onClick={() => setSetupOpen((open) => !open)} type="button"><Icon>person</Icon>Complete setup<Icon>{setupOpen ? "expand_less" : "expand_more"}</Icon></button><Link className="runr-button" to="/jobs"><Icon>search</Icon>Find jobs</Link></div>
     </header>
 
     <section className="runr-setup-card">
-      <div className="runr-setup-card__intro"><span className="runr-setup-card__spark"><Icon>auto_awesome</Icon></span><div><span className="runr-eyebrow">Your Runr foundation</span><h2>Finish account setup for better matches</h2><p>Runr uses your profile to rank jobs, prepare applications, tailor resumes, and power autofill. Add the missing details once and every workflow gets stronger.</p></div><div className="runr-setup-progress"><strong>2 of 4</strong><span>steps complete</span><i><b /></i></div></div>
-      <div className="runr-setup-steps">{setupSteps.map(([title, copy, to, complete], index) => <Link className={complete ? "is-complete" : ""} key={title} to={to}><span>{complete ? <Icon>check</Icon> : index + 1}</span><div><strong>{title}</strong><small>{copy}</small></div><em>{complete ? "Complete" : <><span>Continue</span><Icon>arrow_forward</Icon></>}</em></Link>)}</div>
+      <button aria-expanded={setupOpen} className="runr-setup-card__intro" onClick={() => setSetupOpen((open) => !open)} type="button"><span className="runr-setup-card__spark"><Icon>auto_awesome</Icon></span><div><span className="runr-eyebrow">Your Runr foundation</span><h2>Finish account setup for better matches</h2><p>Complete your profile, connect LinkedIn referrals, and set up Apply.</p></div><div className="runr-setup-progress"><strong>2 of 6</strong><span>steps complete</span><i><b /></i></div><Icon>{setupOpen ? "expand_less" : "expand_more"}</Icon></button>
+      {setupOpen ? <div className="runr-setup-steps">{setupSteps.map(([title, copy, to, complete], index) => <Link className={complete ? "is-complete" : ""} key={title} to={to}><span>{complete ? <Icon>check</Icon> : index + 1}</span><div><strong>{title}</strong><small>{copy}</small></div><em>{complete ? "Complete" : <><span>Continue</span><Icon>arrow_forward</Icon></>}</em></Link>)}</div> : null}
     </section>
 
     <section className="runr-home__stats" aria-label="Search overview">

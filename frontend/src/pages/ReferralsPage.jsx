@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { useSession } from "../context/SessionContext";
 import { useApiResource } from "../hooks/useApiResource";
@@ -399,13 +399,21 @@ function formatUpdatedAt(value) {
 }
 
 export default function ReferralsPage() {
+  const [searchParams] = useSearchParams();
   const { request } = useSession();
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState("");
-  const [activeSection, setActiveSection] = useState("manual");
+  const requestedSection = searchParams.get("section");
+  const [activeSection, setActiveSection] = useState(REFERRAL_SECTION_OPTIONS.some((section) => section.id === requestedSection) ? requestedSection : "manual");
   const [visibleContactLimit, setVisibleContactLimit] = useState(CONTACT_RENDER_BATCH_SIZE);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [actionState, setActionState] = useState({ message: "", error: "", busyId: "" });
+
+  useEffect(() => {
+    if (REFERRAL_SECTION_OPTIONS.some((section) => section.id === requestedSection)) {
+      setActiveSection(requestedSection);
+    }
+  }, [requestedSection]);
   const [importState, setImportState] = useState({
     csvText: "",
     fileName: "",
