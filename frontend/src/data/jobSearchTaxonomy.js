@@ -58,7 +58,7 @@ export const JOB_FILTER_GROUPS = [
     filters: [
       ["posting_age", "Date posted"], ["exclude_expired", "Hide expired jobs"],
       ["hide_applied", "Hide applied jobs"], ["easy_apply", "Simple applications"],
-      ["application_deadline", "Application deadline"], ["source", "Job source"],
+      ["application_deadline", "Application deadline"], ["source_type", "Source"],
     ],
   },
   {
