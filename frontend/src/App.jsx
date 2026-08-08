@@ -34,6 +34,7 @@ const QuickApplyPage = lazy(() => import("./pages/QuickApplyPage"));
 const RunDetailPage = lazy(() => import("./pages/RunDetailPage"));
 const RunsPage = lazy(() => import("./pages/RunsPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const ProfilePage = lazy(() => import("./pages/ProfilePage"));
 const TrackerPage = lazy(() => import("./pages/TrackerPage"));
 const TrackerAtsPage = lazy(() => import("./pages/TrackerAtsPage"));
 const WorkspacesPage = lazy(() => import("./pages/WorkspacesPage"));
@@ -253,7 +254,7 @@ function AuthenticatedApp() {
               <Route path="/refer" element={<ReferralsPage />} />
               <Route path="/referrals/linkedin-csv-guide" element={<LinkedInConnectionsGuidePage />} />
               <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/profile" element={<SettingsPage />} />
+              <Route path="/profile" element={<ProfilePage />} />
               <Route path="/settings/assisted-apply" element={<AssistedApplyConnectionPage />} />
               <Route path="/pricing" element={<PricingPage />} />
               <Route

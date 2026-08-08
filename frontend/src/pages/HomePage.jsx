@@ -18,6 +18,12 @@ const focusItems = [
   ["Follow up on active applications", "Keep your application pipeline moving.", "/tracker", "Open tracker"],
 ];
 
+const freshMatches = [
+  ["Operations & Strategy", "Based on your target roles and evidence", "/matches"],
+  ["Business Analysis", "Explore newly ranked roles in your preferred locations", "/jobs?category=Business%20Analysis"],
+  ["Business & Strategy", "Compare v1 keyword fit with v2 evidence fit", "/jobs?category=Business%20%26%20Strategy"],
+];
+
 export default function HomePage() {
   const { user } = useSession();
   const displayName = String(user?.display_name || user?.email || "there").split(/[ @]/)[0];
@@ -42,6 +48,11 @@ export default function HomePage() {
     <div className="runr-home__grid">
       <section className="runr-home-card"><div className="runr-home-card__heading"><div><span className="runr-eyebrow">Recommended next</span><h2>Focus for today</h2></div></div><div className="runr-focus-list">{focusItems.map(([title, copy, to, meta], index) => <Link key={title} to={to}><span>{index + 1}</span><div><strong>{title}</strong><small>{copy}</small></div><em>{meta}</em><Icon>arrow_forward</Icon></Link>)}</div></section>
       <section className="runr-home-card runr-home-card--accent"><span className="runr-eyebrow">How matching works</span><h2>Two scores, one clearer decision</h2><p>v1 checks ATS-style keyword alignment. v2 adds semantic and evidence-aware matching from your profile.</p><div className="runr-score-demo"><span className="is-medium"><strong>63</strong><small>v1</small></span><span className="is-strong"><strong>82</strong><small>v2</small></span></div><Link className="runr-button runr-button--secondary" to="/profile?section=experience">Strengthen profile evidence</Link></section>
+    </div>
+    <div className="runr-home__dashboard-grid">
+      <section className="runr-home-card"><div className="runr-home-card__heading"><div><span className="runr-eyebrow">Suggested rhythm</span><h2>Build weekly momentum</h2></div><Link to="/tracker">Open tracker</Link></div><div className="runr-activity-chart" aria-label="Suggested weekly job-search rhythm"><div><i style={{height:"30%"}}/><span>Mon</span></div><div><i style={{height:"52%"}}/><span>Tue</span></div><div><i style={{height:"42%"}}/><span>Wed</span></div><div><i style={{height:"78%"}}/><span>Thu</span></div><div><i style={{height:"64%"}}/><span>Fri</span></div><div><i style={{height:"88%"}}/><span>Sat</span></div><div><i style={{height:"58%"}}/><span>Sun</span></div></div><p className="runr-home-card__note">Use this cadence as a guide for reviewing, saving, and progressing opportunities. Your actual pipeline stays in Tracker.</p></section>
+      <section className="runr-home-card"><div className="runr-home-card__heading"><div><span className="runr-eyebrow">Discover</span><h2>Fresh matches</h2></div><Link to="/matches">View all</Link></div><div className="runr-fresh-list">{freshMatches.map(([title, copy, to], index) => <Link key={title} to={to}><span>{index + 1}</span><div><strong>{title}</strong><small>{copy}</small></div><Icon>arrow_forward</Icon></Link>)}</div></section>
+      <section className="runr-home-card"><div className="runr-home-card__heading"><div><span className="runr-eyebrow">Application funnel</span><h2>Move work forward</h2></div><Link to="/tracker">Manage</Link></div><div className="runr-funnel"><Link to="/jobs"><b>Discover</b><span>Find and evaluate roles</span></Link><Link to="/documents"><b>Prepare</b><span>Tailor your documents</span></Link><Link to="/tracker"><b>Track</b><span>Follow up and record outcomes</span></Link></div></section>
     </div>
   </div>;
 }
