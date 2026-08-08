@@ -15,7 +15,8 @@ import {
   unknownCompanyCharacteristics,
 } from "../../lib/personalizedJobsApi";
 import unverifiedCompanyTeam from "../../assets/company-enrichment-team.svg";
-import { JOB_CATEGORY_OPTIONS, JOB_FILTER_GROUPS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxonomy";
+import { JOB_CATEGORY_OPTIONS, JOB_SORT_OPTIONS } from "../../data/jobSearchTaxonomy";
+import { FILTER_GROUP_ICONS, formatFilterOption, JOB_MORE_FILTER_GROUPS } from "../../data/jobMoreFilterTaxonomy";
 
 const NETWORK_ITEMS = [
   ["hiring", "People hiring for this team", "Recruiters & hiring leads", "work"],
@@ -273,31 +274,31 @@ function JobOverview({ job, onOpenNetwork, onPrepare, onReport, onHide, onImprov
   </div>;
 }
 
-function FilterVocabulary() {
-  const [query, setQuery] = useState("");
-  const normalized = query.trim().toLowerCase();
-  return <section className="jobs-filter-vocabulary">
-    <div className="jobs-filter-vocabulary__heading">
-      <div><h3>All searchable data keys</h3><p>The same vocabulary can drive the company and job collection pipeline.</p></div>
-      <label><Icon>search</Icon><input aria-label="Search filter keys" onChange={(event) => setQuery(event.target.value)} placeholder="Search keywords" value={query} /></label>
-    </div>
-    <div className="jobs-filter-vocabulary__groups">{JOB_FILTER_GROUPS.map((group) => {
-      const visibleFilters = group.filters.filter(([key, label]) => !normalized || key.includes(normalized) || label.toLowerCase().includes(normalized));
-      if (!visibleFilters.length) return null;
-      return <div key={group.label}><strong>{group.label}</strong><div>{visibleFilters.map(([key, label]) => <span key={key} title={key}>{label}<code>{key}</code></span>)}</div></div>;
-    })}</div>
-  </section>;
+function DrawerFilterControl({ filter, value, onChange }) {
+  const options = filter.options || [];
+  if (filter.type === "boolean") return <label className="jobs-drawer-switch"><input checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} type="checkbox" /><span aria-hidden="true" /><em>{value ? "On" : "Off"}</em></label>;
+  if (["single_select", "multi_select", "taxonomy", "currency", "tri_state"].includes(filter.type)) {
+    const selectOptions = filter.type === "tri_state" && !options.length ? ["yes", "no", "unknown"] : options;
+    return <select aria-label={filter.label} onChange={(event) => onChange(event.target.value)} value={value ?? ""}><option value="">Any</option>{selectOptions.map((option) => <option key={option} value={option}>{formatFilterOption(option)}</option>)}</select>;
+  }
+  const inputType = filter.type === "date" ? "date" : ["money", "number", "percentage", "year"].includes(filter.type) ? "number" : "text";
+  return <input aria-label={filter.label} onChange={(event) => onChange(event.target.value)} placeholder={inputType === "text" ? `Add ${filter.label.toLowerCase()}` : "Any"} type={inputType} value={value ?? ""} />;
 }
 
 function FilterDrawer({ filters, onChange, onClear, onClose, onApply }) {
+  const [query, setQuery] = useState("");
+  const normalized = query.trim().toLowerCase();
   return <div className="jobs-filter-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <aside aria-label="All filters" aria-modal="true" className="jobs-filter-drawer" role="dialog">
-      <header className="jobs-filter-drawer__header"><div><p className="jobs-eyebrow">Job search</p><h2>All filters</h2></div><button aria-label="Close filters" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
+    <aside aria-label="More filters" aria-modal="true" className="jobs-filter-drawer" role="dialog">
+      <header className="jobs-filter-drawer__header"><div><p className="jobs-eyebrow">Job search</p><h2>More filters</h2><p>Every control maps to a stable backend key.</p></div><button aria-label="Close filters" className="jobs-modal-close" onClick={onClose} type="button"><Icon>close</Icon></button></header>
       <div className="jobs-filter-drawer__body">
-        <section><h3>Job details</h3><label>Employment type<select onChange={(event) => onChange("employmentType", event.target.value)} value={filters.employmentType}><option value="all">Any employment type</option><option value="full-time">Full-time</option><option value="part-time">Part-time</option><option value="contract">Contract</option><option value="internship">Internship</option></select></label></section>
-        <section><h3>Company</h3><label>Company<input onChange={(event) => onChange("company", event.target.value)} placeholder="Search company" value={filters.company} /></label><label>Hidden companies<input onChange={(event) => onChange("hiddenCompanies", event.target.value)} placeholder="Filter out companies" value={filters.hiddenCompanies} /></label></section>
-        <section><h3>Posting age</h3><div className="jobs-filter-radio-list">{[["all", "Any time"], ["24h", "Past 24 hours"], ["7d", "Past 7 days"], ["30d", "Past 30 days"]].map(([value, label]) => <label key={value}><input checked={filters.datePosted === value} name="posting-age" onChange={() => onChange("datePosted", value)} type="radio" />{label}</label>)}</div></section>
-        <FilterVocabulary />
+        <label className="jobs-drawer-search"><Icon>search</Icon><input aria-label="Search filter keys" onChange={(event) => setQuery(event.target.value)} placeholder="Find a filter or backend key" value={query} /></label>
+        <div className="jobs-filter-groups">{JOB_MORE_FILTER_GROUPS.map((group) => {
+          const visibleFilters = group.filters.filter((filter) => !normalized || [filter.key, filter.label, ...(filter.options || []), ...(filter.aliases || [])].join(" ").toLowerCase().includes(normalized));
+          if (!visibleFilters.length) return null;
+          return <section className="jobs-filter-group" key={group.group}><header><span className="jobs-filter-group__icon"><Icon>{FILTER_GROUP_ICONS[group.group] || "tune"}</Icon></span><div><h3>{group.label}</h3><small>{group.filters.length} backend key{group.filters.length === 1 ? "" : "s"}</small></div></header><div className="jobs-filter-list">{visibleFilters.map((filter) => <div className="jobs-drawer-filter" key={filter.key}><div><strong>{filter.label}</strong><code>{filter.key}</code></div><DrawerFilterControl filter={filter} onChange={(value) => onChange(filter.key, value)} value={filters[filter.key]} /></div>)}</div></section>;
+        })}</div>
+        {!JOB_MORE_FILTER_GROUPS.some((group) => group.filters.some((filter) => !normalized || [filter.key, filter.label, ...(filter.options || []), ...(filter.aliases || [])].join(" ").toLowerCase().includes(normalized))) ? <div className="jobs-filter-empty"><Icon>search_off</Icon><strong>No filter keys found</strong><span>Try salary, visa, company, education, or keyword.</span></div> : null}
       </div>
       <footer className="jobs-filter-drawer__footer"><button className="jobs-outline-button" onClick={onClear} type="button">Clear all</button><button className="jobs-primary-button" onClick={onApply} type="button">Show results</button></footer>
     </aside>

@@ -111,7 +111,53 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
     preferred_major: filters.preferredMajor,
     security_clearance: filters.securityClearance,
     lifting_requirement: filters.liftingRequirement,
-    sort: filters.sort === "best" ? "priority" : filters.sort,
+    sort: filters.sort === "best" ? "priority" : (filters.sort || filters.sort_by),
+    posting_age: filters.posting_age,
+    posted_at: filters.posted_at,
+    application_deadline: filters.application_deadline,
+    exclude_expired: filters.exclude_expired,
+    simple_application: filters.simple_application,
+    exclude_applied: filters.exclude_applied,
+    exclude_saved: filters.exclude_saved,
+    cover_letter_required: filters.cover_letter_required,
+    referral_available: filters.referral_available,
+    recruiter_contact_available: filters.recruiter_contact_available,
+    applicant_count_max: filters.applicant_count_max,
+    apply_method: filters.apply_method,
+    salary_currency: filters.salary_currency,
+    salary_period: filters.salary_period,
+    salary_disclosed: filters.salary_disclosed,
+    compensation_types: filters.compensation_types,
+    workplace_type: filters.workplace_type,
+    remote_scope: filters.remote_scope,
+    travel_percent_max: filters.travel_percent_max,
+    relocation_assistance: filters.relocation_assistance,
+    degree_requirement: filters.degree_requirement,
+    fields_of_study: filters.fields_of_study,
+    certifications: filters.certifications,
+    professional_license: filters.professional_license,
+    visa_sponsorship: filters.visa_sponsorship,
+    h1b_sponsorship: filters.h1b_sponsorship,
+    work_authorization_required: filters.work_authorization_required,
+    citizenship_required: filters.citizenship_required,
+    security_clearance_detail: filters.security_clearance,
+    company_include: filters.company_include,
+    company_exclude: filters.company_exclude,
+    company_type: filters.company_type,
+    headquarters_location: filters.headquarters_location,
+    keywords_include: filters.keywords_include,
+    keywords_exclude: filters.keywords_exclude,
+    skills_include: filters.skills_include,
+    skills_exclude: filters.skills_exclude,
+    years_experience_min: filters.years_experience_min,
+    years_experience_max: filters.years_experience_max,
+    management_role: filters.management_role,
+    languages: filters.languages,
+    benefits: filters.benefits,
+    verified_posting: filters.verified_posting,
+    has_company_profile: filters.has_company_profile,
+    has_closing_date: filters.has_closing_date,
+    source_type: filters.source_type,
   };
   Object.entries(values).forEach(([key, value]) => {
     if (key === "sort" && omitSort) return;
@@ -125,7 +171,7 @@ export function buildPersonalizedJobsQuery(filters = {}, { cursor = "", includeH
 }
 
 export function countPersonalizedJobFilters(filters = {}) {
-  return [
+  const known = [
     ["location", filters.location],
     ["workArrangement", filters.workArrangement !== "all" ? filters.workArrangement : ""],
     ["employmentType", filters.employmentType !== "all" ? filters.employmentType : ""],
@@ -153,7 +199,10 @@ export function countPersonalizedJobFilters(filters = {}) {
     ["preferredMajor", filters.preferredMajor],
     ["securityClearance", filters.securityClearance],
     ["liftingRequirement", filters.liftingRequirement],
-  ].filter(([, value]) => text(value)).length;
+  ];
+  const knownKeys = new Set(known.map(([key]) => key));
+  const extra = Object.entries(filters).filter(([key, value]) => !knownKeys.has(key) && !["query", "sort"].includes(key) && text(value));
+  return [...known.filter(([, value]) => text(value)), ...extra].length;
 }
 
 export function toPersonalizedJobsFilterPayload(filters = {}) {

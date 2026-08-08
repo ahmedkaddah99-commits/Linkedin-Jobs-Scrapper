@@ -1689,6 +1689,37 @@ html.dark .app-shell--jobs-experience { background: #f7f9fb !important; color: v
   .runr-setup-steps > a:nth-child(6) { border-top: 1px solid #dfe9ed; }
   .runr-home__grid { grid-template-columns: 1fr; }
 }
+
+/* Local Runr preview filter drawer ----------------------------------------- */
+.jobs-filter-drawer { max-width: 420px; width: min(100%, 420px); }
+.jobs-filter-drawer__header { padding: 1.1rem 1rem 0.9rem; }
+.jobs-filter-drawer__header > div > p:last-child { color: var(--jobs-muted); font-size: 0.7rem; margin: 0.35rem 0 0; }
+.jobs-filter-drawer__body { padding: 0 1rem 5rem; }
+.jobs-drawer-search { align-items: center; background: #f7fafb; border: 1px solid #d7e3e8; border-radius: 0.45rem; display: flex !important; gap: 0.45rem; margin: 0.9rem 0 0.4rem !important; padding: 0 0.6rem; }
+.jobs-drawer-search .material-symbols-outlined { color: #78909c; font-size: 1.05rem; }
+.jobs-drawer-search input { background: transparent !important; border: 0 !important; box-shadow: none !important; margin: 0 !important; min-height: 2.3rem !important; padding: 0.35rem 0 !important; }
+.jobs-filter-group { border-bottom: 1px solid var(--jobs-line); padding: 1rem 0 0.35rem; }
+.jobs-filter-group > header { align-items: center; display: flex; gap: 0.6rem; margin-bottom: 0.45rem; }
+.jobs-filter-group__icon { align-items: center; background: #eaf6f8; border-radius: 0.45rem; color: #087f95; display: inline-flex; height: 2rem; justify-content: center; width: 2rem; }
+.jobs-filter-group__icon .material-symbols-outlined { font-size: 1.1rem; }
+.jobs-filter-group h3 { font-size: 0.82rem !important; margin: 0 !important; }
+.jobs-filter-group small { color: #7b8e99; display: block; font-size: 0.62rem; margin-top: 0.12rem; }
+.jobs-filter-list { display: grid; }
+.jobs-drawer-filter { align-items: center; border-top: 1px solid #edf2f4; display: grid; gap: 0.75rem; grid-template-columns: minmax(0, 1fr) minmax(125px, 0.75fr); padding: 0.65rem 0; }
+.jobs-drawer-filter strong { color: #29485a; display: block; font-size: 0.7rem; font-weight: 650; }
+.jobs-drawer-filter code { color: #8a9aa3; display: block; font-size: 0.58rem; margin-top: 0.16rem; overflow-wrap: anywhere; }
+.jobs-drawer-filter > input, .jobs-drawer-filter > select { margin: 0 !important; min-height: 2.05rem !important; }
+.jobs-drawer-switch { align-items: center; display: inline-flex !important; gap: 0.4rem; justify-content: flex-end; margin: 0 !important; }
+.jobs-drawer-switch input { height: 1px; opacity: 0; position: absolute; width: 1px; }
+.jobs-drawer-switch span { background: #c6d4da; border-radius: 999px; display: inline-block; height: 1.25rem; position: relative; transition: 0.16s ease; width: 2.2rem; }
+.jobs-drawer-switch span::after { background: #fff; border-radius: 50%; box-shadow: 0 1px 3px #78909c; content: ""; height: 0.95rem; left: 0.15rem; position: absolute; top: 0.15rem; transition: 0.16s ease; width: 0.95rem; }
+.jobs-drawer-switch input:checked + span { background: var(--jobs-cyan); }
+.jobs-drawer-switch input:checked + span::after { transform: translateX(0.95rem); }
+.jobs-drawer-switch em { color: #80929c; font-size: 0.62rem; font-style: normal; min-width: 1.2rem; }
+.jobs-filter-empty { align-items: center; color: #78909c; display: flex; flex-direction: column; gap: 0.35rem; padding: 3rem 1rem; text-align: center; }
+.jobs-filter-empty strong { color: #29485a; font-size: 0.8rem; }
+.jobs-filter-empty span { font-size: 0.68rem; }
+@media (max-width: 520px) { .jobs-drawer-filter { grid-template-columns: 1fr; } .jobs-drawer-filter > input, .jobs-drawer-filter > select, .jobs-drawer-switch { justify-self: stretch; } }
 @media (max-width: 600px) { .setup-flow-steps article { align-items: flex-start; grid-template-columns: auto 1fr; }.setup-flow-steps article > a { grid-column: 2; justify-self: start; }.setup-flow-note { align-items: flex-start; flex-wrap: wrap; }.setup-flow-note a { width: 100%; } }
 
 /* Preferred Runr career profile. /settings deliberately keeps the legacy workspace UI. */
