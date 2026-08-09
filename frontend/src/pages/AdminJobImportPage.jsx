@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { getApiErrorMessage } from "../lib/api";
 import { formatDateTime } from "../lib/formatters";
@@ -80,6 +81,7 @@ function useInspectorStyles() {
 export default function AdminJobImportPage() {
   useInspectorStyles();
   const { request } = useSession();
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({});
   const [selectedId, setSelectedId] = useState("");
@@ -91,6 +93,8 @@ export default function AdminJobImportPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Last cycle unavailable");
+  const [filterMode, setFilterMode] = useState("all");
+  const [recordMenuOpen, setRecordMenuOpen] = useState(false);
 
   const loadCatalog = useCallback(async () => {
     const response = await request("/admin/job-import/jobs?limit=200");
@@ -128,7 +132,13 @@ export default function AdminJobImportPage() {
 
   const selectedRow = rows.find(item => String(item.canonical_job_id) === selectedId) || rows[0] || null;
   const selected = useMemo(() => recordFrom(selectedRow, inspection), [inspection, selectedRow]);
-  const filtered = rows.filter(item => `${item.title || ""} ${item.company || ""} ${item.location || ""} ${item.source || ""} ${item.canonical_job_id || ""}`.toLowerCase().includes(query.toLowerCase()));
+  const filtered = rows.filter(item => {
+    const matchesQuery = `${item.title || ""} ${item.company || ""} ${item.location || ""} ${item.source || ""} ${item.canonical_job_id || ""}`.toLowerCase().includes(query.toLowerCase());
+    const matchesFilter = filterMode === "all"
+      || (filterMode === "missing" && item.apply_status !== "present")
+      || (filterMode === "incomplete" && (!item.description || !item.company_id || item.apply_status !== "present"));
+    return matchesQuery && matchesFilter;
+  });
   const jobCoverage = countFields(selected.job);
   const companyCoverage = countFields(selected.companyData);
   const adminCoverage = countFields(selected.admin);
@@ -178,6 +188,27 @@ export default function AdminJobImportPage() {
     }
   }
 
+  function focusInspector(nextTab = "coverage") {
+    setTab(nextTab);
+    setMenuOpen(false);
+    setRecordMenuOpen(false);
+    window.requestAnimationFrame(() => document.querySelector(".inspector")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
+  async function refreshSelected() {
+    if (!selected.id) return;
+    setBusy(true);
+    try {
+      const response = await request(`/admin/job-import/jobs/${encodeURIComponent(selected.id)}/inspection`);
+      setInspection(response);
+      setMessage("Record refreshed");
+    } catch (error) {
+      setMessage(getApiErrorMessage(error, "Record refresh failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function importJobs() {
     setBusy(true);
     try {
@@ -191,6 +222,26 @@ export default function AdminJobImportPage() {
       setMessage("Import queued");
     } catch (error) {
       setMessage(getApiErrorMessage(error, "Import could not be queued"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function publishSelected() {
+    const importId = selected.raw?.imports?.find(item => item.import_id)?.import_id;
+    if (!importId) {
+      setMessage("This record has no import publication context");
+      return;
+    }
+    setBusy(true);
+    try {
+      const preview = await request("/admin/job-import/preview", { method: "POST", body: { import_id: importId } });
+      if (!preview.publication_id) throw new Error("Publication preview did not return an ID.");
+      await request("/admin/job-import/publish", { method: "POST", body: { publication_id: preview.publication_id } });
+      setMessage("Record published");
+      await loadCatalog();
+    } catch (error) {
+      setMessage(getApiErrorMessage(error, "Publication failed"));
     } finally {
       setBusy(false);
     }
@@ -214,12 +265,45 @@ export default function AdminJobImportPage() {
     }
   }
 
+  function handleNavigation(item) {
+    const routes = {
+      Overview: "/admin",
+      Jobs: "/admin/job-import",
+      Operations: "/admin/scrapeops",
+      System: "/admin/events",
+    };
+    if (routes[item]) {
+      navigate(routes[item]);
+      return;
+    }
+    if (item === "Companies") {
+      focusInspector("company");
+      setMessage("Company data is shown for the selected canonical job");
+      return;
+    }
+    if (item === "Imports") {
+      setMenuOpen(false);
+      importJobs();
+      return;
+    }
+    focusInspector("coverage");
+    setMessage("Review actions are available below the selected record");
+  }
+
+  function handleWorkflow(step) {
+    if (step === "Import") return importJobs();
+    if (step === "Inspect data") return focusInspector("coverage");
+    if (step === "Review") return focusInspector("coverage");
+    if (step === "Publish") return publishSelected();
+    return navigate("/jobs");
+  }
+
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? "open" : ""}`}>
       <div className="brand"><span>r</span><div><strong>runr</strong><small>ADMIN CONSOLE</small></div></div>
-      <nav>{NAV.map((item, index) => <button className={item === "Jobs" ? "active" : ""} key={item} onClick={() => setMenuOpen(false)} type="button"><span>{["⌂", "▤", "◇", "↗", "↻", "✓", "···"][index]}</span>{item}{item === "Jobs" ? <i>{summary.catalog_records ?? "—"}</i> : item === "Review" ? <i>{attentionCount}</i> : null}</button>)}</nav>
+      <nav>{NAV.map((item, index) => <button aria-current={item === "Jobs" ? "page" : undefined} className={item === "Jobs" ? "active" : ""} key={item} onClick={() => handleNavigation(item)} type="button"><span>{["⌂", "▤", "◇", "↗", "↻", "✓", "···"][index]}</span>{item}{item === "Jobs" ? <i>{summary.catalog_records ?? "—"}</i> : item === "Review" ? <i>{attentionCount}</i> : null}</button>)}</nav>
       <div className="system-on"><span className="pulse"/><div><b>Acquisition enabled</b><small>{message}</small></div></div>
-      <button className="profile" type="button"><span>AK</span><div><b>Ahmed Kaddah</b><small>Administrator</small></div><i>⌄</i></button>
+      <button aria-label="Open administrator profile" className="profile" onClick={() => navigate("/profile")} type="button"><span>AK</span><div><b>Ahmed Kaddah</b><small>Administrator</small></div><i>⌄</i></button>
     </aside>
 
     <main>
@@ -231,7 +315,7 @@ export default function AdminJobImportPage() {
       </header>
 
       <div className="workflow">
-        {["Import", "Inspect data", "Review", "Publish", "View live"].map((step, index) => <div className={index === 1 ? "current" : index === 0 ? "done" : ""} key={step}><span>{index === 0 ? "✓" : index + 1}</span><b>{step}</b></div>)}
+        {["Import", "Inspect data", "Review", "Publish", "View live"].map((step, index) => <div aria-current={index === 1 ? "step" : undefined} className={index === 1 ? "current" : index === 0 ? "done" : ""} key={step} onClick={() => handleWorkflow(step)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); handleWorkflow(step); } }} role="button" tabIndex={0}><span>{index === 0 ? "✓" : index + 1}</span><b>{step}</b></div>)}
       </div>
 
       <section className="summary-strip">
@@ -245,8 +329,8 @@ export default function AdminJobImportPage() {
         <aside className="job-list card">
           <div className="list-head"><div><h2>Collected jobs</h2><p>Select a record to inspect every stored field</p></div><span>{filtered.length}</span></div>
           <label className="search"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search jobs, companies, IDs…" /></label>
-          <div className="quick-filters"><button className="active" type="button">All</button><button type="button">Missing Apply <b>{summary.apply_url_missing_or_invalid ?? "—"}</b></button><button type="button">Incomplete</button></div>
-          <div className="records">{filtered.map(record => <button className={String(record.canonical_job_id) === selected.id ? "selected" : ""} key={record.canonical_job_id} onClick={() => { setSelectedId(String(record.canonical_job_id)); setTab("coverage"); }} type="button">
+          <div className="quick-filters"><button aria-pressed={filterMode === "all"} className={filterMode === "all" ? "active" : ""} onClick={() => setFilterMode("all")} type="button">All</button><button aria-pressed={filterMode === "missing"} className={filterMode === "missing" ? "active" : ""} onClick={() => setFilterMode("missing")} type="button">Missing Apply <b>{summary.apply_url_missing_or_invalid ?? "—"}</b></button><button aria-pressed={filterMode === "incomplete"} className={filterMode === "incomplete" ? "active" : ""} onClick={() => setFilterMode("incomplete")} type="button">Incomplete</button></div>
+          <div className="records">{filtered.map(record => <button className={String(record.canonical_job_id) === selected.id ? "selected" : ""} key={record.canonical_job_id} onClick={() => { setSelectedId(String(record.canonical_job_id)); setTab("coverage"); setRecordMenuOpen(false); }} type="button">
             <span className="company-mark">{String(record.company || "?").slice(0, 2).toUpperCase()}</span>
             <span className="record-copy"><b>{record.title || "Unknown title"}</b><small>{record.company || "Unknown company"} · {record.location || "Unknown location"}</small><em>{record.canonical_job_id}</em></span>
             <span className={`apply-dot ${record.apply_status === "present" ? "verified" : "missing"}`} title={`Apply URL ${record.apply_status || "unknown"}`} />
@@ -256,7 +340,7 @@ export default function AdminJobImportPage() {
         <article className="inspector card">
           <header className="record-head">
             <div className="record-title"><span className="company-mark large">{selected.company.slice(0, 2).toUpperCase()}</span><div><div className="eyebrow">{selected.id || "No canonical record selected"}</div><h2>{selected.title}</h2><p>{selected.company} · {selected.location} · {selected.source}</p></div></div>
-            <div className="record-actions"><Status value={selected.state}/><button type="button">⋯</button></div>
+            <div className="record-actions"><Status value={selected.state}/><div className="record-menu-wrap"><button aria-expanded={recordMenuOpen} aria-label="Record actions" onClick={() => setRecordMenuOpen(value => !value)} type="button">⋯</button>{recordMenuOpen ? <div className="record-menu"><button onClick={() => focusInspector("company")} type="button">Inspect company</button><button disabled={busy} onClick={() => { setRecordMenuOpen(false); refreshSelected(); }} type="button">Refresh record</button><button disabled={busy} onClick={() => { setRecordMenuOpen(false); recordDecision("undo"); }} type="button">Send to review</button></div> : null}</div></div>
           </header>
 
           <section className={`apply-check apply-${selected.applyStatus}`}>
@@ -285,7 +369,7 @@ export default function AdminJobImportPage() {
             <JsonView value={activeJson} search={jsonSearch}/>
           </div>}
 
-          <footer className="inspector-footer"><div><span className="pulse"/><p><b>Real backend record</b><small>{selected.freshness} · Version {String(selected.admin.posting_version || "Unknown")}</small></p></div><div><button className="secondary" disabled={busy} onClick={() => recordDecision("reject")} type="button">Send to review</button><button className="primary" disabled={busy} onClick={() => recordDecision("approve")} type="button">Approve record</button></div></footer>
+          <footer className="inspector-footer"><div><span className="pulse"/><p><b>Real backend record</b><small>{selected.freshness} · Version {String(selected.admin.posting_version || "Unknown")}</small></p></div><div><button className="secondary" disabled={busy} onClick={() => recordDecision("undo")} type="button">Send to review</button><button className="primary" disabled={busy} onClick={() => recordDecision("approve")} type="button">Approve record</button></div></footer>
         </article>
       </section>
     </main>
