@@ -215,6 +215,18 @@ function AuthenticatedApp() {
     });
   }, [hasSession, location.hash, location.pathname, location.search, userId]);
 
+  if (hasSession && location.pathname === "/admin/job-import") {
+    return (
+      <RouteErrorBoundary>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <RequireAdminRoute>
+            <AdminJobImportPage />
+          </RequireAdminRoute>
+        </Suspense>
+      </RouteErrorBoundary>
+    );
+  }
+
   return (
     <AppShell muteSidebar={!hasSession}>
       <UpgradeModalHost />

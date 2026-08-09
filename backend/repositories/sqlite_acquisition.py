@@ -2353,10 +2353,14 @@ class SqliteAcquisitionStore(_SqliteStore):
         """
         summary_query = f"""
             SELECT COUNT(*) AS total,
-                   SUM(CASE WHEN COALESCE(v.apply_url, '') != '' THEN 1 ELSE 0 END) AS apply_url_present
+                   SUM(CASE WHEN COALESCE(v.apply_url, '') != '' THEN 1 ELSE 0 END) AS apply_url_present,
+                   SUM(CASE WHEN COALESCE(p.profile_json, '') = ''
+                                  OR p.profile_json LIKE '%\"state\":\"unknown\"%'
+                            THEN 1 ELSE 0 END) AS company_profiles_incomplete
             FROM canonical_jobs j
             JOIN canonical_companies c ON c.company_id=j.company_id
             LEFT JOIN job_posting_versions v ON v.version_id=j.current_version_id
+            LEFT JOIN canonical_company_profiles p ON p.company_id=j.company_id
             LEFT JOIN job_source_observations o ON o.observation_id=(
                 SELECT latest.source_observation_id
                 FROM job_posting_versions latest
@@ -2379,6 +2383,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             jobs.append(item)
         total = int(summary_row["total"] or 0) if summary_row is not None else 0
         apply_present = int(summary_row["apply_url_present"] or 0) if summary_row is not None else 0
+        company_profiles_incomplete = int(summary_row["company_profiles_incomplete"] or 0) if summary_row is not None else 0
         return {
             "jobs": jobs,
             "total": total,
@@ -2388,6 +2393,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "catalog_records": total,
                 "apply_url_present": apply_present,
                 "apply_url_missing_or_invalid": max(0, total - apply_present),
+                "company_profiles_incomplete": company_profiles_incomplete,
             },
         }
 

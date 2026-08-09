@@ -1034,7 +1034,12 @@ class BackendApplication:
             "total": 0,
             "limit": limit,
             "offset": offset,
-            "summary": {"catalog_records": 0, "apply_url_present": 0, "apply_url_missing_or_invalid": 0},
+            "summary": {
+                "catalog_records": 0,
+                "apply_url_present": 0,
+                "apply_url_missing_or_invalid": 0,
+                "company_profiles_incomplete": 0,
+            },
         }
 
     def get_admin_job_inspection(self, canonical_job_id: str) -> dict[str, Any] | None:
