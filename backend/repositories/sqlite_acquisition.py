@@ -5,9 +5,11 @@ import json
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from backend.domain.models import utc_now_iso, utc_plus_seconds
+from backend.acquisition.network_policy import hostname_for_url
 from backend.acquisition.phase_g import (
     applicant_source_gate,
     has_applicant_evidence,
@@ -2235,6 +2237,614 @@ class SqliteAcquisitionStore(_SqliteStore):
         start = max(0, int(offset))
         page = rows[start : start + max(1, min(200, int(limit)))]
         return {"jobs": page, "total": len(rows), "limit": max(1, int(limit)), "offset": start}
+
+    @staticmethod
+    def _inspection_value_present(value: Any) -> bool:
+        if value is None or value == "":
+            return False
+        if isinstance(value, (list, tuple, set, dict)) and not value:
+            return False
+        if isinstance(value, Mapping) and str(value.get("state") or "").casefold() in {"unknown", "missing", "unavailable"}:
+            return False
+        return True
+
+    @staticmethod
+    def _inspection_value_state(value: Any) -> str:
+        if value is None:
+            return "null"
+        if value == "":
+            return "empty"
+        if isinstance(value, list) and not value:
+            return "empty_list"
+        if isinstance(value, dict) and not value:
+            return "empty_object"
+        if isinstance(value, Mapping):
+            explicit_state = str(value.get("state") or "").casefold()
+            if explicit_state in {"unknown", "missing", "unavailable", "extraction_not_run", "conflict", "failed"}:
+                return explicit_state
+        return "present"
+
+    @classmethod
+    def _inspection_coverage(cls, values: Mapping[str, Any]) -> dict[str, Any]:
+        missing = [key for key, value in values.items() if not cls._inspection_value_present(value)]
+        total = len(values)
+        present = total - len(missing)
+        return {
+            "present": present,
+            "total": total,
+            "missing_fields": missing,
+            "field_states": {
+                key: cls._inspection_value_state(value)
+                for key, value in values.items()
+            },
+        }
+
+    @staticmethod
+    def _inspection_rows(rows: Iterable[Any], json_fields: Iterable[str] = ()) -> list[dict[str, Any]]:
+        fields = tuple(json_fields)
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = _dict_row(row)
+            for field in fields:
+                decoded_key = field[:-5] if field.endswith("_json") else field
+                item[decoded_key] = _decode(item.get(field), {} if field != "snapshot_json" else [])
+            result.append(item)
+        return result
+
+    @staticmethod
+    def _inspection_in_clause(column: str, values: Iterable[str]) -> tuple[str, tuple[str, ...]]:
+        normalized = tuple(dict.fromkeys(str(value) for value in values if str(value).strip()))
+        if not normalized:
+            return "1=0", ()
+        return f"{column} IN ({','.join('?' for _ in normalized)})", normalized
+
+    def list_admin_job_inspections(
+        self,
+        *,
+        search: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List real canonical jobs for the admin data inspector."""
+
+        limit_value = max(1, min(200, int(limit)))
+        offset_value = max(0, int(offset))
+        normalized_search = " ".join(str(search or "").casefold().split())
+        predicates = []
+        params: list[Any] = []
+        if normalized_search:
+            predicates.append(
+                "LOWER(j.canonical_job_id || ' ' || c.canonical_name || ' ' || j.title || ' ' || "
+                "j.location || ' ' || COALESCE(o.target_id, '') || ' ' || COALESCE(v.payload_json, '')) LIKE ?"
+            )
+            params.append(f"%{normalized_search}%")
+        where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
+        query = f"""
+            SELECT j.canonical_job_id, j.company_id, c.canonical_name AS company,
+                   j.title, j.location, j.canonical_url, j.lifecycle_state,
+                   j.first_seen_at, j.last_seen_at, j.last_verified_at,
+                   j.current_version_id, j.identity_key, j.identity_signature,
+                   v.version_number, v.description, v.apply_url,
+                   o.target_id AS source_id, o.external_job_id, o.source_ats,
+                   o.original_url, o.observed_at, t.connector, t.provider,
+                   COALESCE((
+                       SELECT d.decision FROM admin_job_review_decisions d
+                       WHERE d.canonical_job_id=j.canonical_job_id
+                       ORDER BY d.created_at DESC LIMIT 1
+                   ), '') AS review_decision,
+                   EXISTS (
+                       SELECT 1 FROM acquisition_publication_jobs pj
+                       JOIN acquisition_publication_head ph
+                         ON ph.publication_id=pj.publication_id AND ph.head_id=1
+                       WHERE pj.canonical_job_id=j.canonical_job_id
+                   ) AS is_live
+            FROM canonical_jobs j
+            JOIN canonical_companies c ON c.company_id=j.company_id
+            LEFT JOIN job_posting_versions v ON v.version_id=j.current_version_id
+            LEFT JOIN job_source_observations o ON o.observation_id=(
+                SELECT latest.source_observation_id
+                FROM job_posting_versions latest
+                WHERE latest.version_id=j.current_version_id
+            )
+            LEFT JOIN acquisition_targets t ON t.target_id=o.target_id
+            {where}
+            ORDER BY COALESCE(v.created_at, j.last_seen_at) DESC, j.canonical_job_id
+            LIMIT ? OFFSET ?
+        """
+        summary_query = f"""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN COALESCE(v.apply_url, '') != '' THEN 1 ELSE 0 END) AS apply_url_present
+            FROM canonical_jobs j
+            JOIN canonical_companies c ON c.company_id=j.company_id
+            LEFT JOIN job_posting_versions v ON v.version_id=j.current_version_id
+            LEFT JOIN job_source_observations o ON o.observation_id=(
+                SELECT latest.source_observation_id
+                FROM job_posting_versions latest
+                WHERE latest.version_id=j.current_version_id
+            )
+            {where}
+        """
+        with self._connect() as connection:
+            rows = connection.execute(query, (*params, limit_value, offset_value)).fetchall()
+            summary_row = connection.execute(summary_query, tuple(params)).fetchone()
+        jobs: list[dict[str, Any]] = []
+        for row in rows:
+            item = _dict_row(row)
+            decision = str(item.pop("review_decision") or "").strip()
+            live = bool(int(item.pop("is_live") or 0))
+            item["state"] = "Published" if live else (decision.replace("_", " ").title() if decision else "Review")
+            item["apply_status"] = "present" if str(item.get("apply_url") or "").strip() else "missing"
+            item["source"] = str(item.get("connector") or item.get("source_id") or "Unknown")
+            item["freshness"] = item.get("last_seen_at") or item.get("observed_at") or None
+            jobs.append(item)
+        total = int(summary_row["total"] or 0) if summary_row is not None else 0
+        apply_present = int(summary_row["apply_url_present"] or 0) if summary_row is not None else 0
+        return {
+            "jobs": jobs,
+            "total": total,
+            "limit": limit_value,
+            "offset": offset_value,
+            "summary": {
+                "catalog_records": total,
+                "apply_url_present": apply_present,
+                "apply_url_missing_or_invalid": max(0, total - apply_present),
+            },
+        }
+
+    def get_admin_job_inspection(self, canonical_job_id: str) -> dict[str, Any] | None:
+        """Compose one admin-only inspection record from canonical and raw tables."""
+
+        job_id = str(canonical_job_id or "").strip()
+        if not job_id:
+            return None
+        with self._connect() as connection:
+            base_row = connection.execute(
+                """
+                SELECT j.*, c.canonical_name AS company_name, c.entity_kind,
+                       c.provenance_url AS company_provenance_url,
+                       p.profile_json, p.logo_source_url, p.logo_verified_at,
+                       v.version_id, v.version_number, v.content_hash,
+                       v.description AS version_description, v.location AS version_location,
+                       v.apply_url AS version_apply_url, v.source_observation_id,
+                       v.payload_json AS version_payload_json, v.created_at AS version_created_at
+                FROM canonical_jobs j
+                JOIN canonical_companies c ON c.company_id=j.company_id
+                LEFT JOIN canonical_company_profiles p ON p.company_id=c.company_id
+                LEFT JOIN job_posting_versions v ON v.version_id=j.current_version_id
+                WHERE j.canonical_job_id=?
+                """,
+                (job_id,),
+            ).fetchone()
+            if base_row is None:
+                return None
+            base = _dict_row(base_row)
+            company_id = str(base.get("company_id") or "")
+            observations = connection.execute(
+                "SELECT * FROM job_source_observations WHERE canonical_job_id=? ORDER BY observed_at DESC, observation_id DESC",
+                (job_id,),
+            ).fetchall()
+            versions = connection.execute(
+                "SELECT * FROM job_posting_versions WHERE canonical_job_id=? ORDER BY version_number DESC, created_at DESC",
+                (job_id,),
+            ).fetchall()
+            external_ids = connection.execute(
+                "SELECT * FROM canonical_job_external_ids WHERE canonical_job_id=? ORDER BY source_id, external_job_id",
+                (job_id,),
+            ).fetchall()
+            aliases = connection.execute(
+                "SELECT * FROM canonical_job_url_aliases WHERE canonical_job_id=? ORDER BY created_at DESC, url",
+                (job_id,),
+            ).fetchall()
+            relationships = connection.execute(
+                "SELECT * FROM canonical_job_relationships WHERE canonical_job_id=? OR related_job_id=? ORDER BY created_at DESC",
+                (job_id, job_id),
+            ).fetchall()
+            source_states = connection.execute(
+                "SELECT * FROM job_source_states WHERE canonical_job_id=? ORDER BY updated_at DESC",
+                (job_id,),
+            ).fetchall()
+            observation_ids = [str(row["observation_id"] or "") for row in observations]
+            cycle_ids = [str(row["cycle_id"] or "") for row in observations]
+            task_ids = [str(row["task_id"] or "") for row in observations]
+            target_ids = [str(row["target_id"] or "") for row in observations]
+            external_job_ids = [str(row["external_job_id"] or "") for row in observations]
+            cycle_where, cycle_params = self._inspection_in_clause("cycle_id", cycle_ids)
+            task_where, task_params = self._inspection_in_clause("task_id", task_ids)
+            target_where, target_params = self._inspection_in_clause("target_id", target_ids)
+            external_where, external_params = self._inspection_in_clause("external_job_id", external_job_ids)
+            requests = connection.execute(
+                f"SELECT * FROM acquisition_requests WHERE {cycle_where} OR {task_where} OR {target_where} ORDER BY started_at DESC, request_id DESC",
+                (*cycle_params, *task_params, *target_params),
+            ).fetchall()
+            attempts = connection.execute(
+                f"SELECT * FROM acquisition_target_attempts WHERE {cycle_where} OR {task_where} OR {target_where} ORDER BY started_at DESC, attempt_id DESC",
+                (*cycle_params, *task_params, *target_params),
+            ).fetchall()
+            tasks = connection.execute(
+                f"SELECT * FROM acquisition_tasks WHERE {cycle_where} OR {target_where} ORDER BY created_at DESC, task_id DESC",
+                (*cycle_params, *target_params),
+            ).fetchall()
+            cycles = connection.execute(
+                f"SELECT * FROM acquisition_cycles WHERE {cycle_where} ORDER BY scheduled_at DESC, cycle_id DESC",
+                cycle_params,
+            ).fetchall()
+            targets = connection.execute(
+                f"SELECT * FROM acquisition_targets WHERE {target_where} ORDER BY target_id",
+                target_params,
+            ).fetchall()
+            rejections = connection.execute(
+                f"SELECT * FROM acquisition_job_rejections WHERE {cycle_where} OR {target_where} OR {external_where} ORDER BY observed_at DESC, rejection_id DESC",
+                (*cycle_params, *target_params, *external_params),
+            ).fetchall()
+            decisions = connection.execute(
+                "SELECT * FROM admin_job_review_decisions WHERE canonical_job_id=? ORDER BY created_at DESC, decision_id DESC",
+                (job_id,),
+            ).fetchall()
+            imports = connection.execute(
+                f"SELECT * FROM admin_job_imports WHERE {cycle_where} ORDER BY created_at DESC, import_id DESC",
+                cycle_params,
+            ).fetchall()
+            import_ids = [str(row["import_id"] or "") for row in imports]
+            import_where, import_params = self._inspection_in_clause("import_id", import_ids)
+            audit_events = connection.execute(
+                f"SELECT * FROM admin_job_audit_events WHERE {import_where} ORDER BY created_at DESC, event_id DESC",
+                import_params,
+            ).fetchall()
+            publication_rows = connection.execute(
+                """
+                SELECT p.*, h.head_id AS current_head
+                FROM acquisition_publications p
+                JOIN acquisition_publication_jobs pj ON pj.publication_id=p.publication_id
+                LEFT JOIN acquisition_publication_head h ON h.publication_id=p.publication_id
+                WHERE pj.canonical_job_id=?
+                ORDER BY p.published_at DESC, p.publication_id DESC
+                """,
+                (job_id,),
+            ).fetchall()
+            observation_placeholders = ",".join("?" for _ in observation_ids) or "''"
+            observation_relationships = connection.execute(
+                f"SELECT * FROM job_source_observation_relationships WHERE observation_id IN ({observation_placeholders}) OR related_observation_id IN ({observation_placeholders}) ORDER BY created_at DESC",
+                (*observation_ids, *observation_ids),
+            ).fetchall() if observation_ids else []
+
+        profile = _decode(base.get("profile_json"), {})
+        profile_fields = profile.get("fields") if isinstance(profile, Mapping) else {}
+        profile_fields = profile_fields if isinstance(profile_fields, Mapping) else {}
+        company: dict[str, Any] = {
+            "canonical_company_id": company_id,
+            "name": base.get("company_name"),
+            "entity_kind": base.get("entity_kind"),
+            "provenance_url": base.get("company_provenance_url") or None,
+            "profile_schema_version": profile.get("schema_version") if isinstance(profile, Mapping) else None,
+            "profile_fields": dict(profile_fields),
+        }
+        for field in _COMPANY_PROFILE_FIELDS:
+            value = profile_fields.get(field)
+            company[field] = value.get("value") if isinstance(value, Mapping) else None
+        company["logo_url"] = company.get("logo")
+
+        current_payload = _decode(base.get("version_payload_json"), {})
+        if not isinstance(current_payload, Mapping):
+            current_payload = {}
+        job: dict[str, Any] = dict(current_payload)
+        job.update(
+            {
+                "canonical_job_id": job_id,
+                "company_id": company_id,
+                "company": base.get("company_name"),
+                "title": base.get("title"),
+                "location_raw": base.get("version_location") or base.get("location") or None,
+                "canonical_url": base.get("canonical_url") or None,
+                "lifecycle_state": base.get("lifecycle_state"),
+                "first_seen_at": base.get("first_seen_at"),
+                "last_seen_at": base.get("last_seen_at"),
+                "last_verified_at": base.get("last_verified_at") or None,
+                "current_version_id": base.get("current_version_id") or None,
+                "posting_version": base.get("version_number"),
+                "content_hash": base.get("content_hash") or None,
+                "description": base.get("version_description") or current_payload.get("description") or None,
+                "full_description": base.get("version_description") or current_payload.get("full_description") or None,
+                "apply_url": base.get("version_apply_url") or current_payload.get("apply_url") or None,
+                "source_url": base.get("canonical_url") or None,
+            }
+        )
+
+        target_items = self._inspection_rows(targets, ("config_json",))
+        target_by_id = {str(item.get("target_id") or ""): item for item in target_items}
+        connector = str((target_items[0] if target_items else {}).get("connector") or "").casefold()
+        if not connector and observations:
+            connector = str(observations[0]["source_ats"] or "").casefold()
+        target = target_items[0] if target_items else {}
+        profile_website = str(company.get("website") or "")
+        company_hosts = {hostname_for_url(profile_website)} if profile_website else set()
+        target_hosts = {
+            hostname_for_url(str(target.get(key) or ""))
+            for key in ("canonical_target_url", "request_url", "provenance_url")
+            if hostname_for_url(str(target.get(key) or ""))
+        }
+        ats_suffixes = {"greenhouse.io", "lever.co", "workdayjobs.com", "smartrecruiters.com", "personio.com", "recruitee.com", "ashbyhq.com"}
+        portal_hosts = {"linkedin.com", "indeed.com", "glassdoor.com", "stepstone.de", "ziprecruiter.com", "monster.com", "careerbuilder.com"}
+        source_urls = {str(base.get("canonical_url") or "").strip()}
+        source_urls.update(str(row["original_url"] or "").strip() for row in observations)
+        source_urls.update(str(row["url"] or "").strip() for row in aliases)
+        candidates: list[dict[str, Any]] = []
+        seen_candidates: set[str] = set()
+
+        def add_candidate(value: Any, source: str, evidence: str, path: str = "") -> None:
+            url = str(value or "").strip()
+            if not url or not urlsplit(url).scheme.casefold() in {"http", "https"} or url in seen_candidates:
+                return
+            seen_candidates.add(url)
+            host = hostname_for_url(url)
+            source_key = source.casefold()
+            if source_key in {"apply_url", "apply_link", "hostedurl", "absolute_url"} and (connector in {"greenhouse", "lever"} or any(host == suffix or host.endswith(f".{suffix}") for suffix in ats_suffixes)):
+                classification = "external_ats"
+            elif host and any(host == item or host.endswith(f".{item}") for item in company_hosts if item):
+                classification = "external_employer"
+            elif host and any(host == suffix or host.endswith(f".{suffix}") for suffix in ats_suffixes):
+                classification = "external_ats"
+            elif url in source_urls or host in target_hosts or any(host == item or host.endswith(f".{item}") for item in portal_hosts):
+                classification = "listing_fallback"
+            else:
+                classification = "unknown"
+            candidates.append(
+                {
+                    "url": url,
+                    "source": source,
+                    "path": path or None,
+                    "classification": classification,
+                    "evidence": [evidence] if evidence else [],
+                }
+            )
+
+        def walk(value: Any, path: str = "") -> None:
+            if isinstance(value, Mapping):
+                for key, child in value.items():
+                    child_path = f"{path}.{key}" if path else str(key)
+                    key_text = str(key).casefold()
+                    if isinstance(child, str) and ("url" in key_text or "link" in key_text or key_text in {"href", "hostedurl", "absolute_url"}):
+                        if not any(token in key_text for token in ("logo", "image", "website", "linkedin")):
+                            add_candidate(child, str(key), f"raw_payload:{child_path}", child_path)
+                    walk(child, child_path)
+            elif isinstance(value, list):
+                for index, child in enumerate(value):
+                    walk(child, f"{path}[{index}]")
+
+        add_candidate(base.get("canonical_url"), "canonical_url", "canonical_job.canonical_url")
+        for row in observations:
+            add_candidate(row["original_url"], "original_url", f"source_observation:{row['observation_id']}")
+            add_candidate(row["apply_url"], "apply_url", f"source_observation:{row['observation_id']}")
+            walk(_decode(row["payload_json"], {}), f"source_observation:{row['observation_id']}.payload")
+        for row in versions:
+            add_candidate(row["apply_url"], "apply_url", f"posting_version:{row['version_id']}")
+            walk(_decode(row["payload_json"], {}), f"posting_version:{row['version_id']}.payload")
+        for row in aliases:
+            add_candidate(row["url"], "url_alias", f"url_alias:{row['alias_id']}")
+
+        stored_apply = str(job.get("apply_url") or "").strip()
+        direct_candidates = [item for item in candidates if item["classification"] in {"external_employer", "external_ats"}]
+        selected_apply = next((item for item in direct_candidates if item["url"] == stored_apply), None)
+        selected_apply = selected_apply or (direct_candidates[0] if direct_candidates else None)
+        audit_rows = self._inspection_rows(audit_events, ("payload_json",))
+        resolution_audits = [item for item in audit_rows if isinstance(item.get("payload"), Mapping) and item["payload"].get("action") == "resolve_apply_url"]
+        if selected_apply is not None:
+            source_verified = bool(current_payload.get("employer_verified")) or connector in {"greenhouse", "lever"}
+            apply_status = "verified" if source_verified and selected_apply["url"] == stored_apply else "unverified"
+            apply_classification = selected_apply["classification"]
+            resolved_url = selected_apply["url"]
+            user_facing_url = resolved_url if apply_status == "verified" else None
+            apply_evidence = list(selected_apply.get("evidence") or [])
+            if source_verified:
+                apply_evidence.append("phase_b_official_apply_destination_gate")
+        elif candidates:
+            apply_status = "invalid"
+            apply_classification = candidates[0]["classification"]
+            resolved_url = None
+            user_facing_url = None
+            apply_evidence = ["Only listing, portal, or unclassified URL candidates were found."]
+        else:
+            apply_status = "missing"
+            apply_classification = "unknown"
+            resolved_url = None
+            user_facing_url = None
+            apply_evidence = ["No application URL candidate was stored by the source."]
+        apply_url = {
+            "source_url": next(iter(source_urls - {""}), None),
+            "candidate_urls": candidates,
+            "resolved_url": resolved_url,
+            "user_facing_url": user_facing_url,
+            "status": apply_status,
+            "classification": apply_classification,
+            "verified_at": (resolution_audits[0].get("created_at") if resolution_audits else (base.get("last_verified_at") or None)) if apply_status == "verified" else None,
+            "evidence": list(dict.fromkeys(apply_evidence)),
+        }
+
+        observation_payloads = self._inspection_rows(observations, ("payload_json",))
+        version_payloads = self._inspection_rows(versions, ("payload_json",))
+        request_payloads = self._inspection_rows(requests, ("detail_json",))
+        rejection_payloads = self._inspection_rows(rejections, ("detail_json",))
+        decision_payloads = self._inspection_rows(decisions)
+        publication_payloads = self._inspection_rows(publication_rows, ("snapshot_json",))
+        cycle_payloads = self._inspection_rows(cycles)
+        task_payloads = self._inspection_rows(tasks)
+        attempt_payloads = self._inspection_rows(attempts)
+        audit_payloads = audit_rows
+        import_payloads = self._inspection_rows(imports, ("source_ids_json", "scope_json", "plan_json"))
+        source_state_payloads = self._inspection_rows(source_states)
+        alias_payloads = self._inspection_rows(aliases)
+        external_id_payloads = self._inspection_rows(external_ids)
+        relationship_payloads = self._inspection_rows(relationships)
+        observation_relationship_payloads = self._inspection_rows(observation_relationships)
+
+        latest_decision = decision_payloads[0] if decision_payloads else {}
+        current_publication = next((item for item in publication_payloads if item.get("current_head")), None)
+        admin = {
+            "canonical_job_id": job_id,
+            "canonical_company_id": company_id,
+            "external_source_job_ids": external_id_payloads,
+            "target_id": str(target.get("target_id") or (target_ids[0] if target_ids else "")) or None,
+            "connector": connector or None,
+            "provider": target.get("provider") or None,
+            "source_observation_ids": observation_ids,
+            "original_urls": list(dict.fromkeys(str(row["original_url"] or "") for row in observations if str(row["original_url"] or ""))),
+            "first_seen_at": base.get("first_seen_at"),
+            "last_seen_at": base.get("last_seen_at"),
+            "last_verified_at": base.get("last_verified_at") or None,
+            "posting_version_id": base.get("current_version_id") or None,
+            "posting_version": base.get("version_number"),
+            "content_hash": base.get("content_hash") or None,
+            "acquisition_cycle_ids": cycle_ids,
+            "acquisition_task_ids": task_ids,
+            "acquisition_attempt_ids": [str(item.get("attempt_id") or "") for item in attempt_payloads],
+            "acquisition_request_ids": [str(item.get("request_id") or "") for item in request_payloads],
+            "request_count": len(request_payloads),
+            "scrapeops_credits_estimated": sum(int(item.get("credits_estimated") or 0) for item in request_payloads),
+            "scrapeops_credits_actual": sum(int(item.get("credits_actual") or 0) for item in request_payloads),
+            "deduplication": {
+                "identity_key": base.get("identity_key"),
+                "identity_signature": base.get("identity_signature") or None,
+                "result": "canonical",
+                "relationship_count": len(relationship_payloads),
+            },
+            "review": latest_decision or None,
+            "review_state": latest_decision.get("decision") or ("already_live" if current_publication else "needs_review"),
+            "publication": current_publication,
+            "publication_status": current_publication.get("status") if current_publication else None,
+            "rejection_count": len(rejection_payloads),
+        }
+
+        raw = {
+            "source_observations": observation_payloads,
+            "posting_versions": version_payloads,
+            "company_profile": profile if profile else None,
+            "acquisition_cycles": cycle_payloads,
+            "acquisition_tasks": task_payloads,
+            "acquisition_attempts": attempt_payloads,
+            "acquisition_requests": request_payloads,
+            "rejections": rejection_payloads,
+            "review_decisions": decision_payloads,
+            "publication": current_publication,
+            "publications": publication_payloads,
+            "audit_events": audit_payloads,
+            "imports": import_payloads,
+            "targets": target_items,
+            "source_states": source_state_payloads,
+            "external_ids": external_id_payloads,
+            "url_aliases": alias_payloads,
+            "relationships": relationship_payloads,
+            "observation_relationships": observation_relationship_payloads,
+        }
+        job_fields = {
+            key: job.get(key)
+            for key in ("canonical_job_id", "company_id", "title", "company", "location_raw", "description", "posted_at", "apply_url", "source_url")
+        }
+        company_fields = {
+            key: company.get(key)
+            for key in ("canonical_company_id", "name", "website", "industry", "company_size", "headquarters", "founded_year", "funding_stage", "total_funding", "benefits", "sponsorship", "logo_url")
+        }
+        admin_fields = {
+            key: admin.get(key)
+            for key in ("canonical_job_id", "canonical_company_id", "target_id", "connector", "provider", "source_observation_ids", "posting_version_id", "content_hash", "first_seen_at", "last_seen_at", "review_state", "publication_status")
+        }
+        coverage = {
+            "job": self._inspection_coverage(job_fields),
+            "company": self._inspection_coverage(company_fields),
+            "admin": self._inspection_coverage(admin_fields),
+        }
+        coverage["overall_percent"] = round(
+            100 * sum(item["present"] for item in (coverage["job"], coverage["company"], coverage["admin"]))
+            / max(1, sum(item["total"] for item in (coverage["job"], coverage["company"], coverage["admin"])))
+        )
+        coverage["critical_checks"] = [
+            {"name": "Canonical identity", "status": "pass" if job_id else "fail", "detail": job_id or "Missing canonical job ID"},
+            {"name": "Direct employer or ATS Apply URL", "status": "pass" if apply_status == "verified" else "fail", "detail": apply_url["evidence"]},
+            {"name": "Full description", "status": "pass" if job.get("description") else "fail", "detail": "Stored" if job.get("description") else "Missing"},
+            {"name": "Source provenance", "status": "pass" if observation_ids else "fail", "detail": observation_ids or "Missing"},
+            {"name": "Company identity", "status": "pass" if company_id else "fail", "detail": company_id or "Missing"},
+        ]
+        return {
+            "job": job,
+            "company": company,
+            "admin": admin,
+            "completeness": coverage,
+            "apply_url": apply_url,
+            "raw": raw,
+        }
+
+    def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
+        """Resolve only an employer/official-ATS candidate already in raw data."""
+
+        inspection = self.get_admin_job_inspection(canonical_job_id)
+        if inspection is None:
+            raise KeyError(f"Canonical job '{canonical_job_id}' not found.")
+        candidates = inspection.get("apply_url", {}).get("candidate_urls") or []
+        candidate = next(
+            (item for item in candidates if item.get("classification") in {"external_employer", "external_ats"}),
+            None,
+        )
+        now = utc_now_iso()
+        admin = inspection.get("admin") or {}
+        import_ids = [str(item.get("import_id") or "") for item in (inspection.get("raw", {}).get("imports") or []) if item.get("import_id")]
+        import_id = import_ids[0] if import_ids else ""
+        with self._connect() as connection:
+            if candidate is not None:
+                current = connection.execute(
+                    "SELECT * FROM job_posting_versions WHERE version_id=?",
+                    (str(inspection["job"].get("current_version_id") or ""),),
+                ).fetchone()
+                if current is None:
+                    raise ValueError("The canonical job has no current posting version to update.")
+                payload = _decode(current["payload_json"], {})
+                payload = dict(payload) if isinstance(payload, Mapping) else {}
+                selected_url = str(candidate.get("url") or "")
+                payload.update(
+                    {
+                        "apply_url": selected_url,
+                        "apply_link": selected_url,
+                        "user_facing_apply_url": selected_url,
+                        "apply_url_resolution_status": "verified_official_ats" if candidate.get("classification") == "external_ats" else "verified_external_employer",
+                        "apply_url_resolution": {
+                            "resolved_url": selected_url,
+                            "classification": candidate.get("classification"),
+                            "resolved_at": now,
+                            "source": candidate.get("source"),
+                        },
+                    }
+                )
+                self._ensure_version(
+                    connection,
+                    str(canonical_job_id),
+                    title=str(current["title"] or inspection["job"].get("title") or ""),
+                    description=str(current["description"] or inspection["job"].get("description") or ""),
+                    location=str(current["location"] or inspection["job"].get("location_raw") or ""),
+                    apply_url=selected_url,
+                    content_hash=self._payload_hash(payload),
+                    source_observation_id=str(current["source_observation_id"] or admin.get("source_observation_ids", [""])[0]),
+                    payload=payload,
+                    now=now,
+                )
+                result = {
+                    "action": "resolve_apply_url",
+                    "status": "resolved",
+                    "resolved_url": selected_url,
+                    "classification": candidate.get("classification"),
+                    "evidence": candidate.get("evidence") or [],
+                }
+            else:
+                result = {
+                    "action": "resolve_apply_url",
+                    "status": "failed",
+                    "reason": "No employer or official ATS application candidate was found. Listing and portal URLs were not accepted.",
+                }
+            connection.execute(
+                """
+                INSERT INTO admin_job_audit_events (
+                    event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                ) VALUES (?, ?, ?, 'apply_url_resolution', ?, ?)
+                """,
+                (f"admin_audit_{uuid4().hex}", import_id, str(actor_user_id or ""), _json(result), now),
+            )
+        return self.get_admin_job_inspection(str(canonical_job_id)) or inspection
 
     def record_job_review_decision(
         self,

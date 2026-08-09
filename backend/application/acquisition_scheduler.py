@@ -48,6 +48,23 @@ PHASE_A_DEFAULT_CONFIG: dict[str, Any] = {
     "cycle_credit_ceiling": 0,
 }
 
+PHASE_A_PRODUCTION_CONFIG: dict[str, Any] = {
+    **PHASE_A_DEFAULT_CONFIG,
+    "scheduler_enabled": True,
+    "kill_switch": False,
+    "global_enabled": True,
+    "connector_validation_enabled": True,
+    "publication_enabled": True,
+    "allow_proxy": True,
+}
+
+PHASE_B_PRODUCTION_CONFIG: dict[str, Any] = {
+    **PHASE_B_DEFAULT_CONFIG,
+    "controlled_validation_enabled": True,
+    "staging_publication_enabled": True,
+    "promotion_enabled": True,
+}
+
 
 def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
@@ -131,8 +148,11 @@ class PhaseAAcquisitionScheduler:
             if name in forced_values:
                 return forced_values[name]
         if name.startswith("target."):
-            return self._config(f"acquisition.phase_a.{name}", False)
-        return self._config(f"acquisition.phase_a.{name}", PHASE_A_DEFAULT_CONFIG[name])
+            production_default = str(os.getenv("RUNR_ENV") or "").strip().casefold() in {"prod", "production"}
+            return self._config(f"acquisition.phase_a.{name}", production_default)
+        production = str(os.getenv("RUNR_ENV") or "").strip().casefold() in {"prod", "production"}
+        default = (PHASE_A_PRODUCTION_CONFIG if production else PHASE_A_DEFAULT_CONFIG)[name]
+        return self._config(f"acquisition.phase_a.{name}", default)
 
     def _phase_b_config(self, name: str) -> Any:
         if private_test_deployment_enabled() and name in {
@@ -141,7 +161,9 @@ class PhaseAAcquisitionScheduler:
             "promotion_enabled",
         }:
             return False
-        return self._config(f"acquisition.phase_b.{name}", PHASE_B_DEFAULT_CONFIG[name])
+        production = str(os.getenv("RUNR_ENV") or "").strip().casefold() in {"prod", "production"}
+        default = (PHASE_B_PRODUCTION_CONFIG if production else PHASE_B_DEFAULT_CONFIG)[name]
+        return self._config(f"acquisition.phase_b.{name}", default)
 
     def _phase_i_config(self, name: str, default: Any = None) -> Any:
         return phase_i_config(getattr(self.repositories, "config_store", None), name, default)
@@ -179,6 +201,8 @@ class PhaseAAcquisitionScheduler:
                     and target_enabled
                     and target_id in {production_source_id, *additional_source_ids}
                 )
+            elif target_enabled and str(os.getenv("RUNR_ENV") or "").strip().casefold() in {"prod", "production"}:
+                target["publication_enabled"] = True
             target["enabled"] = target_enabled
             target["disabled_reason"] = "" if target_enabled else disabled_reason
         return manifest

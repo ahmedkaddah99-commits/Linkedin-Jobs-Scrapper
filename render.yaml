@@ -47,9 +47,9 @@ services:
       - key: RUNR_ENV
         value: production
       - key: RUNR_PRIVATE_TEST_DEPLOYMENT
-        value: "true"
-      - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
         value: "false"
+      - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
+        value: "true"
       - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
         value: "false"
       - key: DATABASE_BACKEND
@@ -136,9 +136,9 @@ services:
       - key: RUNR_ENV
         value: production
       - key: RUNR_PRIVATE_TEST_DEPLOYMENT
-        value: "true"
-      - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
         value: "false"
+      - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
+        value: "true"
       - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
         value: "false"
       - key: DATABASE_BACKEND

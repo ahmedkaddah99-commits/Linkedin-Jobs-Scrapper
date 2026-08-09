@@ -50,6 +50,21 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments == ["admin", "job-import", "history"]:
         context.send_json({"events": application.list_admin_job_import_history(import_id=_query_value(query, "import_id"), limit=_int_query(query, "limit", 100, 500))})
         return True
+    if segments == ["admin", "job-import", "jobs"]:
+        context.send_json(
+            application.list_admin_job_inspections(
+                search=_query_value(query, "search"),
+                limit=_int_query(query, "limit", 100, 200),
+                offset=_int_query(query, "offset", 0, 100000),
+            )
+        )
+        return True
+    if len(segments) == 5 and segments[2] == "jobs" and segments[4] == "inspection":
+        inspection = application.get_admin_job_inspection(segments[3])
+        if inspection is None:
+            return _error(context, 404, "canonical_job_not_found", "Canonical job not found.")
+        context.send_json(inspection)
+        return True
     if len(segments) == 4 and segments[2] == "preview":
         preview = application.get_admin_job_import_preview(segments[3])
         if preview is None:
@@ -129,6 +144,15 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
             config_store.set_value("acquisition.admin_imports.enabled", not paused)
             config_store.set_value("acquisition.admin_imports.allow_proxy", not paused)
             context.send_json({"paused": paused, "status": "Paused" if paused else "Ready"})
+            return True
+        if len(segments) == 5 and segments[2] == "jobs" and segments[4] == "resolve-apply-url":
+            context.send_json(
+                application.resolve_admin_job_apply_url(
+                    segments[3],
+                    actor_user_id=actor_user_id,
+                ),
+                status=202,
+            )
             return True
     except PermissionError as exc:
         return _error(context, 423, "imports_paused", str(exc))

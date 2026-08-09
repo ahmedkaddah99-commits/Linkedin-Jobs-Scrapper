@@ -266,6 +266,53 @@ class AdminJobImportDashboardTests(unittest.TestCase):
         application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.enabled", True)
         application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.allow_proxy", True)
 
+    def test_admin_inspection_composes_canonical_job_company_provenance_and_apply_state(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
+            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
+
+            def requester(url, **_kwargs):
+                return _Response(url, {"jobs": [{
+                    "id": "job-inspection-1",
+                    "title": "Senior Backend Engineer",
+                    "absolute_url": "https://job-boards.greenhouse.io/n26/jobs/job-inspection-1",
+                    "location": {"name": "Berlin, Germany"},
+                    "content": "Build reliable payment services.",
+                }]})
+
+            app._acquisition_scheduler.requester = requester
+            imported = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="inspection-import-1",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            app.process_next_admin_job_import(worker_id="inspection-worker")
+
+            listed = app.list_admin_job_inspections(search="N26", limit=10)
+            self.assertEqual(listed["total"], 1)
+            canonical_job_id = listed["jobs"][0]["canonical_job_id"]
+            inspection = app.get_admin_job_inspection(canonical_job_id)
+            self.assertIsNotNone(inspection)
+            self.assertEqual(inspection["job"]["title"], "Senior Backend Engineer")
+            self.assertEqual(inspection["company"]["name"], "N26")
+            self.assertEqual(inspection["admin"]["target_id"], "n26_greenhouse")
+            self.assertEqual(inspection["apply_url"]["classification"], "external_ats")
+            self.assertEqual(inspection["apply_url"]["status"], "verified")
+            self.assertTrue(inspection["raw"]["source_observations"])
+            self.assertTrue(inspection["raw"]["posting_versions"])
+            self.assertTrue(inspection["raw"]["acquisition_requests"])
+
+            resolved = app.resolve_admin_job_apply_url(canonical_job_id, actor_user_id="admin-fixture")
+            self.assertEqual(resolved["apply_url"]["status"], "verified")
+            self.assertTrue(any(
+                event.get("event_type") == "apply_url_resolution"
+                for event in resolved["raw"]["audit_events"]
+            ))
+            self.assertEqual(app.get_admin_job_import(imported["import_id"])["status"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

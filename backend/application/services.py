@@ -1027,6 +1027,26 @@ class BackendApplication:
         store = self.repositories.acquisition_store
         return store.list_job_import_audit_events(import_id=import_id, limit=limit) if store is not None else []
 
+    def list_admin_job_inspections(self, *, search: str = "", limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_job_inspections(search=search, limit=limit, offset=offset) if store is not None else {
+            "jobs": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "summary": {"catalog_records": 0, "apply_url_present": 0, "apply_url_missing_or_invalid": 0},
+        }
+
+    def get_admin_job_inspection(self, canonical_job_id: str) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.get_admin_job_inspection(canonical_job_id) if store is not None else None
+
+    def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Apply URL resolution requires sqlite/Turso acquisition storage.")
+        return store.resolve_admin_job_apply_url(canonical_job_id, actor_user_id=actor_user_id)
+
     def run_due_company_enrichment(
         self,
         *,

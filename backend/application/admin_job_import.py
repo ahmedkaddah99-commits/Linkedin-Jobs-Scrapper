@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
+import os
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -71,9 +72,10 @@ class AdminJobImportService:
         return getter(key, default) if callable(getter) else default
 
     def imports_paused(self) -> bool:
-        if _bool(self._config("acquisition.admin_imports.kill_switch", True)):
+        production = _text(os.getenv("RUNR_ENV")).casefold() in {"prod", "production"}
+        if _bool(self._config("acquisition.admin_imports.kill_switch", not production)):
             return True
-        return not _bool(self._config("acquisition.admin_imports.enabled", False))
+        return not _bool(self._config("acquisition.admin_imports.enabled", production))
 
     def list_sources(self) -> list[dict[str, Any]]:
         sources: list[dict[str, Any]] = []
