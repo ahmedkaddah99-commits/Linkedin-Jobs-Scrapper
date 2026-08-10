@@ -278,6 +278,7 @@ PHASE_A_TARGETS: tuple[dict[str, object], ...] = (
             "careers.smartrecruiters.com",
             "jobs.smartrecruiters.com",
             "api.smartrecruiters.com",
+            "rhein-bmw.de",
         ],
         "maturity_state": "candidate",
         "enabled": True,
@@ -291,6 +292,7 @@ PHASE_A_TARGETS: tuple[dict[str, object], ...] = (
             "max_retries": 1,
             "admin_scope": {"max_pages": 1, "max_requests": 1, "full_source_import": False},
             "company_profile": {
+                "website": "https://www.rhein-bmw.de/",
                 "careers_page": "https://careers.smartrecruiters.com/RheinGroup",
                 "ats_url": "https://careers.smartrecruiters.com/RheinGroup",
             },
