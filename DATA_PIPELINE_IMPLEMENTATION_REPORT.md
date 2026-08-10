@@ -6,9 +6,12 @@ GATE PASSED.
 
 Final verification completed on `deployment/render-turso-r2`.
 
-- Deployed code commit: `cba90b6` (`Document guarded production checkpoint`).
+- Deployed functional code commit: `f551c34` (`Quarantine fixture acquisition targets`).
+- Guarded reprocessing code is in its deployed ancestor `cba90b6`.
+- Latest closeout report push: `ae3399e`.
 - Rule version: `unified_mapping_v1`.
-- Live migration: `045_acquisition_reprocessing_leases`.
+- Live migrations: `045_acquisition_reprocessing_leases` and
+  `046_acquisition_source_quarantine`.
 - `/health/live`: HTTP 200.
 - `/health/ready`: HTTP 200.
 - No automatic publication, duplicate merge, destructive cleanup, or new
@@ -101,11 +104,12 @@ publish automatically.
 
 ## Fixture quarantine
 
-`fixture_source` and `x` were quarantined with:
+`fixture_source` and `x` were durably quarantined with:
 
 - `maturity_state=quarantined`;
 - `enabled=0`; and
-- `publication_enabled=0`.
+- `publication_enabled=0`; and
+- `quarantined=1`, with reason `fixture_or_test_target` and a timestamp.
 
 Their two source observations remain present (one per target), and no audit
 history was deleted. They are excluded from normal enabled-target metrics and
