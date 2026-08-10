@@ -18,6 +18,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup, Comment
 
 from backend.acquisition.network_policy import hostname_for_url
+from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION, map_job_fields
 from backend.domain.job_identity import canonicalize_url, compact_whitespace
 
 
@@ -424,7 +425,21 @@ def resolve_application_destination(job: Mapping[str, Any], target: Mapping[str,
         "status": status,
         "classification": direct["classification"] if direct else (detail["classification"] if detail else listing["classification"] if listing else URL_UNKNOWN),
         "application_method": method,
+        "destination_type": (
+            "dedicated_apply" if direct and not any(str(item.get("source_field") or "").startswith("html_form") for item in candidates if item is direct)
+            else "embedded_apply" if direct
+            else "job_detail_with_apply" if detail and detail.get("verified")
+            else "job_detail_only" if detail
+            else "unresolved"
+        ),
         "candidate_urls": candidates,
+        "validation": {
+            "validated_at": _text(job.get("application_validated_at")) or None,
+            "final_url": _text(job.get("application_final_url")) or None,
+            "http_status": job.get("application_http_status"),
+            "evidence_type": _text(job.get("application_evidence_type")) or None,
+            "failure_reason": _text(job.get("application_failure_reason")) or ("not_validated" if direct or detail else "missing_destination"),
+        },
         "warnings": warning_codes,
         "evidence": "direct employer/ATS application route" if direct else "no verified direct application route in source payload",
     }
@@ -855,6 +870,14 @@ def normalize_job_for_ingestion(job: Mapping[str, Any], target: Mapping[str, Any
     # ``apply_url`` is the verified destination only.  A detail/listing
     # fallback is retained in ``apply_link`` and ``application_destination``.
     normalized["apply_url"] = application["resolved_url"] or ""
+    normalized["unified_mapping"] = map_job_fields(
+        normalized,
+        observed_at=_text(normalized.get("observed_at") or normalized.get("observation_timestamp")),
+        source_observation_id=_text(normalized.get("source_observation_id") or normalized.get("observation_id")),
+        source=source_ats or "source_observation",
+    )
+    normalized["field_provenance"] = normalized["unified_mapping"].get("fields") or {}
+    normalized["unified_rule_version"] = UNIFIED_RULE_VERSION
     normalized["quality_warnings"] = list(dict.fromkeys([*(_text(item) for item in application.get("warnings") or [])]))
     if raw_employer and employer and company_name_key(raw_employer) != company_name_key(employer):
         normalized["quality_warnings"].append("source_labeled_employer_name_normalized")

@@ -50,10 +50,42 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments == ["admin", "job-import", "history"]:
         context.send_json({"events": application.list_admin_job_import_history(import_id=_query_value(query, "import_id"), limit=_int_query(query, "limit", 100, 500))})
         return True
+    if segments == ["admin", "job-import", "duplicates"]:
+        context.send_json({"clusters": application.list_admin_duplicate_clusters(limit=_int_query(query, "limit", 100, 500))})
+        return True
+    if segments == ["admin", "job-import", "companies"]:
+        context.send_json({"companies": application.list_admin_companies(limit=_int_query(query, "limit", 100, 500), search=_query_value(query, "search"))})
+        return True
+    if segments == ["admin", "job-import", "rules"]:
+        context.send_json(application.get_admin_rules_coverage())
+        return True
+    if segments == ["admin", "job-import", "reprocessing"]:
+        context.send_json({"runs": application.list_admin_reprocessing_runs(limit=_int_query(query, "limit", 50, 200))})
+        return True
+    if segments == ["admin", "job-import", "reprocessing", "plan"]:
+        context.send_json(application.get_admin_reprocessing_plan(scope={}))
+        return True
+    if segments == ["admin", "job-import", "publication"]:
+        context.send_json(application.get_admin_publication_read_model())
+        return True
     if segments == ["admin", "job-import", "jobs"]:
         context.send_json(
             application.list_admin_job_inspections(
                 search=_query_value(query, "search"),
+                function=_query_value(query, "function"),
+                subfunction=_query_value(query, "subfunction"),
+                employment_type=_query_value(query, "employment_type"),
+                workplace=_query_value(query, "workplace"),
+                location=_query_value(query, "location"),
+                language=_query_value(query, "language"),
+                seniority=_query_value(query, "seniority"),
+                source=_query_value(query, "source"),
+                freshness=_query_value(query, "freshness"),
+                completeness_state=_query_value(query, "completeness_state"),
+                warning_type=_query_value(query, "warning_type"),
+                duplicate_state=_query_value(query, "duplicate_state"),
+                application_method=_query_value(query, "application_method"),
+                publication_state=_query_value(query, "publication_state"),
                 limit=_int_query(query, "limit", 100, 200),
                 offset=_int_query(query, "offset", 0, 100000),
             )

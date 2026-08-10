@@ -1046,6 +1046,34 @@ class BackendApplication:
         store = self.repositories.acquisition_store
         return store.get_admin_job_inspection(canonical_job_id) if store is not None else None
 
+    def list_admin_duplicate_clusters(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_duplicate_clusters(limit=limit) if store is not None else []
+
+    def list_admin_companies(self, *, limit: int = 100, search: str = "") -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_companies(limit=limit, search=search) if store is not None else []
+
+    def get_admin_rules_coverage(self) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.get_admin_rules_coverage() if store is not None else {"rule_version": "unavailable", "report_only": True}
+
+    def list_admin_reprocessing_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_reprocessing_runs(limit=limit) if store is not None else []
+
+    def get_admin_publication_read_model(self) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.get_admin_publication_read_model() if store is not None else {"automatic_promotion": False}
+
+    def get_admin_reprocessing_plan(self, *, scope: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Reprocessing requires sqlite/Turso acquisition storage.")
+        from backend.acquisition.reprocessing import build_reprocessing_plan
+
+        return build_reprocessing_plan(store.db_path, scope=scope)
+
     def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
         store = self.repositories.acquisition_store
         if store is None:

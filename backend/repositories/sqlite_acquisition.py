@@ -29,6 +29,7 @@ from backend.acquisition.quality import (
     source_employer_name,
     stable_content_payload,
 )
+from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION
 from backend.repositories.sqlite_core import _SqliteStore
 
 
@@ -875,6 +876,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
             quality_events: list[dict[str, Any]] = []
             for raw_job in job_rows:
+                raw_job = dict(raw_job)
                 job = normalize_job_for_ingestion(raw_job, {**target_payload, "canonical_company_name": company_name})
                 external_id = str(job.get("job_id") or job.get("external_job_id") or "").strip()
                 title = str(job.get("title") or "").strip()
@@ -1013,6 +1015,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     )
                 observation_id = f"observation_{uuid4().hex}"
                 payload_hash = self._payload_hash(job)
+                raw_content_hash = hashlib.sha256(_json(raw_job).encode("utf-8")).hexdigest()
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO job_source_observations (
@@ -1021,7 +1024,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                         content_hash, payload_json, observed_at, active,
                         source_display_name, source_token, source_connector, application_url,
                         application_classification, quality_warnings_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                        , raw_payload_json, raw_content_hash, rule_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         observation_id,
@@ -1042,6 +1046,9 @@ class SqliteAcquisitionStore(_SqliteStore):
                         str(job.get("application_url") or ""),
                         str((job.get("application_destination") or {}).get("classification") if isinstance(job.get("application_destination"), Mapping) else "unknown"),
                         _json(list(job.get("quality_warnings") or [])),
+                        _json(raw_job),
+                        raw_content_hash,
+                        str(job.get("unified_rule_version") or UNIFIED_RULE_VERSION),
                     ),
                 )
                 persisted_observation = connection.execute(
@@ -1124,6 +1131,16 @@ class SqliteAcquisitionStore(_SqliteStore):
                     payload=job,
                     now=now,
                     force_new_version=reopened_from_closed,
+                )
+                self._persist_unified_mapping(
+                    connection,
+                    canonical_job_id=canonical_id,
+                    company_id=company_id,
+                    source_observation_id=observation_id,
+                    execution_id=cycle_id,
+                    mapping=job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {},
+                    job=job,
+                    observed_at=now,
                 )
                 applicant_snapshot = normalize_applicant_snapshot(
                     job,
@@ -2424,6 +2441,20 @@ class SqliteAcquisitionStore(_SqliteStore):
         self,
         *,
         search: str = "",
+        function: str = "",
+        subfunction: str = "",
+        employment_type: str = "",
+        workplace: str = "",
+        location: str = "",
+        language: str = "",
+        seniority: str = "",
+        source: str = "",
+        freshness: str = "",
+        completeness_state: str = "",
+        warning_type: str = "",
+        duplicate_state: str = "",
+        application_method: str = "",
+        publication_state: str = "",
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -2440,6 +2471,39 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "j.location || ' ' || COALESCE(o.target_id, '') || ' ' || COALESCE(v.payload_json, '')) LIKE ?"
             )
             params.append(f"%{normalized_search}%")
+        for value, field_name in ((function, "runr_function"), (subfunction, "runr_subfunction"), (employment_type, "employment_type"), (workplace, "workplace_arrangement"), (seniority, "experience"), (language, "languages")):
+            normalized_value = " ".join(str(value or "").casefold().split())
+            if normalized_value:
+                predicates.append(
+                    "EXISTS (SELECT 1 FROM acquisition_field_provenance fp WHERE fp.entity_kind='job' AND fp.entity_id=j.canonical_job_id AND fp.field_name=? AND LOWER(fp.normalized_value_json) LIKE ?)"
+                )
+                params.extend([field_name, f"%{normalized_value}%"])
+        if str(location or "").strip():
+            predicates.append("LOWER(j.location) LIKE ?")
+            params.append(f"%{' '.join(str(location).casefold().split())}%")
+        if str(source or "").strip():
+            predicates.append("LOWER(COALESCE(t.connector, o.source_ats, '')) = ?")
+            params.append(str(source).casefold().strip())
+        if str(application_method or "").strip():
+            predicates.append("LOWER(COALESCE(json_extract(v.payload_json, '$.application_method'), '')) = ?")
+            params.append(str(application_method).casefold().strip())
+        if str(completeness_state or "").strip():
+            predicates.append("EXISTS (SELECT 1 FROM acquisition_completeness_reports cr WHERE cr.entity_kind='job' AND cr.entity_id=j.canonical_job_id AND cr.state=?)")
+            params.append(str(completeness_state).strip())
+        if str(warning_type or "").strip():
+            predicates.append("EXISTS (SELECT 1 FROM acquisition_quality_events qe WHERE qe.canonical_job_id=j.canonical_job_id AND qe.warning_code=?)")
+            params.append(str(warning_type).strip())
+        if str(duplicate_state or "").strip():
+            predicates.append("EXISTS (SELECT 1 FROM acquisition_duplicate_members dm JOIN acquisition_duplicate_clusters dc ON dc.cluster_id=dm.cluster_id WHERE dm.canonical_job_id=j.canonical_job_id AND dc.state=?)")
+            params.append(str(duplicate_state).strip())
+        if str(publication_state or "").strip().casefold() in {"published", "live"}:
+            predicates.append("EXISTS (SELECT 1 FROM acquisition_publication_jobs pj JOIN acquisition_publication_head ph ON ph.publication_id=pj.publication_id AND ph.head_id=1 WHERE pj.canonical_job_id=j.canonical_job_id)")
+        elif str(publication_state or "").strip().casefold() in {"unpublished", "not_published"}:
+            predicates.append("NOT EXISTS (SELECT 1 FROM acquisition_publication_jobs pj JOIN acquisition_publication_head ph ON ph.publication_id=pj.publication_id AND ph.head_id=1 WHERE pj.canonical_job_id=j.canonical_job_id)")
+        if str(freshness or "").strip().casefold() in {"fresh", "recent"}:
+            predicates.append("COALESCE(j.last_seen_at, o.observed_at) >= datetime('now', '-7 days')")
+        elif str(freshness or "").strip().casefold() in {"stale", "old"}:
+            predicates.append("COALESCE(j.last_seen_at, o.observed_at) < datetime('now', '-7 days')")
         where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
         query = f"""
             SELECT j.canonical_job_id, j.company_id, c.canonical_name AS company,
@@ -2651,6 +2715,32 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "SELECT * FROM acquisition_version_quality WHERE canonical_job_id=? ORDER BY calculated_at DESC, version_id DESC",
                 (job_id,),
             ).fetchall()
+            field_provenance = connection.execute(
+                "SELECT * FROM acquisition_field_provenance WHERE (entity_kind='job' AND entity_id=?) OR (entity_kind='company' AND entity_id=?) ORDER BY entity_kind, field_name, observed_at DESC",
+                (job_id, company_id),
+            ).fetchall()
+            rule_outputs = connection.execute(
+                "SELECT * FROM acquisition_rule_outputs WHERE (entity_kind='job' AND entity_id=?) ORDER BY created_at DESC",
+                (job_id,),
+            ).fetchall()
+            company_urls = connection.execute(
+                "SELECT * FROM canonical_company_urls WHERE company_id=? ORDER BY url_type, selected_primary DESC, updated_at DESC",
+                (company_id,),
+            ).fetchall()
+            completeness_reports = connection.execute(
+                "SELECT * FROM acquisition_completeness_reports WHERE entity_kind='job' AND entity_id=? ORDER BY calculated_at DESC",
+                (job_id,),
+            ).fetchall()
+            duplicate_clusters = connection.execute(
+                """
+                SELECT c.*, m.canonical_job_id AS member_job_id, m.member_score, m.member_reasons_json
+                FROM acquisition_duplicate_clusters c
+                JOIN acquisition_duplicate_members m ON m.cluster_id=c.cluster_id
+                WHERE m.canonical_job_id=?
+                ORDER BY c.updated_at DESC
+                """,
+                (job_id,),
+            ).fetchall()
 
         profile = _decode(base.get("profile_json"), {})
         profile_fields = profile.get("fields") if isinstance(profile, Mapping) else {}
@@ -2826,7 +2916,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             "evidence": list(dict.fromkeys(apply_evidence)),
         }
 
-        observation_payloads = self._inspection_rows(observations, ("payload_json",))
+        observation_payloads = self._inspection_rows(observations, ("payload_json", "raw_payload_json"))
         version_payloads = self._inspection_rows(versions, ("payload_json",))
         request_payloads = self._inspection_rows(requests, ("detail_json",))
         rejection_payloads = self._inspection_rows(rejections, ("detail_json",))
@@ -2847,6 +2937,18 @@ class SqliteAcquisitionStore(_SqliteStore):
             {**_dict_row(row), "report": _decode(row["report_json"], {})}
             for row in version_quality
         ]
+        provenance_payloads = self._inspection_rows(field_provenance, ("raw_value_json", "normalized_value_json", "evidence_json"))
+        rule_output_payloads = self._inspection_rows(rule_outputs, ("output_json",))
+        company_url_payloads = self._inspection_rows(company_urls)
+        company["urls"] = company_url_payloads
+        company["field_provenance"] = [item for item in provenance_payloads if item.get("entity_kind") == "company"]
+        job["field_provenance"] = [item for item in provenance_payloads if item.get("entity_kind") == "job"]
+        job["rule_outputs"] = rule_output_payloads
+        completeness_payloads = [
+            {**_dict_row(row), "report": _decode(row["report_json"], {})}
+            for row in completeness_reports
+        ]
+        duplicate_payloads = self._inspection_rows(duplicate_clusters, ("reasons_json", "review_history_json", "member_reasons_json"))
 
         latest_decision = decision_payloads[0] if decision_payloads else {}
         current_publication = next((item for item in publication_payloads if item.get("current_head")), None)
@@ -2907,6 +3009,11 @@ class SqliteAcquisitionStore(_SqliteStore):
             "observation_relationships": observation_relationship_payloads,
             "quality_events": quality_event_payloads,
             "version_quality": version_quality_payloads,
+            "field_provenance": provenance_payloads,
+            "rule_outputs": rule_output_payloads,
+            "company_urls": company_url_payloads,
+            "completeness_reports": completeness_payloads,
+            "duplicate_clusters": duplicate_payloads,
         }
         job_fields = {
             key: job.get(key)
@@ -2950,6 +3057,120 @@ class SqliteAcquisitionStore(_SqliteStore):
             "apply_url": apply_url,
             "raw": raw,
         }
+
+    def list_admin_duplicate_clusters(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT c.*, m.canonical_job_id, m.member_score, m.member_reasons_json,
+                       j.title, j.location, co.canonical_name AS company
+                FROM acquisition_duplicate_clusters c
+                JOIN acquisition_duplicate_members m ON m.cluster_id=c.cluster_id
+                LEFT JOIN canonical_jobs j ON j.canonical_job_id=m.canonical_job_id
+                LEFT JOIN canonical_companies co ON co.company_id=j.company_id
+                ORDER BY c.updated_at DESC, c.cluster_id, m.canonical_job_id
+                LIMIT ?
+                """,
+                (max(1, min(500, int(limit))),),
+            ).fetchall()
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            item = _dict_row(row)
+            cluster_id = str(item.pop("cluster_id"))
+            member = {
+                key: item.pop(key)
+                for key in ("canonical_job_id", "member_score", "member_reasons_json", "title", "location", "company")
+                if key in item
+            }
+            member["member_reasons"] = _decode(member.pop("member_reasons_json", "[]"), [])
+            cluster = grouped.setdefault(cluster_id, {"cluster_id": cluster_id, **item, "members": []})
+            cluster["reasons"] = _decode(cluster.pop("reasons_json", "[]"), [])
+            cluster["review_history"] = _decode(cluster.pop("review_history_json", "[]"), [])
+            cluster["members"].append(member)
+        return list(grouped.values())
+
+    def list_admin_companies(self, *, limit: int = 100, search: str = "") -> list[dict[str, Any]]:
+        normalized = " ".join(str(search or "").casefold().split())
+        predicate = "WHERE LOWER(c.canonical_name || ' ' || COALESCE(c.provenance_url, '')) LIKE ?" if normalized else ""
+        params: tuple[Any, ...] = (f"%{normalized}%",) if normalized else ()
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT c.*, p.profile_json, p.logo_source_url, p.logo_verified_at,
+                       (SELECT COUNT(*) FROM canonical_jobs j WHERE j.company_id=c.company_id) AS job_count
+                FROM canonical_companies c
+                LEFT JOIN canonical_company_profiles p ON p.company_id=c.company_id
+                {predicate}
+                ORDER BY c.canonical_name LIMIT ?
+                """,
+                (*params, max(1, min(500, int(limit)))),
+            ).fetchall()
+            company_ids = [str(row["company_id"]) for row in rows]
+            urls = []
+            if company_ids:
+                placeholders = ",".join("?" for _ in company_ids)
+                urls = connection.execute(
+                    f"SELECT * FROM canonical_company_urls WHERE company_id IN ({placeholders}) ORDER BY company_id, url_type, updated_at DESC",
+                    tuple(company_ids),
+                ).fetchall()
+        urls_by_company: dict[str, list[dict[str, Any]]] = {}
+        for row in urls:
+            urls_by_company.setdefault(str(row["company_id"]), []).append(_dict_row(row))
+        result = []
+        for row in rows:
+            item = _dict_row(row)
+            item["profile"] = _decode(item.pop("profile_json", "{}"), {})
+            item["urls"] = urls_by_company.get(str(item["company_id"]), [])
+            result.append(item)
+        return result
+
+    def get_admin_rules_coverage(self) -> dict[str, Any]:
+        with self._connect() as connection:
+            field_rows = connection.execute(
+                "SELECT entity_kind, field_name, state, COUNT(*) AS count FROM acquisition_field_provenance GROUP BY entity_kind, field_name, state ORDER BY entity_kind, field_name, state"
+            ).fetchall()
+            stage_rows = connection.execute(
+                "SELECT stage_name, status, COUNT(*) AS count FROM acquisition_stage_results GROUP BY stage_name, status ORDER BY stage_name, status"
+            ).fetchall()
+            completeness = connection.execute(
+                "SELECT state, COUNT(*) AS count FROM acquisition_completeness_reports GROUP BY state ORDER BY state"
+            ).fetchall()
+            warning_rows = connection.execute(
+                "SELECT warning_code, severity, COUNT(*) AS count FROM acquisition_quality_events GROUP BY warning_code, severity ORDER BY warning_code, severity"
+            ).fetchall()
+        return {
+            "rule_version": UNIFIED_RULE_VERSION,
+            "field_states": [_dict_row(row) for row in field_rows],
+            "stage_states": [_dict_row(row) for row in stage_rows],
+            "completeness_states": [_dict_row(row) for row in completeness],
+            "warnings": [_dict_row(row) for row in warning_rows],
+            "report_only": True,
+        }
+
+    def list_admin_reprocessing_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM acquisition_reprocessing_runs ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(200, int(limit))),),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = _dict_row(row)
+            for key in ("environment_json", "scope_json", "plan_json", "checkpoint_json", "counts_json", "backup_json", "error_json"):
+                item[key[:-5]] = _decode(item.pop(key, "{}"), {})
+            result.append(item)
+        return result
+
+    def get_admin_publication_read_model(self) -> dict[str, Any]:
+        with self._connect() as connection:
+            counts = connection.execute("SELECT status, COUNT(*) AS count FROM acquisition_publications GROUP BY status ORDER BY status").fetchall()
+            head = connection.execute(
+                "SELECT h.*, p.status, p.published_at, p.rule_version FROM acquisition_publication_head h LEFT JOIN acquisition_publications p ON p.publication_id=h.publication_id WHERE h.head_id=1"
+            ).fetchone()
+            jobs = connection.execute(
+                "SELECT COUNT(*) AS count FROM acquisition_publication_jobs pj JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id AND h.head_id=1"
+            ).fetchone()
+        return {"rule_version": UNIFIED_RULE_VERSION, "publication_states": [_dict_row(row) for row in counts], "current_head": _dict_row(head) if head else None, "current_job_count": int(jobs["count"] or 0) if jobs else 0, "automatic_promotion": False}
 
     def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
         """Resolve only an employer/official-ATS candidate already in raw data."""
@@ -3476,6 +3697,189 @@ class SqliteAcquisitionStore(_SqliteStore):
         )
 
     @staticmethod
+    def _persist_unified_mapping(
+        connection,
+        *,
+        canonical_job_id: str,
+        company_id: str,
+        source_observation_id: str,
+        execution_id: str,
+        mapping: Mapping[str, Any],
+        job: Mapping[str, Any],
+        observed_at: str,
+    ) -> None:
+        """Persist the typed projection without rewriting source evidence."""
+
+        rule_version = str(mapping.get("rule_version") or UNIFIED_RULE_VERSION)
+        now = str(observed_at or utc_now_iso())
+        fields = mapping.get("fields") if isinstance(mapping.get("fields"), Mapping) else {}
+        for field_name, record in fields.items():
+            if not isinstance(record, Mapping):
+                continue
+            selected = int(str(record.get("state") or "unknown") in {"present", "inferred"})
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO acquisition_field_provenance (
+                    provenance_id, entity_kind, entity_id, field_name, source_observation_id,
+                    raw_value_json, normalized_value_json, state, source, source_field,
+                    extraction_method, evidence_json, confidence, observed_at, rule_version,
+                    selected, selection_reason, created_at
+                ) VALUES (?, 'job', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"field_provenance_{uuid4().hex}", canonical_job_id, str(field_name), source_observation_id,
+                    _json(record.get("raw_value")), _json(record.get("normalized_value")), str(record.get("state") or "unknown"),
+                    str(record.get("source") or ""), str(record.get("source_field") or ""),
+                    str(record.get("extraction_method") or ""), _json(record.get("evidence")),
+                    float(record.get("confidence") or 0), str(record.get("observed_at") or now), rule_version,
+                    selected, "latest evidence-backed candidate" if selected else "no evidence-backed value", now,
+                ),
+            )
+        mapped_company_fields = mapping.get("company_fields") if isinstance(mapping.get("company_fields"), Mapping) else {}
+        company_source = job.get("company") if isinstance(job.get("company"), Mapping) else {}
+        company_values = {
+            "company_identity": job.get("company") if not isinstance(job.get("company"), Mapping) else company_source.get("name") or company_source.get("canonical_name"),
+            "website": company_source.get("website") if isinstance(company_source, Mapping) else job.get("website"),
+            "careers_url": company_source.get("careers_page") if isinstance(company_source, Mapping) else job.get("careers_page"),
+            "industry": company_source.get("industry") if isinstance(company_source, Mapping) else job.get("industry"),
+            "company_size": company_source.get("company_size") if isinstance(company_source, Mapping) else job.get("company_size"),
+            "headquarters": company_source.get("headquarters") if isinstance(company_source, Mapping) else job.get("headquarters"),
+            "logo": company_source.get("logo_url") if isinstance(company_source, Mapping) else job.get("logo_url"),
+        }
+        for field_name, record in mapped_company_fields.items():
+            if not isinstance(record, Mapping):
+                continue
+            value = record.get("raw_value")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO acquisition_field_provenance (
+                    provenance_id, entity_kind, entity_id, field_name, source_observation_id,
+                    raw_value_json, normalized_value_json, state, source, source_field,
+                    extraction_method, evidence_json, confidence, observed_at, rule_version,
+                    selected, selection_reason, created_at
+                ) VALUES (?, 'company', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"field_provenance_{uuid4().hex}", company_id, str(field_name), source_observation_id,
+                    _json(value), _json(record.get("normalized_value")), str(record.get("state") or "unknown"),
+                    str(record.get("source") or ""), str(record.get("source_field") or ""),
+                    str(record.get("extraction_method") or ""), _json(record.get("evidence")),
+                    float(record.get("confidence") or 0), str(record.get("observed_at") or now), rule_version,
+                    int(str(record.get("state") or "unknown") in {"present", "inferred"}),
+                    "latest evidence-backed candidate" if str(record.get("state") or "unknown") in {"present", "inferred"} else "no evidence-backed value", now,
+                ),
+            )
+        for field_name, value in company_values.items():
+            known = value not in (None, "", [])
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO acquisition_field_provenance (
+                    provenance_id, entity_kind, entity_id, field_name, source_observation_id,
+                    raw_value_json, normalized_value_json, state, source, source_field,
+                    extraction_method, evidence_json, confidence, observed_at, rule_version,
+                    selected, selection_reason, created_at
+                ) VALUES (?, 'company', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"field_provenance_{uuid4().hex}", company_id, field_name, source_observation_id,
+                    _json(value), _json(value), "present" if known else "unknown",
+                    "source_observation" if known else "", f"company.{field_name}" if known else "",
+                    "source_payload" if known else "not_available", _json(value if known else None),
+                    0.9 if known else 0, now, rule_version, int(known),
+                    "latest evidence-backed candidate" if known else "no evidence-backed value", now,
+                ),
+            )
+        output_payload = dict(mapping)
+        connection.execute(
+            """
+            INSERT INTO acquisition_rule_outputs (
+                output_id, execution_id, entity_kind, entity_id, source_observation_id,
+                stage_name, rule_version, semantic_hash, output_json, created_at
+            ) VALUES (?, ?, 'job', ?, ?, 'normalization', ?, ?, ?, ?)
+            ON CONFLICT(entity_kind, entity_id, source_observation_id, stage_name, rule_version)
+            DO UPDATE SET execution_id=excluded.execution_id, semantic_hash=excluded.semantic_hash,
+                output_json=excluded.output_json
+            """,
+            (
+                f"rule_output_{uuid4().hex}", str(execution_id or ""), canonical_job_id, source_observation_id,
+                rule_version, hashlib.sha256(_json(output_payload).encode("utf-8")).hexdigest(),
+                _json(output_payload), now,
+            ),
+        )
+        company_urls = mapping.get("company_urls") if isinstance(mapping.get("company_urls"), list) else []
+        for item in company_urls:
+            if not isinstance(item, Mapping) or not item.get("canonical_url"):
+                continue
+            connection.execute(
+                """
+                INSERT INTO canonical_company_urls (
+                    company_url_id, company_id, url_type, url, canonical_url, source,
+                    source_observation_id, first_seen_at, last_seen_at, validation_status,
+                    redirect_target, selected_primary, rule_version, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                ON CONFLICT(company_id, url_type, canonical_url) DO UPDATE SET
+                    last_seen_at=excluded.last_seen_at, source_observation_id=excluded.source_observation_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    f"company_url_{uuid4().hex}", company_id, str(item.get("url_type") or "source"),
+                    str(item.get("url") or ""), str(item.get("canonical_url") or ""), str(item.get("source") or ""),
+                    source_observation_id, str(item.get("first_seen_at") or now), str(item.get("last_seen_at") or now),
+                    str(item.get("validation_status") or "not_validated"), str(item.get("redirect_target") or ""),
+                    rule_version, now, now,
+                ),
+            )
+        timestamps = mapping.get("timestamps") if isinstance(mapping.get("timestamps"), Mapping) else {}
+        timestamp_values = {
+            "published_at": timestamps.get("published_at", {}).get("normalized_value") if isinstance(timestamps.get("published_at"), Mapping) else "",
+            "source_updated_at": timestamps.get("updated_at", {}).get("normalized_value") if isinstance(timestamps.get("updated_at"), Mapping) else "",
+            "closed_at": timestamps.get("closed_at", {}).get("normalized_value") if isinstance(timestamps.get("closed_at"), Mapping) else "",
+        }
+        connection.execute(
+            """
+            UPDATE canonical_jobs
+            SET published_at=CASE WHEN ? != '' THEN ? ELSE published_at END,
+                source_updated_at=CASE WHEN ? != '' THEN ? ELSE source_updated_at END,
+                closed_at=CASE WHEN ? != '' THEN ? ELSE closed_at END,
+                last_reprocessed_at=?, updated_at=?
+            WHERE canonical_job_id=?
+            """,
+            (
+                timestamp_values["published_at"], timestamp_values["published_at"],
+                timestamp_values["source_updated_at"], timestamp_values["source_updated_at"],
+                timestamp_values["closed_at"], timestamp_values["closed_at"], now, now, canonical_job_id,
+            ),
+        )
+        report_fields: dict[str, Any] = {}
+        for field_name, record in fields.items():
+            if isinstance(record, Mapping):
+                report_fields[field_name] = {
+                    "state": str(record.get("state") or "unknown"),
+                    "confidence": float(record.get("confidence") or 0),
+                    "source": record.get("source"),
+                }
+        report = {
+            "schema_version": "field_matrix_v1", "rule_version": rule_version, "report_only": True,
+            "fields": report_fields,
+            "rollup": {
+                "present": sum(1 for item in report_fields.values() if item["state"] == "present"),
+                "total": len(report_fields),
+                "warnings": [name for name, item in report_fields.items() if item["state"] != "present"],
+            },
+        }
+        overall_state = "complete" if report["rollup"]["warnings"] == [] else "warning"
+        connection.execute(
+            """
+            INSERT INTO acquisition_completeness_reports (
+                report_id, entity_kind, entity_id, rule_version, state, report_json, calculated_at
+            ) VALUES (?, 'job', ?, ?, ?, ?, ?)
+            ON CONFLICT(entity_kind, entity_id, rule_version) DO UPDATE SET
+                state=excluded.state, report_json=excluded.report_json, calculated_at=excluded.calculated_at
+            """,
+            (f"completeness_{uuid4().hex}", canonical_job_id, rule_version, overall_state, _json(report), now),
+        )
+
+    @staticmethod
     def _ensure_company_profile(
         connection,
         company_id: str,
@@ -3731,6 +4135,25 @@ class SqliteAcquisitionStore(_SqliteStore):
             """,
             (canonical_job_id,),
         ).fetchone()
+        if not force_new_version:
+            existing_hash = connection.execute(
+                """
+                SELECT v.version_id
+                FROM job_posting_versions v
+                LEFT JOIN acquisition_version_quality q ON q.version_id=v.version_id
+                WHERE v.canonical_job_id=?
+                  AND COALESCE(NULLIF(q.stable_content_hash, ''), v.content_hash)=?
+                ORDER BY v.version_number DESC, v.created_at DESC
+                LIMIT 1
+                """,
+                (canonical_job_id, content_hash),
+            ).fetchone()
+            if existing_hash is not None:
+                connection.execute(
+                    "UPDATE canonical_jobs SET current_version_id = ? WHERE canonical_job_id = ?",
+                    (str(existing_hash["version_id"]), canonical_job_id),
+                )
+                return
         if not force_new_version and current is not None and str(current["stable_hash"] or "") == content_hash:
             connection.execute(
                 "UPDATE canonical_jobs SET current_version_id = ? WHERE canonical_job_id = ?",

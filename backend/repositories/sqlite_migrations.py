@@ -2001,6 +2001,196 @@ def _apply_acquisition_quality_migration(connection: DatabaseConnection) -> None
         """
     )
 
+
+def _apply_unified_acquisition_mapping_migration(connection: DatabaseConnection) -> None:
+    """Add versioned connector-independent projections and reprocessing state.
+
+    All tables are additive.  Source observations remain the evidence layer;
+    normalized outputs, provenance, quality reports, and repair runs are
+    append-only or upsertable projections keyed by rule version.
+    """
+
+    for table, column, definition in (
+        ("job_source_observations", "raw_payload_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("job_source_observations", "raw_content_hash", "TEXT NOT NULL DEFAULT ''"),
+        ("job_source_observations", "rule_version", "TEXT NOT NULL DEFAULT ''"),
+        ("canonical_jobs", "published_at", "TEXT NOT NULL DEFAULT ''"),
+        ("canonical_jobs", "source_updated_at", "TEXT NOT NULL DEFAULT ''"),
+        ("canonical_jobs", "closed_at", "TEXT NOT NULL DEFAULT ''"),
+        ("canonical_jobs", "last_reprocessed_at", "TEXT NOT NULL DEFAULT ''"),
+        ("acquisition_publications", "rule_version", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        _ensure_table_column(connection, table, column, definition)
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_stage_results (
+            stage_result_id TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            rule_version TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            checkpoint_json TEXT NOT NULL DEFAULT '{}',
+            error_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(execution_id, stage_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_stage_results_execution
+            ON acquisition_stage_results(execution_id, stage_name);
+
+        CREATE TABLE IF NOT EXISTS acquisition_rule_outputs (
+            output_id TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL DEFAULT '',
+            entity_kind TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            source_observation_id TEXT NOT NULL DEFAULT '',
+            stage_name TEXT NOT NULL,
+            rule_version TEXT NOT NULL,
+            semantic_hash TEXT NOT NULL DEFAULT '',
+            output_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(entity_kind, entity_id, source_observation_id, stage_name, rule_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_rule_outputs_entity
+            ON acquisition_rule_outputs(entity_kind, entity_id, stage_name, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS acquisition_field_provenance (
+            provenance_id TEXT PRIMARY KEY,
+            entity_kind TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            field_name TEXT NOT NULL,
+            source_observation_id TEXT NOT NULL DEFAULT '',
+            raw_value_json TEXT NOT NULL DEFAULT 'null',
+            normalized_value_json TEXT NOT NULL DEFAULT 'null',
+            state TEXT NOT NULL DEFAULT 'unknown',
+            source TEXT NOT NULL DEFAULT '',
+            source_field TEXT NOT NULL DEFAULT '',
+            extraction_method TEXT NOT NULL DEFAULT '',
+            evidence_json TEXT NOT NULL DEFAULT 'null',
+            confidence REAL NOT NULL DEFAULT 0,
+            observed_at TEXT NOT NULL DEFAULT '',
+            rule_version TEXT NOT NULL,
+            selected INTEGER NOT NULL DEFAULT 0,
+            selection_reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(entity_kind, entity_id, field_name, source_observation_id, rule_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_field_provenance_entity
+            ON acquisition_field_provenance(entity_kind, entity_id, field_name, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_field_provenance_state
+            ON acquisition_field_provenance(state, rule_version, observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS acquisition_completeness_reports (
+            report_id TEXT PRIMARY KEY,
+            entity_kind TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            rule_version TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'unknown',
+            report_json TEXT NOT NULL DEFAULT '{}',
+            calculated_at TEXT NOT NULL,
+            UNIQUE(entity_kind, entity_id, rule_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_completeness_entity
+            ON acquisition_completeness_reports(entity_kind, state, calculated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS acquisition_reprocessing_runs (
+            reprocessing_id TEXT PRIMARY KEY,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'planned',
+            rule_version TEXT NOT NULL,
+            environment_json TEXT NOT NULL DEFAULT '{}',
+            scope_json TEXT NOT NULL DEFAULT '{}',
+            plan_json TEXT NOT NULL DEFAULT '{}',
+            checkpoint_json TEXT NOT NULL DEFAULT '{}',
+            counts_json TEXT NOT NULL DEFAULT '{}',
+            backup_json TEXT NOT NULL DEFAULT '{}',
+            error_json TEXT NOT NULL DEFAULT '{}',
+            started_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_reprocessing_status
+            ON acquisition_reprocessing_runs(status, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS acquisition_duplicate_clusters (
+            cluster_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'candidate',
+            confidence REAL NOT NULL DEFAULT 0,
+            reasons_json TEXT NOT NULL DEFAULT '[]',
+            review_history_json TEXT NOT NULL DEFAULT '[]',
+            rule_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS acquisition_duplicate_members (
+            cluster_id TEXT NOT NULL,
+            canonical_job_id TEXT NOT NULL,
+            member_score REAL NOT NULL DEFAULT 0,
+            member_reasons_json TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(cluster_id, canonical_job_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_duplicate_members_job
+            ON acquisition_duplicate_members(canonical_job_id, cluster_id);
+
+        CREATE TABLE IF NOT EXISTS canonical_company_urls (
+            company_url_id TEXT PRIMARY KEY,
+            company_id TEXT NOT NULL,
+            url_type TEXT NOT NULL,
+            url TEXT NOT NULL,
+            canonical_url TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT '',
+            source_observation_id TEXT NOT NULL DEFAULT '',
+            first_seen_at TEXT NOT NULL DEFAULT '',
+            last_seen_at TEXT NOT NULL DEFAULT '',
+            validation_status TEXT NOT NULL DEFAULT 'not_validated',
+            redirect_target TEXT NOT NULL DEFAULT '',
+            selected_primary INTEGER NOT NULL DEFAULT 0,
+            rule_version TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(company_id, url_type, canonical_url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_canonical_company_urls_company
+            ON canonical_company_urls(company_id, url_type, selected_primary DESC);
+
+        CREATE TABLE IF NOT EXISTS company_logo_enrichments (
+            logo_enrichment_id TEXT PRIMARY KEY,
+            company_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            source_url TEXT NOT NULL DEFAULT '',
+            object_key TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL DEFAULT '',
+            content_type TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'unknown',
+            terms_metadata_json TEXT NOT NULL DEFAULT '{}',
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            observed_at TEXT NOT NULL DEFAULT '',
+            rule_version TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(company_id, provider, content_hash, rule_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_logo_enrichments_company
+            ON company_logo_enrichments(company_id, updated_at DESC);
+
+        CREATE TRIGGER IF NOT EXISTS trg_job_source_observations_immutable_update
+        BEFORE UPDATE ON job_source_observations
+        BEGIN
+            SELECT RAISE(ABORT, 'job_source_observations are immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_job_source_observations_immutable_delete
+        BEFORE DELETE ON job_source_observations
+        BEGIN
+            SELECT RAISE(ABORT, 'job_source_observations are immutable');
+        END;
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2235,6 +2425,12 @@ MIGRATIONS = (
         "043_acquisition_quality_contract",
         "Add shared acquisition quality, provenance, reconciliation, and repair annotations.",
         _apply_acquisition_quality_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "044_unified_acquisition_mapping",
+        "Add connector-independent mapping, provenance, enrichment, duplicate, and resumable reprocessing state.",
+        _apply_unified_acquisition_mapping_migration,
         dependencies=(_table_columns, _ensure_table_column),
     ),
 )
