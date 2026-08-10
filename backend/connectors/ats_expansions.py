@@ -12,10 +12,11 @@ import hashlib
 import json
 import re
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 
@@ -183,6 +184,7 @@ _DETAIL_KEYS = (
     "absolute_url",
     "externalUrl",
     "jobPostingInfo.externalUrl",
+    "externalPath",
 )
 
 _APPLICATION_KEYS = (
@@ -393,7 +395,7 @@ def _timestamp_semantics(item: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _locations(item: Mapping[str, Any]) -> list[str]:
-    value = _first_value(item, ("locations", "jobPostingInfo.locations", "jobLocation", "location", "office"))
+    value = _first_value(item, ("locations", "locationsText", "jobPostingInfo.locations", "jobLocation", "location", "office"))
     return _string_list(value)
 
 
@@ -448,11 +450,27 @@ def _salary(item: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_job(connector: str, item: Mapping[str, Any], *, target_url: str, snapshot_complete: bool) -> dict[str, Any]:
-    detail_url = _canonical_url(_first_value(item, _DETAIL_KEYS), base_url=target_url)
+    raw_detail = _first_value(item, _DETAIL_KEYS)
+    if connector == "smartrecruiters" and _text(raw_detail).startswith("https://api.smartrecruiters.com/"):
+        target_parts = urlsplit(target_url)
+        company_slug = next((part for part in target_parts.path.split("/") if part), "")
+        posting_id = _text(_first_value(item, ("id", "uuid", "jobAdId")))
+        if company_slug and posting_id:
+            raw_detail = f"https://jobs.smartrecruiters.com/{quote(company_slug, safe='')}/{quote(posting_id, safe='')}"
+    if connector == "workday" and not _text(raw_detail):
+        raw_detail = _first_value(item, ("jobPostingInfo.externalPath",))
+    if connector == "personio" and not _text(raw_detail):
+        position_id = _text(_first_value(item, ("id", "uuid", "positionId", "jobId")))
+        if position_id:
+            raw_detail = urljoin(target_url.rstrip("/") + "/", f"job/{quote(position_id, safe='')}")
+    detail_url = _canonical_url(raw_detail, base_url=target_url)
     identity = _stable_external_identity(connector, item, detail_url)
     application = _application_destination(item, detail_url=detail_url, target_url=target_url)
     timestamp_semantics = _timestamp_semantics(item)
     title = _text(_first_value(item, ("title", "text", "name", "jobPostingInfo.title")))
+    description = _text(_first_value(item, ("description", "descriptionPlain", "description_text", "jobDescriptions.description", "jobPostingInfo.description")))
+    location_values = _locations(item)
+    apply_url = application["url"] or detail_url
     warnings = list(application["warnings"])
     if not title:
         warnings.append("missing_title")
@@ -462,20 +480,36 @@ def _normalize_job(connector: str, item: Mapping[str, Any], *, target_url: str, 
     return {
         **identity,
         "title": title,
+        "job_id": identity["external_id"],
+        "external_job_id": identity["external_id"],
         "job_detail_url": detail_url,
+        "url": detail_url,
+        "link": detail_url,
+        "source_url": detail_url,
+        "apply_link": apply_url,
+        "apply_url": application["url"],
+        "location": ", ".join(location_values),
+        "location_raw": ", ".join(location_values),
+        "full_description": description,
+        "description": description,
+        "source_ats": connector,
+        "source_raw_payload": deepcopy(dict(item)),
         "application_destination": application,
         "application_method": application["method"],
         "application_status": application["status"],
-        "source_department": _text(_first_value(item, ("source_department", "department", "jobPostingInfo.jobFamily"))) or None,
+        "department": _text(_first_value(item, ("source_department", "department", "jobPostingInfo.jobFamily", "jobPostingInfo.jobCategory", "fieldOfWork"))) or None,
+        "team": _text(_first_value(item, ("source_team", "team", "jobPostingInfo.team"))) or None,
+        "category": _text(_first_value(item, ("source_category", "category", "function", "jobPostingInfo.jobCategory"))) or None,
+        "source_department": _text(_first_value(item, ("source_department", "department", "jobPostingInfo.jobFamily", "jobPostingInfo.jobCategory", "fieldOfWork"))) or None,
         "source_team": _text(_first_value(item, ("source_team", "team", "jobPostingInfo.team"))) or None,
         "source_category": _text(_first_value(item, ("source_category", "category", "function", "jobPostingInfo.jobCategory")))
         or None,
         "runr_function": _text(_first_value(item, ("runr_function", "runrFunction"))) or None,
         "runr_subfunction": _text(_first_value(item, ("runr_subfunction", "runrSubfunction"))) or None,
-        "employment_type": _text(_first_value(item, ("employment_type", "employmentType", "typeOfEmployment", "commitment")))
+        "employment_type": _text(_first_value(item, ("employment_type", "employmentType", "typeOfEmployment", "commitment", "jobPostingInfo.timeType", "timeType")))
         or None,
         "workplace_arrangement": _text(
-            _first_value(item, ("workplace_arrangement", "workplaceType", "remoteType", "remote"))
+            _first_value(item, ("workplace_arrangement", "workplaceType", "remoteType", "remote", "jobPostingInfo.remoteType"))
         )
         or None,
         "remote_geographic_restrictions": _string_list(
@@ -513,16 +547,41 @@ def _request_url(connector: str, target_url: str, *, offset: int, page_size: int
         base = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings"
         return f"{base}?limit={page_size}&offset={offset}"
     if connector == "recruitee":
-        base = f"https://api.recruitee.com/c/{slug}/offers"
+        base = f"{parts.scheme}://{parts.netloc}/api/offers"
         return f"{base}?limit={page_size}&offset={offset}"
     if connector == "personio" and "/xml" not in parts.path.casefold():
         return urljoin(target_url.rstrip("/") + "/", "xml")
+    if connector == "workday":
+        tenant = (parts.hostname or "").split(".", 1)[0]
+        site = path_segments[-1] if path_segments else ""
+        if len(path_segments) >= 2 and re.fullmatch(r"[a-z]{2}(?:-[A-Z]{2})?", path_segments[0]):
+            site = path_segments[-1]
+        return f"{parts.scheme}://{parts.netloc}/wday/cxs/{quote(tenant, safe='')}/{quote(site, safe='')}/jobs"
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query.update({"limit": str(page_size), "offset": str(offset)})
     return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", urlencode(query), ""))
 
 
 def _items_from_payload(connector: str, payload: Any) -> list[Any]:
+    if connector == "personio" and isinstance(payload, str) and payload.lstrip().startswith("<"):
+        try:
+            root = ET.fromstring(payload)
+        except ET.ParseError:
+            return []
+        rows: list[dict[str, Any]] = []
+        for position in root.iter():
+            if position.tag.rsplit("}", 1)[-1].casefold() != "position":
+                continue
+            row: dict[str, Any] = dict(position.attrib)
+            for child in position.iter():
+                if child is position:
+                    continue
+                key = child.tag.rsplit("}", 1)[-1]
+                text = " ".join(" ".join(child.itertext()).split())
+                if text and key not in row:
+                    row[key] = text
+            rows.append(row)
+        return rows
     if isinstance(payload, list):
         return list(payload)
     if not isinstance(payload, Mapping):
@@ -561,11 +620,18 @@ def _pagination(payload: Any, *, item_count: int, offset: int, page_size: int) -
     return item_count >= page_size, offset + item_count
 
 
-def _safe_request(request: Callable[..., Any], url: str, timeout_seconds: int) -> Any:
+def _safe_request(
+    request: Callable[..., Any],
+    url: str,
+    timeout_seconds: int,
+    *,
+    method: str = "GET",
+    json_payload: Mapping[str, Any] | None = None,
+) -> Any:
     try:
-        return request(url, timeout=timeout_seconds, allow_redirects=False)
+        return request(url, timeout=timeout_seconds, allow_redirects=False, json=dict(json_payload or {})) if method == "POST" else request(url, timeout=timeout_seconds, allow_redirects=False)
     except TypeError:
-        return request(url, timeout=timeout_seconds)
+        return request(url, timeout=timeout_seconds, json=dict(json_payload or {})) if method == "POST" else request(url, timeout=timeout_seconds)
 
 
 def _error_message(exc: BaseException) -> str:
@@ -583,7 +649,7 @@ def build_capability_snapshot(
     max_retries: int = DEFAULT_MAX_RETRIES,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Describe an expansion connector without registering or enabling it."""
+    """Describe an expansion connector and its bounded production contract."""
 
     normalized = str(connector or "").strip().casefold()
     capabilities = deepcopy(_CAPABILITIES.get(normalized, {}))
@@ -596,7 +662,7 @@ def build_capability_snapshot(
         "target_url": _canonical_url(target_url) if target_url else "",
         "enabled": bool(enabled and known),
         "state": "enabled" if enabled and known else "fixture_only" if fixture_mode and known else "disabled" if known else "unsupported",
-        "production_registered": False,
+        "production_registered": bool(enabled and known),
         "capabilities": capabilities,
         "request_limits": {
             "max_requests": bounded_requests,
@@ -619,9 +685,9 @@ def build_capability_snapshot(
 
 
 def build_capability_snapshots() -> list[dict[str, Any]]:
-    """Return all expansion capabilities; all remain disabled and unregistered."""
+    """Return the production-registered capability inventory."""
 
-    return [build_capability_snapshot(connector) for connector in EXPANSION_CONNECTORS]
+    return [build_capability_snapshot(connector, enabled=True) for connector in EXPANSION_CONNECTORS]
 
 
 def measure_raw_retention(records: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
@@ -716,7 +782,7 @@ def fetch_expansion_snapshot(
         base_result["warnings"] = ["connector_disabled_by_default"]
         return base_result
 
-    request = requester or requests.get
+    request = requester or (requests.post if normalized == "workday" else requests.get)
     bounded_requests = snapshot["request_limits"]["max_requests"]
     bounded_pages = snapshot["request_limits"]["max_pages"]
     bounded_page_size = max(1, min(500, int(page_size)))
@@ -737,6 +803,8 @@ def fetch_expansion_snapshot(
     while pages_fetched < bounded_pages and (fixture or len(request_log) < bounded_requests):
         page_payload: Any
         request_url = _request_url(normalized, target_url, offset=offset, page_size=bounded_page_size)
+        request_method = "POST" if normalized == "workday" else "GET"
+        request_payload = {"appliedFacets": {}, "limit": min(bounded_page_size, 10), "offset": offset, "searchText": ""} if normalized == "workday" else None
         if fixture:
             if fixture_pages is not None:
                 if pages_fetched >= len(fixture_pages):
@@ -752,7 +820,13 @@ def fetch_expansion_snapshot(
                 if len(request_log) >= bounded_requests:
                     break
                 try:
-                    response = _safe_request(request, request_url, snapshot["request_limits"]["timeout_seconds"])
+                    response = _safe_request(
+                        request,
+                        request_url,
+                        snapshot["request_limits"]["timeout_seconds"],
+                        method=request_method,
+                        json_payload=request_payload,
+                    )
                     status_code = int(getattr(response, "status_code", 0) or 0)
                     retryable = status_code in snapshot["retry_policy"]["retryable_statuses"]
                     if status_code >= 400:
@@ -775,7 +849,10 @@ def fetch_expansion_snapshot(
                         failures.append(f"http_{status_code}")
                         page_failed = True
                         break
-                    page_payload = response.json()
+                    try:
+                        page_payload = response.json()
+                    except (ValueError, AttributeError):
+                        page_payload = getattr(response, "text", "")
                     request_log.append(
                         {
                             "page": pages_fetched + 1,

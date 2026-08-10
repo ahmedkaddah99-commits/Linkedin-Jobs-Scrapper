@@ -839,7 +839,12 @@ def _discover_frontend_api_base(origin: str, html: str) -> dict[str, Any]:
         except Exception:
             continue
         for match in re.finditer(r"""https?://[^"'\\\s]+/v1""", script):
-            candidates.add(match.group(0).rstrip("/"))
+            candidate = match.group(0).rstrip("/")
+            # Vite/minifier output can contain a template literal such as
+            # ``https://${n}/v1``. It is code, not a concrete DNS target.
+            if "${" in candidate or "}" in candidate or "<" in candidate or ">" in candidate:
+                continue
+            candidates.add(candidate)
         if '"/v1"' in script or "'/v1'" in script:
             candidates.add("/v1")
     sorted_candidates = sorted(candidates)

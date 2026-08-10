@@ -4251,22 +4251,31 @@ class SqliteAcquisitionStore(_SqliteStore):
         for item in company_urls:
             if not isinstance(item, Mapping) or not item.get("canonical_url"):
                 continue
+            url_type = str(item.get("url_type") or "source")
+            selected_primary = int(bool(item.get("selected_primary")))
+            if selected_primary:
+                connection.execute(
+                    "UPDATE canonical_company_urls SET selected_primary=0, updated_at=? WHERE company_id=? AND url_type=?",
+                    (now, company_id, url_type),
+                )
             connection.execute(
                 """
                 INSERT INTO canonical_company_urls (
                     company_url_id, company_id, url_type, url, canonical_url, source,
                     source_observation_id, first_seen_at, last_seen_at, validation_status,
                     redirect_target, selected_primary, rule_version, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(company_id, url_type, canonical_url) DO UPDATE SET
                     last_seen_at=excluded.last_seen_at, source_observation_id=excluded.source_observation_id,
+                    validation_status=excluded.validation_status,
+                    selected_primary=CASE WHEN excluded.selected_primary=1 THEN 1 ELSE canonical_company_urls.selected_primary END,
                     updated_at=excluded.updated_at
                 """,
                 (
-                    f"company_url_{uuid4().hex}", company_id, str(item.get("url_type") or "source"),
+                    f"company_url_{uuid4().hex}", company_id, url_type,
                     str(item.get("url") or ""), str(item.get("canonical_url") or ""), str(item.get("source") or ""),
                     source_observation_id, str(item.get("first_seen_at") or now), str(item.get("last_seen_at") or now),
-                    str(item.get("validation_status") or "not_validated"), str(item.get("redirect_target") or ""),
+                    str(item.get("validation_status") or "not_validated"), str(item.get("redirect_target") or ""), selected_primary,
                     rule_version, now, now,
                 ),
             )

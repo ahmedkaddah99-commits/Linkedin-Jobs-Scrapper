@@ -193,6 +193,18 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "scope": "frontend",
         "description": "Render-provided API hostname used by the frontend to derive preview API URLs.",
     },
+    "RUNR_COMPANY_ENRICHMENT_PROVIDER": {
+        "required": False,
+        "scope": "backend",
+        "default": "official_website",
+        "description": "Explicit bounded company enrichment provider; official_website reads authoritative company pages only.",
+    },
+    "RUNR_COMPANY_ENRICHMENT_ENABLED": {
+        "required": False,
+        "scope": "backend",
+        "default": "0",
+        "description": "Execution switch for scheduled company enrichment. Keep disabled until a separate logo/profile run is approved.",
+    },
     "RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": {
         "required": False,
         "scope": "backend",

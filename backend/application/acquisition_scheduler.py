@@ -14,7 +14,9 @@ from backend.acquisition.network_policy import (
     require_phase_a_network_permission,
 )
 from backend.connectors.ats_router import fetch_ats_snapshot
+from backend.connectors.ats_expansions import EXPANSION_CONNECTORS
 from backend.connectors.bounded_probe import fetch_bounded_probe
+from backend.connectors.generic_jsonld import fetch_generic_snapshot
 from backend.acquisition.phase_b import PHASE_B_DEFAULT_CONFIG, normalize_phase_b_jobs
 from backend.acquisition.phase_g import portal_audit_gate
 from backend.application.production_rollout import build_rollout_health, phase_i_config, private_test_deployment_enabled
@@ -704,6 +706,13 @@ class PhaseAAcquisitionScheduler:
                 hostname_for_url(str(target.get("request_url") or "")),
                 hostname_for_url(str(target.get("canonical_target_url") or "")),
             }
+            configured_hosts = target.get("official_employer_hosts") or target_config.get("official_employer_hosts") or []
+            if isinstance(configured_hosts, (list, tuple, set)):
+                allowed_hosts.update(
+                    hostname_for_url(f"https://{str(host).strip()}")
+                    for host in configured_hosts
+                    if str(host).strip()
+                )
             if request_mode == "direct":
                 require_phase_a_network_permission(
                     request_url=str(target["request_url"]),
@@ -723,6 +732,26 @@ class PhaseAAcquisitionScheduler:
                     connector,
                     requester=self.requester,
                     max_pages=max(1, _as_int(_admin_scope_for_target(target).get("max_pages"), 1)),
+                )
+            elif connector in EXPANSION_CONNECTORS:
+                scope = _admin_scope_for_target(target)
+                fetched = fetch_ats_snapshot(
+                    str(target.get("canonical_target_url") or target["request_url"]),
+                    connector,
+                    requester=self.requester,
+                    enabled=True,
+                    max_requests=max(1, _as_int(target.get("max_direct_requests"), 1)),
+                    max_pages=max(1, _as_int(scope.get("max_pages"), 1)),
+                    max_retries=max(0, min(2, _as_int(target_config.get("max_retries"), 0))),
+                    page_size=max(1, min(100, _as_int(target_config.get("page_size"), 100))),
+                )
+            elif connector == "generic_jsonld":
+                scope = _admin_scope_for_target(target)
+                fetched = fetch_generic_snapshot(
+                    str(target.get("request_url") or target.get("canonical_target_url") or ""),
+                    requester=self.requester,
+                    max_job_links=max(1, min(25, _as_int(scope.get("max_pages"), 6))),
+                    allowed_hosts=allowed_hosts,
                 )
             elif connector == "company_career_sites":
                 from backend.connectors.company_career_sites import scrape_company_career_sites

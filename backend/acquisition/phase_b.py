@@ -189,6 +189,9 @@ def normalize_phase_b_jobs(
             "description": description,
             "full_description": str(job.get("full_description") or job.get("description") or description),
         }
+        configured_profile = target_config.get("company_profile") or target_config.get("company")
+        if isinstance(configured_profile, Mapping):
+            normalized["company_details"] = dict(configured_profile)
         normalized = normalize_job_for_ingestion(normalized, {**target, "canonical_company_name": employer})
         normalized["quality_warnings"] = list(dict.fromkeys(normalized.get("quality_warnings") or []))
         accepted.append(normalized)

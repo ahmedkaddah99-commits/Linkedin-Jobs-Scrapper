@@ -10,6 +10,7 @@ import requests
 
 from backend.domain.pipeline_jobs import stable_manual_job_id
 from backend.acquisition.quality import normalize_source_timestamps
+from backend.connectors.ats_expansions import EXPANSION_CONNECTORS, fetch_expansion_snapshot
 
 
 LOGGER = logging.getLogger(__name__)
@@ -189,6 +190,10 @@ def fetch_ats_snapshot(
     requester: Callable[..., Any] | None = None,
     timeout_seconds: int = ATS_REQUEST_TIMEOUT_SECONDS,
     max_pages: int = 1,
+    enabled: bool = False,
+    max_requests: int = 1,
+    max_retries: int = 0,
+    page_size: int = 100,
 ) -> dict[str, Any]:
     """Fetch one bounded public ATS listing snapshot with request metadata."""
 
@@ -301,11 +306,17 @@ def fetch_ats_snapshot(
             "source_reported_count": len(postings),
         }
 
-    if normalized_ats in {"workday", "personio", "recruitee", "smartrecruiters"}:
-        LOGGER.info(
-            "ATS detected but structured API not yet implemented - will fall through to proxy: %s (%s)",
+    if normalized_ats in EXPANSION_CONNECTORS:
+        return fetch_expansion_snapshot(
             url,
             normalized_ats,
+            requester=requester,
+            enabled=enabled,
+            max_requests=max_requests,
+            max_pages=max_pages,
+            max_retries=max_retries,
+            timeout_seconds=timeout_seconds,
+            page_size=page_size,
         )
     return {
         "jobs": [],

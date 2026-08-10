@@ -218,12 +218,12 @@ class AtsExpansionContractTests(unittest.TestCase):
         self.assertEqual(result["observation_failures"][0]["index"], 1)
         self.assertEqual(result["observation_failures"][0]["error_type"], "invalid_item")
 
-    def test_capability_inventory_is_disabled_and_unregistered_for_every_expansion_connector(self):
+    def test_capability_inventory_is_registered_for_every_expansion_connector(self):
         snapshots = build_capability_snapshots()
 
         self.assertEqual({snapshot["connector"] for snapshot in snapshots}, {"workday", "personio", "recruitee", "smartrecruiters"})
-        self.assertTrue(all(not snapshot["enabled"] for snapshot in snapshots))
-        self.assertTrue(all(not snapshot["production_registered"] for snapshot in snapshots))
+        self.assertTrue(all(snapshot["enabled"] for snapshot in snapshots))
+        self.assertTrue(all(snapshot["production_registered"] for snapshot in snapshots))
 
 
 if __name__ == "__main__":

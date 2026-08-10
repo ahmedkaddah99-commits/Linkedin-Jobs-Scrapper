@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 from backend.acquisition.manifest import load_phase_a_manifest
 from backend.connectors.company_career_sites import estimate_company_site_runner_credit_range
+from backend.connectors.ats_expansions import EXPANSION_CONNECTORS
 
 
 _DEFAULT_MAX_REQUESTS = 100
@@ -82,7 +83,7 @@ class AdminJobImportService:
         for target in load_phase_a_manifest():
             target_id = _text(target.get("target_id"))
             connector = _text(target.get("connector")).casefold()
-            official = connector in {"greenhouse", "lever"}
+            official = connector in {"greenhouse", "lever", *EXPANSION_CONNECTORS, "generic_jsonld"}
             admin_import_enabled = official or _bool(target.get("admin_import_enabled"))
             method = "direct" if official else "scrapeops"
             source_type = "Official source" if official else "Web import"
@@ -168,7 +169,7 @@ class AdminJobImportService:
         for source_id in normalized_sources:
             target = manifest[source_id]
             connector = _text(target.get("connector")).casefold()
-            official = connector in {"greenhouse", "lever"}
+            official = connector in {"greenhouse", "lever", *EXPANSION_CONNECTORS, "generic_jsonld"}
             target_max_pages = 1 if official else scope["max_pages"]
             if official:
                 requests += target_max_pages

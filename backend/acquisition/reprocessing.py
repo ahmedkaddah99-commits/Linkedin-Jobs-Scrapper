@@ -348,12 +348,24 @@ def _process_observation(connection, row: Mapping[str, Any], *, execution_id: st
         stored_payload = normalized_payload.get("source_raw_payload") if isinstance(normalized_payload, Mapping) and isinstance(normalized_payload.get("source_raw_payload"), Mapping) else normalized_payload
         historical = True
     raw_job = dict(stored_payload) if isinstance(stored_payload, Mapping) else {}
+    target_id = str(row.get("target_id") or "")
+    target_row = connection.execute(
+        "SELECT display_name, canonical_target_url, provenance_url, config_json, connector, source_token FROM acquisition_targets WHERE target_id=?",
+        (target_id,),
+    ).fetchone()
+    target_config = _decode(target_row["config_json"], {}) if target_row is not None else {}
     target = {
-        "target_id": str(row.get("target_id") or ""), "connector": str(row.get("target_connector") or row.get("source_connector") or row.get("source_ats") or ""),
-        "display_name": str(row.get("source_display_name") or ""), "source_token": str(row.get("source_token") or ""),
-        "provenance_url": str(row.get("original_url") or ""), "canonical_target_url": str(row.get("original_url") or ""),
-        "config": {},
+        "target_id": target_id,
+        "connector": str((target_row["connector"] if target_row is not None else "") or row.get("target_connector") or row.get("source_connector") or row.get("source_ats") or ""),
+        "display_name": str((target_row["display_name"] if target_row is not None else "") or row.get("source_display_name") or ""),
+        "source_token": str((target_row["source_token"] if target_row is not None else "") or row.get("source_token") or ""),
+        "provenance_url": str((target_row["provenance_url"] if target_row is not None else "") or row.get("original_url") or ""),
+        "canonical_target_url": str((target_row["canonical_target_url"] if target_row is not None else "") or row.get("original_url") or ""),
+        "config": target_config if isinstance(target_config, Mapping) else {},
     }
+    configured_profile = target["config"].get("company_profile") or target["config"].get("company")
+    if isinstance(configured_profile, Mapping):
+        raw_job["company_details"] = dict(configured_profile)
     normalized = normalize_job_for_ingestion(raw_job, target)
     normalized["source_observation_id"] = observation_id
     normalized["observed_at"] = str(row.get("observed_at") or now)

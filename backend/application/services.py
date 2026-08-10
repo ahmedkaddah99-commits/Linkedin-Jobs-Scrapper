@@ -1200,7 +1200,10 @@ class BackendApplication:
         provider: CompanyEnrichmentProvider | None = None,
     ) -> dict[str, Any]:
         """Worker-only bounded company enrichment; never called by catalog reads."""
-        enabled = self.repositories.config_store.get_value("acquisition.phase_f.company_enrichment_enabled", False)
+        enabled = self.repositories.config_store.get_value(
+            "acquisition.phase_f.company_enrichment_enabled",
+            os.getenv("RUNR_COMPANY_ENRICHMENT_ENABLED", "0"),
+        )
         if not force and str(enabled).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
             return {"status": "disabled", "reason": "phase_f_company_enrichment_disabled"}
         previous = self._company_enrichment_service.provider

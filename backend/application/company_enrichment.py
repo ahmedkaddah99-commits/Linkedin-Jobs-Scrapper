@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import os
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
@@ -240,6 +241,15 @@ class OfficialWebsiteProvider:
         return result
 
 
+def configured_company_enrichment_provider() -> CompanyEnrichmentProvider:
+    """Build the explicitly configured provider without starting enrichment."""
+
+    provider = str(os.getenv("RUNR_COMPANY_ENRICHMENT_PROVIDER") or "official_website").strip().casefold()
+    if provider in {"official_website", "company_website"}:
+        return OfficialWebsiteProvider()
+    raise ValueError(f"Unsupported RUNR_COMPANY_ENRICHMENT_PROVIDER: {provider}")
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -296,7 +306,7 @@ class CompanyEnrichmentService:
         self.repositories = repositories
         self.object_storage = object_storage
         self.profile_writer = profile_writer
-        self.provider = provider or OfficialWebsiteProvider()
+        self.provider = provider or configured_company_enrichment_provider()
         self.lease_owner = lease_owner
 
     @property
@@ -394,4 +404,4 @@ class CompanyEnrichmentService:
         return asyncio.run(self.run(**kwargs))
 
 
-__all__ = ["COMPANY_ENRICHMENT_FIELDS", "CompanyEnrichmentResult", "CompanyEnrichmentService", "OfficialWebsiteProvider"]
+__all__ = ["COMPANY_ENRICHMENT_FIELDS", "CompanyEnrichmentResult", "CompanyEnrichmentService", "OfficialWebsiteProvider", "configured_company_enrichment_provider"]

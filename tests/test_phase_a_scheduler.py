@@ -82,7 +82,7 @@ class PhaseASchedulerTests(unittest.TestCase):
             self.assertEqual(
                 {request[0] for request in requests},
                 {
-                    "https://www.siemens.com/en-us/company/jobs",
+                    "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?42392=%5B67940248%5D&42392_format=17551&listFilterMode=1&folderRecordsPerPage=6",
                     "https://basf.jobs/",
                     "https://jobs.bosch.de/",
                     "https://careers.dhl.com/eu/de",

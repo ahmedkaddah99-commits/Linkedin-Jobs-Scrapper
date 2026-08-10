@@ -386,12 +386,13 @@ def company_url_records(job: Mapping[str, Any], *, company_id: str = "", observe
         if not url or (url, url_type) in seen:
             continue
         seen.add((url, url_type))
+        configured = source_field.startswith(("company_profile.", "company_details."))
         result.append({
             "company_id": company_id or None, "url_type": url_type, "url": url,
-            "canonical_url": url, "source": "source_observation", "source_field": source_field,
+            "canonical_url": url, "source": "configured_official" if configured else "source_observation", "source_field": source_field,
             "first_seen_at": observed_at or None, "last_seen_at": observed_at or None,
-            "validation_status": "not_validated", "redirect_target": None,
-            "selected_primary": False, "rule_version": UNIFIED_RULE_VERSION,
+            "validation_status": "configured_official" if configured else "not_validated", "redirect_target": None,
+            "selected_primary": bool(configured and url_type in {"homepage", "careers", "employer_jobs", "ats_jobs"}), "rule_version": UNIFIED_RULE_VERSION,
         })
     return result
 
