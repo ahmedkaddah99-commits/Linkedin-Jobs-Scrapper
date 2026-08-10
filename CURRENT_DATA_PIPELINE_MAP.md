@@ -12,9 +12,9 @@ local database: `DATABASE_BACKEND=turso`, `RUNR_ENV=production`, remote
 libSQL/Turso configured, and R2/S3 object storage configured. No secret value
 is reproduced here. [P]
 
-The current production database has 44 applied migrations, 587 immutable job
+The current production database has 45 applied migrations, 587 immutable job
 observations, 609 posting-version rows, 141 canonical jobs, 11 canonical
-companies, 7,316 field-evidence rows, 127 completeness reports, 3,729 quality
+companies, 7,316 field-evidence rows, 127 completeness reports, 3,864 quality
 events, 252 company URL rows, zero logo-enrichment rows, zero duplicate
 clusters, five publication rows, and one current publication head. [P]
 
@@ -35,7 +35,10 @@ resumable reprocessing code. [C][S][T][P]
 
 Partial: company URL/profile coverage, timestamp semantics, source metadata,
 field precedence, enrichment, duplicate review, user-facing publication of
-the new normalized fields, and post-deploy production reprocessing. [C][P]
+the new normalized fields, and production reprocessing. The production
+reprocessing row has a durable checkpoint at 30 observations but is currently
+stale/running after an external duplicate launcher was stopped; it is not a
+completed backfill. [C][P]
 
 Missing or not proven in the inspected data: logo provider results, durable
 company-source/alias decision history, automatic semantic conflict resolution,
@@ -94,7 +97,7 @@ manifest / configured source registry
 | Quality/completeness | `completeness_rules()`, `quality.py`, reprocessor | `acquisition_completeness_reports`, `acquisition_quality_events`, `acquisition_version_quality` | Canonical fields, evidence, publication/review state | Pass/warning, state vocabulary, denominator, report-only percentages, warning events | Warnings never block ingestion or publication; completeness is not a product eligibility gate. [C][T] |
 | Publication | admin import service and acquisition store preview/publish/undo | `acquisition_publications`, `acquisition_publication_jobs`, `acquisition_publication_head`, audit rows | Explicit approved import/preview and admin action | Valid publication and single head read model | Only an explicit publish promotes the head; reprocessing cannot promote it; undo is an admin action. [C][P] |
 | API/read models | `api/routes/acquisition_admin.py`, `job_import_admin.py`, `acquisition_catalog.py`, `personalized_jobs_service.py` | Read joins over canonical, version, evidence, publication/profile tables | Authenticated request and filters | Admin inspection/read model; user feed/card/detail serializers | Admin routes require admin identity; user routes require user identity and current publication. New normalized fields are stored more broadly than the public serializer exposes. [C][U] |
-| Reprocessing/backfill | `scripts/reprocess_acquisition.py`, `acquisition/reprocessing.py` | Run/stage/checkpoint/rule/provenance/quality/duplicate tables | Preserved observations and explicit scope/idempotency key | Bounded additive projections, checkpoint, counts, rollback reference | Project interpreter guard, local backup, remote additive acknowledgement, compare-and-swap lease, stale reclaim, local SQLite savepoint per observation, remote libSQL whole-batch rollback/retry, resumable failure list, no delete/merge/publish. [C][T] |
+| Reprocessing/backfill | `scripts/reprocess_acquisition.py`, `acquisition/reprocessing.py` | Run/stage/checkpoint/rule/provenance/quality/duplicate tables | Preserved observations and explicit scope/idempotency key | Bounded additive projections, checkpoint, counts, rollback reference | Project interpreter guard, local backup, remote additive acknowledgement, compare-and-swap lease, stale reclaim, local SQLite savepoint per observation, remote libSQL replayable batch first with isolated per-observation retry fallback, resumable failure list, no delete/merge/publish. [C][T] |
 
 ## Canonical entity relationship map
 
@@ -233,8 +236,9 @@ The script refuses non-project Python or a version other than 3.12.7. Local
 SQLite apply copies the database before writing. Remote apply is additive and
 transaction-batched, uses an owner lease (`045_acquisition_reprocessing_leases`),
 reclaims only a stale lease with compare-and-swap, checkpoints each batch,
-uses per-observation savepoints on local SQLite and whole-batch rollback/retry
-on remote libSQL, records retryable failures, and never deletes
+uses per-observation savepoints on local SQLite. Remote libSQL first attempts a
+replayable batch transaction and falls back to isolated per-observation
+transactions when the batch fails; it records retryable failures and never deletes
 observations/versions or automatically merges/publishes. A second completed
 invocation with the same idempotency key returns an idempotent replay. [C][S][T]
 

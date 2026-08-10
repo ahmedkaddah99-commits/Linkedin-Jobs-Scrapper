@@ -2,7 +2,8 @@
 
 Date: 2026-08-10  
 Branch: `deployment/render-turso-r2`  
-Implementation commit inspected: `9a62e81` (`Add acquisition admin console and resilient reprocessing leases`)
+Implementation commits inspected: `9a62e81` through `e5bc855` (acquisition admin console,
+resumable leases, and resilient remote reprocessing transactions)
 
 ## Scope and safety
 
@@ -77,17 +78,17 @@ in the public user serializer.
 
 ## Production baseline and evidence
 
-The read-only inventory immediately before deployment packaging was:
+The current read-only inventory after deployment was:
 
 | Metric | Observed |
 |---|---:|
-| Applied migrations | 44 |
+| Applied migrations | 45 |
 | Acquisition targets/cycles/requests | 9 / 10 / 25 |
 | Immutable observations | 587 |
 | Canonical jobs/companies | 141 / 11 |
 | Posting versions | 609 |
 | Field provenance/rule outputs | 7,316 / 236 |
-| Completeness reports/quality events | 127 / 3,729 |
+| Completeness reports/quality events | 127 / 3,864 |
 | Company URL/logo-enrichment rows | 252 / 0 |
 | Duplicate clusters/members | 0 / 0 |
 | Publications/current head | 5 / 1 |
@@ -110,20 +111,21 @@ a clean production baseline.
 ## Reprocessing state
 
 The requested production idempotency key is
-`unified-mapping-production-2026-08-10`. Two concurrent invocations were
-found and stopped after exact command inspection; one was using the project
-venv and one used a global interpreter. The global interpreter is now rejected
-by the script guard. No further production invocation was started during
-implementation review.
+`unified-mapping-production-2026-08-10`. The run currently has a durable
+checkpoint at 30 observations, 300 fields, 30 historical repairs, 148
+warnings, and 26 committed batches, with no failed observations. Its database
+row is `running` with a stale lease because the bounded process exited while
+an external duplicate launcher repeatedly spawned a global-Python copy. The
+duplicate copies were stopped by exact PID/command inspection; no active
+reprocessor remains. The run is therefore checkpointed and resumable, but not
+complete.
 
-The remote run row is currently `failed` after the controlled resume exposed
-that the libSQL driver can invalidate a named SQLite savepoint during a
-transaction replay. Its latest durable checkpoint/count projection was 23
-committed observations, 23 fields, 23 historical repairs, 115 warnings, and
-23 batches. The savepoint issue is patched: local SQLite keeps per-observation
-savepoints, while remote libSQL rolls back and retries the whole bounded batch
-from the durable checkpoint. The count anomaly is itself an operational
-finding; post-resume counts must be reconciled against table deltas.
+Remote reprocessing now attempts a replayable batch transaction first and
+falls back to isolated per-observation transactions when the batch fails; local
+SQLite retains per-observation savepoints. This avoids the earlier libSQL named
+savepoint failure. The count anomaly and external launcher are operational
+findings; a future resume must reconcile table deltas by source before claiming
+completion.
 
 Required post-deploy operator command:
 
@@ -131,25 +133,27 @@ Required post-deploy operator command:
 .venv\Scripts\python.exe scripts/reprocess_acquisition.py `
   --env-file user_config\.env `
   --apply --yes --allow-remote-additive-rollback `
-  --batch-size 25 `
+  --batch-size 5 `
+  --max-batches 1 `
+  --stale-after-seconds 1 `
   --idempotency-key unified-mapping-production-2026-08-10 `
   --resume reprocess_ef912ccf2e9f44ca974222fe60732e55
 ```
 
-Then run the same command again without a new key. The expected second result
-is `idempotent_replay=true` with no additional observation/version/evidence
-rows beyond the first completed projection. The current admin UI deliberately
-does not authorize remote additive apply by default; the CLI acknowledgement
-is the explicit operational path until a visible admin acknowledgement control
-is added.
+After the run reaches `completed`, run the same command again without a new
+key. The expected second result is `idempotent_replay=true` with no additional
+observation/version/evidence rows beyond the first completed projection. That
+replay has not yet been observed because the production run is incomplete. The
+current admin UI deliberately does not authorize remote additive apply by
+default; the CLI acknowledgement is the explicit operational path until a
+visible admin acknowledgement control is added.
 
 ## Validation completed
 
 - Project interpreter: Python 3.12.7.
 - Focused acquisition, migration, quality, admin, ATS, dedupe, mapping, and
-  reprocessing tests: 47 passed, 15 subtests passed before the final docs-only
-  edits; the committed lease workstream also includes four dedicated
-  reprocessing tests.
+  reprocessing tests: 51 passed, 15 subtests; a subsequent remote-transaction
+  focused run passed 13 tests. Ruff passed for changed Python files.
 - Ruff: all changed Python files passed.
 - Frontend production build: Vite build passed; the new
   `AdminAcquisitionPage` chunk was generated.
@@ -167,17 +171,17 @@ is added.
 
 ## Remaining blockers and recommended sequence
 
-1. Deploy the committed migration/code to API and worker; verify migration 045,
-   health, worker readiness, and that the current publication head is unchanged.
-2. Resume the stale production run exactly once, reconcile table deltas and
-   warnings by N26/Qonto/fixture source, then run the same idempotency key again.
-3. Quarantine fixture/test targets and decide whether to backfill or exclude
+1. Remove or disable the external duplicate launcher, then resume the stale
+   production run exactly once, reconcile table deltas and warnings by
+   N26/Qonto/fixture source, and run the same idempotency key again only after
+   it reports `completed`.
+2. Quarantine fixture/test targets and decide whether to backfill or exclude
    their observations from production quality metrics.
-4. Add durable connector capability snapshots, raw-retention coverage,
+3. Add durable connector capability snapshots, raw-retention coverage,
    timestamp/lifecycle conflict semantics, and company-source alias decisions.
-5. Add reversible duplicate decisions, one approved enrichment provider with
+4. Add reversible duplicate decisions, one approved enrichment provider with
    budget/terms/refresh controls, and authenticated production contract tests.
-6. Expand public serializers and admin controls only after versioning the
+5. Expand public serializers and admin controls only after versioning the
    `known`/legacy-`present` compatibility contract.
 
 The complete stage, entity, field-lineage, connector, consumer, duplicate, and
