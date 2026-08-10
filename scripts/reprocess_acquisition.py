@@ -19,6 +19,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend.acquisition.reprocessing import build_reprocessing_plan, run_reprocessing
 
 
+def _assert_project_interpreter() -> None:
+    expected = Path(__file__).resolve().parents[1] / ".venv" / "Scripts" / "python.exe"
+    actual = Path(sys.executable).resolve()
+    if actual != expected:
+        raise RuntimeError(
+            "reprocessing must run with the project interpreter "
+            f"{expected}; refusing {actual}"
+        )
+    if sys.version_info[:3] != (3, 12, 7):
+        raise RuntimeError(f"reprocessing requires Python 3.12.7; found {sys.version.split()[0]}")
+
+
 def _load_env(path: Path) -> None:
     if not path.exists():
         return
@@ -34,11 +46,13 @@ def _load_env(path: Path) -> None:
 
 
 def main() -> int:
+    _assert_project_interpreter()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, default=Path("user_config/.env"))
     parser.add_argument("--database-root", type=Path, default=Path(".backend_data"))
-    parser.add_argument("--scope-json", default="{}", help="JSON object limiting the run; currently recorded for audit")
+    parser.add_argument("--scope-json", default="{}", help="JSON object limiting the run; recorded for audit")
     parser.add_argument("--batch-size", type=int, default=100)
+    parser.add_argument("--max-batches", type=int, default=100, help="Maximum committed batches per invocation")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--yes", action="store_true", help="Confirm additive reprocessing")
     parser.add_argument("--idempotency-key", default="")
@@ -59,6 +73,7 @@ def main() -> int:
             args.database_root,
             apply=True,
             batch_size=max(1, args.batch_size),
+            max_batches=max(1, args.max_batches),
             idempotency_key=args.idempotency_key,
             resume_id=args.resume_id,
             scope=scope,

@@ -266,6 +266,66 @@ class AdminJobImportDashboardTests(unittest.TestCase):
         application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.enabled", True)
         application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.allow_proxy", True)
 
+    def test_acquisition_admin_alias_forwards_job_filters(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.list_admin_job_inspections.return_value = {"jobs": [], "total": 0}
+        handler = _AdminHandler()
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="GET",
+            segments=("admin", "acquisition", "jobs"),
+            query={"search": ["backend"], "publication_state": ["unpublished"], "limit": ["25"]},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        self.assertEqual(handler.payload, (200, {"jobs": [], "total": 0}))
+        application.list_admin_job_inspections.assert_called_once_with(
+            search="backend",
+            function="",
+            subfunction="",
+            employment_type="",
+            workplace="",
+            location="",
+            language="",
+            seniority="",
+            source="",
+            freshness="",
+            completeness_state="",
+            warning_type="",
+            duplicate_state="",
+            application_method="",
+            publication_state="unpublished",
+            limit=25,
+            offset=0,
+        )
+
+    def test_acquisition_admin_reprocessing_alias_is_admin_only_and_explicit(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.run_admin_reprocessing.return_value = {"status": "planned"}
+        handler = _AdminHandler({"apply": False, "batch_size": 5, "scope": {"country": "Germany"}})
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="POST",
+            segments=("admin", "acquisition", "reprocessing", "run"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        self.assertEqual(handler.admin_calls, 1)
+        self.assertEqual(handler.payload, (202, {"status": "planned"}))
+        application.run_admin_reprocessing.assert_called_once_with(
+            apply=False,
+            batch_size=5,
+            idempotency_key="",
+            resume_id="",
+            scope={"country": "Germany"},
+            allow_remote_additive_rollback=False,
+        )
+
     def test_admin_inspection_composes_canonical_job_company_provenance_and_apply_state(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = create_backend(Path(temporary_directory), storage_backend="sqlite")

@@ -63,7 +63,7 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
         context.send_json({"runs": application.list_admin_reprocessing_runs(limit=_int_query(query, "limit", 50, 200))})
         return True
     if segments == ["admin", "job-import", "reprocessing", "plan"]:
-        context.send_json(application.get_admin_reprocessing_plan(scope={}))
+        context.send_json(application.get_admin_reprocessing_plan(scope=_scope_query(query)))
         return True
     if segments == ["admin", "job-import", "publication"]:
         context.send_json(application.get_admin_publication_read_model())
@@ -167,6 +167,19 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
         if segments == ["admin", "job-import", "undo"]:
             context.send_json(application.undo_admin_job_publication(actor_user_id=actor_user_id), status=202)
             return True
+        if segments in (["admin", "job-import", "reprocessing", "run"], ["admin", "job-import", "reprocessing", "apply"]):
+            context.send_json(
+                application.run_admin_reprocessing(
+                    apply=_flag(body.get("apply")),
+                    batch_size=_int_value(body.get("batch_size"), 100, 1000),
+                    idempotency_key=_text(body.get("idempotency_key")),
+                    resume_id=_text(body.get("resume_id")),
+                    scope=dict(body.get("scope") or {}),
+                    allow_remote_additive_rollback=_flag(body.get("allow_remote_additive_rollback")),
+                ),
+                status=202,
+            )
+            return True
         if segments == ["admin", "job-import", "pause"]:
             paused = bool(body.get("paused", True))
             config_store = getattr(application.repositories, "config_store", None)
@@ -218,6 +231,29 @@ def _int_query(query: Mapping[str, list[str]], key: str, default: int, maximum: 
     except (TypeError, ValueError):
         value = default
     return max(0, min(maximum, value))
+
+
+def _int_value(value: Any, default: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(1, min(maximum, parsed))
+
+
+def _flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return _text(value).casefold() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _scope_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
+    scope: dict[str, Any] = {}
+    for key in ("country", "city", "department", "category", "freshness"):
+        value = _query_value(query, key)
+        if value:
+            scope[key] = value
+    return scope
 
 
 def _text(value: Any) -> str:

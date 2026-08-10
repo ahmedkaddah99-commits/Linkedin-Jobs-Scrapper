@@ -2191,6 +2191,24 @@ def _apply_unified_acquisition_mapping_migration(connection: DatabaseConnection)
         """
     )
 
+
+def _apply_acquisition_reprocessing_lease_migration(connection: DatabaseConnection) -> None:
+    """Add an additive owner lease for resumable reprocessing runs.
+
+    The lease is operational metadata only.  It does not alter observations,
+    posting versions, or any canonical record, and it allows a stale process
+    to be reclaimed with a compare-and-swap update.
+    """
+
+    _ensure_table_column(connection, "acquisition_reprocessing_runs", "lease_token", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "acquisition_reprocessing_runs", "lease_expires_at", "TEXT NOT NULL DEFAULT ''")
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_acquisition_reprocessing_lease
+            ON acquisition_reprocessing_runs(status, lease_expires_at, updated_at)
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2431,6 +2449,12 @@ MIGRATIONS = (
         "044_unified_acquisition_mapping",
         "Add connector-independent mapping, provenance, enrichment, duplicate, and resumable reprocessing state.",
         _apply_unified_acquisition_mapping_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "045_acquisition_reprocessing_leases",
+        "Add compare-and-swap ownership leases for resumable acquisition reprocessing.",
+        _apply_acquisition_reprocessing_lease_migration,
         dependencies=(_table_columns, _ensure_table_column),
     ),
 )

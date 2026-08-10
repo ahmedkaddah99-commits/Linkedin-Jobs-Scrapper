@@ -14,6 +14,15 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from backend.acquisition.network_policy import hostname_for_url
+from backend.acquisition.rule_registry import (
+    FIELD_STATE_SET,
+    FIELD_STATES,
+    RULE_VERSION_REGISTRY,
+    VALUE_FIELD_STATES,
+    canonical_field_state,
+    field_state_for,
+    value_is_present,
+)
 from backend.domain.job_identity import canonicalize_url, compact_whitespace
 
 
@@ -76,7 +85,7 @@ def _text(value: Any) -> str:
 
 
 def _known(value: Any) -> bool:
-    if value in (None, "", []):
+    if not value_is_present(value):
         return False
     return not (isinstance(value, str) and value.strip().casefold() in _UNKNOWN)
 
@@ -127,6 +136,43 @@ def _company_value(job: Mapping[str, Any], keys: Sequence[str]) -> tuple[Any, st
     return None, "", "not_available"
 
 
+def _source_conflicting(job: Mapping[str, Any], keys: Sequence[str]) -> bool:
+    """Detect disagreement across connector, structured, and raw values."""
+
+    values: list[str] = []
+    for source, _, _ in _nested_sources(job):
+        for key in keys:
+            value = source.get(key)
+            if _known(value):
+                token = compact_whitespace(_text(value)).casefold()
+                if token and token not in values:
+                    values.append(token)
+    return len(values) > 1
+
+
+def _company_conflicting(job: Mapping[str, Any], keys: Sequence[str]) -> bool:
+    values: list[str] = []
+    sources: list[Mapping[str, Any]] = [job]
+    for key in ("company", "company_profile", "company_details", "employer"):
+        value = job.get(key)
+        if isinstance(value, Mapping):
+            sources.append(value)
+    for key in ("source_raw_payload", "source_metadata"):
+        value = job.get(key)
+        if isinstance(value, Mapping):
+            nested = value.get("company") or value.get("employer")
+            if isinstance(nested, Mapping):
+                sources.append(nested)
+    for source in sources:
+        for key in keys:
+            value = source.get(key)
+            if _known(value):
+                token = compact_whitespace(_text(value)).casefold()
+                if token and token not in values:
+                    values.append(token)
+    return len(values) > 1
+
+
 def _normalize_count(value: Any) -> Any:
     if isinstance(value, Mapping):
         return dict(value)
@@ -142,11 +188,11 @@ def field_record(
     *, raw_value: Any = None, normalized_value: Any = None, source: str = "", source_field: str = "",
     extraction_method: str = "not_available", evidence: Any = None, confidence: float = 0.0,
     observed_at: str = "", state: str = "unknown", unsupported: bool = False,
+    state_reason: str = "",
 ) -> dict[str, Any]:
     if unsupported:
         state = "unsupported"
-    elif state not in {"present", "missing", "unknown", "unsupported", "invalid", "conflicting", "inferred"}:
-        state = "unknown"
+    state = canonical_field_state(state)
     return {
         "raw_value": raw_value,
         "normalized_value": normalized_value,
@@ -157,6 +203,7 @@ def field_record(
         "evidence": evidence,
         "confidence": round(max(0.0, min(1.0, float(confidence or 0.0))), 3),
         "observed_at": observed_at or None,
+        "state_reason": state_reason or None,
         "rule_version": UNIFIED_RULE_VERSION,
     }
 
@@ -168,7 +215,7 @@ def _normalized_token(value: Any) -> str:
 def _normalize_employment(value: Any) -> str:
     token = _normalized_token(value)
     if not token:
-        return "Unknown"
+        return ""
     if "working student" in token or "werkstudent" in token:
         return "Working student"
     if "intern" in token or "praktikum" in token:
@@ -185,13 +232,13 @@ def _normalize_employment(value: Any) -> str:
         return "Contract"
     if "full" in token or "vollzeit" in token:
         return "Full-time"
-    return "Unknown"
+    return ""
 
 
 def _normalize_workplace(value: Any) -> str:
     token = _normalized_token(value)
     if not token:
-        return "Unknown"
+        return ""
     if "hybrid" in token or "hybride" in token:
         return "Hybrid"
     if "remote" in token or "remot" in token or "home office" in token or "homeoffice" in token:
@@ -200,7 +247,7 @@ def _normalize_workplace(value: Any) -> str:
         return "Flexible"
     if "on-site" in token or "onsite" in token or "on site" in token or "office" in token or "vor ort" in token:
         return "On-site"
-    return "Unknown"
+    return ""
 
 
 def _map_function(raw_department: Any) -> tuple[str, str]:
@@ -253,6 +300,7 @@ def _parse_languages(raw: Any, *, source_field: str, method: str, description: s
             "language": language, "status": status, "proficiency": proficiency,
             "evidence": evidence, "source": source_field, "extraction_method": method,
             "confidence": 0.9 if method.startswith("structured") else 0.75,
+            "state": "inferred" if method == "labeled_page_text" else "present",
             "observed_at": observed_at or None, "rule_version": UNIFIED_RULE_VERSION,
         })
     if result:
@@ -353,13 +401,79 @@ def map_job_fields(job: Mapping[str, Any], *, observed_at: str = "", source_obse
 
     department, department_field, department_method = _source_value(job, ("source_department", "department", "department_name"))
     function, subfunction = _map_function(department)
-    function_state = "present" if function not in {"Unclassified", "Other"} else "unknown" if not _known(department) else "present"
     employment, employment_field, employment_method = _source_value(job, ("employment_type", "employmentType", "job_type", "type", "commitment"))
     workplace, workplace_field, workplace_method = _source_value(job, ("workplace_arrangement", "workplace_type", "workplaceType", "remote_type", "workplace"))
     description = _description_text(job)
     languages_raw, languages_field, languages_method = _source_value(job, ("languages", "language_requirements", "language", "required_languages", "preferred_languages"))
     languages = _parse_languages(languages_raw, source_field=languages_field, method=languages_method, description=description, observed_at=observed_at)
     experience = _experience(job, description, observed_at)
+    metadata_fields = (
+        job.get("normalized_source_metadata", {}).get("fields", {})
+        if isinstance(job.get("normalized_source_metadata"), Mapping)
+        else {}
+    )
+
+    def metadata_state(
+        field_name: str,
+        raw_value: Any,
+        *,
+        inferred: bool = False,
+        invalid: bool = False,
+        conflicting: bool = False,
+    ) -> str:
+        record = metadata_fields.get(field_name) if isinstance(metadata_fields, Mapping) else None
+        if isinstance(record, Mapping) and str(record.get("state") or ""):
+            state = canonical_field_state(record.get("state"))
+            if state != "unknown" or not value_is_present(raw_value):
+                if inferred and state == "present":
+                    return "inferred"
+                return state
+        supported = None
+        capability = (
+            job.get("normalized_source_metadata", {}).get("source_capability")
+            if isinstance(job.get("normalized_source_metadata"), Mapping)
+            else None
+        )
+        supported_fields = (
+            job.get("normalized_source_metadata", {}).get("supported_fields")
+            if isinstance(job.get("normalized_source_metadata"), Mapping)
+            else None
+        )
+        if capability == "known" and isinstance(supported_fields, Sequence) and not isinstance(supported_fields, (str, bytes)):
+            supported = field_name in supported_fields
+        return field_state_for(
+            raw_value,
+            supported=supported,
+            observed=bool(source_observation_id or source or observed_at or job.get("source_raw_payload")),
+            inferred=inferred,
+            invalid=invalid,
+            conflicting=conflicting,
+        )
+
+    department_state = metadata_state(
+        "department",
+        department,
+        conflicting=_source_conflicting(job, ("source_department", "department", "department_name")),
+    )
+    employment_normalized = _normalize_employment(employment)
+    workplace_normalized = _normalize_workplace(workplace)
+    employment_state = metadata_state(
+        "employment_type",
+        employment,
+        invalid=bool(_known(employment) and not employment_normalized),
+        conflicting=_source_conflicting(job, ("employment_type", "employmentType", "job_type", "type", "commitment")),
+    )
+    workplace_state = metadata_state(
+        "workplace_arrangement",
+        workplace,
+        invalid=bool(_known(workplace) and not workplace_normalized),
+        conflicting=_source_conflicting(job, ("workplace_arrangement", "workplace_type", "workplaceType", "remote_type", "workplace")),
+    )
+    if experience.get("extraction_method") == "description_evidence" and experience.get("state") == "present":
+        experience["state"] = "inferred"
+    language_state = "unknown"
+    if languages:
+        language_state = "inferred" if all(item.get("state") == "inferred" for item in languages) else "present"
     company_fields: dict[str, dict[str, Any]] = {}
     company_field_map = {
         "name": ("name", "canonical_name", "company_name", "employer_name"),
@@ -386,10 +500,15 @@ def map_job_fields(job: Mapping[str, Any], *, observed_at: str = "", source_obse
         normalized_value = _normalize_count(raw_value) if field_name in {"headcount", "associated_members"} else raw_value
         company_fields[field_name] = field_record(
             raw_value=raw_value, normalized_value=normalized_value,
-            source=source or "source_observation" if raw_value is not None else "",
+            source=source or "source_observation" if _known(raw_value) else "",
             source_field=source_field, extraction_method=method,
-            evidence=raw_value, confidence=0.95 if raw_value is not None else 0.0,
-            observed_at=observed_at, state="present" if _known(raw_value) else "unknown",
+            evidence=raw_value, confidence=0.95 if _known(raw_value) else 0.0,
+            observed_at=observed_at,
+            state=field_state_for(
+                raw_value,
+                observed=bool(source_observation_id or source or observed_at or job.get("source_raw_payload")),
+                conflicting=_company_conflicting(job, keys),
+            ),
         )
     application = job.get("application_destination") if isinstance(job.get("application_destination"), Mapping) else {}
     classification = _text(application.get("classification"))
@@ -412,19 +531,24 @@ def map_job_fields(job: Mapping[str, Any], *, observed_at: str = "", source_obse
     for name in ("published_at", "updated_at", "first_seen_at", "last_seen_at", "closed_at"):
         source_name = "source_" + name if name in {"published_at", "updated_at", "closed_at"} else name
         item = timestamp_fields.get("fields", {}).get(source_name) if isinstance(timestamp_fields.get("fields"), Mapping) else None
+        if not item and name == "published_at" and isinstance(timestamp_fields.get("fields"), Mapping):
+            # Acquisition quality names the canonical source publication field
+            # ``source_posted_at``; expose it as the mapper's published_at.
+            source_name = "source_posted_at"
+            item = timestamp_fields["fields"].get(source_name)
         value = item.get("value") if isinstance(item, Mapping) else job.get(source_name)
         timestamps[name] = field_record(raw_value=value, normalized_value=value, source=source or "source_observation" if value else "", source_field=(item or {}).get("source_field", "") if isinstance(item, Mapping) else source_name if value else "", extraction_method=(item or {}).get("method", "source_field") if isinstance(item, Mapping) and value else "not_available", evidence=(item or {}).get("semantic") if isinstance(item, Mapping) else None, confidence=0.95 if value else 0.0, observed_at=observed_at, state="present" if value else "unknown")
     fields = {
-        "source_department": field_record(raw_value=department, normalized_value=_text(department) or None, source=source or "source_observation" if department else "", source_field=department_field, extraction_method=department_method, evidence=department, confidence=0.95 if department else 0.0, observed_at=observed_at, state="present" if department else "unknown"),
-        "runr_function": field_record(raw_value=department, normalized_value=function, source=source or "source_observation" if department else "", source_field=department_field, extraction_method="versioned_department_mapping" if department else "not_available", evidence=department or None, confidence=0.9 if department else 0.0, observed_at=observed_at, state=function_state),
-        "runr_subfunction": field_record(raw_value=department, normalized_value=subfunction or None, source=source or "source_observation" if subfunction else "", source_field=department_field, extraction_method="versioned_department_mapping" if subfunction else "not_available", evidence=department or None, confidence=0.85 if subfunction else 0.0, observed_at=observed_at, state="present" if subfunction else "unknown"),
-        "employment_type": field_record(raw_value=employment, normalized_value=_normalize_employment(employment), source=source or "source_observation" if employment else "", source_field=employment_field, extraction_method=employment_method, evidence=employment, confidence=0.95 if employment_method.startswith("structured") else 0.8 if employment else 0.0, observed_at=observed_at, state="present" if _normalize_employment(employment) != "Unknown" else "unknown"),
-        "workplace_arrangement": field_record(raw_value=workplace, normalized_value=_normalize_workplace(workplace), source=source or "source_observation" if workplace else "", source_field=workplace_field, extraction_method=workplace_method, evidence=workplace, confidence=0.95 if workplace_method.startswith("structured") else 0.8 if workplace else 0.0, observed_at=observed_at, state="present" if _normalize_workplace(workplace) != "Unknown" else "unknown"),
-        "remote_geographic_restrictions": field_record(raw_value=job.get("remote_scope") or job.get("remote_restrictions"), normalized_value=job.get("remote_scope") or job.get("remote_restrictions"), source=source if _known(job.get("remote_scope") or job.get("remote_restrictions")) else "", source_field="remote_scope" if _known(job.get("remote_scope")) else "remote_restrictions" if _known(job.get("remote_restrictions")) else "", extraction_method="structured_source_field" if _known(job.get("remote_scope") or job.get("remote_restrictions")) else "not_available", confidence=0.9 if _known(job.get("remote_scope") or job.get("remote_restrictions")) else 0.0, observed_at=observed_at, state="present" if _known(job.get("remote_scope") or job.get("remote_restrictions")) else "unknown"),
-        "application_destination": field_record(raw_value=job.get("application_destination"), normalized_value=application, source=source if application else "", source_field="application_destination" if application else "", extraction_method="deterministic_destination_rules" if application else "not_available", evidence=application.get("evidence") if application else None, confidence=0.95 if application else 0.0, observed_at=observed_at, state="present" if destination_type != "unresolved" else "unknown"),
-        "description": field_record(raw_value=job.get("description_raw") or job.get("full_description") or job.get("description"), normalized_value={"raw_html": job.get("description_raw"), "sanitized_html": job.get("description_html"), "clean_text": job.get("description_text") or job.get("description")}, source=source if description else "", source_field="description", extraction_method="html_sanitization" if description else "not_available", evidence="description representations" if description else None, confidence=0.95 if description else 0.0, observed_at=observed_at, state="present" if description else "unknown"),
-        "experience": field_record(raw_value=experience.get("raw_value"), normalized_value={key: experience.get(key) for key in ("minimum_years", "maximum_years", "seniority", "requirement_status")}, source=source if experience.get("state") == "present" else "", source_field=experience.get("source") or "", extraction_method=experience.get("extraction_method") or "not_available", evidence=experience.get("evidence"), confidence=experience.get("confidence", 0.0), observed_at=observed_at, state=experience.get("state", "unknown")),
-        "languages": field_record(raw_value=languages_raw, normalized_value=languages, source=source if languages else "", source_field=languages_field or "description.languages", extraction_method=languages_method if languages else "not_available", evidence=[item.get("evidence") for item in languages], confidence=max((float(item.get("confidence", 0.0)) for item in languages), default=0.0), observed_at=observed_at, state="present" if languages else "unknown"),
+        "source_department": field_record(raw_value=department, normalized_value=_text(department) or None, source=source or "source_observation" if department else "", source_field=department_field, extraction_method=department_method, evidence=department, confidence=0.95 if department else 0.0, observed_at=observed_at, state=department_state),
+        "runr_function": field_record(raw_value=department, normalized_value=function if _known(department) else None, source=source or "source_observation" if department else "", source_field=department_field, extraction_method="versioned_department_mapping" if department else "not_available", evidence=department or None, confidence=0.9 if department else 0.0, observed_at=observed_at, state=department_state),
+        "runr_subfunction": field_record(raw_value=department, normalized_value=subfunction or None, source=source or "source_observation" if subfunction else "", source_field=department_field, extraction_method="versioned_department_mapping" if subfunction else "not_available", evidence=department or None, confidence=0.85 if subfunction else 0.0, observed_at=observed_at, state="present" if subfunction else department_state),
+        "employment_type": field_record(raw_value=employment, normalized_value=employment_normalized or None, source=source or "source_observation" if employment_normalized else "", source_field=employment_field, extraction_method=employment_method, evidence=employment, confidence=0.95 if employment_method.startswith("structured") else 0.8 if employment_normalized else 0.0, observed_at=observed_at, state=employment_state),
+        "workplace_arrangement": field_record(raw_value=workplace, normalized_value=workplace_normalized or None, source=source or "source_observation" if workplace_normalized else "", source_field=workplace_field, extraction_method=workplace_method, evidence=workplace, confidence=0.95 if workplace_method.startswith("structured") else 0.8 if workplace_normalized else 0.0, observed_at=observed_at, state=workplace_state),
+        "remote_geographic_restrictions": field_record(raw_value=job.get("remote_scope") or job.get("remote_restrictions"), normalized_value=job.get("remote_scope") or job.get("remote_restrictions"), source=source if _known(job.get("remote_scope") or job.get("remote_restrictions")) else "", source_field="remote_scope" if _known(job.get("remote_scope")) else "remote_restrictions" if _known(job.get("remote_restrictions")) else "", extraction_method="structured_source_field" if _known(job.get("remote_scope") or job.get("remote_restrictions")) else "not_available", confidence=0.9 if _known(job.get("remote_scope") or job.get("remote_restrictions")) else 0.0, observed_at=observed_at, state=field_state_for(job.get("remote_scope") or job.get("remote_restrictions"), observed=bool(source_observation_id or source or observed_at or job.get("source_raw_payload")))),
+        "application_destination": field_record(raw_value=job.get("application_destination"), normalized_value=application, source=source if application else "", source_field="application_destination" if application else "", extraction_method="deterministic_destination_rules" if application else "not_available", evidence=application.get("evidence") if application else None, confidence=0.95 if application else 0.0, observed_at=observed_at, state="present" if destination_type != "unresolved" else "missing" if application else "unknown"),
+        "description": field_record(raw_value=job.get("description_raw") or job.get("full_description") or job.get("description"), normalized_value={"raw_html": job.get("description_raw"), "sanitized_html": job.get("description_html"), "clean_text": job.get("description_text") or job.get("description")}, source=source if description else "", source_field="description", extraction_method="html_sanitization" if description else "not_available", evidence="description representations" if description else None, confidence=0.95 if description else 0.0, observed_at=observed_at, state="present" if description else "missing" if source_observation_id or source or observed_at else "unknown"),
+        "experience": field_record(raw_value=experience.get("raw_value"), normalized_value={key: experience.get(key) for key in ("minimum_years", "maximum_years", "seniority", "requirement_status")}, source=source if experience.get("state") in VALUE_FIELD_STATES else "", source_field=experience.get("source") or "", extraction_method=experience.get("extraction_method") or "not_available", evidence=experience.get("evidence"), confidence=experience.get("confidence", 0.0), observed_at=observed_at, state=experience.get("state", "unknown")),
+        "languages": field_record(raw_value=languages_raw, normalized_value=languages, source=source if languages else "", source_field=languages_field or "description.languages", extraction_method=languages_method if languages else "not_available", evidence=[item.get("evidence") for item in languages], confidence=max((float(item.get("confidence", 0.0)) for item in languages), default=0.0), observed_at=observed_at, state=language_state),
     }
     return {
         "schema_version": "unified_mapping_v1", "rule_version": UNIFIED_RULE_VERSION,
@@ -439,5 +563,6 @@ def map_job_fields(job: Mapping[str, Any], *, observed_at: str = "", source_obse
 
 __all__ = [
     "APPLICATION_DESTINATIONS", "EMPLOYMENT_TYPES", "FUNCTION_TAXONOMY", "UNIFIED_RULE_VERSION",
+    "FIELD_STATE_SET", "FIELD_STATES", "RULE_VERSION_REGISTRY", "VALUE_FIELD_STATES",
     "WORKPLACE_ARRANGEMENTS", "company_url_records", "field_record", "map_job_fields",
 ]

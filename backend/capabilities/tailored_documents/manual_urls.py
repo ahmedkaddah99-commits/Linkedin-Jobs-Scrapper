@@ -263,30 +263,72 @@ def extract_generic_company(soup: BeautifulSoup, jsonld_payload: dict[str, Any],
     return ""
 
 
-def extract_generic_location(jsonld_payload: dict[str, Any]) -> str:
+def _jsonld_location_label(location: Any) -> str:
+    if not isinstance(location, dict):
+        return compact_whitespace(str(location or ""))
+
+    address = location.get("address")
+    if isinstance(address, dict):
+        parts: list[str] = []
+        for key in ("addressLocality", "addressRegion", "addressCountry"):
+            value = address.get(key)
+            if isinstance(value, dict):
+                value = value.get("name") or value.get("value")
+            text = compact_whitespace(str(value or ""))
+            if text and text not in parts:
+                parts.append(text)
+        if parts:
+            return ", ".join(parts)
+    elif address:
+        address_text = compact_whitespace(str(address))
+        if address_text:
+            return address_text
+
+    return compact_whitespace(str(location.get("name") or ""))
+
+
+def extract_generic_locations(jsonld_payload: dict[str, Any]) -> list[str]:
     locations = jsonld_payload.get("jobLocation")
     if not locations:
-        return ""
+        return []
 
     if not isinstance(locations, list):
         locations = [locations]
 
     location_values: list[str] = []
     for location in locations:
-        if not isinstance(location, dict):
-            continue
-        address = location.get("address")
-        if isinstance(address, dict):
-            for key in ("addressLocality", "addressRegion", "addressCountry"):
-                value = compact_whitespace(str(address.get(key) or ""))
-                if value and value not in location_values:
-                    location_values.append(value)
-        else:
-            address_text = compact_whitespace(str(address or ""))
-            if address_text and address_text not in location_values:
-                location_values.append(address_text)
+        label = _jsonld_location_label(location)
+        if label and label not in location_values:
+            location_values.append(label)
 
-    return ", ".join(location_values)
+    return location_values
+
+
+def extract_generic_location(jsonld_payload: dict[str, Any]) -> str:
+    return "; ".join(extract_generic_locations(jsonld_payload))
+
+
+def extract_generic_html_locations(soup: BeautifulSoup) -> list[str]:
+    """Read one conservative location signal from common employer-page markup."""
+
+    selectors = (
+        "meta[name='jobLocation']",
+        "meta[property='job:location']",
+        "[data-location]",
+        "[itemprop='jobLocation']",
+        "[class*='location']",
+        "[id*='location']",
+    )
+    for selector in selectors:
+        node = soup.select_one(selector)
+        if not node:
+            continue
+        value = node.get("content") or node.get("data-location") or node.get_text(" ", strip=True)
+        text = compact_whitespace(str(value or ""))
+        if text and len(text) <= 200:
+            return [text]
+
+    return []
 
 
 def extract_public_posted_age(date_posted: Any) -> tuple[str, float | None, str | None]:
@@ -439,7 +481,8 @@ def fetch_generic_manual_job(
         title = compact_whitespace(og_title.get("content", "")) if og_title else ""
 
     company = extract_generic_company(soup, jsonld_payload, title)
-    location_raw = extract_generic_location(jsonld_payload)
+    location_collection = extract_generic_locations(jsonld_payload) or extract_generic_html_locations(soup)
+    location_raw = "; ".join(location_collection)
     description_source = extract_generic_description_source(soup, jsonld_payload)
     description_bundle = normalize_description(description_source or extract_generic_description(soup, jsonld_payload))
     description = description_bundle["plain_text"]
@@ -485,11 +528,15 @@ def fetch_generic_manual_job(
             "description_html": description_bundle["sanitized_html"],
             "description_text": description_bundle["plain_text"],
             "description_decoding": description_bundle["decoding"],
+            "location_collection": location_collection,
+            "source_posted_at": jsonld_payload.get("datePosted") or "",
             "source_page_html": response.text,
             "source_raw_payload": {
                 "source_page_html": response.text,
                 "jobposting_jsonld": jsonld_payload,
                 "canonical_url": canonical_url,
+                "datePosted": jsonld_payload.get("datePosted") or "",
+                "location_collection": location_collection,
                 "status_code": response.status_code,
             },
             "application_candidates": html_candidates,
@@ -730,6 +777,8 @@ __all__ = [
     "extract_generic_description",
     "extract_generic_description_source",
     "extract_generic_location",
+    "extract_generic_locations",
+    "extract_generic_html_locations",
     "extract_jobposting_jsonld",
     "extract_public_posted_age",
     "extract_linkedin_job_id",

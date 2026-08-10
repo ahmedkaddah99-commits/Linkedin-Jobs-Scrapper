@@ -1027,9 +1027,47 @@ class BackendApplication:
         store = self.repositories.acquisition_store
         return store.list_job_import_audit_events(import_id=import_id, limit=limit) if store is not None else []
 
-    def list_admin_job_inspections(self, *, search: str = "", limit: int = 100, offset: int = 0) -> dict[str, Any]:
+    def list_admin_job_inspections(
+        self,
+        *,
+        search: str = "",
+        function: str = "",
+        subfunction: str = "",
+        employment_type: str = "",
+        workplace: str = "",
+        location: str = "",
+        language: str = "",
+        seniority: str = "",
+        source: str = "",
+        freshness: str = "",
+        completeness_state: str = "",
+        warning_type: str = "",
+        duplicate_state: str = "",
+        application_method: str = "",
+        publication_state: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
         store = self.repositories.acquisition_store
-        return store.list_admin_job_inspections(search=search, limit=limit, offset=offset) if store is not None else {
+        return store.list_admin_job_inspections(
+            search=search,
+            function=function,
+            subfunction=subfunction,
+            employment_type=employment_type,
+            workplace=workplace,
+            location=location,
+            language=language,
+            seniority=seniority,
+            source=source,
+            freshness=freshness,
+            completeness_state=completeness_state,
+            warning_type=warning_type,
+            duplicate_state=duplicate_state,
+            application_method=application_method,
+            publication_state=publication_state,
+            limit=limit,
+            offset=offset,
+        ) if store is not None else {
             "jobs": [],
             "total": 0,
             "limit": limit,
@@ -1073,6 +1111,31 @@ class BackendApplication:
         from backend.acquisition.reprocessing import build_reprocessing_plan
 
         return build_reprocessing_plan(store.db_path, scope=scope)
+
+    def run_admin_reprocessing(
+        self,
+        *,
+        apply: bool = False,
+        batch_size: int = 100,
+        idempotency_key: str = "",
+        resume_id: str = "",
+        scope: Mapping[str, Any] | None = None,
+        allow_remote_additive_rollback: bool = False,
+    ) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Reprocessing requires sqlite/Turso acquisition storage.")
+        from backend.acquisition.reprocessing import run_reprocessing
+
+        return run_reprocessing(
+            store.db_path,
+            apply=bool(apply),
+            batch_size=max(1, min(1000, int(batch_size))),
+            idempotency_key=str(idempotency_key or "").strip(),
+            resume_id=str(resume_id or "").strip(),
+            scope=dict(scope or {}),
+            allow_remote_additive_rollback=bool(allow_remote_additive_rollback),
+        )
 
     def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
         store = self.repositories.acquisition_store

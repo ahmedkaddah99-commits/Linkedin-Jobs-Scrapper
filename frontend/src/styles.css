@@ -40,6 +40,34 @@ body {
   box-sizing: border-box;
 }
 
+/* Acquisition admin read-model status accents. */
+.status-pill-green {
+  background: rgba(22, 163, 74, 0.11);
+  color: #15803d;
+}
+
+.status-pill-amber {
+  background: rgba(217, 119, 6, 0.12);
+  color: #a16207;
+}
+
+.status-pill-slate {
+  background: rgba(100, 116, 139, 0.12);
+  color: #64748b;
+}
+
+.metric-green {
+  color: #15803d;
+}
+
+.metric-amber {
+  color: #a16207;
+}
+
+.metric-slate {
+  color: #0b1c30;
+}
+
 /* Keep native select text inside its own region instead of allowing it to
    collide with the platform-rendered arrow at compressed/wide breakpoints. */
 .career-assets-select {

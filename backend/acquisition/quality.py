@@ -18,6 +18,13 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup, Comment
 
 from backend.acquisition.network_policy import hostname_for_url
+from backend.acquisition.rule_registry import (
+    FIELD_STATE_DESCRIPTIONS,
+    FIELD_STATES,
+    VALUE_FIELD_STATES,
+    canonical_field_state,
+    field_state_for,
+)
 from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION, map_job_fields
 from backend.domain.job_identity import canonicalize_url, compact_whitespace
 
@@ -319,7 +326,7 @@ def extract_application_candidates_from_html(
             href,
             target=target,
             source_ats=source_ats,
-            explicit_kind="ats_application" if source_ats and path_application else "",
+            explicit_kind="ats_application" if source_ats in _ATS_SUFFIXES and path_application else "",
         )
         if classification not in DIRECT_APPLICATION_CLASSIFICATIONS:
             # Preserve the evidence for diagnostics, but never promote an
@@ -492,10 +499,8 @@ def normalize_description(raw_value: Any) -> DescriptionRepresentations:
     }
 
 
-def _state(value: Any, *, supported: bool = True) -> str:
-    if not supported:
-        return "unsupported_by_source"
-    return "known" if value not in (None, "", []) else "unknown"
+def _state(value: Any, *, supported: bool | None = True) -> str:
+    return field_state_for(value, supported=supported, observed=supported is not None)
 
 
 def _first(mapping: Mapping[str, Any], *keys: str) -> Any:
@@ -570,9 +575,11 @@ def normalize_source_timestamps(
     source_name = connector or "career_site"
 
     def field(value: str | None, source_field: str, semantic: str) -> dict[str, Any]:
+        state = field_state_for(value, supported=True, observed=True)
         return {
             "value": value,
-            "state": "known" if value else "unknown",
+            "state": state,
+            "state_reason": "source_field_present" if state == "present" else "source_field_missing",
             "semantic": semantic,
             "source_field": source_field or None,
             "provenance": _provenance(
@@ -607,7 +614,8 @@ def normalize_source_timestamps(
 
 def normalize_source_metadata(job: Mapping[str, Any], *, source_ats: str = "", provenance_url: str = "") -> dict[str, Any]:
     connector = _text(source_ats).casefold()
-    supported = _ATS_SUPPORTED_FIELDS.get(connector, _GENERIC_SUPPORTED_FIELDS)
+    capability_known = connector in _ATS_SUPPORTED_FIELDS
+    supported = _ATS_SUPPORTED_FIELDS.get(connector, frozenset())
     raw_metadata = job.get("source_metadata") if isinstance(job.get("source_metadata"), Mapping) else {}
     timestamps = normalize_source_timestamps(job, source_ats=connector, provenance_url=provenance_url)
     raw_payload = job.get("source_raw_payload") if isinstance(job.get("source_raw_payload"), Mapping) else {}
@@ -635,9 +643,12 @@ def normalize_source_metadata(job: Mapping[str, Any], *, source_ats: str = "", p
     normalized: dict[str, Any] = {}
     for field in _METADATA_FIELDS:
         value = source_values[field]
+        field_supported = field in supported if capability_known else None
+        field_state = _state(value, supported=field_supported)
         normalized[field] = {
             "value": value if value not in (None, "", []) else None,
-            "state": _state(value, supported=field in supported),
+            "state": field_state,
+            "state_reason": "source_field_present" if field_state == "present" else "source_field_unsupported" if field_state == "unsupported" else "source_field_missing" if field_state == "missing" else "source_capability_unknown",
             "provenance": _provenance(
                 source=connector or "career_site" if value not in (None, "", []) else "",
                 url=provenance_url if value not in (None, "", []) else "",
@@ -652,6 +663,7 @@ def normalize_source_metadata(job: Mapping[str, Any], *, source_ats: str = "", p
         "schema_version": QUALITY_SCHEMA_VERSION,
         "fields": normalized,
         "raw": dict(raw_metadata),
+        "source_capability": "known" if capability_known else "unknown",
         "supported_fields": sorted(supported),
         "source_timestamps": timestamps,
     }
@@ -760,7 +772,14 @@ def completeness_rules(*, job: Mapping[str, Any], company: Mapping[str, Any], so
     observed_at = _text(source.get("observed_at") or job.get("observed_at"))
 
     def state_present(record: Any) -> bool:
-        return isinstance(record, Mapping) and str(record.get("state") or "") == "known"
+        return isinstance(record, Mapping) and canonical_field_state(record.get("state")) in VALUE_FIELD_STATES
+
+    def field_state(record: Any, passed: bool) -> str:
+        if passed:
+            return "present"
+        if isinstance(record, Mapping) and record.get("state"):
+            return canonical_field_state(record.get("state"))
+        return field_state_for(None, supported=True, observed=True)
 
     rules = {
         "job": {
@@ -785,23 +804,39 @@ def completeness_rules(*, job: Mapping[str, Any], company: Mapping[str, Any], so
         "source": {
             "source_provenance": bool(source.get("source_observation_ids") or source.get("target_id") or source.get("source_id")),
             "external_source_id": bool(_text(source.get("external_job_id"))),
-            "department_state": str(department_record.get("state") or "") == "known" if isinstance(department_record, Mapping) else bool(_text(job.get("department"))),
+            "department_state": canonical_field_state(department_record.get("state")) in VALUE_FIELD_STATES if isinstance(department_record, Mapping) else bool(_text(job.get("department"))),
             "source_timestamp_semantics": timestamp_state == "known",
             "source_status": state_present(status_record),
             "freshness": bool(_text(job.get("last_verified_at") or observed_at or job.get("last_seen_at"))),
         },
         "admin": {"publication_state": bool(_text(admin.get("publication_status") or admin.get("review_state") or admin.get("state")))},
     }
-    result: dict[str, Any] = {"schema_version": QUALITY_SCHEMA_VERSION, "rules": {}, "categories": {}}
+    result: dict[str, Any] = {
+        "schema_version": QUALITY_SCHEMA_VERSION,
+        "rule_version": "field_matrix_v1",
+        "report_only": True,
+        "rules": {},
+        "categories": {},
+    }
     all_rules: list[dict[str, Any]] = []
     for category, category_rules in rules.items():
         rows = []
         for name, passed in category_rules.items():
+            record = {
+                "employment_type": employment_record,
+                "workplace_arrangement": workplace_record,
+                "department_state": department_record,
+                "source_status": status_record,
+            }.get(name)
+            state = field_state(record, passed)
             row = {
                 "name": name,
                 "status": "pass" if passed else "warning",
-                "availability": "present" if passed else "unknown",
+                "state": state,
+                "availability": state,
                 "blocking": False,
+                "report_only": True,
+                "rule_version": "field_matrix_v1",
             }
             rows.append(row)
             all_rules.append({"category": category, **row})
@@ -827,8 +862,14 @@ def completeness_rules(*, job: Mapping[str, Any], company: Mapping[str, Any], so
     result["denominator"] = {
         "included_rules": [f"{row['category']}.{row['name']}" for row in all_rules],
         "excluded_available_fields": [],
+        "state_vocabulary": list(FIELD_STATES),
         "mode": "report_only",
     }
+    result["field_state_counts"] = {
+        state: sum(1 for row in all_rules if row["state"] == state)
+        for state in FIELD_STATES
+    }
+    result["field_state_descriptions"] = dict(FIELD_STATE_DESCRIPTIONS)
     return result
 
 
@@ -885,7 +926,7 @@ def normalize_job_for_ingestion(job: Mapping[str, Any], target: Mapping[str, Any
         raw_description = normalized["description_raw"]
         if "&amp;" in raw_description or "&lt;" in raw_description or "&#" in raw_description:
             normalized["quality_warnings"].append("description_contains_html_entities")
-    if normalized["normalized_source_metadata"]["fields"]["department"]["state"] != "known":
+    if canonical_field_state(normalized["normalized_source_metadata"]["fields"]["department"].get("state")) not in VALUE_FIELD_STATES:
         normalized["quality_warnings"].append("department_not_available")
     if normalized["source_timestamps"].get("timestamp_state") == "unknown_source_timestamp":
         normalized["quality_warnings"].append("suspicious_posting_timestamp")
