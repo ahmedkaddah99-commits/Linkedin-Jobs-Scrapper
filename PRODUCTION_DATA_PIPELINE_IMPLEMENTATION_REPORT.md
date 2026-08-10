@@ -116,13 +116,14 @@ venv and one used a global interpreter. The global interpreter is now rejected
 by the script guard. No further production invocation was started during
 implementation review.
 
-The remote run row was left in `running` with a stale checkpoint after those
-processes were stopped. Its latest observed checkpoint/count projection was
-23 committed observations, 23 fields, 23 historical repairs, 115 warnings,
-and 23 batches in the row after the concurrent invocation. The count anomaly
-is itself an operational finding: the new lease/checkpoint deployment must go
-live before resuming so the row is reclaimed once, with the same idempotency
-key, and its post-resume counts are reconciled against table deltas.
+The remote run row is currently `failed` after the controlled resume exposed
+that the libSQL driver can invalidate a named SQLite savepoint during a
+transaction replay. Its latest durable checkpoint/count projection was 23
+committed observations, 23 fields, 23 historical repairs, 115 warnings, and
+23 batches. The savepoint issue is patched: local SQLite keeps per-observation
+savepoints, while remote libSQL rolls back and retries the whole bounded batch
+from the durable checkpoint. The count anomaly is itself an operational
+finding; post-resume counts must be reconciled against table deltas.
 
 Required post-deploy operator command:
 

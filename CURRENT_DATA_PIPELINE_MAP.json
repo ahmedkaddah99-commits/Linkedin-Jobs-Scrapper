@@ -64,7 +64,7 @@
     },
     "uncertainties": [
       "The authenticated production API response body was not sampled; live health endpoints were sampled.",
-      "The current remote reprocessing row was left stale/running after concurrent invocations were stopped; it must be resumed after migration 045 is live.",
+      "The current remote reprocessing row is failed after a controlled libSQL savepoint compatibility failure; it must be resumed after the remote batch-rollback patch is live.",
       "No production duplicate cluster, logo enrichment, closure/reactivation, or manual merge decision was present to use as a live example.",
       "Remote backup restore is not automated or tested as a destructive operation."
     ]
@@ -82,7 +82,7 @@
     {"id":"provenance_quality_duplicates","owner":"quality/review","entry_points":["_persist_unified_mapping","completeness_rules","_store_duplicate_candidates","rule_registry.py"],"tables":["acquisition_field_provenance","acquisition_rule_outputs","acquisition_completeness_reports","acquisition_quality_events","acquisition_duplicate_clusters","acquisition_duplicate_members","acquisition_version_quality"],"inputs":["canonical fields","source evidence","rule outputs","review/publication state"],"outputs":["field evidence","rule semantic hashes","completeness/warnings","candidate duplicate clusters"],"rules":["states include present/missing/unknown/unsupported/invalid/conflicting/inferred with known compatibility","all quality results are report-only","no automatic duplicate merge"],"evidence":["code","schema","tests","production"]},
     {"id":"publication","owner":"admin publication service","entry_points":["admin import service","SqliteAcquisitionStore.create_job_import_preview","publish_job_import_preview","undo_last_job_publication"],"tables":["acquisition_publications","acquisition_publication_jobs","acquisition_publication_head","admin_job_audit_events"],"inputs":["approved import","explicit preview/publish/undo action"],"outputs":["valid publication","single public head","publication audit"],"rules":["manual publish only","reprocessing never promotes publication","undo is reversible read-model control"],"evidence":["code","schema","production"]},
     {"id":"api_admin_user_read_models","owner":"API/product","entry_points":["backend/api/routes/acquisition_admin.py","backend/api/routes/job_import_admin.py","backend/api/routes/acquisition_catalog.py","backend/application/personalized_jobs_service.py"],"tables":["canonical_jobs","job_posting_versions","canonical_companies","canonical_company_profiles","publication head","evidence tables"],"inputs":["admin/user identity","filters","current publication"],"outputs":["admin inspection/operations JSON","personalized job feed/card/detail JSON"],"rules":["admin requires admin auth","user feed requires user auth and publication","raw source evidence is admin-only"],"evidence":["code","tests","http","uncertain"]},
-    {"id":"reprocessing","owner":"acquisition operations","entry_points":["scripts/reprocess_acquisition.py","backend/acquisition/reprocessing.py"],"tables":["acquisition_reprocessing_runs","acquisition_stage_results","field/rule/quality/duplicate projections"],"inputs":["preserved observations","stable scope","idempotency key"],"outputs":["bounded additive projections","durable checkpoint/counts","rollback reference","retryable failure list"],"rules":["local backup before apply","remote additive acknowledgement","compare-and-swap owner lease/stale reclaim","savepoint per observation","no delete/merge/publish"],"evidence":["code","schema","tests"]}
+    {"id":"reprocessing","owner":"acquisition operations","entry_points":["scripts/reprocess_acquisition.py","backend/acquisition/reprocessing.py"],"tables":["acquisition_reprocessing_runs","acquisition_stage_results","field/rule/quality/duplicate projections"],"inputs":["preserved observations","stable scope","idempotency key"],"outputs":["bounded additive projections","durable checkpoint/counts","rollback reference","retryable failure list"],"rules":["local backup before apply","remote additive acknowledgement","compare-and-swap owner lease/stale reclaim","local SQLite savepoint per observation","remote libSQL whole-batch rollback/retry","no delete/merge/publish"],"evidence":["code","schema","tests"]}
   ],
   "entities": [
     {"name":"company","tables":["canonical_companies","canonical_company_aliases","canonical_company_profiles","canonical_company_urls"],"identity":"company_id; conservative employer/domain identity","relations":["has source URLs","has aliases","has profiles/enrichment","owns canonical jobs"]},
@@ -173,7 +173,7 @@
     "stage_table":"acquisition_stage_results",
     "lease_migration":"045_acquisition_reprocessing_leases",
     "idempotency":"same completed key returns idempotent replay; incomplete/failed keys resume checkpoint",
-    "failure_behavior":"savepoint per observation, quality event, failed observation IDs retained for retry",
+    "failure_behavior":"local SQLite savepoint per observation; remote libSQL whole-batch rollback/retry; quality event and failed observation IDs retained for retry",
     "rollback":"local copy or publication/review reversal; remote restore remains operator-owned/untested"
   },
   "gaps": [

@@ -94,7 +94,7 @@ manifest / configured source registry
 | Quality/completeness | `completeness_rules()`, `quality.py`, reprocessor | `acquisition_completeness_reports`, `acquisition_quality_events`, `acquisition_version_quality` | Canonical fields, evidence, publication/review state | Pass/warning, state vocabulary, denominator, report-only percentages, warning events | Warnings never block ingestion or publication; completeness is not a product eligibility gate. [C][T] |
 | Publication | admin import service and acquisition store preview/publish/undo | `acquisition_publications`, `acquisition_publication_jobs`, `acquisition_publication_head`, audit rows | Explicit approved import/preview and admin action | Valid publication and single head read model | Only an explicit publish promotes the head; reprocessing cannot promote it; undo is an admin action. [C][P] |
 | API/read models | `api/routes/acquisition_admin.py`, `job_import_admin.py`, `acquisition_catalog.py`, `personalized_jobs_service.py` | Read joins over canonical, version, evidence, publication/profile tables | Authenticated request and filters | Admin inspection/read model; user feed/card/detail serializers | Admin routes require admin identity; user routes require user identity and current publication. New normalized fields are stored more broadly than the public serializer exposes. [C][U] |
-| Reprocessing/backfill | `scripts/reprocess_acquisition.py`, `acquisition/reprocessing.py` | Run/stage/checkpoint/rule/provenance/quality/duplicate tables | Preserved observations and explicit scope/idempotency key | Bounded additive projections, checkpoint, counts, rollback reference | Project interpreter guard, local backup, remote additive acknowledgement, compare-and-swap lease, stale reclaim, savepoint per observation, resumable failure list, no delete/merge/publish. [C][T] |
+| Reprocessing/backfill | `scripts/reprocess_acquisition.py`, `acquisition/reprocessing.py` | Run/stage/checkpoint/rule/provenance/quality/duplicate tables | Preserved observations and explicit scope/idempotency key | Bounded additive projections, checkpoint, counts, rollback reference | Project interpreter guard, local backup, remote additive acknowledgement, compare-and-swap lease, stale reclaim, local SQLite savepoint per observation, remote libSQL whole-batch rollback/retry, resumable failure list, no delete/merge/publish. [C][T] |
 
 ## Canonical entity relationship map
 
@@ -233,7 +233,8 @@ The script refuses non-project Python or a version other than 3.12.7. Local
 SQLite apply copies the database before writing. Remote apply is additive and
 transaction-batched, uses an owner lease (`045_acquisition_reprocessing_leases`),
 reclaims only a stale lease with compare-and-swap, checkpoints each batch,
-uses a savepoint per observation, records retryable failures, and never deletes
+uses per-observation savepoints on local SQLite and whole-batch rollback/retry
+on remote libSQL, records retryable failures, and never deletes
 observations/versions or automatically merges/publishes. A second completed
 invocation with the same idempotency key returns an idempotent replay. [C][S][T]
 

@@ -453,13 +453,21 @@ def _process_batch(
         return None
     batch_counts = {key: 0 for key in totals}
     unresolved_failures = set(failed_observation_ids)
+    # SQLite supports savepoints reliably inside the local transaction. The
+    # remote libSQL driver can replay a transaction and invalidate a named
+    # savepoint, so remote failures roll back the whole bounded batch and are
+    # retried from the durable batch checkpoint instead.
+    supports_savepoints = getattr(connection, "backend", "sqlite") == "sqlite"
     for index, row in enumerate(rows):
         observation_id = str(row["observation_id"])
         savepoint = f"reprocess_observation_{index}"
-        connection.execute(f"SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
+        if supports_savepoints:
+            connection.execute(f"SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
         try:
             result = _process_observation(connection, row, execution_id=execution_id, now=_now())
         except Exception as exc:
+            if not supports_savepoints:
+                raise
             connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
             connection.execute(f"RELEASE SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
             _record_observation_failure(connection, row, execution_id=execution_id, error=exc, now=_now())
@@ -469,7 +477,8 @@ def _process_batch(
             batch_counts["failure_references"] += 1
             continue
         else:
-            connection.execute(f"RELEASE SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
+            if supports_savepoints:
+                connection.execute(f"RELEASE SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
             unresolved_failures.discard(observation_id)
         for key in ("observations", "historical_repairs", "warnings", "fields"):
             batch_counts[key] += int(result.get(key) or 0)
