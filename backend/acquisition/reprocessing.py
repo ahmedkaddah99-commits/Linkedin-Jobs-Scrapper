@@ -256,13 +256,13 @@ def _process_observation(connection, row: Mapping[str, Any], *, execution_id: st
     for warning in sorted(set(str(item) for item in warnings if item)):
         connection.execute(
             """
-            INSERT INTO acquisition_quality_events (
+            INSERT OR IGNORE INTO acquisition_quality_events (
                 event_id, cycle_id, task_id, target_id, canonical_job_id, company_id,
                 employer_name, connector, source_token, warning_code, severity, details_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'warning', ?, ?)
             """,
             (
-                f"quality_event_{uuid4().hex}", execution_id, "reprocessing", str(row.get("target_id") or ""), canonical_job_id,
+                f"quality_event_reprocess_{hashlib.sha256(_json([observation_id, warning, UNIFIED_RULE_VERSION]).encode('utf-8')).hexdigest()[:32]}", execution_id, "reprocessing", str(row.get("target_id") or ""), canonical_job_id,
                 company_id, str(normalized.get("company") or ""), str(row.get("source_connector") or ""), str(row.get("source_token") or ""),
                 warning, _json({"observation_id": observation_id, "report_only": True}), now,
             ),
