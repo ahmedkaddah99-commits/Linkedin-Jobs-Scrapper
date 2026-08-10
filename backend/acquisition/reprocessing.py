@@ -270,6 +270,58 @@ def _process_observation(connection, row: Mapping[str, Any], *, execution_id: st
     return {"observations": 1, "historical_repairs": int(historical), "warnings": len(set(warnings)), "fields": len(mapping.get("fields") or {})}
 
 
+def _process_batch(
+    connection,
+    *,
+    checkpoint: str,
+    batch_size: int,
+    execution_id: str,
+    totals: Mapping[str, int],
+) -> tuple[str, dict[str, int], dict[str, int]] | None:
+    """Process one batch inside an explicit transaction.
+
+    The explicit transaction is important for remote libSQL: without it each
+    statement can become an independent network round trip.
+    """
+
+    rows = connection.execute(
+        """
+        SELECT o.*, j.company_id, t.connector AS target_connector
+        FROM job_source_observations o
+        JOIN canonical_jobs j ON j.canonical_job_id=o.canonical_job_id
+        LEFT JOIN acquisition_targets t ON t.target_id=o.target_id
+        WHERE (? = '' OR o.observation_id > ?)
+        ORDER BY o.observation_id LIMIT ?
+        """,
+        (checkpoint, checkpoint, max(1, min(1000, int(batch_size)))),
+    ).fetchall()
+    if not rows:
+        return None
+    batch_counts = {key: 0 for key in totals}
+    for row in rows:
+        result = _process_observation(connection, row, execution_id=execution_id, now=_now())
+        for key in ("observations", "historical_repairs", "warnings", "fields"):
+            batch_counts[key] += int(result.get(key) or 0)
+    next_checkpoint = str(rows[-1]["observation_id"])
+    next_totals = dict(totals)
+    for key, value in batch_counts.items():
+        next_totals[key] = int(next_totals.get(key) or 0) + int(value or 0)
+    next_totals["batches"] = int(next_totals.get("batches") or 0) + 1
+    connection.execute(
+        """
+        UPDATE acquisition_reprocessing_runs
+        SET checkpoint_json=?, counts_json=?, updated_at=?
+        WHERE reprocessing_id=?
+        """,
+        (_json({"last_observation_id": next_checkpoint}), _json(next_totals), _now(), execution_id),
+    )
+    _stage(connection, execution_id, "extraction", status="completed", metrics={"batch": next_totals["batches"], "observations": batch_counts["observations"]}, checkpoint={"last_observation_id": next_checkpoint})
+    _stage(connection, execution_id, "normalization", status="completed", metrics={"fields": batch_counts["fields"]}, checkpoint={"last_observation_id": next_checkpoint})
+    _stage(connection, execution_id, "canonical_field_merge", status="completed", metrics={"observations": batch_counts["observations"]}, checkpoint={"last_observation_id": next_checkpoint})
+    _stage(connection, execution_id, "quality_completeness", status="report_only", metrics={"warnings": batch_counts["warnings"]}, checkpoint={"last_observation_id": next_checkpoint})
+    return next_checkpoint, batch_counts, next_totals
+
+
 def run_reprocessing(
     db_path: str | Path,
     *,
@@ -310,44 +362,22 @@ def run_reprocessing(
         if existing is not None:
             checkpoint = str((_decode(existing["checkpoint_json"], {}) or {}).get("last_observation_id") or "")
             totals.update({key: int(value or 0) for key, value in (_decode(existing["counts_json"], {}) or {}).items() if key in totals})
-    _ = batch_size
     try:
         while True:
             with database_session(db_path) as connection:
-                rows = connection.execute(
-                """
-                SELECT o.*, j.company_id, t.connector AS target_connector
-                FROM job_source_observations o
-                JOIN canonical_jobs j ON j.canonical_job_id=o.canonical_job_id
-                LEFT JOIN acquisition_targets t ON t.target_id=o.target_id
-                WHERE (? = '' OR o.observation_id > ?)
-                ORDER BY o.observation_id LIMIT ?
-                """,
-                (checkpoint, checkpoint, max(1, min(1000, int(batch_size)))),
-                ).fetchall()
-                if not rows:
-                    break
-                batch_counts = {key: 0 for key in totals}
-                for row in rows:
-                    result = _process_observation(connection, row, execution_id=reprocessing_id, now=_now())
-                    for key in ("observations", "historical_repairs", "warnings", "fields"):
-                        batch_counts[key] += int(result.get(key) or 0)
-                checkpoint = str(rows[-1]["observation_id"])
-                for key, value in batch_counts.items():
-                    totals[key] += value
-                totals["batches"] += 1
-                connection.execute(
-                """
-                UPDATE acquisition_reprocessing_runs
-                SET checkpoint_json=?, counts_json=?, updated_at=?
-                WHERE reprocessing_id=?
-                """,
-                (_json({"last_observation_id": checkpoint}), _json(totals), _now(), reprocessing_id),
+                batch = connection.transaction(
+                    lambda transaction_connection: _process_batch(
+                        transaction_connection,
+                        checkpoint=checkpoint,
+                        batch_size=batch_size,
+                        execution_id=reprocessing_id,
+                        totals=totals,
+                    )
                 )
-                _stage(connection, reprocessing_id, "extraction", status="completed", metrics={"batch": totals["batches"], "observations": batch_counts["observations"]}, checkpoint={"last_observation_id": checkpoint})
-                _stage(connection, reprocessing_id, "normalization", status="completed", metrics={"fields": batch_counts["fields"]}, checkpoint={"last_observation_id": checkpoint})
-                _stage(connection, reprocessing_id, "canonical_field_merge", status="completed", metrics={"observations": batch_counts["observations"]}, checkpoint={"last_observation_id": checkpoint})
-                _stage(connection, reprocessing_id, "quality_completeness", status="report_only", metrics={"warnings": batch_counts["warnings"]}, checkpoint={"last_observation_id": checkpoint})
+                if batch is None:
+                    break
+                checkpoint, _, next_totals = batch
+                totals = next_totals
     except Exception as exc:
         with database_session(db_path) as connection:
             connection.execute(
