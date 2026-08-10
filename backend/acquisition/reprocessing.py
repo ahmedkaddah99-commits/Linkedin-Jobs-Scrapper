@@ -422,6 +422,7 @@ def _process_batch(
     lease_token: str,
     lease_seconds: int,
     remote_mode: str = "auto",
+    _process_context: object | None = None,
 ) -> tuple[str, dict[str, int], dict[str, int], list[str]] | None:
     """Process one batch inside an explicit transaction.
 
@@ -429,6 +430,8 @@ def _process_batch(
     statement can become an independent network round trip.
     """
 
+    if _process_context is not _RUNNER_CLAIM_CONTEXT:
+        return None
     if getattr(connection, "backend", "sqlite") == "libsql" and remote_mode == "auto":
         try:
             # Fast path: one replayable transaction for the complete batch.
@@ -446,6 +449,7 @@ def _process_batch(
                     lease_token=lease_token,
                     lease_seconds=lease_seconds,
                     remote_mode="batch",
+                    _process_context=_RUNNER_CLAIM_CONTEXT,
                 )
             )
         except ReprocessingLeaseLost:
@@ -462,6 +466,7 @@ def _process_batch(
                 lease_token=lease_token,
                 lease_seconds=lease_seconds,
                 remote_mode="isolated",
+                _process_context=_RUNNER_CLAIM_CONTEXT,
             )
 
     limit = _as_int(batch_size, default=100, minimum=1, maximum=MAX_BATCH_SIZE)
@@ -848,6 +853,7 @@ def run_reprocessing(
                         retry_failed=retry_failed,
                         lease_token=lease_token,
                         lease_seconds=stale_after_seconds,
+                        _process_context=_RUNNER_CLAIM_CONTEXT,
                     )
                 else:
                     batch = connection.transaction(
@@ -861,6 +867,7 @@ def run_reprocessing(
                             retry_failed=retry_failed,
                             lease_token=lease_token,
                             lease_seconds=stale_after_seconds,
+                            _process_context=_RUNNER_CLAIM_CONTEXT,
                         )
                     )
                 if batch is None:
