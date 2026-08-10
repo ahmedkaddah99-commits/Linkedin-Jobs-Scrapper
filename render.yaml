@@ -8,7 +8,7 @@ services:
     autoDeployTrigger: commit
     envVars:
       - key: VITE_API_BASE_URL
-        value: /v1
+        sync: false
       - key: VITE_API_EXTERNAL_HOSTNAME
         fromService:
           type: web
