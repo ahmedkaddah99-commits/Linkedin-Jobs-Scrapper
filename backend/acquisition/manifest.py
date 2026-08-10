@@ -283,7 +283,7 @@ PHASE_A_TARGETS: tuple[dict[str, object], ...] = (
         "max_direct_requests": 1,
         "request_mode": "direct",
         "config": {
-            "page_size": 100,
+            "page_size": 10,
             "max_retries": 1,
             "admin_scope": {"max_pages": 1, "max_requests": 1, "full_source_import": False},
             "company_profile": {
