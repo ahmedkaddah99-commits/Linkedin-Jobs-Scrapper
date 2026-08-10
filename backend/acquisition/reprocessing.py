@@ -409,12 +409,48 @@ def _process_batch(
     retry_failed: bool,
     lease_token: str,
     lease_seconds: int,
+    remote_mode: str = "auto",
 ) -> tuple[str, dict[str, int], dict[str, int], list[str]] | None:
     """Process one batch inside an explicit transaction.
 
     The explicit transaction is important for remote libSQL: without it each
     statement can become an independent network round trip.
     """
+
+    if getattr(connection, "backend", "sqlite") == "libsql" and remote_mode == "auto":
+        try:
+            # Fast path: one replayable transaction for the complete batch.
+            # If any record fails, retry the same batch in isolated
+            # transactions below so the failure remains report-only.
+            return connection.transaction(
+                lambda transaction_connection: _process_batch(
+                    transaction_connection,
+                    checkpoint=checkpoint,
+                    batch_size=batch_size,
+                    execution_id=execution_id,
+                    totals=totals,
+                    failed_observation_ids=failed_observation_ids,
+                    retry_failed=retry_failed,
+                    lease_token=lease_token,
+                    lease_seconds=lease_seconds,
+                    remote_mode="batch",
+                )
+            )
+        except ReprocessingLeaseLost:
+            raise
+        except Exception:
+            return _process_batch(
+                connection,
+                checkpoint=checkpoint,
+                batch_size=batch_size,
+                execution_id=execution_id,
+                totals=totals,
+                failed_observation_ids=failed_observation_ids,
+                retry_failed=retry_failed,
+                lease_token=lease_token,
+                lease_seconds=lease_seconds,
+                remote_mode="isolated",
+            )
 
     limit = _as_int(batch_size, default=100, minimum=1, maximum=MAX_BATCH_SIZE)
     rows = []
@@ -455,22 +491,41 @@ def _process_batch(
     unresolved_failures = set(failed_observation_ids)
     # SQLite supports savepoints reliably inside the local transaction. The
     # remote libSQL driver can replay a transaction and invalidate a named
-    # savepoint, so remote failures roll back the whole bounded batch and are
-    # retried from the durable batch checkpoint instead.
-    supports_savepoints = getattr(connection, "backend", "sqlite") == "sqlite"
+    # savepoint, so each remote observation gets its own atomic transaction.
+    # That keeps one bad observation report-only without rolling back healthy
+    # observations in the same bounded batch.
+    remote_per_observation_transactions = (
+        getattr(connection, "backend", "sqlite") == "libsql" and remote_mode == "isolated"
+    )
+    supports_savepoints = not remote_per_observation_transactions
     for index, row in enumerate(rows):
         observation_id = str(row["observation_id"])
         savepoint = f"reprocess_observation_{index}"
         if supports_savepoints:
             connection.execute(f"SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
         try:
-            result = _process_observation(connection, row, execution_id=execution_id, now=_now())
+            if remote_per_observation_transactions:
+                result = connection.transaction(
+                    lambda transaction_connection: _process_observation(
+                        transaction_connection, row, execution_id=execution_id, now=_now()
+                    )
+                )
+            else:
+                result = _process_observation(connection, row, execution_id=execution_id, now=_now())
         except Exception as exc:
-            if not supports_savepoints:
+            if remote_mode == "batch":
                 raise
-            connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
-            connection.execute(f"RELEASE SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
-            _record_observation_failure(connection, row, execution_id=execution_id, error=exc, now=_now())
+            if not supports_savepoints:
+                observation_error = exc
+                connection.transaction(
+                    lambda transaction_connection: _record_observation_failure(
+                        transaction_connection, row, execution_id=execution_id, error=observation_error, now=_now()
+                    )
+                )
+            else:
+                connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
+                connection.execute(f"RELEASE SAVEPOINT {savepoint}")  # noqa: S608 - name is an internal integer
+                _record_observation_failure(connection, row, execution_id=execution_id, error=exc, now=_now())
             unresolved_failures.add(observation_id)
             batch_counts["failed_observations"] = int(batch_counts.get("failed_observations") or 0) + 1
             batch_counts.setdefault("failure_references", 0)
@@ -493,40 +548,46 @@ def _process_batch(
         "last_observation_id": next_checkpoint,
         "failed_observation_ids": sorted(unresolved_failures),
     }
-    connection.execute(
-        """
-        UPDATE acquisition_reprocessing_runs
-        SET checkpoint_json=?, counts_json=?, lease_expires_at=?, updated_at=?
-        WHERE reprocessing_id=? AND status='running' AND lease_token=?
-        """,
-        (_json(checkpoint_payload), _json(next_totals), _lease_expiry(lease_seconds), _now(), execution_id, lease_token),
-    )
-    if connection.execute("SELECT changes()").fetchone()[0] != 1:
-        raise ReprocessingLeaseLost("reprocessing lease was lost before checkpoint commit")
-    batch_error = {
-        "failed_observations": sorted(unresolved_failures),
-        "retryable_by_resume": bool(unresolved_failures),
-    }
-    _stage(
-        connection, execution_id, "extraction", status="completed",
-        metrics={"batch": next_totals["batches"], "observations": batch_counts["observations"], "failed_observations": len(unresolved_failures)},
-        checkpoint=checkpoint_payload, error=batch_error if unresolved_failures else {},
-    )
-    _stage(
-        connection, execution_id, "normalization", status="completed",
-        metrics={"fields": batch_counts["fields"], "failed_observations": len(unresolved_failures)},
-        checkpoint=checkpoint_payload, error=batch_error if unresolved_failures else {},
-    )
-    _stage(
-        connection, execution_id, "canonical_field_merge", status="completed",
-        metrics={"observations": batch_counts["observations"], "failed_observations": len(unresolved_failures)},
-        checkpoint=checkpoint_payload, error=batch_error if unresolved_failures else {},
-    )
-    _stage(
-        connection, execution_id, "quality_completeness", status="report_only",
-        metrics={"warnings": batch_counts["warnings"], "failed_observations": len(unresolved_failures)},
-        checkpoint=checkpoint_payload, error=batch_error if unresolved_failures else {},
-    )
+    def finalize_batch(transaction_connection) -> None:
+        transaction_connection.execute(
+            """
+            UPDATE acquisition_reprocessing_runs
+            SET checkpoint_json=?, counts_json=?, lease_expires_at=?, updated_at=?
+            WHERE reprocessing_id=? AND status='running' AND lease_token=?
+            """,
+            (_json(checkpoint_payload), _json(next_totals), _lease_expiry(lease_seconds), _now(), execution_id, lease_token),
+        )
+        if transaction_connection.execute("SELECT changes()").fetchone()[0] != 1:
+            raise ReprocessingLeaseLost("reprocessing lease was lost before checkpoint commit")
+        batch_error = {
+            "failed_observations": sorted(unresolved_failures),
+            "retryable_by_resume": bool(unresolved_failures),
+        }
+        _stage(
+            transaction_connection, execution_id, "extraction", status="completed",
+            metrics={"batch": next_totals["batches"], "observations": batch_counts["observations"], "failed_observations": len(unresolved_failures)},
+            checkpoint=checkpoint_payload, error=batch_error if unresolved_failures else {},
+        )
+        _stage(
+            transaction_connection, execution_id, "normalization", status="completed",
+            metrics={"fields": batch_counts["fields"], "failed_observations": len(unresolved_failures)},
+            checkpoint=checkpoint_payload, error=batch_error if unresolved_failures else {},
+        )
+        _stage(
+            transaction_connection, execution_id, "canonical_field_merge", status="completed",
+            metrics={"observations": batch_counts["observations"], "failed_observations": len(unresolved_failures)},
+            checkpoint=checkpoint_payload, error=batch_error if unresolved_failures else {},
+        )
+        _stage(
+            transaction_connection, execution_id, "quality_completeness", status="report_only",
+            metrics={"warnings": batch_counts["warnings"], "failed_observations": len(unresolved_failures)},
+            checkpoint=checkpoint_payload, error=batch_error if unresolved_failures else {},
+        )
+
+    if remote_per_observation_transactions:
+        connection.transaction(finalize_batch)
+    else:
+        finalize_batch(connection)
     return next_checkpoint, batch_counts, next_totals, sorted(unresolved_failures)
 
 
@@ -760,9 +821,12 @@ def run_reprocessing(
                     "rollback_reference": _rollback_reference(reprocessing_id=reprocessing_id, idempotency_key=idempotency_key, backup=backup),
                 }
             with database_session(db_path) as connection:
-                batch = connection.transaction(
-                    lambda transaction_connection: _process_batch(
-                        transaction_connection,
+                if connection.backend == "libsql":
+                    # Remote batches use a replayable batch transaction first;
+                    # a failing batch automatically falls back to one atomic
+                    # transaction per observation so failures stay report-only.
+                    batch = _process_batch(
+                        connection,
                         checkpoint=checkpoint,
                         batch_size=batch_size,
                         execution_id=reprocessing_id,
@@ -772,7 +836,20 @@ def run_reprocessing(
                         lease_token=lease_token,
                         lease_seconds=stale_after_seconds,
                     )
-                )
+                else:
+                    batch = connection.transaction(
+                        lambda transaction_connection: _process_batch(
+                            transaction_connection,
+                            checkpoint=checkpoint,
+                            batch_size=batch_size,
+                            execution_id=reprocessing_id,
+                            totals=totals,
+                            failed_observation_ids=failed_observation_ids,
+                            retry_failed=retry_failed,
+                            lease_token=lease_token,
+                            lease_seconds=stale_after_seconds,
+                        )
+                    )
                 if batch is None:
                     break
                 checkpoint, _, next_totals, failed_observation_ids = batch
