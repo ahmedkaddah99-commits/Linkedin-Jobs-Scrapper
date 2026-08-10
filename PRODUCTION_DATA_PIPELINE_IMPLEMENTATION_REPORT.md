@@ -2,10 +2,11 @@
 
 Date: 2026-08-10  
 Branch: `deployment/render-turso-r2`  
-Implementation commits inspected: `a1a1c92` through `cba90b6`. The currently live
-Runr API and worker are both deployed at `cba90b654b13eb7d4951c2e418de57719906ab11`;
-the separate frontend deployment is `9a62e81`. The final live backend commit
-includes the lease-expiry and private-caller fencing fixes described below.
+Implementation commits inspected: `a1a1c92` through `cba90b6`. The production
+reprocessing run executed while the Runr API and worker were deployed at
+`cba90b654b13eb7d4951c2e418de57719906ab11`, which includes the lease-expiry and
+private-caller fencing fixes described below. The subsequent report-only
+deployment is `9a7423f`; the separate frontend deployment is `9a62e81`.
 
 ## Scope and safety
 
