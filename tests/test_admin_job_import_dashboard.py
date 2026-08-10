@@ -75,7 +75,7 @@ class AdminJobImportDashboardTests(unittest.TestCase):
             )
             self.assertTrue(plan["can_start"])
             self.assertTrue(plan["estimated_cost"]["known"])
-            self.assertEqual(plan["estimated_cost"]["currency"], "ScrapeOps credits")
+            self.assertEqual(plan["estimated_cost"]["currency"], "USD")
 
     def test_greenhouse_pagination_is_bounded_and_durable(self):
         calls = []
@@ -109,6 +109,49 @@ class AdminJobImportDashboardTests(unittest.TestCase):
             "https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true",
             "https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true&page=2",
         ])
+
+    def test_admin_import_preserves_registered_expansion_connector(self):
+        calls = []
+
+        def requester(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response(
+                url,
+                {
+                    "jobPostings": [
+                        {
+                            "externalId": "lowell-1",
+                            "title": "Operations Analyst",
+                            "externalPath": "/job/lowell-1",
+                            "jobPostingInfo": {"location": "Berlin"},
+                        }
+                    ]
+                },
+            )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
+            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
+            app._acquisition_scheduler.requester = requester
+            queued = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="expansion-direct-1",
+                source_ids=["lowell_workday"],
+                scope={"country": "Germany"},
+            )
+
+            processed = app.process_next_admin_job_import(worker_id="fixture-worker")
+
+            self.assertEqual(processed["import"]["status"], "completed")
+            self.assertEqual(processed["report"]["cycle"]["status"], "completed")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], "https://lowell.wd3.myworkdayjobs.com/wday/cxs/lowell/LowellGroup_Careers2/jobs")
+            self.assertIn("json", calls[0][1])
+            review = app.list_admin_review_jobs(import_id=queued["import_id"], status="all", limit=20)
+            self.assertEqual(review["total"], 1)
+            self.assertEqual(review["jobs"][0]["title"], "Operations Analyst")
 
     def test_import_review_publish_undo_and_failed_import_are_offline_and_idempotent(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
