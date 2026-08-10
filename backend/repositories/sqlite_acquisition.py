@@ -3469,7 +3469,14 @@ class SqliteAcquisitionStore(_SqliteStore):
                 """,
                 (
                     snapshot_id, connector, str(snapshot.get("target_id") or ""),
-                    _json(snapshot.get("capabilities") or snapshot.get("capability") or {}),
+                    _json({
+                        **dict(snapshot.get("capabilities") or snapshot.get("capability") or {}),
+                        "_state": str(snapshot.get("state") or "disabled"),
+                        "_production_registered": bool(snapshot.get("production_registered", False)),
+                        "_failure_policy": str(snapshot.get("failure_policy") or "report_only"),
+                        "_request_limits": dict(snapshot.get("request_limits") or {}),
+                        "_retry_policy": dict(snapshot.get("retry_policy") or {}),
+                    }),
                     _json(snapshot.get("raw_retention") or snapshot.get("retention") or {}),
                     str(snapshot.get("observed_at") or now), now,
                 ),
@@ -3480,6 +3487,13 @@ class SqliteAcquisitionStore(_SqliteStore):
             ).fetchone()
         result = _dict_row(row) if row is not None else dict(snapshot)
         result["capabilities"] = _decode(result.pop("capability_json", "{}"), {})
+        capability_metadata = result["capabilities"]
+        if isinstance(capability_metadata, Mapping):
+            result["state"] = capability_metadata.get("_state") or "disabled"
+            result["production_registered"] = bool(capability_metadata.get("_production_registered"))
+            result["failure_policy"] = capability_metadata.get("_failure_policy") or "report_only"
+            result["request_limits"] = capability_metadata.get("_request_limits") or {}
+            result["retry_policy"] = capability_metadata.get("_retry_policy") or {}
         result["raw_retention"] = _decode(result.pop("raw_retention_json", "{}"), {})
         return result
 
@@ -3494,8 +3508,18 @@ class SqliteAcquisitionStore(_SqliteStore):
             item = _dict_row(row)
             item["capabilities"] = _decode(item.pop("capability_json", "{}"), {})
             item["raw_retention"] = _decode(item.pop("raw_retention_json", "{}"), {})
+            metadata = item["capabilities"]
+            if isinstance(metadata, Mapping):
+                item["state"] = metadata.get("_state") or "disabled"
+                item["production_registered"] = bool(metadata.get("_production_registered"))
+                item["failure_policy"] = metadata.get("_failure_policy") or "report_only"
+                item["request_limits"] = metadata.get("_request_limits") or {}
+                item["retry_policy"] = metadata.get("_retry_policy") or {}
             result.append(item)
-        return result
+        latest: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in result:
+            latest[(str(item.get("connector") or ""), str(item.get("target_id") or ""))] = item
+        return list(latest.values())
 
     def get_admin_rules_coverage(self) -> dict[str, Any]:
         with self._connect() as connection:
