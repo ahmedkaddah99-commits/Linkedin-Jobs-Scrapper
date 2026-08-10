@@ -485,7 +485,11 @@ class PhaseAAcquisitionScheduler:
             window_key=f"admin_import:{str(import_payload.get('idempotency_key') or import_id)}",
             lease_owner=worker_id,
             scheduled_at=now.isoformat(),
-            lease_seconds=self.lease_seconds,
+            # A single official ATS snapshot can take longer than the default
+            # five-minute scheduler lease to project into remote Turso. Keep
+            # recovery available, but do not let a healthy long transaction be
+            # reclaimed by another writer at the five-minute boundary.
+            lease_seconds=max(self.lease_seconds, 1800),
             force=False,
         )
         if cycle is None:
@@ -507,7 +511,7 @@ class PhaseAAcquisitionScheduler:
         store.ensure_cycle_tasks(cycle_id, targets)
         failures = 0
         for _ in targets:
-            task = store.claim_next_task(cycle_id=cycle_id, lease_owner=worker_id, lease_seconds=self.lease_seconds)
+            task = store.claim_next_task(cycle_id=cycle_id, lease_owner=worker_id, lease_seconds=max(self.lease_seconds, 1800))
             if task is None:
                 break
             target = store.get_target(str(task["target_id"]))

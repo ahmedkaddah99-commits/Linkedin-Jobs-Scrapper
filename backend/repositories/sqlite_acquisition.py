@@ -2316,6 +2316,55 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         return int(self._run_transaction(reconcile) or 0)
 
+    def requeue_stale_job_imports(self, *, stale_after_seconds: int = 900) -> int:
+        """Return long-expired running imports to the durable worker queue."""
+
+        now = utc_now_iso()
+        cutoff = utc_plus_seconds(-max(60, int(stale_after_seconds)))
+
+        def requeue(connection) -> int:
+            rows = connection.execute(
+                """
+                SELECT i.import_id, i.cycle_id
+                FROM admin_job_imports i
+                JOIN acquisition_cycles c ON c.cycle_id=i.cycle_id
+                WHERE i.status='running'
+                  AND c.status='running'
+                  AND c.lease_expires_at <= ?
+                  AND i.updated_at <= ?
+                ORDER BY i.created_at, i.import_id
+                """,
+                (now, cutoff),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """
+                    UPDATE admin_job_imports
+                    SET status='queued', started_at='', completed_at='',
+                        error_code='stale_lease_reclaimed',
+                        error_message='Worker lease expired; import returned to the durable queue.',
+                        updated_at=?
+                    WHERE import_id=? AND status='running'
+                    """,
+                    (now, str(row["import_id"])),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO admin_job_audit_events (
+                        event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                    ) VALUES (?, ?, '', 'import_requeued_stale_lease', ?, ?)
+                    """,
+                    (
+                        f"admin_audit_{uuid4().hex}",
+                        str(row["import_id"]),
+                        _json({"cycle_id": str(row["cycle_id"]), "stale_after_seconds": max(60, int(stale_after_seconds))}),
+                        now,
+                    ),
+                )
+            return len(rows)
+
+        return int(self._run_transaction(requeue) or 0)
+
     def _review_job_payload(self, row: Mapping[str, Any], *, rejected: bool = False) -> dict[str, Any]:
         payload = _dict_row(row) if hasattr(row, "keys") else dict(row)
         raw_payload = _decode(payload.pop("version_payload_json", payload.pop("detail_json", "{}")), {})
