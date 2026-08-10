@@ -8,7 +8,6 @@ Final verification completed on `deployment/render-turso-r2`.
 
 - Deployed functional code commit: `f551c34` (`Quarantine fixture acquisition targets`).
 - Guarded reprocessing code is in its deployed ancestor `cba90b6`.
-- Latest closeout report push: `ae3399e`.
 - Rule version: `unified_mapping_v1`.
 - Live migrations: `045_acquisition_reprocessing_leases` and
   `046_acquisition_source_quarantine`.
