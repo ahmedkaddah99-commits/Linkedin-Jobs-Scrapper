@@ -333,7 +333,7 @@ export default function AdminJobImportPage() {
           <div className="records">{filtered.map(record => <button className={String(record.canonical_job_id) === selected.id ? "selected" : ""} key={record.canonical_job_id} onClick={() => { setSelectedId(String(record.canonical_job_id)); setTab("coverage"); setRecordMenuOpen(false); }} type="button">
             <span className="company-mark">{String(record.company || "?").slice(0, 2).toUpperCase()}</span>
             <span className="record-copy"><b>{record.title || "Unknown title"}</b><small>{record.company || "Unknown company"} · {record.location || "Unknown location"}</small><em>{record.canonical_job_id}</em></span>
-            <span className={`apply-dot ${record.apply_status === "present" ? "verified" : "missing"}`} title={`Apply URL ${record.apply_status || "unknown"}`} />
+            <span className={`apply-dot ${record.apply_status === "present" ? "is-verified" : "is-missing"}`} title={`Apply URL ${record.apply_status || "unknown"}`} />
           </button>)}</div>
         </aside>
 
