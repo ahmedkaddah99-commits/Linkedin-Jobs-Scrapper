@@ -319,3 +319,31 @@ Qonto detail/Apply behavior, and N26's same-page detail application route.
 The machine-readable companion contains the exact current production counts,
 source capability facts, fresh import IDs, consumer checks, and unresolved
 gaps under `prompt_2_fresh_production`.
+
+## Prompt 3 integration truth (2026-08-10)
+
+The four product-completion workstreams are now integrated and deployed. The
+configured production Turso/libSQL database is at migration 047. API and
+worker runtime commit is `8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`; the
+frontend runtime containing the admin changes is
+`0ba834a8b59dcdbc660ef03dad4429904a700a39`.
+
+| Workstream | Code/data contract | API/admin consumer | Production truth |
+|---|---|---|---|
+| A company URLs/logo/enrichment | `company_operations.py`, `company_logo_adapter.py`, separate URL/logo/profile projections | Company detail and bounded enrichment routes; Companies detail panel | N26 has 202 source URL rows and Qonto 86; logo enrichment rows remain 0; no provider canary |
+| B duplicate decisions | migration 047 append-only `acquisition_duplicate_decisions`; reversible state machine | decision/undo routes and interactive Duplicates panel | 0 clusters, 0 members, 0 decisions; no merge or publication mutation |
+| C typed fields/filters | `public_typed_contract_v1`, additive `typed` namespace and normalized filter predicates | user card/detail projections; admin typed filter controls | authenticated feed/detail and Jobs UI rendered; representative Qonto still has unknown workplace/category/application and no verified description |
+| D connector capability/retention | disabled-by-default expansion contracts and migration-backed snapshots | capability, retention, and snapshot routes; Rules panel | 4 latest disabled/unregistered connectors; 8 historical snapshots; 839/839 observations retain payloads |
+
+Current production counts are 11 companies, 146 canonical jobs, 839 source
+observations, 735 posting versions, 26,009 provenance rows, 839 rule outputs,
+146 completeness reports, 6,749 quality events, 290 company URLs, 0 logo
+enrichment rows, 0 duplicate clusters, 0 duplicate decisions, and a valid
+current publication head of 133 jobs. Source counts are 615 observations / 101
+source jobs for N26 Greenhouse, 222 / 43 for Qonto Lever, and one observation /
+one source job each for the quarantined `fixture_source` and `x`. The latter
+remain preserved evidence and are absent from the current publication.
+
+The current map now includes the Prompt 3 deployment, capabilities, typed
+consumers, admin actions, production counts, and gaps under
+`prompt_3_product_completion` in `CURRENT_DATA_PIPELINE_MAP.json`.

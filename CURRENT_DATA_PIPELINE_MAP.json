@@ -216,5 +216,109 @@
     "authenticated_checks": {"admin_sources_ui":"rendered and queued N26/Qonto imports","public_jobs_ui":"rendered 25 of 133 jobs with search/location/workplace/experience/category filters","qonto_detail":"rendered description and Apply; click opened https://jobs.lever.co/qonto/043279bd-c543-4e54-bffa-094c77f4c97b/apply","n26_detail":"live employer detail exposed /en-eu/careers/positions/7140058/apply; no application submitted","unauthenticated_401_not_used_as_body_evidence":true},
     "remaining_gaps":["five employer-site targets enabled but unproven","Greenhouse direct application URL missing; same-page child route is live but not persisted","N26 employment/workplace/experience unsupported or unknown; Qonto language/experience unknown","zero logo enrichment rows and no selected company URL for representatives","pre-existing frontend bundle API-host diagnostic and ScrapeOps timeout"]
   },
-  "recommended_sequence":["persist connector capability snapshots and Greenhouse same-page application child URLs","add raw-retention metrics and remote projection heartbeat","model company-source aliases and selected homepage/careers/ATS evidence","configure one approved enrichment provider and reversible duplicate decisions","version and expose expanded public fields after contract review","resolve frontend API-host diagnostic and add authenticated production contract gates"]
+  "recommended_sequence":["persist connector capability snapshots and Greenhouse same-page application child URLs","add raw-retention metrics and remote projection heartbeat","model company-source aliases and selected homepage/careers/ATS evidence","configure one approved enrichment provider and reversible duplicate decisions","version and expose expanded public fields after contract review","resolve frontend API-host diagnostic and add authenticated production contract gates"],
+  "prompt_3_product_completion": {
+    "environment": "configured production Turso/libSQL from user_config/.env; local SQLite is not production",
+    "secrets_included": false,
+    "deployed_commits": {
+      "api": "8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f",
+      "worker": "8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f",
+      "frontend": "0ba834a8b59dcdbc660ef03dad4429904a700a39"
+    },
+    "migration": "047_product_completion_wave",
+    "workstreams": {
+      "A_company_urls_logo_enrichment": {
+        "status": "integrated_deployed",
+        "entry_points": ["backend/application/company_operations.py", "backend/application/company_logo_adapter.py", "backend/repositories/sqlite_acquisition.py:get_admin_company_detail", "backend/api/routes/acquisition_admin.py", "frontend/src/pages/AdminAcquisitionPage.jsx:InteractiveCompanies"],
+        "production_evidence": {"n26_url_rows": 202, "qonto_url_rows": 86, "logo_enrichment_rows": 0, "provider_canary": false},
+        "known_gap": "No approved enrichment provider was configured or invoked; source URL evidence is not yet a complete official-domain/homepage/careers/ATS identity model."
+      },
+      "B_reversible_duplicate_decisions": {
+        "status": "integrated_deployed",
+        "entry_points": ["backend/application/duplicate_decisions.py", "backend/repositories/sqlite_acquisition.py:record_admin_duplicate_decision", "backend/api/routes/acquisition_admin.py", "frontend/src/pages/AdminAcquisitionPage.jsx:InteractiveDuplicates"],
+        "tables": ["acquisition_duplicate_decisions"],
+        "production_evidence": {"clusters": 0, "members": 0, "decisions": 0, "automatic_merges": 0, "publication_mutations": 0},
+        "known_gap": "No live duplicate cluster existed for a production decision-transition canary."
+      },
+      "C_typed_api_fields_filters_admin": {
+        "status": "integrated_deployed",
+        "entry_points": ["backend/acquisition/public_contract.py", "backend/application/personalized_jobs_service.py", "frontend/src/pages/AdminAcquisitionPage.jsx"],
+        "contract_version": "public_typed_contract_v1",
+        "consumers": ["authenticated user job cards", "authenticated user job detail", "authenticated admin Jobs filters", "authenticated admin job inspection"],
+        "production_evidence": {"publication_jobs": 133, "feed_rendered_jobs": 25, "qonto_apply_actionable": true},
+        "known_gap": "Representative Qonto detail currently exposes unknown workplace/category/application and no verified description; no value was inferred."
+      },
+      "D_connector_capability_raw_retention": {
+        "status": "integrated_deployed",
+        "entry_points": ["backend/connectors/ats_expansions.py", "backend/repositories/sqlite_acquisition.py:record_connector_capability_snapshot", "backend/api/routes/acquisition_admin.py", "frontend/src/pages/AdminAcquisitionPage.jsx:ConnectorCapabilities"],
+        "connectors": [
+          {"connector":"workday","enabled":false,"registered":false,"failure_policy":"report_only","raw_retention":"required/admin-only"},
+          {"connector":"personio","enabled":false,"registered":false,"failure_policy":"report_only","raw_retention":"required/admin-only"},
+          {"connector":"recruitee","enabled":false,"registered":false,"failure_policy":"report_only","raw_retention":"required/admin-only"},
+          {"connector":"smartrecruiters","enabled":false,"registered":false,"failure_policy":"report_only","raw_retention":"required/admin-only"}
+        ],
+        "production_evidence": {"historical_snapshot_rows": 8, "latest_connector_views": 4, "payload_bearing_observations": 839, "observations_with_payload": 839},
+        "known_gap": "Retention count proves payload presence in the inspected table, not complete legacy field recoverability or archive verification."
+      }
+    },
+    "production_counts_after": {
+      "schema_migrations": 47,
+      "canonical_companies": 11,
+      "canonical_jobs": 146,
+      "job_source_observations": 839,
+      "job_posting_versions": 735,
+      "acquisition_field_provenance": 26009,
+      "acquisition_rule_outputs": 839,
+      "acquisition_completeness_reports": 146,
+      "acquisition_quality_events": 6749,
+      "canonical_company_urls": 290,
+      "company_logo_enrichments": 0,
+      "acquisition_duplicate_clusters": 0,
+      "acquisition_duplicate_members": 0,
+      "acquisition_duplicate_decisions": 0,
+      "acquisition_connector_capability_snapshots": 8,
+      "valid_publication_head_jobs": 133
+    },
+    "source_counts_after": {
+      "n26_greenhouse": {"connector":"greenhouse","observations":615,"source_jobs":101,"canonical_company_jobs":101},
+      "qonto_lever": {"connector":"lever","observations":222,"source_jobs":43,"canonical_company_jobs":43},
+      "fixture_source": {"observations":1,"source_jobs":1,"quarantined":true,"in_current_publication":false},
+      "x": {"observations":1,"source_jobs":1,"quarantined":true,"in_current_publication":false}
+    },
+    "reprocessing": {
+      "id": "reprocess_ef912ccf2e9f44ca974222fe60732e55",
+      "idempotency_key": "unified-mapping-production-2026-08-10",
+      "state": "completed",
+      "final_checkpoint": "observation_ffc65009d257463e95239c00166d6ab7",
+      "failed_observation_ids": [],
+      "semantic_projection_changes_from_prompt_3": 0
+    },
+    "authenticated_checks": {
+      "admin_duplicates": "rendered; production queue empty",
+      "admin_companies": "rendered N26/Qonto URL and logo state",
+      "admin_capabilities": "rendered four disabled/unregistered connectors",
+      "admin_jobs": "rendered typed filter controls and canonical rows",
+      "public_feed": "rendered 25 of 133 jobs",
+      "public_detail": "rendered Qonto detail and actionable Apply",
+      "unauthenticated_401_used_as_body_evidence": false
+    },
+    "rules": {
+      "quality_blocks_ingestion": false,
+      "quality_blocks_publication": false,
+      "duplicate_auto_merge": false,
+      "connector_expansion_default": "disabled",
+      "decision_history": "append_only_and_undoable",
+      "raw_retention": "required/admin-only capability contract"
+    },
+    "known_gaps": [
+      {"category":"data_loss","priority":1,"items":["payload presence is measured but legacy archive/field recoverability is not"]},
+      {"category":"incorrect_semantics","priority":2,"items":["Qonto detail has unknown workplace/category/application and no verified description","Greenhouse same-page application child URL is not yet persisted"]},
+      {"category":"identity_duplicate_risk","priority":3,"items":["company-source aliases and syndication rules remain absent","no live duplicate decision canary because production has zero clusters"]},
+      {"category":"missing_enrichment","priority":4,"items":["approved provider, terms, refresh, budget, and logo/profile backfill remain unconfigured"]},
+      {"category":"observability","priority":5,"items":["snapshot freshness and per-target raw-retention dashboards remain to be added"]},
+      {"category":"admin_usability","priority":6,"items":["field conflict resolution and richer version-diff review remain to be added"]},
+      {"category":"pre_existing_runtime","priority":7,"items":["frontend bundle API-host diagnostic api_host: ${n} and proxy DNS failure remain unresolved"]}
+    ],
+    "recommended_implementation_sequence": ["raw-retention and source-reconciliation metrics", "typed unknown/conflict semantics and application destinations", "company-source identity and aliases", "approved bounded enrichment provider", "real duplicate-review canary", "connector enablement only after authenticated productive contract and rollback evidence"]
+  }
 }

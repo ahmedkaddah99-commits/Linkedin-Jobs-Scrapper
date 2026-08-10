@@ -335,3 +335,76 @@ The complete source reconciliation, representative N26/Qonto field lineage,
 application destination checks, authenticated admin/user UI checks, warnings,
 and unresolved gaps are recorded in
 [PRODUCTION_FRESH_ACQUISITION_REPORT.md](PRODUCTION_FRESH_ACQUISITION_REPORT.md).
+
+## Prompt 3 — parallel product-completion wave (2026-08-10)
+
+Prompt 2 ended with `PROMPT 2 GATE PASSED`, so the four bounded product
+workstreams were integrated and deployed. The inspected environment remained
+configured production Turso/libSQL from `user_config/.env`; local SQLite was
+not treated as production. The API and worker are live on
+`8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`, the frontend containing the new
+admin UI is live on `0ba834a8b59dcdbc660ef03dad4429904a700a39`, and production
+has migration `047_product_completion_wave`.
+
+### Integrated workstreams
+
+- **A — company identity/enrichment:** typed URL aggregation, validation,
+  provenance, primary-candidate selection, logo adapter/monogram fallback,
+  company detail API, and bounded admin enrichment controls. Production N26
+  and Qonto URL evidence rendered in the authenticated Companies page. No
+  provider was configured or invoked; `company_logo_enrichments` remains 0.
+- **B — duplicate decisions:** migration-backed append-only decisions, state
+  validation, evidence/reason capture, reversible undo, authenticated API, and
+  admin review controls. Production has zero duplicate clusters, so no live
+  decision event was created. No merge or publication occurred.
+- **C — typed product contract:** additive `typed` public job-card/detail
+  namespace, bounded admin lineage/version helpers, normalized typed filters,
+  application-destination safety, and admin Jobs filters. Authenticated
+  production feed/detail and admin Jobs checks passed. Current Qonto detail
+  data still exposes unknown workplace/category/application and no verified
+  description; these are source/read-model gaps, not invented values.
+- **D — connector capability/retention:** disabled-by-default Workday,
+  Personio, Recruitee, and SmartRecruiters contracts, bounded retry and
+  pagination rules, raw-retention metrics, capability snapshots, and Rules UI.
+  Production contains 8 historical snapshots, displayed as 4 latest views;
+  all four remain disabled/unregistered and report-only.
+
+The full workstream report is [PARALLEL_PRODUCT_COMPLETION_REPORT.md](PARALLEL_PRODUCT_COMPLETION_REPORT.md).
+
+### Current production read after deployment
+
+| Metric | Current value |
+|---|---:|
+| Migration | 047 |
+| Canonical companies/jobs | 11 / 146 |
+| Source observations / posting versions | 839 / 735 |
+| Field provenance / rule outputs | 26,009 / 839 |
+| Completeness reports / quality events | 146 / 6,749 |
+| Company URLs / verified logo rows | 290 / 0 |
+| Duplicate clusters / decisions | 0 / 0 |
+| Capability snapshots | 8 historical, 4 latest connector views |
+| Raw payload-bearing observations | 839 of 839 |
+| Valid publication head | `acq_publication_5884f63297fc4f56a0fb019c7cd4f063`, 133 jobs |
+
+The completed reprocessing run remains
+`reprocess_ef912ccf2e9f44ca974222fe60732e55` with idempotency key
+`unified-mapping-production-2026-08-10`, final observation checkpoint
+`observation_ffc65009d257463e95239c00166d6ab7`, and no failed observation IDs.
+Prompt 3 added no semantic versions, duplicate projections, merges, or
+publication changes.
+
+### Validation and limitations
+
+The project interpreter was Python 3.12.7. Backend compile/Ruff, focused
+product-completion and acquisition tests, frontend Node tests/ESLint/Vite, and
+`git diff --check` passed. Authenticated production browser checks rendered the
+new duplicate, company, capability, and typed Jobs admin surfaces plus the
+user feed/detail. No unauthenticated 401 response was used as authenticated
+body evidence.
+
+The pre-existing deployed frontend API-host diagnostic (`api_host: "${n}"`)
+and proxy DNS failure remain unresolved. A production enrichment provider was
+not configured, and the zero-cluster state prevented a live duplicate-decision
+canary. Quality and completeness remain report-only and do not block unrelated
+observations. See the parallel report and current map for the prioritized
+follow-up sequence.
