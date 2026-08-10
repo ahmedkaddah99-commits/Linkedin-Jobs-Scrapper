@@ -2501,9 +2501,9 @@ class SqliteAcquisitionStore(_SqliteStore):
         elif str(publication_state or "").strip().casefold() in {"unpublished", "not_published"}:
             predicates.append("NOT EXISTS (SELECT 1 FROM acquisition_publication_jobs pj JOIN acquisition_publication_head ph ON ph.publication_id=pj.publication_id AND ph.head_id=1 WHERE pj.canonical_job_id=j.canonical_job_id)")
         if str(freshness or "").strip().casefold() in {"fresh", "recent"}:
-            predicates.append("COALESCE(j.last_seen_at, o.observed_at) >= datetime('now', '-7 days')")
+            predicates.append("datetime(COALESCE(j.last_seen_at, o.observed_at)) >= datetime('now', '-7 days')")
         elif str(freshness or "").strip().casefold() in {"stale", "old"}:
-            predicates.append("COALESCE(j.last_seen_at, o.observed_at) < datetime('now', '-7 days')")
+            predicates.append("datetime(COALESCE(j.last_seen_at, o.observed_at)) < datetime('now', '-7 days')")
         where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
         query = f"""
             SELECT j.canonical_job_id, j.company_id, c.canonical_name AS company,
