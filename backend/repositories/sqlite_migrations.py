@@ -2239,6 +2239,42 @@ def _apply_acquisition_source_quarantine_migration(connection: DatabaseConnectio
         (now, now),
     )
 
+
+def _apply_product_completion_wave_migration(connection: DatabaseConnection) -> None:
+    """Add append-only duplicate decisions and connector capability snapshots."""
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_duplicate_decisions (
+            decision_id TEXT PRIMARY KEY,
+            cluster_id TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            actor_user_id TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            affected_ids_json TEXT NOT NULL DEFAULT '[]',
+            rule_version TEXT NOT NULL DEFAULT '',
+            supersedes_decision_id TEXT NOT NULL DEFAULT '',
+            undone_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_duplicate_decisions_cluster
+            ON acquisition_duplicate_decisions(cluster_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS acquisition_connector_capability_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            connector TEXT NOT NULL,
+            target_id TEXT NOT NULL DEFAULT '',
+            capability_json TEXT NOT NULL DEFAULT '{}',
+            raw_retention_json TEXT NOT NULL DEFAULT '{}',
+            observed_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_connector_capabilities_connector
+            ON acquisition_connector_capability_snapshots(connector, target_id, observed_at DESC);
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2492,5 +2528,10 @@ MIGRATIONS = (
         "Persist fixture/test source quarantine without deleting immutable acquisition evidence.",
         _apply_acquisition_source_quarantine_migration,
         dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "047_product_completion_wave",
+        "Add append-only duplicate decision history and connector capability snapshots.",
+        _apply_product_completion_wave_migration,
     ),
 )

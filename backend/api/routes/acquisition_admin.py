@@ -37,6 +37,19 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments == ["admin", "acquisition", "companies"]:
         context.send_json({"companies": application.list_admin_companies(limit=_int_query(query, "limit", 100, 500), search=_query_value(query, "search"))})
         return True
+    if len(segments) == 4 and segments[:3] == ["admin", "acquisition", "companies"]:
+        company = application.get_admin_company_detail(segments[3])
+        if company is None:
+            return _error(context, 404, "company_not_found", "Canonical company not found.")
+        context.send_json({"company": company})
+        return True
+    if segments == ["admin", "acquisition", "connectors", "capabilities"]:
+        context.send_json({"connectors": application.list_admin_connector_capabilities(limit=_int_query(query, "limit", 200, 1000))})
+        return True
+    if segments == ["admin", "acquisition", "retention"]:
+        snapshots = application.list_admin_connector_capabilities(limit=_int_query(query, "limit", 200, 1000))
+        context.send_json({"snapshots": snapshots, "report_only": True})
+        return True
     if segments == ["admin", "acquisition", "rules"]:
         context.send_json(application.get_admin_rules_coverage())
         return True
@@ -178,6 +191,75 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
             )
         except ValueError as exc:
             return _error(context, 400, "invalid_publication_request", str(exc))
+        return True
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "companies"] and segments[4] == "enrich":
+        try:
+            context.send_json(
+                context.application.run_admin_company_enrichment(
+                    max_companies=_int_value(payload.get("max_companies"), 1, 25),
+                    concurrency=_int_value(payload.get("concurrency"), 1, 3),
+                    request_budget=_int_value(payload.get("request_budget"), 5, 50),
+                    cycle_key=_text(payload.get("cycle_key")),
+                ),
+                status=202,
+            )
+        except (RuntimeError, ValueError) as exc:
+            return _error(context, 400, "company_enrichment_failed", str(exc))
+        return True
+    if segments == ["admin", "acquisition", "companies", "enrich"]:
+        try:
+            context.send_json(
+                context.application.run_admin_company_enrichment(
+                    max_companies=_int_value(payload.get("max_companies"), 1, 25),
+                    concurrency=_int_value(payload.get("concurrency"), 1, 3),
+                    request_budget=_int_value(payload.get("request_budget"), 5, 50),
+                    cycle_key=_text(payload.get("cycle_key")),
+                ),
+                status=202,
+            )
+        except (RuntimeError, ValueError) as exc:
+            return _error(context, 400, "company_enrichment_failed", str(exc))
+        return True
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "duplicate-clusters"] and segments[4] == "decisions":
+        try:
+            context.send_json(
+                context.application.record_admin_duplicate_decision(
+                    segments[3],
+                    decision=_text(payload.get("decision") or payload.get("state")),
+                    actor_user_id=_actor_user_id(admin),
+                    reason=_text(payload.get("reason")),
+                    evidence=dict(payload.get("evidence") or {}),
+                    affected_ids=[str(item) for item in payload.get("affected_ids") or []] or None,
+                    rule_version=_text(payload.get("rule_version")),
+                    merge_plan=payload.get("merge_plan") if isinstance(payload.get("merge_plan"), Mapping) else None,
+                    split_plan=payload.get("split_plan") if isinstance(payload.get("split_plan"), Mapping) else None,
+                    undo_plan=payload.get("undo_plan") if isinstance(payload.get("undo_plan"), Mapping) else None,
+                    supersedes_decision_id=_text(payload.get("supersedes_decision_id")),
+                ),
+                status=202,
+            )
+        except KeyError as exc:
+            return _error(context, 404, "duplicate_cluster_not_found", str(exc))
+        except ValueError as exc:
+            return _error(context, 400, "invalid_duplicate_decision", str(exc))
+        return True
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "duplicate-clusters"] and segments[4] == "undo":
+        try:
+            context.send_json(
+                context.application.undo_admin_duplicate_decision(
+                    segments[3],
+                    actor_user_id=_actor_user_id(admin),
+                    reason=_text(payload.get("reason") or "Admin undo"),
+                    evidence=dict(payload.get("evidence") or {"source": "admin_review"}),
+                    rule_version=_text(payload.get("rule_version")),
+                ),
+                status=202,
+            )
+        except (KeyError, ValueError) as exc:
+            return _error(context, 400, "invalid_duplicate_undo", str(exc))
+        return True
+    if segments == ["admin", "acquisition", "connectors", "capabilities", "snapshot"]:
+        context.send_json({"connectors": context.application.record_admin_connector_capability_snapshots()}, status=202)
         return True
     if segments == ["admin", "acquisition", "rollout", "configure"]:
         context.send_json(context.application.configure_production_rollout(payload), status=202)

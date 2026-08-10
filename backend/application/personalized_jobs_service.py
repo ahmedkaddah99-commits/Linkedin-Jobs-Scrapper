@@ -28,6 +28,7 @@ from backend.application.production_rollout import catalog_user_access
 from backend.application.company_logo import cache_logo, deterministic_monogram, validate_logo
 from backend.acquisition.phase_g import build_applicant_competition, build_priority
 from backend.acquisition.quality import DIRECT_APPLICATION_CLASSIFICATIONS, classify_job_url, posted_age_hours
+from backend.acquisition.public_contract import serialize_public_contract
 
 
 EVALUATOR_VERSION = MATCH_V2_VERSION
@@ -600,6 +601,7 @@ def _job_projection(
         "applicant_intelligence": _user_applicant_projection(applicant_intelligence),
         "priority": dict(priority or {"state": "unknown", "score": None}),
     })
+    projection["typed"] = serialize_public_contract({**payload, **projection})["typed"]
     return projection
 
 
@@ -623,7 +625,7 @@ def _job_card_projection(
     languages = _unique_strings(_value(payload, row, "languages", "language_requirements", "required_languages")) or None
     posted_at = _text(_value(payload, row, "posted_at", "published_at", "date_posted")) or None
     application_destination = payload.get("application_destination") if isinstance(payload.get("application_destination"), Mapping) else {}
-    return {
+    projection = {
         "posting_id": str(row.get("canonical_job_id") or ""),
         "canonical_job_id": str(row.get("canonical_job_id") or ""),
         "company_id": str(row.get("company_id") or ""),
@@ -655,6 +657,8 @@ def _job_card_projection(
         "applicant_intelligence": {"state": "unknown", "visibility": "pro"},
         "priority": {"state": "unknown", "score": None},
     }
+    projection["typed"] = serialize_public_contract({**payload, **projection})["typed"]
+    return projection
 
 
 def _job_filter_values(row: Mapping[str, Any]) -> dict[str, Any]:

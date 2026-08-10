@@ -3204,7 +3204,183 @@ class SqliteAcquisitionStore(_SqliteStore):
             cluster["reasons"] = _decode(cluster.pop("reasons_json", "[]"), [])
             cluster["review_history"] = _decode(cluster.pop("review_history_json", "[]"), [])
             cluster["members"].append(member)
-        return list(grouped.values())
+        result = list(grouped.values())
+        if result:
+            cluster_ids = [str(item.get("cluster_id") or "") for item in result]
+            placeholders = ",".join("?" for _ in cluster_ids)
+            with self._connect() as connection:
+                decision_rows = connection.execute(
+                    f"SELECT * FROM acquisition_duplicate_decisions WHERE cluster_id IN ({placeholders}) ORDER BY created_at, decision_id",
+                    tuple(cluster_ids),
+                ).fetchall()
+            decisions_by_cluster: dict[str, list[dict[str, Any]]] = {}
+            for row in decision_rows:
+                decision = _dict_row(row)
+                decision["evidence"] = _decode(decision.pop("evidence_json", "{}"), {})
+                decision["affected_ids"] = _decode(decision.pop("affected_ids_json", "[]"), [])
+                decisions_by_cluster.setdefault(str(decision.get("cluster_id") or ""), []).append(decision)
+            for item in result:
+                item["decision_history"] = decisions_by_cluster.get(str(item.get("cluster_id") or ""), [])
+                item["current_decision"] = item["decision_history"][-1] if item["decision_history"] else None
+        return result
+
+    def record_admin_duplicate_decision(
+        self,
+        cluster_id: str,
+        *,
+        decision: str,
+        actor_user_id: str,
+        reason: str,
+        evidence: Mapping[str, Any],
+        affected_ids: Iterable[str] | None = None,
+        rule_version: str = "",
+        merge_plan: Mapping[str, Any] | None = None,
+        split_plan: Mapping[str, Any] | None = None,
+        undo_plan: Mapping[str, Any] | None = None,
+        supersedes_decision_id: str = "",
+    ) -> dict[str, Any]:
+        """Append an explicit duplicate annotation without merging or publishing.
+
+        The decision table is an immutable event log.  The existing cluster row
+        is only a current-state projection; members and all source/canonical
+        records are intentionally untouched.
+        """
+
+        cluster_id = str(cluster_id or "").strip()
+        target = str(decision or "").strip().casefold()
+        if not cluster_id or not target:
+            raise ValueError("cluster_id and decision are required")
+        if not isinstance(evidence, Mapping) or not evidence:
+            raise ValueError("evidence must be a non-empty object")
+        if any(str(key).casefold() in {"raw_payload", "source_raw_payload", "payload_json"} for key in evidence):
+            raise ValueError("raw payloads are not accepted in duplicate decisions")
+        allowed = {"candidate", "confirmed_duplicate", "distinct", "ignored", "merged", "split", "undone"}
+        if target not in allowed:
+            raise ValueError(f"unsupported duplicate decision: {target}")
+        now = utc_now_iso()
+        with self._connect() as connection:
+            cluster = connection.execute(
+                "SELECT * FROM acquisition_duplicate_clusters WHERE cluster_id=?",
+                (cluster_id,),
+            ).fetchone()
+            if cluster is None:
+                raise KeyError(f"Duplicate cluster '{cluster_id}' not found.")
+            members = connection.execute(
+                "SELECT canonical_job_id FROM acquisition_duplicate_members WHERE cluster_id=? ORDER BY canonical_job_id",
+                (cluster_id,),
+            ).fetchall()
+            member_ids = [str(row["canonical_job_id"] or "") for row in members if row["canonical_job_id"]]
+            ids = [str(item).strip() for item in (affected_ids or member_ids) if str(item).strip()]
+            if set(ids) != set(member_ids) and member_ids:
+                raise ValueError("affected_ids must match the cluster members")
+            previous = connection.execute(
+                "SELECT * FROM acquisition_duplicate_decisions WHERE cluster_id=? ORDER BY created_at DESC, decision_id DESC LIMIT 1",
+                (cluster_id,),
+            ).fetchone()
+            current_state = str((previous["decision"] if previous is not None else cluster["state"]) or "candidate").casefold()
+            from backend.application.duplicate_decisions import ALLOWED_TRANSITIONS
+
+            if target != "candidate" and target not in ALLOWED_TRANSITIONS.get(current_state, frozenset()):
+                raise ValueError(f"cannot transition duplicate cluster from {current_state} to {target}")
+            if target == "merged" and not isinstance(merge_plan, Mapping):
+                raise ValueError("merged requires merge_plan; no merge was performed")
+            if target == "split" and not isinstance(split_plan, Mapping):
+                raise ValueError("split requires split_plan; no split was performed")
+            decision_id = f"duplicate_decision_{uuid4().hex}"
+            event = {
+                "event_id": decision_id,
+                "cluster_id": cluster_id,
+                "from_state": current_state,
+                "to_state": target,
+                "actor": str(actor_user_id or ""),
+                "reason": str(reason or ""),
+                "evidence": dict(evidence),
+                "affected_ids": ids,
+                "rule_version": str(rule_version or UNIFIED_RULE_VERSION),
+                "recorded_at": now,
+                "merge_plan": dict(merge_plan) if isinstance(merge_plan, Mapping) else None,
+                "split_plan": dict(split_plan) if isinstance(split_plan, Mapping) else None,
+                "undo_plan": dict(undo_plan) if isinstance(undo_plan, Mapping) else None,
+                "automatic_merge": False,
+                "automatic_publish": False,
+            }
+            connection.execute(
+                """
+                INSERT INTO acquisition_duplicate_decisions (
+                    decision_id, cluster_id, decision, actor_user_id, reason,
+                    evidence_json, affected_ids_json, rule_version,
+                    supersedes_decision_id, undone_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision_id, cluster_id, target, str(actor_user_id or ""), str(reason or ""),
+                    _json(event), _json(ids), str(rule_version or UNIFIED_RULE_VERSION),
+                    str(supersedes_decision_id or (previous["decision_id"] if previous is not None else "")),
+                    now if target == "undone" else "", now,
+                ),
+            )
+            history = _decode(cluster["review_history_json"], [])
+            if not isinstance(history, list):
+                history = []
+            history.append(event)
+            connection.execute(
+                """
+                UPDATE acquisition_duplicate_clusters
+                SET state=?, review_history_json=?, rule_version=?, updated_at=?
+                WHERE cluster_id=?
+                """,
+                (target, _json(history), str(rule_version or UNIFIED_RULE_VERSION), now, cluster_id),
+            )
+            rows = connection.execute(
+                "SELECT * FROM acquisition_duplicate_decisions WHERE cluster_id=? ORDER BY created_at, decision_id",
+                (cluster_id,),
+            ).fetchall()
+        events = [_dict_row(row) for row in rows]
+        for item in events:
+            item["evidence"] = _decode(item.pop("evidence_json", "{}"), {})
+            item["affected_ids"] = _decode(item.pop("affected_ids_json", "[]"), [])
+        return {
+            "cluster_id": cluster_id,
+            "decision": event,
+            "history": events,
+            "automatic_merge": False,
+            "automatic_publish": False,
+        }
+
+    def undo_admin_duplicate_decision(
+        self,
+        cluster_id: str,
+        *,
+        actor_user_id: str,
+        reason: str,
+        evidence: Mapping[str, Any],
+        rule_version: str = "",
+    ) -> dict[str, Any]:
+        with self._connect() as connection:
+            prior = connection.execute(
+                "SELECT decision_id, affected_ids_json FROM acquisition_duplicate_decisions WHERE cluster_id=? ORDER BY created_at DESC, decision_id DESC LIMIT 1",
+                (str(cluster_id),),
+            ).fetchone()
+        if prior is None:
+            raise ValueError("duplicate cluster has no decision to undo")
+        return self.record_admin_duplicate_decision(
+            cluster_id,
+            decision="undone",
+            actor_user_id=actor_user_id,
+            reason=reason,
+            evidence=evidence,
+            affected_ids=_decode(prior["affected_ids_json"], []),
+            rule_version=rule_version,
+            undo_plan={
+                "undo_of_decision_id": str(prior["decision_id"]),
+                "preserve_source_observations": True,
+                "preserve_posting_versions": True,
+                "preserve_provenance": True,
+                "automatic_merge": False,
+                "automatic_publish": False,
+            },
+            supersedes_decision_id=str(prior["decision_id"]),
+        )
 
     def list_admin_companies(self, *, limit: int = 100, search: str = "") -> list[dict[str, Any]]:
         normalized = " ".join(str(search or "").casefold().split())
@@ -3238,6 +3414,86 @@ class SqliteAcquisitionStore(_SqliteStore):
             item = _dict_row(row)
             item["profile"] = _decode(item.pop("profile_json", "{}"), {})
             item["urls"] = urls_by_company.get(str(item["company_id"]), [])
+            result.append(item)
+        return result
+
+    def get_admin_company_detail(self, company_id: str) -> dict[str, Any] | None:
+        company_id = str(company_id or "").strip()
+        if not company_id:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT c.*, p.profile_json, p.logo_source_url, p.logo_verified_at,
+                       (SELECT COUNT(*) FROM canonical_jobs j WHERE j.company_id=c.company_id) AS job_count
+                FROM canonical_companies c
+                LEFT JOIN canonical_company_profiles p ON p.company_id=c.company_id
+                WHERE c.company_id=?
+                """,
+                (company_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            urls = connection.execute(
+                "SELECT * FROM canonical_company_urls WHERE company_id=? ORDER BY url_type, selected_primary DESC, updated_at DESC",
+                (company_id,),
+            ).fetchall()
+            logos = connection.execute(
+                "SELECT * FROM company_logo_enrichments WHERE company_id=? ORDER BY updated_at DESC",
+                (company_id,),
+            ).fetchall()
+        result = _dict_row(row)
+        result["profile"] = _decode(result.pop("profile_json", "{}"), {})
+        result["urls"] = [_dict_row(item) for item in urls]
+        result["logo_enrichments"] = []
+        for item in logos:
+            value = _dict_row(item)
+            value["terms_metadata"] = _decode(value.pop("terms_metadata_json", "{}"), {})
+            value["provenance"] = _decode(value.pop("provenance_json", "{}"), {})
+            result["logo_enrichments"].append(value)
+        return result
+
+    def record_connector_capability_snapshot(self, snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        snapshot_id = str(snapshot.get("snapshot_id") or f"capability_{uuid4().hex}")
+        now = utc_now_iso()
+        connector = str(snapshot.get("connector") or "").strip()
+        if not connector:
+            raise ValueError("connector is required")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO acquisition_connector_capability_snapshots (
+                    snapshot_id, connector, target_id, capability_json,
+                    raw_retention_json, observed_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id, connector, str(snapshot.get("target_id") or ""),
+                    _json(snapshot.get("capabilities") or snapshot.get("capability") or {}),
+                    _json(snapshot.get("raw_retention") or snapshot.get("retention") or {}),
+                    str(snapshot.get("observed_at") or now), now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM acquisition_connector_capability_snapshots WHERE snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+        result = _dict_row(row) if row is not None else dict(snapshot)
+        result["capabilities"] = _decode(result.pop("capability_json", "{}"), {})
+        result["raw_retention"] = _decode(result.pop("raw_retention_json", "{}"), {})
+        return result
+
+    def list_admin_connector_capabilities(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM acquisition_connector_capability_snapshots ORDER BY observed_at DESC, connector LIMIT ?",
+                (max(1, min(1000, int(limit))),),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = _dict_row(row)
+            item["capabilities"] = _decode(item.pop("capability_json", "{}"), {})
+            item["raw_retention"] = _decode(item.pop("raw_retention_json", "{}"), {})
             result.append(item)
         return result
 

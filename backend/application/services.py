@@ -1092,6 +1092,52 @@ class BackendApplication:
         store = self.repositories.acquisition_store
         return store.list_admin_companies(limit=limit, search=search) if store is not None else []
 
+    def get_admin_company_detail(self, company_id: str) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.get_admin_company_detail(company_id) if store is not None else None
+
+    def run_admin_company_enrichment(
+        self,
+        *,
+        max_companies: int = 1,
+        concurrency: int = 1,
+        request_budget: int = 5,
+        cycle_key: str = "",
+    ) -> dict[str, Any]:
+        """Explicit, bounded admin action; quality remains report-only."""
+
+        return self.run_due_company_enrichment(
+            max_companies=max(1, min(25, int(max_companies))),
+            concurrency=max(1, min(3, int(concurrency))),
+            request_budget=max(1, min(50, int(request_budget))),
+            cycle_key=str(cycle_key or f"admin-company-enrichment:{utc_now_iso()}"),
+            force=True,
+        )
+
+    def record_admin_duplicate_decision(self, cluster_id: str, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Duplicate decisions require sqlite/Turso acquisition storage.")
+        return store.record_admin_duplicate_decision(cluster_id, **kwargs)
+
+    def undo_admin_duplicate_decision(self, cluster_id: str, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Duplicate decisions require sqlite/Turso acquisition storage.")
+        return store.undo_admin_duplicate_decision(cluster_id, **kwargs)
+
+    def list_admin_connector_capabilities(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_connector_capabilities(limit=limit) if store is not None else []
+
+    def record_admin_connector_capability_snapshots(self) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return []
+        from backend.connectors.ats_expansions import build_capability_snapshots
+
+        return [store.record_connector_capability_snapshot(item) for item in build_capability_snapshots()]
+
     def get_admin_rules_coverage(self) -> dict[str, Any]:
         store = self.repositories.acquisition_store
         return store.get_admin_rules_coverage() if store is not None else {"rule_version": "unavailable", "report_only": True}
