@@ -154,6 +154,56 @@ class ReprocessingTests(unittest.TestCase):
             reclaimed = run_reprocessing(db_path, apply=True, idempotency_key="concurrent-fixture", stale_after_seconds=1)
             self.assertEqual(reclaimed["status"], "completed")
 
+    def test_direct_claim_cannot_overwrite_a_live_owner_lease(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, db_path = _fixture(root, count=0)
+            plan = build_reprocessing_plan(db_path)
+            with database_session(db_path) as connection:
+                reprocessing._start_run(
+                    connection,
+                    reprocessing_id="lease-guard-fixture",
+                    idempotency_key="lease-guard-fixture",
+                    plan=plan,
+                    backup={"status": "transaction_safe_additive", "recoverable": False},
+                )
+                observed = connection.execute(
+                    "SELECT updated_at FROM acquisition_reprocessing_runs WHERE reprocessing_id=?",
+                    ("lease-guard-fixture",),
+                ).fetchone()["updated_at"]
+                self.assertTrue(
+                    reprocessing._claim_run(
+                        connection,
+                        reprocessing_id="lease-guard-fixture",
+                        lease_token="owner-token",
+                        lease_seconds=3600,
+                        expected_statuses=("running",),
+                        expected_updated_at=observed,
+                    )
+                )
+                self.assertFalse(
+                    reprocessing._claim_run(
+                        connection,
+                        reprocessing_id="lease-guard-fixture",
+                        lease_token="intruder-token",
+                        lease_seconds=3600,
+                        expected_statuses=("running",),
+                    )
+                )
+                connection.execute(
+                    "UPDATE acquisition_reprocessing_runs SET lease_expires_at=? WHERE reprocessing_id=?",
+                    ("2020-01-01T00:00:00+00:00", "lease-guard-fixture"),
+                )
+                self.assertTrue(
+                    reprocessing._claim_run(
+                        connection,
+                        reprocessing_id="lease-guard-fixture",
+                        lease_token="stale-owner-token",
+                        lease_seconds=3600,
+                        expected_statuses=("running",),
+                    )
+                )
+
     def test_duplicate_finalize_failure_is_recorded_and_resume_is_safe(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

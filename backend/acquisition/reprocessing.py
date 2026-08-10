@@ -89,6 +89,13 @@ def _claim_run(
     placeholders = ",".join("?" for _ in expected_statuses)
     where = f"reprocessing_id=? AND status IN ({placeholders})"
     parameters: list[Any] = [lease_token, _lease_expiry(lease_seconds), _now(), reprocessing_id, *expected_statuses]
+    # Private/operator callers may not have the timestamp observed during the
+    # initial read. They still must not overwrite a live owner lease. The
+    # normal runner supplies ``expected_updated_at`` after checking staleness;
+    # this guard protects direct callers and stale launchers that bypass it.
+    if "running" in expected_statuses and not expected_updated_at:
+        where += " AND (status != 'running' OR lease_expires_at = '' OR lease_expires_at <= ?)"
+        parameters.append(_now())
     if expected_updated_at:
         where += " AND updated_at=?"
         parameters.append(expected_updated_at)
