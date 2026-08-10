@@ -26,6 +26,7 @@ STAGES = (
 MAX_BATCH_SIZE = 1000
 DEFAULT_MAX_BATCHES = 100
 DEFAULT_STALE_RUN_SECONDS = 30 * 60
+_RUNNER_CLAIM_CONTEXT = object()
 
 
 class ReprocessingLeaseLost(RuntimeError):
@@ -83,8 +84,9 @@ def _claim_run(
     lease_seconds: int,
     expected_statuses: tuple[str, ...],
     expected_updated_at: str = "",
+    _claim_context: object | None = None,
 ) -> bool:
-    if not expected_statuses:
+    if _claim_context is not _RUNNER_CLAIM_CONTEXT or not expected_statuses:
         return False
     placeholders = ",".join("?" for _ in expected_statuses)
     where = f"reprocessing_id=? AND status IN ({placeholders})"
@@ -763,6 +765,7 @@ def run_reprocessing(
             lease_seconds=stale_after_seconds,
             expected_statuses=expected_statuses,
             expected_updated_at=expected_updated_at,
+            _claim_context=_RUNNER_CLAIM_CONTEXT,
         ):
             latest = connection.execute(
                 "SELECT status, checkpoint_json, counts_json FROM acquisition_reprocessing_runs WHERE reprocessing_id=?",
