@@ -93,8 +93,11 @@ def _claim_run(
     # initial read. They still must not overwrite a live owner lease. The
     # normal runner supplies ``expected_updated_at`` after checking staleness;
     # this guard protects direct callers and stale launchers that bypass it.
-    if "running" in expected_statuses:
-        where += " AND (status != 'running' OR lease_expires_at = '' OR lease_expires_at <= ?)"
+    # A resumable row can be marked incomplete while a writer is still
+    # finishing its final checkpoint, so the lease guard must cover every
+    # takeover status, not just ``running``.
+    if expected_statuses:
+        where += " AND (lease_expires_at = '' OR lease_expires_at <= ?)"
         parameters.append(_now())
     if expected_updated_at:
         where += " AND updated_at=?"

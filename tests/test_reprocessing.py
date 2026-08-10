@@ -181,6 +181,19 @@ class ReprocessingTests(unittest.TestCase):
                         expected_updated_at=observed,
                     )
                 )
+                connection.execute(
+                    "UPDATE acquisition_reprocessing_runs SET status='incomplete', lease_expires_at=? WHERE reprocessing_id=?",
+                    ("2099-01-01T00:00:00+00:00", "lease-guard-fixture"),
+                )
+                self.assertFalse(
+                    reprocessing._claim_run(
+                        connection,
+                        reprocessing_id="lease-guard-fixture",
+                        lease_token="incomplete-intruder-token",
+                        lease_seconds=3600,
+                        expected_statuses=("incomplete",),
+                    )
+                )
                 self.assertFalse(
                     reprocessing._claim_run(
                         connection,
@@ -200,7 +213,7 @@ class ReprocessingTests(unittest.TestCase):
                         reprocessing_id="lease-guard-fixture",
                         lease_token="stale-owner-token",
                         lease_seconds=3600,
-                        expected_statuses=("running",),
+                        expected_statuses=("incomplete",),
                     )
                 )
 
