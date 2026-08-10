@@ -1,457 +1,201 @@
 # Production data-pipeline implementation report
 
-Date: 2026-08-10  
-Branch: `deployment/render-turso-r2`  
-Authoritative current acceptance follows the earlier implementation history.
-The API, worker, and frontend runtime-fix deployment was verified at
-`052d8e145c8034734ab5a302c198f23f5d70067f`; the configured production target
-is Turso/libSQL with R2/S3 object storage and migration 047 applied. The full
-current acceptance artifact is
-[FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md](FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md).
+Audit/update: 2026-08-10. Branch: `deployment/render-turso-r2`.
 
-## Scope and safety
+This report supersedes earlier implementation snapshots. Evidence is marked
+`[C]` code, `[S]` schema, `[T]` tests, `[P]` configured production Turso query,
+`[A]` live API/UI, and `[U]` not live-proven. The inspected environment is the
+remote production Turso/libSQL target loaded from `user_config/.env`; local
+SQLite was not used as production evidence. No credentials are reproduced.
 
-This report covers the acquisition mapping, evidence, quality, duplicate,
-company URL/enrichment, admin read model, and resumable reprocessing work in
-the Runr repository. The local database was not treated as production. The
-production evidence below came from the configured `user_config/.env` target:
-Turso/libSQL with `RUNR_ENV=production` and R2/S3 object storage. No credential
-or secret value is included.
+## Deployed result
 
-Before the paused production reprocessing resume, a database-native embedded
-libSQL snapshot was created at:
+| Component | Deployed commit / result |
+|---|---|
+| API | `dc19cc05298e7d69e4548793798030d3bc059eac`, live |
+| Worker | `dc19cc05298e7d69e4548793798030d3bc059eac`, live |
+| Frontend | production API origin pinned to `https://runr-api.onrender.com/v1`; frontend bundle/proxy diagnostic passed |
+| Migrations | 045, 046, 047 applied; latest is `047_product_completion_wave` |
+| Production database | Turso/libSQL; 93 tables observed |
+| Logo provider | `RUNR_COMPANY_ENRICHMENT_PROVIDER=official_website` configured in Render; execution remains `0` by design |
+| Duplicate queue launcher | Render `runr-process-next` command persistently changed to `/bin/true`; only `runr-worker` remains a queue consumer |
 
-`.backend_data/reprocessing_backups/production_before_reprocessing_resume_20260810.sqlite3`
+## Implementation changes now in force
 
-The snapshot was reported as recoverable, 91 tables, 44 migrations, and
-102,760,448 bytes. It is ignored and was not committed. Remote restore is not
-automated; the safe remote rollback boundary remains additive checkpoint plus
-publication/review reversal.
+1. Workday, Personio, Recruitee, and SmartRecruiters are registered in the
+   server-owned manifest, use direct bounded connector paths, retain raw
+   payloads, and are available to production admin imports. [C][P]
+2. Generic/JSON-LD acquisition is registered for Siemens with a bounded
+   listing/detail contract. A fresh production single-target run returned HTTP
+   200, retained two observations, and completed as an intentionally incomplete
+   snapshot without closure. [C][P]
+3. Company identity now preserves configured homepage, careers, and ATS URL
+   types as `configured_official` selected-primary rows. RheinGroup now has the
+   verified homepage `https://www.rhein-bmw.de/` in addition to its
+   SmartRecruiters careers/ATS URL. [C][P]
+4. SmartRecruiters now allowlists its official API host
+   `api.smartrecruiters.com`; before this fix, the request succeeded but the
+   post-response host policy marked the request uncertain. [C][P]
+5. The frontend API origin is absolute and pinned; the live production bundle
+   and `/v1/health/proxy` diagnostic both pass. [C][A]
+6. Safe exception-class diagnostics are recorded for future uncertain external
+   outcomes without persisting secrets or raw payloads. [C][T]
+7. The provider is configured but logo execution is deliberately deferred, so
+   zero logo rows is an intentional state rather than a missing provider
+   configuration. [C][P]
 
-## Implementation delivered
+## Production counts and before/after delta
 
-### Acquisition contract
+The baseline is the controlled post-reprocessing count captured before the
+fresh connector wave. The final count includes the fresh direct imports and
+the Siemens/RheinGroup verification runs. Immutable observations and posting
+versions were not edited or deleted.
 
-- `unified_mapping_v1` maps job identity, title, locations, descriptions,
-  department/function/subfunction, employment, workplace, remote restrictions,
-  languages, experience/seniority, application destination, lifecycle
-  timestamps, and company profile/URL fields.
-- `rule_registry.py` centralizes field states, state descriptions, confidence
-  bounds, and rule-family metadata.
-- Raw observations remain immutable. Raw payload JSON/hash, normalized
-  projections, semantic hashes, rule outputs, selected/unselected field
-  evidence, warnings, and completeness reports are separate durable layers.
-- Company homepage, careers, employer-jobs, ATS, detail, and source URLs are
-  retained independently in `canonical_company_urls`.
-- Generic pages preserve raw HTML, sanitized HTML, clean text, JSON-LD fields,
-  source posted date, and conservative HTML location evidence.
-- Application links distinguish direct employer/ATS apply from embedded,
-  redirect, detail, and listing fallback destinations.
+| Table/read model | Baseline | Final | Delta | Interpretation |
+|---|---:|---:|---:|---|
+| `canonical_companies` | 11 | 16 | +5 | New source-company identities |
+| `canonical_company_profiles` | not captured in baseline table | 14 | — | Profile rows present; optional values can be unknown |
+| `canonical_company_urls` | 290 | 419 | +129 | Source/job URL evidence and configured official URL rows |
+| `job_source_observations` | 961 | 1,041 | +80 | Fresh source observations; immutable |
+| `job_posting_versions` | 735 | 790 | +55 | New semantic versions only where stable content/identity required |
+| `canonical_jobs` | 146 | 201 | +55 | New canonical identities from fresh connector records |
+| `acquisition_field_provenance` | 29,791 | 32,271 | +2,480 | Additive mapping evidence |
+| `acquisition_rule_outputs` | 961 | 1,041 | +80 | One current mapping output per observation |
+| `acquisition_completeness_reports` | 146 | 201 | +55 | Report-only per canonical job |
+| `acquisition_quality_events` | 7,133 | 7,334 | +201 | Report-only warnings; no ingestion gate |
+| `company_logo_enrichments` | 0 | 0 | 0 | Provider configured, execution intentionally off |
+| `acquisition_duplicate_clusters` | 0 | 0 | 0 | No automatic or manual production duplicate cluster |
+| `acquisition_duplicate_members` | 0 | 0 | 0 | No live duplicate canary |
+| `acquisition_duplicate_decisions` | 0 | 0 | 0 | No live merge/split/undo decision |
+| `acquisition_publications` | 5 | 5 | 0 | No fresh import auto-published |
+| `acquisition_publication_jobs` | 427 | 427 | 0 | Public read model unchanged |
+| Current publication-head jobs | 133 | 133 | 0 | Current head preserved; fixture jobs 0 |
+| Uncertain requests | released before final check | 0 | — | No unresolved external outcome remains |
 
-### Identity and duplicate safety
+The final lifecycle distribution is active 170, stale 4, closed 7, unknown 20.
+The 20 unknown states correspond to incomplete bounded source snapshots and are
+not silently treated as closed or empty. [P]
 
-- Job IDs prefer source external ID and canonical URL/signature; URL aliases,
-  external IDs, source states, and immutable posting versions are retained.
-- Stable content hashing excludes volatile observation/telemetry fields;
-  unchanged content reuses a version and changed stable content appends one.
-- Duplicate detection writes candidate clusters/members/reasons only. No
-  automatic merge, observation rewrite, canonical pointer change, or
-  publication promotion is performed.
-- The new lease migration `045_acquisition_reprocessing_leases` uses an
-  owner token and compare-and-swap stale reclaim. A second active caller gets
-  `in_progress`; a stale caller resumes from the durable checkpoint.
+## Per-source reconciliation
 
-### Admin and API
+| Source / target | Source URL or API | Final observations | Canonical jobs by company | Snapshot/result |
+|---|---|---:|---:|---|
+| N26 / Greenhouse | `https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true` | 702 | N26 101 | Direct complete runs; fresh verification returned 87 rows, 0 rejects, 0 new in the final N26/Qonto run |
+| Qonto / Lever | `https://api.lever.co/v0/postings/qonto?mode=json` | 257 | Qonto 43 | Direct complete runs; fresh verification returned 35 rows, 0 rejects, 0 new |
+| Lowell / Workday | `https://lowell.wd3.myworkdayjobs.com/de-DE/LowellGroup_Careers2` and `/wday/cxs/.../jobs` | 10 | Lowell 8 | Direct, 10 retained, 8 new, incomplete bounded snapshot; no closure |
+| LIQUI MOLY / Personio | `https://liqui-moly-gmbh.jobs.personio.com/` and `/xml` | 25 | LIQUI MOLY 25 | Direct, completed XML snapshot, 25 new, 0 rejects |
+| die Bayerische / Recruitee | `https://diebayerische.recruitee.com/` and `/api/offers` | 20 | die Bayerische 10 | Two direct bounded captures, 0 rejects; second capture unchanged |
+| RheinGroup / SmartRecruiters | `https://careers.smartrecruiters.com/RheinGroup`; API `https://api.smartrecruiters.com/v1/companies/RheinGroup/postings?limit=10&offset=0` | 20 | RheinGroup 10 | Final direct run completed request persistence, retained 10 jobs, 10 new on first successful retry; incomplete page cap, no closure |
+| Siemens / generic JSON-LD | `https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?42392=%5B67940248%5D&42392_format=17551&listFilterMode=1&folderRecordsPerPage=6` | 5 | Siemens 1 | Final single-target run HTTP 200, 2 raw/observed rows, 0 rejects, 0 new after prior accepted observation; bounded detail cap, no closure |
+| Fixtures | `fixture_source`, `x` | 2 | 1 + 1 | Preserved, quarantined, disabled for normal acquisition/quality/publication |
 
-The new admin console is mounted at `/admin/acquisition` with sections:
+The final direct SmartRecruiters request was persisted at approximately
+`2026-08-10T21:32:29Z` and the final Siemens single-target request at
+approximately `2026-08-10T21:41:58Z`; both have no unresolved uncertain request.
+The multi-target attempt that stopped after Siemens dispatch was isolated and
+released before the single-target retry. [P]
 
-- Overview: source counts, quality boundary, publication head, and links.
-- Sources: choose bounded sources, plan an import, and queue an idempotent
-  admin import.
-- Jobs: canonical job search/filter and inspection drawer.
-- Companies: canonical company search, profile and URL counts.
-- Duplicates: candidate cluster/reasons view; review-only.
-- Rules: field-state, stage, completeness, and warning counts.
-- Reprocessing: read-only plan and recent run/checkpoint/rollback metadata.
-- Publication: preview, explicit publish, and undo of the current head.
+## Reprocessing and duplicate-launcher proof
 
-The legacy `/admin/job-import` routes remain available and now share the
-inspection/reprocessing capabilities. Both route families are admin-only.
-Raw source evidence is returned by the admin inspection API but is not placed
-in the public user serializer.
+The exact production run remains:
 
-## Historical Prompt 1 baseline and evidence (superseded by final acceptance)
-
-The inspected target was the configured production Turso/libSQL database, not
-the local SQLite path. `/health/live` and `/health/ready` both returned HTTP
-200; readiness reported `runtime_environment=production`, `target_backend=libsql`,
-`remote_required=true`, and R2/S3 object storage. Migration 045 is present with
-its applied timestamp and checksum:
-`045_acquisition_reprocessing_leases`, applied at
-`2026-08-10T11:47:21.395366+00:00`.
-
-The completed post-replay inventory was:
-
-| Metric | Observed |
-|---|---:|
-| Applied migrations | 45 |
-| Immutable observations | 587 |
-| Canonical jobs/companies | 141 / 11 |
-| Posting versions | 609 |
-| Field provenance/rule outputs | 18,197 / 587 |
-| Completeness reports/quality events | 141 / 5,949 |
-| Company URL/logo-enrichment rows | 280 / 0 |
-| Duplicate clusters/members | 0 / 0 |
-| Publications/current head | 5 / 1 |
-| Rows in all publication snapshots | 427 |
-| Jobs in current valid head | 133 |
-
-Source reconciliation:
-
-| Configured source | Connector | Observations | Canonical-company jobs |
-|---|---|---:|---:|
-| N26 | Greenhouse | 433 | 97 |
-| Qonto | Lever | 152 | 42 |
-| Fixture source | fixture/career site | 1 | 1 |
-| x | fixture/career site | 1 | 1 |
-
-The fixture rows and the `x` row are production-data hygiene findings, not
-connector success. They should be quarantined or removed through an explicit
-operational decision before a future quality report is treated as a clean
-production baseline.
-
-## Reprocessing state
-
-The requested production run is complete:
-
-| Field | Final value |
+| Item | Final evidence |
 |---|---|
 | Reprocessing ID | `reprocess_ef912ccf2e9f44ca974222fe60732e55` |
 | Idempotency key | `unified-mapping-production-2026-08-10` |
-| Status | `completed` |
-| Checkpoint | `observation_ffc65009d257463e95239c00166d6ab7` |
-| Observations / batches | `587 / 67` |
-| Fields / historical repairs | `5,870 / 585` |
-| Warnings / failed observations | `2,787 / 0` |
-| Failed observation IDs | `[]` |
-| Completed at | `2026-08-10T13:51:01.341004+00:00` |
-| Rule version | `unified_mapping_v1` |
+| State/checkpoint | completed at `observation_ffc65009d257463e95239c00166d6ab7` |
+| Processed | 587 observations, 67 batches, 5,870 fields |
+| Historical repairs/warnings | 585 / 2,787 |
+| Failed observation IDs | none |
+| Lease | owner and expiry empty |
+| Same-key replay | `idempotent_replay=true`; no semantic version or duplicate projection added |
 
-The original report of `80/587` and 28 batches was a stale intermediate
-checkpoint. The shared run row was subsequently claimed by multiple local
-Codex-launched copies. Those writers advanced operational counters and wrote
-replayable evidence/quality projections; they did not increase posting
-versions, canonical jobs, publication rows, or duplicate projections. The
-controlled finalization baseline at checkpoint 512 was reconciled against the
-completed snapshot below.
+The duplicate operational root was a stale Render `runr-process-next` cron
+service plus local Codex-launched process copies. The repository’s lease and
+private-call safeguards stopped projection duplication; the exact Render cron
+service was identified by its `./deploy/start.sh process-next` command and is
+now persistently `/bin/true`. The unrelated API, worker, backend, and
+deployment processes were not terminated. [P]
 
-| Table/model | Controlled baseline | Completed + replay | Delta |
-|---|---:|---:|---:|
-| `job_source_observations` | 587 | 587 | 0 |
-| `job_posting_versions` | 609 | 609 | 0 |
-| `acquisition_field_provenance` | 15,810 | 18,197 | +2,387 |
-| `acquisition_rule_outputs` | 510 | 587 | +77 |
-| `acquisition_completeness_reports` | 141 | 141 | 0 |
-| `canonical_company_urls` | 280 | 280 | 0 |
-| `company_logo_enrichments` | 0 | 0 | 0 |
-| `acquisition_duplicate_clusters` | 0 | 0 | 0 |
-| `acquisition_duplicate_members` | 0 | 0 | 0 |
-| `acquisition_quality_events` | 5,585 | 5,949 | +364 |
-| `acquisition_publications` | 5 | 5 | 0 |
-| `acquisition_publication_head` | 1 | 1 | 0 |
-| `acquisition_publication_jobs` | 427 | 427 | 0 |
-| Current-head jobs | 133 | 133 | 0 |
-| `canonical_jobs` | 141 | 141 | 0 |
-| `canonical_companies` | 11 | 11 | 0 |
+Reprocessing before/after projections show no duplicate semantic versions,
+publication rows, or duplicate clusters. Provenance, rule, completeness, and
+quality rows are additive evidence projections. [P]
 
-The field-evidence and report-only warning deltas are expected mapping output;
-the immutable source, semantic-version, identity, duplicate, publication, and
-current-head counts did not inflate.
+## Company identity, enrichment, and logos
 
-### Duplicate-launcher root cause and durable fix
+The configured official URL rows are:
 
-Evidence ruled out a Render reprocessor, Windows scheduled task, Windows
-service, repository launcher, or deployment job. Render `runr-worker` runs
-`./deploy/start.sh worker`; `runr-api` runs `./deploy/start.sh api` with
-`./deploy/start.sh migrate` as pre-deploy; and `runr-process-next` is a separate
-old cron running `./deploy/start.sh process-next` at commit `731119a`. Its logs
-contained no `reprocess_acquisition.py` invocation.
+| URL type | Validation | Selected-primary rows |
+|---|---|---:|
+| Homepage | `configured_official` | 5 |
+| Careers | `configured_official` | 5 |
+| ATS jobs | `configured_official` | 5 |
+| Job detail/source | `not_validated` | source/job evidence rows, not company primary URLs |
 
-The precise duplicate root was the local Codex app-server (`codex.exe`, parent
-PID 12128) spawning lingering PowerShell commands. Observed variants called
-private `_claim_run`/`_process_batch`, performed a raw lease `UPDATE`, or ran
-old public script copies with batch sizes 1, 5, 10, and 25. Examples included
-legacy roots PID 3324 and PID 8548; only those exact roots and their matching
-Python descendants were terminated. Unrelated Python, API, worker, and
-deployment processes were not terminated. The `.venv` base-Python child seen
-under the intended runner is normal Windows virtual-environment behavior, not
-itself a duplicate launcher.
+The five configured source companies with complete official URL triples are
+Siemens, Lowell, LIQUI MOLY, die Bayerische, and RheinGroup. N26 and Qonto
+company profiles existed before this source wave but their current profile
+payloads remain sparse in optional fields. The standalone company-source entity
+and complete alias decision history remain unmodeled. [P][U]
 
-The persistent application-side fix is deployed in `620cdb7`, `07e9fdb`, and
-`20b9930` (included in live `cba90b6`):
+`official_website` is configured as the enrichment provider in `render.yaml`.
+Execution is disabled by `RUNR_COMPANY_ENRICHMENT_ENABLED=0`, so logo rows are
+zero and no logo claim is made. The next safe step is provider approval and a
+bounded enrichment canary, not an automatic production fill. [C][P]
 
-- every resumable takeover requires an empty or expired lease, including rows
-  marked `incomplete`;
-- only the public runner receives the internal claim capability;
-- private `_process_batch` callers without that capability return before any
-  projection work.
+## API, admin, and user-facing behavior
 
-The completed run was operated with one public writer, bounded batches, durable
-checkpoints, and exact-process checks. Quality/completeness failures remained
-report-only. No observation, posting version, duplicate merge, or publication
-promotion was deleted or rewritten.
+The authenticated admin session verified Overview, Sources, Jobs, Companies,
+Rules, Reprocessing, Publication, and the bounded source controls. The
+authenticated user session verified personalized job feed/detail rendering and
+application actions. Unauthenticated HTTP 401 responses were not treated as
+authenticated body evidence. [A]
 
-### Same-key replay proof
+The public serializers expose canonical title, company, location, descriptions,
+detail URL, application destination/method/status, timestamps/freshness,
+employment/workplace/function fields where present, completeness/warnings, and
+company URL/profile fields where stored. Search and typed filters are supported
+for text, function/subfunction, location, workplace, employment, experience,
+language, salary, sponsorship/authorization, company attributes, and freshness;
+admin adds publication/completeness/warning/duplicate filters. Raw payloads,
+alternate evidence, rule output and internal confidence remain admin-only.
 
-Immediately after completion, the exact same command/key was invoked. It
-returned exit code 0 with:
+## Tests, build, deployment
 
-```json
-{
-  "status": "completed",
-  "idempotent_replay": true,
-  "reprocessing_id": "reprocess_ef912ccf2e9f44ca974222fe60732e55",
-  "idempotency_key": "unified-mapping-production-2026-08-10",
-  "counts": {"batches": 67, "observations": 587, "fields": 5870,
-             "historical_repairs": 585, "warnings": 2787,
-             "failed_observations": 0}
-}
-```
+| Check | Result |
+|---|---|
+| Python interpreter | `.venv\\Scripts\\python.exe`, Python 3.12.7 |
+| Direct connector/generic/scheduler/admin tests | Passed; latest focused run 19 passed, 3 subtests; diagnostic patch run 11 passed |
+| Ruff | Passed on changed backend files |
+| Frontend unit tests | 148 passed |
+| Frontend build | Passed |
+| Frontend ESLint | Passed with `--max-warnings=0`; package has no `lint` script |
+| API/worker health | `/health`, `/health/live`, `/health/ready` passed during production checks |
+| Frontend API diagnostic | Absolute API host and proxy health passed |
+| Render deployment | API and worker live on `dc19cc05298e7d69e4548793798030d3bc059eac` |
 
-The post-replay snapshot matched the completion snapshot: no semantic version,
-duplicate projection, publication, current-head, observation, or canonical
-identity delta occurred during replay.
+## Remaining limitations
 
-The safe resumable command shape, if an operator must inspect the completed
-run, is:
+1. Siemens and SmartRecruiters are productive through bounded paths, but their
+   current captures are intentionally incomplete; they must not be used as
+   authoritative closure snapshots until a complete-page contract exists.
+2. Logo enrichment is configured but execution is deferred; logo coverage is
+   zero by design.
+3. No live duplicate cluster exists, so production merge/split/undo has not
+   been exercised against a naturally occurring candidate.
+4. Company-source and full alias decision history are not first-class entities.
+5. Confidence scores are not calibrated probabilities, and some optional typed
+   fields remain unknown by source capability.
+6. Automated remote backup restore and destructive rollback are not acceptance
+   tested; reprocessing rollback is additive/replay-safe rather than a delete.
 
-```powershell
-.venv\Scripts\python.exe scripts/reprocess_acquisition.py `
-  --env-file user_config\.env `
-  --apply --yes --allow-remote-additive-rollback `
-  --batch-size 5 `
-  --max-batches 1 `
-  --stale-after-seconds 1800 `
-  --idempotency-key unified-mapping-production-2026-08-10 `
-  --resume reprocess_ef912ccf2e9f44ca974222fe60732e55
-```
+## Recommended next sequence
 
-The backup reference remains
-`.backend_data/reprocessing_backups/production_before_reprocessing_resume_20260810.sqlite3`;
-it is recoverable and was not committed. Remote rollback remains additive
-checkpoint/resume plus publication/review reversal; no destructive automatic
-restore exists.
-
-## Validation completed
-
-- Project interpreter: Python 3.12.7; focused reprocessing tests passed 5/5
-  after the lease-expiry and private-caller fixes; Ruff passed.
-- Frontend production build: Vite build passed; the new
-  `AdminAcquisitionPage` chunk was generated.
-- Local fixture validation: raw observation payload remained unchanged,
-  differing descriptions did not false-merge, bounded resume completed, a
-  failed observation was retryable, duplicate-finalize failure was resumable,
-  and completed idempotency replay returned stable counts.
-- Live API health: `/health/live` and `/health/ready` returned HTTP 200; ready
-  reported Turso/libSQL and R2/S3 backends. Admin and user bodies require
-  authenticated sessions, so no unauthenticated production catalog body is
-  claimed here.
-- Machine-readable map parsed successfully as JSON with 12 stages, 11
-  entities, 21 lineage entries, 10 connector capability entries, and 6 gap
-  categories.
-
-## Remaining limitations and recommended sequence
-
-No failed observations or unresolved lease owners remain. Remaining
-limitations are operational/data-quality items, not a reprocessing gate:
-
-1. Quarantine fixture/test targets and decide whether to exclude them from
-   production quality metrics.
-2. Do not grant external callers direct database write access; the observed
-   raw-SQL launcher variant bypassed application fencing and was terminated by
-   exact process identity. A future control should enforce this boundary at
-   the database/operator surface as well.
-3. Add durable connector capability snapshots, raw-retention coverage,
-   timestamp/lifecycle conflict semantics, and company-source alias decisions.
-4. Add reversible duplicate decisions, one approved enrichment provider with
-   budget/terms/refresh controls, and authenticated production contract tests.
-5. Expand public serializers and admin controls only after versioning the
-   `known`/legacy-`present` compatibility contract.
-
-The complete stage, entity, field-lineage, connector, consumer, duplicate, and
-gap map is in [CURRENT_DATA_PIPELINE_MAP.md](CURRENT_DATA_PIPELINE_MAP.md) and
-[CURRENT_DATA_PIPELINE_MAP.json](CURRENT_DATA_PIPELINE_MAP.json).
-
-## Historical Prompt 2 — fresh production baseline (superseded by final acceptance)
-
-The configured environment inspected was production Turso/libSQL from
-`user_config/.env`; the local SQLite database was not treated as production.
-At the validation boundary, the API and worker were live on
-`5e494dc68a7bf2b3c2bc49d6a52886110cccc2db` and the frontend was live on
-`9a62e81b0ea7e3a7f02026ae07cbd56f705a0e12`. Migration 046,
-`046_acquisition_source_quarantine`, was applied at
-`2026-08-10T14:19:41.263182+00:00`; migration 045 was already applied at
-`2026-08-10T11:47:21.395366+00:00`.
-
-The source hygiene fix quarantines `fixture_source` and `x` by setting
-`enabled=0`, `publication_enabled=0`, and `maturity_state=quarantined`, while
-retaining their immutable observations. Normal scheduler and quality-metric
-selection exclude quarantined targets. The current valid publication head
-`acq_publication_5884f63297fc4f56a0fb019c7cd4f063` contains 133 jobs and zero
-fixture jobs, so no exclusion preview was necessary and no publication was
-promoted.
-
-Fresh production acquisition completed through the authenticated admin path:
-
-| Source | Import / idempotency key | Cycle | Request evidence | Result |
-|---|---|---|---|---|
-| N26 / Greenhouse | `job_import_870c6fab348e4aaba91dbf722df6fc39` / `admin-acquisition-1786371852231` | `acq_cycle_8fc75e5e4f5149379db22e2b4ba89c3e` | HTTP 200, 91 returned from `https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true` | 91 accepted, 0 rejected, 91 distinct IDs, 0 new/updated, 91 unchanged, 0 closed |
-| Qonto / Lever | `job_import_df980bf7cb194bb7ab3795097449f0fe` / `admin-acquisition-1786372234773` | `acq_cycle_33efc4e694d14e87bef67306d2fa12d2` | Two HTTP 200 attempts, 35 rows each from `https://api.lever.co/v0/postings/qonto?mode=json` | 35 unique accepted, 0 rejected, 35 distinct IDs, 0 new/updated, 35 unchanged, 0 closed |
-
-Qonto's first request exceeded the former five-minute remote projection lease.
-The worker did not create a new import or key: after the stale lease guard and
-30-minute remote lease were deployed, the same import/cycle/key resumed and
-committed 35 rows. The two fetched batches explain 70 request-level rows versus
-35 unique source records; no duplicate observation, semantic version, or
-projection inflation occurred.
-
-The before/after production projection read was:
-
-| Table/read model | Before | After/current | Delta |
-|---|---:|---:|---:|
-| `job_source_observations` | 713 | 839 | +126 |
-| `job_posting_versions` | 735 | 735 | 0 |
-| `acquisition_field_provenance` | 22,103 | 26,009 | +3,906 |
-| `acquisition_rule_outputs` | 713 | 839 | +126 |
-| `acquisition_completeness_reports` | 20 before boundary | 146 | +126 |
-| `acquisition_quality_events` | 6,349 | 6,749 | +400 |
-| `canonical_company_urls` | 290 | 290 | 0 |
-| `company_logo_enrichments` | 0 | 0 | 0 |
-| `acquisition_duplicate_clusters/members` | 0 / 0 | 0 / 0 | 0 / 0 |
-| `acquisition_publications` | 5 | 5 | 0 |
-| `acquisition_publication_jobs` | 427 | 427 | 0 |
-| Current head jobs | 133 | 133 | 0 |
-
-The complete source reconciliation, representative N26/Qonto field lineage,
-application destination checks, authenticated admin/user UI checks, warnings,
-and unresolved gaps are recorded in
-[PRODUCTION_FRESH_ACQUISITION_REPORT.md](PRODUCTION_FRESH_ACQUISITION_REPORT.md).
-
-## Historical Prompt 3 — parallel product-completion wave (superseded by final acceptance)
-
-Prompt 2 ended with `PROMPT 2 GATE PASSED`, so the four bounded product
-workstreams were integrated and deployed. The inspected environment remained
-configured production Turso/libSQL from `user_config/.env`; local SQLite was
-not treated as production. The product-code API/worker deployment was
-`8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`; the current API/worker deployment
-after the documentation push is
-`b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f`. The frontend containing the new
-admin UI is live on `0ba834a8b59dcdbc660ef03dad4429904a700a39`, and production
-has migration `047_product_completion_wave`.
-
-### Integrated workstreams
-
-- **A — company identity/enrichment:** typed URL aggregation, validation,
-  provenance, primary-candidate selection, logo adapter/monogram fallback,
-  company detail API, and bounded admin enrichment controls. Production N26
-  and Qonto URL evidence rendered in the authenticated Companies page. No
-  provider was configured or invoked; `company_logo_enrichments` remains 0.
-- **B — duplicate decisions:** migration-backed append-only decisions, state
-  validation, evidence/reason capture, reversible undo, authenticated API, and
-  admin review controls. Production has zero duplicate clusters, so no live
-  decision event was created. No merge or publication occurred.
-- **C — typed product contract:** additive `typed` public job-card/detail
-  namespace, bounded admin lineage/version helpers, normalized typed filters,
-  application-destination safety, and admin Jobs filters. Authenticated
-  production feed/detail and admin Jobs checks passed. Current Qonto detail
-  data still exposes unknown workplace/category/application and no verified
-  description; these are source/read-model gaps, not invented values.
-- **D — connector capability/retention:** disabled-by-default Workday,
-  Personio, Recruitee, and SmartRecruiters contracts, bounded retry and
-  pagination rules, raw-retention metrics, capability snapshots, and Rules UI.
-  Production contains 8 historical snapshots, displayed as 4 latest views;
-  all four remain disabled/unregistered and report-only.
-
-The full workstream report is [PARALLEL_PRODUCT_COMPLETION_REPORT.md](PARALLEL_PRODUCT_COMPLETION_REPORT.md).
-
-### Current production read after deployment
-
-| Metric | Current value |
-|---|---:|
-| Migration | 047 |
-| Canonical companies/jobs | 11 / 146 |
-| Source observations / posting versions | 839 / 735 |
-| Field provenance / rule outputs | 26,009 / 839 |
-| Completeness reports / quality events | 146 / 6,749 |
-| Company URLs / verified logo rows | 290 / 0 |
-| Duplicate clusters / decisions | 0 / 0 |
-| Capability snapshots | 8 historical, 4 latest connector views |
-| Raw payload-bearing observations | 839 of 839 |
-| Valid publication head | `acq_publication_5884f63297fc4f56a0fb019c7cd4f063`, 133 jobs |
-
-The completed reprocessing run remains
-`reprocess_ef912ccf2e9f44ca974222fe60732e55` with idempotency key
-`unified-mapping-production-2026-08-10`, final observation checkpoint
-`observation_ffc65009d257463e95239c00166d6ab7`, and no failed observation IDs.
-Prompt 3 added no semantic versions, duplicate projections, merges, or
-publication changes.
-
-### Validation and limitations
-
-The project interpreter was Python 3.12.7. Backend compile/Ruff, focused
-product-completion and acquisition tests, frontend Node tests/ESLint/Vite, and
-`git diff --check` passed. Authenticated production browser checks rendered the
-new duplicate, company, capability, and typed Jobs admin surfaces plus the
-user feed/detail. No unauthenticated 401 response was used as authenticated
-body evidence.
-
-The pre-existing deployed frontend API-host diagnostic (`api_host: "${n}"`)
-and proxy DNS failure remain unresolved. A production enrichment provider was
-not configured, and the zero-cluster state prevented a live duplicate-decision
-canary. Quality and completeness remain report-only and do not block unrelated
-observations. See the parallel report and current map for the prioritized
-follow-up sequence.
-
-## Final acceptance handoff (2026-08-10)
-
-This section and
-[FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md](FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md)
-supersede the historical Prompt 1, Prompt 2, and Prompt 3 snapshots above.
-Those snapshots retain their original evidence and are not the current
-production count.
-
-The configured production target is remote Turso/libSQL with R2/S3; migration
-047 is applied. The code-bearing runtime-fix deployment verified at acceptance
-was `052d8e145c8034734ab5a302c198f23f5d70067f`. Health and readiness returned
-HTTP 200, and authenticated admin and user pages rendered. [P][A]
-
-| Current production metric | Value |
-|---|---:|
-| Schema migrations | 47 |
-| Canonical companies / jobs | 11 / 146 |
-| Source observations / posting versions | 961 / 735 |
-| Field provenance / rule outputs | 29,791 / 961 |
-| Completeness reports / physical quality events | 146 / 7,133 |
-| Company URL rows / logo-enrichment rows | 290 / 0 |
-| Duplicate clusters / members / decisions | 0 / 0 / 0 |
-| Publications / publication-job rows | 5 / 427 |
-| Current valid-head jobs | 133; fixture jobs 0 |
-| Lifecycle | 135 active / 4 stale / 7 closed |
-
-The original reprocessing run
-`reprocess_ef912ccf2e9f44ca974222fe60732e55` is completed at checkpoint
-`observation_ffc65009d257463e95239c00166d6ab7` with zero failed observation
-IDs. Re-invoking it with the exact same idempotency key returned
-`idempotent_replay=true` and added no semantic versions or duplicate
-projections. [P]
-
-Fresh N26/Greenhouse and Qonto/Lever acquisition completed with 87/87 and
-35/35 accepted observations respectively; all were unchanged, with 4 and 3
-complete-snapshot closures and zero unexplained reconciliation differences.
-The Siemens generic/JSON-LD attempt ended uncertain with zero accepted
-observations and is deferred. Fixtures remain quarantined, retained, and
-excluded from normal acquisition and quality metrics. [P][U]
-
-Acceptance is partial. The exact deferred scope, connector limitations,
-field gaps, authenticated UI evidence, duplicate workflow test evidence, and
-recommended next actions are maintained in the final acceptance report.
+1. Add a durable snapshot manifest and expose source-reported/observed/accepted/
+   rejected/closed reconciliation in the admin UI.
+2. Add the company-source and alias decision model with reversible audit history.
+3. Complete typed public serializers and calibrate confidence semantics.
+4. Approve and enable a bounded official-website/logo provider canary.
+5. Exercise duplicate decisions in an isolated production-shaped database, then
+   run a reviewed live candidate without automatic merging.
+6. Add backup/restore drills and structured connector telemetry dashboards.

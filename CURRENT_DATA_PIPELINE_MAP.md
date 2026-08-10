@@ -1,380 +1,257 @@
 # Current Runr data-pipeline map
 
-Audit date: 2026-08-10. Evidence tags: **[C]** executable code, **[S]**
-migrations/schema, **[T]** tests/fixture runs, **[P]** read-only query against
-the configured remote database, **[A]** live HTTP smoke check, **[U]**
-uncertain or not observable without an authenticated session.
+Audit date: 2026-08-10. Repository branch: `deployment/render-turso-r2`.
+
+Evidence labels: `[C]` code, `[S]` schema/migration, `[T]` automated tests,
+`[P]` configured production Turso/libSQL query, `[A]` live API/UI check, and
+`[U]` uncertain or not live-proven. The inspected database is the remote
+production database configured by `user_config/.env`; local SQLite is not
+production. Secrets are intentionally omitted. [P]
 
 ## Current truth
 
-The inspected environment is the configured `user_config/.env` target, not a
-local database: `DATABASE_BACKEND=turso`, `RUNR_ENV=production`, remote
-libSQL/Turso configured, and R2/S3 object storage configured. No secret value
-is reproduced here. [P]
+The deployed API and worker are live on `dc19cc05298e7d69e4548793798030d3bc059eac`.
+The frontend API bundle is pinned to `https://runr-api.onrender.com/v1`; the
+production diagnostic reports `api_host=runr-api.onrender.com`, an absolute
+base URL, and `/v1/health/proxy` status `ok`. [A]
 
-The current production database has 47 applied migrations, 961 immutable job
-observations, 735 posting-version rows, 146 canonical jobs, 11 canonical
-companies, 29,791 field-evidence rows, 146 completeness reports, 7,133 quality
-events, 290 company URL rows, zero logo-enrichment rows, zero duplicate
-clusters, five publication rows, and one current publication head. [P]
+Migrations 045, 046, and 047 are applied. The original reprocessing run
+`reprocess_ef912ccf2e9f44ca974222fe60732e55` is completed at observation
+`observation_ffc65009d257463e95239c00166d6ab7`, has an empty lease and zero
+failed observations; replay with the same idempotency key returned
+`idempotent_replay=true`. [P]
 
-N26/Greenhouse contributes 433 legacy rows with blank connector plus 269 fresh
-Greenhouse rows; Qonto/Lever contributes 152 legacy rows with blank connector
-plus 105 fresh Lever rows. `fixture_source` and `x` remain one row each,
-quarantined and excluded from productive acquisition and normal quality
-metrics. [P]
+Production counts at the end of this audit:
 
-The valid public head contains 133 jobs; canonical jobs include N26 101,
-Qonto 43, Fixture source 1, and x 1. The current head was published at
-`2026-08-10T00:02:55.648984+00:00`; fixture jobs in the head: 0. [P]
+| Area | Count / state |
+|---|---:|
+| Canonical companies | 16 |
+| Company profiles | 14 |
+| Company URL evidence rows | 419 |
+| Immutable job observations | 1,041 |
+| Immutable posting versions | 790 |
+| Canonical jobs | 201 |
+| Field provenance rows | 32,271 |
+| Rule outputs | 1,041 |
+| Completeness reports | 201 |
+| Report-only quality events | 7,334 |
+| Logo enrichment rows | 0; provider configured, execution intentionally off |
+| Duplicate clusters / members / decisions | 0 / 0 / 0 |
+| Publications / publication rows | 5 / 427 |
+| Current valid publication head | 133 jobs; fixture jobs 0 |
+| Uncertain acquisition requests | 0 |
 
-Complete/live-proven: immutable observation and raw-payload retention for the
-inspected 961 rows, Greenhouse/Lever direct acquisition, bounded remote
-projection recovery, URL/application classification, description
-representations, canonical job identity/versioning, field provenance,
-report-only quality, conservative duplicate candidates, publication-head
-control, admin inspection APIs, authenticated feed/detail rendering, and the
-completed resumable reprocessing run plus same-key idempotent replay. [C][S][T][P][A]
+Lifecycle counts are active 170, stale 4, closed 7, and unknown 20. Unknown
+states are expected for incomplete bounded snapshots: a partial source page is
+not treated as an authoritative empty catalog and cannot close jobs. [C][P]
 
-Partial/deferred: generic/JSON-LD acquisition (Siemens ended with an uncertain
-external outcome), official company homepage/careers/ATS identity selection,
-company aliases/source entity, timestamp semantics, Greenhouse application
-child-route persistence, enrichment, live duplicate decisions, public typed
-field completeness, and four disabled/unregistered ATS expansions. [P][U]
-
-Quality and completeness are annotations. They do not reject ingestion, stop
-canonicalization, block publication, or filter the user feed unless a separate
-explicit publication/review action does so. [C][T][A]
-
-The remainder of this file contains the stage/entity/lineage/capability map;
-earlier Prompt-1/2/3 recounts are historical evidence only. The authoritative
-acceptance narrative and current counts are in
-`FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md`. [P]
+Connector observations are Greenhouse 702, Lever 257, Workday 10, Personio
+25, Recruitee 20, SmartRecruiters 20, generic/JSON-LD 5, and other career-site
+2. Fixture targets `fixture_source` and `x` remain immutable evidence but are
+quarantined from acquisition and normal quality metrics; neither is in the
+publication head. [P]
 
 ## End-to-end path
 
 ```text
 manifest / configured source registry
-  -> target + acquisition cycle/task/request/attempt leases
-  -> connector/API/career-page response with retry policy
-  -> immutable job_source_observations (raw payload + hash + source metadata)
-  -> extraction and typed normalization
-       -> canonical URL/application destination
-       -> raw/sanitized/plain description
-       -> source metadata + timestamp semantics
-       -> unified_mapping_v1 fields/company URLs/taxonomies
-  -> company and job identity resolution
-  -> canonical company/job + immutable posting version
-  -> field evidence, rule outputs, completeness, quality events
-  -> candidate duplicate clusters (human review; no auto merge)
+  -> target registry -> cycle/task/request leases
+  -> direct ATS API, generic JSON-LD, or bounded career-site fetch
+  -> raw response + retry/cost telemetry
+  -> immutable source observation and raw-payload hash
+  -> extraction / URL classification / description representations
+  -> typed normalization and taxonomies
+  -> company identity + URL evidence
+  -> job identity + canonical job + immutable semantic version
+  -> field evidence + rule outputs + completeness + quality warnings
+  -> duplicate candidate review (human decision only)
   -> explicit publication preview -> valid publication head
-  -> API serializers/read models
-       -> admin acquisition console / legacy job-import dashboard
-       -> authenticated personalized-jobs feed/detail and filters
+  -> authenticated admin read models and user feed/detail
 ```
 
-## Processing stages and ownership
+## Processing-stage map
 
-| Stage | Code entry points | Database tables/models | Inputs | Outputs | Owner rules |
+| Stage | Code entry points | Tables/models | Inputs | Outputs | Owner rules |
 |---|---|---|---|---|---|
-| Environment and safety | `backend/database/connection.py`, `backend/config/*`, `scripts/reprocess_acquisition.py` | `config_values`, `schema_migrations` | Runtime flags and env file | Selected SQLite or remote libSQL target, storage backend | Production requires remote configuration; the reprocessor requires project Python 3.12.7 and explicit `--apply --yes`; remote apply requires the explicit additive-rollback acknowledgement. [C] |
-| Source registry | `backend/acquisition/manifest.py`, `application/acquisition_scheduler.py`, `SqliteAcquisitionStore.ensure_targets()` | `acquisition_targets` | Manifest, target config, provider/connector | Canonical target URL, request URL, connector, source token, employer hosts, limits, maturity | Disabled/unproven/quarantined targets do not become productive evidence; production currently has manually enabled test rows. [C][P] |
-| Career/ATS discovery | `backend/connectors/company_career_discovery.py`, `tools/discover_company_careers.py`, `connectors/ats_router.py` | Target config and URL observations | Homepage/careers URL, host/path | Detected ATS, board slug, careers/ATS candidates | Host suffix routing is deterministic; discovery can identify Greenhouse, Lever, Workday, Personio, Recruitee, SmartRecruiters; only Greenhouse/Lever are productive in the inspected database. [C][P] |
-| Acquisition scheduling | `AcquisitionScheduler.run_due_cycle()`, `claim_due_cycle()`, `ensure_cycle_tasks()`, `claim_next_task()` | `acquisition_cycles`, `acquisition_tasks`, `acquisition_requests`, `acquisition_target_attempts`, `acquisition_stage_results` | Due target, window key, leases | Cycle/task/request reservations, attempt metrics, retries | Bounded requests and lease ownership; repeated cycle keys are idempotent; failure is recorded before retry. [C][S] |
-| Connector fetch | `connectors/ats_router.py`, `connectors/company_career_sites.py`, `connectors/bounded_probe.py`, job-board collectors | Request/attempt/evidence tables | Official API URL or career page | Normalized connector jobs, request status/credits, raw response payload | Greenhouse uses boards API `.../v1/boards/{token}/jobs?content=true`; Lever uses `.../v0/postings/{slug}?mode=json`; generic career pages use bounded crawling; LinkedIn is a separate portal strategy and is not a current productive target. [C][P] |
-| Retry and transport evidence | acquisition scheduler, `integrations/scrapeops.py`, request/attempt stores | `acquisition_requests`, `acquisition_target_attempts`, `acquisition_quality_events` | HTTP/network failures, retryable statuses, cost telemetry | Attempt history, retry counts, error categories, credits | Retry is bounded and transport-aware; content failures do not fabricate jobs. Exact production retry distribution was not queried. [C][U] |
-| Immutable source record | `SqliteAcquisitionStore.ingest_snapshot()` | `job_source_observations` | Connector job plus target/cycle/task context | External ID, original URL, apply URL, source ATS, payload JSON, raw payload JSON/hash, observed timestamp | Observation rows are immutable by triggers after migration 044; raw payload retention is additive and historical rows may have only older payload fields. [C][S][P] |
-| Extraction | `backend/acquisition/quality.py`, manual URL helpers | Observation payload and version payload | Raw HTML/JSON-LD/ATS fields | Title, location, URLs, description source, application candidates, metadata, timestamps | Extraction is deterministic; HTML is sanitized and JSON-LD/job markup preferred for generic pages; unsupported fields remain explicit rather than inferred silently. [C][T] |
-| URL and application mapping | `classify_job_url()`, `resolve_application_destination()`, `phase_b.py`, `unified_mapping.py` | Observation/version payload, `canonical_job_url_aliases`, `acquisition_field_provenance` | Job/detail/apply/link/candidate URLs | Canonical URL, job-detail URL, verified direct apply URL, user-facing fallback, classification and validation metadata | A job-detail/listing URL is not promoted to direct apply; employer/official ATS candidates are distinct; validation is evidence-backed and admin resolution is audited. [C][T] |
-| Description mapping | `normalize_description()` | Version payload, raw observation | Raw description HTML/text | `description_raw`, sanitized HTML, clean text, one-pass entity decoding | Raw and derived representations coexist; scripts/forms are removed from sanitized HTML; clean text is used by product serializers. [C][T] |
-| Typed source metadata | `normalize_source_metadata()`, `normalize_source_timestamps()` | Version payload, provenance rows, quality events | ATS structured fields and raw payload | Department/team/office/location collection/employment/workplace/language/salary/requisition/categories/custom fields/seniority/education/status and source lifecycle timestamps | Connector capabilities are explicit where known; unknown connector capability is different from unsupported field; source `created/posted/updated/closed/reopened` semantics are retained. [C][T] |
-| Unified field map | `backend/acquisition/unified_mapping.py::map_job_fields()` | `acquisition_field_provenance`, `acquisition_rule_outputs`, `canonical_company_urls` | Normalized job + company objects | Typed normalized fields, taxonomies, evidence, confidence, extraction method, rule version | Precedence is structured source field, then raw source field, then explicitly labeled description evidence; conflicts are flagged and not silently selected. The current storage vocabulary retains legacy `present`; `known` is the product/read-model compatibility name. [C][S] |
-| Company identity | `canonical_employer_name()`, company profile helpers, `ensure_company()` | `canonical_companies`, `canonical_company_aliases`, `canonical_company_profiles`, `canonical_company_urls` | Employer label, official host, company object, careers/homepage URLs | Canonical company ID/name/entity kind, aliases, profile fields, URL candidates | Identity is conservative and evidence-backed; homepage/careers/ATS URLs are separate records; enrichment must not overwrite source evidence. Alias decision history is incomplete in current production data. [C][P] |
-| Job identity | `backend/domain/job_identity.py`, acquisition store identity helpers | `canonical_jobs`, `canonical_job_external_ids`, `canonical_job_url_aliases`, `job_source_states`, relationships | Source ID, canonical URL, employer, title/location/signature | Canonical job ID, external ID links, URL aliases, identity key/signature, source state | Prefer source+external ID and canonical URL; canonicalize tracking/query noise; weak identity stays separate. Cross-source identity is conservative. [C][T] |
-| Versioning and lifecycle | `_ensure_version()`, stable payload/content hash helpers, source snapshot completion | `job_posting_versions`, `canonical_jobs`, `job_source_observations` | Stable content fields and observed source state | Version number, semantic/content hash, current pointer, first/last seen, verified, closed/source timestamps | Identical stable content reuses a version; stable content changes create a new immutable version; closure/reactivation is source-state evidence, not disappearance from one partial crawl. Exact reactivation examples were not found. [C][S][U] |
-| Provenance and rule outputs | `_persist_unified_mapping()`, provenance writers, `rule_registry.py` | `acquisition_field_provenance`, `acquisition_rule_outputs`, `acquisition_stage_results` | Mapper records and observation/version IDs | Per-field raw/normalized/state/source/source field/method/evidence/confidence/observed time/selected/reason/rule; semantic output hash | Rule version is `unified_mapping_v1`; quality/completeness and description/application families are separate registered rule families. [C][S] |
-| Company enrichment | `CompanyEnrichmentService`, `run_due_company_enrichment()`, logo/object-storage helpers | `company_enrichment_targets`, `company_enrichment_attempts`, `canonical_company_profiles`, `company_logo_enrichments`, R2 object keys | Explicit worker/provider invocation and company URL | Provider attempts, profile evidence, cached logo metadata/object key | Disabled by default for catalog reads; no network enrichment is invoked by reprocessing; current production has zero logo-enrichment rows. [C][P] |
-| Duplicate detection | `_store_duplicate_candidates()`, `list_admin_duplicate_clusters()` | `acquisition_duplicate_clusters`, `acquisition_duplicate_members`, job relationships | Same company/title/location/content hash and identity evidence | Candidate cluster, score, reasons, review history | Candidate only; no automatic merge. Review/merge decision model is incomplete and no current production clusters exist. [C][P] |
-| Quality/completeness | `completeness_rules()`, `quality.py`, reprocessor | `acquisition_completeness_reports`, `acquisition_quality_events`, `acquisition_version_quality` | Canonical fields, evidence, publication/review state | Pass/warning, state vocabulary, denominator, report-only percentages, warning events | Warnings never block ingestion or publication; completeness is not a product eligibility gate. [C][T] |
-| Publication | admin import service and acquisition store preview/publish/undo | `acquisition_publications`, `acquisition_publication_jobs`, `acquisition_publication_head`, audit rows | Explicit approved import/preview and admin action | Valid publication and single head read model | Only an explicit publish promotes the head; reprocessing cannot promote it; undo is an admin action. [C][P] |
-| API/read models | `api/routes/acquisition_admin.py`, `job_import_admin.py`, `acquisition_catalog.py`, `personalized_jobs_service.py` | Read joins over canonical, version, evidence, publication/profile tables | Authenticated request and filters | Admin inspection/read model; user feed/card/detail serializers | Admin routes require admin identity; user routes require user identity and current publication. New normalized fields are stored more broadly than the public serializer exposes. [C][U] |
-| Reprocessing/backfill | `scripts/reprocess_acquisition.py`, `acquisition/reprocessing.py` | Run/stage/checkpoint/rule/provenance/quality/duplicate tables | Preserved observations and explicit scope/idempotency key | Bounded additive projections, checkpoint, counts, rollback reference | Project interpreter guard, local backup, remote additive acknowledgement, compare-and-swap lease, stale reclaim, local SQLite savepoint per observation, remote libSQL replayable batch first with isolated per-observation retry fallback, resumable failure list, no delete/merge/publish. [C][T] |
+| Environment and safety | `backend/config/env_schema.py`, `backend/database/connection.py`, `scripts/reprocess_acquisition.py` | `schema_migrations`, `config_values` | Runtime env, Turso/R2 configuration, project interpreter | Selected remote DB/storage and operation safeguards | Production requires remote Turso/libSQL; Python 3.12.7 is mandatory; remote reprocessing is additive and explicitly acknowledged. |
+| Source/connector registry | `backend/acquisition/manifest.py`, `backend/application/admin_job_import.py`, `backend/application/acquisition_scheduler.py`, `SqliteAcquisitionStore.ensure_targets` | `acquisition_targets` | Manifest target, company profile, source token, connector, limits | Careers URL, ATS/API URL, official host allowlist, maturity and publication flags | Manifest is server-owned; canonical target URLs are normalized; fixtures are quarantined; target flags do not by themselves publish. |
+| Acquisition planning | `AdminJobImportService.plan_import`, `start_import` | `admin_job_imports`, `admin_job_audit_events` | Authenticated source IDs and bounded scope | Idempotent queued import, cost/request forecast, audit event | No automatic publication; paid web imports require a credit ceiling; direct official connectors have no ScrapeOps charge. |
+| Lease and dispatch | `PhaseAAcquisitionScheduler.run_controlled_import`, `_execute_target` | `acquisition_cycles`, `acquisition_tasks`, `acquisition_requests`, `acquisition_budget_reservations` | Queued import, target, request/credit ceilings | Durable lease, dispatch state, latency, request result | One deployed worker is the queue writer; uncertain outcomes require explicit release/retry; no duplicate launcher. |
+| Connector fetch | `ats_router.fetch_ats_snapshot`, `ats_expansions.fetch_expansion_snapshot`, `generic_jsonld.fetch_generic_snapshot`, `company_career_sites.scrape_company_career_sites` | Request detail and raw retention fields | Official ATS/API URL or bounded careers page | Bounded jobs, source count, raw payload, retry/page warnings | Workday, Personio, Recruitee, SmartRecruiters, Greenhouse, Lever and generic JSON-LD use direct bounded paths; incomplete snapshots never close source states. |
+| Observation retention | `SqliteAcquisitionStore.ingest_snapshot` | `job_source_observations`, source-state tables | Accepted normalized source records plus request context | Immutable observation, external ID, source URLs, raw payload/hash, observed time | Observations are never rewritten or deleted; projections are replayable. |
+| Extraction and URL mapping | `backend/acquisition/phase_b.py`, `backend/acquisition/quality.py`, URL/application helpers | Observation/version/provenance/quality tables | ATS objects, HTML, JSON-LD, links/forms | Title, locations, descriptions, source metadata, timestamps, detail/apply URL candidates | Direct application destination wins over detail/listing fallback; careers index URLs are not Apply destinations. |
+| Unified normalization | `backend/acquisition/unified_mapping.py`, `rule_registry.py` | `acquisition_field_provenance`, `acquisition_rule_outputs`, `canonical_company_urls` | Extracted fields and source evidence | Typed fields, taxonomy values, field states, rule/version metadata | Structured source > raw payload > explicitly labelled text; unknown, unsupported, inferred and conflicting states remain representable. |
+| Company identity and URLs | `canonical_employer_name`, `SqliteAcquisitionStore` company helpers, `company_enrichment.py` | `canonical_companies`, `canonical_company_aliases`, `canonical_company_profiles`, `canonical_company_urls` | Employer name, configured homepage/careers/ATS, observed source URLs | Company identity, aliases, selected primary URL per type, profile evidence | Configured official URLs are source-backed and selected; enrichment cannot overwrite stronger source evidence; ambiguous aliases are not silently merged. |
+| Company enrichment/logo | `CompanyEnrichmentService`, `CompanyLogoEnrichmentService`, provider adapter | `company_enrichment_targets`, `company_enrichment_attempts`, `company_logo_enrichments`, profile logo columns | Company URL/profile and explicit provider configuration | Provider attempts, profile fields, logo object/provenance | `official_website` is configured in Render; execution is `0`, so no logo row is fabricated. |
+| Job identity/versioning | `backend/domain/job_identity.py`, acquisition identity helpers, version writer | `canonical_jobs`, `canonical_job_external_ids`, `canonical_job_url_aliases`, `job_source_states`, `job_posting_versions` | External ID, canonical URL, employer/title/location, stable content | Canonical job, aliases, lifecycle, immutable version/hash | Source+external ID and canonical URL are preferred; stable content hash excludes volatile telemetry; changed stable content appends a version. |
+| Provenance/quality/completeness | `_persist_unified_mapping`, completeness rules, `rule_registry.py` | `acquisition_field_provenance`, `acquisition_rule_outputs`, `acquisition_completeness_reports`, `acquisition_quality_events` | Candidate field values and evidence | Selected/unselected evidence, confidence, rule output, completeness and warnings | Report-only. Missing metadata, unsupported values, and quality warnings do not stop ingestion, canonicalization, publication, API, or UI rendering. |
+| Duplicate review | Duplicate candidate and decision services | `acquisition_duplicate_clusters`, `acquisition_duplicate_members`, `acquisition_duplicate_decisions`, merge/split audit tables | Similarity candidates and human decision | Candidate, distinct/ignore, merge/split plan, undo history | No automatic merge. Immutable observations and versions survive decisions; live production has no cluster yet. |
+| Publication | `create_job_import_preview`, `publish_job_import_preview`, `undo_last_job_publication` | `acquisition_publications`, `acquisition_publication_jobs`, `acquisition_publication_head`, admin audit | Explicit preview and administrator action | Staging snapshot, valid head, reversible undo | Acquisition and reprocessing never promote a publication; fixture-only jobs are excluded from previews. |
+| API/read models | `backend/api/routes/acquisition_admin.py`, `job_import_admin.py`, `acquisition_catalog.py`, `personalized_jobs_service.py` | Canonical/read-model/evidence/publication tables | Authenticated admin/user and filters | Admin inspection/operation JSON; user feed/card/detail JSON | Raw payloads and evidence are admin-only; user reads the valid publication head. |
+| Reprocessing/backfill | `scripts/reprocess_acquisition.py`, `backend/acquisition/reprocessing.py` | `acquisition_reprocessing_runs`, `acquisition_stage_results`, projection tables | Immutable observations, idempotency key, checkpoint | Additive versioned projections, durable counts/checkpoint and failure IDs | Project venv only; CAS lease and stale reclaim; bounded batches; per-observation isolation; no destructive rollback of immutable evidence. |
 
 ## Canonical entity relationship map
 
 ```text
-acquisition_target (source registry: connector, URL, ATS/provider, limits)
-  1 -> many acquisition_cycles -> many tasks -> many requests/attempts
-  1 -> many job_source_observations (immutable raw evidence)
-job_source_observation
-  many -> 1 canonical_job
-  many -> 1 canonical_company (through canonical_job/company_id)
-  1 -> many job_posting_versions (source_observation_id)
-  1 -> many acquisition_field_provenance (entity_kind=job)
-  1 -> many acquisition_rule_outputs
-canonical_company
-  1 -> many canonical_company_aliases / canonical_company_urls / profiles
-  1 -> many company_enrichment_targets -> attempts -> logo/profile enrichments
-canonical_job
-  1 -> many external_ids / URL aliases / source states / relationships
-  1 -> many immutable job_posting_versions
-  1 -> many duplicate members -> duplicate cluster
-  1 -> many field evidence / completeness reports / quality events
-job_posting_version
-  selected by canonical_job.current_version_id
-  included by acquisition_publication_jobs -> acquisition_publication
-acquisition_publication
-  1 -> current acquisition_publication_head (single public pointer)
-rule version (code registry + row on every projection)
-  scopes rule outputs, evidence, completeness, versions/publications, reprocessing
+company: canonical_companies
+  ├─ aliases: canonical_company_aliases
+  ├─ profiles/enrichment: canonical_company_profiles, company_enrichment_*
+  ├─ official URL evidence: canonical_company_urls
+  └─ owns canonical_jobs
+
+source registry: acquisition_targets
+  └─ cycles/tasks/requests -> job_source_observations (immutable)
+                                  ├─ raw payload + source URL + external ID
+                                  ├─ acquisition_field_provenance
+                                  ├─ acquisition_rule_outputs / quality events
+                                  └─ canonical job
+
+canonical_jobs
+  ├─ external IDs / URL aliases / source states
+  ├─ current_version_id -> job_posting_versions (immutable semantic versions)
+  └─ publication job -> acquisition_publications -> singleton publication head
+
+rule code/version metadata -> evidence, rules, completeness, quality, reprocessing
+identity similarity -> duplicate cluster/member -> append-only decision/audit history
 ```
 
-The database does not have one table literally named “company source” or
-“field evidence”: source ownership is represented by `acquisition_targets`,
-observation `target_id/source_ats/source_token`, and the source fields in
-`acquisition_field_provenance`. This is a real modeling gap, not an inferred
-entity. [S]
+There is no standalone complete `company_source` table. Source identity is
+currently composed from `acquisition_targets`, observation source fields, and
+company URL evidence. That is an explicit model gap, not an inferred entity.
 
 ## Field lineage matrix
 
-`precedence` means the current deterministic selection order. `confidence` is
-the mapper's bounded score; it is not a probability calibrated against labels.
-Missing/unsupported/unknown values are retained as states and do not become
-empty-string facts in the user serializer.
+| User-facing field | Raw source locations | Extraction / normalized type | Precedence | Provenance / confidence | Completeness rule | API and UI/filter consumer | Known gap |
+|---|---|---|---|---|---|---|---|
+| Job ID / canonical ID | ATS `id`, `external_job_id`, canonical URL | Identity resolver / stable string | Source+external ID, then URL/signature | Observation/version IDs; deterministic when stable ID exists | Identity warning only | Feed/detail, admin Jobs | Cross-source weak-ID ambiguity |
+| Title | ATS title, JSON-LD `name/title`, page title | Connector/JSON-LD parser / string | Structured > JSON-LD > page | Source field evidence; high when present | `title` warning | Feed card/detail, search | No multilingual reconciliation |
+| Company name / company ID | ATS employer, `company.name`, configured canonical employer | Employer normalizer / string + FK | Configured canonical > structured employer > normalized text | Company and observation evidence | Company identity warning | Feed/detail/company page/admin Companies | Alias decision history is incomplete |
+| Location(s) | ATS office/location, JSON-LD `jobLocation`, page selectors | Location parser / collection + display string | Structured > JSON-LD > page | Field evidence; source-dependent | `location` warning | Cards, detail, location filter/admin | Public multi-location type is not uniform |
+| Source department/team/category | `department`, `team`, ATS family/category, labelled description | Connector aliases / strings | Explicit structured field > raw payload > label | Observation field evidence | Department/category warning | Detail/admin inspection/filter | Connector coverage varies |
+| Runr function/subfunction | Source department/category/team and mapping taxonomy | Versioned taxonomy mapper / enum-like strings | Source metadata > explicit labelled text > inferred mapping | Rule version and state; mapping confidence is not calibrated | Report-only | Feed/detail/admin typed filters | `Other` semantics need product agreement |
+| Employment type | `employment_type`, `employmentType`, `type`, `commitment`, Workday time type | Alias mapper / taxonomy | Structured ATS > raw source > labelled text | Field evidence/state; structured high, inferred lower | Report-only | Feed/detail/admin filter | Not available from every connector |
+| Workplace arrangement | `workplace_arrangement`, `workplaceType`, `remoteType`, `remote`, labelled text | Arrangement taxonomy / On-site, Hybrid, Remote, Flexible, Unknown | Structured > labelled text | Evidence/state; inferred is explicit | Report-only | Feed/detail/filter/admin | Geographic remote restriction is separate and sparse |
+| Language(s) | `languages`, requirements, JSON-LD/description language lines | List/proficiency parser / list of language records | Structured > explicit labelled text | Field evidence; inferred state preserved | Report-only | Detail/filter/admin | Proficiency and taxonomy incomplete |
+| Experience/seniority | `seniority`, `experience_level`, years fields, labelled description | Experience parser / seniority + optional min/max | Structured > explicit description | Rule/evidence; inferred lower confidence | Report-only | Feed/detail/filter/admin | Public min/max exposure is incomplete |
+| Salary | Salary/range/compensation/custom ATS fields | Salary parser / amount, currency, period | Structured > raw source | Evidence; connector-dependent | Report-only | Detail/filter/admin | Currency comparability incomplete |
+| Description | ATS content, JSON-LD `description`, page HTML | Raw HTML + sanitized HTML + clean text | Structured source > JSON-LD > page | Observation/version/hash; high when present | `full_description` warning | Detail and admin; clean text in feed | Public representation is primarily clean text |
+| Job detail URL | `url`, `link`, `source_url`, `hostedUrl`, `absolute_url`, canonical/link tags | URL canonicalizer / HTTP URL | Source canonical/detail > aliases | Candidate evidence and observation | `job_detail_url` warning | Detail link, admin | Redirect equivalence is not universal |
+| Application URL | `apply_url`, `application_url`, ATS apply route, verified link/form | Application resolver / URL + status | Direct employer/ATS apply > detail fallback | Candidate validation and rule version | Direct-apply warning | Apply action/detail/admin | Embedded/redirect validation varies |
+| Application method/status | Link/form/ATS hosted route, URL classification | Destination classifier / direct, same-page, external, unavailable | Verified destination > fallback | Provenance and validation state | Report-only | Apply action/admin | A detail URL fallback is actionable only when explicitly classified |
+| Posted/updated timestamps | `datePosted`, `source_posted_at`, ATS created/updated/published | Timestamp normalizer / UTC ISO | Explicit publication date; no silent substitution | Source field and observed_at; deterministic when explicit | Timestamp semantics warning | Freshness/sort/detail/admin | Some ATS dates are ambiguous |
+| First/last seen and verified | Observation/request/canonical lifecycle timestamps | Store lifecycle writer / UTC ISO | Durable observation/request state | Cycle/request/observation provenance | Freshness report | Admin and detail | Observation age is not publication age |
+| Lifecycle | Complete source snapshot, source state, absence history | State machine / active, stale, closed, unknown | Explicit source state + complete snapshot | Source state and observation history | Report-only | Feed visibility/detail/admin | Reactivation is modeled but no live reactivation canary exists |
+| Completeness/warnings | Missing field checks, connector warnings, source reconciliation | Completeness/rule engine / report state + warning list | All evidence retained; no silent suppression | Rule version, field evidence, severity | Always report-only | Admin warnings; UI may show badges | Not a publication/API gate |
+| Freshness/publication state | Observation times, current head, publication row | Read-model serializer / state object | Current publication and timestamps | Deterministic read-model metadata | Not a gate | Feed/detail/admin | No public version diff UI |
+| Company homepage | Manifest `company_profile.website`, official company URL evidence | Configured URL mapper / URL | Explicit official source > provider | `configured_official`, selected primary | Company URL warning only | Company detail/admin Companies | Only five configured source companies have homepage rows |
+| Company careers URL | Manifest `careers_page`, careers/source URL | URL mapper / URL | Explicit careers source > provider | URL row + source observation/config | Company URL warning only | Company detail/admin | No separate company-source entity |
+| Company ATS URL | Manifest `ats_url`, detected ATS/source URL | URL mapper / URL | Explicit ATS source > detected source | URL row + connector provenance | Company URL warning only | Company detail/admin | ATS URLs are not application URLs unless job-level resolver says so |
+| Company aliases | Employer variants, configured canonical name | Alias resolver / string list | Explicit alias evidence only | Alias/source audit when present | Report-only | Admin/company detail | Manual alias decision UX is limited |
+| Company profile fields | Company payload/profile/enrichment provider | Profile alias mapper / typed field records | Source profile > enabled provider | Per-field state, source URL, verification time | Report-only | Company detail/admin | Many fields remain unknown |
+| Company logo | Provider URL/content, configured logo object | Logo adapter / object metadata | Explicit provider > stored fallback | Logo enrichment row, provider/rule version | Report-only | Company detail/card/admin | Provider is configured but execution is intentionally off; zero rows |
 
-| Published field | Raw source locations and extraction | Normalized type / precedence | Provenance, confidence, completeness | API / consumer | Known gap |
-|---|---|---|---|---|---|
-| `posting_id`, `canonical_job_id` | Source external ID, canonical URL, employer/title identity | String ID; source ID then canonical URL identity | Observation/version IDs; identity is deterministic; identity rule is not a completeness blocker | Feed/detail; admin Jobs | Cross-source aliases are conservative; weak IDs remain indistinguishable. |
-| `company_id`, `company`, `company_detail.name` | `company.name`, employer label, configured canonical employer | String; structured company then normalized employer label | Company ID/observation provenance; 0.95 when source-backed | Feed/detail and company view | Alias/merge audit history is incomplete. |
-| `title` | ATS `title`, JSON-LD `title`, page title/meta | String; structured ATS then JSON-LD/page | Source field + observation, 0.95 when present | Cards, feed, detail, admin filter/search | No multilingual title reconciliation. |
-| `location` | ATS location/offices, JSON-LD `jobLocation`, page location selectors | String/list collapsed for current serializer; structured then page | Source field evidence; location rule is report-only | Cards/feed/detail/admin filter | Multi-location typed structure is stored in payload but not consistently public. |
-| `work_arrangement` | `workplace_arrangement`, `workplace_type`, `remote_type`, labeled text | Taxonomy On-site/Hybrid/Remote/Flexible/Unknown | Source field or inferred description evidence; 0.95/0.8 | Feed/detail filter | Remote geographic restrictions are stored in unified evidence but not public filterable. |
-| `employment_type` | ATS employment/type/commitment and generic labeled text | Full-time/Part-time/Contract/Temporary/Internship/Apprenticeship/Freelance/Working student/Unknown | Structured 0.95, normalized 0.8; completeness warning only | Feed/detail filter | Greenhouse capability currently does not claim this field even when raw custom data may exist. |
-| `experience_level` | `seniority`, `experience_level`, years/description evidence | String plus unified experience `{minimum_years, maximum_years, seniority}` | Structured 0.9, labeled description inferred 0.75; report-only | Feed/detail/filter | Public field loses the typed min/max structure. |
-| `category` / function | `department`, `department_name`, source metadata | String taxonomy + unified `runr_function/subfunction` | Structured mapping 0.9/0.85; conflicting state retained | Feed/filter and admin | Taxonomy is code-owned; `Other` vs `Unclassified` semantics need product agreement. |
-| `description` | ATS content, JSON-LD description, page HTML | String clean text; raw HTML -> sanitized HTML -> clean text | Raw/derived hashes and observation; 0.95; description completeness warning | Detail/feed/intelligence | Sanitized HTML is stored but public serializer primarily exposes clean text. |
-| `salary` | ATS salary/range/compensation/custom fields | Existing salary object; no universal currency guarantee | Source metadata evidence; confidence connector dependent | Feed/detail/filter | Not in all connectors and not always normalized to comparable currency. |
-| `languages` | ATS language fields, raw labeled `Languages:` line | List of `{language,status,proficiency}` in unified map; public strings | Structured 0.9, labeled inference 0.75; warning only | Feed/detail/filter | Language taxonomy/proficiency normalization is incomplete. |
-| `work_authorization`, `sponsorship` | Raw requirement/company fields, profile fields | String/requirement projection | Evidence when source says it; unknown otherwise | Feed/detail/filter and company profile | No provider/source precedence contract across job and company. |
-| `posted_at`, `posted_age_hours` | Explicit `datePosted/source_posted_at/published_at`; non-ATS page JSON-LD | ISO timestamp + computed age; explicit publication timestamp only for ATS | Timestamp source field + observed time; suspicious timestamp warning | Feed/detail/filter | ATS `createdAt`/`updatedAt` is not silently treated as publication; many rows remain ambiguous. |
-| `first_seen_at`, `last_seen_at`, `last_verified_at` | Observation/canonical lifecycle timestamps | ISO timestamps | Observation/request provenance; completeness freshness rule | Feed/detail/admin | Freshness calculations use observation recency, not publication recency. |
-| `canonical_url`, `job_detail_url` | Source URL, hosted URL, JSON-LD canonical/link | Canonical URL; tracking noise removed | URL alias + source observation | Feed/detail/admin | Redirect target validation is not universally stored. |
-| `apply_url` | Apply URL, ATS `absolute_url/hostedUrl`, HTML forms | Verified direct URL only | URL classification/validation and admin audit; direct candidates only | Feed/detail/apply; admin inspection | Current public value can be null even when a detail/listing fallback exists. |
-| `user_facing_url`, `application_method`, `application_status` | Application candidate set and destination classifier | URL + dedicated/embedded/job-detail/redirect/unresolved | Evidence candidates, validation metadata, warnings | Feed/detail/admin inspection | Embedded forms and redirect validation vary by connector. |
-| `lifecycle_state` | Complete snapshot/source status/closed evidence | Current canonical lifecycle enum | Source state and observation history | Feed/detail | Reactivation/closure examples are not present in inspected production evidence. |
-| `version_id`, `version`, `description_version.content_hash` | Stable content payload | Immutable version number/hash | Rule/version/observation pointer | Detail/admin | Semantic hash excludes volatile fields by rule; no user-facing diff view yet. |
-| `user_state`, `evaluation`, `match_intelligence`, `priority` | User disposition, preference evaluator, cached intelligence | Product-owned state objects | User/workspace provenance, evaluator/prompt versions | Personalized feed/detail | These are not acquisition facts and are not filled by reprocessing. |
-| `company_detail.profile.fields.description` | Company object/profile/enrichment payload | Evidence-backed field record `{value,state,provenance,observed_at}` | Source/provider + confidence; report-only | Detail/company panel | Public company profile exists but admin/public parity is incomplete. |
-| Company website/careers/industry/size/HQ/founded/stage | Job company object, configured homepage/careers URL, profile/enrichment | Typed/string profile fields; source then provider only when enabled | Field evidence and URL rows; 0.95 source-backed | Company detail, filters for selected fields, admin Companies | Provider precedence and validation/redirect history not fully modeled. |
-| Company funding/leadership/benefits/sponsorship | Company object, profile, enrichment provider | Typed/string where present | Evidence/provider metadata; no fabricated defaults | Company profile/filters | Usually stored but sparse; current production completeness is low. |
-| Company logo | `logo_url/logo`, configured provider, R2 object | URL/object-key/monogram fallback | `company_logo_enrichments` and profile metadata | Company detail/logo | Zero logo-enrichment rows in inspected production; monogram is presentation fallback, not source fact. |
+## Source/connector capability matrix
 
-## Connector capability matrix
+| Connector | Production registry and request | Can provide | Cannot guarantee / current limitation | Current observations |
+|---|---|---|---|---:|
+| Greenhouse | `boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true` | ID, title, location, description, department, offices, categories, hosted/apply URLs, raw timestamps | Employment, workplace, language, salary, experience are sparse/optional | 702 |
+| Lever | `api.lever.co/v0/postings/{slug}?mode=json` | ID, title, categories/team, location, commitment, workplace, salary, description, hosted/apply URL, timestamps | Applicant counts, closure semantics, consistent language/experience | 257 |
+| Workday | `wday/cxs/{tenant}/{site}/jobs` POST | Job family/category, external path, title, location, description, detail URL, time type/remote when supplied | XML/tenant variations; page may be partial; no closure from bounded page | 10 |
+| Personio | `<target>/xml` | Position ID, name, department/team, location, employment/type, description, detail URL when supplied | XML field variation, language/experience/salary consistency | 25 |
+| Recruitee | `<target>/api/offers?limit=&offset=` | Offer ID/title, department/team, location, description, employment/workplace when supplied, detail/apply URLs | Coverage depends on public offer payload; incomplete pagination is report-only | 20 |
+| SmartRecruiters | `api.smartrecruiters.com/v1/companies/{slug}/postings?limit=10&offset=0` | ID, title, department, location, description, `jobs.smartrecruiters.com` detail/apply candidates, raw payload | API does not guarantee all typed metadata; current one-page result is intentionally incomplete | 20 |
+| Generic/JSON-LD | Siemens listing URL plus up to bounded detail links | JSON-LD title, description, location, datePosted, canonical/detail/apply candidates; raw HTML | No stable API schema; typed department/employment/workplace/language/experience are sparse; snapshot partial by cap | 5 |
+| Generic career-site/ScrapeOps | `company_career_sites.py` | HTML/page discovery, JSON-LD, conservative location and apply candidates | Paid cost ceiling required; structured metadata varies | 2 |
+| Fixture/test | Test payloads only | Contract coverage and raw evidence | Not production source; quarantined and excluded from normal metrics/head | 2 |
 
-| Connector | Entry/API/crawl | Can provide now | Cannot reliably provide / current gap |
-|---|---|---|---|
-| Greenhouse | `ats_router.fetch_ats_snapshot`; boards API with `content=true` | External ID, title, location, content/description, department, office, categories, requisition, hosted URL, ATS apply URL, created/updated raw fields | Employment/workplace/language/salary/experience are not guaranteed by the declared capability set; applicant counts unavailable; production has 433 observations. |
-| Lever | `ats_router.fetch_ats_snapshot`; Lever postings API `mode=json` | External ID, title, categories/department/team, location, commitment/employment, workplace, salary, description, hosted/apply URL, created/updated raw fields | Applicant counts unavailable; experience/language/closure semantics depend on payload; production has 152 observations. |
-| Workday | Router detection and unsupported connector branch | Host/ATS classification and raw URL/metadata capability contract | No productive fetch path proven in current production; no observations. |
-| Personio | Router detection and capability contract | Host detection and potential structured metadata fields | No productive fetch path/observations proven. |
-| Recruitee | Router detection and capability contract | Host detection and potential structured metadata fields | No productive fetch path/observations proven. |
-| SmartRecruiters | Router detection and capability contract | Host detection and potential structured metadata fields | No productive fetch path/observations proven. |
-| Generic employer career site | `company_career_sites.py`, bounded crawler/manual URL JSON-LD/HTML | Page title, JSON-LD title/company/location/datePosted/description, canonical/link/apply candidates, conservative location selectors | No stable API schema; structured department/employment/workplace/language/experience usually missing; crawl retry distribution not proven. |
-| Bounded probe | `bounded_probe.py`, scheduler | Request/response/HTML evidence under a hard request ceiling | Not a productive connector; five targets are quarantined/unproven in configured data. |
-| LinkedIn guest/portal strategy | `job_boards/collector.py`, `strategies.scrape_linkedin_jobs()` | Portal job ID/title/location/description/link when authorized guest endpoint works | Not an official employer/ATS source; authorization/terms and applicant fields are not part of this acquisition catalog; no current production observations were attributed to it. |
-| Company enrichment provider | `CompanyEnrichmentService`, provider interface | Explicit provider-returned profile/logo evidence and attempt metadata | Disabled for reads/reprocessing; current provider result count is zero. |
+## Duplicate algorithm and evidence
 
-## Duplicate algorithm and observed cases
+The current algorithm first groups by stable source+external ID, then by
+canonical URL/URL aliases, then uses conservative employer/title/location and
+stable-content similarity. It emits a candidate cluster with reason/evidence;
+it does not merge automatically. Human decisions are append-only and merge,
+split, distinct/ignore, and undo preserve observation/version rows. [C][T]
 
-Current automatic candidate generation is conservative: it groups canonical
-jobs only when the same canonical company, normalized title/location, and
-stable content hash/identity evidence agree; it stores reasons, score, rule
-version, members, and review history in candidate tables. It never merges,
-rewrites observations, changes a canonical pointer, or publishes. [C][S]
+Production currently has zero clusters, members, and decisions. Therefore no
+live false merge or missed-duplicate example can honestly be claimed. The
+configured data does show the indistinguishable boundary: source rows with
+missing/weak IDs and similar normalized title/employer/location require a
+human decision; fixture rows are quarantined rather than used as a duplicate
+canary. Local tests cover same identity with changed content (new version),
+unsafe merge/split rejection, explicit distinct/ignore, merge plan, split plan,
+and undo without losing immutable rows. [P][T][U]
 
-Observed configured-data result: zero clusters and zero members. [P] Therefore
-the following are evidence-backed fixtures/algorithm cases, not claims that
-the production database contains a duplicate:
+## UI and API capability matrix
 
-| Case | Result | Meaning |
-|---|---|---|
-| Same company/title/location but different descriptions (`a` and `b` in the unified pipeline fixture) | Not clustered; test passes | Prevents a false merge when stable content differs. [T] |
-| Same source external ID or canonical URL with changed stable content | One canonical job, new immutable posting version | Correct version change, not a duplicate. [C][T] |
-| Two different employers with the same title/location/description | No automatic cross-company merge | Conservative company boundary; may miss a true syndication duplicate. [C][T] |
-| Same job with tracking parameters or ATS detail/apply aliases | Canonical URL normalization/alias path may coalesce | Depends on canonicalizer and source ID; redirect-equivalent URLs without stored redirect evidence remain indistinguishable. [C][U] |
-| Two postings with no stable external ID, same title/location, and identical content hash | Candidate can be indistinguishable from a deliberate repost | Requires manual decision; no automatic merge. [C][U] |
-
-False merges and missed duplicates found in the inspected configured database:
-none demonstrated because the database has no duplicate candidates. The main
-identity risk is therefore indistinguishable weak-ID records, not an observed
-bad merge. [P]
-
-## UI and consumer capability matrix
-
-| Capability | Supported now | API but missing in admin | Stored but not exposed to users | Not yet modeled / gap |
+| Capability | Supported now | API-supported but missing in admin | Stored but not exposed to users | Not yet modeled / live-proven gap |
 |---|---|---|---|---|
-| Source/connector inventory and bounded import | Acquisition admin Sources; API `/admin/acquisition/sources`, import plan/start | Full request/attempt retry detail is API/read-model dependent | Raw connector capability details | Unified connector capability registry with persisted field-by-field contract |
-| Canonical job search/filter | Acquisition admin Jobs; source/publication/completeness filters; user feed filters | Function, workplace, language, seniority, warning and duplicate filters are API-supported; UI has only a subset | Full field-evidence state/filter combination | Typed multi-location and semantic conflict filter |
-| Job inspection | Admin `/admin/acquisition/jobs/{id}` and legacy Data inspector | Full raw observations, versions, evidence, rule outputs, quality, URL candidates are returned | Raw payload and field evidence intentionally admin-only | Diff/revision timeline and direct field conflict resolver |
-| Company inventory | Acquisition admin Companies with URL/profile/job count | Full provider attempts/enrichment history | Many profile fields and source URLs are admin-only | Durable company-source alias/merge decision screen |
-| Duplicate review | Duplicate page is candidate-only | Cluster reasons/review history are API-supported | Candidate memberships and scores are not public | Explicit approve/reject/merge decision model and reversible merge operation |
-| Rules/quality | Rules page; report-only warnings/completeness | Detailed rule outputs and per-field confidence are inspection API-supported | Provenance/confidence/rule versions are not user-facing | Calibrated confidence and persisted rule catalog UI |
-| Reprocessing | Plan and recent runs visible; CLI is fully explicit/resumable | Checkpoint, errors, rollback metadata API-supported | Reprocessing diagnostics not public | Remote backup branch/restore automation and operator lease history UI |
-| Publication | Preview/publish/undo admin actions and current head | Publication audit/read model API-supported | Publication provenance hidden from user feed | Automated release diff/approval workflow |
-| User job feed/detail | Existing authenticated `/personalized-jobs` card/feed/detail serializers | New unified function/subfunction, remote restrictions, full field evidence and raw timestamps are available only in admin/current payload | Raw HTML, normalized taxonomies, evidence, confidence, completeness, duplicate state | Public contract version for the expanded acquisition fields |
-| Company logo/enrichment | Profile serializer supports cached logo or deterministic monogram | Provider/attempt status is stored/admin-readable | Provider provenance and object storage metadata are not public | Product-approved enrichment provider and terms/refresh policy |
-
-## Reprocessing, backfill, idempotency, and rollback
-
-Read-only plan and apply entry point:
-
-```powershell
-.venv\Scripts\python.exe scripts/reprocess_acquisition.py --env-file user_config\.env
-.venv\Scripts\python.exe scripts/reprocess_acquisition.py --env-file user_config\.env --apply --yes --allow-remote-additive-rollback --batch-size 25 --idempotency-key <stable-key>
-```
-
-The script refuses non-project Python or a version other than 3.12.7. Local
-SQLite apply copies the database before writing. Remote apply is additive and
-transaction-batched, uses an owner lease (`045_acquisition_reprocessing_leases`),
-reclaims only a stale lease with compare-and-swap, checkpoints each batch,
-uses per-observation savepoints on local SQLite. Remote libSQL first attempts a
-replayable batch transaction and falls back to isolated per-observation
-transactions when the batch fails; it records retryable failures and never deletes
-observations/versions or automatically merges/publishes. A second completed
-invocation with the same idempotency key returns an idempotent replay. [C][S][T]
-
-Rollback is asymmetric: local SQLite has a recoverable copy; remote has a
-transaction-safe additive checkpoint and reversible publication/review actions,
-but there is no tested destructive remote restore command. The production
-snapshot taken before the paused resume is documented in the implementation
-report and remains outside version control. [P][U]
+| Admin overview, source registry, bounded import plan/start | Yes; Sources and Overview pages | — | Raw payload, request detail and cost telemetry | None for the current direct connector wave |
+| Admin job inspection/search | Yes; Jobs page and admin inspection API | Some deep provenance/rule evidence requires API/read model inspection | Full raw payload, alternate field evidence, rule outputs | Rich side-by-side source diff |
+| Typed function/subfunction, employment, workplace, language, seniority, location filters | API and service support; core controls are present | Some typed controls are not equally surfaced in every admin table | Source fields and inferred/conflicting evidence | Calibrated confidence and complete connector parity |
+| Company page and URL types | API/read model and Companies page; homepage/careers/ATS rows configured for five companies | Alias decision history and full profile provenance views | Provider attempts and unselected URL candidates | Standalone company-source entity |
+| Logo | Profile/logo serializer shape exists | No admin execution control needed while provider is off | Provider/logo rows would be stored but currently zero | Provider execution and live logo coverage |
+| Duplicate candidate/decision workflows | Service and local tests cover candidate, distinct, merge, split, undo | No live production cluster to exercise safely | All decision/audit evidence if created | Live canary without fabricating production duplicates |
+| Publication preview/publish/undo | Supported; current head unchanged | Fixture-excluding preview path is available | Staging snapshot and audit events | No automatic publication by design |
+| Personalized feed/detail/application | Authenticated API/UI verified; current head has 133 jobs | Raw evidence and full provenance intentionally admin-only | Source payload, field evidence, quality detail | Public version diff and complete typed-field display |
+| Reprocessing/backfill | CLI, lease/checkpoint, idempotent replay | Detailed per-observation report available through admin/API | Internal rule outputs and failure references | Automated remote restore/rollback execution |
 
 ## Prioritized gap list
 
-1. **Data loss:** older observations may not have `raw_payload_json`; raw
-   retention is complete only for new captures and preserved legacy payloads.
-   Add a retention/completeness metric and object-storage archive policy.
-2. **Incorrect semantics:** formalize `known` versus legacy `present`, source
-   timestamp semantics, closure/reactivation, multi-location, redirect and
-   conflict precedence; migrate read models without losing old evidence.
-3. **Identity/duplicate risk:** add company-source identity and alias decision
-   entities, explicit duplicate decisions/merge provenance, reversible merge
-   operations, and cross-source syndication rules.
-4. **Missing enrichment:** choose and configure an approved provider, persist
-   provider precedence/refresh/terms, and backfill logos/profile fields under a
-   budget. Current logo rows are zero.
-5. **Observability:** persist connector capability snapshots, retry/freshness
-   distributions, source reconciliation, rule coverage by target, and deploy
-   and reprocessing lease metrics; remove fixture/test targets from production.
-6. **Admin usability:** add field-level conflict views, duplicate decision
-   actions, reprocessing scope/remote acknowledgement controls, version diffs,
-   and a source capability matrix in the admin console.
+### Data loss
+
+1. Generic and ATS snapshots are bounded; incomplete pages preserve evidence but
+   do not prove a complete catalog. [P]
+2. Raw payload retention is present for inspected connector observations, but
+   long-term object-storage archival and restore is not an automated acceptance
+   test. [C][U]
+
+### Incorrect semantics
+
+1. Unknown lifecycle is correct for partial snapshots but is easy for consumers
+   to misread as empty; keep completeness beside lifecycle in every serializer.
+2. Confidence is a bounded mapper score, not a calibrated probability.
+3. Public experience/language/salary representations are less expressive than
+   stored evidence for some connectors.
+
+### Identity/duplicate risk
+
+1. There is no standalone `company_source` entity or complete alias decision
+   history.
+2. Live duplicate clusters and manual decisions are zero, so live merge/split/
+   undo safety remains unproven.
+3. Weak-ID cross-source cases remain human-review cases.
+
+### Missing enrichment
+
+1. `official_website` is configured but disabled (`RUNR_COMPANY_ENRICHMENT_ENABLED=0`);
+   logo coverage is therefore zero by design.
+2. Most company profile fields are explicitly unknown rather than fabricated.
+
+### Observability
+
+1. Acquisition uncertainty now records a safe exception class, but per-target
+   connector metrics should be emitted directly into structured worker logs.
+2. Source reconciliation would benefit from a durable snapshot manifest with
+   source-reported count, accepted count, and closure authority in one row.
+
+### Admin usability
+
+1. Expose raw-vs-normalized-vs-selected field evidence and provenance in one
+   inspection view.
+2. Add a source-specific completeness/partial-snapshot banner before a user
+   previews publication.
+3. Add live duplicate canary fixtures in an isolated non-production database,
+   not by mutating this production catalog.
 
 ## Recommended implementation sequence
 
-1. Make production source hygiene explicit: quarantine fixture/test rows,
-   reconcile N26/Qonto counts, and finish the interrupted reprocessing with the
-   new lease/checkpoint guard after the deployment migration is live.
-2. Add durable capability snapshots, raw-retention/completeness metrics, and
-   timestamp/lifecycle semantics before expanding connectors.
-3. Add company-source/alias entities and reversible duplicate decisions with
-   review-only defaults.
-4. Configure one approved enrichment provider and run a budgeted, observable
-   company backfill; then expose profile/URL/logo provenance in admin.
-5. Expand public API serializers and user filters only after the field contract
-   and `known`/unknown semantics are versioned.
-6. Add remote backup/restore procedure, operational dashboards, version diffs,
-   and authenticated production contract tests.
-
-## Historical Prompt 2 snapshot (superseded by final acceptance)
-
-The configured production Turso/libSQL database now has migration 046 applied
-in addition to 045. The target registry contains nine targets: N26/Greenhouse
-and Qonto/Lever are enabled candidate direct-API sources; five employer-site
-targets are enabled but unproven; `fixture_source` and `x` are explicitly
-quarantined, disabled, and publication-disabled. Their immutable observations
-remain available for audit, but normal scheduler and quality-metric queries
-exclude them.
-
-Fresh direct snapshots completed as follows:
-
-| Target | Request URL | Returned/accepted | Canonical/lifecycle result | Current publication |
-|---|---|---:|---|---:|
-| N26 / Greenhouse | `https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true` | 91 / 91 | 91 distinct; 91 active, 0 stale, 0 closed | 91 |
-| Qonto / Lever | `https://api.lever.co/v0/postings/qonto?mode=json` | 70 request rows over 2 attempts / 35 unique | 35 distinct; 35 active, 0 stale, 0 closed | 42 |
-
-Qonto's 70-versus-35 difference is a preserved HTTP replay after the old lease
-expired; the same import, cycle, and idempotency key resumed and only one set
-of 35 observations/projections committed. Both source snapshots were complete
-and valid, with zero rejected records and zero duplicate candidates. The valid
-publication head remained `acq_publication_5884f63297fc4f56a0fb019c7cd4f063`
-with 133 jobs and no fixture jobs.
-
-The deployed runtime guard now uses a minimum 1,800-second remote lease and
-reclaims an admin import only after an expired cycle lease plus a 15-minute
-staleness threshold. Preview construction excludes quarantined-only jobs;
-publication remains an explicit admin action. Authenticated browser evidence
-confirmed the admin source page, user feed (25 of 133 visible with filters),
-Qonto detail/Apply behavior, and N26's same-page detail application route.
-
-The machine-readable companion contains the exact current production counts,
-source capability facts, fresh import IDs, consumer checks, and unresolved
-gaps under `prompt_2_fresh_production`.
-
-## Historical Prompt 3 snapshot (superseded by final acceptance)
-
-The four product-completion workstreams are now integrated and deployed. The
-configured production Turso/libSQL database is at migration 047. The
-product-code API/worker commit was `8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`
-and the current API/worker deployment after the documentation push is
-`b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f`; the frontend runtime containing the admin changes is
-`0ba834a8b59dcdbc660ef03dad4429904a700a39`.
-
-| Workstream | Code/data contract | API/admin consumer | Production truth |
-|---|---|---|---|
-| A company URLs/logo/enrichment | `company_operations.py`, `company_logo_adapter.py`, separate URL/logo/profile projections | Company detail and bounded enrichment routes; Companies detail panel | N26 has 202 source URL rows and Qonto 86; logo enrichment rows remain 0; no provider canary |
-| B duplicate decisions | migration 047 append-only `acquisition_duplicate_decisions`; reversible state machine | decision/undo routes and interactive Duplicates panel | 0 clusters, 0 members, 0 decisions; no merge or publication mutation |
-| C typed fields/filters | `public_typed_contract_v1`, additive `typed` namespace and normalized filter predicates | user card/detail projections; admin typed filter controls | authenticated feed/detail and Jobs UI rendered; representative Qonto still has unknown workplace/category/application and no verified description |
-| D connector capability/retention | disabled-by-default expansion contracts and migration-backed snapshots | capability, retention, and snapshot routes; Rules panel | 4 latest disabled/unregistered connectors; 8 historical snapshots; 839/839 observations retain payloads |
-
-The historical Prompt 3 boundary contained 11 companies, 146 canonical jobs,
-839 source observations, 735 posting versions, 26,009 provenance rows, 839
-rule outputs, 146 completeness reports, 6,749 quality events, 290 company
-URLs, 0 logo-enrichment rows, 0 duplicate clusters, 0 duplicate decisions,
-and a valid current publication head of 133 jobs. Those values are retained
-for delta evidence only; the current production values are in the Final
-acceptance truth section above.
-
-The machine-readable companion retains this historical checkpoint under
-`prompt_3_product_completion`; it is not the current truth.
-
-## Final acceptance truth (2026-08-10)
-
-The authoritative current report is
-`FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md`. At acceptance the
-configured production target had 47 migrations, 961 source observations, 735
-posting versions, 146 canonical jobs, 29,791 provenance rows, 961 rule
-outputs, 146 completeness reports, 7,133 quality events, 290 company URL
-rows, zero logo enrichments, zero duplicate clusters, five publications, and
-a valid 133-job head. [P]
-
-The existing reprocessing run
-`reprocess_ef912ccf2e9f44ca974222fe60732e55` with key
-`unified-mapping-production-2026-08-10` is completed at observation
-`observation_ffc65009d257463e95239c00166d6ab7`; failed IDs are empty. The
-same-key invocation returned `idempotent_replay=true` and changed no semantic
-version or duplicate projection. [P]
-
-Fresh direct acquisition reconciled N26 Greenhouse at 87 returned/87
-accepted/87 unchanged/0 rejected and Qonto Lever at 35 returned/35
-accepted/35 unchanged/0 rejected, with 4 and 3 complete-snapshot closures.
-The Siemens generic/JSON-LD attempt is explicitly uncertain and produced no
-accepted observation; it is deferred rather than counted as connector
-success. Fixtures remain quarantined and absent from the current head. [P][U]
-
-The API, worker, and frontend runtime-fix deployment was verified at
-`052d8e145c8034734ab5a302c198f23f5d70067f`; final docs-only deployment must
-preserve this code-bearing runtime truth. Authenticated admin pages and the
-user feed/detail rendered; the Duplicates queue was empty, and local duplicate
-candidate/distinct/merge/split/undo tests passed without mutation of source
-evidence. [A][T]
+1. Add snapshot manifests and first-class partial/complete semantics to the
+   admin reconciliation view.
+2. Add company-source and alias decision entities with reversible audit history.
+3. Add a calibrated confidence contract and public typed-field serializers.
+4. Enable official-website/logo enrichment only after provider credentials,
+   budget, cache, and rollback controls are approved.
+5. Run isolated duplicate merge/split canaries, then expose the same workflow
+   to production admins without automatic merges.
+6. Add object-storage backup/restore drills and a durable per-target worker
+   telemetry dashboard.

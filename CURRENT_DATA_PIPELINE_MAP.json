@@ -1,331 +1,175 @@
 {
-  "schema_version": "current_data_pipeline_map_v2",
+  "schema_version": "current_data_pipeline_map_v3",
   "audit": {
-    "audit_date": "2026-08-10",
-    "repository_branch": "deployment/render-turso-r2",
+    "date": "2026-08-10",
+    "branch": "deployment/render-turso-r2",
     "environment_inspected": "configured production Turso/libSQL from user_config/.env",
     "local_database_is_production": false,
-    "database_target": {
-      "database_backend": "turso",
-      "runtime_environment": "production",
-      "target_backend": "libsql",
-      "remote_configured": true,
-      "object_storage": "r2/S3ObjectStorage"
-    },
+    "database_backend": "turso",
+    "runtime_environment": "production",
+    "object_storage": "R2/S3",
     "secrets_included": false,
+    "deployed_commit": "dc19cc05298e7d69e4548793798030d3bc059eac",
+    "frontend_api_origin": "https://runr-api.onrender.com/v1",
+    "migrations_applied": ["045_acquisition_reprocessing_leases", "046_acquisition_source_quarantine", "047_product_completion_wave"],
     "evidence_labels": {
-      "code": "executable repository code",
-      "schema": "migrations/schema",
-      "test": "automated test or fixture run",
-      "production": "read-only query against configured remote database",
-      "http": "live HTTP smoke result",
-      "uncertain": "not observable or not proven"
+      "C": "repository code",
+      "S": "schema or migration",
+      "T": "automated test",
+      "P": "configured production database query",
+      "A": "live API or authenticated UI check",
+      "U": "uncertain or not live-proven"
     },
     "production_counts": {
-      "schema_migrations": 47,
-      "acquisition_targets": 9,
-      "acquisition_cycles": 14,
-      "acquisition_requests": 33,
-      "canonical_companies": 11,
-      "canonical_jobs": 146,
-      "job_source_observations": 961,
-      "job_posting_versions": 735,
+      "canonical_companies": 16,
+      "canonical_company_profiles": 14,
+      "canonical_company_urls": 419,
+      "job_source_observations": 1041,
+      "job_posting_versions": 790,
+      "canonical_jobs": 201,
+      "acquisition_field_provenance": 32271,
+      "acquisition_rule_outputs": 1041,
+      "acquisition_completeness_reports": 201,
+      "acquisition_quality_events": 7334,
+      "company_logo_enrichments": 0,
       "acquisition_publications": 5,
-      "acquisition_publication_head": 1,
-      "acquisition_field_provenance": 29791,
-      "acquisition_rule_outputs": 961,
-      "acquisition_completeness_reports": 146,
-      "acquisition_quality_events": 7133,
-      "acquisition_stage_results": 8,
-      "acquisition_reprocessing_runs": 1,
-      "acquisition_duplicate_clusters": 0,
-      "acquisition_duplicate_members": 0,
-      "canonical_company_urls": 290,
-      "company_logo_enrichments": 0,
-      "publication_head_jobs": 133,
-      "fixture_observations_preserved": 2,
-      "fixture_observations_in_current_head": 0,
-      "current_lifecycle": {"active": 135, "stale": 4, "closed": 7}
-    },
-    "production_source_counts": {
-      "greenhouse": 433,
-      "lever": 152,
-      "fixture": 1,
-      "x": 1
-    },
-    "production_company_job_counts": {
-      "N26": 101,
-      "Qonto": 43,
-      "Fixture source": 1,
-      "x": 1
-    },
-    "current_publication_head": {
-      "publication_id": "acq_publication_5884f63297fc4f56a0fb019c7cd4f063",
-      "status": "valid",
-      "published_at": "2026-08-10T00:02:55.648984+00:00",
-      "job_count": 133
-    },
-    "current_reprocessing": {
-      "idempotency_key": "unified-mapping-production-2026-08-10",
-      "reprocessing_id": "reprocess_ef912ccf2e9f44ca974222fe60732e55",
-      "status": "completed",
-      "observations": 587,
-      "fields": 5870,
-      "historical_repairs": 585,
-      "warnings": 2787,
-      "batches": 67,
-      "failed_observations": 0,
-      "last_observation_id": "observation_ffc65009d257463e95239c00166d6ab7",
-      "external_duplicate_launcher_stopped": true,
-      "idempotent_replay": true
-    },
-    "uncertainties": [
-      "The authenticated response proof is UI/body evidence from the signed-in admin and user session; unauthenticated 401 checks were not used as body evidence.",
-      "The generic Siemens request ended with uncertain external outcome and needs operator retry through the recovery path.",
-      "No production duplicate cluster, logo enrichment, closure/reactivation, or manual merge decision was present to use as a live example.",
-      "Remote backup restore is not automated or tested as a destructive operation."
-    ]
-  },
-  "diagram": "source registry -> cycle/task/request -> connector/API/crawl -> immutable observation -> extraction/normalization -> company/job identity -> canonical record/version -> field evidence/rule outputs -> quality/duplicate candidates -> explicit publication head -> admin API and authenticated user feed",
-  "stages": [
-    {"id":"environment_safety","owner":"platform/acquisition operations","entry_points":["backend/database/connection.py","backend/config","scripts/reprocess_acquisition.py"],"tables":["schema_migrations","config_values"],"inputs":["RUNR_ENV","DATABASE_BACKEND","Turso/R2 configuration"],"outputs":["selected database target","storage target","interpreter/apply safeguards"],"rules":["production requires remote libSQL configuration","reprocessing requires project Python 3.12.7","remote apply requires explicit additive acknowledgement"],"evidence":["code","production"]},
-    {"id":"source_registry","owner":"acquisition scheduler","entry_points":["backend/acquisition/manifest.py","backend/application/acquisition_scheduler.py","backend/repositories/sqlite_acquisition.py"],"tables":["acquisition_targets"],"inputs":["manifest targets","source IDs","connector/provider config"],"outputs":["target URL","careers/API URL","connector","ATS/provider","source token","limits","maturity","publication flag"],"rules":["canonicalize target URL and remove tracking parameters","unproven/quarantined targets are not productive evidence"],"evidence":["code","schema","production"]},
-    {"id":"discovery_and_fetch","owner":"connector owners","entry_points":["backend/connectors/company_career_discovery.py","backend/connectors/ats_router.py","backend/connectors/company_career_sites.py","backend/connectors/bounded_probe.py","backend/connectors/job_boards"],"tables":["acquisition_cycles","acquisition_tasks","acquisition_requests","acquisition_target_attempts"],"inputs":["official career URL","Greenhouse/Lever API URL","bounded page request"],"outputs":["connector response","attempt/retry/cost telemetry","raw connector job objects"],"rules":["official ATS routes are deterministic","request and credit ceilings are bounded","retryable transport failures are recorded and retried"],"evidence":["code","tests","production"]},
-    {"id":"immutable_observation","owner":"acquisition store","entry_points":["SqliteAcquisitionStore.ingest_snapshot"],"tables":["job_source_observations"],"inputs":["connector job","target/cycle/task/request context"],"outputs":["external ID","original URL","apply URL","source ATS","payload JSON","raw payload JSON/hash","observed timestamp"],"rules":["observations are append-only","migration 044 update/delete triggers reject mutation"],"evidence":["code","schema","tests","production"]},
-    {"id":"extraction_and_url_mapping","owner":"quality/URL mapping","entry_points":["backend/acquisition/quality.py","backend/capabilities/tailored_documents/manual_urls.py","backend/acquisition/phase_b.py"],"tables":["job_source_observations","job_posting_versions","acquisition_quality_events"],"inputs":["raw HTML","JSON-LD","ATS payload","candidate links/forms"],"outputs":["title","location","description representations","job/detail/apply candidates","URL classification","validation metadata","source metadata","timestamps"],"rules":["direct apply is distinct from detail/listing fallback","HTML sanitization removes scripts/forms","explicit publication dates are preferred"],"evidence":["code","tests"]},
-    {"id":"unified_normalization","owner":"acquisition mapping","entry_points":["backend/acquisition/unified_mapping.py::map_job_fields","backend/acquisition/rule_registry.py"],"tables":["acquisition_field_provenance","acquisition_rule_outputs","canonical_company_urls"],"inputs":["normalized job/company payload","source capability"],"outputs":["typed fields","taxonomies","company URL records","raw/normalized/state/provenance/confidence/rule"],"rules":["structured source > raw source > explicitly labeled description evidence","conflicts are retained, not silently overwritten","quality is report-only"],"evidence":["code","schema","tests"]},
-    {"id":"company_identity_and_enrichment","owner":"company profile/enrichment service","entry_points":["canonical_employer_name","CompanyEnrichmentService","backend/application/company_enrichment.py","backend/application/company_logo.py"],"tables":["canonical_companies","canonical_company_aliases","canonical_company_profiles","canonical_company_urls","company_enrichment_targets","company_enrichment_attempts","company_logo_enrichments"],"inputs":["employer name","official domain/homepage/careers/ATS URL","explicit provider result"],"outputs":["canonical company","aliases","profile evidence","URL candidates","logo object/provenance"],"rules":["source evidence is not overwritten by enrichment","enrichment is worker-only and disabled for catalog reads/reprocessing","no result is fabricated"],"evidence":["code","schema","production"]},
-    {"id":"job_identity_and_versioning","owner":"acquisition store/domain identity","entry_points":["backend/domain/job_identity.py","SqliteAcquisitionStore identity helpers","_ensure_version"],"tables":["canonical_jobs","canonical_job_external_ids","canonical_job_url_aliases","job_source_states","job_posting_versions","job_source_observation_relationships"],"inputs":["external ID","canonical URL","employer/title/location/content"],"outputs":["canonical job ID","identity key/signature","external IDs","aliases","immutable semantic version/hash","lifecycle pointers"],"rules":["prefer source+external ID and canonical URL","tracking/query noise is canonicalized","stable content change creates a new version","ambiguous identity is not merged"],"evidence":["code","schema","tests"]},
-    {"id":"provenance_quality_duplicates","owner":"quality/review","entry_points":["_persist_unified_mapping","completeness_rules","_store_duplicate_candidates","rule_registry.py"],"tables":["acquisition_field_provenance","acquisition_rule_outputs","acquisition_completeness_reports","acquisition_quality_events","acquisition_duplicate_clusters","acquisition_duplicate_members","acquisition_version_quality"],"inputs":["canonical fields","source evidence","rule outputs","review/publication state"],"outputs":["field evidence","rule semantic hashes","completeness/warnings","candidate duplicate clusters"],"rules":["states include present/missing/unknown/unsupported/invalid/conflicting/inferred with known compatibility","all quality results are report-only","no automatic duplicate merge"],"evidence":["code","schema","tests","production"]},
-    {"id":"publication","owner":"admin publication service","entry_points":["admin import service","SqliteAcquisitionStore.create_job_import_preview","publish_job_import_preview","undo_last_job_publication"],"tables":["acquisition_publications","acquisition_publication_jobs","acquisition_publication_head","admin_job_audit_events"],"inputs":["approved import","explicit preview/publish/undo action"],"outputs":["valid publication","single public head","publication audit"],"rules":["manual publish only","reprocessing never promotes publication","undo is reversible read-model control"],"evidence":["code","schema","production"]},
-    {"id":"api_admin_user_read_models","owner":"API/product","entry_points":["backend/api/routes/acquisition_admin.py","backend/api/routes/job_import_admin.py","backend/api/routes/acquisition_catalog.py","backend/application/personalized_jobs_service.py"],"tables":["canonical_jobs","job_posting_versions","canonical_companies","canonical_company_profiles","publication head","evidence tables"],"inputs":["admin/user identity","filters","current publication"],"outputs":["admin inspection/operations JSON","personalized job feed/card/detail JSON"],"rules":["admin requires admin auth","user feed requires user auth and publication","raw source evidence is admin-only"],"evidence":["code","tests","http","uncertain"]},
-    {"id":"reprocessing","owner":"acquisition operations","entry_points":["scripts/reprocess_acquisition.py","backend/acquisition/reprocessing.py"],"tables":["acquisition_reprocessing_runs","acquisition_stage_results","field/rule/quality/duplicate projections"],"inputs":["preserved observations","stable scope","idempotency key"],"outputs":["bounded additive projections","durable checkpoint/counts","rollback reference","retryable failure list"],"rules":["local backup before apply","remote additive acknowledgement","compare-and-swap owner lease/stale reclaim","local SQLite savepoint per observation","remote libSQL replayable batch then isolated per-observation fallback","no delete/merge/publish"],"evidence":["code","schema","tests"]}
-  ],
-  "entities": [
-    {"name":"company","tables":["canonical_companies","canonical_company_aliases","canonical_company_profiles","canonical_company_urls"],"identity":"company_id; conservative employer/domain identity","relations":["has source URLs","has aliases","has profiles/enrichment","owns canonical jobs"]},
-    {"name":"company_source","tables":["acquisition_targets","job_source_observations","canonical_company_urls"],"identity":"target_id/source_ats/source_token plus observed URL","relations":["source registry -> observations -> company URL evidence"],"gap":"no single durable company-source entity or complete alias decision history"},
-    {"name":"enrichment","tables":["company_enrichment_targets","company_enrichment_attempts","company_logo_enrichments","canonical_company_profiles"],"identity":"company/provider/content hash/rule version","relations":["provider attempt -> profile/logo projection"],"gap":"provider results are zero in inspected production"},
-    {"name":"job","tables":["canonical_jobs","canonical_job_external_ids","canonical_job_url_aliases","job_source_states"],"identity":"canonical_job_id from source ID/URL/identity signature","relations":["company owner","source observations","versions","publication" ]},
-    {"name":"job_source_record","tables":["job_source_observations"],"identity":"observation_id; immutable","relations":["target/cycle/task/request","canonical job","raw payload","versions","field evidence"]},
-    {"name":"observation","definition":"immutable source observation row; no separate observation table beyond job_source_observations","tables":["job_source_observations"],"relations":["one source capture to many projections"]},
-    {"name":"version","tables":["job_posting_versions"],"identity":"version_id/canonical_job_id/version_number/content_hash","relations":["selected by canonical_jobs.current_version_id","publication job","source observation"]},
-    {"name":"field_evidence","tables":["acquisition_field_provenance"],"identity":"entity/field/observation/rule version","relations":["selected flag and selection reason","completeness","admin inspection"]},
-    {"name":"duplicate_cluster","tables":["acquisition_duplicate_clusters","acquisition_duplicate_members"],"identity":"cluster_id","relations":["candidate members","reasons","review history"],"automatic_merge":false},
-    {"name":"rule_version","definition":"code registry plus rule_version columns on outputs; no separate persisted registry table","values":["unified_mapping_v1","acquisition_quality_v1","description_representations_v1","application_destination_v1","field_matrix_v1"],"relations":["versions","field evidence","rule outputs","quality","reprocessing","publication"]},
-    {"name":"publication","tables":["acquisition_publications","acquisition_publication_jobs","acquisition_publication_head"],"identity":"publication_id plus singleton head_id=1","relations":["version/canonical job snapshot","user feed read model","admin preview/publish/undo"]}
-  ],
-  "field_lineage": [
-    {"field":"posting_id/canonical_job_id","raw":["external_job_id","source ID","canonical URL"],"extraction":"identity resolver","normalized":"string ID","precedence":"source+external ID, then canonical URL/signature","provenance":"observation/version IDs","confidence":"deterministic, uncalibrated","completeness":"canonical_job_identity warning only","api":"personalized-jobs feed/detail; admin jobs","ui":"user cards/detail; admin Jobs","gap":"weak-ID cross-source ambiguity"},
-    {"field":"company_id/company/company_detail.name","raw":["company.name","employer_name","configured canonical employer"],"extraction":"canonical_employer_name/company resolver","normalized":"string + company detail","precedence":"structured company then normalized employer","provenance":"company/observation evidence","confidence":"0.95 source-backed","completeness":"company identity warning only","api":"feed/detail/company admin","ui":"job cards/detail/company view","gap":"alias decision history incomplete"},
-    {"field":"title","raw":["ATS title","JSON-LD title","page title/meta"],"extraction":"connector normalization/HTML JSON-LD","normalized":"string","precedence":"structured ATS > JSON-LD > page","provenance":"source field/observation","confidence":"0.95 when present","completeness":"title warning only","api":"feed/card/detail/admin","ui":"cards, search","gap":"no multilingual reconciliation"},
-    {"field":"location","raw":["ATS location/offices","JSON-LD jobLocation","data-location/page selectors"],"extraction":"connector + generic page parser","normalized":"serializer string; typed collection in payload","precedence":"structured > JSON-LD > page","provenance":"source field/observation","confidence":"source-dependent","completeness":"location warning only","api":"feed/card/detail/admin filter","ui":"cards/search","gap":"multi-location public type incomplete"},
-    {"field":"work_arrangement","raw":["workplace_arrangement","workplace_type","remote_type","labeled text"],"extraction":"taxonomy mapper","normalized":"On-site|Hybrid|Remote|Flexible|Unknown","precedence":"structured then labeled evidence","provenance":"field evidence/state","confidence":"0.95 structured, 0.8 normalized","completeness":"report-only","api":"feed/detail/filter/admin","ui":"filter exists in user API; limited admin UI","gap":"remote geographic restriction not public"},
-    {"field":"employment_type","raw":["employment_type","employmentType","type","commitment"],"extraction":"connector metadata + token mapper","normalized":"employment taxonomy","precedence":"structured ATS > raw source","provenance":"field evidence/state","confidence":"0.95 structured, 0.8 normalized","completeness":"report-only","api":"feed/detail/filter/admin","ui":"user filter; admin filter","gap":"connector capability varies"},
-    {"field":"experience_level","raw":["seniority","experience_level","years_experience","description labeled evidence"],"extraction":"typed parser + description evidence","normalized":"string plus unified min/max/seniority","precedence":"structured then explicit description","provenance":"source/evidence/rule","confidence":"0.9 structured, 0.75 inferred","completeness":"report-only","api":"feed/detail/filter","ui":"feed/detail","gap":"public serializer loses min/max"},
-    {"field":"category/function/subfunction","raw":["department","department_name","team"],"extraction":"versioned taxonomy mapper","normalized":"category string + runr function/subfunction","precedence":"department structured then source raw","provenance":"field evidence/rule_version","confidence":"0.9/0.85 mapped","completeness":"department warning only","api":"feed category; admin function filters","ui":"category in feed; admin rules","gap":"Other/Unclassified semantics need product agreement"},
-    {"field":"description","raw":["ATS content","JSON-LD description","page HTML"],"extraction":"normalize_description","normalized":"raw HTML, sanitized HTML, clean text","precedence":"raw source then sanitized/clean projections","provenance":"observation/version/hash","confidence":"0.95 when present","completeness":"full_description warning only","api":"feed/detail/intelligence","ui":"detail","gap":"public mostly exposes clean text"},
-    {"field":"salary","raw":["salary","salary_range","compensation","ATS custom fields"],"extraction":"source metadata/salary parser","normalized":"salary object when parseable","precedence":"structured source then raw","provenance":"field evidence","confidence":"connector-dependent","completeness":"report-only","api":"feed/detail/filter","ui":"salary filter/detail","gap":"currency/comparability incomplete"},
-    {"field":"languages","raw":["languages","language_requirements","required_languages","description Languages line"],"extraction":"structured parser or labeled text parser","normalized":"list of language/status/proficiency","precedence":"structured then labeled evidence","provenance":"field evidence with inferred state","confidence":"0.9 structured, 0.75 inferred","completeness":"report-only","api":"feed/detail/filter","ui":"filter/detail","gap":"taxonomy/proficiency incomplete"},
-    {"field":"work_authorization/sponsorship","raw":["job requirements","company fields","profile fields"],"extraction":"alias lookup/profile projection","normalized":"string/requirement","precedence":"job payload then company profile","provenance":"field evidence when source-backed","confidence":"source-dependent","completeness":"report-only","api":"feed/detail/filter/company","ui":"user filters","gap":"job/company precedence not formalized"},
-    {"field":"posted_at/posted_age_hours","raw":["source_posted_at/datePosted/published_at","JSON-LD datePosted"],"extraction":"timestamp normalizer + age calculator","normalized":"UTC ISO + numeric age","precedence":"explicit publication date; ATS created/updated not silently substituted","provenance":"source timestamp field/observed_at","confidence":"0.95 explicit","completeness":"timestamp semantics warning","api":"feed/detail/filter/admin","ui":"freshness/sort","gap":"many ATS rows ambiguous"},
-    {"field":"first_seen_at/last_seen_at/last_verified_at","raw":["observation/canonical/request timestamps"],"extraction":"store lifecycle updates","normalized":"UTC ISO timestamps","precedence":"observation/request lifecycle","provenance":"cycle/request/observation","confidence":"deterministic","completeness":"freshness report","api":"feed/detail/admin","ui":"admin freshness","gap":"freshness is observation age, not publication age"},
-    {"field":"canonical_url/job_detail_url","raw":["source_url","url/link","hostedUrl/absolute_url","canonical/link tags"],"extraction":"canonicalize_url + URL classifier","normalized":"canonical HTTP URL + alias","precedence":"source canonical/job URL then aliases","provenance":"URL candidate/source observation","confidence":"deterministic normalization","completeness":"job_detail_url warning","api":"feed/detail/admin","ui":"detail/link","gap":"redirect equivalence not universal"},
-    {"field":"apply_url/user_facing_url/application_method/application_status","raw":["apply URL","ATS hosted/absolute URL","HTML form/link candidates"],"extraction":"resolve_application_destination","normalized":"verified direct URL plus classification/status","precedence":"verified employer/ATS direct > detail/listing fallback","provenance":"candidate evidence/validation/audit","confidence":"0.95 classified","completeness":"direct apply report-only","api":"feed/detail/admin","ui":"Apply action/admin resolver","gap":"embedded/redirect validation varies"},
-    {"field":"lifecycle_state","raw":["source_status","complete snapshot","closed/reopened timestamps"],"extraction":"snapshot/state logic","normalized":"canonical lifecycle enum","precedence":"explicit source state and complete snapshot","provenance":"source state/observation history","confidence":"source-dependent","completeness":"report-only","api":"feed/detail/admin","ui":"job visibility","gap":"reactivation not live-proven"},
-    {"field":"version_id/version/description_version.content_hash","raw":["stable payload fields","source observation"],"extraction":"stable payload/hash + _ensure_version","normalized":"immutable version/hash","precedence":"stable content excluding volatile fields","provenance":"observation/rule version","confidence":"deterministic","completeness":"not a gate","api":"detail/admin","ui":"admin inspection","gap":"no public version diff UI"},
-    {"field":"company_detail.profile.fields.*","raw":["company object","canonical profile","explicit enrichment provider"],"extraction":"company profile alias mapping","normalized":"field record with value/state/provenance","precedence":"source profile then enabled provider","provenance":"source/provider/observed_at","confidence":"source/provider-dependent","completeness":"company profile report-only","api":"feed/detail/company","ui":"company detail","gap":"many stored fields sparse; provider rows zero"},
-    {"field":"company website/careers/industry/size/headquarters/founded/stage/funding/leadership/benefits/sponsorship/logo","raw":["company object","configured official URLs","profile/enrichment/logo provider"],"extraction":"company mapper + URL records + provider adapter","normalized":"string/number/URL/logo object","precedence":"source evidence, then explicit provider","provenance":"field evidence, URL rows, logo enrichment","confidence":"0.95 source-backed else provider-dependent","completeness":"report-only","api":"company profile/feed detail/admin","ui":"company detail/admin Companies","gap":"redirect validation/provider precedence/logo enrichment absent"},
-    {"field":"user_state/evaluation/match_intelligence/priority","raw":["user disposition","preference evaluator","cached intelligence"],"extraction":"personalized_jobs_service","normalized":"product state objects","precedence":"user/product services, not acquisition mapper","provenance":"user/evaluator/prompt versions","confidence":"not acquisition confidence","completeness":"separate product states","api":"feed/detail","ui":"personalized feed/detail","gap":"not populated by reprocessing"}
-  ],
-  "source_capabilities": [
-    {"connector":"greenhouse","entry":"boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true","can":["external ID","title","location","description/content","department","office","categories","requisition","hosted URL","ATS apply URL","raw created/updated fields"],"cannot_or_not_guaranteed":["employment","workplace","language","salary","experience","applicant counts"],"production_observations":433},
-    {"connector":"lever","entry":"api.lever.co/v0/postings/{slug}?mode=json","can":["external ID","title","categories/department/team","location","commitment/employment","workplace","salary","description","hosted/apply URL","raw created/updated fields"],"cannot_or_not_guaranteed":["applicant counts","closure/reactivation semantics","experience/language consistency"],"production_observations":152},
-    {"connector":"workday","entry":"ATS router host detection","can":["host classification","raw URL/metadata contract"],"cannot_or_not_guaranteed":["productive fetch path","current production observations"],"production_observations":0},
-    {"connector":"personio","entry":"ATS router host detection","can":["host classification","declared metadata capability"],"cannot_or_not_guaranteed":["productive fetch path","current production observations"],"production_observations":0},
-    {"connector":"recruitee","entry":"ATS router host detection","can":["host classification","declared metadata capability"],"cannot_or_not_guaranteed":["productive fetch path","current production observations"],"production_observations":0},
-    {"connector":"smartrecruiters","entry":"ATS router host detection","can":["host classification","declared metadata capability"],"cannot_or_not_guaranteed":["productive fetch path","current production observations"],"production_observations":0},
-    {"connector":"generic_career_site","entry":"company_career_sites + manual URL JSON-LD/HTML","can":["title","location","description","JSON-LD datePosted","canonical/link/apply candidates","conservative location selector"],"cannot_or_not_guaranteed":["stable API schema","department/employment/workplace/language/experience","productive production observations in inspected rows"]},
-    {"connector":"bounded_probe","entry":"bounded_probe.py","can":["bounded request/response evidence"],"cannot_or_not_guaranteed":["productive connector semantics"],"production_note":"five targets quarantined/unproven"},
-    {"connector":"linkedin_portal","entry":"job_boards/strategies.scrape_linkedin_jobs","can":["guest job ID/title/location/description/link when endpoint works"],"cannot_or_not_guaranteed":["official employer/ATS provenance","applicant counts","current production catalog evidence"],"production_observations":0},
-    {"connector":"company_enrichment","entry":"CompanyEnrichmentService/provider interface","can":["explicit provider profile/logo evidence","attempts and object metadata"],"cannot_or_not_guaranteed":["automatic enrichment during reads/reprocessing"],"production_rows":0}
-  ],
-  "rules": {
-    "field_states": ["present","missing","unknown","unsupported","invalid","conflicting","inferred"],
-    "field_state_compatibility": {"known":"read-model/product name for present","present":"legacy persisted mapper state"},
-    "rule_versions": [
-      {"version":"unified_mapping_v1","family":"unified_mapping","report_only":true},
-      {"version":"acquisition_quality_v1","family":"acquisition_quality","report_only":true},
-      {"version":"description_representations_v1","family":"description_representations","report_only":true},
-      {"version":"application_destination_v1","family":"application_destination","report_only":true},
-      {"version":"field_matrix_v1","family":"completeness","report_only":true}
-    ],
-    "precedence": ["structured connector field","raw source payload field","explicitly labeled description evidence","unknown/unsupported state"],
-    "conflict_handling":"field evidence retains conflicting state and all source locations; no automatic selection is guaranteed",
-    "confidence":"bounded mapper score, not calibrated probability",
-    "quality":"report-only; no ingestion, publication, or user-feed gate",
-    "duplicate":"candidate cluster only; no automatic merge",
-    "publication":"manual preview/publish/undo; one current head",
-    "versioning":"stable hash excludes volatile observation/telemetry fields; equal hash reuses version; changed hash appends immutable version",
-    "closure_reactivation":"source-state/complete-snapshot based; live reactivation example not found"
-  },
-  "consumers": {
-    "admin_api": ["GET /admin/acquisition/overview","GET /admin/acquisition/sources","GET /admin/acquisition/jobs","GET /admin/acquisition/jobs/{id}","GET /admin/acquisition/companies","GET /admin/acquisition/duplicates","GET /admin/acquisition/rules","GET /admin/acquisition/reprocessing","GET /admin/acquisition/reprocessing/plan","GET /admin/acquisition/publication","POST import plan/start","POST reprocessing run","POST publication preview/publish/undo"],
-    "admin_ui": ["/admin/acquisition Overview","Sources","Jobs","Duplicates","Companies","Rules","Reprocessing","Publication","/admin/job-import legacy Data inspector"],
-    "user_api": ["GET /personalized-jobs","GET /personalized-jobs/{posting_id}","GET /personalized-jobs/companies/{company_id}"],
-    "user_ui": ["Personalized Jobs cards/feed","job detail","company detail","user filters and application action"],
-    "filters": ["search","role/category/function","location","work arrangement","employment type","experience/seniority","language","salary","authorization/sponsorship","company/industry/size/stage/funding","posted freshness","admin publication/completeness/warnings/duplicates"]
-  },
-  "duplicate_examples": [
-    {"case":"fixture same company/title/location but different descriptions","result":"not clustered","evidence":"tests/test_unified_acquisition_pipeline.py; no false merge"},
-    {"case":"same source identity with changed stable content","result":"same canonical job, new immutable version","evidence":"identity/version code and tests"},
-    {"case":"different employers with same title/location/content","result":"not auto-merged across company boundary","evidence":"conservative identity rule"},
-    {"case":"no stable ID, same normalized identity/content","result":"candidate or indistinguishable; manual review required","evidence":"algorithm; no production cluster observed"}
-  ],
-  "reprocessing": {
-    "command":".venv\\Scripts\\python.exe scripts/reprocess_acquisition.py --env-file user_config\\.env --apply --yes --allow-remote-additive-rollback --batch-size 25 --idempotency-key <stable-key>",
-    "plan_is_read_only_for_remote":true,
-    "local_backup":true,
-    "remote_behavior":"transaction-safe additive projections; no destructive restore command",
-    "checkpoint_table":"acquisition_reprocessing_runs",
-    "stage_table":"acquisition_stage_results",
-    "lease_migration":"045_acquisition_reprocessing_leases",
-    "idempotency":"same completed key returns idempotent replay; incomplete/failed keys resume checkpoint",
-    "failure_behavior":"local SQLite savepoint per observation; remote libSQL replayable batch first, then isolated per-observation transactions on batch failure; quality event and failed observation IDs retained for retry",
-    "rollback":"local copy or publication/review reversal; remote restore remains operator-owned/untested"
-  },
-  "gaps": [
-    {"priority":1,"category":"data_loss","items":["legacy observations may lack raw_payload_json","no raw-retention completeness metric or archive policy"]},
-    {"priority":2,"category":"incorrect_semantics","items":["formalize known versus legacy present","timestamp/closure/reactivation/multi-location/redirect/conflict semantics"]},
-    {"priority":3,"category":"identity_duplicate_risk","items":["company-source entity and alias decisions","reversible duplicate decision/merge history","cross-source syndication rules"]},
-    {"priority":4,"category":"missing_enrichment","items":["approved provider/refresh/terms policy","logo/profile backfill; current logo enrichment rows are zero"]},
-    {"priority":5,"category":"observability","items":["connector capability snapshots","retry/freshness/source reconciliation","reprocessing/deploy lease metrics","remove fixture/test targets from production"]},
-    {"priority":6,"category":"admin_usability","items":["field conflict resolver","duplicate decisions","remote acknowledgement checkbox","version diff view","capability matrix view"]}
-  ],
-  "prompt_2_fresh_production": {
-    "deployed_application_commit_at_validation_boundary": "5e494dc68a7bf2b3c2bc49d6a52886110cccc2db",
-    "frontend_commit_at_validation_boundary": "9a62e81b0ea7e3a7f02026ae07cbd56f705a0e12",
-    "environment": "configured production Turso/libSQL; local SQLite is not production",
-    "migration_045_applied_at": "2026-08-10T11:47:21.395366+00:00",
-    "migration_046_applied_at": "2026-08-10T14:19:41.263182+00:00",
-    "publication_head": {"publication_id":"acq_publication_5884f63297fc4f56a0fb019c7cd4f063","status":"valid","jobs":133,"fixture_jobs":0},
-    "sources": [
-      {"target_id":"n26_greenhouse","connector":"greenhouse","canonical_url":"https://job-boards.greenhouse.io/n26/","request_url":"https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true","import_id":"job_import_870c6fab348e4aaba91dbf722df6fc39","idempotency_key":"admin-acquisition-1786371852231","cycle_id":"acq_cycle_8fc75e5e4f5149379db22e2b4ba89c3e","returned":91,"accepted":91,"rejected":0,"distinct_external_ids":91,"canonical_jobs":91,"active":91,"stale":0,"closed":0,"current_head_jobs":91,"warnings":{"missing_direct_application_url":91,"job_detail_url_used_as_application_url":91,"description_contains_html_entities":91,"suspicious_posting_timestamp":91,"department_not_available":1}},
-      {"target_id":"qonto_lever","connector":"lever","canonical_url":"https://jobs.lever.co/qonto/","request_url":"https://api.lever.co/v0/postings/qonto?mode=json","import_id":"job_import_df980bf7cb194bb7ab3795097449f0fe","idempotency_key":"admin-acquisition-1786372234773","cycle_id":"acq_cycle_33efc4e694d14e87bef67306d2fa12d2","request_attempts":2,"returned":70,"accepted_unique":35,"rejected":0,"distinct_external_ids":35,"canonical_jobs":35,"active":35,"stale":0,"closed":0,"current_head_jobs":42,"warnings":{"suspicious_posting_timestamp":35},"replay_explanation":"first request was preserved transport metadata; same import/cycle/key resumed after old lease expiry and committed one set of 35 projections"}
-    ],
-    "fixture_quarantine": {"targets":["fixture_source","x"],"immutable_observations_preserved":2,"enabled":false,"publication_enabled":false,"normal_quality_metrics_excluded":true,"current_head_fixture_jobs":0,"automatic_preview_created":false},
-    "deltas_from_boundary": {"boundary":"2026-08-10T14:24:13.369788+00:00","job_source_observations":{"before":713,"after":839,"delta":126},"job_posting_versions":{"before":735,"after":735,"delta":0},"acquisition_field_provenance":{"before":22103,"after":26009,"delta":3906},"acquisition_rule_outputs":{"before":713,"after":839,"delta":126},"acquisition_completeness_reports":{"before":20,"after":146,"delta":126},"acquisition_quality_events":{"before":6349,"after":6749,"delta":400},"canonical_company_urls":{"before":290,"after":290,"delta":0},"company_logo_enrichments":{"before":0,"after":0,"delta":0},"acquisition_duplicate_clusters":{"before":0,"after":0,"delta":0},"acquisition_duplicate_members":{"before":0,"after":0,"delta":0},"acquisition_publications":{"before":5,"after":5,"delta":0},"acquisition_publication_jobs":{"before":427,"after":427,"delta":0},"current_head_jobs":{"before":133,"after":133,"delta":0}},
-    "authenticated_checks": {"admin_sources_ui":"rendered and queued N26/Qonto imports","public_jobs_ui":"rendered 25 of 133 jobs with search/location/workplace/experience/category filters","qonto_detail":"rendered description and Apply; click opened https://jobs.lever.co/qonto/043279bd-c543-4e54-bffa-094c77f4c97b/apply","n26_detail":"live employer detail exposed /en-eu/careers/positions/7140058/apply; no application submitted","unauthenticated_401_not_used_as_body_evidence":true},
-    "remaining_gaps":["five employer-site targets enabled but unproven","Greenhouse direct application URL missing; same-page child route is live but not persisted","N26 employment/workplace/experience unsupported or unknown; Qonto language/experience unknown","zero logo enrichment rows and no selected company URL for representatives","pre-existing frontend bundle API-host diagnostic and ScrapeOps timeout"]
-  },
-  "recommended_sequence":["persist connector capability snapshots and Greenhouse same-page application child URLs","add raw-retention metrics and remote projection heartbeat","model company-source aliases and selected homepage/careers/ATS evidence","configure one approved enrichment provider and reversible duplicate decisions","version and expose expanded public fields after contract review","resolve frontend API-host diagnostic and add authenticated production contract gates"],
-  "prompt_3_product_completion": {
-    "environment": "configured production Turso/libSQL from user_config/.env; local SQLite is not production",
-    "secrets_included": false,
-    "deployed_commits": {
-      "api": "052d8e145c8034734ab5a302c198f23f5d70067f",
-      "worker": "052d8e145c8034734ab5a302c198f23f5d70067f",
-      "frontend": "052d8e145c8034734ab5a302c198f23f5d70067f"
-    },
-    "product_runtime_commits": {
-      "api": "8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f",
-      "worker": "8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f",
-      "frontend": "0ba834a8b59dcdbc660ef03dad4429904a700a39"
-    },
-    "migration": "047_product_completion_wave",
-    "workstreams": {
-      "A_company_urls_logo_enrichment": {
-        "status": "integrated_deployed",
-        "entry_points": ["backend/application/company_operations.py", "backend/application/company_logo_adapter.py", "backend/repositories/sqlite_acquisition.py:get_admin_company_detail", "backend/api/routes/acquisition_admin.py", "frontend/src/pages/AdminAcquisitionPage.jsx:InteractiveCompanies"],
-        "production_evidence": {"n26_url_rows": 202, "qonto_url_rows": 86, "logo_enrichment_rows": 0, "provider_canary": false},
-        "known_gap": "No approved enrichment provider was configured or invoked; source URL evidence is not yet a complete official-domain/homepage/careers/ATS identity model."
-      },
-      "B_reversible_duplicate_decisions": {
-        "status": "integrated_deployed",
-        "entry_points": ["backend/application/duplicate_decisions.py", "backend/repositories/sqlite_acquisition.py:record_admin_duplicate_decision", "backend/api/routes/acquisition_admin.py", "frontend/src/pages/AdminAcquisitionPage.jsx:InteractiveDuplicates"],
-        "tables": ["acquisition_duplicate_decisions"],
-        "production_evidence": {"clusters": 0, "members": 0, "decisions": 0, "automatic_merges": 0, "publication_mutations": 0},
-        "known_gap": "No live duplicate cluster existed for a production decision-transition canary."
-      },
-      "C_typed_api_fields_filters_admin": {
-        "status": "integrated_deployed",
-        "entry_points": ["backend/acquisition/public_contract.py", "backend/application/personalized_jobs_service.py", "frontend/src/pages/AdminAcquisitionPage.jsx"],
-        "contract_version": "public_typed_contract_v1",
-        "consumers": ["authenticated user job cards", "authenticated user job detail", "authenticated admin Jobs filters", "authenticated admin job inspection"],
-        "production_evidence": {"publication_jobs": 133, "feed_rendered_jobs": 25, "qonto_apply_actionable": true},
-        "known_gap": "Representative Qonto detail currently exposes unknown workplace/category/application and no verified description; no value was inferred."
-      },
-      "D_connector_capability_raw_retention": {
-        "status": "integrated_deployed",
-        "entry_points": ["backend/connectors/ats_expansions.py", "backend/repositories/sqlite_acquisition.py:record_connector_capability_snapshot", "backend/api/routes/acquisition_admin.py", "frontend/src/pages/AdminAcquisitionPage.jsx:ConnectorCapabilities"],
-        "connectors": [
-          {"connector":"workday","enabled":false,"registered":false,"failure_policy":"report_only","raw_retention":"required/admin-only"},
-          {"connector":"personio","enabled":false,"registered":false,"failure_policy":"report_only","raw_retention":"required/admin-only"},
-          {"connector":"recruitee","enabled":false,"registered":false,"failure_policy":"report_only","raw_retention":"required/admin-only"},
-          {"connector":"smartrecruiters","enabled":false,"registered":false,"failure_policy":"report_only","raw_retention":"required/admin-only"}
-        ],
-        "production_evidence": {"historical_snapshot_rows": 8, "latest_connector_views": 4, "payload_bearing_observations": 839, "observations_with_payload": 839},
-        "known_gap": "Retention count proves payload presence in the inspected table, not complete legacy field recoverability or archive verification."
-      }
-    },
-    "production_counts_after": {
-      "schema_migrations": 47,
-      "canonical_companies": 11,
-      "canonical_jobs": 146,
-      "job_source_observations": 961,
-      "job_posting_versions": 735,
-      "acquisition_field_provenance": 29791,
-      "acquisition_rule_outputs": 961,
-      "acquisition_completeness_reports": 146,
-      "acquisition_quality_events": 7133,
-      "canonical_company_urls": 290,
-      "company_logo_enrichments": 0,
+      "acquisition_publication_jobs": 427,
       "acquisition_duplicate_clusters": 0,
       "acquisition_duplicate_members": 0,
       "acquisition_duplicate_decisions": 0,
-      "acquisition_connector_capability_snapshots": 8,
-      "valid_publication_head_jobs": 133
+      "publication_head_jobs": 133,
+      "uncertain_acquisition_requests": 0,
+      "lifecycle": {"active": 170, "stale": 4, "closed": 7, "unknown": 20}
     },
-    "source_counts_after": {
-      "n26_greenhouse": {"connector":"greenhouse","legacy_blank_connector_observations":433,"fresh_connector_observations":269,"observations":702,"source_jobs":101,"canonical_company_jobs":101},
-      "qonto_lever": {"connector":"lever","legacy_blank_connector_observations":152,"fresh_connector_observations":105,"observations":257,"source_jobs":43,"canonical_company_jobs":43},
-      "fixture_source": {"observations":1,"source_jobs":1,"quarantined":true,"in_current_publication":false},
-      "x": {"observations":1,"source_jobs":1,"quarantined":true,"in_current_publication":false}
+    "production_observations_by_connector": {
+      "greenhouse": 702,
+      "lever": 257,
+      "workday": 10,
+      "personio": 25,
+      "recruitee": 20,
+      "smartrecruiters": 20,
+      "generic_jsonld": 5,
+      "career_site": 2
+    },
+    "publication_head": {
+      "publication_id": "acq_publication_5884f63297fc4f56a0fb019c7cd4f063",
+      "status": "valid",
+      "job_count": 133,
+      "fixture_jobs": 0
     },
     "reprocessing": {
-      "id": "reprocess_ef912ccf2e9f44ca974222fe60732e55",
+      "reprocessing_id": "reprocess_ef912ccf2e9f44ca974222fe60732e55",
       "idempotency_key": "unified-mapping-production-2026-08-10",
-      "state": "completed",
-      "final_checkpoint": "observation_ffc65009d257463e95239c00166d6ab7",
+      "status": "completed",
+      "observations": 587,
+      "batches": 67,
+      "fields": 5870,
+      "historical_repairs": 585,
+      "warnings": 2787,
       "failed_observation_ids": [],
-      "semantic_projection_changes_from_prompt_3": 0,
-      "idempotent_replay": true
-    },
-    "authenticated_checks": {
-      "admin_duplicates": "rendered; production queue empty",
-      "admin_companies": "rendered N26/Qonto URL and logo state",
-      "admin_capabilities": "rendered four disabled/unregistered connectors",
-      "admin_jobs": "rendered typed filter controls and canonical rows",
-      "public_feed": "rendered 25 of 133 jobs",
-      "public_detail": "rendered Qonto detail and actionable Apply",
-      "unauthenticated_401_used_as_body_evidence": false
-    },
-    "rules": {
-      "quality_blocks_ingestion": false,
-      "quality_blocks_publication": false,
-      "duplicate_auto_merge": false,
-      "connector_expansion_default": "disabled",
-      "decision_history": "append_only_and_undoable",
-      "raw_retention": "required/admin-only capability contract"
-    },
-    "known_gaps": [
-      {"category":"data_loss","priority":1,"items":["payload presence is measured but legacy archive/field recoverability is not"]},
-      {"category":"incorrect_semantics","priority":2,"items":["Qonto detail has unknown workplace/category/application and no verified description","Greenhouse same-page application child URL is not yet persisted"]},
-      {"category":"identity_duplicate_risk","priority":3,"items":["company-source aliases and syndication rules remain absent","no live duplicate decision canary because production has zero clusters"]},
-      {"category":"missing_enrichment","priority":4,"items":["approved provider, terms, refresh, budget, and logo/profile backfill remain unconfigured"]},
-      {"category":"observability","priority":5,"items":["snapshot freshness and per-target raw-retention dashboards remain to be added"]},
-      {"category":"admin_usability","priority":6,"items":["field conflict resolution and richer version-diff review remain to be added"]},
-      {"category":"pre_existing_runtime","priority":7,"items":["frontend bundle API-host diagnostic api_host: ${n} and proxy DNS failure remain unresolved"]}
-    ],
-    "recommended_implementation_sequence": ["raw-retention and source-reconciliation metrics", "typed unknown/conflict semantics and application destinations", "company-source identity and aliases", "approved bounded enrichment provider", "real duplicate-review canary", "connector enablement only after authenticated productive contract and rollback evidence"]
-  }
+      "last_observation_id": "observation_ffc65009d257463e95239c00166d6ab7",
+      "lease_owner": "",
+      "same_key_idempotent_replay": true
+    }
+  },
+  "diagram": "manifest -> target registry -> cycle/task/request -> bounded connector/API/crawl -> immutable observation/raw payload -> extraction/URL/application mapping -> typed normalization -> company/job identity -> immutable version -> evidence/rules/completeness/quality -> duplicate candidate review -> explicit publication preview/head -> admin API/UI and authenticated user feed/detail",
+  "stages": [
+    {"id":"environment_safety","owner":"platform/acquisition operations","entry_points":["backend/config/env_schema.py","backend/database/connection.py","scripts/reprocess_acquisition.py"],"tables":["schema_migrations","config_values"],"inputs":["RUNR_ENV","DATABASE_BACKEND","Turso/R2 env","project venv"],"outputs":["selected remote target","operation safeguards"],"rules":["production requires remote libSQL","Python 3.12.7 project interpreter","remote reprocessing is additive and explicitly acknowledged"],"evidence":["C","S","P"]},
+    {"id":"source_registry","owner":"acquisition scheduler","entry_points":["backend/acquisition/manifest.py","backend/application/admin_job_import.py","backend/application/acquisition_scheduler.py","SqliteAcquisitionStore.ensure_targets"],"tables":["acquisition_targets"],"inputs":["manifest target","company profile","connector","official hosts","limits"],"outputs":["careers URL","ATS/API URL","connector","maturity","publication flag"],"rules":["server-owned manifest","canonical target URL","quarantine fixture targets","host allowlist after direct fetch"],"evidence":["C","S","P"]},
+    {"id":"planning_and_leases","owner":"admin import service and one worker","entry_points":["AdminJobImportService.plan_import","AdminJobImportService.start_import","PhaseAAcquisitionScheduler.run_controlled_import","_execute_target"],"tables":["admin_job_imports","admin_job_audit_events","acquisition_cycles","acquisition_tasks","acquisition_requests","acquisition_budget_reservations"],"inputs":["authenticated source IDs","scope","idempotency key"],"outputs":["queued import","durable lease","request telemetry","uncertain recovery state"],"rules":["one queue writer","bounded requests/pages/credits","explicit uncertain release/retry","no automatic publication"],"evidence":["C","S","P"]},
+    {"id":"connector_fetch","owner":"connector owners","entry_points":["backend/connectors/ats_router.py","backend/connectors/ats_expansions.py","backend/connectors/generic_jsonld.py","backend/connectors/company_career_sites.py"],"tables":["acquisition_requests","acquisition_target_attempts"],"inputs":["official ATS/API/career URL","page/request cap"],"outputs":["raw job objects","raw HTML/JSON-LD","source count","retry warnings"],"rules":["direct connector path for Greenhouse/Lever/Workday/Personio/Recruitee/SmartRecruiters/generic JSON-LD","partial snapshots never close source states","raw response retained"],"evidence":["C","T","P"]},
+    {"id":"immutable_observation","owner":"acquisition store","entry_points":["SqliteAcquisitionStore.ingest_snapshot"],"tables":["job_source_observations","job_source_states"],"inputs":["accepted source jobs","target/cycle/task/request"],"outputs":["immutable observation","external ID","source URLs","raw payload/hash","observed time"],"rules":["no rewrite/delete","idempotent projection replay"],"evidence":["C","S","P"]},
+    {"id":"extraction_and_mapping","owner":"phase B and mapping rules","entry_points":["backend/acquisition/phase_b.py","backend/acquisition/quality.py","backend/acquisition/unified_mapping.py","backend/acquisition/rule_registry.py"],"tables":["acquisition_field_provenance","acquisition_rule_outputs","canonical_company_urls","acquisition_quality_events"],"inputs":["ATS payload","HTML","JSON-LD","links/forms"],"outputs":["typed fields","description representations","URL/application classification","company URL evidence","field states"],"rules":["structured > raw payload > explicitly labelled text","direct application > detail/listing fallback","unknown/unsupported/inferred/conflicting retained"],"evidence":["C","T","P"]},
+    {"id":"company_identity_and_enrichment","owner":"company identity and enrichment services","entry_points":["canonical_employer_name","company profile helpers","backend/application/company_enrichment.py","company logo adapter"],"tables":["canonical_companies","canonical_company_aliases","canonical_company_profiles","canonical_company_urls","company_enrichment_targets","company_enrichment_attempts","company_logo_enrichments"],"inputs":["employer name","configured homepage/careers/ATS","provider result"],"outputs":["company identity","aliases","selected URL types","profile evidence","logo metadata"],"rules":["configured official URL is source-backed","provider cannot overwrite stronger evidence","provider configured official_website but execution off"],"evidence":["C","S","P"]},
+    {"id":"job_identity_and_versioning","owner":"domain identity and acquisition store","entry_points":["backend/domain/job_identity.py","acquisition identity helpers","version writer"],"tables":["canonical_jobs","canonical_job_external_ids","canonical_job_url_aliases","job_source_states","job_posting_versions"],"inputs":["external ID","canonical URL","employer/title/location/content"],"outputs":["canonical job","aliases","lifecycle","immutable version/hash"],"rules":["stable source ID and URL preferred","volatile telemetry excluded from stable hash","content change appends version","ambiguous identity not merged"],"evidence":["C","S","T","P"]},
+    {"id":"quality_and_duplicates","owner":"quality and human review","entry_points":["completeness rules","_persist_unified_mapping","duplicate decision services"],"tables":["acquisition_completeness_reports","acquisition_quality_events","acquisition_duplicate_clusters","acquisition_duplicate_members","acquisition_duplicate_decisions"],"inputs":["canonical fields","evidence","similarity candidates"],"outputs":["report-only warnings","completeness state","candidate duplicate cluster","decision audit"],"rules":["quality never blocks","no automatic merge","merge/split/undo preserve immutable evidence"],"evidence":["C","S","T","P"]},
+    {"id":"publication_and_consumers","owner":"admin publication and product read models","entry_points":["create_job_import_preview","publish_job_import_preview","undo_last_job_publication","backend/api/routes","personalized_jobs_service"],"tables":["acquisition_publications","acquisition_publication_jobs","acquisition_publication_head","canonical_jobs","canonical_company_profiles"],"inputs":["explicit preview/publish/undo","authenticated user/admin","typed filters"],"outputs":["valid publication head","admin JSON","user feed/card/detail"],"rules":["manual publish only","reprocessing never promotes","raw payload/evidence admin-only","current head drives user feed"],"evidence":["C","S","A","P"]},
+    {"id":"reprocessing","owner":"acquisition operations","entry_points":["scripts/reprocess_acquisition.py","backend/acquisition/reprocessing.py"],"tables":["acquisition_reprocessing_runs","acquisition_stage_results","projection tables"],"inputs":["immutable observations","scope","same idempotency key"],"outputs":["bounded additive projections","checkpoint/counts","failed IDs","replay result"],"rules":["CAS lease/stale reclaim","bounded batches","per-observation isolation","no immutable delete/version rewrite/merge/publish"],"evidence":["C","S","T","P"]}
+  ],
+  "entities": [
+    {"name":"company","tables":["canonical_companies","canonical_company_aliases","canonical_company_profiles","canonical_company_urls"],"identity":"company_id with conservative employer/domain identity","relations":["source URLs","aliases","profiles/enrichment","canonical jobs"]},
+    {"name":"company_source","tables":["acquisition_targets","job_source_observations","canonical_company_urls"],"identity":"target_id/source connector/source token plus observed URL","relations":["registry -> observations -> URL evidence"],"gap":"no standalone durable company-source entity"},
+    {"name":"enrichment","tables":["company_enrichment_targets","company_enrichment_attempts","company_logo_enrichments","canonical_company_profiles"],"identity":"company/provider/content hash/rule version","relations":["provider attempt -> profile/logo"],"current":"official_website configured; execution off; zero logo rows"},
+    {"name":"job","tables":["canonical_jobs","canonical_job_external_ids","canonical_job_url_aliases","job_source_states"],"identity":"canonical_job_id from source ID/URL/signature","relations":["company","observations","versions","publication"]},
+    {"name":"job_source_record","tables":["job_source_observations"],"identity":"observation_id; immutable","relations":["target/cycle/task/request","raw payload","versions","evidence"]},
+    {"name":"observation","tables":["job_source_observations"],"identity":"one immutable source capture","relations":["many replayable projections"]},
+    {"name":"version","tables":["job_posting_versions"],"identity":"version_id/canonical_job_id/version_number/content_hash","relations":["current head","publication","source observation"]},
+    {"name":"field_evidence","tables":["acquisition_field_provenance"],"identity":"entity/field/observation/rule version","relations":["selected evidence","completeness","admin inspection"]},
+    {"name":"duplicate_cluster","tables":["acquisition_duplicate_clusters","acquisition_duplicate_members","acquisition_duplicate_decisions"],"identity":"cluster_id","relations":["candidate members","human decision history"],"automatic_merge":false},
+    {"name":"rule_version","tables":["rule_version columns and code registry"],"identity":"rule version string","values":["unified_mapping_v1","acquisition_quality_v1","description_representations_v1","application_destination_v1","field_matrix_v1"],"gap":"no standalone persisted registry table"},
+    {"name":"publication","tables":["acquisition_publications","acquisition_publication_jobs","acquisition_publication_head"],"identity":"publication_id plus singleton head_id=1","relations":["canonical job snapshot","user feed","admin preview/publish/undo"]}
+  ],
+  "fields": [
+    {"name":"job_id/canonical_job_id","raw_locations":["ATS id","external_job_id","canonical URL"],"extraction":"identity resolver","normalized_type":"stable string","precedence":["source+external ID","canonical URL","identity signature"],"provenance":"observation/version IDs","confidence":"deterministic when stable ID exists","completeness":"identity warning only","api":"feed/detail/admin jobs","ui":"cards/detail/admin Jobs","gap":"weak-ID cross-source ambiguity"},
+    {"name":"title","raw_locations":["ATS title","JSON-LD name/title","page title"],"extraction":"connector/JSON-LD parser","normalized_type":"string","precedence":["structured","JSON-LD","page"],"provenance":"source field evidence","confidence":"high when present","completeness":"title warning","api":"feed/card/detail/admin","ui":"cards/search","gap":"no multilingual reconciliation"},
+    {"name":"company/company_id","raw_locations":["company.name","employer_name","configured canonical employer"],"extraction":"canonical employer resolver","normalized_type":"string + FK","precedence":["configured canonical","structured employer","normalized text"],"provenance":"company/observation evidence","confidence":"source-dependent","completeness":"company identity warning","api":"feed/detail/company/admin","ui":"cards/detail/company","gap":"alias history incomplete"},
+    {"name":"locations/location","raw_locations":["ATS location/offices","JSON-LD jobLocation","page selectors"],"extraction":"location parser","normalized_type":"collection + display string","precedence":["structured","JSON-LD","page"],"provenance":"field evidence","confidence":"source-dependent","completeness":"location warning","api":"feed/detail/location filter/admin","ui":"cards/search","gap":"public multi-location type varies"},
+    {"name":"source_department/source_team/source_category","raw_locations":["department","team","ATS family/category","labelled text"],"extraction":"connector aliases","normalized_type":"strings","precedence":["structured","raw payload","labelled text"],"provenance":"observation evidence","confidence":"source-dependent","completeness":"department/category warning","api":"detail/admin/filter","ui":"detail/admin","gap":"connector coverage varies"},
+    {"name":"runr_function/runr_subfunction","raw_locations":["department/category/team","mapped text"],"extraction":"versioned taxonomy mapper","normalized_type":"taxonomy strings","precedence":["source metadata","labelled text","inferred mapping"],"provenance":"rule version + field evidence","confidence":"mapping score, not calibrated","completeness":"report-only","api":"feed/detail/admin filters","ui":"typed filters","gap":"Other semantics need agreement"},
+    {"name":"employment_type","raw_locations":["employment_type","employmentType","type","commitment","timeType"],"extraction":"alias/taxonomy mapper","normalized_type":"employment taxonomy","precedence":["structured","raw source","labelled text"],"provenance":"field state/evidence","confidence":"structured > inferred","completeness":"report-only","api":"feed/detail/filter/admin","ui":"filter/detail","gap":"not universal"},
+    {"name":"workplace_arrangement","raw_locations":["workplace_arrangement","workplaceType","remoteType","remote","labelled text"],"extraction":"arrangement taxonomy","normalized_type":"On-site|Hybrid|Remote|Flexible|Unknown","precedence":["structured","labelled text"],"provenance":"field state/evidence","confidence":"structured > inferred","completeness":"report-only","api":"feed/detail/filter/admin","ui":"filter/detail","gap":"remote geography sparse"},
+    {"name":"languages","raw_locations":["languages","language_requirements","description language lines"],"extraction":"list/proficiency parser","normalized_type":"language list","precedence":["structured","labelled text"],"provenance":"field evidence; inferred state","confidence":"source-dependent","completeness":"report-only","api":"feed/detail/filter/admin","ui":"filter/detail","gap":"taxonomy/proficiency incomplete"},
+    {"name":"experience/seniority","raw_locations":["seniority","experience_level","years","description labels"],"extraction":"experience parser","normalized_type":"seniority plus optional range","precedence":["structured","explicit description"],"provenance":"rule/evidence","confidence":"inferred lower","completeness":"report-only","api":"feed/detail/filter/admin","ui":"feed/detail","gap":"public min/max incomplete"},
+    {"name":"salary","raw_locations":["salary","salary_range","compensation","custom ATS fields"],"extraction":"salary parser","normalized_type":"salary object","precedence":["structured","raw source"],"provenance":"field evidence","confidence":"connector-dependent","completeness":"report-only","api":"feed/detail/filter/admin","ui":"salary filter/detail","gap":"currency comparability"},
+    {"name":"description","raw_locations":["ATS content","JSON-LD description","page HTML"],"extraction":"raw/sanitized/clean representations","normalized_type":"HTML + text","precedence":["structured","JSON-LD","page"],"provenance":"observation/version/hash","confidence":"high when present","completeness":"full_description warning","api":"detail/feed/admin","ui":"detail","gap":"feed primarily clean text"},
+    {"name":"job_detail_url","raw_locations":["url","link","source_url","hostedUrl","absolute_url","canonical/link tags"],"extraction":"URL canonicalizer","normalized_type":"canonical HTTP URL","precedence":["source detail","aliases"],"provenance":"URL candidate + observation","confidence":"deterministic normalization","completeness":"job_detail_url warning","api":"feed/detail/admin","ui":"detail link","gap":"redirect equivalence varies"},
+    {"name":"application_url/application_method/application_status","raw_locations":["apply_url","application_url","ATS route","link/form candidates"],"extraction":"application destination resolver","normalized_type":"URL + classification/status","precedence":["verified direct employer/ATS","detail fallback"],"provenance":"candidate validation + rule version","confidence":"classified, not universally verified","completeness":"direct apply report-only","api":"feed/detail/admin","ui":"Apply action","gap":"embedded/redirect validation"},
+    {"name":"posted_at/updated_at/freshness","raw_locations":["datePosted","source_posted_at","ATS created/updated/published","observed_at"],"extraction":"timestamp normalizer","normalized_type":"UTC ISO + age","precedence":["explicit publication date","source lifecycle","observed_at"],"provenance":"source timestamp + observation","confidence":"explicit dates high","completeness":"timestamp semantics warning","api":"feed/detail/filter/admin","ui":"freshness/sort","gap":"ATS ambiguity"},
+    {"name":"lifecycle_state","raw_locations":["complete snapshot","source state","absence history"],"extraction":"source-state machine","normalized_type":"active|stale|closed|unknown","precedence":["explicit source state","complete snapshot","history"],"provenance":"source state/observations","confidence":"source-dependent","completeness":"report-only","api":"feed/detail/admin","ui":"visibility","gap":"reactivation live canary absent"},
+    {"name":"completeness/warnings","raw_locations":["missing fields","connector warnings","source count reconciliation"],"extraction":"completeness/rule engine","normalized_type":"state + warning list","precedence":["all evidence retained"],"provenance":"rule version/severity","confidence":"rule output","completeness":"always report-only","api":"admin; selected user badges","ui":"admin warnings","gap":"not a gate"},
+    {"name":"company_homepage/company_careers_url/company_ats_url","raw_locations":["manifest company_profile","configured official URL rows","observed source URL"],"extraction":"company URL mapper","normalized_type":"URL rows by type","precedence":["configured official","provider","observed source"],"provenance":"source=configured_official, observation when observed","confidence":"official configured URLs high","completeness":"company URL warning","api":"company detail/admin","ui":"Companies/detail","gap":"only five source companies have all three selected rows"},
+    {"name":"company_aliases","raw_locations":["employer variants","canonical name config"],"extraction":"alias resolver","normalized_type":"string list","precedence":["explicit evidence only"],"provenance":"alias/source audit","confidence":"source-dependent","completeness":"report-only","api":"company/admin","ui":"limited admin","gap":"manual alias UX"},
+    {"name":"company_profile_fields","raw_locations":["company payload","profile","official website provider"],"extraction":"profile alias mapper","normalized_type":"field records with state/value/provenance","precedence":["source profile","enabled provider"],"provenance":"source/provider URL + verified time","confidence":"source/provider-dependent","completeness":"report-only","api":"company/feed detail/admin","ui":"company detail","gap":"many fields unknown"},
+    {"name":"company_logo","raw_locations":["provider logo URL/content","stored logo object"],"extraction":"logo adapter","normalized_type":"logo object metadata","precedence":["provider","stored fallback"],"provenance":"provider/rule/version","confidence":"not available in current production","completeness":"report-only","api":"company/detail when present","ui":"company cards/detail","gap":"provider execution off; zero rows"}
+  ],
+  "source_capabilities": [
+    {"connector":"greenhouse","request":"boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true","observations":702,"can":["ID","title","location","description","department","offices/categories","hosted/apply URL","raw timestamps"],"cannot_guarantee":["employment","workplace","language","salary","experience"]},
+    {"connector":"lever","request":"api.lever.co/v0/postings/{slug}?mode=json","observations":257,"can":["ID","title","categories/team","location","commitment","workplace","salary","description","hosted/apply URL","timestamps"],"cannot_guarantee":["applicant counts","closure semantics","consistent language/experience"]},
+    {"connector":"workday","request":"https://{tenant}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs","observations":10,"can":["family/category","external path","title","location","description","detail URL","time type/remote when supplied"],"cannot_guarantee":["tenant-specific fields","complete page","closure from partial page"]},
+    {"connector":"personio","request":"{target}/xml","observations":25,"can":["position ID/name","department/team","location","employment/type","description","detail URL when supplied"],"cannot_guarantee":["XML field parity","language/experience/salary consistency"]},
+    {"connector":"recruitee","request":"{target}/api/offers?limit=&offset=","observations":20,"can":["offer ID/title","department/team","location","description","employment/workplace when supplied","detail/apply URL"],"cannot_guarantee":["complete pagination when cap reached","all typed metadata"]},
+    {"connector":"smartrecruiters","request":"api.smartrecruiters.com/v1/companies/{slug}/postings?limit=10&offset=0","observations":20,"can":["ID/title/department/location/description","jobs.smartrecruiters.com detail/apply candidates","raw payload"],"cannot_guarantee":["all typed metadata","complete catalog from one page"]},
+    {"connector":"generic_jsonld","request":"configured Siemens listing plus bounded detail links","observations":5,"can":["JSON-LD title/description/location/datePosted","canonical/detail/apply candidates","raw HTML"],"cannot_guarantee":["stable API schema","department/employment/workplace/language/experience","complete catalog under cap"]},
+    {"connector":"career_site","request":"company_career_sites.py","observations":2,"can":["HTML discovery","JSON-LD","location/apply candidates"],"cannot_guarantee":["stable schema","structured metadata","paid cost-free execution"]},
+    {"connector":"fixture","request":"test payload only","observations":2,"can":["contract evidence"],"cannot_guarantee":["production truth","publication eligibility"]}
+  ],
+  "rules": {
+    "field_states":["present","missing","unknown","unsupported","invalid","conflicting","inferred"],
+    "precedence":["structured connector field","raw source field","explicitly labelled description evidence","unknown/unsupported"],
+    "rule_versions":["unified_mapping_v1","acquisition_quality_v1","description_representations_v1","application_destination_v1","field_matrix_v1"],
+    "conflict_handling":"retain conflicting evidence and state; selection requires explicit precedence and is not silent",
+    "confidence":"bounded mapper score, not calibrated probability",
+    "quality":"report-only; no ingestion/publication/API/UI gate",
+    "duplicate":"candidate cluster only; automatic merge false",
+    "versioning":"equal stable content hash reuses version; changed stable content appends immutable version",
+    "closure_reactivation":"complete source snapshot is required for closure; incomplete snapshots leave unknown source state; reactivation is modeled but not live-canary proven",
+    "publication":"manual preview/publish/undo; one valid head; reprocessing never promotes"
+  },
+  "consumers": {
+    "admin_api":["GET /admin/acquisition/overview","GET /admin/acquisition/sources","GET /admin/acquisition/jobs","GET /admin/acquisition/companies","GET /admin/acquisition/duplicates","GET /admin/acquisition/rules","GET /admin/acquisition/reprocessing","GET /admin/acquisition/publication","POST import plan/start","POST preview/publish/undo"],
+    "admin_ui":["/admin/acquisition Overview","Sources","Jobs","Duplicates","Companies","Rules","Reprocessing","Publication","/admin/job-import legacy inspector"],
+    "user_api":["GET /personalized-jobs","GET /personalized-jobs/{posting_id}","GET /personalized-jobs/companies/{company_id}"],
+    "user_ui":["Personalized Jobs cards/feed","job detail","company detail","Apply action"],
+    "filters":["search","function/subfunction","location","workplace arrangement","employment type","experience/seniority","language","salary","authorization/sponsorship","company fields","posted freshness","admin completeness/warnings/duplicates/publication"]
+  },
+  "duplicate_algorithm": {
+    "steps":["stable source+external ID","canonical URL and URL aliases","conservative employer/title/location similarity","stable-content similarity","candidate cluster with reason/evidence","human decision"],
+    "automatic_merge":false,
+    "production_clusters":0,
+    "production_members":0,
+    "production_decisions":0,
+    "false_merge_examples_found":[],
+    "missed_duplicate_examples_found":[],
+    "indistinguishable_cases":["weak or missing external ID with similar employer/title/location requires human review","fixture rows are isolated from production duplicate metrics"],
+    "test_coverage":["changed stable content creates a new version","distinct/ignore","unsafe merge/split rejection","merge/split plan","undo preserving observations and versions"]
+  },
+  "gaps": {
+    "data_loss":["bounded snapshots preserve raw evidence but do not provide complete catalog proof","automated object-storage restore drill absent"],
+    "incorrect_semantics":["unknown lifecycle must not be read as empty","confidence is not calibrated","public typed fields are less expressive than stored evidence"],
+    "identity_duplicate_risk":["no standalone company-source entity","alias decision history limited","no live duplicate canary"],
+    "missing_enrichment":["official_website provider configured but execution disabled","zero logo enrichment rows","most optional company fields explicitly unknown"],
+    "observability":["snapshot manifest and per-target structured worker telemetry should be first-class"],
+    "admin_usability":["single view for raw/normalized/selected evidence","partial-snapshot warning before preview","richer provenance and duplicate audit UI"]
+  },
+  "recommended_sequence":["snapshot reconciliation manifest","company-source and alias audit model","calibrated confidence and public typed serializers","approved logo provider execution","isolated duplicate canaries","backup/restore and telemetry dashboard"]
 }
