@@ -221,6 +221,11 @@
     "environment": "configured production Turso/libSQL from user_config/.env; local SQLite is not production",
     "secrets_included": false,
     "deployed_commits": {
+      "api": "b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f",
+      "worker": "b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f",
+      "frontend": "0ba834a8b59dcdbc660ef03dad4429904a700a39"
+    },
+    "product_runtime_commits": {
       "api": "8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f",
       "worker": "8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f",
       "frontend": "0ba834a8b59dcdbc660ef03dad4429904a700a39"

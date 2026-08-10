@@ -9,8 +9,10 @@ capability canary; it was not treated as production.
 ## Result
 
 The four Prompt 3 workstreams are integrated into the API, admin UI, worker
-contracts, migrations, and tests. The API and worker are deployed on
-`8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`; the frontend containing the UI
+contracts, migrations, and tests. The product-code deployment was
+`8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`; the subsequent documentation push
+is the current API/worker deployment at
+`b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f`. The frontend containing the UI
 changes is deployed on `0ba834a8b59dcdbc660ef03dad4429904a700a39`. Migration
 047 is applied in production. No duplicate merge, publication promotion, or
 company enrichment write was performed during validation.
@@ -25,8 +27,8 @@ missing where the source did not provide them.
 
 | Surface | Deployed commit | Evidence |
 |---|---|---|
-| API | `8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f` | Render live deployment; authenticated admin routes returned successfully |
-| Worker | `8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f` | Render live deployment; same repository commit |
+| API | `b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f` | Current Render live deployment; product code came from `8ba4e5e`; authenticated admin routes returned successfully |
+| Worker | `b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f` | Current Render live deployment; product code came from `8ba4e5e` |
 | Frontend | `0ba834a8b59dcdbc660ef03dad4429904a700a39` | Render live deployment; authenticated browser rendered new panels |
 | Database | migration `047_product_completion_wave` | production `schema_migrations` max is 047 |
 | Prior gate | Prompt 2 | previous report ended `PROMPT 2 GATE PASSED` |

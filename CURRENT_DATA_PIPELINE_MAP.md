@@ -323,9 +323,10 @@ gaps under `prompt_2_fresh_production`.
 ## Prompt 3 integration truth (2026-08-10)
 
 The four product-completion workstreams are now integrated and deployed. The
-configured production Turso/libSQL database is at migration 047. API and
-worker runtime commit is `8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`; the
-frontend runtime containing the admin changes is
+configured production Turso/libSQL database is at migration 047. The
+product-code API/worker commit was `8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`
+and the current API/worker deployment after the documentation push is
+`b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f`; the frontend runtime containing the admin changes is
 `0ba834a8b59dcdbc660ef03dad4429904a700a39`.
 
 | Workstream | Code/data contract | API/admin consumer | Production truth |

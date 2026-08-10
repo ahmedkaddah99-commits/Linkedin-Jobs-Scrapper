@@ -341,8 +341,10 @@ and unresolved gaps are recorded in
 Prompt 2 ended with `PROMPT 2 GATE PASSED`, so the four bounded product
 workstreams were integrated and deployed. The inspected environment remained
 configured production Turso/libSQL from `user_config/.env`; local SQLite was
-not treated as production. The API and worker are live on
-`8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`, the frontend containing the new
+not treated as production. The product-code API/worker deployment was
+`8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f`; the current API/worker deployment
+after the documentation push is
+`b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f`. The frontend containing the new
 admin UI is live on `0ba834a8b59dcdbc660ef03dad4429904a700a39`, and production
 has migration `047_product_completion_wave`.
 
