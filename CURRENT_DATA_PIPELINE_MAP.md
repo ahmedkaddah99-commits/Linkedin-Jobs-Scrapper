@@ -14,7 +14,7 @@ is reproduced here. [P]
 
 The current production database has 45 applied migrations, 587 immutable job
 observations, 609 posting-version rows, 141 canonical jobs, 11 canonical
-companies, 7,316 field-evidence rows, 127 completeness reports, 3,864 quality
+companies, 7,316 field-evidence rows, 127 completeness reports, 4,002 quality
 events, 252 company URL rows, zero logo-enrichment rows, zero duplicate
 clusters, five publication rows, and one current publication head. [P]
 
@@ -36,7 +36,7 @@ resumable reprocessing code. [C][S][T][P]
 Partial: company URL/profile coverage, timestamp semantics, source metadata,
 field precedence, enrichment, duplicate review, user-facing publication of
 the new normalized fields, and production reprocessing. The production
-reprocessing row has a durable checkpoint at 30 observations but is currently
+reprocessing row has a durable checkpoint at 80 observations but is currently
 stale/running after an external duplicate launcher was stopped; it is not a
 completed backfill. [C][P]
 

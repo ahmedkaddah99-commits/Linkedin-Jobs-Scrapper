@@ -88,7 +88,7 @@ The current read-only inventory after deployment was:
 | Canonical jobs/companies | 141 / 11 |
 | Posting versions | 609 |
 | Field provenance/rule outputs | 7,316 / 236 |
-| Completeness reports/quality events | 127 / 3,864 |
+| Completeness reports/quality events | 127 / 4,002 |
 | Company URL/logo-enrichment rows | 252 / 0 |
 | Duplicate clusters/members | 0 / 0 |
 | Publications/current head | 5 / 1 |
@@ -112,8 +112,8 @@ a clean production baseline.
 
 The requested production idempotency key is
 `unified-mapping-production-2026-08-10`. The run currently has a durable
-checkpoint at 30 observations, 300 fields, 30 historical repairs, 148
-warnings, and 26 committed batches, with no failed observations. Its database
+checkpoint at 80 observations, 800 fields, 80 historical repairs, 388
+warnings, and 28 committed batches, with no failed observations. Its database
 row is `running` with a stale lease because the bounded process exited while
 an external duplicate launcher repeatedly spawned a global-Python copy. The
 duplicate copies were stopped by exact PID/command inspection; no active
