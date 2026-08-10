@@ -43,6 +43,8 @@ class AtsRouterTests(unittest.TestCase):
         self.assertEqual(jobs[0]["location"], "Berlin")
         self.assertEqual(jobs[0]["source_ats"], "greenhouse")
         self.assertEqual(jobs[0]["url"], "https://boards.greenhouse.io/acme/jobs/123")
+        self.assertEqual(jobs[0]["source_timestamps"]["timestamp_state"], "unknown_source_timestamp")
+        self.assertEqual(jobs[0]["posted_at"], "")
 
     @patch("backend.connectors.ats_router.requests.get")
     def test_fetch_lever_jobs_returns_normalized_records(self, mock_get):
@@ -64,6 +66,8 @@ class AtsRouterTests(unittest.TestCase):
         self.assertEqual(jobs[0]["title"], "Business Analyst")
         self.assertEqual(jobs[0]["company"], "acme")
         self.assertEqual(jobs[0]["source_ats"], "lever")
+        self.assertEqual(jobs[0]["source_timestamps"]["timestamp_state"], "unknown_source_timestamp")
+        self.assertEqual(jobs[0]["posted_at"], "")
 
     def test_unimplemented_structured_ats_returns_empty_list(self):
         for ats in ("workday", "personio", "recruitee", "smartrecruiters"):

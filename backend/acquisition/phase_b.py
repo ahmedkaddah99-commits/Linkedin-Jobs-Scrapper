@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from backend.acquisition.network_policy import hostname_for_url
 from backend.acquisition.phase_g import is_portal_target
+from backend.acquisition.quality import canonical_employer_name, normalize_job_for_ingestion
 
 
 PHASE_B_DEFAULT_CONFIG = {
@@ -137,7 +138,7 @@ def normalize_phase_b_jobs(
     target_config = dict(target.get("config") or {})
     # A portal is an acquisition target only.  Its display name (for example,
     # "LinkedIn Germany") must never become the canonical employer.
-    employer = _text(target.get("canonical_company_name") or target_config.get("canonical_company_name"))
+    employer = canonical_employer_name(target)
     if not is_portal_target(target):
         employer = employer or _text(target.get("display_name"))
     connector = _text(target.get("connector")).casefold()
@@ -146,7 +147,6 @@ def normalize_phase_b_jobs(
         job = dict(raw)
         external_id = _text(job.get("job_id") or job.get("external_job_id") or job.get("id"))
         title = " ".join(_text(job.get("title") or job.get("text")).split())
-        apply_url = _official_apply_url(job, target)
         reason = _looks_excluded(job)
         if not external_id:
             reason = reason or "missing_external_job_id"
@@ -154,15 +154,23 @@ def normalize_phase_b_jobs(
             reason = reason or "missing_title"
         if not employer or not target_host:
             reason = reason or "unverified_employer"
-        if not apply_url:
-            reason = reason or "unverified_direct_apply_destination"
         if external_id and external_id in seen_external:
             reason = reason or "duplicate_source_record"
         if reason:
             rejected.append({"external_job_id": external_id, "reason": reason, "title": title})
             continue
         seen_external.add(external_id)
-        location = " ".join(_text(job.get("location") or job.get("location_raw")).split())
+        location_value = job.get("location") or job.get("location_raw")
+        if isinstance(location_value, Mapping):
+            location_value = location_value.get("name") or location_value.get("address") or ""
+        location = " ".join(_text(location_value).split())
+        source_url = _url(job.get("url") or job.get("link") or job.get("source_url") or job.get("absolute_url") or job.get("hostedUrl"))
+        if not source_url:
+            # A missing direct-apply destination is report-only.  A missing
+            # source URL is different: without a source identity the record
+            # cannot be safely persisted or reconciled.
+            rejected.append({"external_job_id": external_id, "reason": "missing_source_url", "title": title})
+            continue
         description = _text(job.get("full_description") or job.get("description") or job.get("descriptionPlain"))
         normalized = {
             **job,
@@ -172,18 +180,17 @@ def normalize_phase_b_jobs(
             "company": employer,
             "location": location,
             "location_raw": location,
-            "url": _url(job.get("url") or job.get("link") or apply_url) or apply_url,
-            "link": _url(job.get("link") or job.get("url") or apply_url) or apply_url,
-            "source_url": _url(job.get("source_url") or job.get("url") or apply_url) or apply_url,
-            "apply_link": apply_url,
-            "apply_url": apply_url,
+            "url": source_url,
+            "link": source_url,
+            "source_url": source_url,
             "apply_link_source": connector or "official_employer",
             "source_ats": connector,
             "employer_verified": True,
-            "application_method": "direct_apply",
             "description": description,
-            "full_description": description,
+            "full_description": str(job.get("full_description") or job.get("description") or description),
         }
+        normalized = normalize_job_for_ingestion(normalized, {**target, "canonical_company_name": employer})
+        normalized["quality_warnings"] = list(dict.fromkeys(normalized.get("quality_warnings") or []))
         accepted.append(normalized)
     return {"accepted": accepted, "rejected": rejected, "raw_count": len(accepted) + len(rejected)}
 

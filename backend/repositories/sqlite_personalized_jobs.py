@@ -670,7 +670,8 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 FROM canonical_companies c
                 LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
                 LEFT JOIN company_enrichment_targets t ON t.company_id = c.company_id
-                WHERE (t.next_attempt_at IS NULL OR t.next_attempt_at = '' OR t.next_attempt_at <= ?)
+                WHERE COALESCE(c.entity_kind, 'employer') != 'source'
+                  AND (t.next_attempt_at IS NULL OR t.next_attempt_at = '' OR t.next_attempt_at <= ?)
                   AND (t.lease_expires_at IS NULL OR t.lease_expires_at = '' OR t.lease_expires_at <= ?)
                 ORDER BY CASE WHEN t.last_success_at IS NULL OR t.last_success_at = '' THEN 0 ELSE 1 END,
                          t.last_success_at, c.company_id

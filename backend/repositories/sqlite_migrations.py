@@ -1933,6 +1933,74 @@ def _apply_admin_job_import_dashboard_migration(connection: DatabaseConnection) 
         """
     )
 
+
+def _apply_acquisition_quality_migration(connection: DatabaseConnection) -> None:
+    """Add shared provenance, warning, reconciliation, and repair state.
+
+    These tables are additive.  They do not alter publication gates and keep
+    immutable posting history intact while allowing safe repair annotations.
+    """
+
+    for table, column, definition in (
+        ("acquisition_tasks", "reconciliation_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("acquisition_tasks", "quality_warnings_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("job_source_observations", "source_display_name", "TEXT NOT NULL DEFAULT ''"),
+        ("job_source_observations", "source_token", "TEXT NOT NULL DEFAULT ''"),
+        ("job_source_observations", "source_connector", "TEXT NOT NULL DEFAULT ''"),
+        ("job_source_observations", "application_url", "TEXT NOT NULL DEFAULT ''"),
+        ("job_source_observations", "application_classification", "TEXT NOT NULL DEFAULT 'unknown'"),
+        ("job_source_observations", "quality_warnings_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ):
+        _ensure_table_column(connection, table, column, definition)
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS canonical_company_aliases (
+            alias_id TEXT PRIMARY KEY,
+            company_id TEXT NOT NULL,
+            alias_key TEXT NOT NULL,
+            alias_display TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            confidence TEXT NOT NULL DEFAULT 'verified',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(alias_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_canonical_company_aliases_company
+            ON canonical_company_aliases(company_id, alias_key);
+
+        CREATE TABLE IF NOT EXISTS acquisition_quality_events (
+            event_id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL DEFAULT '',
+            task_id TEXT NOT NULL DEFAULT '',
+            target_id TEXT NOT NULL DEFAULT '',
+            canonical_job_id TEXT NOT NULL DEFAULT '',
+            company_id TEXT NOT NULL DEFAULT '',
+            employer_name TEXT NOT NULL DEFAULT '',
+            connector TEXT NOT NULL DEFAULT '',
+            source_token TEXT NOT NULL DEFAULT '',
+            warning_code TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'warning',
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_quality_events_cycle
+            ON acquisition_quality_events(cycle_id, warning_code, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_quality_events_dimensions
+            ON acquisition_quality_events(connector, target_id, employer_name, warning_code);
+
+        CREATE TABLE IF NOT EXISTS acquisition_version_quality (
+            version_id TEXT PRIMARY KEY,
+            canonical_job_id TEXT NOT NULL,
+            stable_content_hash TEXT NOT NULL DEFAULT '',
+            redundant INTEGER NOT NULL DEFAULT 0,
+            report_json TEXT NOT NULL DEFAULT '{}',
+            calculated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_version_quality_job
+            ON acquisition_version_quality(canonical_job_id, stable_content_hash, redundant);
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2161,6 +2229,12 @@ MIGRATIONS = (
         "042_admin_job_import_dashboard",
         "Create durable admin job import, review, publication and audit state.",
         _apply_admin_job_import_dashboard_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "043_acquisition_quality_contract",
+        "Add shared acquisition quality, provenance, reconciliation, and repair annotations.",
+        _apply_acquisition_quality_migration,
         dependencies=(_table_columns, _ensure_table_column),
     ),
 )

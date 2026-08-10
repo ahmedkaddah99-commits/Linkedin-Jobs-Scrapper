@@ -27,6 +27,7 @@ from backend.repositories.contracts import BackendRepositories
 from backend.application.production_rollout import catalog_user_access
 from backend.application.company_logo import cache_logo, deterministic_monogram, validate_logo
 from backend.acquisition.phase_g import build_applicant_competition, build_priority
+from backend.acquisition.quality import DIRECT_APPLICATION_CLASSIFICATIONS, classify_job_url, posted_age_hours
 
 
 EVALUATOR_VERSION = MATCH_V2_VERSION
@@ -118,7 +119,21 @@ def _pending_match() -> dict[str, Any]:
 
 
 def _approved_apply_url(row: Mapping[str, Any]) -> str | None:
-    value = _text(row.get("apply_url"))
+    payload = _payload_for_row(row)
+    destination = payload.get("application_destination") if isinstance(payload.get("application_destination"), Mapping) else None
+    if destination is not None:
+        if destination.get("status") != "verified":
+            return None
+        value = _text(destination.get("resolved_url"))
+    else:
+        value = _text(row.get("apply_url"))
+        legacy_classification = classify_job_url(
+            value,
+            target={"canonical_target_url": row.get("company_provenance_url") or ""},
+            source_ats=_text(row.get("source_ats")),
+        )
+        if legacy_classification not in DIRECT_APPLICATION_CLASSIFICATIONS:
+            return None
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
@@ -398,6 +413,7 @@ def _salary(payload: Mapping[str, Any]) -> dict[str, Any] | None:
 _COMPANY_FIELD_ALIASES = {
     "description": ("description", "company_description", "about"),
     "website": ("website", "company_website", "site"),
+    "careers_page": ("careers_page", "careersPage", "careers_url", "jobs_page"),
     "industry": ("industry", "company_industry"),
     "company_size": ("company_size", "size", "employees"),
     "headquarters": ("headquarters", "company_headquarters", "hq"),
@@ -524,6 +540,8 @@ def _job_projection(
     languages = _unique_strings(_value(payload, row, "languages", "language_requirements", "required_languages")) or None
     authorization = _value(payload, row, "work_authorization", "authorization", "work_permit", "visa_requirement")
     sponsorship = _value(payload, row, "sponsorship", "visa_sponsorship", "sponsors_h1b")
+    posted_at = _text(_value(payload, row, "posted_at", "published_at", "date_posted")) or None
+    application_destination = payload.get("application_destination") if isinstance(payload.get("application_destination"), Mapping) else {}
     projection = _public_clean({
         "posting_id": str(row.get("canonical_job_id") or ""),
         "canonical_job_id": str(row.get("canonical_job_id") or ""),
@@ -547,12 +565,17 @@ def _job_projection(
         "languages": languages,
         "work_authorization": authorization if authorization not in (None, "") else None,
         "sponsorship": sponsorship if sponsorship not in (None, "") else None,
-        "posted_at": _text(_value(payload, row, "posted_at", "published_at", "date_posted")) or None,
+        "posted_at": posted_at,
+        "posted_age_hours": posted_age_hours(posted_at),
         "first_seen_at": _text(row.get("first_seen_at")) or None,
         "last_seen_at": _text(row.get("last_seen_at")) or None,
         "last_verified_at": _text(row.get("last_verified_at")) or None,
         "canonical_url": canonical_url,
         "apply_url": apply_url,
+        "user_facing_url": _text(application_destination.get("user_facing_url") or canonical_url) or None,
+        "job_detail_url": _text(payload.get("job_detail_url") or canonical_url) or None,
+        "application_method": _text(payload.get("application_method") or application_destination.get("application_method")) or "unknown",
+        "application_status": _text(application_destination.get("status")) or "unknown",
         "lifecycle_state": _text(row.get("lifecycle_state")) or "unknown",
         "version_id": _text(row.get("current_version_id")) or None,
         "version": int(row.get("version_number") or 0) or None,
@@ -598,6 +621,8 @@ def _job_card_projection(
     experience = _value(payload, row, "experience_level", "seniority", "level")
     category = _value(payload, row, "category", "job_category", "role_category", "function")
     languages = _unique_strings(_value(payload, row, "languages", "language_requirements", "required_languages")) or None
+    posted_at = _text(_value(payload, row, "posted_at", "published_at", "date_posted")) or None
+    application_destination = payload.get("application_destination") if isinstance(payload.get("application_destination"), Mapping) else {}
     return {
         "posting_id": str(row.get("canonical_job_id") or ""),
         "canonical_job_id": str(row.get("canonical_job_id") or ""),
@@ -610,11 +635,16 @@ def _job_card_projection(
         "experience_level": _text(experience) or None,
         "category": _text(category) or None,
         "languages": languages,
-        "posted_at": _text(_value(payload, row, "posted_at", "published_at", "date_posted")) or None,
+        "posted_at": posted_at,
+        "posted_age_hours": posted_age_hours(posted_at),
         "first_seen_at": _text(row.get("first_seen_at")) or None,
         "last_verified_at": _text(row.get("last_verified_at")) or None,
         "canonical_url": _text(row.get("canonical_url")) or None,
         "apply_url": _approved_apply_url(row) or None,
+        "user_facing_url": _text(application_destination.get("user_facing_url") or row.get("canonical_url")) or None,
+        "job_detail_url": _text(payload.get("job_detail_url") or row.get("canonical_url")) or None,
+        "application_method": _text(payload.get("application_method") or application_destination.get("application_method")) or "unknown",
+        "application_status": _text(application_destination.get("status")) or "unknown",
         "user_state": _text((disposition or {}).get("state")) or "none",
         "evaluation": {
             "state": evaluation_state,
@@ -1424,12 +1454,17 @@ class PersonalizedJobsService:
                 record["value"] = record_value if record_value not in (None, "", []) else None
                 record["state"] = "known" if record["value"] is not None and not _is_unknown_value(record["value"]) and str(record.get("state") or "") != "unknown" else "unknown"
                 provenance = record.get("provenance") if isinstance(record.get("provenance"), Mapping) else {}
-                record["provenance"] = {
-                    "source": _text(provenance.get("source")) or payload_source,
-                    "url": _text(provenance.get("url")) or payload_url,
-                }
-                record["observed_at"] = _text(record.get("observed_at")) or payload_observed
-                record["verified_at"] = _text(record.get("verified_at")) or payload_verified
+                if record["state"] == "known":
+                    record["provenance"] = {
+                        "source": _text(provenance.get("source")) or payload_source,
+                        "url": _text(provenance.get("url")) or payload_url,
+                    }
+                    record["observed_at"] = _text(record.get("observed_at")) or payload_observed or None
+                    record["verified_at"] = _text(record.get("verified_at")) or payload_verified or None
+                else:
+                    record["provenance"] = None
+                    record["observed_at"] = None
+                    record["verified_at"] = None
                 record["status"] = "known" if record["state"] == "known" else "unknown"
             else:
                 known = value not in (None, "", []) and not _is_unknown_value(value)
@@ -1437,12 +1472,9 @@ class PersonalizedJobsService:
                     "value": value if known else None,
                     "state": "known" if known else "unknown",
                     "status": "known" if known else "unknown",
-                    "provenance": {
-                        "source": payload_source,
-                        "url": payload_url,
-                    },
-                    "observed_at": payload_observed,
-                    "verified_at": payload_verified,
+                    "provenance": {"source": payload_source, "url": payload_url} if known else None,
+                    "observed_at": payload_observed or None if known else None,
+                    "verified_at": payload_verified or None if known else None,
                     "unknown_reason": "not_verified" if not known else "",
                 }
             old = existing_fields.get(field)

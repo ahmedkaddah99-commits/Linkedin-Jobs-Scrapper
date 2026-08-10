@@ -299,14 +299,16 @@ class AdminJobImportDashboardTests(unittest.TestCase):
             self.assertEqual(inspection["job"]["title"], "Senior Backend Engineer")
             self.assertEqual(inspection["company"]["name"], "N26")
             self.assertEqual(inspection["admin"]["target_id"], "n26_greenhouse")
-            self.assertEqual(inspection["apply_url"]["classification"], "external_ats")
-            self.assertEqual(inspection["apply_url"]["status"], "verified")
+            self.assertEqual(inspection["apply_url"]["classification"], "listing_fallback")
+            self.assertEqual(inspection["apply_url"]["url_type"], "ats_job_detail")
+            self.assertEqual(inspection["apply_url"]["status"], "unresolved")
+            self.assertEqual(inspection["apply_url"]["application_method"], "job_detail")
             self.assertTrue(inspection["raw"]["source_observations"])
             self.assertTrue(inspection["raw"]["posting_versions"])
             self.assertTrue(inspection["raw"]["acquisition_requests"])
 
             resolved = app.resolve_admin_job_apply_url(canonical_job_id, actor_user_id="admin-fixture")
-            self.assertEqual(resolved["apply_url"]["status"], "verified")
+            self.assertEqual(resolved["apply_url"]["status"], "unresolved")
             self.assertTrue(any(
                 event.get("event_type") == "apply_url_resolution"
                 for event in resolved["raw"]["audit_events"]

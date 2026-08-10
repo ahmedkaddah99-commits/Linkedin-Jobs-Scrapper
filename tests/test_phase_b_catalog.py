@@ -48,7 +48,7 @@ class _Handler:
 
 
 class PhaseBCatalogTests(unittest.TestCase):
-    def test_normalization_rejects_unverified_and_non_direct_application_methods(self):
+    def test_normalization_keeps_listing_records_and_reports_missing_apply_routes(self):
         target = next(item for item in load_phase_a_manifest() if item["target_id"] == "n26_greenhouse")
         result = normalize_phase_b_jobs(
             [
@@ -77,10 +77,10 @@ class PhaseBCatalogTests(unittest.TestCase):
             ],
             target,
         )
-        self.assertEqual([job["job_id"] for job in result["accepted"]], ["accepted"])
+        self.assertEqual([job["job_id"] for job in result["accepted"]], ["accepted", "quick", "listing-only"])
         self.assertEqual(
             {item["reason"] for item in result["rejected"]},
-            {"unverified_direct_apply_destination", "unsupported_application_method"},
+            {"unsupported_application_method"},
         )
 
     def test_single_target_validation_is_durable_and_staging_only(self):
@@ -131,8 +131,9 @@ class PhaseBCatalogTests(unittest.TestCase):
             self.assertEqual(staging["freshness"], "staging")
             self.assertEqual(staging["total"], 1)
             self.assertEqual(staging["jobs"][0]["company"], "N26")
+            self.assertEqual(staging["jobs"][0]["apply_url"], "")
             self.assertEqual(
-                staging["jobs"][0]["apply_url"],
+                staging["jobs"][0]["canonical_url"],
                 "https://boards.greenhouse.io/n26/jobs/n26-1",
             )
 

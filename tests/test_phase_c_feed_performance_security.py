@@ -101,7 +101,8 @@ class PhaseCFeedPerformanceSecurityTests(unittest.TestCase):
         self.assertNotIn("source_ats", serialized)
         self.assertNotIn("observation_url", serialized)
         self.assertNotIn("provenance_url", serialized)
-        self.assertEqual(public["apply_url"], "https://boards.greenhouse.io/acme/jobs/a")
+        self.assertIsNone(public["apply_url"])
+        self.assertEqual(public["user_facing_url"], "https://boards.greenhouse.io/acme/jobs/a")
 
 
 if __name__ == "__main__":

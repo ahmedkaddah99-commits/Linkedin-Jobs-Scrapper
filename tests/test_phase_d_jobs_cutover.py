@@ -26,7 +26,8 @@ class PhaseDJobsCutoverTests(unittest.TestCase):
         self.assertNotIn("observation_url", serialized)
         self.assertNotIn("provenance_url", serialized)
         self.assertNotIn("canonical_url", serialized)
-        self.assertEqual(detail["apply_url"], "https://boards.greenhouse.io/acme/jobs/a")
+        self.assertIsNone(detail["apply_url"])
+        self.assertEqual(detail["user_facing_url"], "https://boards.greenhouse.io/acme/jobs/a")
 
     def test_filters_and_saved_search_are_read_or_preference_actions(self):
         app = self._backend()

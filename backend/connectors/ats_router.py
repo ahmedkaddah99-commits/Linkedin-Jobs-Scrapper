@@ -9,6 +9,7 @@ from urllib.parse import quote, urlparse
 import requests
 
 from backend.domain.pipeline_jobs import stable_manual_job_id
+from backend.acquisition.quality import normalize_source_timestamps
 
 
 LOGGER = logging.getLogger(__name__)
@@ -71,21 +72,55 @@ def _age_hours(posted_at: str) -> float | None:
 
 def _normalize_greenhouse_job(job: dict[str, Any], board_token: str) -> dict[str, Any]:
     job_url = str(job.get("absolute_url") or "").strip()
-    posted_at = str(job.get("updated_at") or "").strip()
+    source_timestamps = normalize_source_timestamps(
+        {**job, "source_ats": "greenhouse", "source_raw_payload": dict(job)},
+        source_ats="greenhouse",
+        provenance_url=job_url,
+    )
+    posted_at = str((source_timestamps.get("fields", {}).get("source_posted_at") or {}).get("value") or "")
     location_value = job.get("location") or {}
     location = str(location_value.get("name") or "").strip() if isinstance(location_value, dict) else ""
+    departments = job.get("departments") if isinstance(job.get("departments"), list) else []
+    offices = job.get("offices") if isinstance(job.get("offices"), list) else []
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), list) else []
+    metadata_map = {
+        str(item.get("name") or "").strip().casefold(): item.get("value")
+        for item in metadata if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
     return {
         "job_id": str(job.get("id") or stable_manual_job_id(job_url, prefix="greenhouse")),
         "title": str(job.get("title") or "").strip(),
         "url": job_url,
         "link": job_url,
         "source_url": job_url,
-        "apply_link": job_url,
+        "job_detail_url": job_url,
+        "application_url": str(job.get("application_url") or job.get("apply_url") or "").strip(),
+        "apply_link": str(job.get("apply_url") or job_url).strip(),
         "apply_link_source": "greenhouse",
         "company": board_token,
+        "source_token": board_token,
+        "source_display_name": f"{board_token} Greenhouse",
         "location": location,
         "location_raw": location,
+        "location_collection": [location] if location else [],
+        "department": ", ".join(str(item.get("name") or "").strip() for item in departments if isinstance(item, dict) and item.get("name")),
+        "office": ", ".join(str(item.get("name") or "").strip() for item in offices if isinstance(item, dict) and item.get("name")),
+        "requisition_id": str(job.get("requisition_id") or metadata_map.get("requisition id") or "").strip(),
+        "categories": {"departments": departments, "offices": offices},
+        "custom_fields": metadata,
+        "source_status": str(job.get("status") or job.get("state") or "").strip(),
+        "source_metadata": {
+            "departments": departments,
+            "offices": offices,
+            "metadata": metadata,
+            "custom_fields": metadata,
+            "metadata_map": metadata_map,
+            "categories": {"departments": departments, "offices": offices},
+        },
+        "source_raw_payload": dict(job),
+        "source_posted_at": posted_at,
         "posted_at": posted_at,
+        "source_timestamps": source_timestamps,
         "posted_time_text": posted_at,
         "posted_age_hours": _age_hours(posted_at),
         "full_description": str(job.get("content") or ""),
@@ -94,28 +129,52 @@ def _normalize_greenhouse_job(job: dict[str, Any], board_token: str) -> dict[str
 
 
 def _normalize_lever_job(job: dict[str, Any], company_slug: str) -> dict[str, Any]:
-    job_url = str(job.get("hostedUrl") or job.get("applyUrl") or "").strip()
+    job_detail_url = str(job.get("hostedUrl") or "").strip()
+    application_url = str(job.get("applyUrl") or "").strip()
+    job_url = job_detail_url or application_url
     categories = job.get("categories") or {}
     location = str(categories.get("location") or "").strip() if isinstance(categories, dict) else ""
-    created_at = job.get("createdAt")
-    posted_at = ""
-    if created_at not in (None, ""):
-        try:
-            posted_at = datetime.fromtimestamp(float(created_at) / 1000, tz=timezone.utc).isoformat()
-        except (TypeError, ValueError, OSError):
-            posted_at = ""
+    source_timestamps = normalize_source_timestamps(
+        {**job, "source_ats": "lever", "source_raw_payload": dict(job)},
+        source_ats="lever",
+        provenance_url=job_detail_url or application_url,
+    )
+    posted_at = str((source_timestamps.get("fields", {}).get("source_posted_at") or {}).get("value") or "")
+    commitment = str(categories.get("commitment") or "").strip() if isinstance(categories, dict) else ""
     return {
         "job_id": str(job.get("id") or stable_manual_job_id(job_url, prefix="lever")),
         "title": str(job.get("text") or "").strip(),
         "url": job_url,
         "link": job_url,
         "source_url": job_url,
-        "apply_link": job_url,
+        "job_detail_url": job_detail_url,
+        "application_url": application_url,
+        "apply_link": application_url or job_url,
         "apply_link_source": "lever",
         "company": company_slug,
+        "source_token": company_slug,
+        "source_display_name": f"{company_slug} Lever",
         "location": location,
         "location_raw": location,
+        "location_collection": [location] if location else [],
+        "department": str(categories.get("department") or "").strip() if isinstance(categories, dict) else "",
+        "team": str(categories.get("team") or "").strip() if isinstance(categories, dict) else "",
+        "employment_type": str(categories.get("commitment") or "").strip() if isinstance(categories, dict) else "",
+        "commitment": commitment,
+        "workplace_arrangement": str(job.get("workplaceType") or "").strip(),
+        "salary": job.get("salaryRange") or {},
+        "categories": categories,
+        "custom_fields": job.get("customFields") or job.get("custom_fields") or {},
+        "source_status": str(job.get("state") or job.get("status") or "").strip(),
+        "source_metadata": {
+            "categories": categories,
+            "salaryRange": job.get("salaryRange"),
+            "customFields": job.get("customFields") or job.get("custom_fields") or {},
+        },
+        "source_raw_payload": dict(job),
+        "source_posted_at": posted_at,
         "posted_at": posted_at,
+        "source_timestamps": source_timestamps,
         "posted_time_text": posted_at,
         "posted_age_hours": _age_hours(posted_at),
         "full_description": str(job.get("descriptionPlain") or job.get("description") or ""),
@@ -188,6 +247,7 @@ def fetch_ats_snapshot(
             "resolved_url": str(getattr(last_response, "url", "") or request_url),
             "redirected": str(getattr(last_response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
             "pages_fetched": pages_fetched,
+            "source_reported_count": total_expected or len(jobs),
         }
 
     if normalized_ats == "lever":
@@ -238,6 +298,7 @@ def fetch_ats_snapshot(
             "resolved_url": str(getattr(last_response, "url", "") or request_url),
             "redirected": str(getattr(last_response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
             "pages_fetched": pages_fetched,
+            "source_reported_count": len(postings),
         }
 
     if normalized_ats in {"workday", "personio", "recruitee", "smartrecruiters"}:

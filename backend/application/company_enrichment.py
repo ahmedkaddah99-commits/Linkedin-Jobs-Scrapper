@@ -12,6 +12,8 @@ from typing import Any, Protocol
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from bs4 import BeautifulSoup
+
 from backend.application.company_logo import (
     LogoValidationError,
     assert_public_official_host,
@@ -24,6 +26,7 @@ from backend.domain.models import utc_now_iso
 
 COMPANY_ENRICHMENT_FIELDS = (
     "website",
+    "careers_page",
     "industry",
     "company_size",
     "headquarters",
@@ -138,6 +141,7 @@ class OfficialWebsiteProvider:
     def _explicit_fields(data: Mapping[str, Any]) -> dict[str, Any]:
         mapping = {
             "url": "website",
+            "careersPage": "careers_page",
             "industry": "industry",
             "companySize": "company_size",
             "headquarters": "headquarters",
@@ -184,8 +188,31 @@ class OfficialWebsiteProvider:
         )
         if len(body) > self.max_html_bytes or "html" not in content_type.casefold():
             return {"fields": {}, "source": "official_company_website", "provenance_url": final_url, "request_count": 1}
-        data = self._json_ld(body.decode("utf-8", errors="replace"))
+        html_text = body.decode("utf-8", errors="replace")
+        data = self._json_ld(html_text)
         fields = self._explicit_fields(data)
+        # Career links are often navigation data rather than JSON-LD. Keep
+        # discovery on the approved official host and accept only clearly
+        # career/job-related links.
+        soup = BeautifulSoup(html_text, "html.parser")
+        for link in soup.find_all("a", href=True):
+            href = urljoin(final_url, str(link.get("href") or "").strip())
+            label = " ".join(link.get_text(" ", strip=True).casefold().split())
+            path = (urlparse(href).path or "").casefold()
+            if not (
+                "career" in label
+                or "job" in label
+                or "karriere" in label
+                or any(token in path for token in ("/career", "/jobs", "/karriere", "/stellen"))
+            ):
+                continue
+            try:
+                safe_careers_url = validate_official_url(href, approved_host=source_host)
+                assert_public_official_host(urlparse(safe_careers_url).hostname or "")
+            except LogoValidationError:
+                continue
+            fields.setdefault("careers_page", safe_careers_url)
+            break
         result: dict[str, Any] = {
             "fields": fields,
             "source": "official_company_website",
@@ -236,7 +263,7 @@ def _known(value: Any) -> bool:
 def _valid_value(field: str, value: Any, *, now_year: int) -> Any:
     if not _known(value):
         return None
-    if field == "website":
+    if field in {"website", "careers_page"}:
         parsed = urlparse(str(value).strip())
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             return None
@@ -335,7 +362,7 @@ class CompanyEnrichmentService:
                             field_url = raw_field.get("url") if isinstance(raw_field, Mapping) else result.provenance_url
                             fields[field] = {"value": value, "state": "known", "status": "known", "provenance": {"source": str(field_source or result.source), "url": str(field_url or result.provenance_url)}, "observed_at": str(raw_field.get("observed_at") if isinstance(raw_field, Mapping) else observed_at), "verified_at": str(raw_field.get("verified_at") if isinstance(raw_field, Mapping) else verified_at)}
                         else:
-                            fields[field] = {"value": None, "state": "unknown", "status": "unknown", "provenance": {}, "observed_at": observed_at, "verified_at": "", "unknown_reason": UNKNOWN_REASON}
+                            fields[field] = {"value": None, "state": "unknown", "status": "unknown", "provenance": None, "observed_at": None, "verified_at": None, "unknown_reason": UNKNOWN_REASON}
                     logo_key = ""
                     logo_cached = False
                     if result.logo_bytes is not None:

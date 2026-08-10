@@ -106,7 +106,8 @@ class PhaseCPersonalizedJobsTests(unittest.TestCase):
             acquire.assert_not_called()
         self.assertEqual(page["total"], 1)
         self.assertEqual(page["jobs"][0]["posting_id"], "job-a")
-        self.assertEqual(page["jobs"][0]["apply_url"], "https://boards.greenhouse.io/acme/jobs/a")
+        self.assertIsNone(page["jobs"][0]["apply_url"])
+        self.assertEqual(page["jobs"][0]["user_facing_url"], "https://boards.greenhouse.io/acme/jobs/a")
         self.assertEqual(page["evaluation"]["state"], "available")
 
         app.set_personalized_job_state("user-a", "job-a", "hidden")

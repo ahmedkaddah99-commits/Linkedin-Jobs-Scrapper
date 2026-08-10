@@ -17,6 +17,18 @@ from backend.acquisition.phase_g import (
     normalize_applicant_snapshot,
     portal_audit_gate,
 )
+from backend.acquisition.quality import (
+    DIRECT_APPLICATION_CLASSIFICATIONS,
+    canonical_employer_name,
+    classify_job_url,
+    company_name_key,
+    completeness_rules,
+    normalize_job_for_ingestion,
+    posted_age_hours,
+    posted_age_hours_for_job,
+    source_employer_name,
+    stable_content_payload,
+)
 from backend.repositories.sqlite_core import _SqliteStore
 
 
@@ -54,10 +66,12 @@ def _is_unknown_value(value: Any) -> bool:
 _COMPANY_PROFILE_FIELDS = (
     "description",
     "website",
+    "careers_page",
     "industry",
     "company_size",
     "headquarters",
     "founded_year",
+    "company_stage",
     "funding_stage",
     "total_funding",
     "funding_year",
@@ -73,8 +87,8 @@ def _profile_field(value: Any = None, *, source: str = "", provenance_url: str =
     return {
         "value": value if known else None,
         "state": "known" if known else "unknown",
-        "provenance": {"source": str(source or ""), "url": str(provenance_url or "")},
-        "verified_at": str(verified_at or "") if known else "",
+        "provenance": {"source": str(source or ""), "url": str(provenance_url or "")} if known else None,
+        "verified_at": str(verified_at or "") if known else None,
     }
 
 
@@ -83,10 +97,12 @@ def _company_profile_payload(source: Mapping[str, Any] | None, *, provenance_url
     aliases = {
         "description": ("description", "company_description", "about"),
         "website": ("website", "company_website", "site"),
+        "careers_page": ("careers_page", "careers_url", "career_page", "jobs_url"),
         "industry": ("industry", "company_industry"),
         "company_size": ("company_size", "size", "employees"),
         "headquarters": ("headquarters", "company_headquarters", "hq"),
         "founded_year": ("founded_year", "company_founded_year", "founded"),
+        "company_stage": ("company_stage", "stage", "company_growth_stage"),
         "funding_stage": ("funding_stage", "company_funding_stage"),
         "total_funding": ("total_funding", "total_funding_amount", "funding"),
         "funding_year": ("funding_year", "last_funding_year"),
@@ -787,15 +803,21 @@ class SqliteAcquisitionStore(_SqliteStore):
         job_rows = [dict(job) for job in jobs]
 
         def ingest(connection):
-            target = connection.execute(
-                "SELECT display_name, target_kind, connector, config_json, provenance_url FROM acquisition_targets WHERE target_id = ?", (target_id,)
+            target_row = connection.execute(
+                "SELECT * FROM acquisition_targets WHERE target_id = ?", (target_id,)
             ).fetchone()
-            if target is None:
+            if target_row is None:
                 raise KeyError(f"Acquisition target '{target_id}' not found.")
+            target = _dict_row(target_row)
             target_for_gate = {
                 "target_id": target_id,
                 "target_kind": str(target["target_kind"] or ""),
                 "connector": str(target["connector"] or ""),
+                "display_name": str(target["display_name"] or ""),
+                "canonical_target_url": str(target["canonical_target_url"] or ""),
+                "request_url": str(target["request_url"] or ""),
+                "provenance_url": str(target["provenance_url"] or ""),
+                "source_token": str(target["source_token"] or ""),
                 "config": _decode(target["config_json"], {}),
             }
             applicant_gate = applicant_source_gate(target_for_gate)
@@ -823,12 +845,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                     or 3
                 ),
             )
-            company_name = str(
-                target.get("canonical_company_name")
-                or config.get("canonical_company_name")
-                or target["display_name"]
-                or target_id
-            )
+            target_payload = {**target_for_gate, "target_id": target_id}
+            company_name = canonical_employer_name(target_payload) or source_employer_name(str(target["display_name"] or "")) or target_id
             entity_kind = "employer"
             company_id = self._ensure_company(
                 connection,
@@ -836,6 +854,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 entity_kind,
                 now,
                 provenance_url=str(target.get("provenance_url") or ""),
+                aliases=(str(target["display_name"] or ""), str(target["source_token"] or "")),
             )
             company_source: Mapping[str, Any] = {}
             configured_profile = config.get("company_profile") or config.get("company")
@@ -854,10 +873,12 @@ class SqliteAcquisitionStore(_SqliteStore):
                 now=now,
                 provenance_url=str(target.get("provenance_url") or ""),
             )
-            for job in job_rows:
+            quality_events: list[dict[str, Any]] = []
+            for raw_job in job_rows:
+                job = normalize_job_for_ingestion(raw_job, {**target_payload, "canonical_company_name": company_name})
                 external_id = str(job.get("job_id") or job.get("external_job_id") or "").strip()
                 title = str(job.get("title") or "").strip()
-                original_url = str(job.get("url") or job.get("link") or job.get("source_url") or "").strip()
+                original_url = str(job.get("job_detail_url") or job.get("url") or job.get("link") or job.get("source_url") or job.get("absolute_url") or "").strip()
                 if not external_id or not title or not original_url:
                     counts["rejected"] += 1
                     continue
@@ -877,7 +898,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                     # A replay is a no-op: do not create observations, versions,
                     # source aliases, or additional lifecycle transitions.
                     continue
-                location = str(job.get("location") or job.get("location_raw") or "").strip()
+                location_value = job.get("location") or job.get("location_raw") or ""
+                if isinstance(location_value, Mapping):
+                    location_value = location_value.get("name") or location_value.get("address") or ""
+                location = str(location_value).strip()
                 identity_key = self._identity_key(company_name, title, location, original_url)
                 identity_signature = self._identity_signature(company_name, title, location)
                 canonical = self._external_canonical(connection, target_id, external_id)
@@ -892,6 +916,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         location=location,
                     )
                 canonical_was_new = canonical is None
+                reopened_from_closed = bool(canonical is not None and str(canonical["lifecycle_state"] or "") == "closed")
                 if canonical is None:
                     canonical_id = f"canonical_job_{uuid4().hex}"
                     durable_identity_key = self._unique_identity_key(connection, identity_key)
@@ -993,8 +1018,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                     INSERT OR IGNORE INTO job_source_observations (
                         observation_id, canonical_job_id, target_id, cycle_id, task_id,
                         external_job_id, original_url, apply_url, source_ats,
-                        content_hash, payload_json, observed_at, active
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                        content_hash, payload_json, observed_at, active,
+                        source_display_name, source_token, source_connector, application_url,
+                        application_classification, quality_warnings_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         observation_id,
@@ -1009,6 +1036,12 @@ class SqliteAcquisitionStore(_SqliteStore):
                         payload_hash,
                         _json(job),
                         now,
+                        str(job.get("source_display_name") or target.get("display_name") or ""),
+                        str(job.get("source_token") or target.get("source_token") or ""),
+                        str(job.get("source_ats") or target.get("connector") or ""),
+                        str(job.get("application_url") or ""),
+                        str((job.get("application_destination") or {}).get("classification") if isinstance(job.get("application_destination"), Mapping) else "unknown"),
+                        _json(list(job.get("quality_warnings") or [])),
                     ),
                 )
                 persisted_observation = connection.execute(
@@ -1067,17 +1100,30 @@ class SqliteAcquisitionStore(_SqliteStore):
                     observed_at=now,
                     grace_attempts=absence_grace_attempts,
                 )
+                # Publication-quality checks are shadow validation only. The
+                # report is persisted with the version so no new quality
+                # rule can block import, scraping, enrichment, or publication.
+                job["quality_completeness"] = completeness_rules(
+                    job=job,
+                    company={"company_id": company_id, "name": company_name},
+                    source={"target_id": target_id, "source_observation_ids": [observation_id], "external_job_id": external_id},
+                    admin={"state": "staged"},
+                )
                 self._ensure_version(
                     connection,
                     canonical_id,
                     title=title,
-                    description=str(job.get("full_description") or job.get("description") or ""),
+                    description=str(job.get("description_text") or job.get("description") or job.get("full_description") or ""),
                     location=location,
-                    apply_url=str(job.get("apply_link") or original_url),
+                    # The version column is the verified direct destination;
+                    # the source/detail fallback remains in payload_json and
+                    # application_destination.user_facing_url.
+                    apply_url=str(job.get("application_url") or ""),
                     content_hash=payload_hash,
                     source_observation_id=observation_id,
                     payload=job,
                     now=now,
+                    force_new_version=reopened_from_closed,
                 )
                 applicant_snapshot = normalize_applicant_snapshot(
                     job,
@@ -1104,6 +1150,26 @@ class SqliteAcquisitionStore(_SqliteStore):
                 elif has_applicant_evidence(job):
                     counts["applicant_snapshots_blocked"] += 1
                 counts["observed"] += 1
+                for warning_code in job.get("quality_warnings") or []:
+                    quality_events.append(
+                        {
+                            "canonical_job_id": canonical_id,
+                            "company_id": company_id,
+                            "employer_name": company_name,
+                            "connector": str(target["connector"] or ""),
+                            "source_token": str(target["source_token"] or ""),
+                            "warning_code": str(warning_code),
+                            "details": {"external_job_id": external_id},
+                        }
+                    )
+
+                self._ensure_company_alias(
+                    connection,
+                    company_id,
+                    str(job.get("company") or ""),
+                    source=str(target["target_id"] or ""),
+                    now=now,
+                )
 
             if complete_snapshot and valid_snapshot:
                 missing_rows = connection.execute(
@@ -1159,7 +1225,15 @@ class SqliteAcquisitionStore(_SqliteStore):
                         (now, cycle_id, now, target_id, str(row["canonical_job_id"])),
                     )
                     self._recompute_lifecycle(connection, str(row["canonical_job_id"]), now=now)
-            return {**counts, "valid_snapshot": bool(valid_snapshot), "complete_snapshot": bool(complete_snapshot)}
+            for event in quality_events:
+                self._record_quality_event(
+                    connection,
+                    cycle_id=cycle_id,
+                    task_id=task_id,
+                    target_id=target_id,
+                    **event,
+                )
+            return {**counts, "valid_snapshot": bool(valid_snapshot), "complete_snapshot": bool(complete_snapshot), "quality_warnings": [item["warning_code"] for item in quality_events]}
 
         return self._run_transaction(ingest)
 
@@ -1272,6 +1346,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     requests_avoided=?, credits_avoided=?, jobs_observed=?, jobs_new=?, jobs_updated=?,
                     jobs_unchanged=?, jobs_closed=?, jobs_rejected=?, jobs_duplicates=?,
                     jobs_published=COALESCE(?, jobs_published),
+                    reconciliation_json=?, quality_warnings_json=?,
                     error_code=?, error_message=?, updated_at=?
                 WHERE task_id = ?
                 """,
@@ -1291,6 +1366,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                     max(0, int(result.get("rejected") or 0)),
                     max(0, int(result.get("duplicates") or 0)),
                     (max(0, int(result.get("jobs_published") or 0)) if "jobs_published" in result else None),
+                    _json(result.get("reconciliation") or {}),
+                    _json(list(result.get("quality_warnings") or [])),
                     error_code,
                     error_message,
                     now,
@@ -1640,6 +1717,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                     "jobs_published",
                 }
             }
+            payload["task"]["reconciliation"] = _decode(payload["task"].pop("task_reconciliation_json", "{}"), {})
+            payload["task"]["quality_warnings"] = _decode(payload["task"].pop("task_quality_warnings_json", "[]"), [])
             payload["requests"] = [self._request_payload(item) for item in target_requests]
             payload["detail_requests"] = payload["requests"]
             payload["requested_urls"] = [item["request_url"] for item in payload["requests"]]
@@ -1874,7 +1953,40 @@ class SqliteAcquisitionStore(_SqliteStore):
             },
             "last_valid_publication": _dict_row(last_publication) if last_publication is not None else None,
         }
+        report["quality"] = self.get_quality_metrics(cycle_id)
         return report
+
+    def get_quality_metrics(self, cycle_id: str = "") -> dict[str, Any]:
+        """Return report-only quality counts by source dimensions."""
+        where = "WHERE cycle_id=?" if str(cycle_id or "").strip() else ""
+        params: tuple[Any, ...] = (str(cycle_id),) if where else ()
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT warning_code, severity, connector, target_id, employer_name, source_token,
+                       COUNT(*) AS count
+                FROM acquisition_quality_events
+                {where}
+                GROUP BY warning_code, severity, connector, target_id, employer_name, source_token
+                ORDER BY count DESC, warning_code
+                """,
+                params,
+            ).fetchall()
+        by_warning: dict[str, int] = {}
+        dimensions: list[dict[str, Any]] = []
+        for row in rows:
+            warning = str(row["warning_code"] or "unknown")
+            by_warning[warning] = by_warning.get(warning, 0) + int(row["count"] or 0)
+            dimensions.append({
+                "warning_code": warning,
+                "severity": str(row["severity"] or "warning"),
+                "connector": str(row["connector"] or ""),
+                "target_id": str(row["target_id"] or ""),
+                "employer_name": str(row["employer_name"] or ""),
+                "source_token": str(row["source_token"] or ""),
+                "count": int(row["count"] or 0),
+            })
+        return {"mode": "report_only", "event_count": sum(by_warning.values()), "by_warning": by_warning, "by_source": dimensions}
 
     def get_latest_report(self) -> dict[str, Any] | None:
         with self._connect() as connection:
@@ -1939,6 +2051,16 @@ class SqliteAcquisitionStore(_SqliteStore):
             "attempts": [_dict_row(row) for row in attempts],
             "requests": [self._request_payload(_dict_row(row)) for row in requests],
         }
+
+    def get_source_state_summary(self, target_id: str) -> dict[str, int]:
+        """Return active/stale/unknown/closed source-state counts for reconciliation."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT lifecycle_state, COUNT(*) AS count FROM job_source_states WHERE target_id=? GROUP BY lifecycle_state",
+                (str(target_id or ""),),
+            ).fetchall()
+        return {str(row["lifecycle_state"] or "unknown"): int(row["count"] or 0) for row in rows}
 
     # Admin Job Import dashboard -----------------------------------------
 
@@ -2324,7 +2446,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                    j.title, j.location, j.canonical_url, j.lifecycle_state,
                    j.first_seen_at, j.last_seen_at, j.last_verified_at,
                    j.current_version_id, j.identity_key, j.identity_signature,
-                   v.version_number, v.description, v.apply_url,
+                   v.version_number, v.description, v.apply_url, v.payload_json AS version_payload_json,
                    o.target_id AS source_id, o.external_job_id, o.source_ats,
                    o.original_url, o.observed_at, t.connector, t.provider,
                    COALESCE((
@@ -2353,7 +2475,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         """
         summary_query = f"""
             SELECT COUNT(*) AS total,
-                   SUM(CASE WHEN COALESCE(v.apply_url, '') != '' THEN 1 ELSE 0 END) AS apply_url_present,
+                   SUM(CASE WHEN json_extract(COALESCE(v.payload_json, '{{}}'), '$.application_destination.status') = 'verified' THEN 1 ELSE 0 END) AS apply_url_present,
                    SUM(CASE WHEN COALESCE(p.profile_json, '') = ''
                                   OR p.profile_json LIKE '%\"state\":\"unknown\"%'
                             THEN 1 ELSE 0 END) AS company_profiles_incomplete
@@ -2374,10 +2496,19 @@ class SqliteAcquisitionStore(_SqliteStore):
         jobs: list[dict[str, Any]] = []
         for row in rows:
             item = _dict_row(row)
+            version_payload = _decode(item.pop("version_payload_json", "{}"), {})
+            if not isinstance(version_payload, Mapping):
+                version_payload = {}
             decision = str(item.pop("review_decision") or "").strip()
             live = bool(int(item.pop("is_live") or 0))
             item["state"] = "Published" if live else (decision.replace("_", " ").title() if decision else "Review")
-            item["apply_status"] = "present" if str(item.get("apply_url") or "").strip() else "missing"
+            destination = version_payload.get("application_destination") if isinstance(version_payload.get("application_destination"), Mapping) else {}
+            item["application_method"] = version_payload.get("application_method") or "unknown"
+            item["application_classification"] = destination.get("classification") or "unknown"
+            item["apply_status"] = "present" if destination.get("status") == "verified" else ("unresolved" if destination else "missing")
+            item["posted_age_hours"] = posted_age_hours(
+                version_payload.get("posted_at") or version_payload.get("datePosted")
+            )
             item["source"] = str(item.get("connector") or item.get("source_id") or "Unknown")
             item["freshness"] = item.get("last_seen_at") or item.get("observed_at") or None
             jobs.append(item)
@@ -2512,6 +2643,14 @@ class SqliteAcquisitionStore(_SqliteStore):
                 f"SELECT * FROM job_source_observation_relationships WHERE observation_id IN ({observation_placeholders}) OR related_observation_id IN ({observation_placeholders}) ORDER BY created_at DESC",
                 (*observation_ids, *observation_ids),
             ).fetchall() if observation_ids else []
+            quality_events = connection.execute(
+                "SELECT * FROM acquisition_quality_events WHERE canonical_job_id=? ORDER BY created_at DESC, event_id DESC",
+                (job_id,),
+            ).fetchall()
+            version_quality = connection.execute(
+                "SELECT * FROM acquisition_version_quality WHERE canonical_job_id=? ORDER BY calculated_at DESC, version_id DESC",
+                (job_id,),
+            ).fetchall()
 
         profile = _decode(base.get("profile_json"), {})
         profile_fields = profile.get("fields") if isinstance(profile, Mapping) else {}
@@ -2550,6 +2689,9 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "content_hash": base.get("content_hash") or None,
                 "description": base.get("version_description") or current_payload.get("description") or None,
                 "full_description": base.get("version_description") or current_payload.get("full_description") or None,
+                "description_raw": current_payload.get("description_raw") or None,
+                "description_html": current_payload.get("description_html") or None,
+                "description_text": current_payload.get("description_text") or None,
                 "apply_url": base.get("version_apply_url") or current_payload.get("apply_url") or None,
                 "source_url": base.get("canonical_url") or None,
             }
@@ -2561,6 +2703,17 @@ class SqliteAcquisitionStore(_SqliteStore):
         if not connector and observations:
             connector = str(observations[0]["source_ats"] or "").casefold()
         target = target_items[0] if target_items else {}
+        normalized_current = normalize_job_for_ingestion(current_payload, target)
+        job["application_destination"] = normalized_current.get("application_destination") or {}
+        job["application_method"] = normalized_current.get("application_method") or "unknown"
+        job["application_url"] = normalized_current.get("application_url") or ""
+        job["job_detail_url"] = normalized_current.get("job_detail_url") or job.get("canonical_url") or ""
+        job["normalized_source_metadata"] = normalized_current.get("normalized_source_metadata") or {}
+        job["source_timestamps"] = normalized_current.get("source_timestamps") or {}
+        if isinstance(job["normalized_source_metadata"], Mapping):
+            job["posted_at"] = (((job["normalized_source_metadata"].get("fields") or {}).get("posted_at") or {}).get("value"))
+        job["quality_warnings"] = normalized_current.get("quality_warnings") or []
+        job["posted_age_hours"] = posted_age_hours_for_job(normalized_current)
         profile_website = str(company.get("website") or "")
         company_hosts = {hostname_for_url(profile_website)} if profile_website else set()
         target_hosts = {
@@ -2582,23 +2735,28 @@ class SqliteAcquisitionStore(_SqliteStore):
                 return
             seen_candidates.add(url)
             host = hostname_for_url(url)
-            source_key = source.casefold()
-            if source_key in {"apply_url", "apply_link", "hostedurl", "absolute_url"} and (connector in {"greenhouse", "lever"} or any(host == suffix or host.endswith(f".{suffix}") for suffix in ats_suffixes)):
-                classification = "external_ats"
-            elif host and any(host == item or host.endswith(f".{item}") for item in company_hosts if item):
-                classification = "external_employer"
-            elif host and any(host == suffix or host.endswith(f".{suffix}") for suffix in ats_suffixes):
-                classification = "external_ats"
-            elif url in source_urls or host in target_hosts or any(host == item or host.endswith(f".{item}") for item in portal_hosts):
-                classification = "listing_fallback"
-            else:
-                classification = "unknown"
+            url_type = classify_job_url(
+                url,
+                target={**target, "official_employer_hosts": list(company_hosts | target_hosts)},
+                source_ats=connector,
+            )
+            classification = {
+                "employer_application": "external_employer",
+                "ats_application": "external_ats",
+                "employer_job_detail": "listing_fallback",
+                "ats_job_detail": "listing_fallback",
+                "careers_index": "listing_fallback",
+                "search_results": "listing_fallback",
+                "portal_listing": "listing_fallback",
+            }.get(url_type, "unknown")
             candidates.append(
                 {
                     "url": url,
                     "source": source,
                     "path": path or None,
                     "classification": classification,
+                    "url_type": url_type,
+                    "verified_direct": url_type in DIRECT_APPLICATION_CLASSIFICATIONS,
                     "evidence": [evidence] if evidence else [],
                 }
             )
@@ -2628,7 +2786,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             add_candidate(row["url"], "url_alias", f"url_alias:{row['alias_id']}")
 
         stored_apply = str(job.get("apply_url") or "").strip()
-        direct_candidates = [item for item in candidates if item["classification"] in {"external_employer", "external_ats"}]
+        direct_candidates = [item for item in candidates if item.get("verified_direct")]
         selected_apply = next((item for item in direct_candidates if item["url"] == stored_apply), None)
         selected_apply = selected_apply or (direct_candidates[0] if direct_candidates else None)
         audit_rows = self._inspection_rows(audit_events, ("payload_json",))
@@ -2643,11 +2801,11 @@ class SqliteAcquisitionStore(_SqliteStore):
             if source_verified:
                 apply_evidence.append("phase_b_official_apply_destination_gate")
         elif candidates:
-            apply_status = "invalid"
+            apply_status = "unresolved"
             apply_classification = candidates[0]["classification"]
             resolved_url = None
-            user_facing_url = None
-            apply_evidence = ["Only listing, portal, or unclassified URL candidates were found."]
+            user_facing_url = candidates[0].get("url")
+            apply_evidence = ["Only a job-detail, listing, portal, or unclassified URL candidate was found; it is not a verified direct-apply destination."]
         else:
             apply_status = "missing"
             apply_classification = "unknown"
@@ -2661,6 +2819,9 @@ class SqliteAcquisitionStore(_SqliteStore):
             "user_facing_url": user_facing_url,
             "status": apply_status,
             "classification": apply_classification,
+            "url_type": (selected_apply or (candidates[0] if candidates else {})).get("url_type", "unknown"),
+            "application_method": job.get("application_method") or "unknown",
+            "warnings": list(dict.fromkeys(job.get("quality_warnings") or [])),
             "verified_at": (resolution_audits[0].get("created_at") if resolution_audits else (base.get("last_verified_at") or None)) if apply_status == "verified" else None,
             "evidence": list(dict.fromkeys(apply_evidence)),
         }
@@ -2681,6 +2842,11 @@ class SqliteAcquisitionStore(_SqliteStore):
         external_id_payloads = self._inspection_rows(external_ids)
         relationship_payloads = self._inspection_rows(relationships)
         observation_relationship_payloads = self._inspection_rows(observation_relationships)
+        quality_event_payloads = self._inspection_rows(quality_events, ("details_json",))
+        version_quality_payloads = [
+            {**_dict_row(row), "report": _decode(row["report_json"], {})}
+            for row in version_quality
+        ]
 
         latest_decision = decision_payloads[0] if decision_payloads else {}
         current_publication = next((item for item in publication_payloads if item.get("current_head")), None)
@@ -2739,6 +2905,8 @@ class SqliteAcquisitionStore(_SqliteStore):
             "url_aliases": alias_payloads,
             "relationships": relationship_payloads,
             "observation_relationships": observation_relationship_payloads,
+            "quality_events": quality_event_payloads,
+            "version_quality": version_quality_payloads,
         }
         job_fields = {
             key: job.get(key)
@@ -2746,27 +2914,33 @@ class SqliteAcquisitionStore(_SqliteStore):
         }
         company_fields = {
             key: company.get(key)
-            for key in ("canonical_company_id", "name", "website", "industry", "company_size", "headquarters", "founded_year", "funding_stage", "total_funding", "benefits", "sponsorship", "logo_url")
+            for key in ("canonical_company_id", "name", "website", "careers_page", "industry", "company_size", "headquarters", "founded_year", "company_stage", "funding_stage", "total_funding", "funding_year", "leadership_type", "benefits", "sponsorship", "logo_url")
         }
         admin_fields = {
             key: admin.get(key)
             for key in ("canonical_job_id", "canonical_company_id", "target_id", "connector", "provider", "source_observation_ids", "posting_version_id", "content_hash", "first_seen_at", "last_seen_at", "review_state", "publication_status")
         }
-        coverage = {
-            "job": self._inspection_coverage(job_fields),
-            "company": self._inspection_coverage(company_fields),
-            "admin": self._inspection_coverage(admin_fields),
+        source_fields = {
+            "target_id": admin.get("target_id"),
+            "source_observation_ids": observation_ids,
+            "external_job_id": external_job_ids[0] if external_job_ids else "",
         }
+        coverage = completeness_rules(job=job, company=company, source=source_fields, admin=admin)
+        for category in ("job", "company", "source", "admin"):
+            if category in coverage.get("categories", {}):
+                coverage[category] = coverage["categories"][category]
         coverage["overall_percent"] = round(
-            100 * sum(item["present"] for item in (coverage["job"], coverage["company"], coverage["admin"]))
-            / max(1, sum(item["total"] for item in (coverage["job"], coverage["company"], coverage["admin"])))
+            100 * int(coverage["overall"]["present"])
+            / max(1, int(coverage["overall"]["total"])),
         )
         coverage["critical_checks"] = [
-            {"name": "Canonical identity", "status": "pass" if job_id else "fail", "detail": job_id or "Missing canonical job ID"},
-            {"name": "Direct employer or ATS Apply URL", "status": "pass" if apply_status == "verified" else "fail", "detail": apply_url["evidence"]},
-            {"name": "Full description", "status": "pass" if job.get("description") else "fail", "detail": "Stored" if job.get("description") else "Missing"},
-            {"name": "Source provenance", "status": "pass" if observation_ids else "fail", "detail": observation_ids or "Missing"},
-            {"name": "Company identity", "status": "pass" if company_id else "fail", "detail": company_id or "Missing"},
+            {
+                "name": item["name"].replace("_", " ").title(),
+                "status": "pass" if item["status"] == "pass" else "warning",
+                "detail": "Rule passed" if item["status"] == "pass" else "Report-only quality warning",
+                "blocking": False,
+            }
+            for item in coverage.get("all_rules", [])
         ]
         return {
             "job": job,
@@ -3196,11 +3370,32 @@ class SqliteAcquisitionStore(_SqliteStore):
         now: str,
         *,
         provenance_url: str = "",
+        aliases: Iterable[str] = (),
     ) -> str:
+        normalized_name = company_name_key(name)
         row = connection.execute(
             "SELECT company_id FROM canonical_companies WHERE canonical_name = ? AND entity_kind = ?",
             (name, entity_kind),
         ).fetchone()
+        if row is None and normalized_name:
+            candidates = connection.execute(
+                "SELECT company_id, canonical_name FROM canonical_companies WHERE entity_kind = ?",
+                (entity_kind,),
+            ).fetchall()
+            row = next(
+                (candidate for candidate in candidates if company_name_key(candidate["canonical_name"]) == normalized_name),
+                None,
+            )
+        if row is None and normalized_name:
+            alias_rows = connection.execute(
+                "SELECT company_id FROM canonical_company_aliases WHERE alias_key=?",
+                (normalized_name,),
+            ).fetchall()
+            if len(alias_rows) == 1:
+                row = connection.execute(
+                    "SELECT company_id FROM canonical_companies WHERE company_id=? AND entity_kind=?",
+                    (str(alias_rows[0]["company_id"]), entity_kind),
+                ).fetchone()
         if row is not None:
             if provenance_url:
                 connection.execute(
@@ -3208,7 +3403,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                     "WHERE company_id=? AND provenance_url=''",
                     (provenance_url, now, str(row["company_id"])),
                 )
-            return str(row["company_id"])
+            company_id = str(row["company_id"])
+            for alias in aliases:
+                SqliteAcquisitionStore._ensure_company_alias(connection, company_id, alias, source="target", now=now)
+            return company_id
         company_id = f"canonical_company_{uuid4().hex}"
         connection.execute(
             """
@@ -3218,7 +3416,64 @@ class SqliteAcquisitionStore(_SqliteStore):
             """,
             (company_id, name, entity_kind, provenance_url, now, now),
         )
+        for alias in aliases:
+            SqliteAcquisitionStore._ensure_company_alias(connection, company_id, alias, source="target", now=now)
         return company_id
+
+    @staticmethod
+    def _ensure_company_alias(connection, company_id: str, alias: str, *, source: str, now: str) -> None:
+        display = str(alias or "").strip()
+        alias_key = company_name_key(display)
+        if not alias_key:
+            return
+        owner = connection.execute(
+            "SELECT company_id FROM canonical_company_aliases WHERE alias_key=?",
+            (alias_key,),
+        ).fetchone()
+        if owner is not None and str(owner["company_id"]) != str(company_id):
+            return
+        connection.execute(
+            """
+            INSERT INTO canonical_company_aliases (
+                alias_id, company_id, alias_key, alias_display, source, confidence, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'verified', ?, ?)
+            ON CONFLICT(alias_key) DO UPDATE SET
+                company_id=excluded.company_id, alias_display=excluded.alias_display,
+                source=excluded.source, updated_at=excluded.updated_at
+            """,
+            (f"company_alias_{uuid4().hex}", str(company_id), alias_key, display, str(source or ""), now, now),
+        )
+
+    @staticmethod
+    def _record_quality_event(
+        connection,
+        *,
+        cycle_id: str,
+        task_id: str,
+        target_id: str,
+        canonical_job_id: str,
+        company_id: str,
+        employer_name: str,
+        connector: str,
+        source_token: str,
+        warning_code: str,
+        details: Mapping[str, Any] | None = None,
+        severity: str = "warning",
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO acquisition_quality_events (
+                event_id, cycle_id, task_id, target_id, canonical_job_id, company_id,
+                employer_name, connector, source_token, warning_code, severity, details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"quality_event_{uuid4().hex}", str(cycle_id or ""), str(task_id or ""), str(target_id or ""),
+                str(canonical_job_id or ""), str(company_id or ""), str(employer_name or ""),
+                str(connector or ""), str(source_token or ""), str(warning_code or "unknown"),
+                str(severity or "warning"), _json(dict(details or {})), utc_now_iso(),
+            ),
+        )
 
     @staticmethod
     def _ensure_company_profile(
@@ -3434,15 +3689,21 @@ class SqliteAcquisitionStore(_SqliteStore):
 
     @staticmethod
     def _payload_hash(job: Mapping[str, Any]) -> str:
-        return hashlib.sha256(_json(dict(job)).encode("utf-8")).hexdigest()
+        return hashlib.sha256(_json(stable_content_payload(job)).encode("utf-8")).hexdigest()
 
     @staticmethod
     def _current_content_hash(connection, canonical_job_id: str) -> str:
         row = connection.execute(
-            "SELECT content_hash FROM job_posting_versions WHERE canonical_job_id = ? ORDER BY version_number DESC LIMIT 1",
+            """
+            SELECT COALESCE(NULLIF(q.stable_content_hash, ''), v.content_hash) AS stable_hash
+            FROM job_posting_versions v
+            LEFT JOIN acquisition_version_quality q ON q.version_id=v.version_id
+            WHERE v.canonical_job_id = ?
+            ORDER BY v.version_number DESC LIMIT 1
+            """,
             (canonical_job_id,),
         ).fetchone()
-        return str(row["content_hash"] or "") if row is not None else ""
+        return str(row["stable_hash"] or "") if row is not None else ""
 
     @staticmethod
     def _ensure_version(
@@ -3457,12 +3718,20 @@ class SqliteAcquisitionStore(_SqliteStore):
         source_observation_id: str,
         payload: Mapping[str, Any],
         now: str,
+        force_new_version: bool = False,
     ) -> None:
         current = connection.execute(
-            "SELECT version_id, content_hash, version_number FROM job_posting_versions WHERE canonical_job_id = ? ORDER BY version_number DESC LIMIT 1",
+            """
+            SELECT v.version_id, v.content_hash, v.version_number,
+                   COALESCE(NULLIF(q.stable_content_hash, ''), v.content_hash) AS stable_hash
+            FROM job_posting_versions v
+            LEFT JOIN acquisition_version_quality q ON q.version_id=v.version_id
+            WHERE v.canonical_job_id = ?
+            ORDER BY v.version_number DESC LIMIT 1
+            """,
             (canonical_job_id,),
         ).fetchone()
-        if current is not None and str(current["content_hash"] or "") == content_hash:
+        if not force_new_version and current is not None and str(current["stable_hash"] or "") == content_hash:
             connection.execute(
                 "UPDATE canonical_jobs SET current_version_id = ? WHERE canonical_job_id = ?",
                 (str(current["version_id"]), canonical_job_id),
@@ -3488,6 +3757,25 @@ class SqliteAcquisitionStore(_SqliteStore):
                 apply_url,
                 source_observation_id,
                 _json(dict(payload)),
+                now,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO acquisition_version_quality (
+                version_id, canonical_job_id, stable_content_hash, redundant, report_json, calculated_at
+            ) VALUES (?, ?, ?, 0, ?, ?)
+            """,
+            (
+                version_id,
+                canonical_job_id,
+                content_hash,
+                _json({
+                    "warnings": list(payload.get("quality_warnings") or []),
+                    "application": payload.get("application_destination") or {},
+                    "normalized_metadata": payload.get("normalized_source_metadata") or {},
+                    "completeness": payload.get("quality_completeness") or {},
+                }),
                 now,
             ),
         )

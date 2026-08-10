@@ -48,6 +48,9 @@ _SECTION_ALIASES = {
     "benefits": ("benefits", "what we offer", "perks", "our offer"),
     "salary": ("salary", "compensation", "pay", "remuneration"),
     "workplace": ("workplace", "work arrangement", "working model", "location"),
+    "employment": ("employment", "employment type", "commitment", "job type"),
+    "seniority": ("seniority", "level", "experience level", "career level"),
+    "experience": ("experience", "years of experience", "required experience", "professional experience"),
     "application": ("how to apply", "application", "applying", "application details", "process"),
 }
 _CONCEPT_GROUPS = (
@@ -183,8 +186,49 @@ def _salary(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     return result or None
 
 
+def _observation_context(row: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "source_observation_id": _text(
+            row.get("source_observation_id") or row.get("observation_id")
+            or payload.get("source_observation_id") or payload.get("observation_id")
+        ) or None,
+        "source_url": _text(
+            row.get("observation_original_url") or row.get("source_url") or row.get("canonical_url")
+            or payload.get("source_url") or payload.get("url")
+        ) or None,
+        "observed_at": _text(
+            row.get("observation_observed_at") or row.get("observed_at") or payload.get("observed_at")
+        ) or None,
+    }
+
+
+def _extraction_states(
+    values: Mapping[str, Any],
+    *,
+    source: str = "posting_text",
+    method: str = "deterministic_grounded",
+    source_observation_id: str | None = None,
+    source_url: str | None = None,
+    observed_at: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Expose Value+State+provenance for every extracted field."""
+    return {
+        str(field): {
+            "value": value,
+            "state": "present" if value not in (None, "", []) else "missing",
+            "provenance": source,
+            "method": method,
+            "source_observation_id": source_observation_id,
+            "source_url": source_url,
+            "observed_at": observed_at,
+        }
+        for field, value in values.items()
+    }
+
+
 def _deterministic_description(row: Mapping[str, Any]) -> dict[str, Any]:
     payload = _payload(row)
+    observation = _observation_context(row, payload)
     description = _text(row.get("description") or payload.get("description"))
     sections = _description_sections(description)
     responsibilities = sections.get("responsibilities") or _list_from_payload(payload, "responsibilities", "main_responsibilities")
@@ -202,6 +246,18 @@ def _deterministic_description(row: Mapping[str, Any]) -> dict[str, Any]:
         _value(payload, row, "work_arrangement", "workplace", "workplace_type", "remote_type"),
         _sentences(" ".join(sections.get("workplace") or []), limit=1),
     )
+    employment = _first_nonempty(
+        _value(payload, row, "employment_type", "employmentType", "commitment", "job_type"),
+        _sentences(" ".join(sections.get("employment") or []), limit=1),
+    )
+    seniority = _first_nonempty(
+        _value(payload, row, "seniority", "experience_level", "level"),
+        _sentences(" ".join(sections.get("seniority") or []), limit=1),
+    )
+    years_experience = _first_nonempty(
+        _value(payload, row, "years_experience", "experience_years", "minimum_experience"),
+        _sentences(" ".join(sections.get("experience") or []), limit=1),
+    )
     salary = _salary(payload) or (_sentences(" ".join(sections.get("salary") or []), limit=1) or None)
     application = sections.get("application") or _list_from_payload(payload, "application_details", "application_requirements", "how_to_apply")
     overview = _sentences(" ".join(sections.get("overview") or []), limit=2) or _sentences(description, limit=2)
@@ -216,6 +272,9 @@ def _deterministic_description(row: Mapping[str, Any]) -> dict[str, Any]:
         "benefits": benefits or None,
         "salary": salary,
         "workplace_arrangement": workplace,
+        "employment_type": employment,
+        "seniority": seniority,
+        "years_experience": years_experience,
         "unknown_fields": [
             field for field, value in {
                 "responsibilities": responsibilities,
@@ -227,9 +286,16 @@ def _deterministic_description(row: Mapping[str, Any]) -> dict[str, Any]:
                 "benefits": benefits,
                 "salary": salary,
                 "workplace_arrangement": workplace,
+                "employment_type": employment,
+                "seniority": seniority,
+                "years_experience": years_experience,
             }.items() if not value
         ],
     }
+    structured["extraction"] = _extraction_states({
+        field: structured.get(field)
+        for field in ("responsibilities", "requirements", "skills", "education", "languages", "authorization", "benefits", "salary", "workplace_arrangement", "employment_type", "seniority", "years_experience")
+    }, **observation)
     summary = {
         "overview": overview or None,
         "main_responsibilities": responsibilities or None,
@@ -246,6 +312,12 @@ def _deterministic_description(row: Mapping[str, Any]) -> dict[str, Any]:
             }.items() if not value
         ],
     }
+    summary["extraction"] = _extraction_states({
+        field: summary.get(field)
+        for field in ("overview", "main_responsibilities", "essential_requirements", "preferred_qualifications", "important_application_details")
+    }, **observation)
+    structured["extraction_fields"] = dict(structured["extraction"])
+    summary["extraction_fields"] = dict(summary["extraction"])
     return {"summary": summary, "structured_description": structured, "provider": "deterministic_grounded", "model": "", "prompt_version": SUMMARY_PROMPT_VERSION}
 
 
@@ -274,7 +346,20 @@ def _normalize_ai_result(value: Any, fallback: Mapping[str, Any]) -> dict[str, A
         if isinstance(structured.get("salary"), Mapping):
             result["structured_description"]["salary"] = dict(structured["salary"])
     result["summary"]["unknown_fields"] = [key for key in ("overview", "main_responsibilities", "essential_requirements", "preferred_qualifications", "important_application_details") if not result["summary"].get(key)]
-    result["structured_description"]["unknown_fields"] = [key for key in ("responsibilities", "requirements", "skills", "education", "languages", "authorization", "benefits", "salary", "workplace_arrangement") if not result["structured_description"].get(key)]
+    result["structured_description"]["unknown_fields"] = [key for key in ("responsibilities", "requirements", "skills", "education", "languages", "authorization", "benefits", "salary", "workplace_arrangement", "employment_type", "seniority", "years_experience") if not result["structured_description"].get(key)]
+    fallback_structured = fallback.get("structured_description") if isinstance(fallback.get("structured_description"), Mapping) else {}
+    fallback_extraction = fallback_structured.get("extraction") if isinstance(fallback_structured, Mapping) else {}
+    context = next(iter(fallback_extraction.values()), {}) if isinstance(fallback_extraction, Mapping) else {}
+    result["summary"]["extraction"] = _extraction_states({
+        key: result["summary"].get(key)
+        for key in ("overview", "main_responsibilities", "essential_requirements", "preferred_qualifications", "important_application_details")
+    }, method="gemini_grounded" if value else "deterministic_grounded")
+    result["structured_description"]["extraction"] = _extraction_states({
+        key: result["structured_description"].get(key)
+        for key in ("responsibilities", "requirements", "skills", "education", "languages", "authorization", "benefits", "salary", "workplace_arrangement", "employment_type", "seniority", "years_experience")
+    }, method="gemini_grounded" if value else "deterministic_grounded", source_observation_id=context.get("source_observation_id"), source_url=context.get("source_url"), observed_at=context.get("observed_at"))
+    result["summary"]["extraction_fields"] = dict(result["summary"]["extraction"])
+    result["structured_description"]["extraction_fields"] = dict(result["structured_description"]["extraction"])
     return result
 
 
@@ -340,6 +425,10 @@ def build_description_intelligence(row: Mapping[str, Any]) -> dict[str, Any]:
         "title": _first_nonempty(row.get("title"), payload.get("title")),
         "location": _first_nonempty(row.get("version_location"), row.get("location"), payload.get("location")),
         "description": original_description,
+        "description_raw": payload.get("description_raw") or original_description,
+        "description_html": payload.get("description_html") or None,
+        "description_text": payload.get("description_text") or original_description,
+        "description_decoding": payload.get("description_decoding") or None,
         "canonical_url": _text(row.get("canonical_url")) or None,
         "apply_url": _text(row.get("apply_url")) or None,
         "observed_at": _text(row.get("observation_observed_at")) or None,
@@ -368,6 +457,10 @@ def build_preserved_original_posting(row: Mapping[str, Any]) -> dict[str, Any]:
         "title": _first_nonempty(row.get("title"), payload.get("title")),
         "location": _first_nonempty(row.get("version_location"), row.get("location"), payload.get("location")),
         "description": str(raw_description) if raw_description is not None else "",
+        "description_raw": payload.get("description_raw") or (str(raw_description) if raw_description is not None else ""),
+        "description_html": payload.get("description_html") or None,
+        "description_text": payload.get("description_text") or (str(raw_description) if raw_description is not None else ""),
+        "description_decoding": payload.get("description_decoding") or None,
         "canonical_url": _text(row.get("canonical_url")) or None,
         "apply_url": _text(row.get("apply_url")) or None,
         "observed_at": _text(row.get("observation_observed_at")) or None,

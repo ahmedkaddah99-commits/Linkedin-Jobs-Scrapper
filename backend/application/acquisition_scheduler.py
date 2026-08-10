@@ -779,6 +779,37 @@ class PhaseAAcquisitionScheduler:
             normalized = normalize_phase_b_jobs(raw_jobs, target)
             jobs = list(normalized.get("accepted") or [])
             rejections = list(normalized.get("rejected") or [])
+            quality_warnings = list(dict.fromkeys(
+                str(warning)
+                for job in jobs
+                for warning in (job.get("quality_warnings") or [])
+                if str(warning).strip()
+            ))
+            raw_external_ids = [
+                str(item.get("job_id") or item.get("external_job_id") or item.get("id") or "").strip()
+                for item in raw_jobs
+            ]
+            distinct_external_ids = sorted({item for item in raw_external_ids if item})
+            source_reported_count = fetched.get("source_reported_count")
+            try:
+                source_reported_count = int(source_reported_count) if source_reported_count not in (None, "") else None
+            except (TypeError, ValueError):
+                source_reported_count = None
+            reconciliation = {
+                "schema_version": "batch_reconciliation_v1",
+                "source_reported_job_count": source_reported_count,
+                "observed_rows": len(raw_jobs),
+                "distinct_external_job_ids": len(distinct_external_ids),
+                "active_source_states": {},
+                "new_canonical_jobs": 0,
+                "updated_canonical_jobs": 0,
+                "unchanged_jobs": 0,
+                "duplicates": len(raw_jobs) - len(distinct_external_ids),
+                "rejections": len(rejections),
+                "missing_jobs": max(0, source_reported_count - len(distinct_external_ids)) if source_reported_count is not None else None,
+                "unexplained_count_difference": abs(source_reported_count - len(distinct_external_ids)) if source_reported_count is not None else None,
+                "source_reported_count_available": source_reported_count is not None,
+            }
             complete_snapshot = bool(fetched.get("complete_snapshot"))
             credible_evidence = bool(fetched.get("credible_evidence"))
             valid_snapshot = complete_snapshot and credible_evidence
@@ -799,6 +830,8 @@ class PhaseAAcquisitionScheduler:
                     "accepted_jobs": len(jobs),
                     "rejected_jobs": len(rejections),
                     "rejections": rejections,
+                    "reconciliation": reconciliation,
+                    "quality_warnings": quality_warnings,
                     "pages_fetched": int(fetched.get("pages_fetched") or 1),
                     "usage_events": usage_events,
                     "source_log": fetched.get("source_log") or {},
@@ -824,6 +857,16 @@ class PhaseAAcquisitionScheduler:
                 valid_snapshot=valid_snapshot,
             )
             counts["rejected"] = int(counts.get("rejected") or 0) + len(rejections)
+            reconciliation.update(
+                {
+                    "new_canonical_jobs": int(counts.get("new") or 0),
+                    "updated_canonical_jobs": int(counts.get("updated") or 0),
+                    "unchanged_jobs": int(counts.get("unchanged") or 0),
+                    "duplicates": int(counts.get("duplicates") or 0) + max(0, len(raw_jobs) - len(distinct_external_ids)),
+                    "rejections": int(counts.get("rejected") or 0),
+                    "active_source_states": store.get_source_state_summary(target_id),
+                }
+            )
             attempts = store.get_target_history(target_id).get("attempts") or []
             attempt_number = len(attempts) + 1
             if jobs:
@@ -875,6 +918,8 @@ class PhaseAAcquisitionScheduler:
                 "credible_evidence": credible_evidence,
                 "requests_avoided": 0,
                 "credits_avoided": 0,
+                "reconciliation": reconciliation,
+                "quality_warnings": quality_warnings,
             }
             store.complete_task(
                 task_id,

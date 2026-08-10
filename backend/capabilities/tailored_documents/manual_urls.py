@@ -19,6 +19,13 @@ from backend.domain.pipeline_jobs import (
     PipelineJob,
     stable_manual_job_id,
 )
+from backend.acquisition.quality import (
+    DIRECT_APPLICATION_CLASSIFICATIONS,
+    URL_ATS_APPLICATION,
+    URL_EMPLOYER_APPLICATION,
+    extract_application_candidates_from_html,
+    normalize_description,
+)
 from backend.integrations.scrapeops import (
     SCRAPEOPS_PROXY_ENDPOINT,
     ScrapeOpsOutOfCreditsError,
@@ -211,6 +218,29 @@ def extract_generic_description(soup: BeautifulSoup, jsonld_payload: dict[str, A
         text = compact_whitespace(node.get_text("\n", strip=True))
         if len(text) >= 80:
             return text
+    return ""
+
+
+def extract_generic_description_source(soup: BeautifulSoup, jsonld_payload: dict[str, Any]) -> str:
+    """Return source description markup before the plain-text projection."""
+
+    jsonld_description = jsonld_payload.get("description")
+    if jsonld_description not in (None, ""):
+        return str(jsonld_description)
+    selectors = [
+        "section[class*='description']",
+        "div[class*='description']",
+        "section[id*='description']",
+        "div[id*='description']",
+        "main",
+        "body",
+    ]
+    for selector in selectors:
+        node = soup.select_one(selector)
+        if node:
+            source = str(node)
+            if len(html_to_text(source)) >= 80:
+                return source
     return ""
 
 
@@ -410,9 +440,21 @@ def fetch_generic_manual_job(
 
     company = extract_generic_company(soup, jsonld_payload, title)
     location_raw = extract_generic_location(jsonld_payload)
-    description = extract_generic_description(soup, jsonld_payload)
+    description_source = extract_generic_description_source(soup, jsonld_payload)
+    description_bundle = normalize_description(description_source or extract_generic_description(soup, jsonld_payload))
+    description = description_bundle["plain_text"]
     posted_time_text, posted_age_hours, posted_datetime_utc = extract_public_posted_age(
         jsonld_payload.get("datePosted")
+    )
+    official_host = (urlparse(canonical_url).hostname or "").strip()
+    html_candidates = extract_application_candidates_from_html(
+        response.text,
+        canonical_url,
+        target={"canonical_target_url": canonical_url, "official_employer_hosts": [official_host]},
+    )
+    direct_html_candidate = next(
+        (candidate for candidate in html_candidates if candidate.get("classification") in DIRECT_APPLICATION_CLASSIFICATIONS),
+        None,
     )
 
     job_record = PipelineJob(
@@ -425,9 +467,9 @@ def fetch_generic_manual_job(
         source_url=canonical_url,
         link=canonical_url,
         linkedin_link=canonical_url if "linkedin.com" in canonical_url.lower() else "",
-        apply_link=canonical_url,
-        apply_link_source="manual_url",
-        full_description=description,
+        apply_link=str((direct_html_candidate or {}).get("url") or canonical_url),
+        apply_link_source="html_apply_link" if direct_html_candidate else "manual_url",
+        full_description=description_bundle["raw_source"],
         easy_apply_status="unknown",
         posted_time_text=posted_time_text,
         posted_age_hours=posted_age_hours,
@@ -436,7 +478,31 @@ def fetch_generic_manual_job(
         enrich_status_code=response.status_code,
         manual_approved=True,
     )
-    return job_record.to_record()
+    record = job_record.to_record()
+    record.update(
+        {
+            "description_raw": description_bundle["raw_source"],
+            "description_html": description_bundle["sanitized_html"],
+            "description_text": description_bundle["plain_text"],
+            "description_decoding": description_bundle["decoding"],
+            "source_page_html": response.text,
+            "source_raw_payload": {
+                "source_page_html": response.text,
+                "jobposting_jsonld": jsonld_payload,
+                "canonical_url": canonical_url,
+                "status_code": response.status_code,
+            },
+            "application_candidates": html_candidates,
+        }
+    )
+    if direct_html_candidate:
+        record["application_url"] = str(direct_html_candidate["url"])
+        record["application_classification"] = str(direct_html_candidate["classification"])
+        if direct_html_candidate["classification"] == URL_EMPLOYER_APPLICATION:
+            record["employer_application_url"] = str(direct_html_candidate["url"])
+        elif direct_html_candidate["classification"] == URL_ATS_APPLICATION:
+            record["ats_application_url"] = str(direct_html_candidate["url"])
+    return record
 
 
 def fetch_manual_linkedin_job(
@@ -476,6 +542,7 @@ def fetch_manual_linkedin_job(
 
     canonical_source_url = canonicalize_url(url) or url
     linkedin_url = f"https://www.linkedin.com/jobs/view/{job_id}"
+    description_bundle = normalize_description(enrich_payload.get("description") or fallback_payload.get("full_description") or "")
     job_record = PipelineJob(
         job_id=str(job_id),
         title=compact_whitespace(str(enrich_payload.get("title") or fallback_payload.get("title") or "")) or f"LinkedIn job {job_id}",
@@ -490,7 +557,7 @@ def fetch_manual_linkedin_job(
         linkedin_link=linkedin_url,
         apply_link=str(enrich_payload.get("apply_link") or fallback_payload.get("apply_link") or linkedin_url),
         apply_link_source=str(enrich_payload.get("apply_link_source") or "manual_url"),
-        full_description=str(enrich_payload.get("description") or fallback_payload.get("full_description") or ""),
+        full_description=description_bundle["raw_source"],
         easy_apply_status=enrich_payload.get("easy_apply_status", "unknown"),
         posted_time_text=str(enrich_payload.get("posted_time_text") or ""),
         posted_age_hours=enrich_payload.get("posted_age_hours"),
@@ -500,7 +567,27 @@ def fetch_manual_linkedin_job(
         enrich_status_code=enrich_payload.get("status_code"),
         manual_approved=True,
     )
-    return job_record.to_record()
+    record = job_record.to_record()
+    record.update(
+        {
+            "description_raw": description_bundle["raw_source"],
+            "description_html": description_bundle["sanitized_html"],
+            "description_text": description_bundle["plain_text"],
+            "description_decoding": description_bundle["decoding"],
+            "source_raw_payload": {
+                "provider_payload": enrich_payload,
+                "fallback_payload": fallback_payload,
+            },
+        }
+    )
+    provider_apply = str(enrich_payload.get("apply_link") or fallback_payload.get("apply_link") or "").strip()
+    if provider_apply and "linkedin.com" not in (urlparse(provider_apply).hostname or "").casefold():
+        # Provider evidence is explicit, so the shared resolver can classify
+        # an employer/ATS destination without treating the LinkedIn detail
+        # page as an application URL.
+        record["employer_application_url"] = provider_apply
+        record["application_url"] = provider_apply
+    return record
 
 
 def fetch_and_normalize_manual_job(
@@ -641,6 +728,7 @@ __all__ = [
     "extract_canonical_url",
     "extract_generic_company",
     "extract_generic_description",
+    "extract_generic_description_source",
     "extract_generic_location",
     "extract_jobposting_jsonld",
     "extract_public_posted_age",
