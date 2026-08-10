@@ -30,6 +30,7 @@ from backend.acquisition.quality import (
     stable_content_payload,
 )
 from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION
+from backend.database.connection import database_target_info
 from backend.repositories.sqlite_core import _SqliteStore
 
 
@@ -806,9 +807,50 @@ class SqliteAcquisitionStore(_SqliteStore):
         complete_snapshot: bool,
         valid_snapshot: bool,
         observed_at: str = "",
+        snapshot_external_ids: Iterable[str] | None = None,
     ) -> dict[str, int | bool]:
         now = str(observed_at or utc_now_iso())
         job_rows = [dict(job) for job in jobs]
+
+        # Keep remote libSQL projection transactions bounded. Intermediate
+        # batches never apply absence/lifecycle decisions; the final batch
+        # receives the complete source ID set so closure remains safe. A
+        # retry of a partially committed cycle is idempotent by target/cycle/
+        # external ID observation identity.
+        if database_target_info(self.db_path).get("target_backend") == "libsql" and len(job_rows) > 25:
+            all_external_ids = list(snapshot_external_ids) if snapshot_external_ids is not None else [
+                str(job.get("job_id") or job.get("external_job_id") or job.get("id") or "").strip()
+                for job in job_rows
+            ]
+            combined: dict[str, Any] = {
+                "observed": 0,
+                "new": 0,
+                "updated": 0,
+                "unchanged": 0,
+                "closed": 0,
+                "rejected": 0,
+                "duplicates": 0,
+                "applicant_snapshots_blocked": 0,
+                "quality_warnings": [],
+            }
+            batches = [job_rows[index : index + 25] for index in range(0, len(job_rows), 25)]
+            for index, batch in enumerate(batches):
+                result = self.ingest_snapshot(
+                    cycle_id=cycle_id,
+                    task_id=task_id,
+                    target_id=target_id,
+                    jobs=batch,
+                    complete_snapshot=bool(complete_snapshot and index == len(batches) - 1),
+                    valid_snapshot=bool(valid_snapshot if index == len(batches) - 1 else True),
+                    observed_at=observed_at,
+                    snapshot_external_ids=all_external_ids if index == len(batches) - 1 else None,
+                )
+                for key in ("observed", "new", "updated", "unchanged", "closed", "rejected", "duplicates", "applicant_snapshots_blocked"):
+                    combined[key] += int(result.get(key) or 0)
+                combined["quality_warnings"].extend(result.get("quality_warnings") or [])
+            combined["valid_snapshot"] = bool(valid_snapshot)
+            combined["complete_snapshot"] = bool(complete_snapshot)
+            return combined
 
         def ingest(connection):
             target_row = connection.execute(
@@ -834,6 +876,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                 if not audit["approved"]:
                     raise ValueError(f"portal_audit_not_passed:{','.join(audit['missing'])}")
             seen_external: set[str] = set()
+            all_snapshot_external = {
+                str(value).strip()
+                for value in (snapshot_external_ids if snapshot_external_ids is not None else [])
+                if str(value).strip()
+            }
             counts = {
                 "observed": 0,
                 "new": 0,
@@ -1208,7 +1255,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 affected: set[str] = set()
                 for missing in missing_rows:
                     external_id = str(missing["external_job_id"] or "")
-                    if external_id in seen_external:
+                    if external_id in (all_snapshot_external or seen_external):
                         continue
                     canonical_id = str(missing["canonical_job_id"])
                     absence_count = int(missing["absence_count"] or 0) + 1

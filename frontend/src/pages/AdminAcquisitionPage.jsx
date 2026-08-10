@@ -98,20 +98,22 @@ function Sources({ data, request, onMessage }) {
   const sources = data?.sources || [];
   const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [maxCredits, setMaxCredits] = useState("20");
   useEffect(() => setSelected(sources.filter((source) => source.status === "ready").map((source) => source.id)), [data]);
   async function startImport() {
     if (!selected.length) return onMessage("Choose at least one ready source.");
     setBusy(true);
     try {
-      const plan = await request("/admin/acquisition/imports/plan", { method: "POST", body: { source_ids: selected, scope: { country: "Germany" } } });
+      const scope = { country: "Germany", max_credits: Number(maxCredits) || 0, max_pages: 1 };
+      const plan = await request("/admin/acquisition/imports/plan", { method: "POST", body: { source_ids: selected, scope } });
       if (!plan.can_start) throw new Error(`Import plan blocked: ${(plan.limit_errors || []).join(", ")}`);
-      await request("/admin/acquisition/imports", { method: "POST", body: { source_ids: selected, scope: { country: "Germany" }, idempotency_key: `admin-acquisition-${Date.now()}` } });
+      await request("/admin/acquisition/imports", { method: "POST", body: { source_ids: selected, scope, idempotency_key: `admin-acquisition-${Date.now()}` } });
       onMessage("Import queued for review.");
     } catch (error) { onMessage(getApiErrorMessage(error, "Import could not be queued.")); } finally { setBusy(false); }
   }
-  return <Panel title="Acquisition sources" description="Only selected sources run, with server-enforced request and credit ceilings." action={<button className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60" disabled={busy || !selected.length} onClick={startImport} type="button">{busy ? "Queueing…" : `Queue import (${selected.length})`}</button>}>
+  return <><div className="border-b border-outline-variant/10 p-5"><label className="block max-w-xs text-xs font-semibold uppercase tracking-wide text-on-surface-variant" htmlFor="acquisition-max-credits">Paid-source credit ceiling</label><div className="mt-2 flex flex-wrap items-center gap-3"><input aria-label="Paid-source credit ceiling" className="w-32 rounded-xl border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface" id="acquisition-max-credits" min="0" onChange={(event) => setMaxCredits(event.target.value)} type="number" value={maxCredits} /><span className="text-xs text-on-surface-variant">Required for ScrapeOps-backed generic/JSON-LD imports; direct ATS imports consume 0.</span></div></div><Panel title="Acquisition sources" description="Only selected sources run, with server-enforced request and credit ceilings." action={<button className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-60" disabled={busy || !selected.length} onClick={startImport} type="button">{busy ? "Queueing…" : `Queue import (${selected.length})`}</button>}>
     <div className="grid gap-4 p-5 lg:grid-cols-2">{sources.map((source) => <label className={`cursor-pointer rounded-2xl border p-4 transition-colors ${selected.includes(source.id) ? "border-primary/40 bg-primary/5" : "border-outline-variant/20 bg-surface"}`} key={source.id}><div className="flex items-start gap-3"><input checked={selected.includes(source.id)} disabled={source.status !== "ready" || busy} onChange={(event) => setSelected((current) => event.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))} type="checkbox" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-base text-on-surface">{text(source.name)}</strong><StatusPill value={source.status} /></div><p className="mt-1 text-sm text-on-surface-variant">{text(source.company)} · {text(source.source_type)}</p><div className="mt-3 grid gap-2 text-xs text-on-surface-variant sm:grid-cols-2"><span>Method: <b className="text-on-surface">{text(source.method)}</b></span><span>Max pages: <b className="text-on-surface">{number(source.max_pages)}</b></span><span>Last import: <b className="text-on-surface">{date(source.last_import)}</b></span><span>Jobs found: <b className="text-on-surface">{number(source.jobs_found)}</b></span></div>{source.reason ? <p className="mt-3 text-xs text-amber-700">{source.reason}</p> : null}<p className="mt-3 truncate font-mono text-[11px] text-on-surface-variant">{(source.request_hosts || []).join(", ") || "host not declared"}</p></div></div></label>)}</div>
-  </Panel>;
+  </Panel></>;
 }
 
 function Jobs({ data, request, onMessage, onInspect }) {

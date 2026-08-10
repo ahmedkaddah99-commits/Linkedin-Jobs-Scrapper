@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.repositories.sqlite_acquisition import SqliteAcquisitionStore
 
@@ -80,6 +81,48 @@ class ProductCompletionWaveRepositoryTests(unittest.TestCase):
         rows = self.store.list_admin_connector_capabilities()
         self.assertEqual(len(rows), 1)
         self.assertTrue(rows[0]["raw_retention"]["required"])
+
+    def test_remote_projection_batches_preserve_observation_counts(self):
+        target = {
+            "target_id": "batch_source",
+            "target_kind": "ats_connector_validation",
+            "display_name": "Batch source",
+            "canonical_target_url": "https://boards.greenhouse.io/batch",
+            "request_url": "https://boards-api.greenhouse.io/v1/boards/batch/jobs",
+            "provenance_url": "https://boards.greenhouse.io/batch",
+            "connector": "greenhouse",
+            "source_token": "batch",
+            "maturity_state": "candidate",
+            "enabled": True,
+            "publication_enabled": False,
+            "config": {},
+        }
+        self.store.ensure_targets([target])
+        jobs = [
+            {
+                "job_id": f"batch-{index}",
+                "title": f"Batch job {index}",
+                "job_detail_url": f"https://boards.greenhouse.io/batch/jobs/{index}",
+                "location": "Berlin",
+                "company": "Batch source",
+                "description": "A bounded projection test.",
+                "source_ats": "greenhouse",
+            }
+            for index in range(26)
+        ]
+        with patch("backend.repositories.sqlite_acquisition.database_target_info", return_value={"target_backend": "libsql"}):
+            result = self.store.ingest_snapshot(
+                cycle_id="cycle-batch",
+                task_id="task-batch",
+                target_id="batch_source",
+                jobs=jobs,
+                complete_snapshot=True,
+                valid_snapshot=True,
+            )
+        self.assertEqual(result["observed"], 26)
+        self.assertEqual(result["rejected"], 0)
+        with self.store._connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM job_source_observations WHERE cycle_id=?", ("cycle-batch",)).fetchone()[0], 26)
 
 
 if __name__ == "__main__":
