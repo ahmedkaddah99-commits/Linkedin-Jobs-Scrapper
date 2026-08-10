@@ -2,7 +2,7 @@
 
 Date: 2026-08-10  
 Branch: `deployment/render-turso-r2`  
-Implementation commits inspected: `9a62e81` through `e5bc855` (acquisition admin console,
+Implementation commits inspected: `9a62e81` through `a424519` (acquisition admin console,
 resumable leases, and resilient remote reprocessing transactions)
 
 ## Scope and safety
