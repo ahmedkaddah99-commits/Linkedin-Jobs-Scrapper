@@ -1,154 +1,186 @@
-# Unified acquisition mapping implementation report
+# Unified acquisition mapping - final production closeout
 
-## Result
+## Gate result
 
-Implemented and pushed the connector-independent acquisition map and safe
-reprocessing path as:
+GATE PASSED.
 
-- `5bbcac6` — unified mapping, provenance tables, admin read projections,
-  reprocessing runner, map, and tests.
-- `2776b1b` — explicit remote/libSQL transaction batching.
-- `10d2366` — idempotent reprocessing warning events.
+Final verification completed on `deployment/render-turso-r2`.
 
-Branch: `deployment/render-turso-r2`.
+- Deployed code commit: `cba90b6` (`Document guarded production checkpoint`).
+- Rule version: `unified_mapping_v1`.
+- Live migration: `045_acquisition_reprocessing_leases`.
+- `/health/live`: HTTP 200.
+- `/health/ready`: HTTP 200.
+- No automatic publication, duplicate merge, destructive cleanup, or new
+  blocking quality rule was introduced.
 
-## What changed
+## Implementation scope
 
-### Schema
+Migration 044 and the unified mapping implementation provide:
 
-Migration `044_unified_acquisition_mapping` adds:
+- immutable source payloads and content hashes;
+- versioned normalized posting projections;
+- field-level provenance and deterministic rule outputs;
+- report-only completeness and quality warnings;
+- review-only duplicate candidates;
+- evidence-backed company URLs and logo-provider projections; and
+- guarded, resumable, idempotent reprocessing.
 
-- `raw_payload_json`, `raw_content_hash`, and `rule_version` to source
-  observations; source observations now have immutable update/delete triggers.
-- Canonical timestamp projections: `published_at`, `source_updated_at`,
-  `closed_at`, and `last_reprocessed_at`.
-- `acquisition_stage_results` for stage checkpoints.
-- `acquisition_rule_outputs` for versioned deterministic outputs.
-- `acquisition_field_provenance` for raw value, normalized value, state,
-  source, source field, extraction method, evidence, confidence, observed
-  time, selected state, and rule version.
-- `acquisition_completeness_reports` for report-only field matrices.
-- `acquisition_reprocessing_runs` for idempotency, checkpoints, counts,
-  environment, scope, and backup metadata.
-- `acquisition_duplicate_clusters` and `acquisition_duplicate_members` for
-  review-only candidate clusters.
-- `canonical_company_urls` for evidence-backed homepage, careers, employer
-  jobs, ATS, detail, and source URLs.
-- `company_logo_enrichments` as the durable provider/provenance projection for
-  a configured logo adapter. No logo is fabricated when the provider has no
-  source-backed result.
+Fresh acquisition stores `raw_payload_json` before normalized projections.
+Historical repair preserves unknown values and reports when raw source payloads
+were unavailable. No AI, Crunchbase, Apollo, or unconfigured enrichment was
+used.
 
-### Code and API
+## Reprocessing: 587/587 and replay proof
 
-- `backend/acquisition/unified_mapping.py` implements
-  `unified_mapping_v1`. It preserves raw source values and maps function,
-  subfunction, employment, workplace, remote restrictions, language,
-  experience, descriptions, application destination, timestamps, company
-  URLs, logo URL, headcount, and associated members.
-- `backend/acquisition/quality.py` now emits destination type plus validation
-  fields and attaches the unified map to every normalized posting.
-- `SqliteAcquisitionStore.ingest_snapshot()` stores the original observation
-  before creating normalized projections. Existing canonical version rows stay
-  immutable; identical stable content reuses any matching existing version.
-- Admin inspection now returns raw observation payloads, field provenance,
-  normalized rule outputs, company URLs, completeness reports, and duplicate
-  candidates.
-- Admin-only read endpoints:
-  `/admin/job-import/companies`, `/duplicates`, `/rules`, `/reprocessing`,
-  `/reprocessing/plan`, and `/publication`.
-- Existing Data inspector layout was preserved. Its exact JSON view now
-  exposes the added projections through the existing job inspection response.
+Idempotency key:
+`unified-mapping-production-2026-08-10`
 
-## Reprocessing contract
+Reprocessing ID:
+`reprocess_ef912ccf2e9f44ca974222fe60732e55`
 
-The stage order is:
+Final guarded run:
 
-`source_registry` → `immutable_observation` → `extraction` → `normalization`
-→ `identity_resolution` → `canonical_field_merge` → `quality_completeness`
-→ `publication_read_model`.
-
-The runner is `scripts/reprocess_acquisition.py` and is dry-run by default.
-Apply requires both `--apply --yes`; a remote target additionally requires
-`--allow-remote-additive-rollback`. Local SQLite gets a recoverable copy before
-apply. Remote writes are additive/versioned and transaction-batched. No
-automatic duplicate merge or publication promotion occurs.
-
-## Production/dev environment run
-
-The configured `user_config/.env` target is the Runr Turso development
-database running with `RUNR_ENV=production`/Turso production safety settings.
-The initial plan observed:
-
-| Metric | Before run |
+| Field | Result |
 | --- | ---: |
-| Source observations | 587 |
-| Canonical jobs | 141 |
-| Canonical companies | 11 |
-| Posting versions | 587 |
-| Existing normalized field rows | 62 |
-| Existing completeness reports | 2 |
-| Existing company URL rows | 2 |
-| Existing warnings | 2,499 |
+| Status | `completed` |
+| Checkpoint | `587 / 587` observations |
+| Failed observations | `0` |
+| Batches | `67` |
+| Run field mappings | `5,870` |
+| Historical repairs | `585` |
+| Run warnings | `2,787` |
+| Duplicate candidate clusters | `0` |
 
-The additive reprocessing run uses idempotency key
-`unified-mapping-production-2026-08-10` and is checkpointed in Turso. At the
-latest verified checkpoint, 512 of 587 observations have been processed.
-The run remains intentionally incomplete while its current lease expires;
-the official CLI must resume it after lease expiry. No source observation was
-rewritten.
+The official guarded CLI was run again with the identical key. It returned:
 
-| Metric | Final |
-| --- | ---: |
-| Observations processed | 512 / 587 |
-| Historical raw repairs | 510 |
-| Field records mapped | 5,120 |
-| Report-only warnings recorded by the run | 2,432 |
-| Duplicate candidate clusters | 0 |
+```json
+{
+  "status": "completed",
+  "idempotent_replay": true,
+  "idempotency_key": "unified-mapping-production-2026-08-10",
+  "reprocessing_id": "reprocess_ef912ccf2e9f44ca974222fe60732e55"
+}
+```
 
-The operation can be safely resumed with the same idempotency key after the
-current lease expires. The runner uses bounded checkpoints, guarded lease
-reclamation, replayable remote batch transactions, and isolated fallback for
-report-only observation failures. The first 512 observations were committed
-without failed observations; the remaining 75 are not claimed as processed.
+The projection counts immediately before and after that replay were identical:
 
-## Fresh vs historical behavior
+| Projection | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Source observations | 587 | 587 | 0 |
+| Canonical jobs | 141 | 141 | 0 |
+| Canonical companies | 11 | 11 | 0 |
+| Posting versions | 609 | 609 | 0 |
+| Field provenance rows | 18,197 | 18,197 | 0 |
+| Rule-output rows | 587 | 587 | 0 |
+| Completeness rows | 141 | 141 | 0 |
+| Warning rows | 5,949 | 5,949 | 0 |
+| Company URL rows | 280 | 280 | 0 |
+| Logo enrichment rows | 0 | 0 | 0 |
+| Duplicate clusters/members | 0 / 0 | 0 / 0 | 0 / 0 |
+| Publications | 5 | 5 | 0 |
 
-- Fresh acquisition stores `raw_payload_json` at ingest time and produces the
-  complete unified map immediately.
-- Historical rows without preserved raw payloads are reprocessed from the
-  existing normalized payload and receive the explicit warning
-  `raw_payload_not_available_for_historical_repair`.
-- Unknown, unsupported, and invalid fields remain explicit null/unknown
-  states. The mapper does not call AI, Crunchbase, Apollo, or an unconfigured
-  external enrichment provider.
-- Company logo, website, headcount, and associated-member values appear only
-  when visible in the preserved source or returned by an enabled configured
-  provider; otherwise they remain null with null provenance.
+Unique-key duplicate checks were zero for provenance, rule outputs,
+completeness, and warning event IDs. Replay created no unnecessary posting
+version.
 
-## Verification
+## Source reconciliation
 
-Passed:
+Final totals after the fresh acquisition:
 
-- Python 3.12.7 project interpreter check.
-- `compileall` for backend, tests, and reprocessing script.
-- Ruff on all changed Python files.
-- Targeted migrations, Phase A, quality, Phase B, company, admin, and unified
-  pipeline tests: 63 passed, 8 subtests passed in the latest affected-suite
-  run; the focused reprocessing/mapping/admin suite separately passed 27 tests
-  and 4 subtests.
-- Fresh fixture acquisition and two unchanged reprocessing runs: raw payload
-  unchanged, no extra posting versions on the second run, no false duplicate
-  cluster for differing descriptions.
-- Live API `/health/live`: HTTP 200.
-- Live API `/health/ready`: HTTP 200 with Turso and R2 visible.
-- New admin paths reach the live authentication layer (HTTP 401 without an
-  admin session, not a route 404).
+| Source | Observations | Canonical jobs | Distinct external IDs | Fresh observations |
+| --- | ---: | ---: | ---: | ---: |
+| N26 / Greenhouse | 524 | 101 | 101 | 91 |
+| Qonto / Lever | 187 | 43 | 43 | 35 |
+| Fixture/test targets (`fixture_source`, `x`) | 2 | 2 | 2 | 0 |
+| Total | 713 | 146 | 146 | 126 |
 
-The full repository pytest command exceeded its 120-second command ceiling
-without emitting a test failure; it is therefore reported as a timeout, not a
-pass.
+Current public head remains unchanged at 133 jobs: 91 N26 and 42 Qonto.
+It contains zero fixture/test jobs, proving that the fresh import did not
+publish automatically.
 
-## Operator guide
+## Fixture quarantine
+
+`fixture_source` and `x` were quarantined with:
+
+- `maturity_state=quarantined`;
+- `enabled=0`; and
+- `publication_enabled=0`.
+
+Their two source observations remain present (one per target), and no audit
+history was deleted. They are excluded from normal enabled-target metrics and
+from the current publication head.
+
+## Fresh N26 and Qonto acquisition
+
+Completed import:
+`job_import_22074593266d42c3a66d4206c1995f7c`
+
+Completed cycle:
+`acq_cycle_7a82ce40fdfd482a88819cd68e13bd6e`
+
+| Evidence | N26 | Qonto |
+| --- | ---: | ---: |
+| Source result | HTTP 200 | HTTP 200 |
+| Raw observations | 91 | 35 |
+| Descriptions present | 91 | 35 |
+| `source_metadata` present | 91 | 35 |
+| `source_timestamps` present | 91 | 35 |
+| `apply_url` present | 91 | 35 |
+| `application_url` present | 0 | 35 |
+| Field provenance rows | 2,821 | 1,085 |
+| Rule-output rows | 91 | 35 |
+| Completeness reports | 91 warning-state | 35 warning-state |
+
+N26 uses the verified employer job-detail destination and records the
+report-only warnings `missing_direct_application_url` and
+`job_detail_url_used_as_application_url` for all 91 rows. Qonto has 35 direct
+Lever Apply destinations. Both sources preserve descriptions, source metadata,
+timestamps, application classification, raw payloads, and report-only quality
+warnings.
+
+## Authenticated production verification
+
+Using the authenticated production browser session, these UI-backed API reads
+and screens succeeded:
+
+- `/admin/acquisition` overview;
+- sources;
+- jobs and admin job inspection;
+- companies;
+- rules;
+- reprocessing and reprocessing plan;
+- publication;
+- authenticated public Jobs feed and detail; and
+- Apply navigation.
+
+The public detail loaded a Qonto job with its full employer description. Apply
+opened the real employer/ATS destination:
+
+`https://jobs.lever.co/qonto/694b8f90-e783-4aa6-af36-ba7bfb3c974f/apply`
+
+The destination page rendered the Qonto application form. No application was
+submitted.
+
+The targeted affected-suite verification passed: 63 tests and 8 subtests in
+the latest affected suite; the focused reprocessing/mapping/admin suite passed
+27 tests and 4 subtests. The full repository pytest command previously
+exceeded its 120-second command ceiling without emitting a failure, so it is
+reported as a timeout rather than a pass.
+
+## Remaining product gaps
+
+- N26 currently exposes a verified employer detail URL but no direct ATS Apply
+  URL in the source payload. This is reported, not invented. A future
+  provider-specific detail-page extraction can improve it.
+- `company_logo_enrichments` is empty because no configured logo provider
+  supplied source-backed results. Headcount and associated-member values remain
+  source/provider dependent and are not fabricated.
+- The observed 91-row N26 persistence transaction exceeded the five-minute
+  acquisition lease before completing. It completed safely, but the worker
+  should renew leases during long persistence or use smaller durable chunks.
+
+## Operator command
 
 Read-only plan:
 
@@ -156,7 +188,7 @@ Read-only plan:
 .venv\Scripts\python.exe scripts\reprocess_acquisition.py --env-file user_config\.env
 ```
 
-Remote additive apply:
+Guarded remote apply/resume:
 
 ```powershell
 .venv\Scripts\python.exe scripts\reprocess_acquisition.py `
@@ -167,12 +199,5 @@ Remote additive apply:
   --resume reprocess_ef912ccf2e9f44ca974222fe60732e55
 ```
 
-Repeat the bounded command with the same key until it reports `completed`,
-then run it once more and verify `idempotent_replay=true`. Do not modify the
-run row manually while a worker may still be active.
-
-Inspect run state through the admin-only
-`GET /admin/job-import/reprocessing` endpoint or directly through the
-`acquisition_reprocessing_runs` projection. Do not delete observations to
-undo a result; use the recorded checkpoint/idempotency key and reversible
-publication or review actions.
+Do not modify a reprocessing run row manually while a worker may still be
+active. Resume with the same key and inspect the durable checkpoint.
