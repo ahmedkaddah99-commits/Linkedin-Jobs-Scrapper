@@ -8,7 +8,7 @@ services:
     autoDeployTrigger: commit
     envVars:
       - key: VITE_API_BASE_URL
-        sync: false
+        value: https://runr-api.onrender.com/v1
       - key: VITE_API_EXTERNAL_HOSTNAME
         fromService:
           type: web
