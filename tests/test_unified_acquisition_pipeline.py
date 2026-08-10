@@ -77,6 +77,18 @@ class UnifiedAcquisitionPipelineTests(unittest.TestCase):
                 "config": {},
             }
             store.ensure_targets([target])
+            with store._connect() as connection:
+                quarantined_target = connection.execute(
+                    "SELECT enabled, publication_enabled, maturity_state, quarantined, quarantine_reason "
+                    "FROM acquisition_targets WHERE target_id = ?",
+                    (target["target_id"],),
+                ).fetchone()
+            self.assertEqual(quarantined_target["enabled"], 0)
+            self.assertEqual(quarantined_target["publication_enabled"], 0)
+            self.assertEqual(quarantined_target["maturity_state"], "quarantined")
+            self.assertEqual(quarantined_target["quarantined"], 1)
+            self.assertEqual(quarantined_target["quarantine_reason"], "fixture_or_test_target")
+            self.assertEqual(store.list_targets(include_disabled=False), [])
             cycle = store.claim_due_cycle(window_key="fixture:unified", lease_owner="test", scheduled_at="2026-08-10T00:00:00+00:00")
             store.ensure_cycle_tasks(cycle["cycle_id"], [target])
             task = store.claim_next_task(cycle_id=cycle["cycle_id"], lease_owner="test")

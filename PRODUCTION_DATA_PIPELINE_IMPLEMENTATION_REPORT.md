@@ -280,3 +280,58 @@ limitations are operational/data-quality items, not a reprocessing gate:
 The complete stage, entity, field-lineage, connector, consumer, duplicate, and
 gap map is in [CURRENT_DATA_PIPELINE_MAP.md](CURRENT_DATA_PIPELINE_MAP.md) and
 [CURRENT_DATA_PIPELINE_MAP.json](CURRENT_DATA_PIPELINE_MAP.json).
+
+## Prompt 2 — fresh production baseline (2026-08-10)
+
+The configured environment inspected was production Turso/libSQL from
+`user_config/.env`; the local SQLite database was not treated as production.
+At the validation boundary, the API and worker were live on
+`5e494dc68a7bf2b3c2bc49d6a52886110cccc2db` and the frontend was live on
+`9a62e81b0ea7e3a7f02026ae07cbd56f705a0e12`. Migration 046,
+`046_acquisition_source_quarantine`, was applied at
+`2026-08-10T14:19:41.263182+00:00`; migration 045 was already applied at
+`2026-08-10T11:47:21.395366+00:00`.
+
+The source hygiene fix quarantines `fixture_source` and `x` by setting
+`enabled=0`, `publication_enabled=0`, and `maturity_state=quarantined`, while
+retaining their immutable observations. Normal scheduler and quality-metric
+selection exclude quarantined targets. The current valid publication head
+`acq_publication_5884f63297fc4f56a0fb019c7cd4f063` contains 133 jobs and zero
+fixture jobs, so no exclusion preview was necessary and no publication was
+promoted.
+
+Fresh production acquisition completed through the authenticated admin path:
+
+| Source | Import / idempotency key | Cycle | Request evidence | Result |
+|---|---|---|---|---|
+| N26 / Greenhouse | `job_import_870c6fab348e4aaba91dbf722df6fc39` / `admin-acquisition-1786371852231` | `acq_cycle_8fc75e5e4f5149379db22e2b4ba89c3e` | HTTP 200, 91 returned from `https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true` | 91 accepted, 0 rejected, 91 distinct IDs, 0 new/updated, 91 unchanged, 0 closed |
+| Qonto / Lever | `job_import_df980bf7cb194bb7ab3795097449f0fe` / `admin-acquisition-1786372234773` | `acq_cycle_33efc4e694d14e87bef67306d2fa12d2` | Two HTTP 200 attempts, 35 rows each from `https://api.lever.co/v0/postings/qonto?mode=json` | 35 unique accepted, 0 rejected, 35 distinct IDs, 0 new/updated, 35 unchanged, 0 closed |
+
+Qonto's first request exceeded the former five-minute remote projection lease.
+The worker did not create a new import or key: after the stale lease guard and
+30-minute remote lease were deployed, the same import/cycle/key resumed and
+committed 35 rows. The two fetched batches explain 70 request-level rows versus
+35 unique source records; no duplicate observation, semantic version, or
+projection inflation occurred.
+
+The before/after production projection read was:
+
+| Table/read model | Before | After/current | Delta |
+|---|---:|---:|---:|
+| `job_source_observations` | 713 | 839 | +126 |
+| `job_posting_versions` | 735 | 735 | 0 |
+| `acquisition_field_provenance` | 22,103 | 26,009 | +3,906 |
+| `acquisition_rule_outputs` | 713 | 839 | +126 |
+| `acquisition_completeness_reports` | 20 before boundary | 146 | +126 |
+| `acquisition_quality_events` | 6,349 | 6,749 | +400 |
+| `canonical_company_urls` | 290 | 290 | 0 |
+| `company_logo_enrichments` | 0 | 0 | 0 |
+| `acquisition_duplicate_clusters/members` | 0 / 0 | 0 / 0 | 0 / 0 |
+| `acquisition_publications` | 5 | 5 | 0 |
+| `acquisition_publication_jobs` | 427 | 427 | 0 |
+| Current head jobs | 133 | 133 | 0 |
+
+The complete source reconciliation, representative N26/Qonto field lineage,
+application destination checks, authenticated admin/user UI checks, warnings,
+and unresolved gaps are recorded in
+[PRODUCTION_FRESH_ACQUISITION_REPORT.md](PRODUCTION_FRESH_ACQUISITION_REPORT.md).

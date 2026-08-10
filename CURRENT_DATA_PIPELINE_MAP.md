@@ -284,3 +284,38 @@ report and remains outside version control. [P][U]
    and `known`/unknown semantics are versioned.
 6. Add remote backup/restore procedure, operational dashboards, version diffs,
    and authenticated production contract tests.
+
+## Prompt 2 production truth update (2026-08-10)
+
+The configured production Turso/libSQL database now has migration 046 applied
+in addition to 045. The target registry contains nine targets: N26/Greenhouse
+and Qonto/Lever are enabled candidate direct-API sources; five employer-site
+targets are enabled but unproven; `fixture_source` and `x` are explicitly
+quarantined, disabled, and publication-disabled. Their immutable observations
+remain available for audit, but normal scheduler and quality-metric queries
+exclude them.
+
+Fresh direct snapshots completed as follows:
+
+| Target | Request URL | Returned/accepted | Canonical/lifecycle result | Current publication |
+|---|---|---:|---|---:|
+| N26 / Greenhouse | `https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true` | 91 / 91 | 91 distinct; 91 active, 0 stale, 0 closed | 91 |
+| Qonto / Lever | `https://api.lever.co/v0/postings/qonto?mode=json` | 70 request rows over 2 attempts / 35 unique | 35 distinct; 35 active, 0 stale, 0 closed | 42 |
+
+Qonto's 70-versus-35 difference is a preserved HTTP replay after the old lease
+expired; the same import, cycle, and idempotency key resumed and only one set
+of 35 observations/projections committed. Both source snapshots were complete
+and valid, with zero rejected records and zero duplicate candidates. The valid
+publication head remained `acq_publication_5884f63297fc4f56a0fb019c7cd4f063`
+with 133 jobs and no fixture jobs.
+
+The deployed runtime guard now uses a minimum 1,800-second remote lease and
+reclaims an admin import only after an expired cycle lease plus a 15-minute
+staleness threshold. Preview construction excludes quarantined-only jobs;
+publication remains an explicit admin action. Authenticated browser evidence
+confirmed the admin source page, user feed (25 of 133 visible with filters),
+Qonto detail/Apply behavior, and N26's same-page detail application route.
+
+The machine-readable companion contains the exact current production counts,
+source capability facts, fresh import IDs, consumer checks, and unresolved
+gaps under `prompt_2_fresh_production`.

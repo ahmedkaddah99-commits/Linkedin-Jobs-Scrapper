@@ -22,27 +22,30 @@
       "uncertain": "not observable or not proven"
     },
     "production_counts": {
-      "schema_migrations": 45,
+      "schema_migrations": 46,
       "acquisition_targets": 9,
-      "acquisition_cycles": 10,
-      "acquisition_requests": 25,
+      "acquisition_cycles": 14,
+      "acquisition_requests": 33,
       "canonical_companies": 11,
-      "canonical_jobs": 141,
-      "job_source_observations": 587,
-      "job_posting_versions": 609,
+      "canonical_jobs": 146,
+      "job_source_observations": 839,
+      "job_posting_versions": 735,
       "acquisition_publications": 5,
       "acquisition_publication_head": 1,
-      "acquisition_field_provenance": 7316,
-      "acquisition_rule_outputs": 236,
-      "acquisition_completeness_reports": 127,
-      "acquisition_quality_events": 4002,
+      "acquisition_field_provenance": 26009,
+      "acquisition_rule_outputs": 839,
+      "acquisition_completeness_reports": 146,
+      "acquisition_quality_events": 6749,
       "acquisition_stage_results": 8,
       "acquisition_reprocessing_runs": 1,
       "acquisition_duplicate_clusters": 0,
       "acquisition_duplicate_members": 0,
-      "canonical_company_urls": 252,
+      "canonical_company_urls": 290,
       "company_logo_enrichments": 0,
-      "publication_head_jobs": 133
+      "publication_head_jobs": 133,
+      "fixture_observations_preserved": 2,
+      "fixture_observations_in_current_head": 0,
+      "current_lifecycle": {"active": 139, "stale": 7, "closed": 0}
     },
     "production_source_counts": {
       "greenhouse": 433,
@@ -197,5 +200,21 @@
     {"priority":5,"category":"observability","items":["connector capability snapshots","retry/freshness/source reconciliation","reprocessing/deploy lease metrics","remove fixture/test targets from production"]},
     {"priority":6,"category":"admin_usability","items":["field conflict resolver","duplicate decisions","remote acknowledgement checkbox","version diff view","capability matrix view"]}
   ],
-  "recommended_sequence":["quarantine fixture/test targets and reconcile productive N26/Qonto sources","resume stale reprocessing only after migration 045 is live and verify idempotent replay","add capability/raw-retention/timestamp/lifecycle observability","model company-source aliases and reversible duplicate decisions","configure one approved enrichment provider and budgeted backfill","version and expose expanded public fields after contract review","add remote restore and authenticated production contract tests"]
+  "prompt_2_fresh_production": {
+    "deployed_application_commit_at_validation_boundary": "5e494dc68a7bf2b3c2bc49d6a52886110cccc2db",
+    "frontend_commit_at_validation_boundary": "9a62e81b0ea7e3a7f02026ae07cbd56f705a0e12",
+    "environment": "configured production Turso/libSQL; local SQLite is not production",
+    "migration_045_applied_at": "2026-08-10T11:47:21.395366+00:00",
+    "migration_046_applied_at": "2026-08-10T14:19:41.263182+00:00",
+    "publication_head": {"publication_id":"acq_publication_5884f63297fc4f56a0fb019c7cd4f063","status":"valid","jobs":133,"fixture_jobs":0},
+    "sources": [
+      {"target_id":"n26_greenhouse","connector":"greenhouse","canonical_url":"https://job-boards.greenhouse.io/n26/","request_url":"https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true","import_id":"job_import_870c6fab348e4aaba91dbf722df6fc39","idempotency_key":"admin-acquisition-1786371852231","cycle_id":"acq_cycle_8fc75e5e4f5149379db22e2b4ba89c3e","returned":91,"accepted":91,"rejected":0,"distinct_external_ids":91,"canonical_jobs":91,"active":91,"stale":0,"closed":0,"current_head_jobs":91,"warnings":{"missing_direct_application_url":91,"job_detail_url_used_as_application_url":91,"description_contains_html_entities":91,"suspicious_posting_timestamp":91,"department_not_available":1}},
+      {"target_id":"qonto_lever","connector":"lever","canonical_url":"https://jobs.lever.co/qonto/","request_url":"https://api.lever.co/v0/postings/qonto?mode=json","import_id":"job_import_df980bf7cb194bb7ab3795097449f0fe","idempotency_key":"admin-acquisition-1786372234773","cycle_id":"acq_cycle_33efc4e694d14e87bef67306d2fa12d2","request_attempts":2,"returned":70,"accepted_unique":35,"rejected":0,"distinct_external_ids":35,"canonical_jobs":35,"active":35,"stale":0,"closed":0,"current_head_jobs":42,"warnings":{"suspicious_posting_timestamp":35},"replay_explanation":"first request was preserved transport metadata; same import/cycle/key resumed after old lease expiry and committed one set of 35 projections"}
+    ],
+    "fixture_quarantine": {"targets":["fixture_source","x"],"immutable_observations_preserved":2,"enabled":false,"publication_enabled":false,"normal_quality_metrics_excluded":true,"current_head_fixture_jobs":0,"automatic_preview_created":false},
+    "deltas_from_boundary": {"boundary":"2026-08-10T14:24:13.369788+00:00","job_source_observations":{"before":713,"after":839,"delta":126},"job_posting_versions":{"before":735,"after":735,"delta":0},"acquisition_field_provenance":{"before":22103,"after":26009,"delta":3906},"acquisition_rule_outputs":{"before":713,"after":839,"delta":126},"acquisition_completeness_reports":{"before":20,"after":146,"delta":126},"acquisition_quality_events":{"before":6349,"after":6749,"delta":400},"canonical_company_urls":{"before":290,"after":290,"delta":0},"company_logo_enrichments":{"before":0,"after":0,"delta":0},"acquisition_duplicate_clusters":{"before":0,"after":0,"delta":0},"acquisition_duplicate_members":{"before":0,"after":0,"delta":0},"acquisition_publications":{"before":5,"after":5,"delta":0},"acquisition_publication_jobs":{"before":427,"after":427,"delta":0},"current_head_jobs":{"before":133,"after":133,"delta":0}},
+    "authenticated_checks": {"admin_sources_ui":"rendered and queued N26/Qonto imports","public_jobs_ui":"rendered 25 of 133 jobs with search/location/workplace/experience/category filters","qonto_detail":"rendered description and Apply; click opened https://jobs.lever.co/qonto/043279bd-c543-4e54-bffa-094c77f4c97b/apply","n26_detail":"live employer detail exposed /en-eu/careers/positions/7140058/apply; no application submitted","unauthenticated_401_not_used_as_body_evidence":true},
+    "remaining_gaps":["five employer-site targets enabled but unproven","Greenhouse direct application URL missing; same-page child route is live but not persisted","N26 employment/workplace/experience unsupported or unknown; Qonto language/experience unknown","zero logo enrichment rows and no selected company URL for representatives","pre-existing frontend bundle API-host diagnostic and ScrapeOps timeout"]
+  },
+  "recommended_sequence":["persist connector capability snapshots and Greenhouse same-page application child URLs","add raw-retention metrics and remote projection heartbeat","model company-source aliases and selected homepage/careers/ATS evidence","configure one approved enrichment provider and reversible duplicate decisions","version and expose expanded public fields after contract review","resolve frontend API-host diagnostic and add authenticated production contract gates"]
 }
