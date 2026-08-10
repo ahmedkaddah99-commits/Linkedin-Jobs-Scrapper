@@ -91,21 +91,25 @@ The initial plan observed:
 | Existing warnings | 2,499 |
 
 The additive reprocessing run uses idempotency key
-`unified-mapping-production-2026-08-10` and is checkpointed in Turso. Its
-final committed counts and completion timestamp are recorded below after the
-remote run completes:
+`unified-mapping-production-2026-08-10` and is checkpointed in Turso. At the
+latest verified checkpoint, 512 of 587 observations have been processed.
+The run remains intentionally incomplete while its current lease expires;
+the official CLI must resume it after lease expiry. No source observation was
+rewritten.
 
 | Metric | Final |
 | --- | ---: |
-| Observations processed | pending completion |
-| Historical raw repairs | pending completion |
-| Field records mapped | pending completion |
-| Report-only warnings | pending completion |
-| Duplicate candidate clusters | pending completion |
+| Observations processed | 512 / 587 |
+| Historical raw repairs | 510 |
+| Field records mapped | 5,120 |
+| Report-only warnings recorded by the run | 2,432 |
+| Duplicate candidate clusters | 0 |
 
-The operation can be safely resumed with the same idempotency key. The first
-50-observation checkpoint was committed before the remote batch size was
-reduced; subsequent batches use the transaction-batched runner.
+The operation can be safely resumed with the same idempotency key after the
+current lease expires. The runner uses bounded checkpoints, guarded lease
+reclamation, replayable remote batch transactions, and isolated fallback for
+report-only observation failures. The first 512 observations were committed
+without failed observations; the remaining 75 are not claimed as processed.
 
 ## Fresh vs historical behavior
 
@@ -129,7 +133,9 @@ Passed:
 - `compileall` for backend, tests, and reprocessing script.
 - Ruff on all changed Python files.
 - Targeted migrations, Phase A, quality, Phase B, company, admin, and unified
-  pipeline tests: 47 passed, 4 subtests passed across the final targeted runs.
+  pipeline tests: 63 passed, 8 subtests passed in the latest affected-suite
+  run; the focused reprocessing/mapping/admin suite separately passed 27 tests
+  and 4 subtests.
 - Fresh fixture acquisition and two unchanged reprocessing runs: raw payload
   unchanged, no extra posting versions on the second run, no false duplicate
   cluster for differing descriptions.
@@ -156,9 +162,14 @@ Remote additive apply:
 .venv\Scripts\python.exe scripts\reprocess_acquisition.py `
   --env-file user_config\.env `
   --apply --yes --allow-remote-additive-rollback `
-  --batch-size 5 `
-  --idempotency-key unified-mapping-production-2026-08-10
+  --batch-size 5 --max-batches 1 `
+  --idempotency-key unified-mapping-production-2026-08-10 `
+  --resume reprocess_ef912ccf2e9f44ca974222fe60732e55
 ```
+
+Repeat the bounded command with the same key until it reports `completed`,
+then run it once more and verify `idempotent_replay=true`. Do not modify the
+run row manually while a worker may still be active.
 
 Inspect run state through the admin-only
 `GET /admin/job-import/reprocessing` endpoint or directly through the
