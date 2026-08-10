@@ -2,8 +2,10 @@
 
 Date: 2026-08-10  
 Branch: `deployment/render-turso-r2`  
-Implementation commits inspected: `9a62e81` through `a424519` (acquisition admin console,
-resumable leases, and resilient remote reprocessing transactions)
+Implementation commits inspected: `a1a1c92` through `cba90b6`. The currently live
+Runr API and worker are both deployed at `cba90b654b13eb7d4951c2e418de57719906ab11`;
+the separate frontend deployment is `9a62e81`. The final live backend commit
+includes the lease-expiry and private-caller fencing fixes described below.
 
 ## Scope and safety
 
@@ -78,20 +80,28 @@ in the public user serializer.
 
 ## Production baseline and evidence
 
-The current read-only inventory after deployment was:
+The inspected target was the configured production Turso/libSQL database, not
+the local SQLite path. `/health/live` and `/health/ready` both returned HTTP
+200; readiness reported `runtime_environment=production`, `target_backend=libsql`,
+`remote_required=true`, and R2/S3 object storage. Migration 045 is present with
+its applied timestamp and checksum:
+`045_acquisition_reprocessing_leases`, applied at
+`2026-08-10T11:47:21.395366+00:00`.
+
+The completed post-replay inventory was:
 
 | Metric | Observed |
 |---|---:|
 | Applied migrations | 45 |
-| Acquisition targets/cycles/requests | 9 / 10 / 25 |
 | Immutable observations | 587 |
 | Canonical jobs/companies | 141 / 11 |
 | Posting versions | 609 |
-| Field provenance/rule outputs | 7,316 / 236 |
-| Completeness reports/quality events | 127 / 4,002 |
-| Company URL/logo-enrichment rows | 252 / 0 |
+| Field provenance/rule outputs | 18,197 / 587 |
+| Completeness reports/quality events | 141 / 5,949 |
+| Company URL/logo-enrichment rows | 280 / 0 |
 | Duplicate clusters/members | 0 / 0 |
 | Publications/current head | 5 / 1 |
+| Rows in all publication snapshots | 427 |
 | Jobs in current valid head | 133 |
 
 Source reconciliation:
@@ -103,31 +113,115 @@ Source reconciliation:
 | Fixture source | fixture/career site | 1 | 1 |
 | x | fixture/career site | 1 | 1 |
 
-The fixture rows and five bounded probe targets are production-data hygiene
-findings, not connector success. They should be quarantined or removed through
-an explicit operational decision before a future quality report is treated as
-a clean production baseline.
+The fixture rows and the `x` row are production-data hygiene findings, not
+connector success. They should be quarantined or removed through an explicit
+operational decision before a future quality report is treated as a clean
+production baseline.
 
 ## Reprocessing state
 
-The requested production idempotency key is
-`unified-mapping-production-2026-08-10`. The run currently has a durable
-checkpoint at 80 observations, 800 fields, 80 historical repairs, 388
-warnings, and 28 committed batches, with no failed observations. Its database
-row is `running` with a stale lease because the bounded process exited while
-an external duplicate launcher repeatedly spawned a global-Python copy. The
-duplicate copies were stopped by exact PID/command inspection; no active
-reprocessor remains. The run is therefore checkpointed and resumable, but not
-complete.
+The requested production run is complete:
 
-Remote reprocessing now attempts a replayable batch transaction first and
-falls back to isolated per-observation transactions when the batch fails; local
-SQLite retains per-observation savepoints. This avoids the earlier libSQL named
-savepoint failure. The count anomaly and external launcher are operational
-findings; a future resume must reconcile table deltas by source before claiming
-completion.
+| Field | Final value |
+|---|---|
+| Reprocessing ID | `reprocess_ef912ccf2e9f44ca974222fe60732e55` |
+| Idempotency key | `unified-mapping-production-2026-08-10` |
+| Status | `completed` |
+| Checkpoint | `observation_ffc65009d257463e95239c00166d6ab7` |
+| Observations / batches | `587 / 67` |
+| Fields / historical repairs | `5,870 / 585` |
+| Warnings / failed observations | `2,787 / 0` |
+| Failed observation IDs | `[]` |
+| Completed at | `2026-08-10T13:51:01.341004+00:00` |
+| Rule version | `unified_mapping_v1` |
 
-Required post-deploy operator command:
+The original report of `80/587` and 28 batches was a stale intermediate
+checkpoint. The shared run row was subsequently claimed by multiple local
+Codex-launched copies. Those writers advanced operational counters and wrote
+replayable evidence/quality projections; they did not increase posting
+versions, canonical jobs, publication rows, or duplicate projections. The
+controlled finalization baseline at checkpoint 512 was reconciled against the
+completed snapshot below.
+
+| Table/model | Controlled baseline | Completed + replay | Delta |
+|---|---:|---:|---:|
+| `job_source_observations` | 587 | 587 | 0 |
+| `job_posting_versions` | 609 | 609 | 0 |
+| `acquisition_field_provenance` | 15,810 | 18,197 | +2,387 |
+| `acquisition_rule_outputs` | 510 | 587 | +77 |
+| `acquisition_completeness_reports` | 141 | 141 | 0 |
+| `canonical_company_urls` | 280 | 280 | 0 |
+| `company_logo_enrichments` | 0 | 0 | 0 |
+| `acquisition_duplicate_clusters` | 0 | 0 | 0 |
+| `acquisition_duplicate_members` | 0 | 0 | 0 |
+| `acquisition_quality_events` | 5,585 | 5,949 | +364 |
+| `acquisition_publications` | 5 | 5 | 0 |
+| `acquisition_publication_head` | 1 | 1 | 0 |
+| `acquisition_publication_jobs` | 427 | 427 | 0 |
+| Current-head jobs | 133 | 133 | 0 |
+| `canonical_jobs` | 141 | 141 | 0 |
+| `canonical_companies` | 11 | 11 | 0 |
+
+The field-evidence and report-only warning deltas are expected mapping output;
+the immutable source, semantic-version, identity, duplicate, publication, and
+current-head counts did not inflate.
+
+### Duplicate-launcher root cause and durable fix
+
+Evidence ruled out a Render reprocessor, Windows scheduled task, Windows
+service, repository launcher, or deployment job. Render `runr-worker` runs
+`./deploy/start.sh worker`; `runr-api` runs `./deploy/start.sh api` with
+`./deploy/start.sh migrate` as pre-deploy; and `runr-process-next` is a separate
+old cron running `./deploy/start.sh process-next` at commit `731119a`. Its logs
+contained no `reprocess_acquisition.py` invocation.
+
+The precise duplicate root was the local Codex app-server (`codex.exe`, parent
+PID 12128) spawning lingering PowerShell commands. Observed variants called
+private `_claim_run`/`_process_batch`, performed a raw lease `UPDATE`, or ran
+old public script copies with batch sizes 1, 5, 10, and 25. Examples included
+legacy roots PID 3324 and PID 8548; only those exact roots and their matching
+Python descendants were terminated. Unrelated Python, API, worker, and
+deployment processes were not terminated. The `.venv` base-Python child seen
+under the intended runner is normal Windows virtual-environment behavior, not
+itself a duplicate launcher.
+
+The persistent application-side fix is deployed in `620cdb7`, `07e9fdb`, and
+`20b9930` (included in live `cba90b6`):
+
+- every resumable takeover requires an empty or expired lease, including rows
+  marked `incomplete`;
+- only the public runner receives the internal claim capability;
+- private `_process_batch` callers without that capability return before any
+  projection work.
+
+The completed run was operated with one public writer, bounded batches, durable
+checkpoints, and exact-process checks. Quality/completeness failures remained
+report-only. No observation, posting version, duplicate merge, or publication
+promotion was deleted or rewritten.
+
+### Same-key replay proof
+
+Immediately after completion, the exact same command/key was invoked. It
+returned exit code 0 with:
+
+```json
+{
+  "status": "completed",
+  "idempotent_replay": true,
+  "reprocessing_id": "reprocess_ef912ccf2e9f44ca974222fe60732e55",
+  "idempotency_key": "unified-mapping-production-2026-08-10",
+  "counts": {"batches": 67, "observations": 587, "fields": 5870,
+             "historical_repairs": 585, "warnings": 2787,
+             "failed_observations": 0}
+}
+```
+
+The post-replay snapshot matched the completion snapshot: no semantic version,
+duplicate projection, publication, current-head, observation, or canonical
+identity delta occurred during replay.
+
+The safe resumable command shape, if an operator must inspect the completed
+run, is:
 
 ```powershell
 .venv\Scripts\python.exe scripts/reprocess_acquisition.py `
@@ -135,26 +229,21 @@ Required post-deploy operator command:
   --apply --yes --allow-remote-additive-rollback `
   --batch-size 5 `
   --max-batches 1 `
-  --stale-after-seconds 1 `
+  --stale-after-seconds 1800 `
   --idempotency-key unified-mapping-production-2026-08-10 `
   --resume reprocess_ef912ccf2e9f44ca974222fe60732e55
 ```
 
-After the run reaches `completed`, run the same command again without a new
-key. The expected second result is `idempotent_replay=true` with no additional
-observation/version/evidence rows beyond the first completed projection. That
-replay has not yet been observed because the production run is incomplete. The
-current admin UI deliberately does not authorize remote additive apply by
-default; the CLI acknowledgement is the explicit operational path until a
-visible admin acknowledgement control is added.
+The backup reference remains
+`.backend_data/reprocessing_backups/production_before_reprocessing_resume_20260810.sqlite3`;
+it is recoverable and was not committed. Remote rollback remains additive
+checkpoint/resume plus publication/review reversal; no destructive automatic
+restore exists.
 
 ## Validation completed
 
-- Project interpreter: Python 3.12.7.
-- Focused acquisition, migration, quality, admin, ATS, dedupe, mapping, and
-  reprocessing tests: 51 passed, 15 subtests; a subsequent remote-transaction
-  focused run passed 13 tests. Ruff passed for changed Python files.
-- Ruff: all changed Python files passed.
+- Project interpreter: Python 3.12.7; focused reprocessing tests passed 5/5
+  after the lease-expiry and private-caller fixes; Ruff passed.
 - Frontend production build: Vite build passed; the new
   `AdminAcquisitionPage` chunk was generated.
 - Local fixture validation: raw observation payload remained unchanged,
@@ -169,14 +258,17 @@ visible admin acknowledgement control is added.
   entities, 21 lineage entries, 10 connector capability entries, and 6 gap
   categories.
 
-## Remaining blockers and recommended sequence
+## Remaining limitations and recommended sequence
 
-1. Remove or disable the external duplicate launcher, then resume the stale
-   production run exactly once, reconcile table deltas and warnings by
-   N26/Qonto/fixture source, and run the same idempotency key again only after
-   it reports `completed`.
-2. Quarantine fixture/test targets and decide whether to backfill or exclude
-   their observations from production quality metrics.
+No failed observations or unresolved lease owners remain. Remaining
+limitations are operational/data-quality items, not a reprocessing gate:
+
+1. Quarantine fixture/test targets and decide whether to exclude them from
+   production quality metrics.
+2. Do not grant external callers direct database write access; the observed
+   raw-SQL launcher variant bypassed application fencing and was terminated by
+   exact process identity. A future control should enforce this boundary at
+   the database/operator surface as well.
 3. Add durable connector capability snapshots, raw-retention coverage,
    timestamp/lifecycle conflict semantics, and company-source alias decisions.
 4. Add reversible duplicate decisions, one approved enrichment provider with
