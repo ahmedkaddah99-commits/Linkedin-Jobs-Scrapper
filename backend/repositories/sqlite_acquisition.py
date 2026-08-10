@@ -3713,28 +3713,29 @@ class SqliteAcquisitionStore(_SqliteStore):
         rule_version = str(mapping.get("rule_version") or UNIFIED_RULE_VERSION)
         now = str(observed_at or utc_now_iso())
         fields = mapping.get("fields") if isinstance(mapping.get("fields"), Mapping) else {}
+        provenance_sql = """
+            INSERT OR IGNORE INTO acquisition_field_provenance (
+                provenance_id, entity_kind, entity_id, field_name, source_observation_id,
+                raw_value_json, normalized_value_json, state, source, source_field,
+                extraction_method, evidence_json, confidence, observed_at, rule_version,
+                selected, selection_reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        job_provenance_rows = []
         for field_name, record in fields.items():
             if not isinstance(record, Mapping):
                 continue
             selected = int(str(record.get("state") or "unknown") in {"present", "inferred"})
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO acquisition_field_provenance (
-                    provenance_id, entity_kind, entity_id, field_name, source_observation_id,
-                    raw_value_json, normalized_value_json, state, source, source_field,
-                    extraction_method, evidence_json, confidence, observed_at, rule_version,
-                    selected, selection_reason, created_at
-                ) VALUES (?, 'job', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"field_provenance_{uuid4().hex}", canonical_job_id, str(field_name), source_observation_id,
-                    _json(record.get("raw_value")), _json(record.get("normalized_value")), str(record.get("state") or "unknown"),
-                    str(record.get("source") or ""), str(record.get("source_field") or ""),
-                    str(record.get("extraction_method") or ""), _json(record.get("evidence")),
-                    float(record.get("confidence") or 0), str(record.get("observed_at") or now), rule_version,
-                    selected, "latest evidence-backed candidate" if selected else "no evidence-backed value", now,
-                ),
+            job_provenance_rows.append(
+                (f"field_provenance_{uuid4().hex}", "job", canonical_job_id, str(field_name), source_observation_id,
+                 _json(record.get("raw_value")), _json(record.get("normalized_value")), str(record.get("state") or "unknown"),
+                 str(record.get("source") or ""), str(record.get("source_field") or ""),
+                 str(record.get("extraction_method") or ""), _json(record.get("evidence")),
+                 float(record.get("confidence") or 0), str(record.get("observed_at") or now), rule_version,
+                 selected, "latest evidence-backed candidate" if selected else "no evidence-backed value", now)
             )
+        if job_provenance_rows:
+            connection.executemany(provenance_sql, job_provenance_rows)
         mapped_company_fields = mapping.get("company_fields") if isinstance(mapping.get("company_fields"), Mapping) else {}
         company_source = job.get("company") if isinstance(job.get("company"), Mapping) else {}
         company_values = {
@@ -3746,49 +3747,32 @@ class SqliteAcquisitionStore(_SqliteStore):
             "headquarters": company_source.get("headquarters") if isinstance(company_source, Mapping) else job.get("headquarters"),
             "logo": company_source.get("logo_url") if isinstance(company_source, Mapping) else job.get("logo_url"),
         }
+        company_provenance_rows = []
         for field_name, record in mapped_company_fields.items():
             if not isinstance(record, Mapping):
                 continue
             value = record.get("raw_value")
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO acquisition_field_provenance (
-                    provenance_id, entity_kind, entity_id, field_name, source_observation_id,
-                    raw_value_json, normalized_value_json, state, source, source_field,
-                    extraction_method, evidence_json, confidence, observed_at, rule_version,
-                    selected, selection_reason, created_at
-                ) VALUES (?, 'company', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"field_provenance_{uuid4().hex}", company_id, str(field_name), source_observation_id,
-                    _json(value), _json(record.get("normalized_value")), str(record.get("state") or "unknown"),
-                    str(record.get("source") or ""), str(record.get("source_field") or ""),
-                    str(record.get("extraction_method") or ""), _json(record.get("evidence")),
-                    float(record.get("confidence") or 0), str(record.get("observed_at") or now), rule_version,
-                    int(str(record.get("state") or "unknown") in {"present", "inferred"}),
-                    "latest evidence-backed candidate" if str(record.get("state") or "unknown") in {"present", "inferred"} else "no evidence-backed value", now,
-                ),
+            company_provenance_rows.append(
+                (f"field_provenance_{uuid4().hex}", "company", company_id, str(field_name), source_observation_id,
+                 _json(value), _json(record.get("normalized_value")), str(record.get("state") or "unknown"),
+                 str(record.get("source") or ""), str(record.get("source_field") or ""),
+                 str(record.get("extraction_method") or ""), _json(record.get("evidence")),
+                 float(record.get("confidence") or 0), str(record.get("observed_at") or now), rule_version,
+                 int(str(record.get("state") or "unknown") in {"present", "inferred"}),
+                 "latest evidence-backed candidate" if str(record.get("state") or "unknown") in {"present", "inferred"} else "no evidence-backed value", now)
             )
         for field_name, value in company_values.items():
             known = value not in (None, "", [])
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO acquisition_field_provenance (
-                    provenance_id, entity_kind, entity_id, field_name, source_observation_id,
-                    raw_value_json, normalized_value_json, state, source, source_field,
-                    extraction_method, evidence_json, confidence, observed_at, rule_version,
-                    selected, selection_reason, created_at
-                ) VALUES (?, 'company', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"field_provenance_{uuid4().hex}", company_id, field_name, source_observation_id,
-                    _json(value), _json(value), "present" if known else "unknown",
-                    "source_observation" if known else "", f"company.{field_name}" if known else "",
-                    "source_payload" if known else "not_available", _json(value if known else None),
-                    0.9 if known else 0, now, rule_version, int(known),
-                    "latest evidence-backed candidate" if known else "no evidence-backed value", now,
-                ),
+            company_provenance_rows.append(
+                (f"field_provenance_{uuid4().hex}", "company", company_id, field_name, source_observation_id,
+                 _json(value), _json(value), "present" if known else "unknown",
+                 "source_observation" if known else "", f"company.{field_name}" if known else "",
+                 "source_payload" if known else "not_available", _json(value if known else None),
+                 0.9 if known else 0, now, rule_version, int(known),
+                 "latest evidence-backed candidate" if known else "no evidence-backed value", now)
             )
+        if company_provenance_rows:
+            connection.executemany(provenance_sql, company_provenance_rows)
         output_payload = dict(mapping)
         connection.execute(
             """
