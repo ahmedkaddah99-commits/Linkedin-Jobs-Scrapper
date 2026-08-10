@@ -974,13 +974,17 @@ class PhaseAAcquisitionScheduler:
                     "Request outcome is durable but a later Phase A persistence boundary failed."
                 ) from exc
             if dispatch_started:
+                uncertainty_type = type(exc).__name__.casefold()
                 store.complete_request(
                     request_id,
                     status="uncertain",
                     uncertain_external_outcome=True,
                     recovery_state="recovery_required",
-                    error_code="uncertain_external_outcome",
-                    error_message="External acquisition may have occurred before persistence completed.",
+                    error_code=f"uncertain_external_outcome:{uncertainty_type}",
+                    error_message=(
+                        "External acquisition may have occurred before persistence completed; "
+                        f"exception_type={uncertainty_type}."
+                    ),
                 )
                 raise AcquisitionUncertainOutcomeError(
                     "External acquisition outcome is uncertain; explicit recovery is required."
