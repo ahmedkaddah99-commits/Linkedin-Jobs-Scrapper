@@ -53,6 +53,7 @@ def main() -> int:
     parser.add_argument("--scope-json", default="{}", help="JSON object limiting the run; recorded for audit")
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--max-batches", type=int, default=100, help="Maximum committed batches per invocation")
+    parser.add_argument("--stale-after-seconds", type=int, default=30 * 60, help="Lease age required before reclaiming a running invocation")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--yes", action="store_true", help="Confirm additive reprocessing")
     parser.add_argument("--idempotency-key", default="")
@@ -74,6 +75,7 @@ def main() -> int:
             apply=True,
             batch_size=max(1, args.batch_size),
             max_batches=max(1, args.max_batches),
+            stale_after_seconds=max(1, args.stale_after_seconds),
             idempotency_key=args.idempotency_key,
             resume_id=args.resume_id,
             scope=scope,
