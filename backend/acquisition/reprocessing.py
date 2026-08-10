@@ -497,7 +497,7 @@ def _process_batch(
     remote_per_observation_transactions = (
         getattr(connection, "backend", "sqlite") == "libsql" and remote_mode == "isolated"
     )
-    supports_savepoints = not remote_per_observation_transactions
+    supports_savepoints = getattr(connection, "backend", "sqlite") == "sqlite"
     for index, row in enumerate(rows):
         observation_id = str(row["observation_id"])
         savepoint = f"reprocess_observation_{index}"
