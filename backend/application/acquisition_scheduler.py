@@ -472,11 +472,15 @@ class PhaseAAcquisitionScheduler:
             target["config"] = {
                 **dict(target.get("config") or {}),
                 "admin_import_id": str(import_payload.get("import_id") or ""),
-                "admin_import_method": "direct" if connector in {"greenhouse", "lever"} else "web",
+                "admin_import_method": (
+                    "direct"
+                    if connector in {"greenhouse", "lever", *EXPANSION_CONNECTORS, "generic_jsonld"}
+                    else "web"
+                ),
                 "admin_import_allow_proxy": bool(plan.get("admin_import_allow_proxy")),
                 "admin_scope": scope,
             }
-            if connector not in {"greenhouse", "lever"}:
+            if connector not in {"greenhouse", "lever", *EXPANSION_CONNECTORS, "generic_jsonld"}:
                 target["connector"] = "company_career_sites"
                 target["request_mode"] = "scrapeops"
             targets.append(target)
