@@ -12,43 +12,44 @@ local database: `DATABASE_BACKEND=turso`, `RUNR_ENV=production`, remote
 libSQL/Turso configured, and R2/S3 object storage configured. No secret value
 is reproduced here. [P]
 
-The current production database has 45 applied migrations, 587 immutable job
-observations, 609 posting-version rows, 141 canonical jobs, 11 canonical
-companies, 7,316 field-evidence rows, 127 completeness reports, 4,002 quality
-events, 252 company URL rows, zero logo-enrichment rows, zero duplicate
+The current production database has 47 applied migrations, 961 immutable job
+observations, 735 posting-version rows, 146 canonical jobs, 11 canonical
+companies, 29,791 field-evidence rows, 146 completeness reports, 7,133 quality
+events, 290 company URL rows, zero logo-enrichment rows, zero duplicate
 clusters, five publication rows, and one current publication head. [P]
 
-N26/Greenhouse contributes 433 observations and Qonto/Lever 152. The database
-also contains two one-row fixture/test sources (`fixture_source` and `x`) and
-five quarantined/unproven bounded probes; those are not evidence of productive
-connector coverage. [P]
+N26/Greenhouse contributes 433 legacy rows with blank connector plus 269 fresh
+Greenhouse rows; Qonto/Lever contributes 152 legacy rows with blank connector
+plus 105 fresh Lever rows. `fixture_source` and `x` remain one row each,
+quarantined and excluded from productive acquisition and normal quality
+metrics. [P]
 
-The public head is valid and contains 133 jobs; canonical jobs include N26 97,
-Qonto 42, Fixture source 1, and x 1. The current head was published at
-`2026-08-10T00:02:55.648984+00:00`. [P]
+The valid public head contains 133 jobs; canonical jobs include N26 101,
+Qonto 43, Fixture source 1, and x 1. The current head was published at
+`2026-08-10T00:02:55.648984+00:00`; fixture jobs in the head: 0. [P]
 
-Complete: immutable observation retention, ATS routing for Greenhouse/Lever,
-URL/application classification, description representations, canonical job
-identity/versioning, field provenance, report-only quality, conservative
-duplicate candidates, publication-head control, admin inspection APIs, and
-resumable reprocessing code. [C][S][T][P]
+Complete/live-proven: immutable observation and raw-payload retention for the
+inspected 961 rows, Greenhouse/Lever direct acquisition, bounded remote
+projection recovery, URL/application classification, description
+representations, canonical job identity/versioning, field provenance,
+report-only quality, conservative duplicate candidates, publication-head
+control, admin inspection APIs, authenticated feed/detail rendering, and the
+completed resumable reprocessing run plus same-key idempotent replay. [C][S][T][P][A]
 
-Partial: company URL/profile coverage, timestamp semantics, source metadata,
-field precedence, enrichment, duplicate review, user-facing publication of
-the new normalized fields, and production reprocessing. The production
-reprocessing row has a durable checkpoint at 80 observations but is currently
-stale/running after an external duplicate launcher was stopped; it is not a
-completed backfill. [C][P]
-
-Missing or not proven in the inspected data: logo provider results, durable
-company-source/alias decision history, automatic semantic conflict resolution,
-connector capability rows for every ATS, reactivation evidence, authenticated
-production API bodies, and a tested automatic rollback of remote additive
-projections. [P][U]
+Partial/deferred: generic/JSON-LD acquisition (Siemens ended with an uncertain
+external outcome), official company homepage/careers/ATS identity selection,
+company aliases/source entity, timestamp semantics, Greenhouse application
+child-route persistence, enrichment, live duplicate decisions, public typed
+field completeness, and four disabled/unregistered ATS expansions. [P][U]
 
 Quality and completeness are annotations. They do not reject ingestion, stop
 canonicalization, block publication, or filter the user feed unless a separate
-explicit publication/review action does so. [C][T]
+explicit publication/review action does so. [C][T][A]
+
+The remainder of this file contains the stage/entity/lineage/capability map;
+earlier Prompt-1/2/3 recounts are historical evidence only. The authoritative
+acceptance narrative and current counts are in
+`FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md`. [P]
 
 ## End-to-end path
 
@@ -285,7 +286,7 @@ report and remains outside version control. [P][U]
 6. Add remote backup/restore procedure, operational dashboards, version diffs,
    and authenticated production contract tests.
 
-## Prompt 2 production truth update (2026-08-10)
+## Historical Prompt 2 snapshot (superseded by final acceptance)
 
 The configured production Turso/libSQL database now has migration 046 applied
 in addition to 045. The target registry contains nine targets: N26/Greenhouse
@@ -320,7 +321,7 @@ The machine-readable companion contains the exact current production counts,
 source capability facts, fresh import IDs, consumer checks, and unresolved
 gaps under `prompt_2_fresh_production`.
 
-## Prompt 3 integration truth (2026-08-10)
+## Historical Prompt 3 snapshot (superseded by final acceptance)
 
 The four product-completion workstreams are now integrated and deployed. The
 configured production Turso/libSQL database is at migration 047. The
@@ -336,15 +337,44 @@ and the current API/worker deployment after the documentation push is
 | C typed fields/filters | `public_typed_contract_v1`, additive `typed` namespace and normalized filter predicates | user card/detail projections; admin typed filter controls | authenticated feed/detail and Jobs UI rendered; representative Qonto still has unknown workplace/category/application and no verified description |
 | D connector capability/retention | disabled-by-default expansion contracts and migration-backed snapshots | capability, retention, and snapshot routes; Rules panel | 4 latest disabled/unregistered connectors; 8 historical snapshots; 839/839 observations retain payloads |
 
-Current production counts are 11 companies, 146 canonical jobs, 839 source
-observations, 735 posting versions, 26,009 provenance rows, 839 rule outputs,
-146 completeness reports, 6,749 quality events, 290 company URLs, 0 logo
-enrichment rows, 0 duplicate clusters, 0 duplicate decisions, and a valid
-current publication head of 133 jobs. Source counts are 615 observations / 101
-source jobs for N26 Greenhouse, 222 / 43 for Qonto Lever, and one observation /
-one source job each for the quarantined `fixture_source` and `x`. The latter
-remain preserved evidence and are absent from the current publication.
+The historical Prompt 3 boundary contained 11 companies, 146 canonical jobs,
+839 source observations, 735 posting versions, 26,009 provenance rows, 839
+rule outputs, 146 completeness reports, 6,749 quality events, 290 company
+URLs, 0 logo-enrichment rows, 0 duplicate clusters, 0 duplicate decisions,
+and a valid current publication head of 133 jobs. Those values are retained
+for delta evidence only; the current production values are in the Final
+acceptance truth section above.
 
-The current map now includes the Prompt 3 deployment, capabilities, typed
-consumers, admin actions, production counts, and gaps under
-`prompt_3_product_completion` in `CURRENT_DATA_PIPELINE_MAP.json`.
+The machine-readable companion retains this historical checkpoint under
+`prompt_3_product_completion`; it is not the current truth.
+
+## Final acceptance truth (2026-08-10)
+
+The authoritative current report is
+`FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md`. At acceptance the
+configured production target had 47 migrations, 961 source observations, 735
+posting versions, 146 canonical jobs, 29,791 provenance rows, 961 rule
+outputs, 146 completeness reports, 7,133 quality events, 290 company URL
+rows, zero logo enrichments, zero duplicate clusters, five publications, and
+a valid 133-job head. [P]
+
+The existing reprocessing run
+`reprocess_ef912ccf2e9f44ca974222fe60732e55` with key
+`unified-mapping-production-2026-08-10` is completed at observation
+`observation_ffc65009d257463e95239c00166d6ab7`; failed IDs are empty. The
+same-key invocation returned `idempotent_replay=true` and changed no semantic
+version or duplicate projection. [P]
+
+Fresh direct acquisition reconciled N26 Greenhouse at 87 returned/87
+accepted/87 unchanged/0 rejected and Qonto Lever at 35 returned/35
+accepted/35 unchanged/0 rejected, with 4 and 3 complete-snapshot closures.
+The Siemens generic/JSON-LD attempt is explicitly uncertain and produced no
+accepted observation; it is deferred rather than counted as connector
+success. Fixtures remain quarantined and absent from the current head. [P][U]
+
+The API, worker, and frontend runtime-fix deployment was verified at
+`052d8e145c8034734ab5a302c198f23f5d70067f`; final docs-only deployment must
+preserve this code-bearing runtime truth. Authenticated admin pages and the
+user feed/detail rendered; the Duplicates queue was empty, and local duplicate
+candidate/distinct/merge/split/undo tests passed without mutation of source
+evidence. [A][T]

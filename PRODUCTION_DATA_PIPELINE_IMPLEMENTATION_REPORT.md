@@ -2,11 +2,12 @@
 
 Date: 2026-08-10  
 Branch: `deployment/render-turso-r2`  
-Implementation commits inspected: `a1a1c92` through `cba90b6`. The production
-reprocessing run executed while the Runr API and worker were deployed at
-`cba90b654b13eb7d4951c2e418de57719906ab11`, which includes the lease-expiry and
-private-caller fencing fixes described below. The subsequent report-only
-deployment is `9a7423f`; the separate frontend deployment is `9a62e81`.
+Authoritative current acceptance follows the earlier implementation history.
+The API, worker, and frontend runtime-fix deployment was verified at
+`052d8e145c8034734ab5a302c198f23f5d70067f`; the configured production target
+is Turso/libSQL with R2/S3 object storage and migration 047 applied. The full
+current acceptance artifact is
+[FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md](FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md).
 
 ## Scope and safety
 
@@ -79,7 +80,7 @@ inspection/reprocessing capabilities. Both route families are admin-only.
 Raw source evidence is returned by the admin inspection API but is not placed
 in the public user serializer.
 
-## Production baseline and evidence
+## Historical Prompt 1 baseline and evidence (superseded by final acceptance)
 
 The inspected target was the configured production Turso/libSQL database, not
 the local SQLite path. `/health/live` and `/health/ready` both returned HTTP
@@ -281,7 +282,7 @@ The complete stage, entity, field-lineage, connector, consumer, duplicate, and
 gap map is in [CURRENT_DATA_PIPELINE_MAP.md](CURRENT_DATA_PIPELINE_MAP.md) and
 [CURRENT_DATA_PIPELINE_MAP.json](CURRENT_DATA_PIPELINE_MAP.json).
 
-## Prompt 2 — fresh production baseline (2026-08-10)
+## Historical Prompt 2 — fresh production baseline (superseded by final acceptance)
 
 The configured environment inspected was production Turso/libSQL from
 `user_config/.env`; the local SQLite database was not treated as production.
@@ -336,7 +337,7 @@ application destination checks, authenticated admin/user UI checks, warnings,
 and unresolved gaps are recorded in
 [PRODUCTION_FRESH_ACQUISITION_REPORT.md](PRODUCTION_FRESH_ACQUISITION_REPORT.md).
 
-## Prompt 3 — parallel product-completion wave (2026-08-10)
+## Historical Prompt 3 — parallel product-completion wave (superseded by final acceptance)
 
 Prompt 2 ended with `PROMPT 2 GATE PASSED`, so the four bounded product
 workstreams were integrated and deployed. The inspected environment remained
@@ -410,3 +411,47 @@ not configured, and the zero-cluster state prevented a live duplicate-decision
 canary. Quality and completeness remain report-only and do not block unrelated
 observations. See the parallel report and current map for the prioritized
 follow-up sequence.
+
+## Final acceptance handoff (2026-08-10)
+
+This section and
+[FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md](FINAL_PRODUCTION_ACQUISITION_ACCEPTANCE_REPORT.md)
+supersede the historical Prompt 1, Prompt 2, and Prompt 3 snapshots above.
+Those snapshots retain their original evidence and are not the current
+production count.
+
+The configured production target is remote Turso/libSQL with R2/S3; migration
+047 is applied. The code-bearing runtime-fix deployment verified at acceptance
+was `052d8e145c8034734ab5a302c198f23f5d70067f`. Health and readiness returned
+HTTP 200, and authenticated admin and user pages rendered. [P][A]
+
+| Current production metric | Value |
+|---|---:|
+| Schema migrations | 47 |
+| Canonical companies / jobs | 11 / 146 |
+| Source observations / posting versions | 961 / 735 |
+| Field provenance / rule outputs | 29,791 / 961 |
+| Completeness reports / physical quality events | 146 / 7,133 |
+| Company URL rows / logo-enrichment rows | 290 / 0 |
+| Duplicate clusters / members / decisions | 0 / 0 / 0 |
+| Publications / publication-job rows | 5 / 427 |
+| Current valid-head jobs | 133; fixture jobs 0 |
+| Lifecycle | 135 active / 4 stale / 7 closed |
+
+The original reprocessing run
+`reprocess_ef912ccf2e9f44ca974222fe60732e55` is completed at checkpoint
+`observation_ffc65009d257463e95239c00166d6ab7` with zero failed observation
+IDs. Re-invoking it with the exact same idempotency key returned
+`idempotent_replay=true` and added no semantic versions or duplicate
+projections. [P]
+
+Fresh N26/Greenhouse and Qonto/Lever acquisition completed with 87/87 and
+35/35 accepted observations respectively; all were unchanged, with 4 and 3
+complete-snapshot closures and zero unexplained reconciliation differences.
+The Siemens generic/JSON-LD attempt ended uncertain with zero accepted
+observations and is deferred. Fixtures remain quarantined, retained, and
+excluded from normal acquisition and quality metrics. [P][U]
+
+Acceptance is partial. The exact deferred scope, connector limitations,
+field gaps, authenticated UI evidence, duplicate workflow test evidence, and
+recommended next actions are maintained in the final acceptance report.

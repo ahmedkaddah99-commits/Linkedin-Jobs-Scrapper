@@ -22,20 +22,20 @@
       "uncertain": "not observable or not proven"
     },
     "production_counts": {
-      "schema_migrations": 46,
+      "schema_migrations": 47,
       "acquisition_targets": 9,
       "acquisition_cycles": 14,
       "acquisition_requests": 33,
       "canonical_companies": 11,
       "canonical_jobs": 146,
-      "job_source_observations": 839,
+      "job_source_observations": 961,
       "job_posting_versions": 735,
       "acquisition_publications": 5,
       "acquisition_publication_head": 1,
-      "acquisition_field_provenance": 26009,
-      "acquisition_rule_outputs": 839,
+      "acquisition_field_provenance": 29791,
+      "acquisition_rule_outputs": 961,
       "acquisition_completeness_reports": 146,
-      "acquisition_quality_events": 6749,
+      "acquisition_quality_events": 7133,
       "acquisition_stage_results": 8,
       "acquisition_reprocessing_runs": 1,
       "acquisition_duplicate_clusters": 0,
@@ -45,7 +45,7 @@
       "publication_head_jobs": 133,
       "fixture_observations_preserved": 2,
       "fixture_observations_in_current_head": 0,
-      "current_lifecycle": {"active": 139, "stale": 7, "closed": 0}
+      "current_lifecycle": {"active": 135, "stale": 4, "closed": 7}
     },
     "production_source_counts": {
       "greenhouse": 433,
@@ -54,8 +54,8 @@
       "x": 1
     },
     "production_company_job_counts": {
-      "N26": 97,
-      "Qonto": 42,
+      "N26": 101,
+      "Qonto": 43,
       "Fixture source": 1,
       "x": 1
     },
@@ -68,19 +68,20 @@
     "current_reprocessing": {
       "idempotency_key": "unified-mapping-production-2026-08-10",
       "reprocessing_id": "reprocess_ef912ccf2e9f44ca974222fe60732e55",
-      "status": "running_stale_checkpointed_incomplete",
-      "observations": 80,
-      "fields": 800,
-      "historical_repairs": 80,
-      "warnings": 388,
-      "batches": 28,
+      "status": "completed",
+      "observations": 587,
+      "fields": 5870,
+      "historical_repairs": 585,
+      "warnings": 2787,
+      "batches": 67,
       "failed_observations": 0,
-      "last_observation_id": "observation_2774e5e02aee42039663cb000eb6e233",
-      "external_duplicate_launcher_stopped": true
+      "last_observation_id": "observation_ffc65009d257463e95239c00166d6ab7",
+      "external_duplicate_launcher_stopped": true,
+      "idempotent_replay": true
     },
     "uncertainties": [
-      "The authenticated production API response body was not sampled; live health endpoints were sampled.",
-      "The current remote reprocessing row is stale/running at a durable checkpoint of 80 observations after an external duplicate launcher was stopped; it is resumable but incomplete.",
+      "The authenticated response proof is UI/body evidence from the signed-in admin and user session; unauthenticated 401 checks were not used as body evidence.",
+      "The generic Siemens request ended with uncertain external outcome and needs operator retry through the recovery path.",
       "No production duplicate cluster, logo enrichment, closure/reactivation, or manual merge decision was present to use as a live example.",
       "Remote backup restore is not automated or tested as a destructive operation."
     ]
@@ -221,9 +222,9 @@
     "environment": "configured production Turso/libSQL from user_config/.env; local SQLite is not production",
     "secrets_included": false,
     "deployed_commits": {
-      "api": "b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f",
-      "worker": "b3477b0c8504dd4bd43c4749bf6cfb46e7a0584f",
-      "frontend": "0ba834a8b59dcdbc660ef03dad4429904a700a39"
+      "api": "052d8e145c8034734ab5a302c198f23f5d70067f",
+      "worker": "052d8e145c8034734ab5a302c198f23f5d70067f",
+      "frontend": "052d8e145c8034734ab5a302c198f23f5d70067f"
     },
     "product_runtime_commits": {
       "api": "8ba4e5ec2f4f61a145636e2ff1a7e761e14d526f",
@@ -270,12 +271,12 @@
       "schema_migrations": 47,
       "canonical_companies": 11,
       "canonical_jobs": 146,
-      "job_source_observations": 839,
+      "job_source_observations": 961,
       "job_posting_versions": 735,
-      "acquisition_field_provenance": 26009,
-      "acquisition_rule_outputs": 839,
+      "acquisition_field_provenance": 29791,
+      "acquisition_rule_outputs": 961,
       "acquisition_completeness_reports": 146,
-      "acquisition_quality_events": 6749,
+      "acquisition_quality_events": 7133,
       "canonical_company_urls": 290,
       "company_logo_enrichments": 0,
       "acquisition_duplicate_clusters": 0,
@@ -285,8 +286,8 @@
       "valid_publication_head_jobs": 133
     },
     "source_counts_after": {
-      "n26_greenhouse": {"connector":"greenhouse","observations":615,"source_jobs":101,"canonical_company_jobs":101},
-      "qonto_lever": {"connector":"lever","observations":222,"source_jobs":43,"canonical_company_jobs":43},
+      "n26_greenhouse": {"connector":"greenhouse","legacy_blank_connector_observations":433,"fresh_connector_observations":269,"observations":702,"source_jobs":101,"canonical_company_jobs":101},
+      "qonto_lever": {"connector":"lever","legacy_blank_connector_observations":152,"fresh_connector_observations":105,"observations":257,"source_jobs":43,"canonical_company_jobs":43},
       "fixture_source": {"observations":1,"source_jobs":1,"quarantined":true,"in_current_publication":false},
       "x": {"observations":1,"source_jobs":1,"quarantined":true,"in_current_publication":false}
     },
@@ -296,7 +297,8 @@
       "state": "completed",
       "final_checkpoint": "observation_ffc65009d257463e95239c00166d6ab7",
       "failed_observation_ids": [],
-      "semantic_projection_changes_from_prompt_3": 0
+      "semantic_projection_changes_from_prompt_3": 0,
+      "idempotent_replay": true
     },
     "authenticated_checks": {
       "admin_duplicates": "rendered; production queue empty",
