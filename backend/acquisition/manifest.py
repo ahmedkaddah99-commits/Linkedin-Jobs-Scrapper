@@ -274,7 +274,11 @@ PHASE_A_TARGETS: tuple[dict[str, object], ...] = (
         "provider": "smartrecruiters",
         "source_token": "RheinGroup",
         "canonical_company_name": "RheinGroup",
-        "official_employer_hosts": ["careers.smartrecruiters.com", "jobs.smartrecruiters.com"],
+        "official_employer_hosts": [
+            "careers.smartrecruiters.com",
+            "jobs.smartrecruiters.com",
+            "api.smartrecruiters.com",
+        ],
         "maturity_state": "candidate",
         "enabled": True,
         "disabled_reason": "",
