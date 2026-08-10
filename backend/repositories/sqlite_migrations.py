@@ -2209,6 +2209,36 @@ def _apply_acquisition_reprocessing_lease_migration(connection: DatabaseConnecti
         """
     )
 
+
+def _apply_acquisition_source_quarantine_migration(connection: DatabaseConnection) -> None:
+    """Persist fixture/test source quarantine without deleting evidence."""
+
+    _ensure_table_column(connection, "acquisition_targets", "quarantined", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_table_column(connection, "acquisition_targets", "quarantine_reason", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "acquisition_targets", "quarantined_at", "TEXT NOT NULL DEFAULT ''")
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_acquisition_targets_quarantine
+            ON acquisition_targets(quarantined, target_kind, enabled)
+        """
+    )
+    now = utc_now_iso()
+    connection.execute(
+        """
+        UPDATE acquisition_targets
+        SET quarantined=1,
+            quarantine_reason=CASE WHEN quarantine_reason='' THEN 'fixture_or_test_target' ELSE quarantine_reason END,
+            quarantined_at=CASE WHEN quarantined_at='' THEN ? ELSE quarantined_at END,
+            enabled=0,
+            publication_enabled=0,
+            maturity_state='quarantined',
+            state_transition_reason='fixture_or_test_target_quarantined',
+            updated_at=?
+        WHERE target_kind='fixture' OR target_id IN ('fixture_source', 'x')
+        """,
+        (now, now),
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2455,6 +2485,12 @@ MIGRATIONS = (
         "045_acquisition_reprocessing_leases",
         "Add compare-and-swap ownership leases for resumable acquisition reprocessing.",
         _apply_acquisition_reprocessing_lease_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "046_acquisition_source_quarantine",
+        "Persist fixture/test source quarantine without deleting immutable acquisition evidence.",
+        _apply_acquisition_source_quarantine_migration,
         dependencies=(_table_columns, _ensure_table_column),
     ),
 )

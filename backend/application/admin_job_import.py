@@ -258,6 +258,7 @@ class AdminJobImportService:
         store = getattr(self.repositories, "acquisition_store", None)
         if store is None:
             return None
+        store.reconcile_terminal_job_imports()
         queued = store.claim_next_job_import(lease_owner=worker_id)
         if queued is None:
             return None

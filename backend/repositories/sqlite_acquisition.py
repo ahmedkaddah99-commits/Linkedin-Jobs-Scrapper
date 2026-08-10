@@ -138,14 +138,17 @@ class SqliteAcquisitionStore(_SqliteStore):
                 target_id = str(target.get("target_id") or "").strip()
                 if not target_id:
                     raise ValueError("Acquisition target requires target_id.")
+                target_kind = str(target.get("target_kind") or "employer_career_site")
+                is_quarantined = target_kind.casefold() == "fixture" or target_id in {"fixture_source", "x"}
                 connection.execute(
                     """
                     INSERT INTO acquisition_targets (
                         target_id, target_kind, display_name, canonical_target_url,
                         provenance_url, request_url, connector, provider, source_token,
                         policy_version, maturity_state, enabled, publication_enabled,
-                        max_direct_requests, request_mode, config_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        max_direct_requests, request_mode, config_json, quarantined,
+                        quarantine_reason, quarantined_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(target_id) DO UPDATE SET
                         target_kind=excluded.target_kind,
                         display_name=excluded.display_name,
@@ -156,8 +159,9 @@ class SqliteAcquisitionStore(_SqliteStore):
                         provider=excluded.provider,
                         source_token=excluded.source_token,
                         policy_version=excluded.policy_version,
-                        enabled=excluded.enabled,
-                        publication_enabled=excluded.publication_enabled,
+                        maturity_state=CASE WHEN acquisition_targets.quarantined=1 THEN 'quarantined' ELSE excluded.maturity_state END,
+                        enabled=CASE WHEN acquisition_targets.quarantined=1 THEN 0 ELSE excluded.enabled END,
+                        publication_enabled=CASE WHEN acquisition_targets.quarantined=1 THEN 0 ELSE excluded.publication_enabled END,
                         max_direct_requests=excluded.max_direct_requests,
                         request_mode=excluded.request_mode,
                         config_json=excluded.config_json,
@@ -174,9 +178,9 @@ class SqliteAcquisitionStore(_SqliteStore):
                         str(target.get("provider") or ""),
                         str(target.get("source_token") or ""),
                         str(target.get("policy_version") or "phase_a_v1"),
-                        str(target.get("maturity_state") or "unproven"),
-                        int(bool(target.get("enabled", False))),
-                        int(bool(target.get("publication_enabled", False))),
+                        "quarantined" if is_quarantined else str(target.get("maturity_state") or "unproven"),
+                        0 if is_quarantined else int(bool(target.get("enabled", False))),
+                        0 if is_quarantined else int(bool(target.get("publication_enabled", False))),
                         max(1, int(target.get("max_direct_requests") or 3)),
                         str(target.get("request_mode") or "direct"),
                         _json(
@@ -194,6 +198,9 @@ class SqliteAcquisitionStore(_SqliteStore):
                                 ),
                             }
                         ),
+                        int(is_quarantined),
+                        "fixture_or_test_target" if is_quarantined else "",
+                        now if is_quarantined else "",
                         now,
                         now,
                     ),
@@ -206,7 +213,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             sql = "SELECT * FROM acquisition_targets"
             params: tuple[Any, ...] = ()
             if not include_disabled:
-                sql += " WHERE enabled = 1"
+                sql += " WHERE enabled = 1 AND COALESCE(quarantined, 0) = 0"
             sql += " ORDER BY target_kind, display_name"
             rows = connection.execute(sql, params).fetchall()
         return [self._target_payload(_dict_row(row)) for row in rows]
@@ -1975,17 +1982,20 @@ class SqliteAcquisitionStore(_SqliteStore):
 
     def get_quality_metrics(self, cycle_id: str = "") -> dict[str, Any]:
         """Return report-only quality counts by source dimensions."""
-        where = "WHERE cycle_id=?" if str(cycle_id or "").strip() else ""
-        params: tuple[Any, ...] = (str(cycle_id),) if where else ()
+        where = "WHERE COALESCE(t.quarantined, 0)=0"
+        if str(cycle_id or "").strip():
+            where += " AND e.cycle_id=?"
+        params: tuple[Any, ...] = (str(cycle_id),) if str(cycle_id or "").strip() else ()
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT warning_code, severity, connector, target_id, employer_name, source_token,
+                SELECT e.warning_code, e.severity, e.connector, e.target_id, e.employer_name, e.source_token,
                        COUNT(*) AS count
-                FROM acquisition_quality_events
+                FROM acquisition_quality_events e
+                LEFT JOIN acquisition_targets t ON t.target_id=e.target_id
                 {where}
-                GROUP BY warning_code, severity, connector, target_id, employer_name, source_token
-                ORDER BY count DESC, warning_code
+                GROUP BY e.warning_code, e.severity, e.connector, e.target_id, e.employer_name, e.source_token
+                ORDER BY count DESC, e.warning_code
                 """,
                 params,
             ).fetchall()
@@ -2153,6 +2163,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         return self._admin_import_payload(row)
 
     def list_job_imports(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        self.reconcile_terminal_job_imports()
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM admin_job_imports ORDER BY created_at DESC, import_id DESC LIMIT ? OFFSET ?",
@@ -2247,6 +2258,63 @@ class SqliteAcquisitionStore(_SqliteStore):
                 ),
             )
         return self.get_job_import(import_id)
+
+    def reconcile_terminal_job_imports(self) -> int:
+        """Close imports whose durable acquisition cycle already reached a terminal state."""
+
+        now = utc_now_iso()
+
+        def reconcile(connection) -> int:
+            rows = connection.execute(
+                """
+                SELECT i.import_id, i.cycle_id, c.status AS cycle_status,
+                       c.error_code AS cycle_error_code, c.error_message AS cycle_error_message
+                FROM admin_job_imports i
+                JOIN acquisition_cycles c ON c.cycle_id=i.cycle_id
+                WHERE i.status='running'
+                  AND c.status IN ('completed', 'degraded', 'failed', 'blocked', 'recovery_required')
+                ORDER BY i.created_at, i.import_id
+                """
+            ).fetchall()
+            for row in rows:
+                cycle_status = str(row["cycle_status"] or "")
+                import_status = {
+                    "completed": "completed",
+                    "failed": "failed",
+                    "degraded": "needs_attention",
+                    "blocked": "needs_attention",
+                    "recovery_required": "needs_attention",
+                }.get(cycle_status, "needs_attention")
+                error_code = str(row["cycle_error_code"] or "")
+                error_message = str(row["cycle_error_message"] or "")
+                if import_status == "needs_attention" and not error_code:
+                    error_code = "cycle_degraded"
+                if import_status == "needs_attention" and not error_message:
+                    error_message = "Acquisition cycle completed with one or more source errors."
+                connection.execute(
+                    """
+                    UPDATE admin_job_imports
+                    SET status=?, error_code=?, error_message=?, completed_at=?, updated_at=?
+                    WHERE import_id=? AND status='running'
+                    """,
+                    (import_status, error_code, error_message[:500], now, now, str(row["import_id"])),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO admin_job_audit_events (
+                        event_id, import_id, actor_user_id, event_type, payload_json, created_at
+                    ) VALUES (?, ?, '', 'import_reconciled', ?, ?)
+                    """,
+                    (
+                        f"admin_audit_{uuid4().hex}",
+                        str(row["import_id"]),
+                        _json({"cycle_id": str(row["cycle_id"]), "cycle_status": cycle_status, "status": import_status}),
+                        now,
+                    ),
+                )
+            return len(rows)
+
+        return int(self._run_transaction(reconcile) or 0)
 
     def _review_job_payload(self, row: Mapping[str, Any], *, rejected: bool = False) -> dict[str, Any]:
         payload = _dict_row(row) if hasattr(row, "keys") else dict(row)
@@ -3377,7 +3445,19 @@ class SqliteAcquisitionStore(_SqliteStore):
                 current_ids = [
                     str(row["canonical_job_id"])
                     for row in connection.execute(
-                        "SELECT canonical_job_id FROM acquisition_publication_jobs WHERE publication_id=?",
+                        """
+                        SELECT pj.canonical_job_id
+                        FROM acquisition_publication_jobs pj
+                        WHERE pj.publication_id=?
+                          AND EXISTS (
+                              SELECT 1
+                              FROM job_source_observations o
+                              LEFT JOIN acquisition_targets t ON t.target_id=o.target_id
+                              WHERE o.canonical_job_id=pj.canonical_job_id
+                                AND COALESCE(t.quarantined, 0)=0
+                                AND COALESCE(t.target_kind, '') <> 'fixture'
+                          )
+                        """,
                         (previous_publication_id,),
                     ).fetchall()
                 ]
@@ -3555,6 +3635,7 @@ class SqliteAcquisitionStore(_SqliteStore):
     def _target_payload(row: dict[str, Any]) -> dict[str, Any]:
         row["enabled"] = _bool(row.get("enabled"))
         row["publication_enabled"] = _bool(row.get("publication_enabled"))
+        row["quarantined"] = _bool(row.get("quarantined"))
         row["config"] = _decode(row.pop("config_json", "{}"), {})
         return row
 
