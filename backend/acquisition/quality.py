@@ -514,6 +514,42 @@ def _first(mapping: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
+_DESCRIPTION_SOURCE_PATHS = (
+    "description_raw",
+    "full_description",
+    "description",
+    "description_html",
+    "description_text",
+    "descriptionPlain",
+    "descriptionHtml",
+    "descriptionHTML",
+    "jobDescription",
+    "job_description",
+    "jobDescriptions.description",
+    "jobPostingInfo.description",
+)
+
+
+def _description_source(job: Mapping[str, Any]) -> Any:
+    """Recover a description from typed data or the retained raw source item."""
+
+    candidates: list[Mapping[str, Any]] = [job]
+    raw_payload = job.get("source_raw_payload")
+    if isinstance(raw_payload, Mapping):
+        candidates.append(raw_payload)
+    for candidate in candidates:
+        for path in _DESCRIPTION_SOURCE_PATHS:
+            value: Any = candidate
+            for part in path.split("."):
+                if not isinstance(value, Mapping):
+                    value = None
+                    break
+                value = value.get(part)
+            if value not in (None, "", [], {}) and not isinstance(value, (Mapping, list, tuple, set)):
+                return value
+    return ""
+
+
 def _normalize_timestamp(value: Any) -> str | None:
     if value in (None, "", []):
         return None
@@ -956,7 +992,7 @@ def normalize_job_for_ingestion(
         normalized["company"] = employer
         normalized["employer_name"] = employer
     source_ats = _text(job.get("source_ats") or target.get("connector")).casefold()
-    description = normalize_description(job.get("description_raw") if job.get("description_raw") not in (None, "") else job.get("full_description") or job.get("description") or "")
+    description = normalize_description(_description_source(job))
     normalized["description_raw"] = description["raw_source"]
     normalized["description_html"] = description["sanitized_html"]
     normalized["description_text"] = description["plain_text"]

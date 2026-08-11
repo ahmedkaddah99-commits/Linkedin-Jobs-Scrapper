@@ -125,6 +125,25 @@ class AcquisitionQualityTests(unittest.TestCase):
         self.assertIn("&amp;", result["sanitized_html"])
         self.assertEqual(result["decoding"], "html_entities_decoded_once")
 
+    def test_description_reprocessing_reads_retained_raw_source_item(self):
+        target = {
+            "connector": "personio",
+            "canonical_company_name": "LIQUI MOLY",
+            "canonical_target_url": "https://liqui-moly-gmbh.jobs.personio.com/",
+        }
+        normalized = normalize_job_for_ingestion(
+            {
+                "title": "Operations Lead",
+                "description": "",
+                "source_raw_payload": {
+                    "jobDescription": "<p>Own the operating model.</p>",
+                },
+            },
+            target,
+        )
+        self.assertEqual(normalized["description_raw"], "<p>Own the operating model.</p>")
+        self.assertIn("Own the operating model.", normalized["description_text"])
+
     def test_stable_content_excludes_volatile_observation_fields(self):
         first = {"title": "Engineer", "description": "Build", "location": "Berlin", "applicant_count": 81, "run_timestamp": "a"}
         second = {**first, "applicant_count": 99, "run_timestamp": "b", "posted_age_hours": 3}

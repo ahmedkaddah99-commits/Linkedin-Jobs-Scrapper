@@ -59,6 +59,19 @@ def _as_int(value: Any, *, default: int = 0, minimum: int = 0, maximum: int | No
     return min(parsed, maximum) if maximum is not None else parsed
 
 
+def _target_scope(scope: Mapping[str, Any] | None) -> tuple[str, list[str]]:
+    """Build a parameterized observation filter for a targeted replay."""
+
+    values = (scope or {}).get("target_ids") if isinstance(scope, Mapping) else None
+    if isinstance(values, str):
+        values = values.split(",")
+    target_ids = list(dict.fromkeys(str(item).strip() for item in (values or []) if str(item).strip()))
+    if not target_ids:
+        return "1=1", []
+    placeholders = ",".join("?" for _ in target_ids)
+    return f"o.target_id IN ({placeholders})", target_ids
+
+
 def _timestamp_age_seconds(value: Any) -> float | None:
     text = str(value or "").strip()
     if not text:
@@ -138,9 +151,15 @@ def build_reprocessing_plan(db_path: str | Path, *, scope: Mapping[str, Any] | N
     if environment.get("target_backend") == "sqlite":
         initialize_database(db_path)
     with database_session(db_path) as connection:
+        target_clause, target_parameters = _target_scope(scope)
+        scoped_observations = connection.execute(
+            f"SELECT COUNT(*) AS count FROM job_source_observations o WHERE {target_clause}",  # noqa: S608 - generated placeholders only
+            target_parameters,
+        ).fetchone()
+        scoped_observation_count = int(scoped_observations["count"] or 0) if scoped_observations is not None else 0
         counts = {
-            "observations": _count(connection, "job_source_observations"),
-            "source_records": _count(connection, "job_source_observations"),
+            "observations": scoped_observation_count,
+            "source_records": scoped_observation_count,
             "canonical_jobs": _count(connection, "canonical_jobs"),
             "canonical_companies": _count(connection, "canonical_companies"),
             "duplicate_clusters": _count(connection, "acquisition_duplicate_clusters"),
@@ -431,6 +450,7 @@ def _process_batch(
     totals: Mapping[str, int],
     failed_observation_ids: list[str],
     retry_failed: bool,
+    scope: Mapping[str, Any] | None,
     lease_token: str,
     lease_seconds: int,
     remote_mode: str = "auto",
@@ -458,6 +478,7 @@ def _process_batch(
                     totals=totals,
                     failed_observation_ids=failed_observation_ids,
                     retry_failed=retry_failed,
+                    scope=scope,
                     lease_token=lease_token,
                     lease_seconds=lease_seconds,
                     remote_mode="batch",
@@ -475,6 +496,7 @@ def _process_batch(
                 totals=totals,
                 failed_observation_ids=failed_observation_ids,
                 retry_failed=retry_failed,
+                scope=scope,
                 lease_token=lease_token,
                 lease_seconds=lease_seconds,
                 remote_mode="isolated",
@@ -482,6 +504,7 @@ def _process_batch(
             )
 
     limit = _as_int(batch_size, default=100, minimum=1, maximum=MAX_BATCH_SIZE)
+    target_clause, target_parameters = _target_scope(scope)
     rows = []
     retry_ids = list(dict.fromkeys(str(item) for item in failed_observation_ids if str(item))) if retry_failed else []
     if retry_ids:
@@ -493,24 +516,24 @@ def _process_batch(
                 FROM job_source_observations o
                 LEFT JOIN canonical_jobs j ON j.canonical_job_id=o.canonical_job_id
                 LEFT JOIN acquisition_targets t ON t.target_id=o.target_id
-                WHERE o.observation_id IN ({placeholders})
+                WHERE o.observation_id IN ({placeholders}) AND {target_clause}
                 ORDER BY o.observation_id LIMIT ?
                 """,  # noqa: S608 - placeholders are generated from persisted IDs
-                (*retry_ids, limit),
+                (*retry_ids, *target_parameters, limit),
             ).fetchall()
         )
     remaining = max(0, limit - len(rows))
     if remaining:
         new_rows = connection.execute(
-            """
+            f"""
             SELECT o.*, j.company_id, t.connector AS target_connector
             FROM job_source_observations o
             LEFT JOIN canonical_jobs j ON j.canonical_job_id=o.canonical_job_id
             LEFT JOIN acquisition_targets t ON t.target_id=o.target_id
-            WHERE (? = '' OR o.observation_id > ?)
+            WHERE (? = '' OR o.observation_id > ?) AND {target_clause}
             ORDER BY o.observation_id LIMIT ?
             """,
-            (checkpoint, checkpoint, remaining),
+            (checkpoint, checkpoint, *target_parameters, remaining),
         ).fetchall()
         seen = {str(row["observation_id"]) for row in rows}
         rows.extend(row for row in new_rows if str(row["observation_id"]) not in seen)
@@ -863,6 +886,7 @@ def run_reprocessing(
                         totals=totals,
                         failed_observation_ids=failed_observation_ids,
                         retry_failed=retry_failed,
+                        scope=scope,
                         lease_token=lease_token,
                         lease_seconds=stale_after_seconds,
                         _process_context=_RUNNER_CLAIM_CONTEXT,
@@ -877,6 +901,7 @@ def run_reprocessing(
                             totals=totals,
                             failed_observation_ids=failed_observation_ids,
                             retry_failed=retry_failed,
+                            scope=scope,
                             lease_token=lease_token,
                             lease_seconds=stale_after_seconds,
                             _process_context=_RUNNER_CLAIM_CONTEXT,

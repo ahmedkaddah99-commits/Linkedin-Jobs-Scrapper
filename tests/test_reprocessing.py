@@ -91,6 +91,35 @@ class ReprocessingTests(unittest.TestCase):
             self.assertEqual(raw_count, 3)
             self.assertEqual(reprocessing._decode(run["backup_json"], {})["rollback_reference"]["kind"], "sqlite_backup")
 
+    def test_target_scope_reprocesses_only_selected_source_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store, db_path = _fixture(root, count=3)
+            second_target = {**_target(), "target_id": "reprocessing_fixture_second"}
+            store.ensure_targets([second_target])
+            cycle = store.claim_due_cycle(window_key="reprocessing:fixture:second", lease_owner="test", scheduled_at="2026-08-10T00:00:00+00:00")
+            store.ensure_cycle_tasks(cycle["cycle_id"], [second_target])
+            task = store.claim_next_task(cycle_id=cycle["cycle_id"], lease_owner="test")
+            store.ingest_snapshot(
+                cycle_id=cycle["cycle_id"],
+                task_id=task["task_id"],
+                target_id=second_target["target_id"],
+                jobs=[{"job_id": "second-target-job", "title": "Second target role", "url": "https://jobs.example.com/second", "description": "Second target description"}],
+                complete_snapshot=True,
+                valid_snapshot=True,
+            )
+
+            result = run_reprocessing(
+                db_path,
+                apply=True,
+                idempotency_key="target-scoped-fixture",
+                scope={"target_ids": [second_target["target_id"]]},
+                max_batches=10,
+            )
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["counts"]["observations"], 1)
+
     def test_one_observation_failure_does_not_rollback_healthy_rows_and_resumes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
