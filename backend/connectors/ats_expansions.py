@@ -468,7 +468,23 @@ def _normalize_job(connector: str, item: Mapping[str, Any], *, target_url: str, 
     application = _application_destination(item, detail_url=detail_url, target_url=target_url)
     timestamp_semantics = _timestamp_semantics(item)
     title = _text(_first_value(item, ("title", "text", "name", "jobPostingInfo.title")))
-    description = _text(_first_value(item, ("description", "descriptionPlain", "description_text", "jobDescriptions.description", "jobPostingInfo.description")))
+    description = _text(
+        _first_value(
+            item,
+            (
+                "description",
+                "descriptionPlain",
+                "description_text",
+                "description_raw",
+                "descriptionHtml",
+                "descriptionHTML",
+                "jobDescription",
+                "job_description",
+                "jobDescriptions.description",
+                "jobPostingInfo.description",
+            ),
+        )
+    )
     location_values = _locations(item)
     apply_url = application["url"] or detail_url
     warnings = list(application["warnings"])

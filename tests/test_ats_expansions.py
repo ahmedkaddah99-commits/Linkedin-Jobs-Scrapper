@@ -98,6 +98,26 @@ class AtsExpansionContractTests(unittest.TestCase):
                 self.assertTrue(result["jobs"][0]["stable_external_id"].startswith(f"{connector}:"))
                 self.assertEqual(result["jobs"][0]["application_status"], "verified")
 
+    def test_personio_job_description_is_projected_from_raw_job_description(self):
+        result = run_fixture_snapshot(
+            "personio",
+            "https://acme.jobs.personio.de/",
+            {
+                "position": [
+                    {
+                        "id": "personio-description-42",
+                        "name": "Operations Lead",
+                        "jobAdLink": "https://acme.jobs.personio.de/job/42",
+                        "jobDescription": "<p>Own the operating model.</p>",
+                    }
+                ]
+            },
+        )
+
+        job = result["jobs"][0]
+        self.assertEqual(job["full_description"], "<p>Own the operating model.</p>")
+        self.assertEqual(job["description"], "<p>Own the operating model.</p>")
+
     def test_bounded_retry_recovers_but_keeps_snapshot_incomplete_when_more_pages_exist(self):
         responses = iter(
             [
