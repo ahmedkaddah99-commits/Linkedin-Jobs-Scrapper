@@ -8,7 +8,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
 LOGGER = logging.getLogger(__name__)
-POSTING_URL_FIELDS = ("apply_link", "job_url", "url", "linkedin_link", "link", "source_url")
+JOB_LISTING_URL_FIELDS = ("job_detail_url", "job_url", "url", "linkedin_link", "link", "source_url")
+POSTING_URL_FIELDS = JOB_LISTING_URL_FIELDS + ("apply_link",)
 
 
 def compact_whitespace(value: str) -> str:
@@ -70,7 +71,9 @@ def canonicalize_url(raw_url: str) -> str:
 
 
 def canonical_posting_url(record: Mapping[str, Any]) -> str:
-    for field_name in POSTING_URL_FIELDS:
+    # Prefer the source listing URL. The apply URL is only a compatibility
+    # fallback for legacy records that did not retain a separate listing URL.
+    for field_name in JOB_LISTING_URL_FIELDS + ("apply_link",):
         canonical_url = canonicalize_url(str(record.get(field_name) or ""))
         if canonical_url:
             return canonical_url
@@ -86,17 +89,9 @@ def job_identity_keys(record: Mapping[str, Any], *, include_title_company: bool 
     keys: list[str] = []
     seen = set()
 
-    for field_name in POSTING_URL_FIELDS:
-        canonical_url = canonicalize_url(str(record.get(field_name) or ""))
-        if canonical_url:
-            identity = f"url:{canonical_url}"
-            if identity not in seen:
-                keys.append(identity)
-                seen.add(identity)
-
-    job_id = compact_whitespace(str(record.get("job_id") or ""))
-    if job_id:
-        identity = f"job_id:{job_id}"
+    canonical_url = canonical_posting_url(record)
+    if canonical_url:
+        identity = f"url:{canonical_url}"
         if identity not in seen:
             keys.append(identity)
             seen.add(identity)

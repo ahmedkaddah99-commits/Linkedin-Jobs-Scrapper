@@ -2275,6 +2275,69 @@ def _apply_product_completion_wave_migration(connection: DatabaseConnection) -> 
         """
     )
 
+
+def _apply_posting_identity_anchor_migration(connection: DatabaseConnection) -> None:
+    """Persist the immutable URL-based posting-age anchor."""
+
+    for column, definition in (
+        ("posting_anchor_at", "TEXT NOT NULL DEFAULT ''"),
+        ("posting_anchor_source", "TEXT NOT NULL DEFAULT ''"),
+        ("posting_anchor_precision", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        _ensure_table_column(connection, "canonical_jobs", column, definition)
+    jobs = connection.execute(
+        "SELECT canonical_job_id, first_seen_at FROM canonical_jobs WHERE posting_anchor_at=''"
+    ).fetchall()
+    for job in jobs:
+        anchor_at = str(job["first_seen_at"] or "")
+        anchor_source = "first_seen_at"
+        anchor_precision = "capture_timestamp"
+        observation = connection.execute(
+            """
+            SELECT payload_json
+            FROM job_source_observations
+            WHERE canonical_job_id=?
+            ORDER BY observed_at ASC, observation_id ASC
+            LIMIT 1
+            """,
+            (str(job["canonical_job_id"]),),
+        ).fetchone()
+        if observation is not None:
+            try:
+                payload = json.loads(str(observation["payload_json"] or "{}"))
+            except (TypeError, ValueError):
+                payload = {}
+            timestamps = payload.get("source_timestamps") if isinstance(payload, dict) else {}
+            fields = timestamps.get("fields") if isinstance(timestamps, dict) else {}
+            posted = fields.get("source_posted_at") if isinstance(fields, dict) else {}
+            source_value = str(posted.get("value") or "") if isinstance(posted, dict) else ""
+            if source_value:
+                anchor_at = source_value
+                anchor_source = "source_posted_age" if str(posted.get("state") or "").casefold() == "inferred" else "source_posted_at"
+                anchor_precision = "relative_source_age" if anchor_source == "source_posted_age" else "source_timestamp"
+        connection.execute(
+            """
+            UPDATE canonical_jobs
+            SET posting_anchor_at=?, posting_anchor_source=?, posting_anchor_precision=?
+            WHERE canonical_job_id=?
+            """,
+            (anchor_at, anchor_source, anchor_precision, str(job["canonical_job_id"])),
+        )
+    connection.execute(
+        """
+        UPDATE canonical_jobs
+        SET posting_anchor_source=CASE WHEN posting_anchor_source='' THEN 'first_seen_at' ELSE posting_anchor_source END,
+            posting_anchor_precision=CASE WHEN posting_anchor_precision='' THEN 'capture_timestamp' ELSE posting_anchor_precision END
+        WHERE posting_anchor_source='' OR posting_anchor_precision=''
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_canonical_jobs_posting_anchor
+            ON canonical_jobs(posting_anchor_at, posting_anchor_source)
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2533,5 +2596,11 @@ MIGRATIONS = (
         "047_product_completion_wave",
         "Add append-only duplicate decision history and connector capability snapshots.",
         _apply_product_completion_wave_migration,
+    ),
+    Migration.from_callable(
+        "048_posting_identity_anchor",
+        "Persist URL-based identity and immutable first-observed posting-age anchors.",
+        _apply_posting_identity_anchor_migration,
+        dependencies=(_table_columns, _ensure_table_column),
     ),
 )

@@ -418,6 +418,66 @@ class AdminJobImportDashboardTests(unittest.TestCase):
             ))
             self.assertEqual(app.get_admin_job_import(imported["import_id"])["status"], "completed")
 
+    def test_job_url_is_identity_and_posting_age_anchor_survives_reposts(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
+            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
+            payloads = [
+                [{
+                    "id": "source-job-1",
+                    "title": "Platform Engineer",
+                    "absolute_url": "https://boards.greenhouse.io/n26/jobs/platform-engineer",
+                    "location": {"name": "Berlin, Germany"},
+                    "content": "Build payment infrastructure.",
+                }],
+                [{
+                    "id": "source-job-reposted",
+                    "title": "Platform Engineer",
+                    "absolute_url": "https://boards.greenhouse.io/n26/jobs/platform-engineer",
+                    "location": {"name": "Berlin, Germany"},
+                    "content": "Build payment infrastructure.",
+                    "posted_time_text": "1 day ago",
+                }],
+            ]
+
+            def requester(url, **_kwargs):
+                return _Response(url, {"jobs": payloads.pop(0)})
+
+            app._acquisition_scheduler.requester = requester
+            first = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="url-identity-first",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            app.process_next_admin_job_import(worker_id="url-identity-worker")
+            first_row = app.list_admin_job_inspections(limit=10)["jobs"][0]
+            first_inspection = app.get_admin_job_inspection(first_row["canonical_job_id"])
+            first_seen_at = first_inspection["job"]["first_seen_at"]
+
+            second = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="url-identity-repost",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            app.process_next_admin_job_import(worker_id="url-identity-worker")
+            listed = app.list_admin_job_inspections(limit=10)
+            self.assertEqual(listed["total"], 1)
+            self.assertEqual(listed["jobs"][0]["canonical_job_id"], first_row["canonical_job_id"])
+
+            inspection = app.get_admin_job_inspection(first_row["canonical_job_id"])
+            self.assertEqual(inspection["job"]["first_seen_at"], first_seen_at)
+            self.assertEqual(inspection["job"]["posting_age"]["anchor_source"], "first_seen_at")
+            self.assertEqual(inspection["job"]["posting_age"]["anchor_at"], first_seen_at)
+            self.assertIsNotNone(inspection["job"]["posted_age_hours"])
+            self.assertEqual(len(inspection["raw"]["posting_versions"]), 1)
+            self.assertEqual(len(inspection["raw"]["source_observations"]), 2)
+            self.assertEqual(app.get_admin_job_import(first["import_id"])["status"], "completed")
+            self.assertEqual(app.get_admin_job_import(second["import_id"])["status"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

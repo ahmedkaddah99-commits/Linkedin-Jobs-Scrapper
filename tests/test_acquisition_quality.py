@@ -103,6 +103,19 @@ class AcquisitionQualityTests(unittest.TestCase):
         self.assertEqual(explicit["timestamp_state"], "known")
         self.assertIsNotNone(explicit["fields"]["source_posted_at"]["value"])
 
+    def test_relative_posting_age_is_inferred_from_first_observation_time(self):
+        result = normalize_source_timestamps(
+            {
+                "posted_time_text": "1 day ago",
+                "observed_at": "2026-08-10T12:00:00Z",
+            },
+            provenance_url="https://linkedin.com/jobs/view/1",
+        )
+        self.assertEqual(result["timestamp_state"], "estimated")
+        self.assertEqual(result["timestamp_semantics"], "source_posted_age_estimate")
+        self.assertEqual(result["fields"]["source_posted_at"]["state"], "inferred")
+        self.assertEqual(result["fields"]["source_posted_at"]["value"], "2026-08-09T12:00:00+00:00")
+
     def test_description_decodes_entities_once_and_preserves_structure(self):
         result = normalize_description("<h2>Role</h2><ul><li>R&amp;D</li></ul><script>alert(1)</script><p>&amp;amp;</p>")
         self.assertIn("<h2>Role</h2>", result["sanitized_html"])

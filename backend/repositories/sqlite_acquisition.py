@@ -25,12 +25,12 @@ from backend.acquisition.quality import (
     completeness_rules,
     normalize_job_for_ingestion,
     posted_age_hours,
-    posted_age_hours_for_job,
     source_employer_name,
     stable_content_payload,
 )
 from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION
 from backend.database.connection import database_target_info
+from backend.domain.job_identity import canonicalize_url
 from backend.repositories.sqlite_core import _SqliteStore
 
 
@@ -53,6 +53,21 @@ def _dict_row(row) -> dict[str, Any]:
 
 def _bool(value: Any) -> bool:
     return bool(int(value or 0))
+
+
+def _posting_anchor(job: Mapping[str, Any], observed_at: str) -> tuple[str, str, str]:
+    """Return the immutable first-observation posting-age anchor."""
+
+    timestamps = job.get("source_timestamps") if isinstance(job.get("source_timestamps"), Mapping) else {}
+    fields = timestamps.get("fields") if isinstance(timestamps.get("fields"), Mapping) else {}
+    posted = fields.get("source_posted_at") if isinstance(fields.get("source_posted_at"), Mapping) else {}
+    value = str(posted.get("value") or "").strip()
+    if value:
+        state = str(posted.get("state") or "present").strip().casefold()
+        if state == "inferred":
+            return value, "source_posted_age", "relative_source_age"
+        return value, "source_posted_at", "source_timestamp"
+    return str(observed_at or ""), "first_seen_at", "capture_timestamp"
 
 
 def _is_unknown_value(value: Any) -> bool:
@@ -875,7 +890,8 @@ class SqliteAcquisitionStore(_SqliteStore):
                 audit = portal_audit_gate(target_for_gate)
                 if not audit["approved"]:
                     raise ValueError(f"portal_audit_not_passed:{','.join(audit['missing'])}")
-            seen_external: set[str] = set()
+            seen_urls: set[str] = set()
+            seen_source_ids: set[str] = set()
             all_snapshot_external = {
                 str(value).strip()
                 for value in (snapshot_external_ids if snapshot_external_ids is not None else [])
@@ -931,24 +947,44 @@ class SqliteAcquisitionStore(_SqliteStore):
             quality_events: list[dict[str, Any]] = []
             for raw_job in job_rows:
                 raw_job = dict(raw_job)
-                job = normalize_job_for_ingestion(raw_job, {**target_payload, "canonical_company_name": company_name})
-                external_id = str(job.get("job_id") or job.get("external_job_id") or "").strip()
+                job = normalize_job_for_ingestion(
+                    raw_job,
+                    {**target_payload, "canonical_company_name": company_name},
+                    observed_at=now,
+                )
+                source_external_id = str(job.get("job_id") or job.get("external_job_id") or "").strip()
                 title = str(job.get("title") or "").strip()
-                original_url = str(job.get("job_detail_url") or job.get("url") or job.get("link") or job.get("source_url") or job.get("absolute_url") or "").strip()
-                if not external_id or not title or not original_url:
+                original_url = canonicalize_url(
+                    str(
+                        job.get("job_detail_url")
+                        or job.get("url")
+                        or job.get("link")
+                        or job.get("source_url")
+                        or job.get("absolute_url")
+                        or ""
+                    ).strip()
+                )
+                if not title or not original_url:
                     counts["rejected"] += 1
                     continue
-                if external_id in seen_external:
+                # The listing URL is the business identity. The source ID is
+                # retained only as source metadata and falls back to the URL
+                # when a connector does not provide one.
+                external_id = source_external_id or original_url
+                job["external_id_source"] = "source_field" if source_external_id else "job_url_fallback"
+                if original_url in seen_urls:
                     counts["duplicates"] += 1
                     continue
-                seen_external.add(external_id)
+                seen_urls.add(original_url)
+                seen_source_ids.add(external_id)
                 replay = connection.execute(
                     """
                     SELECT observation_id FROM job_source_observations
-                    WHERE target_id=? AND cycle_id=? AND external_job_id=?
+                    WHERE target_id=? AND cycle_id=?
+                      AND (external_job_id=? OR original_url=?)
                     LIMIT 1
                     """,
-                    (target_id, cycle_id, external_id),
+                    (target_id, cycle_id, external_id, original_url),
                 ).fetchone()
                 if replay is not None:
                     # A replay is a no-op: do not create observations, versions,
@@ -960,29 +996,25 @@ class SqliteAcquisitionStore(_SqliteStore):
                 location = str(location_value).strip()
                 identity_key = self._identity_key(company_name, title, location, original_url)
                 identity_signature = self._identity_signature(company_name, title, location)
-                canonical = self._external_canonical(connection, target_id, external_id)
-                if canonical is None:
-                    canonical = self._find_existing_canonical(
-                        connection,
-                        identity_key=identity_key,
-                        identity_signature=identity_signature,
-                        original_url=original_url,
-                        company_id=company_id,
-                        title=title,
-                        location=location,
-                    )
+                canonical = self._find_existing_canonical(
+                    connection,
+                    identity_key=identity_key,
+                    original_url=original_url,
+                )
                 canonical_was_new = canonical is None
                 reopened_from_closed = bool(canonical is not None and str(canonical["lifecycle_state"] or "") == "closed")
                 if canonical is None:
                     canonical_id = f"canonical_job_{uuid4().hex}"
                     durable_identity_key = self._unique_identity_key(connection, identity_key)
+                    posting_anchor_at, posting_anchor_source, posting_anchor_precision = _posting_anchor(job, now)
                     connection.execute(
                         """
                         INSERT INTO canonical_jobs (
                             canonical_job_id, company_id, identity_key, title, location,
                             canonical_url, identity_signature, lifecycle_state, first_seen_at, last_seen_at,
-                            last_verified_at, absence_count, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 0, ?, ?)
+                            last_verified_at, absence_count, created_at, updated_at,
+                            posting_anchor_at, posting_anchor_source, posting_anchor_precision
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 0, ?, ?, ?, ?, ?)
                         """,
                         (
                             canonical_id,
@@ -997,6 +1029,9 @@ class SqliteAcquisitionStore(_SqliteStore):
                             now,
                             now,
                             now,
+                            posting_anchor_at,
+                            posting_anchor_source,
+                            posting_anchor_precision,
                         ),
                     )
                     counts["new"] += 1
@@ -1032,7 +1067,6 @@ class SqliteAcquisitionStore(_SqliteStore):
                         first_seen_at, last_seen_at
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source_id, external_job_id) DO UPDATE SET
-                        canonical_job_id=excluded.canonical_job_id,
                         last_seen_at=excluded.last_seen_at
                     """,
                     (
@@ -1255,7 +1289,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 affected: set[str] = set()
                 for missing in missing_rows:
                     external_id = str(missing["external_job_id"] or "")
-                    if external_id in (all_snapshot_external or seen_external):
+                    if external_id in (all_snapshot_external or seen_source_ids):
                         continue
                     canonical_id = str(missing["canonical_job_id"])
                     absence_count = int(missing["absence_count"] or 0) + 1
@@ -2673,6 +2707,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             SELECT j.canonical_job_id, j.company_id, c.canonical_name AS company,
                    j.title, j.location, j.canonical_url, j.lifecycle_state,
                    j.first_seen_at, j.last_seen_at, j.last_verified_at,
+                   j.posting_anchor_at, j.posting_anchor_source, j.posting_anchor_precision,
                    j.current_version_id, j.identity_key, j.identity_signature,
                    v.version_number, v.description, v.apply_url, v.payload_json AS version_payload_json,
                    o.target_id AS source_id, o.external_job_id, o.source_ats,
@@ -2734,9 +2769,13 @@ class SqliteAcquisitionStore(_SqliteStore):
             item["application_method"] = version_payload.get("application_method") or "unknown"
             item["application_classification"] = destination.get("classification") or "unknown"
             item["apply_status"] = "present" if destination.get("status") == "verified" else ("unresolved" if destination else "missing")
-            item["posted_age_hours"] = posted_age_hours(
-                version_payload.get("posted_at") or version_payload.get("datePosted")
-            )
+            posting_anchor_at = str(item.get("posting_anchor_at") or item.get("first_seen_at") or "")
+            item["posted_age_hours"] = posted_age_hours(posting_anchor_at)
+            item["posting_age"] = {
+                "anchor_at": posting_anchor_at or None,
+                "anchor_source": item.get("posting_anchor_source") or "first_seen_at",
+                "anchor_precision": item.get("posting_anchor_precision") or "capture_timestamp",
+            }
             item["source"] = str(item.get("connector") or item.get("source_id") or "Unknown")
             item["freshness"] = item.get("last_seen_at") or item.get("observed_at") or None
             jobs.append(item)
@@ -2967,7 +3006,17 @@ class SqliteAcquisitionStore(_SqliteStore):
         if isinstance(job["normalized_source_metadata"], Mapping):
             job["posted_at"] = (((job["normalized_source_metadata"].get("fields") or {}).get("posted_at") or {}).get("value"))
         job["quality_warnings"] = normalized_current.get("quality_warnings") or []
-        job["posted_age_hours"] = posted_age_hours_for_job(normalized_current)
+        posting_anchor_at = str(base.get("posting_anchor_at") or base.get("first_seen_at") or "").strip()
+        posting_anchor_source = str(base.get("posting_anchor_source") or "first_seen_at").strip()
+        posting_anchor_precision = str(base.get("posting_anchor_precision") or "capture_timestamp").strip()
+        job["posted_at"] = posting_anchor_at or None
+        job["posted_age_hours"] = posted_age_hours(posting_anchor_at)
+        job["posting_age"] = {
+            "anchor_at": posting_anchor_at or None,
+            "anchor_source": posting_anchor_source,
+            "anchor_precision": posting_anchor_precision,
+            "repost_safe": True,
+        }
         profile_website = str(company.get("website") or "")
         company_hosts = {hostname_for_url(profile_website)} if profile_website else set()
         target_hosts = {
@@ -3128,6 +3177,9 @@ class SqliteAcquisitionStore(_SqliteStore):
             "first_seen_at": base.get("first_seen_at"),
             "last_seen_at": base.get("last_seen_at"),
             "last_verified_at": base.get("last_verified_at") or None,
+            "posting_age_anchor_at": posting_anchor_at or None,
+            "posting_age_anchor_source": posting_anchor_source,
+            "posting_age_anchor_precision": posting_anchor_precision,
             "posting_version_id": base.get("current_version_id") or None,
             "posting_version": base.get("version_number"),
             "content_hash": base.get("content_hash") or None,
@@ -4391,62 +4443,38 @@ class SqliteAcquisitionStore(_SqliteStore):
         connection,
         *,
         identity_key: str,
-        identity_signature: str = "",
         original_url: str,
-        company_id: str,
-        title: str,
-        location: str,
     ):
-        """Resolve URL aliases first, then a strong cross-source signature."""
+        """Resolve only the canonical listing URL; never merge by content."""
 
         row = connection.execute(
-            "SELECT * FROM canonical_jobs WHERE identity_key = ? AND lifecycle_state != 'closed'",
+            "SELECT * FROM canonical_jobs WHERE identity_key = ?",
             (identity_key,),
         ).fetchone()
         if row is not None:
             return row
-        if identity_signature:
-            row = connection.execute(
-                """
-                SELECT * FROM canonical_jobs
-                WHERE identity_signature = ? AND lifecycle_state != 'closed'
-                ORDER BY first_seen_at, canonical_job_id
-                LIMIT 1
-                """,
-                (identity_signature,),
-            ).fetchone()
-            if row is not None:
-                return row
+        row = connection.execute(
+            "SELECT * FROM canonical_jobs WHERE canonical_url = ? ORDER BY first_seen_at, canonical_job_id LIMIT 1",
+            (original_url,),
+        ).fetchone()
+        if row is not None:
+            return row
         row = connection.execute(
             """
             SELECT j.*
             FROM canonical_jobs j
             JOIN canonical_job_url_aliases a ON a.canonical_job_id = j.canonical_job_id
-            WHERE a.url = ? AND j.lifecycle_state != 'closed'
+            WHERE a.url = ?
             ORDER BY j.updated_at DESC
             LIMIT 1
             """,
             (original_url,),
         ).fetchone()
-        if row is not None:
-            return row
-        # A strong employer/title/location signature consolidates different
-        # official ATS URLs while excluding already-closed postings so a true
-        # repost keeps a relationship and its historical provenance.
-        return connection.execute(
-            """
-            SELECT * FROM canonical_jobs
-            WHERE company_id = ? AND title = ? AND location = ?
-              AND lifecycle_state != 'closed'
-            ORDER BY first_seen_at, canonical_job_id
-            LIMIT 1
-            """,
-            (company_id, title, location),
-        ).fetchone()
+        return row
 
     @staticmethod
     def _identity_key(company: str, title: str, location: str, url: str) -> str:
-        stable_url = url.split("?", 1)[0].rstrip("/").casefold()
+        stable_url = canonicalize_url(url)
         if stable_url:
             return f"url:{stable_url}"
         return f"text:{company.casefold()}|{title.casefold()}|{location.casefold()}"

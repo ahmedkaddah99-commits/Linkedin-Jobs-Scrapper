@@ -7,11 +7,83 @@ import inspectorStyles from "../adminInspectorV3.css?raw";
 
 const NAV = ["Overview", "Jobs", "Companies", "Imports", "Operations", "Review", "System"];
 const DATA_TABS = ["coverage", "job", "company", "admin", "complete"];
+const JSON_SEGMENTS = {
+  job: [
+    ["all", "All job data"],
+    ["identity", "Identity"],
+    ["location", "Location"],
+    ["timing", "Timing"],
+    ["description", "Description"],
+    ["requirements", "Requirements"],
+    ["application", "Application"],
+  ],
+  company: [
+    ["all", "All company data"],
+    ["identity", "Identity"],
+    ["location", "Location"],
+    ["profile", "Profile"],
+    ["funding", "Funding"],
+    ["leadership", "Leadership & growth"],
+    ["source", "Source & provenance"],
+  ],
+  admin: [
+    ["all", "All admin data"],
+    ["source", "Source observations"],
+    ["operations", "Acquisition operations"],
+    ["provenance", "Provenance & rules"],
+    ["quality", "Completeness & warnings"],
+    ["review", "Review & publication"],
+  ],
+  complete: [
+    ["all", "All data"],
+    ["job", "Job section"],
+    ["company", "Company section"],
+    ["admin", "Admin section"],
+  ],
+};
+
+const SEGMENT_FIELDS = {
+  job: {
+    identity: key => ["canonical_job_id", "company_id", "title", "company", "canonical_url", "job_detail_url", "source_url", "lifecycle_state"].includes(key),
+    location: key => /location|address|city|country|region|postal|geo/i.test(key),
+    timing: key => /posted|first_seen|last_seen|verified|timestamp|freshness|posting_age/i.test(key),
+    description: key => /description/i.test(key),
+    requirements: key => /requirement|employment|workplace|experience|seniority|education|salary|skill|language|department|team|commitment|category/i.test(key),
+    application: key => /apply|application/i.test(key),
+  },
+  company: {
+    identity: key => ["canonical_company_id", "name", "entity_kind", "provenance_url"].includes(key),
+    location: key => /location|headquarter|address|city|country|region|postal|geo|office/i.test(key),
+    profile: key => /description|website|careers|industry|company_size|founded|logo|profile|benefit|sponsorship/i.test(key),
+    funding: key => /funding|stage|valuation|investment/i.test(key),
+    leadership: key => /leadership|growth|employee|headcount|associated|follower/i.test(key),
+    source: key => /url|provenance|source|field_provenance/i.test(key),
+  },
+  admin: {
+    source: key => /source|external|target|connector|provider|original_url/i.test(key),
+    operations: key => /acquisition|cycle|task|attempt|request|rejection|import/i.test(key),
+    provenance: key => /provenance|rule|version|content_hash|deduplication/i.test(key),
+    quality: key => /quality|completeness|warning|freshness/i.test(key),
+    review: key => /review|publication|decision|state/i.test(key),
+  },
+};
+
+function segmentedJson(value, section, segment) {
+  if (segment === "all" || !value) return value || {};
+  if (section === "complete" && ["job", "company", "admin"].includes(segment)) {
+    return { [segment]: value?.[segment] ?? null };
+  }
+  const matcher = SEGMENT_FIELDS[section]?.[segment];
+  if (!matcher) return value || {};
+  return Object.fromEntries(Object.entries(value || {}).filter(([key]) => matcher(key)));
+}
 
 function countFields(value) {
   const entries = Object.entries(value || {});
   const missing = entries
-    .filter(([, item]) => item === null || item === "" || (Array.isArray(item) && item.length === 0))
+    .filter(([, item]) => item === null || item === "" || (Array.isArray(item) && item.length === 0) || (
+      item && typeof item === "object" && !Array.isArray(item) && ["unknown", "missing", "unavailable", "failed", "extraction_not_run"].includes(String(item.state || "").toLowerCase())
+    ))
     .map(([key]) => key);
   return { total: entries.length, present: entries.length - missing.length, missing };
 }
@@ -87,6 +159,7 @@ export default function AdminJobImportPage() {
   const [selectedId, setSelectedId] = useState("");
   const [inspection, setInspection] = useState(null);
   const [tab, setTab] = useState("coverage");
+  const [jsonSegment, setJsonSegment] = useState("all");
   const [query, setQuery] = useState("");
   const [jsonSearch, setJsonSearch] = useState("");
   const [copied, setCopied] = useState(false);
@@ -143,7 +216,16 @@ export default function AdminJobImportPage() {
   const companyCoverage = countFields(selected.companyData);
   const adminCoverage = countFields(selected.admin);
   const completeRecord = selected.inspection || { job: selected.job, company: selected.companyData, admin: selected.admin };
-  const activeJson = tab === "job" ? selected.job : tab === "company" ? selected.companyData : tab === "admin" ? selected.admin : completeRecord;
+  const jsonSection = tab === "job" || tab === "company" || tab === "admin" || tab === "complete" ? tab : "complete";
+  const activeJson = useMemo(
+    () => segmentedJson(
+      tab === "job" ? selected.job : tab === "company" ? selected.companyData : tab === "admin" ? selected.admin : completeRecord,
+      jsonSection,
+      jsonSegment,
+    ),
+    [completeRecord, jsonSection, jsonSegment, selected.admin, selected.companyData, selected.job, tab],
+  );
+  const jsonSegments = JSON_SEGMENTS[jsonSection] || JSON_SEGMENTS.complete;
   const criticalChecks = selected.inspection?.completeness?.critical_checks || [
     ["Canonical identity", selected.id ? "Pass" : "Fail", selected.id || "Missing"],
     ["Direct employer Apply URL", selected.applyStatus === "verified" ? "Pass" : "Fail", selected.job.apply_url || "Missing"],
@@ -190,6 +272,7 @@ export default function AdminJobImportPage() {
 
   function focusInspector(nextTab = "coverage") {
     setTab(nextTab);
+    setJsonSegment("all");
     setMenuOpen(false);
     setRecordMenuOpen(false);
     window.requestAnimationFrame(() => document.querySelector(".inspector")?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -330,7 +413,7 @@ export default function AdminJobImportPage() {
           <div className="list-head"><div><h2>Collected jobs</h2><p>Select a record to inspect every stored field</p></div><span>{filtered.length}</span></div>
           <label className="search"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search jobs, companies, IDs…" /></label>
           <div className="quick-filters"><button aria-pressed={filterMode === "all"} className={filterMode === "all" ? "active" : ""} onClick={() => setFilterMode("all")} type="button">All</button><button aria-pressed={filterMode === "missing"} className={filterMode === "missing" ? "active" : ""} onClick={() => setFilterMode("missing")} type="button">Missing Apply <b>{summary.apply_url_missing_or_invalid ?? "—"}</b></button><button aria-pressed={filterMode === "incomplete"} className={filterMode === "incomplete" ? "active" : ""} onClick={() => setFilterMode("incomplete")} type="button">Incomplete</button></div>
-          <div className="records">{filtered.map(record => <button className={String(record.canonical_job_id) === selected.id ? "selected" : ""} key={record.canonical_job_id} onClick={() => { setSelectedId(String(record.canonical_job_id)); setTab("coverage"); setRecordMenuOpen(false); }} type="button">
+          <div className="records">{filtered.map(record => <button className={String(record.canonical_job_id) === selected.id ? "selected" : ""} key={record.canonical_job_id} onClick={() => { setSelectedId(String(record.canonical_job_id)); setTab("coverage"); setJsonSegment("all"); setRecordMenuOpen(false); }} type="button">
             <span className="company-mark">{String(record.company || "?").slice(0, 2).toUpperCase()}</span>
             <span className="record-copy"><b>{record.title || "Unknown title"}</b><small>{record.company || "Unknown company"} · {record.location || "Unknown location"}</small><em>{record.canonical_job_id}</em></span>
             <span className={`apply-dot ${record.apply_status === "present" ? "is-verified" : "is-missing"}`} title={`Apply URL ${record.apply_status || "unknown"}`} />
@@ -350,7 +433,7 @@ export default function AdminJobImportPage() {
           </section>
 
           <div className="tabs" role="tablist">
-            {DATA_TABS.map(item => <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)} key={item} type="button">{item === "coverage" ? "Data coverage" : item === "complete" ? "Complete JSON" : `${item[0].toUpperCase()}${item.slice(1)} JSON`}</button>)}
+            {DATA_TABS.map(item => <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => { setTab(item); setJsonSegment("all"); }} key={item} type="button">{item === "coverage" ? "Data coverage" : item === "complete" ? "Complete JSON" : `${item[0].toUpperCase()}${item.slice(1)} JSON`}</button>)}
           </div>
 
           {tab === "coverage" ? <div className="coverage-page">
@@ -359,13 +442,14 @@ export default function AdminJobImportPage() {
               {[["Job data", jobCoverage, "Title, description, location, requirements and application destination"], ["Company data", companyCoverage, "Identity, website, profile, funding, leadership and growth"], ["Admin data", adminCoverage, "Source observation, versions, requests, review and publication"]].map(([label, stats, help]) => <section key={label}>
                 <header><div><h4>{label}</h4><p>{help}</p></div><strong>{stats.present}/{stats.total}</strong></header>
                 <div className="bar"><i style={{ width: `${Math.round(stats.present / Math.max(stats.total, 1) * 100)}%` }}/></div>
-                <div className="missing"><b>{stats.missing.length ? `${stats.missing.length} missing fields` : "No missing fields"}</b>{stats.missing.slice(0, 7).map(field => <span key={field}>{field}</span>)}{stats.missing.length > 7 ? <em>+{stats.missing.length - 7} more</em> : null}</div>
-                <button onClick={() => setTab(label.startsWith("Job") ? "job" : label.startsWith("Company") ? "company" : "admin")} type="button">Inspect exact JSON →</button>
+                <div className="missing" aria-label={`${label} missing fields`}><b>{stats.missing.length ? `${stats.missing.length} missing fields` : "No missing fields"}</b>{stats.missing.map(field => <span key={field}>{field}</span>)}</div>
+                <button onClick={() => { setTab(label.startsWith("Job") ? "job" : label.startsWith("Company") ? "company" : "admin"); setJsonSegment("all"); }} type="button">Inspect exact JSON →</button>
               </section>)}
             </div>
             <section className="field-checklist"><header><h3>Critical publication checks</h3><span>{attentionCount} need attention</span></header>{criticalChecks.map(item => <div key={item.name}><span className={item.status === "pass" ? "check-pass" : "check-fail"}>{item.status === "pass" ? "✓" : "!"}</span><b>{item.name}</b><code>{typeof item.detail === "string" ? item.detail : JSON.stringify(item.detail)}</code><Status value={item.status === "pass" ? "Pass" : "Fail"}/></div>)}</section>
           </div> : <div className="json-page">
             <div className="json-toolbar"><div><h3>{tab === "complete" ? "Complete stored record" : `${tab[0].toUpperCase()}${tab.slice(1)} data`}</h3><p>Exact backend response. Null and empty values remain visible.</p></div><label><span>⌕</span><input value={jsonSearch} onChange={event => setJsonSearch(event.target.value)} placeholder="Find a field or value…" /></label><button onClick={copyJson} type="button">{copied ? "Copied ✓" : "Copy JSON"}</button><button onClick={downloadJson} type="button">Download</button></div>
+            <div className="json-segment-tabs" role="tablist" aria-label="JSON data segments">{jsonSegments.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={jsonSegment === key} className={jsonSegment === key ? "active" : ""} onClick={() => setJsonSegment(key)}>{label}</button>)}</div>
             <JsonView value={activeJson} search={jsonSearch}/>
           </div>}
 

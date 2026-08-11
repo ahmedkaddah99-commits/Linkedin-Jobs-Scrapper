@@ -10,7 +10,7 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 from typing import Any, TypedDict
 from urllib.parse import urljoin, urlparse
@@ -73,6 +73,9 @@ _VOLATILE_KEYS = {
     "native_credits", "runner_credits", "credits_actual", "credits_estimated", "runtime_metadata",
     "run_timestamp", "run_id", "cycle_id", "task_id", "version_id", "generated_at", "created_at",
     "updated_at", "first_seen_at", "verified_at", "applicant_count", "applicants", "view_count",
+    "job_id", "external_job_id", "external_id_source", "posted_time_text", "posted_text", "listed_at_text",
+    "posted_at", "source_posted_at", "date_posted", "dateposted", "posting_time", "posting_timestamp",
+    "published_at", "publishedat",
 }
 _PRESERVE_TIMESTAMP_KEYS = {"posted_at", "date_posted", "datePosted", "posting_time", "posting_timestamp"}
 _DESCRIPTION_KEYS = {"description", "full_description", "description_raw", "description_html", "description_text"}
@@ -534,6 +537,46 @@ def _normalize_timestamp(value: Any) -> str | None:
     return parsed.astimezone(timezone.utc).isoformat()
 
 
+_RELATIVE_POSTED_AGE_RE = re.compile(
+    r"(?P<amount>\d+(?:\.\d+)?)\s*(?P<unit>minute|min|hour|hr|day|week|month|year)s?\b",
+    re.IGNORECASE,
+)
+
+
+def _relative_posted_age_hours(*values: Any) -> float | None:
+    """Read a source-reported relative posting age without using Runr time."""
+
+    for value in values:
+        if value in (None, "", []):
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+            if numeric >= 0:
+                return numeric
+            continue
+        text = _text(value).casefold()
+        if not text:
+            continue
+        if any(token in text for token in ("just now", "today", "now")):
+            return 0.0
+        match = _RELATIVE_POSTED_AGE_RE.search(text)
+        if not match:
+            continue
+        amount = float(match.group("amount"))
+        multiplier = {
+            "minute": 1 / 60,
+            "min": 1 / 60,
+            "hour": 1,
+            "hr": 1,
+            "day": 24,
+            "week": 7 * 24,
+            "month": 30 * 24,
+            "year": 365 * 24,
+        }[match.group("unit").casefold()]
+        return amount * multiplier
+    return None
+
+
 def normalize_source_timestamps(
     job: Mapping[str, Any],
     *,
@@ -566,6 +609,20 @@ def normalize_source_timestamps(
     if connector not in _ATS_SUFFIXES:
         posted_keys = ("source_posted_at", "posted_at", *posted_keys[1:])
     posted_at, posted_field = source_value(*posted_keys)
+    posted_age_hours_value = _relative_posted_age_hours(
+        job.get("posted_age_hours"),
+        job.get("posted_time_text"),
+        job.get("posted_text"),
+        job.get("listed_at_text"),
+    )
+    posted_age_estimated = False
+    if not posted_at and posted_age_hours_value is not None:
+        observed_at = _normalize_timestamp(job.get("observed_at") or job.get("observation_timestamp"))
+        if observed_at:
+            observed_datetime = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+            posted_at = (observed_datetime - timedelta(hours=posted_age_hours_value)).isoformat()
+            posted_field = "posted_time_text" if _text(job.get("posted_time_text") or job.get("posted_text") or job.get("listed_at_text")) else "posted_age_hours"
+            posted_age_estimated = True
     updated_at, updated_field = source_value("source_updated_at", "updated_at", "updatedAt", "last_updated_at", "lastUpdatedAt")
     closed_at, closed_field = source_value("source_closed_at", "closed_at", "closedAt", "archived_at", "archivedAt")
     reopened_at, reopened_field = source_value("source_reopened_at", "reopened_at", "reopenedAt")
@@ -574,12 +631,12 @@ def normalize_source_timestamps(
     observed_at = _text(job.get("observed_at") or job.get("observation_timestamp"))
     source_name = connector or "career_site"
 
-    def field(value: str | None, source_field: str, semantic: str) -> dict[str, Any]:
-        state = field_state_for(value, supported=True, observed=True)
+    def field(value: str | None, source_field: str, semantic: str, *, inferred: bool = False) -> dict[str, Any]:
+        state = field_state_for(value, supported=True, observed=True, inferred=inferred)
         return {
             "value": value,
             "state": state,
-            "state_reason": "source_field_present" if state == "present" else "source_field_missing",
+            "state_reason": "source_field_inferred" if state == "inferred" else "source_field_present" if state == "present" else "source_field_missing",
             "semantic": semantic,
             "source_field": source_field or None,
             "provenance": _provenance(
@@ -589,7 +646,7 @@ def normalize_source_timestamps(
                 observation_id=observation_id if value else "",
                 observed_at=observed_at if value else "",
             ),
-            "method": "source_field" if value else None,
+            "method": "relative_source_age" if inferred else "source_field" if value else None,
         }
 
     timestamp_state = "known" if posted_at else ("unknown_source_timestamp" if created_at or updated_at else "unknown")
@@ -597,13 +654,13 @@ def normalize_source_timestamps(
         "schema_version": QUALITY_SCHEMA_VERSION,
         "fields": {
             "source_created_at": field(created_at, created_field, "source_record_created"),
-            "source_posted_at": field(posted_at, posted_field, "source_published"),
+            "source_posted_at": field(posted_at, posted_field, "source_published", inferred=posted_age_estimated),
             "source_updated_at": field(updated_at, updated_field, "source_record_updated"),
             "source_closed_at": field(closed_at, closed_field, "source_closed"),
             "source_reopened_at": field(reopened_at, reopened_field, "source_reopened"),
         },
-        "timestamp_semantics": "source_posted_at" if posted_at else "unknown_source_timestamp",
-        "timestamp_state": timestamp_state,
+        "timestamp_semantics": "source_posted_age_estimate" if posted_age_estimated else "source_posted_at" if posted_at else "unknown_source_timestamp",
+        "timestamp_state": "estimated" if posted_age_estimated else timestamp_state,
         "posted_age_hours": posted_age_hours(posted_at) if posted_at else None,
         "observation": {
             "source_observation_id": observation_id or None,
@@ -745,8 +802,13 @@ def posted_age_hours(posted_at: Any, *, now: datetime | None = None) -> float | 
     return round(max(0.0, (current - parsed.astimezone(timezone.utc)).total_seconds() / 3600), 2)
 
 
-def posted_age_hours_for_job(job: Mapping[str, Any], *, now: datetime | None = None) -> float | None:
-    """Compute age from a semantically valid source publication time at read time."""
+def posted_age_hours_for_job(
+    job: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    fallback_at: Any = None,
+) -> float | None:
+    """Compute age from the source anchor, falling back to first capture."""
 
     timestamps = job.get("source_timestamps") if isinstance(job.get("source_timestamps"), Mapping) else {}
     fields = timestamps.get("fields") if isinstance(timestamps.get("fields"), Mapping) else {}
@@ -757,7 +819,7 @@ def posted_age_hours_for_job(job: Mapping[str, Any], *, now: datetime | None = N
         metadata_timestamps = metadata.get("source_timestamps") if isinstance(metadata.get("source_timestamps"), Mapping) else {}
         metadata_fields = metadata_timestamps.get("fields") if isinstance(metadata_timestamps.get("fields"), Mapping) else {}
         value = (metadata_fields.get("source_posted_at") or {}).get("value")
-    return posted_age_hours(value, now=now)
+    return posted_age_hours(value or fallback_at, now=now)
 
 
 def completeness_rules(*, job: Mapping[str, Any], company: Mapping[str, Any], source: Mapping[str, Any], admin: Mapping[str, Any]) -> dict[str, Any]:
@@ -805,7 +867,7 @@ def completeness_rules(*, job: Mapping[str, Any], company: Mapping[str, Any], so
             "source_provenance": bool(source.get("source_observation_ids") or source.get("target_id") or source.get("source_id")),
             "external_source_id": bool(_text(source.get("external_job_id"))),
             "department_state": canonical_field_state(department_record.get("state")) in VALUE_FIELD_STATES if isinstance(department_record, Mapping) else bool(_text(job.get("department"))),
-            "source_timestamp_semantics": timestamp_state == "known",
+            "source_timestamp_semantics": timestamp_state in {"known", "estimated"} or bool(_text(admin.get("posting_age_anchor_at") or admin.get("first_seen_at"))),
             "source_status": state_present(status_record),
             "freshness": bool(_text(job.get("last_verified_at") or observed_at or job.get("last_seen_at"))),
         },
@@ -873,10 +935,17 @@ def completeness_rules(*, job: Mapping[str, Any], company: Mapping[str, Any], so
     return result
 
 
-def normalize_job_for_ingestion(job: Mapping[str, Any], target: Mapping[str, Any]) -> dict[str, Any]:
+def normalize_job_for_ingestion(
+    job: Mapping[str, Any],
+    target: Mapping[str, Any],
+    *,
+    observed_at: str = "",
+) -> dict[str, Any]:
     """Apply the shared contract while retaining all source fields."""
 
     normalized = dict(job)
+    if observed_at:
+        normalized["observed_at"] = observed_at
     # Keep an immutable connector payload alongside typed projections. This
     # is the raw escape hatch for fields that a connector exposes but the
     # shared contract does not yet understand.
