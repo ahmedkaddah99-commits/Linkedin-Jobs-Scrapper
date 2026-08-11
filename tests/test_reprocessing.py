@@ -120,6 +120,80 @@ class ReprocessingTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["counts"]["observations"], 1)
 
+    def test_reprocessing_repairs_missing_projection_without_rewriting_raw_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store, db_path = _fixture(root, count=0)
+            target = _target()
+            cycle = store.claim_due_cycle(
+                window_key="reprocessing:repair",
+                lease_owner="test",
+                scheduled_at="2026-08-10T00:00:00+00:00",
+            )
+            store.ensure_cycle_tasks(cycle["cycle_id"], [target])
+            task = store.claim_next_task(cycle_id=cycle["cycle_id"], lease_owner="test")
+
+            from backend.acquisition.quality import normalize_job_for_ingestion
+
+            def legacy_normalizer(job, target, **kwargs):
+                normalized = normalize_job_for_ingestion(job, target, **kwargs)
+                for key in ("description_raw", "description_html", "description_text"):
+                    normalized[key] = ""
+                return normalized
+
+            with patch(
+                "backend.repositories.sqlite_acquisition.normalize_job_for_ingestion",
+                side_effect=legacy_normalizer,
+            ):
+                store.ingest_snapshot(
+                    cycle_id=cycle["cycle_id"],
+                    task_id=task["task_id"],
+                    target_id=target["target_id"],
+                    jobs=[
+                        {
+                            "job_id": "repair-fixture",
+                            "title": "Backend Engineer",
+                            "url": "https://jobs.example.com/repair",
+                            "location": "Berlin",
+                            "description": "",
+                            "source_raw_payload": {"jobDescription": "Build service safely"},
+                        }
+                    ],
+                    complete_snapshot=True,
+                    valid_snapshot=True,
+                )
+
+            with store._connect() as connection:
+                raw_before = connection.execute(
+                    "SELECT raw_payload_json FROM job_source_observations LIMIT 1"
+                ).fetchone()["raw_payload_json"]
+                version_before = connection.execute(
+                    "SELECT description FROM job_posting_versions LIMIT 1"
+                ).fetchone()["description"]
+            self.assertEqual(version_before, "")
+
+            result = run_reprocessing(
+                db_path,
+                apply=True,
+                idempotency_key="projection-repair-fixture",
+                max_batches=10,
+            )
+            self.assertEqual(result["status"], "completed")
+
+            with store._connect() as connection:
+                current = connection.execute(
+                    """
+                    SELECT v.description, v.version_number, o.raw_payload_json
+                    FROM canonical_jobs j
+                    JOIN job_posting_versions v ON v.version_id=j.current_version_id
+                    JOIN job_source_observations o ON o.observation_id=v.source_observation_id
+                    LIMIT 1
+                    """
+                ).fetchone()
+            self.assertEqual(current["description"], "Build service safely")
+            self.assertEqual(current["version_number"], 2)
+            self.assertEqual(current["raw_payload_json"], raw_before)
+
     def test_one_observation_failure_does_not_rollback_healthy_rows_and_resumes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -4605,6 +4605,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         current = connection.execute(
             """
             SELECT v.version_id, v.content_hash, v.version_number,
+                   v.description, v.payload_json,
                    COALESCE(NULLIF(q.stable_content_hash, ''), v.content_hash) AS stable_hash
             FROM job_posting_versions v
             LEFT JOIN acquisition_version_quality q ON q.version_id=v.version_id
@@ -4613,10 +4614,35 @@ class SqliteAcquisitionStore(_SqliteStore):
             """,
             (canonical_job_id,),
         ).fetchone()
+
+        def needs_projection_repair(version_row) -> bool:
+            """Detect a missing canonical projection without changing raw history."""
+
+            if str(description or "").strip() and not str(version_row["description"] or "").strip():
+                return True
+            existing_payload = _decode(version_row["payload_json"], {})
+            existing_payload = existing_payload if isinstance(existing_payload, Mapping) else {}
+            for key in (
+                "description_raw",
+                "description_html",
+                "description_text",
+                "normalized_source_metadata",
+                "source_timestamps",
+                "application_destination",
+                "unified_mapping",
+                "field_provenance",
+                "unified_rule_version",
+            ):
+                new_value = payload.get(key)
+                old_value = existing_payload.get(key)
+                if new_value not in (None, "", []) and old_value in (None, "", []):
+                    return True
+            return False
+
         if not force_new_version:
             existing_hash = connection.execute(
                 """
-                SELECT v.version_id
+                SELECT v.version_id, v.description, v.payload_json
                 FROM job_posting_versions v
                 LEFT JOIN acquisition_version_quality q ON q.version_id=v.version_id
                 WHERE v.canonical_job_id=?
@@ -4626,13 +4652,18 @@ class SqliteAcquisitionStore(_SqliteStore):
                 """,
                 (canonical_job_id, content_hash),
             ).fetchone()
-            if existing_hash is not None:
+            if existing_hash is not None and not needs_projection_repair(existing_hash):
                 connection.execute(
                     "UPDATE canonical_jobs SET current_version_id = ? WHERE canonical_job_id = ?",
                     (str(existing_hash["version_id"]), canonical_job_id),
                 )
                 return
-        if not force_new_version and current is not None and str(current["stable_hash"] or "") == content_hash:
+        if (
+            not force_new_version
+            and current is not None
+            and str(current["stable_hash"] or "") == content_hash
+            and not needs_projection_repair(current)
+        ):
             connection.execute(
                 "UPDATE canonical_jobs SET current_version_id = ? WHERE canonical_job_id = ?",
                 (str(current["version_id"]), canonical_job_id),
