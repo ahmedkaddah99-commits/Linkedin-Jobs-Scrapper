@@ -41,6 +41,13 @@ were clean at inspection time.
   definition for `051_enrichment_operations`; repair committed as `9fbf9e19`.
 - After the repair, the combined publication/enrichment/evaluation/acquisition
   and migration suite is `70 passed`.
+- Unit 05 integrated as `b270d2cb`; its provisional and final migration is
+  `053_acquisition_audit_permissions`.
+- Unit 05 integration preserved the explicit-plan-only enrichment boundary from
+  Unit 02, moved audit emission onto the durable enrichment operations, and
+  repaired the conflicting legacy batch test accordingly.
+- After Unit 05, the combined audit/publication/enrichment/evaluation/
+  acquisition and migration suite is `78 passed`.
 
 ## Dependency order
 
