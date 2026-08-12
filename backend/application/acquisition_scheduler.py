@@ -429,7 +429,13 @@ class PhaseAAcquisitionScheduler:
         if publication_enabled and valid_target_ids:
             try:
                 self._failpoint("during_publication_creation")
-                publication_id = store.publish_valid_snapshot(cycle_id=cycle_id, valid_target_ids=valid_target_ids)
+                publication_id = store.publish_valid_snapshot(
+                    cycle_id=cycle_id,
+                    valid_target_ids=valid_target_ids,
+                    origin="scheduled",
+                    created_by="system",
+                    scheduled_run_id=cycle_id,
+                )
             except BaseException as exc:
                 store.complete_cycle(
                     cycle_id,
@@ -671,6 +677,9 @@ class PhaseAAcquisitionScheduler:
                 publication_id = store.publish_staging_snapshot(
                     cycle_id=cycle_id,
                     valid_target_ids=[normalized_target_id],
+                    origin="scheduled",
+                    created_by="system",
+                    scheduled_run_id=cycle_id,
                 )
             cycle_status = "degraded" if str(result.get("status") or "") in {"failed", "blocked"} else "completed"
             store.complete_cycle(cycle_id, status=cycle_status, publication_id=publication_id)

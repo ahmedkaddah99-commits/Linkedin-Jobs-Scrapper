@@ -1032,6 +1032,16 @@ class BackendApplication:
         store = self.repositories.acquisition_store
         return store.list_job_import_audit_events(import_id=import_id, limit=limit) if store is not None else []
 
+    def restore_admin_publication(self, confirmation) -> str:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication restore requires sqlite/Turso acquisition storage.")
+        return store.restore_publication(confirmation)
+
+    def list_admin_publication_audit(self, *, publication_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_publication_audit_events(publication_id=publication_id, limit=limit) if store is not None else []
+
     def list_admin_job_inspections(
         self,
         *,
@@ -1518,13 +1528,30 @@ class BackendApplication:
             return {"jobs": [], "total": 0, "publication": None, "freshness": "unpublished"}
         return store.get_staging_catalog(publication_id=publication_id, limit=limit, offset=offset)
 
-    def promote_staging_acquisition_catalog(self, publication_id: str) -> str:
+    def promote_staging_acquisition_catalog(
+        self,
+        publication_id: str,
+        *,
+        expected_previous_publication_id: str | None = None,
+        origin: str = "administrator",
+        created_by: str = "",
+        scheduled_run_id: str = "",
+        policy_version: str = "",
+    ) -> str:
         store = self.repositories.acquisition_store
         if store is None or not hasattr(store, "promote_staging_publication"):
             raise ValueError("Staging catalog promotion requires sqlite storage support.")
         if not bool(self._acquisition_scheduler._phase_b_config("promotion_enabled")):
             raise ValueError("Phase B catalog promotion is disabled.")
-        return store.promote_staging_publication(publication_id)
+        kwargs = {
+            "expected_previous_publication_id": expected_previous_publication_id,
+            "origin": origin,
+            "created_by": created_by,
+            "scheduled_run_id": scheduled_run_id,
+        }
+        if policy_version:
+            kwargs["policy_version"] = policy_version
+        return store.promote_staging_publication(publication_id, **kwargs)
 
     def list_acquisition_cycle_targets(self, cycle_id: str) -> list[dict[str, Any]]:
         store = self.repositories.acquisition_store
