@@ -148,3 +148,38 @@ were clean at inspection time.
   `396c45deb36d95e084a745a7a22b43bdb81ba35fc6ff0c8ef66df5877444dc`;
   restore counts matched the recorded 49-migration baseline. Since this unit
   is migration-free, no production migration operation is required.
+
+## Wave 2 production verification
+
+- Production branch push: `3c5e609a` (`06a4cb17` plus the integration ledger).
+- API readiness: `https://runr-api.onrender.com/health/ready` returned HTTP 200
+  with production Turso/libSQL and R2 configured.
+- Frontend: `https://app.userunr.com` served the new dashboard bundle
+  (`assets/index-BygCU6S-.js`) and rendered the expanded navigation.
+- Worker: authenticated Overview read model reported `Online` / `ONLINE`.
+- Authenticated routes tested: overview, sources, imports and import detail,
+  jobs, job inspection, companies and company inspection, enrichment, data
+  quality, duplicates, publication, live catalog, and audit.
+- State coverage: loading indicators were observed during slow reads; empty
+  results were verified with an unmatched source filter and the empty duplicate
+  queue; partial/unknown values were visible in company and enrichment views;
+  no authenticated request rendered an error alert.
+- Jobs source filter: `source=n26_greenhouse` returned a normal result; an
+  unmatched source returned the explicit empty state and no SQLite/no-such-table
+  error. Pagination moved from page 1 to page 2 while preserving query state;
+  inspection opened and Escape closed without losing the URL filters.
+- Publication safety: the page remained manual-only; no preview, publish, undo,
+  restore, import, enrichment, duplicate, or reconciliation mutation was sent.
+- Publication head before and after: `acq_publication_8378ea4c5aa04ddc9362e4400bb088df`,
+  163 jobs, unchanged.
+- Desktop browser evidence was captured at the connected browser viewport
+  `1272x549`, including the expanded navigation and Overview read model.
+  The connected browser surface exposes no viewport resize/device-emulation
+  capability, so an independent 390px mobile browser run remains outstanding;
+  the responsive horizontal navigation and mobile drawer behavior are covered
+  by the shipped responsive classes and local build, but not live device
+  emulation.
+- Render control-plane deploy IDs/logs could not be queried because the
+  configured `RENDER_API_KEY` returned HTTP 401. Live API readiness, the new
+  frontend asset, authenticated dashboard routes, and worker Online state were
+  used as deployment evidence.
