@@ -54,10 +54,10 @@ test("inspection paths preserve the current job filters", () => {
   );
 });
 
-test("job paths omit the backend source filter until its query contract is fixed", () => {
-  assert.doesNotMatch(
+test("job paths preserve the verified backend source filter", () => {
+  assert.match(
     buildJobsPath({ search: "personio", source: "personio", limit: 25, offset: 0 }),
-    /source=/,
+    /source=personio/,
   );
 });
 

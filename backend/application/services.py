@@ -1095,9 +1095,49 @@ class BackendApplication:
         )
         return result
 
+    def restore_admin_publication(
+        self,
+        *,
+        target_publication_id: str,
+        expected_head_publication_id: str,
+        actor_user_id: str,
+        confirmation: str,
+    ) -> dict[str, Any]:
+        """Restore a prior publication through the repository's guarded contract."""
+
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication restore requires sqlite/Turso acquisition storage.")
+        from backend.acquisition.publication import RestorePublicationConfirmation
+
+        request = RestorePublicationConfirmation.from_values(
+            target_publication_id=target_publication_id,
+            expected_head_publication_id=expected_head_publication_id,
+            actor_user_id=actor_user_id,
+            confirmation=confirmation,
+        )
+        publication_id = store.restore_publication(request)
+        self._emit_acquisition_audit(
+            "publication_restored",
+            actor=actor_user_id,
+            entity_type="publication",
+            entity_id=str(publication_id or ""),
+            operation_id=str(publication_id or ""),
+            payload={"target_publication_id": target_publication_id},
+        )
+        return {"publication_id": publication_id, "status": "restored"}
+
     def get_admin_job_import_preview(self, publication_id: str = "") -> dict[str, Any] | None:
         store = self.repositories.acquisition_store
         return store.get_job_import_preview(publication_id) if store is not None else None
+
+    def list_admin_publication_audit_events(self, *, publication_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return (
+            store.list_publication_audit_events(publication_id=publication_id, limit=limit)
+            if store is not None
+            else []
+        )
 
     def list_admin_job_import_history(self, *, import_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
         store = self.repositories.acquisition_store

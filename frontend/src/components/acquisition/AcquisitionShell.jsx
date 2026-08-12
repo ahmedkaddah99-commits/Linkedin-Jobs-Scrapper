@@ -3,7 +3,15 @@ import { NavLink, useLocation } from "react-router-dom";
 const NAV_ITEMS = [
   { label: "Overview", icon: "dashboard", to: "/admin/acquisition", end: true },
   { label: "Sources", icon: "lan", to: "/admin/acquisition/sources" },
+  { label: "Imports", icon: "download", to: "/admin/acquisition/imports" },
   { label: "Jobs", icon: "work_history", to: "/admin/acquisition/jobs" },
+  { label: "Companies", icon: "business", to: "/admin/acquisition/companies" },
+  { label: "Enrichment", icon: "auto_awesome", to: "/admin/acquisition/enrichment" },
+  { label: "Data Quality", icon: "fact_check", to: "/admin/acquisition/data-quality" },
+  { label: "Duplicates", icon: "content_copy", to: "/admin/acquisition/duplicates" },
+  { label: "Publication", icon: "publish", to: "/admin/acquisition/publication" },
+  { label: "Live Catalog", icon: "language", to: "/admin/acquisition/live-catalog" },
+  { label: "Audit", icon: "manage_search", to: "/admin/acquisition/audit" },
 ];
 
 export default function AcquisitionShell({ title, description, children }) {
@@ -11,7 +19,7 @@ export default function AcquisitionShell({ title, description, children }) {
 
   return (
     <div className="mx-auto w-full max-w-[1440px] space-y-6">
-      <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+      {(title || description) ? <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">
             Acquisition Operations
@@ -25,9 +33,9 @@ export default function AcquisitionShell({ title, description, children }) {
         </div>
         <span className="inline-flex w-fit items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-2 text-xs font-semibold text-on-surface-variant">
           <span className="h-2 w-2 rounded-full bg-primary" />
-          Read-only operations
+          Manual operations · explicit confirmation
         </span>
-      </header>
+      </header> : null}
 
       <nav
         aria-label="Acquisition Operations sections"

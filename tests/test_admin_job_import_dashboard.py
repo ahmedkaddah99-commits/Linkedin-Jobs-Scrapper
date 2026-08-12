@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from backend.api.routes import build_route_registry
 from backend.api.routes.registry import ApiRouteContext
@@ -380,6 +380,52 @@ class AdminJobImportDashboardTests(unittest.TestCase):
             publication_state="unpublished",
             limit=25,
             offset=0,
+        )
+
+    def test_acquisition_dashboard_read_models_expose_import_detail_preview_and_live_catalog(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.get_admin_job_import.return_value = {"import_id": "import-1", "status": "completed"}
+        application.get_admin_job_import_preview.return_value = {"publication_id": "preview-1", "status": "preview"}
+        application.get_public_acquisition_catalog.return_value = {"jobs": [], "total": 0}
+
+        for segments, expected_method, expected_call, expected_payload in (
+            (("admin", "acquisition", "imports", "import-1"), "get_admin_job_import", call("import-1"), {"import_id": "import-1", "status": "completed"}),
+            (("admin", "acquisition", "publication", "previews", "preview-1"), "get_admin_job_import_preview", call("preview-1"), {"publication_id": "preview-1", "status": "preview"}),
+            (("admin", "acquisition", "live-catalog"), "get_public_acquisition_catalog", call(limit=25, offset=10), {"jobs": [], "total": 0}),
+        ):
+            handler = _AdminHandler()
+            query = {"limit": ["25"], "offset": ["10"]} if segments[-1] == "live-catalog" else {}
+            context = ApiRouteContext(application=application, handler=handler, method="GET", segments=segments, query=query)
+
+            self.assertTrue(registry.dispatch(context, auth_required=True))
+            self.assertEqual(handler.payload, (200, expected_payload))
+            getattr(application, expected_method).assert_called_with(*expected_call.args, **expected_call.kwargs)
+
+    def test_acquisition_dashboard_restore_requires_explicit_confirmation_and_expected_head(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.restore_admin_publication.return_value = {"publication_id": "publication-1", "status": "restored"}
+        handler = _AdminHandler({
+            "target_publication_id": "publication-1",
+            "expected_head_publication_id": "publication-2",
+            "confirmation": "restore_publication",
+        })
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="POST",
+            segments=("admin", "acquisition", "publication", "restore"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        self.assertEqual(handler.payload, (202, {"publication_id": "publication-1", "status": "restored"}))
+        application.restore_admin_publication.assert_called_once_with(
+            target_publication_id="publication-1",
+            expected_head_publication_id="publication-2",
+            actor_user_id="admin-fixture",
+            confirmation="restore_publication",
         )
 
     def test_acquisition_admin_reprocessing_alias_is_admin_only_and_explicit(self):

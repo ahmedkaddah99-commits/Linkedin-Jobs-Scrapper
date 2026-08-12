@@ -12,6 +12,7 @@ export const JOB_FILTER_KEYS = Object.freeze([
   "employment_type",
   "workplace",
   "location",
+  "source",
   "language",
   "seniority",
   "freshness",
