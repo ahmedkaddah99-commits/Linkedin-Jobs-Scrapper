@@ -201,33 +201,19 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
             return _error(context, 400, "invalid_publication_request", str(exc))
         return True
     if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "companies"] and segments[4] == "enrich":
-        try:
-            context.send_json(
-                context.application.run_admin_company_enrichment(
-                    max_companies=_int_value(payload.get("max_companies"), 1, 25),
-                    concurrency=_int_value(payload.get("concurrency"), 1, 3),
-                    request_budget=_int_value(payload.get("request_budget"), 5, 50),
-                    cycle_key=_text(payload.get("cycle_key")),
-                ),
-                status=202,
-            )
-        except (RuntimeError, ValueError) as exc:
-            return _error(context, 400, "company_enrichment_failed", str(exc))
-        return True
+        return _error(
+            context,
+            400,
+            "company_scoped_enrichment_required",
+            "Use an explicit company-scoped enrichment plan and run.",
+        )
     if segments == ["admin", "acquisition", "companies", "enrich"]:
-        try:
-            context.send_json(
-                context.application.run_admin_company_enrichment(
-                    max_companies=_int_value(payload.get("max_companies"), 1, 25),
-                    concurrency=_int_value(payload.get("concurrency"), 1, 3),
-                    request_budget=_int_value(payload.get("request_budget"), 5, 50),
-                    cycle_key=_text(payload.get("cycle_key")),
-                ),
-                status=202,
-            )
-        except (RuntimeError, ValueError) as exc:
-            return _error(context, 400, "company_enrichment_failed", str(exc))
-        return True
+        return _error(
+            context,
+            400,
+            "batch_company_enrichment_disabled",
+            "Batch company enrichment is disabled; select a company explicitly.",
+        )
     if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "duplicate-clusters"] and segments[4] == "decisions":
         try:
             context.send_json(

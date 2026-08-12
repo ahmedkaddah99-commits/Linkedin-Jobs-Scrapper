@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backend.api.routes.admin import register_routes as register_admin_routes
 from backend.api.routes.acquisition_admin import register_routes as register_acquisition_admin_routes
+from backend.api.routes.enrichment_admin import register_routes as register_enrichment_admin_routes
 from backend.api.routes.acquisition_catalog import register_routes as register_acquisition_catalog_routes
 from backend.api.routes.job_import_admin import register_routes as register_job_import_admin_routes
 from backend.api.routes.application_bindings import register_routes as register_application_bindings_routes
@@ -42,6 +43,7 @@ def build_route_registry() -> RouteRegistry:
     register_assisted_apply_preparation_routes(registry)
     register_assisted_apply_telemetry_routes(registry)
     register_acquisition_admin_routes(registry)
+    register_enrichment_admin_routes(registry)
     register_acquisition_catalog_routes(registry)
     register_job_import_admin_routes(registry)
     register_admin_routes(registry)

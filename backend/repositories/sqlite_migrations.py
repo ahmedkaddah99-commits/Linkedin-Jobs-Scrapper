@@ -2451,7 +2451,6 @@ def _apply_enrichment_foundation_migration(connection: DatabaseConnection) -> No
         """
     )
 
-
 def _apply_collection_controls_migration(connection: DatabaseConnection) -> None:
     """Persist server-owned collection result metadata on acquisition tasks."""
 
@@ -2461,6 +2460,205 @@ def _apply_collection_controls_migration(connection: DatabaseConnection) -> None
         "collection_metadata_json",
         "TEXT NOT NULL DEFAULT '{}'",
     )
+
+
+def _apply_enrichment_operations_migration(connection: DatabaseConnection) -> None:
+    """Create durable, report-only enrichment operation state.
+
+    Operation state is deliberately separate from canonical observations,
+    profiles, and publication tables.  Evidence and proposal decisions are
+    append-only; run progress is the only mutable execution state.
+    """
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS enrichment_operation_plans (
+            plan_id TEXT PRIMARY KEY,
+            scope_type TEXT NOT NULL,
+            scope_id TEXT NOT NULL DEFAULT '',
+            target_type TEXT NOT NULL,
+            selected_records_json TEXT NOT NULL DEFAULT '[]',
+            query_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            selected_fields_json TEXT NOT NULL DEFAULT '[]',
+            provider_id TEXT NOT NULL,
+            expected_request_count INTEGER NOT NULL DEFAULT 0,
+            expected_cost_units REAL NOT NULL DEFAULT 0,
+            exclusions_json TEXT NOT NULL DEFAULT '[]',
+            policy_version TEXT NOT NULL,
+            rule_version TEXT NOT NULL,
+            snapshot_version TEXT NOT NULL DEFAULT '',
+            report_only INTEGER NOT NULL DEFAULT 1,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            requested_by TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'planned',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (scope_type IN ('import', 'company')),
+            CHECK (report_only = 1)
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_plans_scope
+            ON enrichment_operation_plans(scope_type, scope_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS enrichment_operation_runs (
+            run_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            scope_type TEXT NOT NULL,
+            scope_id TEXT NOT NULL DEFAULT '',
+            target_type TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request_budget INTEGER NOT NULL DEFAULT 0,
+            cost_budget_units REAL NOT NULL DEFAULT 0,
+            requests_used INTEGER NOT NULL DEFAULT 0,
+            cost_units_used REAL NOT NULL DEFAULT 0,
+            retry_policy_json TEXT NOT NULL DEFAULT '{}',
+            lease_owner TEXT NOT NULL DEFAULT '',
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            cancellation_requested INTEGER NOT NULL DEFAULT 0,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            requested_by TEXT NOT NULL DEFAULT '',
+            error_code TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            started_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            CHECK (status IN ('pending', 'running', 'paused', 'completed', 'partially_completed', 'failed', 'cancelled'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_runs_claim
+            ON enrichment_operation_runs(status, lease_expires_at, created_at);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_runs_scope
+            ON enrichment_operation_runs(scope_type, scope_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS enrichment_operation_run_items (
+            run_item_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            field_path TEXT NOT NULL,
+            input_json TEXT NOT NULL DEFAULT '{}',
+            existing_normalized_value_json TEXT NOT NULL DEFAULT 'null',
+            attempt_state TEXT NOT NULL DEFAULT 'pending',
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            evidence_id TEXT NOT NULL DEFAULT '',
+            proposed_value_json TEXT NOT NULL DEFAULT 'null',
+            confidence REAL,
+            failure_reason TEXT NOT NULL DEFAULT '',
+            last_attempt_at TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            UNIQUE(run_id, target_id, field_path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_run_items_run
+            ON enrichment_operation_run_items(run_id, attempt_state, target_id, field_path);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_run_items_target
+            ON enrichment_operation_run_items(target_type, target_id, field_path, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS enrichment_field_proposals (
+            proposal_id TEXT PRIMARY KEY,
+            run_item_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            field_path TEXT NOT NULL,
+            proposed_value_json TEXT NOT NULL DEFAULT 'null',
+            existing_normalized_value_json TEXT NOT NULL DEFAULT 'null',
+            evidence_id TEXT NOT NULL DEFAULT '',
+            confidence REAL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_proposals_run
+            ON enrichment_field_proposals(run_id, created_at, proposal_id);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_proposals_target
+            ON enrichment_field_proposals(target_type, target_id, field_path, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS enrichment_proposal_actions (
+            action_id TEXT PRIMARY KEY,
+            proposal_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            reviewer_id TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            replacement_proposal_id TEXT NOT NULL DEFAULT '',
+            idempotency_key TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_proposal_actions_proposal
+            ON enrichment_proposal_actions(proposal_id, created_at DESC, action_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_enrichment_proposal_actions_idempotency
+            ON enrichment_proposal_actions(proposal_id, idempotency_key)
+            WHERE idempotency_key <> '';
+
+        CREATE TABLE IF NOT EXISTS enrichment_operation_audit_events (
+            event_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL DEFAULT '',
+            run_id TEXT NOT NULL DEFAULT '',
+            run_item_id TEXT NOT NULL DEFAULT '',
+            proposal_id TEXT NOT NULL DEFAULT '',
+            event_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_operation_audit_plan
+            ON enrichment_operation_audit_events(plan_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_operation_audit_run
+            ON enrichment_operation_audit_events(run_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS enrichment_provider_budgets (
+            provider_id TEXT PRIMARY KEY,
+            configured INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            max_requests INTEGER NOT NULL DEFAULT 0,
+            max_cost_units REAL NOT NULL DEFAULT 0,
+            requests_used INTEGER NOT NULL DEFAULT 0,
+            cost_units_used REAL NOT NULL DEFAULT 0,
+            policy_state TEXT NOT NULL DEFAULT 'blocked_by_policy',
+            updated_at TEXT NOT NULL
+        );
+
+        INSERT OR IGNORE INTO enrichment_provider_budgets (
+            provider_id, configured, enabled, max_requests, max_cost_units,
+            requests_used, cost_units_used, policy_state, updated_at
+        ) VALUES
+            ('null', 1, 1, 0, 0, 0, 0, 'enabled', datetime('now')),
+            ('fixture', 1, 1, 0, 0, 0, 0, 'enabled', datetime('now')),
+            ('fixture_place', 1, 1, 0, 0, 0, 0, 'enabled', datetime('now')),
+            ('fixture_company', 1, 1, 0, 0, 0, 0, 'enabled', datetime('now')),
+            ('fixture_occupation', 1, 1, 0, 0, 0, 0, 'enabled', datetime('now'));
+
+        CREATE TRIGGER IF NOT EXISTS trg_enrichment_field_proposals_immutable_update
+        BEFORE UPDATE ON enrichment_field_proposals
+        BEGIN
+            SELECT RAISE(ABORT, 'enrichment_field_proposals is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_enrichment_field_proposals_immutable_delete
+        BEFORE DELETE ON enrichment_field_proposals
+        BEGIN
+            SELECT RAISE(ABORT, 'enrichment_field_proposals is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_enrichment_proposal_actions_append_only_update
+        BEFORE UPDATE ON enrichment_proposal_actions
+        BEGIN
+            SELECT RAISE(ABORT, 'enrichment_proposal_actions is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_enrichment_proposal_actions_append_only_delete
+        BEFORE DELETE ON enrichment_proposal_actions
+        BEGIN
+            SELECT RAISE(ABORT, 'enrichment_proposal_actions is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_enrichment_operation_audit_append_only_update
+        BEFORE UPDATE ON enrichment_operation_audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'enrichment_operation_audit_events is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_enrichment_operation_audit_append_only_delete
+        BEFORE DELETE ON enrichment_operation_audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'enrichment_operation_audit_events is append-only');
+        END;
+        """
+    )
+
+
 
 
 MIGRATIONS = (
@@ -2738,5 +2936,10 @@ MIGRATIONS = (
         "Persist retrieval mode, collection limits, completeness, stop reason, and closure safety metadata.",
         _apply_collection_controls_migration,
         dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "051_enrichment_operations",
+        "Create durable report-only enrichment plans, runs, items, proposals, budgets, and audit state.",
+        _apply_enrichment_operations_migration,
     ),
 )

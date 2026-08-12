@@ -219,9 +219,8 @@ class EnrichmentCacheAndPersistenceTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'enrichment_%'"
                 ).fetchall()
             }
-            self.assertEqual(
-                tables,
-                {"enrichment_evidence", "enrichment_version_registry", "enrichment_cache_entries"},
+            self.assertTrue(
+                {"enrichment_evidence", "enrichment_version_registry", "enrichment_cache_entries"}.issubset(tables)
             )
             evidence = self._evidence(raw=True)
             append_evidence(connection, evidence)
@@ -262,7 +261,8 @@ class EnrichmentCacheAndPersistenceTests(unittest.TestCase):
                     if migration.migration_id == "049_enrichment_foundation"
                 )
                 before_foundation = MIGRATIONS[:foundation_index]
-                after_foundation = MIGRATIONS[foundation_index:]
+                operation_migrations = MIGRATIONS[:foundation_index + 2]
+                after_foundation = MIGRATIONS[foundation_index:foundation_index + 2]
                 applied_before_foundation = run_migrations(connection, before_foundation)
                 self.assertEqual(
                     applied_before_foundation,
@@ -273,8 +273,8 @@ class EnrichmentCacheAndPersistenceTests(unittest.TestCase):
                         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='enrichment_evidence'"
                     ).fetchone()
                 )
-                applied_foundation = run_migrations(connection, MIGRATIONS)
-                rerun = run_migrations(connection, MIGRATIONS)
+                applied_foundation = run_migrations(connection, operation_migrations)
+                rerun = run_migrations(connection, operation_migrations)
 
                 self.assertEqual(
                     applied_foundation,
