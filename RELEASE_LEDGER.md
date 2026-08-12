@@ -93,3 +93,38 @@ were clean at inspection time.
   1,635,259 bytes, 1,490 rows across the directly modified tables. Restore
   verification passed at
   `C:\Users\ahmed\Projects_Local\runr-release-evidence\turso-prod-wave1-restore-verification.sqlite3`.
+
+## Production deployment record
+
+- `619c637925f9f4839723275d283ec34016869bd6` — Unit 01 collection controls;
+  API and worker live. `050_collection_controls` applied.
+- `43f2152296bbbf39a050056d51d43a87f6ec0849` — Unit 03 deterministic
+  evaluation; migration-free API and worker live.
+- `ef2ad6d3726358023418cf637235bad96accf798` — Unit 02 enrichment
+  operations; API and worker live. `051_enrichment_operations` applied.
+- `fd4709bb7f1aca4d992869cd423be3cb2c0a26ce` — first Unit 04 publication
+  attempt; worker live but API pre-deploy failed before applying `052` because
+  the recovered branch omitted the tested closing SQL-string repair.
+- `6fd91cb281096d3f13147f4eb715ad0482292f11` — forward repair commit. API
+  and worker live; `052_publication_policy_history`,
+  `053_acquisition_audit_permissions`, and
+  `054_company_identity_reconciliation` applied successfully. Render grouped
+  the later integrator history into this one successful migration deploy.
+- The API pre-deploy failure was diagnosed from Render logs as an unterminated
+  migration SQL string, then repaired by `9fbf9e19` and the applied-051
+  checksum-preserving fix `6fd91cb2`; the only redeploy was successful.
+- Every post-deploy readiness check returned HTTP 200. Authenticated admin
+  frontend calls recorded HTTP 200 for `/admin/acquisition/overview`,
+  `/admin/acquisition/publication`, `/admin/acquisition/sources`, and
+  `/admin/acquisition/connectors/capabilities`; no post-release frontend API
+  failures were recorded.
+- After the successful final deploy, all migrations 049 through 054 reported
+  applied, the publication audit table was empty, the publication head remained
+  `acq_publication_8378ea4c5aa04ddc9362e4400bb088df`, and the head contained
+  163 jobs.
+- Production configuration verification: company enrichment is `0`, live
+  networking discovery is `false`, provider budgets remain zero, and no
+  enrichment evidence was written. `RUNR_ACQUISITION_LIVE_NETWORK_ENABLED`
+  remains a pre-existing Render configuration value of `true`; the scheduler
+  produced no-op cycles and no external collection occurred during Wave 1.
+  This configuration drift remains an explicit release defect for follow-up.
