@@ -16,6 +16,7 @@ const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
 const AdminScrapeOpsPage = lazy(() => import("./pages/AdminScrapeOpsPage"));
 const AdminJobImportPage = lazy(() => import("./pages/AdminJobImportPage"));
 const AdminAcquisitionPage = lazy(() => import("./pages/AdminAcquisitionPage"));
+const AcquisitionOperationsPage = lazy(() => import("./pages/AcquisitionOperationsPage"));
 const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
 const ApplyExtensionSetupPage = lazy(() => import("./pages/ApplyExtensionSetupPage"));
 const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
@@ -308,7 +309,31 @@ function AuthenticatedApp() {
                 path="/admin/acquisition"
                 element={(
                   <RequireAdminRoute>
-                    <AdminAcquisitionPage />
+                    <AcquisitionOperationsPage />
+                  </RequireAdminRoute>
+                )}
+              />
+              <Route
+                path="/admin/acquisition/sources"
+                element={(
+                  <RequireAdminRoute>
+                    <AcquisitionOperationsPage />
+                  </RequireAdminRoute>
+                )}
+              />
+              <Route
+                path="/admin/acquisition/jobs"
+                element={(
+                  <RequireAdminRoute>
+                    <AcquisitionOperationsPage />
+                  </RequireAdminRoute>
+                )}
+              />
+              <Route
+                path="/admin/acquisition/jobs/:canonicalJobId"
+                element={(
+                  <RequireAdminRoute>
+                    <AcquisitionOperationsPage />
                   </RequireAdminRoute>
                 )}
               />
