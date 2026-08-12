@@ -71,6 +71,17 @@ export function buildInspectionPath(canonicalJobId, search = "") {
   return `/admin/acquisition/jobs/${encodedId}${normalizedSearch || ""}`;
 }
 
+export function getJobsRangeLabel({ offset = 0, rows = 0, total = 0 } = {}) {
+  const normalizedOffset = Math.max(0, Number(offset) || 0);
+  const normalizedRows = Math.max(0, Number(rows) || 0);
+  const normalizedTotal = Math.max(0, Number(total) || 0);
+  if (!normalizedTotal) return "No jobs match the current filters.";
+  if (!normalizedRows || normalizedOffset >= normalizedTotal) {
+    return `No jobs on this page. ${formatCount(normalizedTotal)} jobs match the current filters.`;
+  }
+  return `Showing ${normalizedOffset + 1}–${Math.min(normalizedOffset + normalizedRows, normalizedTotal)} of ${formatCount(normalizedTotal)} jobs.`;
+}
+
 export function getSourceOperationalState(source = {}) {
   const status = String(source.status || "").trim().toLowerCase();
   if (status === "ready") return "Ready";

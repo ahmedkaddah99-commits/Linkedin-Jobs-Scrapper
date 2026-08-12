@@ -11,6 +11,7 @@ import {
   buildJobsPath,
   formatCount,
   getCapabilityKey,
+  getJobsRangeLabel,
   getResourceViewState,
   getSourceCollectionState,
   getSourceOperationalState,
@@ -335,11 +336,8 @@ function JobsPage() {
   const { canonicalJobId } = useParams();
   const filters = useMemo(() => parseJobFilters(location.search), [location.search]);
   const requestPath = useMemo(() => {
-    const query = new URLSearchParams(location.search);
-    query.set("limit", String(filters.limit));
-    query.set("offset", String(filters.offset));
-    return `/admin/acquisition/jobs?${query.toString()}`;
-  }, [filters.limit, filters.offset, location.search]);
+    return buildJobsPath(filters);
+  }, [filters]);
   const resource = useApiResource(
     () => request(requestPath),
     [requestPath],
@@ -373,13 +371,14 @@ function JobsPage() {
 
   const rows = resource.data?.jobs || [];
   const total = Number(resource.data?.total || 0);
+  const hasFilteredResults = total > 0;
   const currentPage = Math.floor(filters.offset / filters.limit) + 1;
   const pageCount = Math.max(1, Math.ceil(total / filters.limit));
   const state = getResourceViewState({
     data: resource.data,
     loading: resource.loading,
     error: resource.error,
-    empty: resource.data && rows.length === 0,
+    empty: resource.data && rows.length === 0 && !hasFilteredResults,
     unavailable: resource.data?.unavailable === true,
   });
 
@@ -403,7 +402,7 @@ function JobsPage() {
           </div>
         </form>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-outline-variant/10 px-5 py-3">
-          <p className="text-sm text-on-surface-variant">{total ? `Showing ${filters.offset + 1}–${Math.min(filters.offset + rows.length, total)} of ${formatCount(total)} jobs.` : "No jobs match the current filters."}</p>
+          <p className="text-sm text-on-surface-variant">{getJobsRangeLabel({ offset: filters.offset, rows: rows.length, total })}</p>
           <div className="flex items-center gap-3">
             {resource.refreshing ? <span className="text-xs text-on-surface-variant" role="status">Refreshing…</span> : null}
             <RefreshButton onClick={() => resource.refresh({ showLoading: false }).catch(() => undefined)} refreshing={resource.refreshing} />

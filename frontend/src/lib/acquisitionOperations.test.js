@@ -7,6 +7,7 @@ import {
   buildInspectionPath,
   buildJobsPath,
   getResourceViewState,
+  getJobsRangeLabel,
   getSourceCollectionState,
   getSourceOperationalState,
   parseJobFilters,
@@ -57,6 +58,13 @@ test("job paths omit the backend source filter until its query contract is fixed
   assert.doesNotMatch(
     buildJobsPath({ search: "personio", source: "personio", limit: 25, offset: 0 }),
     /source=/,
+  );
+});
+
+test("job range labels stay valid when pagination is beyond the filtered total", () => {
+  assert.equal(
+    getJobsRangeLabel({ offset: 50, rows: 0, total: 34 }),
+    "No jobs on this page. 34 jobs match the current filters.",
   );
 });
 
