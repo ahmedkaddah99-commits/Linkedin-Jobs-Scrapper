@@ -391,7 +391,6 @@ function JobsPage() {
       <section className="overflow-hidden rounded-2xl border border-outline-variant/20 bg-surface-container-lowest shadow-soft">
         <form className="grid gap-4 border-b border-outline-variant/10 p-5 md:grid-cols-2 xl:grid-cols-4" onSubmit={applyFilters}>
           <div className="md:col-span-2 xl:col-span-4"><FilterInput id="acquisition-job-search" label="Search" onChange={(event) => setDraftFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Title, company, location or job ID" value={draftFilters.search} /></div>
-          <FilterInput id="acquisition-job-source" label="Source" onChange={(event) => setDraftFilters((current) => ({ ...current, source: event.target.value }))} placeholder="Connector or source" value={draftFilters.source} />
           <FilterInput id="acquisition-job-location" label="Location" onChange={(event) => setDraftFilters((current) => ({ ...current, location: event.target.value }))} placeholder="Raw location text" value={draftFilters.location} />
           <FilterInput id="acquisition-job-function" label="Runr function" onChange={(event) => setDraftFilters((current) => ({ ...current, function: event.target.value }))} placeholder="Function" value={draftFilters.function} />
           <FilterInput id="acquisition-job-warning" label="Warning code" onChange={(event) => setDraftFilters((current) => ({ ...current, warning_type: event.target.value }))} placeholder="Warning type" value={draftFilters.warning_type} />

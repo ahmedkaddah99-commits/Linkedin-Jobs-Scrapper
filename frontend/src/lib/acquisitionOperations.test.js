@@ -34,22 +34,29 @@ test("App keeps the new acquisition routes and legacy admin routes", () => {
 });
 
 test("job filters are parsed and rebuilt as URL-backed pagination", () => {
-  const filters = parseJobFilters("?search=data%20engineer&source=greenhouse&limit=50&offset=100");
+  const filters = parseJobFilters("?search=data%20engineer&function=engineering&limit=50&offset=100");
 
   assert.equal(filters.search, "data engineer");
-  assert.equal(filters.source, "greenhouse");
+  assert.equal(filters.function, "engineering");
   assert.equal(filters.limit, 50);
   assert.equal(filters.offset, 100);
   assert.equal(
     buildJobsPath(filters),
-    "/admin/acquisition/jobs?search=data+engineer&source=greenhouse&limit=50&offset=100",
+    "/admin/acquisition/jobs?search=data+engineer&function=engineering&limit=50&offset=100",
   );
 });
 
 test("inspection paths preserve the current job filters", () => {
   assert.equal(
-    buildInspectionPath("job/42", "?source=lever&limit=25&offset=25"),
-    "/admin/acquisition/jobs/job%2F42?source=lever&limit=25&offset=25",
+    buildInspectionPath("job/42", "?function=engineering&limit=25&offset=25"),
+    "/admin/acquisition/jobs/job%2F42?function=engineering&limit=25&offset=25",
+  );
+});
+
+test("job paths omit the backend source filter until its query contract is fixed", () => {
+  assert.doesNotMatch(
+    buildJobsPath({ search: "personio", source: "personio", limit: 25, offset: 0 }),
+    /source=/,
   );
 });
 
