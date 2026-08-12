@@ -2650,11 +2650,15 @@ def _apply_enrichment_operations_migration(connection: DatabaseConnection) -> No
         BEGIN
             SELECT RAISE(ABORT, 'enrichment_operation_audit_events is append-only');
         END;
-        CREATE TRIGGER IF NOT EXISTS trg_enrichment_operation_audit_append_only_delete
-        BEFORE DELETE ON enrichment_operation_audit_events
-        BEGIN
-            SELECT RAISE(ABORT, 'enrichment_operation_audit_events is append-only');
-        END;
+         CREATE TRIGGER IF NOT EXISTS trg_enrichment_operation_audit_append_only_delete
+         BEFORE DELETE ON enrichment_operation_audit_events
+         BEGIN
+             SELECT RAISE(ABORT, 'enrichment_operation_audit_events is append-only');
+         END;
+        """
+    )
+
+
 def _apply_publication_policy_history_migration(connection: DatabaseConnection) -> None:
     """Add explicit publication origins, policy/preflight state, and restore audit."""
 
