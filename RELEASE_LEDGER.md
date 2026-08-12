@@ -222,3 +222,24 @@ were clean at inspection time.
   source-reproducible or independently log-verifiable. Local source, Python,
   frontend, and migration checks pass; no speculative Docker/configuration
   change was made.
+
+## Wave 3 deployment hold
+
+- Production branch push completed: `deployment/render-turso-r2` points to
+  `d969f43b3466e776025cad3130ecf96e63fce20a`, whose parent is the analytics
+  implementation commit `12f342fb8964685682e264188a971d03b88a4af9`.
+- Render accepted the auto-deploy event for `runr-api`, `runr-worker`, and
+  `runr-frontend`, but each deployment for `d969f43` is `Build blocked` because
+  the workspace has run out of pipeline minutes. The last live deployment for
+  all three services remains `3c5e609acd9661d4f114e0f487bd9fb15f4dabbe`.
+- The pre-existing API readiness endpoint still returns HTTP 200, and the
+  authenticated pre-deploy live-catalog baseline still reports the unchanged
+  publication head and 163 jobs. The frontend still serves the pre-analytics
+  bundle `/assets/index-BygCU6S-.js`; the analytics route is not live.
+- `055_acquisition_analytics_indexes` was not applied because the API
+  pre-deploy/build never ran. No production database write, provider call, AI
+  call, publication, or mutation was performed by Wave 3.
+- Deployment smoke tests are pending the external Render pipeline-minute
+  constraint. No repair or redeploy commit was created; the local source and
+  release checks are green. This hold requires Render workspace authority or
+  restored pipeline capacity.
