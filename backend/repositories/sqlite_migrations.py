@@ -2451,6 +2451,48 @@ def _apply_enrichment_foundation_migration(connection: DatabaseConnection) -> No
         """
     )
 
+def _apply_publication_policy_history_migration(connection: DatabaseConnection) -> None:
+    """Add explicit publication origins, policy/preflight state, and restore audit."""
+
+    for column, definition in (
+        ("origin", "TEXT NOT NULL DEFAULT 'system'"),
+        ("created_by", "TEXT NOT NULL DEFAULT ''"),
+        ("scheduled_run_id", "TEXT NOT NULL DEFAULT ''"),
+        ("preflight_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("policy_version", "TEXT NOT NULL DEFAULT 'publication_policy_v1'"),
+    ):
+        _ensure_table_column(connection, "acquisition_publications", column, definition)
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS publication_audit_events (
+            event_id TEXT PRIMARY KEY,
+            publication_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            actor_user_id TEXT NOT NULL DEFAULT '',
+            target_publication_id TEXT NOT NULL DEFAULT '',
+            previous_publication_id TEXT NOT NULL DEFAULT '',
+            expected_head_publication_id TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_publication_audit_events_publication
+            ON publication_audit_events(publication_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_publication_audit_events_created
+            ON publication_audit_events(created_at DESC, event_id DESC);
+        CREATE TRIGGER IF NOT EXISTS publication_audit_events_immutable_update
+            BEFORE UPDATE ON publication_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'publication audit events are immutable');
+            END;
+        CREATE TRIGGER IF NOT EXISTS publication_audit_events_immutable_delete
+            BEFORE DELETE ON publication_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'publication audit events are immutable');
+            END;
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2720,5 +2762,11 @@ MIGRATIONS = (
         "049_enrichment_foundation",
         "Create inactive provider-neutral enrichment evidence, version, and cache state.",
         _apply_enrichment_foundation_migration,
+    ),
+    Migration.from_callable(
+        "050_publication_policy_history",
+        "Add explicit publication origins, versioned preflight policy, chaining metadata, and immutable restore audit events.",
+        _apply_publication_policy_history_migration,
+        dependencies=(_table_columns, _ensure_table_column),
     ),
 )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from backend.acquisition.publication import RestorePublicationConfirmation, StalePublicationHeadError
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 
 
@@ -66,6 +67,9 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
         return True
     if segments == ["admin", "acquisition", "publication"]:
         context.send_json(application.get_admin_publication_read_model())
+        return True
+    if segments == ["admin", "acquisition", "publication", "audit"]:
+        context.send_json({"events": application.list_admin_publication_audit(limit=_int_query(query, "limit", 100, 500))})
         return True
     if segments == ["admin", "acquisition", "imports"]:
         context.send_json({"imports": application.list_admin_job_imports(limit=_int_query(query, "limit", 50, 200), offset=_int_query(query, "offset", 0, 100000))})
@@ -184,6 +188,8 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                 _text(payload.get("publication_id")),
                 actor_user_id=_actor_user_id(admin),
             )
+        except StalePublicationHeadError as exc:
+            return _error(context, 409, "stale_publication_head", str(exc))
         except ValueError as exc:
             return _error(context, 400, "invalid_publication_request", str(exc))
         context.send_json({"publication_id": publication_id, "status": "published"}, status=202)
@@ -196,6 +202,23 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
             )
         except ValueError as exc:
             return _error(context, 400, "invalid_publication_request", str(exc))
+        return True
+    if segments == ["admin", "acquisition", "publication", "restore"]:
+        try:
+            confirmation = RestorePublicationConfirmation.from_values(
+                target_publication_id=_text(payload.get("target_publication_id") or payload.get("publication_id")),
+                expected_head_publication_id=_text(payload.get("expected_head_publication_id")),
+                actor_user_id=_actor_user_id(admin),
+                confirmation=_text(payload.get("confirmation")),
+            )
+            publication_id = context.application.restore_admin_publication(confirmation)
+        except StalePublicationHeadError as exc:
+            return _error(context, 409, "stale_publication_head", str(exc))
+        except PermissionError as exc:
+            return _error(context, 403, "publication_restore_forbidden", str(exc))
+        except (KeyError, TypeError, ValueError) as exc:
+            return _error(context, 400, "invalid_publication_restore", str(exc))
+        context.send_json({"publication_id": publication_id, "status": "restored"}, status=202)
         return True
     if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "companies"] and segments[4] == "enrich":
         try:

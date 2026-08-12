@@ -28,6 +28,13 @@ from backend.acquisition.quality import (
     source_employer_name,
     stable_content_payload,
 )
+from backend.acquisition.publication import (
+    DEFAULT_PUBLICATION_POLICY_VERSION,
+    PUBLICATION_ORIGINS,
+    RestorePublicationConfirmation,
+    StalePublicationHeadError,
+    get_publication_policy,
+)
 from backend.acquisition.unified_mapping import UNIFIED_RULE_VERSION
 from backend.database.connection import database_target_info
 from backend.domain.job_identity import canonicalize_url
@@ -53,6 +60,23 @@ def _dict_row(row) -> dict[str, Any]:
 
 def _bool(value: Any) -> bool:
     return bool(int(value or 0))
+
+
+def _publication_origin(value: str, *, default: str = "system") -> str:
+    origin = str(value or default).strip().casefold()
+    if origin not in PUBLICATION_ORIGINS:
+        raise ValueError(
+            f"Publication origin must be one of: {', '.join(sorted(PUBLICATION_ORIGINS))}."
+        )
+    return origin
+
+
+def _snapshot_job_id(item: Mapping[str, Any]) -> str:
+    return str(item.get("canonical_job_id") or item.get("job_id") or "").strip()
+
+
+def _snapshot_comparison_key(item: Mapping[str, Any]) -> str:
+    return _json(dict(item))
 
 
 def _posting_anchor(job: Mapping[str, Any], observed_at: str) -> tuple[str, str, str]:
@@ -1518,12 +1542,28 @@ class SqliteAcquisitionStore(_SqliteStore):
                 ),
             )
 
-    def publish_valid_snapshot(self, *, cycle_id: str, valid_target_ids: Iterable[str], valid_until: str = "") -> str:
+    def publish_valid_snapshot(
+        self,
+        *,
+        cycle_id: str,
+        valid_target_ids: Iterable[str],
+        valid_until: str = "",
+        origin: str = "scheduled",
+        created_by: str = "system",
+        scheduled_run_id: str = "",
+        policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
+    ) -> str:
         target_ids = tuple(str(item) for item in valid_target_ids if str(item).strip())
         if not target_ids:
             return ""
         now = utc_now_iso()
         publication_id = f"acq_publication_{uuid4().hex}"
+        normalized_origin = _publication_origin(origin, default="scheduled")
+        policy = get_publication_policy(policy_version)
+        normalized_created_by = str(created_by or "system").strip()
+        normalized_scheduled_run_id = str(
+            scheduled_run_id or (cycle_id if normalized_origin == "scheduled" else "")
+        ).strip()
 
         def publish(connection):
             existing = connection.execute(
@@ -1536,14 +1576,18 @@ class SqliteAcquisitionStore(_SqliteStore):
                     "SELECT COUNT(*) AS count FROM acquisition_publication_jobs WHERE publication_id = ?",
                     (existing_id,),
                 ).fetchone()["count"]
-                connection.execute(
-                    """
-                    INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
-                    VALUES (1, ?, ?)
-                    ON CONFLICT(head_id) DO UPDATE SET publication_id=excluded.publication_id, updated_at=excluded.updated_at
-                    """,
-                    (existing_id, now),
-                )
+                current = connection.execute(
+                    "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+                ).fetchone()
+                if current is None or str(current["publication_id"] or "") == existing_id:
+                    connection.execute(
+                        """
+                        INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
+                        VALUES (1, ?, ?)
+                        ON CONFLICT(head_id) DO UPDATE SET publication_id=excluded.publication_id, updated_at=excluded.updated_at
+                        """,
+                        (existing_id, now),
+                    )
                 connection.execute(
                     "UPDATE acquisition_cycles SET jobs_published = ?, publication_id = ?, updated_at = ? WHERE cycle_id = ?",
                     (int(published_count or 0), existing_id, now, cycle_id),
@@ -1579,25 +1623,65 @@ class SqliteAcquisitionStore(_SqliteStore):
                 (*target_ids, cycle_id),
             ).fetchall()
             snapshot = [_dict_row(row) for row in rows]
+            previous = connection.execute(
+                "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+            ).fetchone()
+            previous_publication_id = str(previous["publication_id"] or "") if previous is not None else ""
+            preflight = self._build_publication_preflight(
+                connection,
+                previous_publication_id=previous_publication_id,
+                next_snapshot=snapshot,
+                cycle_id=cycle_id,
+                policy_version=policy.version,
+            )
             connection.execute(
                 """
                 INSERT INTO acquisition_publications (
-                    publication_id, cycle_id, status, snapshot_json, published_at, valid_until
-                ) VALUES (?, ?, 'valid', ?, ?, ?)
+                    publication_id, cycle_id, status, snapshot_json, published_at, valid_until,
+                    previous_publication_id, origin, created_by, scheduled_run_id,
+                    preflight_json, policy_version
+                ) VALUES (?, ?, 'valid', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (publication_id, cycle_id, _json(snapshot), now, str(valid_until or "")),
+                (
+                    publication_id, cycle_id, _json(snapshot), now, str(valid_until or ""),
+                    previous_publication_id, normalized_origin, normalized_created_by,
+                    normalized_scheduled_run_id, _json(preflight), policy.version,
+                ),
             )
             connection.executemany(
                 "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
                 [(publication_id, str(row["canonical_job_id"])) for row in rows],
             )
-            connection.execute(
-                """
-                INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
-                VALUES (1, ?, ?)
-                ON CONFLICT(head_id) DO UPDATE SET publication_id=excluded.publication_id, updated_at=excluded.updated_at
-                """,
-                (publication_id, now),
+            if previous_publication_id:
+                changed = connection.execute(
+                    """
+                    UPDATE acquisition_publication_head
+                    SET publication_id=?, updated_at=?
+                    WHERE head_id=1 AND publication_id=?
+                    """,
+                    (publication_id, now, previous_publication_id),
+                ).rowcount
+                if changed != 1:
+                    raise StalePublicationHeadError("Publication head changed during publication.")
+            else:
+                inserted = connection.execute(
+                    """
+                    INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
+                    VALUES (1, ?, ?)
+                    ON CONFLICT(head_id) DO NOTHING
+                    """,
+                    (publication_id, now),
+                ).rowcount
+                if inserted != 1:
+                    raise StalePublicationHeadError("Publication head changed during publication.")
+            self._record_publication_audit(
+                connection,
+                publication_id=publication_id,
+                event_type="publication_created",
+                actor_user_id=normalized_created_by,
+                previous_publication_id=previous_publication_id,
+                payload={"origin": normalized_origin, "policy_version": policy.version},
+                created_at=now,
             )
             connection.execute(
                 "UPDATE acquisition_cycles SET jobs_published = ?, publication_id = ?, updated_at = ? WHERE cycle_id = ?",
@@ -1627,6 +1711,10 @@ class SqliteAcquisitionStore(_SqliteStore):
         cycle_id: str,
         valid_target_ids: Iterable[str],
         valid_until: str = "",
+        origin: str = "system",
+        created_by: str = "system",
+        scheduled_run_id: str = "",
+        policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
     ) -> str:
         """Create a non-public publication candidate; do not move the public head."""
 
@@ -1635,6 +1723,10 @@ class SqliteAcquisitionStore(_SqliteStore):
             return ""
         now = utc_now_iso()
         publication_id = f"acq_staging_{uuid4().hex}"
+        normalized_origin = _publication_origin(origin, default="system")
+        normalized_created_by = str(created_by or "system").strip()
+        normalized_scheduled_run_id = str(scheduled_run_id or "").strip()
+        policy = get_publication_policy(policy_version)
 
         def publish(connection):
             placeholders = ",".join("?" for _ in target_ids)
@@ -1655,13 +1747,30 @@ class SqliteAcquisitionStore(_SqliteStore):
                 (*target_ids, cycle_id),
             ).fetchall()
             snapshot = [_dict_row(row) for row in rows]
+            previous = connection.execute(
+                "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+            ).fetchone()
+            previous_publication_id = str(previous["publication_id"] or "") if previous is not None else ""
+            preflight = self._build_publication_preflight(
+                connection,
+                previous_publication_id=previous_publication_id,
+                next_snapshot=snapshot,
+                cycle_id=cycle_id,
+                policy_version=policy.version,
+            )
             connection.execute(
                 """
                 INSERT INTO acquisition_publications (
-                    publication_id, cycle_id, status, snapshot_json, published_at, valid_until
-                ) VALUES (?, ?, 'staging', ?, ?, ?)
+                    publication_id, cycle_id, status, snapshot_json, published_at, valid_until,
+                    previous_publication_id, origin, created_by, scheduled_run_id,
+                    preflight_json, policy_version
+                ) VALUES (?, ?, 'staging', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (publication_id, cycle_id, _json(snapshot), now, str(valid_until or "")),
+                (
+                    publication_id, cycle_id, _json(snapshot), now, str(valid_until or ""),
+                    previous_publication_id, normalized_origin, normalized_created_by,
+                    normalized_scheduled_run_id, _json(preflight), policy.version,
+                ),
             )
             connection.executemany(
                 "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
@@ -1693,13 +1802,15 @@ class SqliteAcquisitionStore(_SqliteStore):
         with self._connect() as connection:
             if publication_id:
                 publication = connection.execute(
-                    "SELECT publication_id, cycle_id, status, published_at, valid_until, snapshot_json "
+                    "SELECT publication_id, cycle_id, status, published_at, valid_until, snapshot_json, "
+                    "previous_publication_id, origin, created_by, scheduled_run_id, preflight_json, policy_version "
                     "FROM acquisition_publications WHERE publication_id=? AND status='staging'",
                     (publication_id,),
                 ).fetchone()
             else:
                 publication = connection.execute(
-                    "SELECT publication_id, cycle_id, status, published_at, valid_until, snapshot_json "
+                    "SELECT publication_id, cycle_id, status, published_at, valid_until, snapshot_json, "
+                    "previous_publication_id, origin, created_by, scheduled_run_id, preflight_json, policy_version "
                     "FROM acquisition_publications WHERE status='staging' ORDER BY published_at DESC LIMIT 1"
                 ).fetchone()
         if publication is None:
@@ -1708,27 +1819,37 @@ class SqliteAcquisitionStore(_SqliteStore):
         jobs = snapshot if isinstance(snapshot, list) else []
         start = max(0, int(offset))
         page = jobs[start : start + max(1, int(limit))]
+        read_model = self._publication_read_model(
+            _dict_row(publication),
+            previous_exists=bool(
+                publication["previous_publication_id"]
+                and self._publication_exists(str(publication["previous_publication_id"]))
+            ),
+        )
         return {
             "jobs": page,
             "total": len(jobs),
-            "publication": {
-                "publication_id": str(publication["publication_id"] or ""),
-                "cycle_id": str(publication["cycle_id"] or ""),
-                "status": str(publication["status"] or "staging"),
-                "published_at": str(publication["published_at"] or ""),
-                "valid_until": str(publication["valid_until"] or ""),
-            },
+            "publication": read_model,
             "freshness": "staging",
         }
 
-    def promote_staging_publication(self, publication_id: str) -> str:
+    def promote_staging_publication(
+        self,
+        publication_id: str,
+        *,
+        expected_previous_publication_id: str | None = None,
+        origin: str = "administrator",
+        created_by: str = "",
+        scheduled_run_id: str = "",
+        policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
+    ) -> str:
         """Move one reviewed staging snapshot to the public valid head."""
 
         now = utc_now_iso()
 
         def promote(connection):
             row = connection.execute(
-                "SELECT publication_id, status FROM acquisition_publications WHERE publication_id=?",
+                "SELECT * FROM acquisition_publications WHERE publication_id=?",
                 (publication_id,),
             ).fetchone()
             if row is None:
@@ -1739,18 +1860,74 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
             ).fetchone()
             previous_id = str(previous["publication_id"] or "") if previous is not None else ""
-            connection.execute(
-                "UPDATE acquisition_publications SET status='valid', previous_publication_id=? WHERE publication_id=?",
-                (previous_id, publication_id),
+            if expected_previous_publication_id is not None and str(expected_previous_publication_id or "") != previous_id:
+                raise StalePublicationHeadError(
+                    f"Publication head changed; expected '{expected_previous_publication_id or ''}', found '{previous_id}'."
+                )
+            normalized_origin = _publication_origin(origin, default="administrator")
+            normalized_created_by = str(created_by or "system").strip()
+            normalized_scheduled_run_id = str(scheduled_run_id or "").strip()
+            policy = get_publication_policy(policy_version)
+            snapshot = _decode(row["snapshot_json"], [])
+            preflight = self._build_publication_preflight(
+                connection,
+                previous_publication_id=previous_id,
+                next_snapshot=snapshot if isinstance(snapshot, list) else [],
+                cycle_id=str(row["cycle_id"] or ""),
+                policy_version=policy.version,
             )
             connection.execute(
                 """
-                INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
-                VALUES (1, ?, ?)
-                ON CONFLICT(head_id) DO UPDATE SET publication_id=excluded.publication_id,
-                    updated_at=excluded.updated_at
+                UPDATE acquisition_publications
+                SET status='valid', previous_publication_id=?, origin=?, created_by=?,
+                    scheduled_run_id=?, preflight_json=?, policy_version=?
+                WHERE publication_id=?
                 """,
-                (publication_id, now),
+                (
+                    previous_id, normalized_origin, normalized_created_by,
+                    normalized_scheduled_run_id, _json(preflight), policy.version, publication_id,
+                ),
+            )
+            if expected_previous_publication_id is None:
+                connection.execute(
+                    """
+                    INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
+                    VALUES (1, ?, ?)
+                    ON CONFLICT(head_id) DO UPDATE SET publication_id=excluded.publication_id,
+                        updated_at=excluded.updated_at
+                    """,
+                    (publication_id, now),
+                )
+            elif previous_id:
+                changed = connection.execute(
+                    """
+                    UPDATE acquisition_publication_head
+                    SET publication_id=?, updated_at=?
+                    WHERE head_id=1 AND publication_id=?
+                    """,
+                    (publication_id, now, previous_id),
+                ).rowcount
+                if changed != 1:
+                    raise StalePublicationHeadError("Publication head changed during promotion.")
+            else:
+                inserted = connection.execute(
+                    """
+                    INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
+                    VALUES (1, ?, ?)
+                    ON CONFLICT(head_id) DO NOTHING
+                    """,
+                    (publication_id, now),
+                ).rowcount
+                if inserted != 1:
+                    raise StalePublicationHeadError("Publication head changed during promotion.")
+            self._record_publication_audit(
+                connection,
+                publication_id=publication_id,
+                event_type="publication_created",
+                actor_user_id=normalized_created_by,
+                previous_publication_id=previous_id,
+                payload={"origin": normalized_origin, "policy_version": policy.version},
+                created_at=now,
             )
             return publication_id
 
@@ -2107,7 +2284,9 @@ class SqliteAcquisitionStore(_SqliteStore):
         with self._connect() as connection:
             publication = connection.execute(
                 """
-                SELECT publication_id, cycle_id, status, published_at, valid_until, snapshot_json
+                SELECT publication_id, cycle_id, status, published_at, valid_until, snapshot_json,
+                       previous_publication_id, origin, created_by, scheduled_run_id,
+                       preflight_json, policy_version
                 FROM acquisition_publications
                 WHERE publication_id = COALESCE(
                     (SELECT publication_id FROM acquisition_publication_head WHERE head_id = 1),
@@ -2127,17 +2306,27 @@ class SqliteAcquisitionStore(_SqliteStore):
         jobs = snapshot if isinstance(snapshot, list) else []
         start = max(0, int(offset))
         end = start + max(1, int(limit))
+        read_model = self._publication_read_model(
+            _dict_row(publication),
+            previous_exists=bool(
+                publication["previous_publication_id"]
+                and self._publication_exists(str(publication["previous_publication_id"]))
+            ),
+        )
         return {
             "jobs": jobs[start:end],
             "total": len(jobs),
-            "publication": {
-                "publication_id": str(publication["publication_id"] or ""),
-                "cycle_id": str(publication["cycle_id"] or ""),
-                "published_at": str(publication["published_at"] or ""),
-                "valid_until": str(publication["valid_until"] or ""),
-            },
+            "publication": read_model,
             "freshness": "valid",
         }
+
+    def _publication_exists(self, publication_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM acquisition_publications WHERE publication_id=?",
+                (str(publication_id or ""),),
+            ).fetchone()
+        return row is not None
 
     def get_target_history(self, target_id: str) -> dict[str, Any]:
         with self._connect() as connection:
@@ -3739,12 +3928,45 @@ class SqliteAcquisitionStore(_SqliteStore):
         with self._connect() as connection:
             counts = connection.execute("SELECT status, COUNT(*) AS count FROM acquisition_publications GROUP BY status ORDER BY status").fetchall()
             head = connection.execute(
-                "SELECT h.*, p.status, p.published_at, p.rule_version FROM acquisition_publication_head h LEFT JOIN acquisition_publications p ON p.publication_id=h.publication_id WHERE h.head_id=1"
+                "SELECT h.*, p.* FROM acquisition_publication_head h LEFT JOIN acquisition_publications p ON p.publication_id=h.publication_id WHERE h.head_id=1"
             ).fetchone()
             jobs = connection.execute(
                 "SELECT COUNT(*) AS count FROM acquisition_publication_jobs pj JOIN acquisition_publication_head h ON h.publication_id=pj.publication_id AND h.head_id=1"
             ).fetchone()
-        return {"rule_version": UNIFIED_RULE_VERSION, "publication_states": [_dict_row(row) for row in counts], "current_head": _dict_row(head) if head else None, "current_job_count": int(jobs["count"] or 0) if jobs else 0, "automatic_promotion": False}
+            history = connection.execute(
+                "SELECT * FROM acquisition_publications ORDER BY published_at DESC, publication_id DESC"
+            ).fetchall()
+            audit = connection.execute(
+                "SELECT * FROM publication_audit_events ORDER BY created_at DESC, event_id DESC LIMIT 500"
+            ).fetchall()
+            existing_ids = {str(row["publication_id"] or "") for row in history}
+        publication_history = [
+            self._publication_read_model(
+                _dict_row(row),
+                previous_exists=str(row["previous_publication_id"] or "") in existing_ids,
+            )
+            for row in history
+        ]
+        current = None
+        if head is not None and head["publication_id"]:
+            current_id = str(head["publication_id"])
+            current = next((item for item in publication_history if item["publication_id"] == current_id), None)
+        audit_events = []
+        for row in audit:
+            item = _dict_row(row)
+            item["payload"] = _decode(item.pop("payload_json", "{}"), {})
+            audit_events.append(item)
+        return {
+            "rule_version": UNIFIED_RULE_VERSION,
+            "publication_policy_version": DEFAULT_PUBLICATION_POLICY_VERSION,
+            "publication_states": [_dict_row(row) for row in counts],
+            "current_head": current,
+            "current_job_count": int(jobs["count"] or 0) if jobs else 0,
+            "publication_history": publication_history,
+            "publications": publication_history,
+            "audit_events": audit_events,
+            "automatic_promotion": False,
+        }
 
     def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
         """Resolve only an employer/official-ATS candidate already in raw data."""
@@ -3907,6 +4129,271 @@ class SqliteAcquisitionStore(_SqliteStore):
                 (f"admin_audit_{uuid4().hex}", str(import_id), str(actor_user_id or ""), _json({"canonical_job_id": str(canonical_job_id)}), now),
             )
 
+    @staticmethod
+    def _publication_read_model(row: Mapping[str, Any], *, previous_exists: bool = False) -> dict[str, Any]:
+        previous_id = str(row.get("previous_publication_id") or "")
+        rollback_available = bool(previous_id and previous_exists)
+        if rollback_available:
+            rollback_reason = ""
+        elif not previous_id:
+            rollback_reason = "no_previous_publication"
+        else:
+            rollback_reason = "previous_publication_missing"
+        return {
+            "publication_id": str(row.get("publication_id") or ""),
+            "cycle_id": str(row.get("cycle_id") or ""),
+            "status": str(row.get("status") or ""),
+            "published_at": str(row.get("published_at") or ""),
+            "valid_until": str(row.get("valid_until") or ""),
+            "previous_publication_id": previous_id,
+            "origin": str(row.get("origin") or "system"),
+            "created_by": str(row.get("created_by") or ""),
+            "scheduled_run_id": str(row.get("scheduled_run_id") or ""),
+            "preflight": _decode(row.get("preflight_json"), {}),
+            "policy_version": str(row.get("policy_version") or DEFAULT_PUBLICATION_POLICY_VERSION),
+            "rollback_available": rollback_available,
+            "rollback_reason": rollback_reason,
+        }
+
+    def _build_publication_preflight(
+        self,
+        connection,
+        *,
+        previous_publication_id: str,
+        next_snapshot: list[Mapping[str, Any]],
+        cycle_id: str = "",
+        policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
+    ) -> dict[str, Any]:
+        policy = get_publication_policy(policy_version)
+        previous_snapshot: list[Any] = []
+        if previous_publication_id:
+            previous = connection.execute(
+                "SELECT snapshot_json FROM acquisition_publications WHERE publication_id=?",
+                (previous_publication_id,),
+            ).fetchone()
+            if previous is not None:
+                decoded = _decode(previous["snapshot_json"], [])
+                previous_snapshot = decoded if isinstance(decoded, list) else []
+        old = {_snapshot_job_id(item): item for item in previous_snapshot if isinstance(item, Mapping) and _snapshot_job_id(item)}
+        new = {_snapshot_job_id(item): item for item in next_snapshot if isinstance(item, Mapping) and _snapshot_job_id(item)}
+        additions = sorted(set(new) - set(old))
+        removals = sorted(set(old) - set(new))
+        changed = sorted(
+            job_id for job_id in set(old) & set(new)
+            if _snapshot_comparison_key(old[job_id]) != _snapshot_comparison_key(new[job_id])
+        )
+        closed = sorted(
+            job_id for job_id in set(old) & set(new)
+            if str(old[job_id].get("lifecycle_state") or "") != "closed"
+            and str(new[job_id].get("lifecycle_state") or "") == "closed"
+        )
+        reopened = sorted(
+            job_id for job_id in set(old) & set(new)
+            if str(old[job_id].get("lifecycle_state") or "") == "closed"
+            and str(new[job_id].get("lifecycle_state") or "") != "closed"
+        )
+        broken_apply_destinations = sorted(
+            job_id for job_id, item in new.items()
+            if not str(item.get("apply_url") or "").strip()
+            or urlsplit(str(item.get("apply_url") or "")).scheme not in {"http", "https"}
+            or not urlsplit(str(item.get("apply_url") or "")).netloc
+        )
+        completeness_warnings = sorted(
+            job_id for job_id, item in new.items()
+            if any(not str(item.get(field) or "").strip() for field in ("title", "company", "location"))
+        )
+        partial_source_warnings: list[dict[str, Any]] = []
+        if cycle_id:
+            task_rows = connection.execute(
+                "SELECT task_id, target_id, status, complete_snapshot, valid_snapshot, quality_warnings_json "
+                "FROM acquisition_tasks WHERE cycle_id=?",
+                (cycle_id,),
+            ).fetchall()
+            for task in task_rows:
+                quality_warnings = _decode(task["quality_warnings_json"], [])
+                if not bool(task["complete_snapshot"]) or str(task["status"] or "") in {"partial", "interrupted"}:
+                    partial_source_warnings.append(
+                        {
+                            "task_id": str(task["task_id"] or ""),
+                            "target_id": str(task["target_id"] or ""),
+                            "status": str(task["status"] or ""),
+                            "quality_warnings": quality_warnings if isinstance(quality_warnings, list) else [],
+                        }
+                    )
+        warnings: list[dict[str, Any]] = []
+        for code, values in (
+            ("additions", additions),
+            ("removals", removals),
+            ("changed_jobs", changed),
+            ("closed_jobs", closed),
+            ("reopened_jobs", reopened),
+            ("broken_apply_destinations", broken_apply_destinations),
+            ("completeness", completeness_warnings),
+        ):
+            if values:
+                warnings.append({"code": code, "count": len(values), "items": values})
+        if partial_source_warnings:
+            warnings.append({"code": "partial_source", "count": len(partial_source_warnings), "items": partial_source_warnings})
+        blocker_count = 0
+        warning_count = sum(int(item["count"]) for item in warnings)
+        return {
+            "policy_version": policy.version,
+            "completeness_mode": policy.completeness_mode,
+            "missing_apply_is_blocker": policy.missing_apply_is_blocker,
+            "additions": additions,
+            "removals": removals,
+            "changed_jobs": changed,
+            "closed_jobs": closed,
+            "reopened_jobs": reopened,
+            "broken_apply_destinations": broken_apply_destinations,
+            "partial_source_warnings": partial_source_warnings,
+            "completeness_warnings": completeness_warnings,
+            "blockers": [],
+            "warnings": warnings,
+            "blocker_count": blocker_count,
+            "warning_count": warning_count,
+            "report_only": True,
+        }
+
+    @staticmethod
+    def _record_publication_audit(
+        connection,
+        *,
+        publication_id: str,
+        event_type: str,
+        actor_user_id: str,
+        previous_publication_id: str = "",
+        target_publication_id: str = "",
+        expected_head_publication_id: str = "",
+        payload: Mapping[str, Any] | None = None,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO publication_audit_events (
+                event_id, publication_id, event_type, actor_user_id,
+                target_publication_id, previous_publication_id,
+                expected_head_publication_id, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"publication_audit_{uuid4().hex}", publication_id, event_type,
+                str(actor_user_id or ""), str(target_publication_id or ""),
+                str(previous_publication_id or ""), str(expected_head_publication_id or ""),
+                _json(dict(payload or {})), created_at,
+            ),
+        )
+
+    def list_publication_audit_events(self, *, publication_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        params: list[Any] = []
+        sql = "SELECT * FROM publication_audit_events"
+        if str(publication_id or "").strip():
+            sql += " WHERE publication_id=?"
+            params.append(str(publication_id))
+        sql += " ORDER BY created_at DESC, event_id DESC LIMIT ?"
+        params.append(max(1, min(500, int(limit))))
+        with self._connect() as connection:
+            rows = connection.execute(sql, tuple(params)).fetchall()
+        result = []
+        for row in rows:
+            item = _dict_row(row)
+            item["payload"] = _decode(item.pop("payload_json", "{}"), {})
+            result.append(item)
+        return result
+
+    def restore_publication(self, confirmation: RestorePublicationConfirmation) -> str:
+        if not isinstance(confirmation, RestorePublicationConfirmation):
+            raise TypeError("restore_publication requires RestorePublicationConfirmation.")
+        if not str(confirmation.target_publication_id or "").strip():
+            raise ValueError("target_publication_id is required.")
+        if not str(confirmation.actor_user_id or "").strip():
+            raise PermissionError("Publication restore requires an authorized administrator identity.")
+        if confirmation.confirmation != "restore_publication":
+            raise ValueError("Typed restore confirmation must be 'restore_publication'.")
+        now = utc_now_iso()
+
+        def restore(connection):
+            current = connection.execute(
+                "SELECT publication_id FROM acquisition_publication_head WHERE head_id=1"
+            ).fetchone()
+            current_id = str(current["publication_id"] or "") if current is not None else ""
+            if current_id != confirmation.expected_head_publication_id:
+                raise StalePublicationHeadError(
+                    f"Publication head changed; expected '{confirmation.expected_head_publication_id}', found '{current_id}'."
+                )
+            target = connection.execute(
+                "SELECT * FROM acquisition_publications WHERE publication_id=?",
+                (confirmation.target_publication_id,),
+            ).fetchone()
+            if target is None:
+                raise KeyError(f"Publication '{confirmation.target_publication_id}' not found.")
+            snapshot = _decode(target["snapshot_json"], [])
+            if not isinstance(snapshot, list):
+                raise ValueError("Target publication snapshot is invalid.")
+            publication_id = f"acq_restored_{uuid4().hex}"
+            policy = get_publication_policy(str(target["policy_version"] or DEFAULT_PUBLICATION_POLICY_VERSION))
+            preflight = self._build_publication_preflight(
+                connection,
+                previous_publication_id=current_id,
+                next_snapshot=snapshot,
+                cycle_id="",
+                policy_version=policy.version,
+            )
+            connection.execute(
+                """
+                INSERT INTO acquisition_publications (
+                    publication_id, cycle_id, status, snapshot_json, published_at, valid_until,
+                    previous_publication_id, origin, created_by, scheduled_run_id,
+                    preflight_json, policy_version
+                ) VALUES (?, ?, 'valid', ?, ?, ?, ?, 'restored', ?, '', ?, ?)
+                """,
+                (
+                    publication_id, f"restore_{uuid4().hex}", _json(snapshot), now,
+                    str(target["valid_until"] or ""), current_id, confirmation.actor_user_id,
+                    _json(preflight), policy.version,
+                ),
+            )
+            connection.executemany(
+                "INSERT INTO acquisition_publication_jobs (publication_id, canonical_job_id) VALUES (?, ?)",
+                [(publication_id, _snapshot_job_id(item)) for item in snapshot if _snapshot_job_id(item)],
+            )
+            if current_id:
+                changed = connection.execute(
+                    """
+                    UPDATE acquisition_publication_head
+                    SET publication_id=?, updated_at=?
+                    WHERE head_id=1 AND publication_id=?
+                    """,
+                    (publication_id, now, current_id),
+                ).rowcount
+                if changed != 1:
+                    raise StalePublicationHeadError("Publication head changed during restore.")
+            else:
+                inserted = connection.execute(
+                    """
+                    INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
+                    VALUES (1, ?, ?)
+                    ON CONFLICT(head_id) DO NOTHING
+                    """,
+                    (publication_id, now),
+                ).rowcount
+                if inserted != 1:
+                    raise StalePublicationHeadError("Publication head changed during restore.")
+            self._record_publication_audit(
+                connection,
+                publication_id=publication_id,
+                event_type="publication_restored",
+                actor_user_id=confirmation.actor_user_id,
+                previous_publication_id=current_id,
+                target_publication_id=confirmation.target_publication_id,
+                expected_head_publication_id=confirmation.expected_head_publication_id,
+                payload={"target_publication_id": confirmation.target_publication_id},
+                created_at=now,
+            )
+            return publication_id
+
+        return self._run_transaction(restore)
+
     def _publication_snapshot_rows(self, connection, canonical_job_ids: Iterable[str]) -> list[dict[str, Any]]:
         ids = tuple(dict.fromkeys(str(item) for item in canonical_job_ids if str(item).strip()))
         if not ids:
@@ -3981,6 +4468,13 @@ class SqliteAcquisitionStore(_SqliteStore):
             ]
             canonical_ids = tuple(dict.fromkeys([*current_ids, *approved_ids]))
             snapshot = self._publication_snapshot_rows(connection, canonical_ids)
+            preflight = self._build_publication_preflight(
+                connection,
+                previous_publication_id=previous_publication_id,
+                next_snapshot=snapshot,
+                cycle_id=cycle_id,
+                policy_version=DEFAULT_PUBLICATION_POLICY_VERSION,
+            )
             existing = connection.execute(
                 "SELECT publication_id FROM acquisition_publications WHERE cycle_id=? AND status='staging' LIMIT 1",
                 (cycle_id,),
@@ -3991,15 +4485,27 @@ class SqliteAcquisitionStore(_SqliteStore):
                     """
                     INSERT INTO acquisition_publications (
                         publication_id, cycle_id, status, snapshot_json, published_at,
-                        valid_until, previous_publication_id
-                    ) VALUES (?, ?, 'staging', ?, ?, '', ?)
+                        valid_until, previous_publication_id, origin, created_by,
+                        scheduled_run_id, preflight_json, policy_version
+                    ) VALUES (?, ?, 'staging', ?, ?, '', ?, 'administrator', ?, '', ?, ?)
                     """,
-                    (publication_id, cycle_id, _json(snapshot), now, previous_publication_id),
+                    (
+                        publication_id, cycle_id, _json(snapshot), now, previous_publication_id,
+                        str(actor_user_id or ""), _json(preflight), DEFAULT_PUBLICATION_POLICY_VERSION,
+                    ),
                 )
             else:
                 connection.execute(
-                    "UPDATE acquisition_publications SET snapshot_json=?, previous_publication_id=? WHERE publication_id=?",
-                    (_json(snapshot), previous_publication_id, publication_id),
+                    """
+                    UPDATE acquisition_publications
+                    SET snapshot_json=?, previous_publication_id=?, origin='administrator',
+                        created_by=?, scheduled_run_id='', preflight_json=?, policy_version=?
+                    WHERE publication_id=?
+                    """,
+                    (
+                        _json(snapshot), previous_publication_id, str(actor_user_id or ""),
+                        _json(preflight), DEFAULT_PUBLICATION_POLICY_VERSION, publication_id,
+                    ),
                 )
                 connection.execute("DELETE FROM acquisition_publication_jobs WHERE publication_id=?", (publication_id,))
             connection.executemany(
@@ -4029,25 +4535,41 @@ class SqliteAcquisitionStore(_SqliteStore):
     def get_job_import_preview(self, publication_id: str = "") -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT publication_id, cycle_id, status, snapshot_json, published_at, valid_until, previous_publication_id FROM acquisition_publications WHERE publication_id=?",
+                """
+                SELECT publication_id, cycle_id, status, snapshot_json, published_at, valid_until,
+                       previous_publication_id, origin, created_by, scheduled_run_id,
+                       preflight_json, policy_version
+                FROM acquisition_publications WHERE publication_id=?
+                """,
                 (str(publication_id or ""),),
             ).fetchone()
         if row is None:
             return None
         snapshot = _decode(row["snapshot_json"], [])
-        return {
-            "publication_id": str(row["publication_id"] or ""),
-            "cycle_id": str(row["cycle_id"] or ""),
-            "status": str(row["status"] or ""),
-            "published_at": str(row["published_at"] or ""),
-            "valid_until": str(row["valid_until"] or ""),
-            "previous_publication_id": str(row["previous_publication_id"] or ""),
+        result = self._publication_read_model(
+            _dict_row(row),
+            previous_exists=bool(
+                row["previous_publication_id"]
+                and self._publication_exists(str(row["previous_publication_id"]))
+            ),
+        )
+        result.update({
             "jobs": snapshot if isinstance(snapshot, list) else [],
             "total": len(snapshot) if isinstance(snapshot, list) else 0,
-        }
+        })
+        return result
 
     def publish_job_import_preview(self, publication_id: str, *, actor_user_id: str = "") -> str:
-        promoted = self.promote_staging_publication(publication_id)
+        preview = self.get_job_import_preview(publication_id)
+        if preview is None:
+            raise KeyError(f"Publication '{publication_id}' not found.")
+        promoted = self.promote_staging_publication(
+            publication_id,
+            expected_previous_publication_id=str(preview.get("previous_publication_id") or ""),
+            origin="administrator",
+            created_by=actor_user_id,
+            policy_version=str(preview.get("policy_version") or DEFAULT_PUBLICATION_POLICY_VERSION),
+        )
         now = utc_now_iso()
         with self._connect() as connection:
             import_row = connection.execute(
