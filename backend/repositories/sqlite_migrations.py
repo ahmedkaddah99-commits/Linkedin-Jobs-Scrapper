@@ -2338,6 +2338,119 @@ def _apply_posting_identity_anchor_migration(connection: DatabaseConnection) -> 
         """
     )
 
+
+def _apply_enrichment_foundation_migration(connection: DatabaseConnection) -> None:
+    """Create inactive, provider-neutral enrichment evidence and cache state.
+
+    These tables are additive.  They do not reference or mutate immutable source
+    observations, posting versions, canonical jobs, or publication heads.
+    """
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS enrichment_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            field_path TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            raw_value_json TEXT NOT NULL DEFAULT 'null',
+            raw_evidence_excerpt TEXT NOT NULL DEFAULT '',
+            raw_storage_permitted INTEGER NOT NULL DEFAULT 0,
+            normalized_candidate_json TEXT NOT NULL DEFAULT 'null',
+            candidate_id TEXT NOT NULL DEFAULT '',
+            provider_id TEXT NOT NULL DEFAULT '',
+            adapter_version TEXT NOT NULL DEFAULT '',
+            dataset_version TEXT NOT NULL DEFAULT '',
+            snapshot_version TEXT NOT NULL DEFAULT '',
+            source_uri TEXT NOT NULL DEFAULT '',
+            source_record_id TEXT NOT NULL DEFAULT '',
+            source_field TEXT NOT NULL DEFAULT '',
+            extraction_method TEXT NOT NULL DEFAULT '',
+            observed_at TEXT NOT NULL DEFAULT '',
+            retrieved_at TEXT NOT NULL DEFAULT '',
+            licence_id TEXT NOT NULL DEFAULT '',
+            licence_url TEXT NOT NULL DEFAULT '',
+            attribution TEXT NOT NULL DEFAULT '',
+            terms_url TEXT NOT NULL DEFAULT '',
+            privacy_class TEXT NOT NULL DEFAULT '',
+            retention_class TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL DEFAULT '',
+            rule_version TEXT NOT NULL DEFAULT '',
+            model_version TEXT NOT NULL DEFAULT '',
+            prompt_version TEXT NOT NULL DEFAULT '',
+            provider_score REAL,
+            calibrated_confidence REAL,
+            result_state TEXT NOT NULL,
+            selected INTEGER NOT NULL DEFAULT 0,
+            conflict_group TEXT NOT NULL DEFAULT '',
+            reviewer_decision TEXT NOT NULL DEFAULT '',
+            reviewer_reason TEXT NOT NULL DEFAULT '',
+            reviewer_id TEXT NOT NULL DEFAULT '',
+            reviewed_at TEXT NOT NULL DEFAULT '',
+            superseded_evidence_id TEXT NOT NULL DEFAULT '',
+            request_count INTEGER NOT NULL DEFAULT 0,
+            latency_ms REAL NOT NULL DEFAULT 0,
+            cost_units REAL NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_evidence_target
+            ON enrichment_evidence(target_type, target_id, field_path, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_evidence_fingerprint
+            ON enrichment_evidence(input_fingerprint, provider_id, rule_version, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_evidence_state
+            ON enrichment_evidence(result_state, selected, created_at DESC);
+
+        CREATE TRIGGER IF NOT EXISTS trg_enrichment_evidence_immutable_update
+        BEFORE UPDATE ON enrichment_evidence
+        BEGIN
+            SELECT RAISE(ABORT, 'enrichment_evidence is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_enrichment_evidence_immutable_delete
+        BEFORE DELETE ON enrichment_evidence
+        BEGIN
+            SELECT RAISE(ABORT, 'enrichment_evidence is append-only');
+        END;
+
+        CREATE TABLE IF NOT EXISTS enrichment_version_registry (
+            version_id TEXT PRIMARY KEY,
+            version_kind TEXT NOT NULL,
+            version_key TEXT NOT NULL,
+            version_value TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            activated_at TEXT NOT NULL DEFAULT '',
+            deactivated_at TEXT NOT NULL DEFAULT '',
+            UNIQUE(version_kind, version_key, version_value)
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_versions_active
+            ON enrichment_version_registry(version_kind, version_key, is_active, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS enrichment_cache_entries (
+            cache_key TEXT PRIMARY KEY,
+            input_fingerprint TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            adapter_version TEXT NOT NULL DEFAULT '',
+            dataset_version TEXT NOT NULL DEFAULT '',
+            rule_version TEXT NOT NULL DEFAULT '',
+            policy_version TEXT NOT NULL DEFAULT '',
+            result_state TEXT NOT NULL,
+            result_json TEXT NOT NULL DEFAULT '{}',
+            raw_storage_permitted INTEGER NOT NULL DEFAULT 0,
+            observed_at TEXT NOT NULL DEFAULT '',
+            retrieved_at TEXT NOT NULL DEFAULT '',
+            expires_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_enrichment_cache_expiry
+            ON enrichment_cache_entries(expires_at, provider_id, result_state);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_cache_input
+            ON enrichment_cache_entries(input_fingerprint, provider_id, rule_version, policy_version);
+        """
+    )
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2602,5 +2715,10 @@ MIGRATIONS = (
         "Persist URL-based identity and immutable first-observed posting-age anchors.",
         _apply_posting_identity_anchor_migration,
         dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "049_enrichment_foundation",
+        "Create inactive provider-neutral enrichment evidence, version, and cache state.",
+        _apply_enrichment_foundation_migration,
     ),
 )

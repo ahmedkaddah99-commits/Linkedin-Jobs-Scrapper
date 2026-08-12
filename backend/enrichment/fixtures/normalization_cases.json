@@ -1,0 +1,230 @@
+[
+  {
+    "fixture_id": "dev_paris_france",
+    "split": "development",
+    "synthetic": true,
+    "connector": "greenhouse",
+    "source_observation_id": "fixture-observation-paris-france",
+    "title": "Backend Engineer",
+    "location": "Paris, France",
+    "country_code": "FR",
+    "expected": {"place_state": "matched", "place_candidate_id": "geonames:2988507"}
+  },
+  {
+    "fixture_id": "dev_paris_texas",
+    "split": "development",
+    "synthetic": true,
+    "connector": "lever",
+    "source_observation_id": "fixture-observation-paris-texas",
+    "title": "Product Manager",
+    "location": "Paris",
+    "country_code": "US",
+    "region": "Texas",
+    "expected": {"place_state": "matched", "place_candidate_id": "fixture:paris-tx"}
+  },
+  {
+    "fixture_id": "dev_paris_ontario",
+    "split": "development",
+    "synthetic": true,
+    "connector": "workday",
+    "source_observation_id": "fixture-observation-paris-ontario",
+    "title": "Data Analyst",
+    "location": "Paris",
+    "country_code": "CA",
+    "region": "Ontario",
+    "expected": {"place_state": "matched", "place_candidate_id": "fixture:paris-on"}
+  },
+  {
+    "fixture_id": "cal_unqualified_paris",
+    "split": "calibration",
+    "synthetic": true,
+    "connector": "personio",
+    "source_observation_id": "fixture-observation-paris-unqualified",
+    "title": "Operations Associate",
+    "location": "Paris",
+    "expected": {"place_state": "ambiguous"}
+  },
+  {
+    "fixture_id": "dev_lowell_employer_leeds",
+    "split": "development",
+    "synthetic": true,
+    "connector": "workday",
+    "source_observation_id": "fixture-observation-lowell-leeds",
+    "title": "Customer Operations Specialist",
+    "company": "Lowell",
+    "company_domain": "lowell.com",
+    "location": "Leeds, UK",
+    "country_code": "GB",
+    "expected": {"company_candidate_id": "fixture:company:lowell", "place_candidate_id": "fixture:leeds-gb"}
+  },
+  {
+    "fixture_id": "dev_lowell_massachusetts",
+    "split": "development",
+    "synthetic": true,
+    "connector": "greenhouse",
+    "source_observation_id": "fixture-observation-lowell-massachusetts",
+    "title": "Software Engineer",
+    "company": "Example Employer",
+    "location": "Lowell",
+    "country_code": "US",
+    "region": "MA",
+    "expected": {"place_candidate_id": "fixture:lowell-ma"}
+  },
+  {
+    "fixture_id": "dev_multiple_locations",
+    "split": "development",
+    "synthetic": true,
+    "connector": "recruitee",
+    "source_observation_id": "fixture-observation-multiple-locations",
+    "title": "Finance Analyst",
+    "locations": ["Berlin, Germany", "Munich, Germany"],
+    "expected": {"location_count": 2}
+  },
+  {
+    "fixture_id": "dev_hybrid_role",
+    "split": "development",
+    "synthetic": true,
+    "connector": "smartrecruiters",
+    "source_observation_id": "fixture-observation-hybrid",
+    "title": "UX Designer",
+    "location": "Paris, France",
+    "workplace_arrangement": "Hybrid",
+    "expected": {"workplace_arrangement": "Hybrid", "place_state": "matched"}
+  },
+  {
+    "fixture_id": "dev_remote_germany",
+    "split": "development",
+    "synthetic": true,
+    "connector": "greenhouse",
+    "source_observation_id": "fixture-observation-remote-germany",
+    "title": "Security Engineer",
+    "location": "Remote",
+    "workplace_arrangement": "Remote",
+    "remote_scope": "Germany",
+    "expected": {"workplace_arrangement": "Remote", "remote_scope": "Germany", "location_count": 0}
+  },
+  {
+    "fixture_id": "dev_remote_eu",
+    "split": "development",
+    "synthetic": true,
+    "connector": "lever",
+    "source_observation_id": "fixture-observation-remote-eu",
+    "title": "Product Designer",
+    "location": "Remote EU",
+    "workplace_arrangement": "Remote",
+    "remote_scope": "EU",
+    "expected": {"workplace_arrangement": "Remote", "remote_scope": "EU", "location_count": 1}
+  },
+  {
+    "fixture_id": "cal_remote_without_scope",
+    "split": "calibration",
+    "synthetic": true,
+    "connector": "generic_jsonld",
+    "source_observation_id": "fixture-observation-remote-unknown-scope",
+    "title": "Marketing Specialist",
+    "location": "Remote",
+    "workplace_arrangement": "Remote",
+    "expected": {"workplace_arrangement": "Remote", "remote_scope": "", "location_count": 0}
+  },
+  {
+    "fixture_id": "dev_german_title",
+    "split": "development",
+    "synthetic": true,
+    "connector": "personio",
+    "source_observation_id": "fixture-observation-german-title",
+    "title": "Werkstudent Data Analyst",
+    "language": "German",
+    "expected": {"occupation_candidate_id": "fixture:occupation:data-analyst", "employment_type": "Working student"}
+  },
+  {
+    "fixture_id": "dev_english_title",
+    "split": "development",
+    "synthetic": true,
+    "connector": "greenhouse",
+    "source_observation_id": "fixture-observation-english-title",
+    "title": "Senior Backend Engineer",
+    "language": "English",
+    "expected": {"occupation_candidate_id": "fixture:occupation:software-developer"}
+  },
+  {
+    "fixture_id": "dev_french_title",
+    "split": "development",
+    "synthetic": true,
+    "connector": "recruitee",
+    "source_observation_id": "fixture-observation-french-title",
+    "title": "Comptable",
+    "language": "French",
+    "expected": {"occupation_candidate_id": "fixture:occupation:accountant"}
+  },
+  {
+    "fixture_id": "cal_mixed_language_title",
+    "split": "calibration",
+    "synthetic": true,
+    "connector": "workday",
+    "source_observation_id": "fixture-observation-mixed-title",
+    "title": "Stagiaire / Intern Data",
+    "language": "French and English",
+    "expected": {"employment_type": "Internship"}
+  },
+  {
+    "fixture_id": "dev_missing_department",
+    "split": "development",
+    "synthetic": true,
+    "connector": "smartrecruiters",
+    "source_observation_id": "fixture-observation-missing-department",
+    "title": "Data Analyst",
+    "department": "",
+    "expected": {"department_state": "unknown"}
+  },
+  {
+    "fixture_id": "cal_contradictory_department_title",
+    "split": "calibration",
+    "synthetic": true,
+    "connector": "lever",
+    "source_observation_id": "fixture-observation-contradictory-department",
+    "title": "Backend Engineer",
+    "department": "Marketing",
+    "expected": {"conflict": true}
+  },
+  {
+    "fixture_id": "dev_explicit_required_language",
+    "split": "development",
+    "synthetic": true,
+    "connector": "greenhouse",
+    "source_observation_id": "fixture-observation-required-language",
+    "title": "Account Manager",
+    "description_excerpt": "German C1 required for this role.",
+    "expected": {"language_state": "required", "language": "German", "proficiency": "C1"}
+  },
+  {
+    "fixture_id": "dev_preferred_language",
+    "split": "development",
+    "synthetic": true,
+    "connector": "personio",
+    "source_observation_id": "fixture-observation-preferred-language",
+    "title": "Sales Manager",
+    "description_excerpt": "Preferred languages: French and English",
+    "expected": {"language_state": "preferred"}
+  },
+  {
+    "fixture_id": "cal_language_merely_mentioned",
+    "split": "calibration",
+    "synthetic": true,
+    "connector": "recruitee",
+    "source_observation_id": "fixture-observation-mentioned-language",
+    "title": "Operations Manager",
+    "description_excerpt": "You will work with our German and English teams.",
+    "expected": {"language_state": "not_established"}
+  },
+  {
+    "fixture_id": "dev_posting_written_in_language_only",
+    "split": "development",
+    "synthetic": true,
+    "connector": "generic_jsonld",
+    "source_observation_id": "fixture-observation-posting-language-only",
+    "title": "Analyste de données",
+    "posting_language": "French",
+    "description_excerpt": "Nous construisons des produits utiles pour nos clients.",
+    "expected": {"language_state": "not_established"}
+  }
+]
