@@ -128,3 +128,23 @@ were clean at inspection time.
   remains a pre-existing Render configuration value of `true`; the scheduler
   produced no-op cycles and no external collection occurred during Wave 1.
   This configuration drift remains an explicit release defect for follow-up.
+
+## Wave 2 complete acquisition dashboard
+
+- Incoming feature branch: `feature/complete-acquisition-dashboard`.
+- Verified implementation commit: `06a4cb174e5331bc07645b7e1dabf534d96e161e`.
+- Base verification: `2b87bfc5ca8e5b73a95ea924fa73df64692b53a7` is an ancestor;
+  the diff contains only the authorized acquisition API, application service,
+  frontend dashboard/navigation, frontend operation helper/test, and admin
+  dashboard regression test files.
+- No migration was added; no migration identifier was reserved or applied.
+- Focused backend and Wave 1 regression suite: `94 passed`.
+- Frontend suite: `157 passed`; ESLint passed; Vite production build passed.
+- Ruff passed. The full Python suite remains unclaimed because the submitted
+  validation timed out; the focused release suite is green.
+- Pre-release backup artifact re-hash and restore verification were repeated:
+  `logical-wave1-direct-396c45deb36d95e0`, timestamp
+  `2026-08-12T18:36:46.135064Z`, SHA-256
+  `396c45deb36d95e084a745a7a22b43bdb81ba35fc6ff0c8ef66df5877444dc`;
+  restore counts matched the recorded 49-migration baseline. Since this unit
+  is migration-free, no production migration operation is required.
