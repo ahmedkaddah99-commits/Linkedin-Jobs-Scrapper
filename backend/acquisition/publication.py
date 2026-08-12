@@ -72,9 +72,7 @@ class RestorePublicationConfirmation:
         if not actor:
             raise PermissionError("Publication restore requires an authorized administrator identity.")
         if token != RESTORE_CONFIRMATION_TOKEN:
-            raise ValueError(
-                f"Typed restore confirmation must be '{RESTORE_CONFIRMATION_TOKEN}'."
-            )
+            raise ValueError(f"Typed restore confirmation must be '{RESTORE_CONFIRMATION_TOKEN}'.")
         return cls(
             target_publication_id=target,
             expected_head_publication_id=expected,

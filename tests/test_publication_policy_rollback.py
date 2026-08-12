@@ -133,12 +133,16 @@ class PublicationPolicyRollbackTests(unittest.TestCase):
             admin_read_model = store.get_admin_publication_read_model()
             self.assertEqual(admin_read_model["current_head"]["publication_id"], restored)
             self.assertEqual(admin_read_model["current_head"]["origin"], "restored")
-            self.assertTrue(any(item["event_type"] == "publication_restored" for item in admin_read_model["audit_events"]))
+            self.assertTrue(
+                any(item["event_type"] == "publication_restored" for item in admin_read_model["audit_events"])
+            )
             with store._connect() as connection:
                 history = connection.execute(
                     "SELECT publication_id, previous_publication_id FROM acquisition_publications ORDER BY published_at"
                 ).fetchall()
-            self.assertEqual({str(row["publication_id"]) for row in history}, {scheduled, administrator, system, restored})
+            self.assertEqual(
+                {str(row["publication_id"]) for row in history}, {scheduled, administrator, system, restored}
+            )
             self.assertEqual(
                 next(row["previous_publication_id"] for row in history if row["publication_id"] == restored),
                 system,
@@ -244,10 +248,38 @@ class PublicationPolicyRollbackTests(unittest.TestCase):
         try:
             cycle_id, _ = self._seed_cycle(store, target, "preflight", 7)
             old_snapshot = [
-                {"canonical_job_id": "job-a", "title": "A", "company": "Acme", "location": "Berlin", "apply_url": "https://acme.example/a", "lifecycle_state": "active"},
-                {"canonical_job_id": "job-b", "title": "B", "company": "Acme", "location": "Berlin", "apply_url": "https://acme.example/b", "lifecycle_state": "active"},
-                {"canonical_job_id": "job-c", "title": "C", "company": "Acme", "location": "Berlin", "apply_url": "https://acme.example/c", "lifecycle_state": "active"},
-                {"canonical_job_id": "job-e", "title": "E", "company": "Acme", "location": "Berlin", "apply_url": "https://acme.example/e", "lifecycle_state": "closed"},
+                {
+                    "canonical_job_id": "job-a",
+                    "title": "A",
+                    "company": "Acme",
+                    "location": "Berlin",
+                    "apply_url": "https://acme.example/a",
+                    "lifecycle_state": "active",
+                },
+                {
+                    "canonical_job_id": "job-b",
+                    "title": "B",
+                    "company": "Acme",
+                    "location": "Berlin",
+                    "apply_url": "https://acme.example/b",
+                    "lifecycle_state": "active",
+                },
+                {
+                    "canonical_job_id": "job-c",
+                    "title": "C",
+                    "company": "Acme",
+                    "location": "Berlin",
+                    "apply_url": "https://acme.example/c",
+                    "lifecycle_state": "active",
+                },
+                {
+                    "canonical_job_id": "job-e",
+                    "title": "E",
+                    "company": "Acme",
+                    "location": "Berlin",
+                    "apply_url": "https://acme.example/e",
+                    "lifecycle_state": "closed",
+                },
             ]
             with store._connect() as connection:
                 connection.execute(
@@ -264,10 +296,38 @@ class PublicationPolicyRollbackTests(unittest.TestCase):
                     (cycle_id,),
                 )
             new_snapshot = [
-                {"canonical_job_id": "job-a", "title": "A changed", "company": "Acme", "location": "Berlin", "apply_url": "https://acme.example/a", "lifecycle_state": "active"},
-                {"canonical_job_id": "job-b", "title": "B", "company": "Acme", "location": "Berlin", "apply_url": "https://acme.example/b", "lifecycle_state": "closed"},
-                {"canonical_job_id": "job-d", "title": "D", "company": "Acme", "location": "", "apply_url": "javascript:void(0)", "lifecycle_state": "active"},
-                {"canonical_job_id": "job-e", "title": "E", "company": "Acme", "location": "Berlin", "apply_url": "https://acme.example/e", "lifecycle_state": "active"},
+                {
+                    "canonical_job_id": "job-a",
+                    "title": "A changed",
+                    "company": "Acme",
+                    "location": "Berlin",
+                    "apply_url": "https://acme.example/a",
+                    "lifecycle_state": "active",
+                },
+                {
+                    "canonical_job_id": "job-b",
+                    "title": "B",
+                    "company": "Acme",
+                    "location": "Berlin",
+                    "apply_url": "https://acme.example/b",
+                    "lifecycle_state": "closed",
+                },
+                {
+                    "canonical_job_id": "job-d",
+                    "title": "D",
+                    "company": "Acme",
+                    "location": "",
+                    "apply_url": "javascript:void(0)",
+                    "lifecycle_state": "active",
+                },
+                {
+                    "canonical_job_id": "job-e",
+                    "title": "E",
+                    "company": "Acme",
+                    "location": "Berlin",
+                    "apply_url": "https://acme.example/e",
+                    "lifecycle_state": "active",
+                },
             ]
             with store._connect() as connection:
                 preflight = store._build_publication_preflight(
