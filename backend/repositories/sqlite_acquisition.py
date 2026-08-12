@@ -821,11 +821,17 @@ class SqliteAcquisitionStore(_SqliteStore):
         jobs: Iterable[Mapping[str, Any]],
         complete_snapshot: bool,
         valid_snapshot: bool,
+        closure_safe: bool | None = None,
         observed_at: str = "",
         snapshot_external_ids: Iterable[str] | None = None,
     ) -> dict[str, int | bool]:
         now = str(observed_at or utc_now_iso())
         job_rows = [dict(job) for job in jobs]
+        closure_permitted = (
+            bool(complete_snapshot and valid_snapshot)
+            if closure_safe is None
+            else bool(closure_safe)
+        )
 
         # Keep remote libSQL projection transactions bounded. Intermediate
         # batches never apply absence/lifecycle decisions; the final batch
@@ -857,6 +863,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     jobs=batch,
                     complete_snapshot=bool(complete_snapshot and index == len(batches) - 1),
                     valid_snapshot=bool(valid_snapshot if index == len(batches) - 1 else True),
+                    closure_safe=closure_permitted if index == len(batches) - 1 else False,
                     observed_at=observed_at,
                     snapshot_external_ids=all_external_ids if index == len(batches) - 1 else None,
                 )
@@ -1276,7 +1283,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     now=now,
                 )
 
-            if complete_snapshot and valid_snapshot:
+            if complete_snapshot and valid_snapshot and closure_permitted:
                 missing_rows = connection.execute(
                     """
                     SELECT source_state_id, canonical_job_id, external_job_id,
@@ -1338,7 +1345,13 @@ class SqliteAcquisitionStore(_SqliteStore):
                     target_id=target_id,
                     **event,
                 )
-            return {**counts, "valid_snapshot": bool(valid_snapshot), "complete_snapshot": bool(complete_snapshot), "quality_warnings": [item["warning_code"] for item in quality_events]}
+            return {
+                **counts,
+                "valid_snapshot": bool(valid_snapshot),
+                "complete_snapshot": bool(complete_snapshot),
+                "closure_safe": bool(closure_permitted),
+                "quality_warnings": [item["warning_code"] for item in quality_events],
+            }
 
         return self._run_transaction(ingest)
 
@@ -1451,7 +1464,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     requests_avoided=?, credits_avoided=?, jobs_observed=?, jobs_new=?, jobs_updated=?,
                     jobs_unchanged=?, jobs_closed=?, jobs_rejected=?, jobs_duplicates=?,
                     jobs_published=COALESCE(?, jobs_published),
-                    reconciliation_json=?, quality_warnings_json=?,
+                    reconciliation_json=?, quality_warnings_json=?, collection_metadata_json=?,
                     error_code=?, error_message=?, updated_at=?
                 WHERE task_id = ?
                 """,
@@ -1473,6 +1486,16 @@ class SqliteAcquisitionStore(_SqliteStore):
                     (max(0, int(result.get("jobs_published") or 0)) if "jobs_published" in result else None),
                     _json(result.get("reconciliation") or {}),
                     _json(list(result.get("quality_warnings") or [])),
+                    _json({
+                        key: result.get(key)
+                        for key in (
+                            "retrieval_mode", "requested_job_limit", "effective_job_limit",
+                            "safety_ceiling", "pagination_complete", "complete_snapshot",
+                            "closure_safe", "completeness_state", "stop_reason",
+                            "observed_count", "accepted_count", "rejected_count",
+                        )
+                        if key in result
+                    }),
                     error_code,
                     error_message,
                     now,
@@ -1779,7 +1802,9 @@ class SqliteAcquisitionStore(_SqliteStore):
                        a.complete_snapshot, a.valid_snapshot, a.credible_evidence,
                        a.requests_avoided, a.credits_avoided, a.jobs_observed,
                        a.jobs_new, a.jobs_updated, a.jobs_unchanged, a.jobs_closed,
-                       a.jobs_rejected, a.jobs_duplicates, a.jobs_published, a.error_code AS task_error_code,
+                       a.jobs_rejected, a.jobs_duplicates, a.jobs_published,
+                       a.collection_metadata_json AS task_collection_metadata_json,
+                       a.error_code AS task_error_code,
                        a.error_message AS task_error_message
                 FROM acquisition_tasks a
                 JOIN acquisition_targets t ON t.target_id = a.target_id
@@ -1824,6 +1849,7 @@ class SqliteAcquisitionStore(_SqliteStore):
             }
             payload["task"]["reconciliation"] = _decode(payload["task"].pop("task_reconciliation_json", "{}"), {})
             payload["task"]["quality_warnings"] = _decode(payload["task"].pop("task_quality_warnings_json", "[]"), [])
+            payload["task"]["collection"] = _decode(payload["task"].pop("task_collection_metadata_json", "{}"), {})
             payload["requests"] = [self._request_payload(item) for item in target_requests]
             payload["detail_requests"] = payload["requests"]
             payload["requested_urls"] = [item["request_url"] for item in payload["requests"]]
@@ -2751,6 +2777,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 FROM job_posting_versions latest
                 WHERE latest.version_id=j.current_version_id
             )
+            LEFT JOIN acquisition_targets t ON t.target_id=o.target_id
             {where}
         """
         with self._connect() as connection:

@@ -774,6 +774,7 @@ def fetch_expansion_snapshot(
         **snapshot,
         "status": "disabled" if not enabled and fixture_payload is None else "unsupported",
         "complete_snapshot": False,
+        "pagination_complete": False,
         "snapshot_semantics": "not_attempted",
         "credible_evidence": False,
         "jobs": [],
@@ -961,10 +962,22 @@ def fetch_expansion_snapshot(
         failures.append("no_snapshot_page")
     status = "failed" if failures and not all_jobs else "incomplete" if failures or has_more else "completed"
     complete = bool(complete and not failures and not has_more)
+    if complete:
+        stop_reason = "pagination_complete"
+    elif has_more and pages_fetched >= bounded_pages:
+        stop_reason = "max_pages"
+    elif has_more and len(request_log) >= bounded_requests:
+        stop_reason = "max_requests"
+    elif not pages_fetched:
+        stop_reason = "no_snapshot_page"
+    else:
+        stop_reason = "provider_error"
     base_result.update(
         {
             "status": status,
             "complete_snapshot": complete,
+            "pagination_complete": complete,
+            "stop_reason": stop_reason,
             "snapshot_semantics": "complete" if complete else "incomplete",
             "credible_evidence": bool(pages_fetched and not failures),
             "jobs": all_jobs,

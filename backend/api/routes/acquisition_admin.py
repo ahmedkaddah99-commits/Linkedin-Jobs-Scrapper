@@ -124,12 +124,15 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
     if not isinstance(payload, Mapping):
         payload = {}
     if segments == ["admin", "acquisition", "imports", "plan"]:
-        context.send_json(
-            context.application.plan_admin_job_import(
-                source_ids=[str(item) for item in payload.get("source_ids") or []],
-                scope=dict(payload.get("scope") or {}),
+        try:
+            context.send_json(
+                context.application.plan_admin_job_import(
+                    source_ids=[str(item) for item in payload.get("source_ids") or []],
+                    scope=dict(payload.get("scope") or {}),
+                )
             )
-        )
+        except (TypeError, ValueError) as exc:
+            return _error(context, 400, "invalid_job_import_request", str(exc))
         return True
     if segments == ["admin", "acquisition", "imports"]:
         idempotency_key = _text(payload.get("idempotency_key"))
