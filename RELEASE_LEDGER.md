@@ -18,6 +18,13 @@ were clean at inspection time.
 | 05 audit permissions | `recovery/05-audit-permissions` | `0344dd452e2af0136a16dce0e97941825639bd9f` | Pushed; origin matches | `053_acquisition_audit_permissions` | `053_acquisition_audit_permissions` | clean |
 | 06 company reconciliation | `recovery/06-company-reconciliation` | `5e4b846f148f0eefe5aacfd97c2f4a8da5950cfe` | Pushed; origin matches | `054_company_identity_reconciliation` | `054_company_identity_reconciliation` | clean |
 
+## Integration progress
+
+- Unit 01 integrated as `619c637`.
+- Unit 01 focused and combined acquisition/migration tests: `32 passed`.
+- Unit 01 produced no conflict-resolution commit and remains provider-neutral;
+  no publication activation was introduced.
+
 ## Dependency order
 
 1. `050_collection_controls`: bounds acquisition requests/jobs and persists
@@ -41,4 +48,3 @@ were clean at inspection time.
   none of Wave 1 authorizes an automatic publication.
 - After each unit: focused tests, combined regression tests, migration registry
   uniqueness/order checks, then an integration commit when repairs are needed.
-
