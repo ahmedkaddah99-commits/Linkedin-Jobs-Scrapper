@@ -340,6 +340,12 @@ class AcquisitionStoreProtocol(Protocol):
     def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]: ...
 
 
+class AcquisitionAuditStoreProtocol(Protocol):
+    def append_event(self, **kwargs: Any) -> dict[str, Any]: ...
+    def query_events(self, **kwargs: Any) -> dict[str, Any]: ...
+    def entity_timeline(self, entity_type: str, entity_id: str, **kwargs: Any) -> dict[str, Any]: ...
+
+
 class PersonalizedJobsStoreProtocol(Protocol):
     """User-scoped state plus read-only access to the shared publication head."""
 
@@ -405,5 +411,6 @@ class BackendRepositories:
     career_profile_store: CareerProfileStoreProtocol | None = None
     evidence_store: EvidenceStoreProtocol | None = None
     acquisition_store: AcquisitionStoreProtocol | None = None
+    acquisition_audit_store: AcquisitionAuditStoreProtocol | None = None
     personalized_jobs_store: PersonalizedJobsStoreProtocol | None = None
 

@@ -24,6 +24,7 @@ from backend.domain.models import (
 from backend.orchestration import workspace_builder_catalog
 from backend.repositories.contracts import BackendRepositories
 from backend.security import issue_api_token, resolve_secret_references, token_has_scope, token_is_expired, verify_token_value
+from backend.acquisition.permissions import has_acquisition_permission
 
 
 WorkspaceValidator = Callable[..., None]
@@ -243,6 +244,20 @@ class IdentityAccessService:
 
     def user_has_scope(self, token: ApiTokenRecord, required_scope: str) -> bool:
         return token_has_scope(token.scopes, required_scope)
+
+    def user_has_acquisition_permission(
+        self,
+        user: UserRecord,
+        token: ApiTokenRecord,
+        permission: str,
+    ) -> bool:
+        """Check granular acquisition access with administrator migration support."""
+
+        return has_acquisition_permission(
+            role=user.role,
+            scopes=token.scopes,
+            permission=permission,
+        )
 
     def user_can_access_workspace(self, user: UserRecord, workspace_id: str) -> bool:
         if user.role == ROLE_ADMIN:

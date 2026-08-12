@@ -13,10 +13,20 @@ def register_routes(registry: RouteRegistry) -> None:
 
 
 def _handle_get(context: ApiRouteContext) -> bool | None:
-    context.require_admin()
     application = context.application
     segments = list(context.segments)
     query = context.query
+    context.require_acquisition_permission(_get_permission(segments))
+    if segments == ["admin", "acquisition", "audit"]:
+        context.send_json(application.query_acquisition_audit_events(**_audit_query(query)))
+        return True
+    if len(segments) == 6 and segments[:3] == ["admin", "acquisition", "entities"] and segments[5] == "timeline":
+        context.send_json(
+            application.get_acquisition_entity_timeline(
+                segments[3], segments[4], **_audit_pagination_query(query)
+            )
+        )
+        return True
     if segments == ["admin", "acquisition", "overview"]:
         context.send_json(application.get_admin_job_import_overview())
         return True
@@ -122,7 +132,9 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
 
 
 def _handle_post(context: ApiRouteContext) -> bool | None:
-    admin = context.require_admin()
+    permission_context = context.require_acquisition_permission(_post_permission(list(context.segments)))
+    identity = getattr(context.handler, "_require_identity", None)
+    admin = context.require_identity() if callable(identity) else permission_context
     segments = list(context.segments)
     payload = context.read_json_body() or {}
     if not isinstance(payload, Mapping):
@@ -370,6 +382,100 @@ def _actor_user_id(value: Any) -> str:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _get_permission(segments: list[str]) -> str:
+    if segments == ["admin", "acquisition", "audit"] or (
+        len(segments) == 6 and segments[:3] == ["admin", "acquisition", "entities"]
+    ):
+        return "acquisition.audit"
+    if segments in (
+        ["admin", "acquisition", "sources"],
+        ["admin", "acquisition", "connectors", "capabilities"],
+        ["admin", "acquisition", "retention"],
+    ):
+        return "acquisition.providers"
+    if segments in (
+        ["admin", "acquisition", "duplicates"],
+    ):
+        return "acquisition.duplicates"
+    if segments in (
+        ["admin", "acquisition", "reprocessing"],
+        ["admin", "acquisition", "reprocessing", "plan"],
+    ):
+        return "acquisition.collect"
+    if segments == ["admin", "acquisition", "staging"] or (
+        len(segments) == 4 and segments[:3] == ["admin", "acquisition", "staging"]
+    ):
+        return "acquisition.preview"
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "cycles"] and segments[4] == "evidence":
+        return "acquisition.audit"
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "targets"] and segments[4] == "history":
+        return "acquisition.audit"
+    return "acquisition.view"
+
+
+def _post_permission(segments: list[str]) -> str:
+    if segments in (
+        ["admin", "acquisition", "imports", "plan"],
+        ["admin", "acquisition", "imports"],
+        ["admin", "acquisition", "reprocessing", "run"],
+        ["admin", "acquisition", "reprocessing", "apply"],
+        ["admin", "acquisition", "recover"],
+    ):
+        return "acquisition.collect"
+    if segments == ["admin", "acquisition", "publication", "preview"]:
+        return "acquisition.preview"
+    if segments == ["admin", "acquisition", "publication", "publish"]:
+        return "acquisition.publish"
+    if segments == ["admin", "acquisition", "publication", "undo"]:
+        return "acquisition.rollback"
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "companies"] and segments[4] == "enrich":
+        return "acquisition.enrich"
+    if segments == ["admin", "acquisition", "companies", "enrich"]:
+        return "acquisition.enrich"
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "duplicate-clusters"] and segments[4] == "decisions":
+        return "acquisition.duplicates"
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "duplicate-clusters"] and segments[4] == "undo":
+        return "acquisition.override"
+    if segments == ["admin", "acquisition", "connectors", "capabilities", "snapshot"]:
+        return "acquisition.providers"
+    if segments in (
+        ["admin", "acquisition", "rollout", "configure"],
+        ["admin", "acquisition", "rollout", "advance"],
+        ["admin", "acquisition", "requests", "decision"],
+    ):
+        return "acquisition.override"
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "targets"] and segments[4] == "validate":
+        return "acquisition.providers"
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "staging"] and segments[4] == "promote":
+        return "acquisition.publish"
+    return "acquisition.view"
+
+
+def _audit_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
+    values = {
+        "domain": _query_value(query, "domain"),
+        "event": _query_value(query, "event"),
+        "actor": _query_value(query, "actor"),
+        "entity_type": _query_value(query, "entity_type"),
+        "entity_id": _query_value(query, "entity_id"),
+        "operation_id": _query_value(query, "operation_id"),
+        "occurred_from": _query_value(query, "occurred_from") or _query_value(query, "time_from"),
+        "occurred_to": _query_value(query, "occurred_to") or _query_value(query, "time_to"),
+        "limit": _int_query(query, "limit", 100, 200),
+        "offset": _int_query(query, "offset", 0, 100000),
+    }
+    return {key: value for key, value in values.items() if value not in ("", None)}
+
+
+def _audit_pagination_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
+    return {
+        "limit": _int_query(query, "limit", 100, 200),
+        "offset": _int_query(query, "offset", 0, 100000),
+        "occurred_from": _query_value(query, "occurred_from") or _query_value(query, "time_from"),
+        "occurred_to": _query_value(query, "occurred_to") or _query_value(query, "time_to"),
+    }
 
 
 def _error(context: ApiRouteContext, status: int, code: str, message: str) -> bool:

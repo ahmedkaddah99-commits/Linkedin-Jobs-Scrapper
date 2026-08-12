@@ -2701,6 +2701,135 @@ def _apply_publication_policy_history_migration(connection: DatabaseConnection) 
     )
 
 
+def _apply_acquisition_audit_permissions_migration(connection: DatabaseConnection) -> None:
+    """Create the unified immutable acquisition audit stream."""
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS acquisition_audit_events (
+            sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL UNIQUE,
+            domain TEXT NOT NULL DEFAULT 'acquisition',
+            event TEXT NOT NULL,
+            actor_id TEXT NOT NULL DEFAULT '',
+            entity_type TEXT NOT NULL DEFAULT '',
+            entity_id TEXT NOT NULL DEFAULT '',
+            operation_id TEXT NOT NULL DEFAULT '',
+            occurred_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            previous_event_hash TEXT NOT NULL DEFAULT '',
+            event_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acquisition_audit_domain_occurred
+            ON acquisition_audit_events(domain, occurred_at DESC, sequence_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_audit_event_occurred
+            ON acquisition_audit_events(event, occurred_at DESC, sequence_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_audit_actor_occurred
+            ON acquisition_audit_events(actor_id, occurred_at DESC, sequence_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_audit_entity_timeline
+            ON acquisition_audit_events(entity_type, entity_id, occurred_at DESC, sequence_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_audit_operation
+            ON acquisition_audit_events(operation_id, occurred_at DESC, sequence_id DESC);
+        """
+    )
+
+    legacy_rows = connection.execute(
+        "SELECT event_id, import_id, actor_user_id, event_type, payload_json, created_at "
+        "FROM admin_job_audit_events ORDER BY created_at, event_id"
+    ).fetchall()
+    from backend.acquisition.audit import redact_acquisition_audit_payload
+
+    for row in legacy_rows:
+        legacy_event_id = f"legacy_admin:{str(row['event_id'] or '')}"
+        payload = str(row["payload_json"] or "{}")
+        try:
+            decoded = json.loads(payload)
+        except (TypeError, ValueError):
+            decoded = {}
+        decoded = decoded if isinstance(decoded, dict) else {}
+        payload = json.dumps(
+            redact_acquisition_audit_payload(decoded),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        entity_type = "import"
+        entity_id = str(row["import_id"] or "")
+        for candidate_type, candidate_key in (
+            ("job", "canonical_job_id"),
+            ("publication", "publication_id"),
+            ("provider", "provider_id"),
+        ):
+            if str(decoded.get(candidate_key) or "").strip():
+                entity_type = candidate_type
+                entity_id = str(decoded[candidate_key])
+                break
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO acquisition_audit_events (
+                event_id, domain, event, actor_id, entity_type, entity_id,
+                operation_id, occurred_at, payload_json, previous_event_hash,
+                event_hash, created_at
+            ) VALUES (?, 'acquisition', ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
+            """,
+            (
+                legacy_event_id,
+                str(row["event_type"] or "legacy_event"),
+                str(row["actor_user_id"] or ""),
+                entity_type,
+                entity_id,
+                str(row["import_id"] or ""),
+                str(row["created_at"] or utc_now_iso()),
+                payload,
+                f"legacy:{legacy_event_id}",
+                str(row["created_at"] or utc_now_iso()),
+            ),
+        )
+
+    connection.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_acquisition_audit_events_immutable_update
+        BEFORE UPDATE ON acquisition_audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'acquisition_audit_events are immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_acquisition_audit_events_immutable_delete
+        BEFORE DELETE ON acquisition_audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'acquisition_audit_events are immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_admin_job_audit_events_unified_bridge
+        AFTER INSERT ON admin_job_audit_events
+        BEGIN
+            INSERT OR IGNORE INTO acquisition_audit_events (
+                event_id, domain, event, actor_id, entity_type, entity_id,
+                operation_id, occurred_at, payload_json, previous_event_hash,
+                event_hash, created_at
+            ) VALUES (
+                'legacy_admin:' || NEW.event_id,
+                'acquisition', NEW.event_type, NEW.actor_user_id,
+                CASE
+                    WHEN COALESCE(json_extract(NEW.payload_json, '$.canonical_job_id'), '') != '' THEN 'job'
+                    WHEN COALESCE(json_extract(NEW.payload_json, '$.publication_id'), '') != '' THEN 'publication'
+                    WHEN COALESCE(json_extract(NEW.payload_json, '$.provider_id'), '') != '' THEN 'provider'
+                    ELSE 'import'
+                END,
+                COALESCE(
+                    NULLIF(json_extract(NEW.payload_json, '$.canonical_job_id'), ''),
+                    NULLIF(json_extract(NEW.payload_json, '$.publication_id'), ''),
+                    NULLIF(json_extract(NEW.payload_json, '$.provider_id'), ''),
+                    NEW.import_id
+                ),
+                NEW.import_id, NEW.created_at, json_object('legacy_bridge', 1),
+                COALESCE((SELECT event_hash FROM acquisition_audit_events ORDER BY sequence_id DESC LIMIT 1), ''),
+                'legacy_admin:' || NEW.event_id, NEW.created_at
+            );
+        END;
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2987,5 +3116,10 @@ MIGRATIONS = (
         "Add explicit publication origins, versioned preflight policy, chaining metadata, and immutable restore audit events.",
         _apply_publication_policy_history_migration,
         dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "053_acquisition_audit_permissions",
+        "Create granular acquisition permissions and the unified immutable acquisition audit stream.",
+        _apply_acquisition_audit_permissions_migration,
     ),
 )
