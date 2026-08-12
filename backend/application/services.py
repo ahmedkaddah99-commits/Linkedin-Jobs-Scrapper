@@ -17,6 +17,7 @@ from backend.application.assisted_apply_service import AssistedApplyConnectionSe
 from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
 from backend.application.admin_job_import import AdminJobImportService
 from backend.application.company_enrichment import CompanyEnrichmentProvider, CompanyEnrichmentService
+from backend.enrichment.operations import EnrichmentOperationService
 from backend.application.personalized_jobs_service import PersonalizedJobsService
 from backend.application.production_rollout import ProductionRolloutService
 from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
@@ -888,6 +889,7 @@ class BackendApplication:
     _production_rollout_service: ProductionRolloutService = field(init=False, repr=False)
     _personalized_jobs_service: PersonalizedJobsService = field(init=False, repr=False)
     _company_enrichment_service: CompanyEnrichmentService = field(init=False, repr=False)
+    _enrichment_operation_service: EnrichmentOperationService | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._workspace_catalog_service = WorkspaceCatalogService(
@@ -944,6 +946,9 @@ class BackendApplication:
             object_storage=self.object_storage,
             profile_writer=self._personalized_jobs_service.upsert_company_profile,
         )
+        acquisition_store = getattr(self.repositories, "acquisition_store", None)
+        if acquisition_store is not None and getattr(acquisition_store, "db_path", None):
+            self._enrichment_operation_service = EnrichmentOperationService(acquisition_store.db_path)
 
     def run_due_acquisition(self) -> dict[str, Any] | None:
         """Worker-only entry point for the disabled-by-default Phase A scheduler."""
@@ -1118,15 +1123,74 @@ class BackendApplication:
         request_budget: int = 5,
         cycle_key: str = "",
     ) -> dict[str, Any]:
-        """Explicit, bounded admin action; quality remains report-only."""
+        """Reject the former implicit batch boundary.
 
-        return self.run_due_company_enrichment(
-            max_companies=max(1, min(25, int(max_companies))),
-            concurrency=max(1, min(3, int(concurrency))),
-            request_budget=max(1, min(50, int(request_budget))),
-            cycle_key=str(cycle_key or f"admin-company-enrichment:{utc_now_iso()}"),
-            force=True,
-        )
+        Company enrichment must be represented by an explicit company-scoped
+        plan and durable run. Keeping this method as a hard failure prevents
+        the legacy admin route from broadening a company operation to a batch.
+        """
+
+        del max_companies, concurrency, request_budget, cycle_key
+        raise ValueError("Company enrichment requires an explicit company-scoped enrichment plan; batch execution is disabled.")
+
+    def _require_enrichment_operations(self) -> EnrichmentOperationService:
+        if self._enrichment_operation_service is None:
+            raise ValueError("Enrichment operations require sqlite/Turso acquisition storage.")
+        return self._enrichment_operation_service
+
+    def plan_admin_enrichment(self, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().create_plan(**kwargs)
+
+    def get_admin_enrichment_plan(self, plan_id: str) -> dict[str, Any] | None:
+        return self._require_enrichment_operations().get_plan(plan_id)
+
+    def list_admin_enrichment_plans(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_plans(**kwargs)
+
+    def start_admin_enrichment_run(self, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().start_run(**kwargs)
+
+    def get_admin_enrichment_run(self, run_id: str, *, include_items: bool = False) -> dict[str, Any] | None:
+        return self._require_enrichment_operations().get_run(run_id, include_items=include_items)
+
+    def list_admin_enrichment_runs(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_runs(**kwargs)
+
+    def process_admin_enrichment_run(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().process_run(run_id, **kwargs)
+
+    def process_next_admin_enrichment_run(self, **kwargs: Any) -> dict[str, Any] | None:
+        return self._require_enrichment_operations().process_next_run(**kwargs)
+
+    def cancel_admin_enrichment_run(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().cancel_run(run_id, **kwargs)
+
+    def pause_admin_enrichment_run(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().pause_run(run_id, **kwargs)
+
+    def get_admin_enrichment_result(self, run_id: str) -> dict[str, Any]:
+        return self._require_enrichment_operations().get_result(run_id)
+
+    def list_admin_enrichment_proposals(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_proposals(**kwargs)
+
+    def get_admin_enrichment_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        return self._require_enrichment_operations().get_proposal(proposal_id)
+
+    def review_admin_enrichment_proposal(self, proposal_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().review_proposal(proposal_id, **kwargs)
+
+    def list_admin_enrichment_audit(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_audit_events(**kwargs)
+
+    def get_admin_enrichment_capabilities(self, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().capabilities(**kwargs)
+
+    def list_admin_enrichment_budgets(self) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_provider_budgets()
+
+    def configure_admin_enrichment_budget(self, provider_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().configure_provider_budget(provider_id, **kwargs)
 
     def record_admin_duplicate_decision(self, cluster_id: str, **kwargs: Any) -> dict[str, Any]:
         store = self.repositories.acquisition_store

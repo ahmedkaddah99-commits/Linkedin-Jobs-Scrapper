@@ -219,9 +219,8 @@ class EnrichmentCacheAndPersistenceTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'enrichment_%'"
                 ).fetchall()
             }
-            self.assertEqual(
-                tables,
-                {"enrichment_evidence", "enrichment_version_registry", "enrichment_cache_entries"},
+            self.assertTrue(
+                {"enrichment_evidence", "enrichment_version_registry", "enrichment_cache_entries"}.issubset(tables)
             )
             evidence = self._evidence(raw=True)
             append_evidence(connection, evidence)
@@ -256,17 +255,22 @@ class EnrichmentCacheAndPersistenceTests(unittest.TestCase):
         ):
             with database_session(db_path) as connection:
                 connection.executescript(BASE_SCHEMA_SQL)
-                applied_before_foundation = run_migrations(connection, MIGRATIONS[:-1])
-                self.assertEqual(applied_before_foundation, [migration.migration_id for migration in MIGRATIONS[:-1]])
+                foundation_index = next(
+                    index for index, migration in enumerate(MIGRATIONS)
+                    if migration.migration_id == "049_enrichment_foundation"
+                )
+                operation_migrations = MIGRATIONS[:foundation_index + 2]
+                applied_before_foundation = run_migrations(connection, MIGRATIONS[:foundation_index])
+                self.assertEqual(applied_before_foundation, [migration.migration_id for migration in MIGRATIONS[:foundation_index]])
                 self.assertIsNone(
                     connection.execute(
                         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='enrichment_evidence'"
                     ).fetchone()
                 )
-                applied_foundation = run_migrations(connection, MIGRATIONS)
-                rerun = run_migrations(connection, MIGRATIONS)
+                applied_foundation = run_migrations(connection, operation_migrations)
+                rerun = run_migrations(connection, operation_migrations)
 
-                self.assertEqual(applied_foundation, ["049_enrichment_foundation"])
+                self.assertEqual(applied_foundation, ["049_enrichment_foundation", "050_enrichment_operations"])
                 self.assertEqual(rerun, [])
                 self.assertIsNotNone(
                     connection.execute(
