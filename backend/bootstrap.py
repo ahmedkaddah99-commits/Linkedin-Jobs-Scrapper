@@ -11,6 +11,7 @@ from backend.orchestration import BackendRegistries, ComponentDescriptor, Regist
 from backend.repositories import (
     BackendRepositories,
     SqliteAcquisitionStore,
+    SqliteAcquisitionAuditStore,
     SqlitePersonalizedJobsStore,
     FileAnalyticsStore,
     FileAuthRepository,
@@ -275,6 +276,7 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             career_profile_store=FileCareerProfileStore(base_path),
             evidence_store=None,
             acquisition_store=None,
+            acquisition_audit_store=None,
             personalized_jobs_store=None,
 
 
@@ -297,6 +299,7 @@ def _build_repositories(base_path: Path, *, storage_backend: str) -> BackendRepo
             career_profile_store=SqliteCareerProfileStore(db_path),
             evidence_store=SqliteEvidenceStore(db_path),
             acquisition_store=SqliteAcquisitionStore(db_path),
+            acquisition_audit_store=SqliteAcquisitionAuditStore(db_path),
             personalized_jobs_store=SqlitePersonalizedJobsStore(db_path),
 
 

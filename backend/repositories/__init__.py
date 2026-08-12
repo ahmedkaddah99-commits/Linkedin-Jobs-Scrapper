@@ -1,4 +1,5 @@
 from .contracts import (
+    AcquisitionAuditStoreProtocol,
     AcquisitionStoreProtocol,
     AnalyticsStoreProtocol,
     ArtifactStoreProtocol,
@@ -50,10 +51,12 @@ from .sqlite_backed import (
     SqliteWorkspaceRepository,
 )
 from .sqlite_acquisition import SqliteAcquisitionStore
+from .sqlite_acquisition_audit import SqliteAcquisitionAuditStore
 from .sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 
 __all__ = [
     "AcquisitionStoreProtocol",
+    "AcquisitionAuditStoreProtocol",
     "AnalyticsStoreProtocol",
     "ArtifactStoreProtocol",
     "AuthRepositoryProtocol",
@@ -81,6 +84,7 @@ __all__ = [
     "SourcePolicyStoreProtocol",
     "SqliteAnalyticsStore",
     "SqliteAcquisitionStore",
+    "SqliteAcquisitionAuditStore",
     "SqlitePersonalizedJobsStore",
     "SqliteAuthRepository",
     "SqliteArtifactStore",

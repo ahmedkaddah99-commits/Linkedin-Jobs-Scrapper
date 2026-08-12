@@ -9464,6 +9464,14 @@ def build_handler(
                 raise PermissionError(f"Missing scope: {required_scope}")
             return user, token
 
+        def _require_acquisition_permission(self, permission: str):
+            context = self._auth_context()
+            user, token = context.user, context.token
+            checker = getattr(application, "user_has_acquisition_permission", None)
+            if not callable(checker) or not checker(user, token, permission):
+                raise PermissionError(f"Missing permission: {permission}")
+            return user, token
+
         def _require_admin(self):
             context = self._auth_context()
             user, token = context.user, context.token

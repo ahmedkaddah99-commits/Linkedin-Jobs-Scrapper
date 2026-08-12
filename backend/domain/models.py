@@ -44,6 +44,21 @@ TOKEN_SCOPE_SECRETS_WRITE = "secrets:write"
 TOKEN_SCOPE_USERS_READ = "users:read"
 TOKEN_SCOPE_USERS_WRITE = "users:write"
 
+# Acquisition operation scopes. ``admin`` remains a compatibility grant for
+# existing administrator tokens; these explicit scopes are used for new
+# operation-specific authorization.
+TOKEN_SCOPE_ACQUISITION_VIEW = "acquisition.view"
+TOKEN_SCOPE_ACQUISITION_COLLECT = "acquisition.collect"
+TOKEN_SCOPE_ACQUISITION_ENRICH = "acquisition.enrich"
+TOKEN_SCOPE_ACQUISITION_REVIEW = "acquisition.review"
+TOKEN_SCOPE_ACQUISITION_OVERRIDE = "acquisition.override"
+TOKEN_SCOPE_ACQUISITION_DUPLICATES = "acquisition.duplicates"
+TOKEN_SCOPE_ACQUISITION_PREVIEW = "acquisition.preview"
+TOKEN_SCOPE_ACQUISITION_PUBLISH = "acquisition.publish"
+TOKEN_SCOPE_ACQUISITION_ROLLBACK = "acquisition.rollback"
+TOKEN_SCOPE_ACQUISITION_PROVIDERS = "acquisition.providers"
+TOKEN_SCOPE_ACQUISITION_AUDIT = "acquisition.audit"
+
 SECRET_PROVIDER_STORED = "stored"
 SECRET_PROVIDER_ENV = "env"
 

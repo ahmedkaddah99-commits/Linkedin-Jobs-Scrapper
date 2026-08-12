@@ -40,6 +40,8 @@ class ApiHandler(Protocol):
 
     def _require_scope(self, required_scope: str): ...
 
+    def _require_acquisition_permission(self, permission: str): ...
+
     def _require_admin(self): ...
 
     def _require_workspace_access(self, *, workspace_id: str, required_scope: str): ...
@@ -108,6 +110,16 @@ class ApiRouteContext:
 
     def require_scope(self, required_scope: str):
         return self.handler._require_scope(required_scope)
+
+    def require_acquisition_permission(self, permission: str):
+        checker = getattr(self.handler, "_require_acquisition_permission", None)
+        if callable(checker):
+            return checker(permission)
+        cached = getattr(self.handler, "_legacy_acquisition_admin_context", None)
+        if cached is None:
+            cached = self.handler._require_admin()
+            setattr(self.handler, "_legacy_acquisition_admin_context", cached)
+        return cached
 
     def require_admin(self):
         return self.handler._require_admin()

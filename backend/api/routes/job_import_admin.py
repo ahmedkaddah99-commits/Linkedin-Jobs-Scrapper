@@ -14,10 +14,10 @@ def register_routes(registry: RouteRegistry) -> None:
 def _handle_get(context: ApiRouteContext) -> bool | None:
     if not context.segments[:2] == ("admin", "job-import"):
         return None
-    context.require_admin()
     application = context.application
     segments = list(context.segments)
     query = context.query
+    context.require_acquisition_permission(_get_permission(segments))
     if segments == ["admin", "job-import", "overview"]:
         context.send_json(application.get_admin_job_import_overview())
         return True
@@ -114,7 +114,9 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
 def _handle_post(context: ApiRouteContext) -> bool | None:
     if not context.segments[:2] == ("admin", "job-import"):
         return None
-    admin = context.require_admin()
+    permission_context = context.require_acquisition_permission(_post_permission(list(context.segments)))
+    identity = getattr(context.handler, "_require_identity", None)
+    admin = context.require_identity() if callable(identity) else permission_context
     actor_user_id = _actor_user_id(admin)
     application = context.application
     segments = list(context.segments)
@@ -267,6 +269,47 @@ def _scope_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _get_permission(segments: list[str]) -> str:
+    if segments == ["admin", "job-import", "sources"]:
+        return "acquisition.providers"
+    if segments == ["admin", "job-import", "review"]:
+        return "acquisition.review"
+    if segments == ["admin", "job-import", "duplicates"]:
+        return "acquisition.duplicates"
+    if segments in (
+        ["admin", "job-import", "reprocessing"],
+        ["admin", "job-import", "reprocessing", "plan"],
+    ):
+        return "acquisition.collect"
+    if len(segments) == 4 and segments[2] == "preview":
+        return "acquisition.preview"
+    if segments in (["admin", "job-import", "history"],):
+        return "acquisition.audit"
+    return "acquisition.view"
+
+
+def _post_permission(segments: list[str]) -> str:
+    if segments in (
+        ["admin", "job-import", "plan"],
+        ["admin", "job-import", "imports"],
+        ["admin", "job-import", "reprocessing", "run"],
+        ["admin", "job-import", "reprocessing", "apply"],
+        ["admin", "job-import", "pause"],
+    ):
+        return "acquisition.collect"
+    if segments == ["admin", "job-import", "review", "decision"]:
+        return "acquisition.review"
+    if segments == ["admin", "job-import", "preview"]:
+        return "acquisition.preview"
+    if segments == ["admin", "job-import", "publish"]:
+        return "acquisition.publish"
+    if segments == ["admin", "job-import", "undo"]:
+        return "acquisition.rollback"
+    if len(segments) == 5 and segments[2] == "jobs" and segments[4] == "resolve-apply-url":
+        return "acquisition.override"
+    return "acquisition.view"
 
 
 def _error(context: ApiRouteContext, status: int, code: str, message: str) -> bool:

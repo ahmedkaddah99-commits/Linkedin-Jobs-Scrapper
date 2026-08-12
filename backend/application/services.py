@@ -954,7 +954,15 @@ class BackendApplication:
         return self._admin_job_import_service.list_sources()
 
     def plan_admin_job_import(self, *, source_ids: list[str], scope: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        return self._admin_job_import_service.plan_import(source_ids=source_ids, scope_payload=scope)
+        result = self._admin_job_import_service.plan_import(source_ids=source_ids, scope_payload=scope)
+        self._emit_acquisition_audit(
+            "import_planned",
+            entity_type="import",
+            entity_id=str(result.get("import_id") or result.get("plan_id") or ""),
+            operation_id=str(result.get("import_id") or result.get("plan_id") or ""),
+            payload={"source_count": len(source_ids), "scope": dict(scope or {})},
+        )
+        return result
 
     def start_admin_job_import(
         self,
@@ -964,15 +972,34 @@ class BackendApplication:
         source_ids: list[str],
         scope: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return self._admin_job_import_service.start_import(
+        result = self._admin_job_import_service.start_import(
             requested_by=requested_by,
             idempotency_key=idempotency_key,
             source_ids=source_ids,
             scope_payload=scope,
         )
+        self._emit_acquisition_audit(
+            "import_queued",
+            actor=requested_by,
+            entity_type="import",
+            entity_id=str(result.get("import_id") or ""),
+            operation_id=str(result.get("import_id") or idempotency_key),
+            payload={"source_count": len(source_ids), "scope": dict(scope or {})},
+        )
+        return result
 
     def process_next_admin_job_import(self, *, worker_id: str = "runr-worker") -> dict[str, Any] | None:
-        return self._admin_job_import_service.process_next_import(worker_id=worker_id)
+        result = self._admin_job_import_service.process_next_import(worker_id=worker_id)
+        if result:
+            self._emit_acquisition_audit(
+                "import_processed",
+                actor=worker_id,
+                entity_type="import",
+                entity_id=str(result.get("import_id") or ""),
+                operation_id=str(result.get("import_id") or ""),
+                payload={"status": result.get("status")},
+            )
+        return result
 
     def get_admin_job_import_overview(self) -> dict[str, Any]:
         return self._admin_job_import_service.overview()
@@ -993,31 +1020,75 @@ class BackendApplication:
         store = self.repositories.acquisition_store
         if store is None:
             raise ValueError("Admin review requires sqlite/Turso acquisition storage.")
-        return store.record_job_review_decision(**kwargs)
+        result = store.record_job_review_decision(**kwargs)
+        self._emit_acquisition_audit(
+            "review_decision",
+            actor=str(kwargs.get("actor_user_id") or ""),
+            entity_type="job",
+            entity_id=str(kwargs.get("canonical_job_id") or ""),
+            operation_id=str(kwargs.get("import_id") or ""),
+            payload={"decision": kwargs.get("decision"), "reason_code": kwargs.get("reason_code")},
+        )
+        return result
 
     def undo_admin_review_decision(self, **kwargs: Any) -> None:
         store = self.repositories.acquisition_store
         if store is None:
             raise ValueError("Admin review requires sqlite/Turso acquisition storage.")
         store.undo_job_review_decision(**kwargs)
+        self._emit_acquisition_audit(
+            "review_decision_undone",
+            actor=str(kwargs.get("actor_user_id") or ""),
+            entity_type="job",
+            entity_id=str(kwargs.get("canonical_job_id") or ""),
+            operation_id=str(kwargs.get("import_id") or ""),
+            payload={},
+        )
 
     def preview_admin_job_import(self, import_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
         store = self.repositories.acquisition_store
         if store is None:
             raise ValueError("Publication preview requires sqlite/Turso acquisition storage.")
-        return store.create_job_import_preview(import_id, actor_user_id=actor_user_id)
+        result = store.create_job_import_preview(import_id, actor_user_id=actor_user_id)
+        self._emit_acquisition_audit(
+            "publication_preview_created",
+            actor=actor_user_id,
+            entity_type="import",
+            entity_id=import_id,
+            operation_id=str(result.get("publication_id") or import_id),
+            payload={"publication_id": result.get("publication_id")},
+        )
+        return result
 
     def publish_admin_job_import(self, publication_id: str, *, actor_user_id: str = "") -> str:
         store = self.repositories.acquisition_store
         if store is None:
             raise ValueError("Publication requires sqlite/Turso acquisition storage.")
-        return store.publish_job_import_preview(publication_id, actor_user_id=actor_user_id)
+        result = store.publish_job_import_preview(publication_id, actor_user_id=actor_user_id)
+        self._emit_acquisition_audit(
+            "publication_published",
+            actor=actor_user_id,
+            entity_type="publication",
+            entity_id=publication_id,
+            operation_id=publication_id,
+            payload={},
+        )
+        return result
 
     def undo_admin_job_publication(self, *, actor_user_id: str = "") -> dict[str, Any]:
         store = self.repositories.acquisition_store
         if store is None:
             raise ValueError("Publication undo requires sqlite/Turso acquisition storage.")
-        return store.undo_last_job_publication(actor_user_id=actor_user_id)
+        result = store.undo_last_job_publication(actor_user_id=actor_user_id)
+        self._emit_acquisition_audit(
+            "publication_rollback",
+            actor=actor_user_id,
+            entity_type="publication",
+            entity_id=str(result.get("publication_id") or ""),
+            operation_id=str(result.get("publication_id") or ""),
+            payload={"status": result.get("status")},
+        )
+        return result
 
     def get_admin_job_import_preview(self, publication_id: str = "") -> dict[str, Any] | None:
         store = self.repositories.acquisition_store
@@ -1120,25 +1191,51 @@ class BackendApplication:
     ) -> dict[str, Any]:
         """Explicit, bounded admin action; quality remains report-only."""
 
-        return self.run_due_company_enrichment(
+        result = self.run_due_company_enrichment(
             max_companies=max(1, min(25, int(max_companies))),
             concurrency=max(1, min(3, int(concurrency))),
             request_budget=max(1, min(50, int(request_budget))),
             cycle_key=str(cycle_key or f"admin-company-enrichment:{utc_now_iso()}"),
             force=True,
         )
+        self._emit_acquisition_audit(
+            "enrichment_completed",
+            entity_type="enrichment_run",
+            entity_id=str(result.get("cycle_key") or cycle_key or ""),
+            operation_id=str(result.get("cycle_key") or cycle_key or ""),
+            payload={"status": result.get("status"), "processed": result.get("processed")},
+        )
+        return result
 
     def record_admin_duplicate_decision(self, cluster_id: str, **kwargs: Any) -> dict[str, Any]:
         store = self.repositories.acquisition_store
         if store is None:
             raise ValueError("Duplicate decisions require sqlite/Turso acquisition storage.")
-        return store.record_admin_duplicate_decision(cluster_id, **kwargs)
+        result = store.record_admin_duplicate_decision(cluster_id, **kwargs)
+        self._emit_acquisition_audit(
+            "duplicate_decision",
+            actor=str(kwargs.get("actor_user_id") or ""),
+            entity_type="duplicate_cluster",
+            entity_id=cluster_id,
+            operation_id=str(result.get("decision_id") or cluster_id),
+            payload={"decision": kwargs.get("decision"), "reason": kwargs.get("reason")},
+        )
+        return result
 
     def undo_admin_duplicate_decision(self, cluster_id: str, **kwargs: Any) -> dict[str, Any]:
         store = self.repositories.acquisition_store
         if store is None:
             raise ValueError("Duplicate decisions require sqlite/Turso acquisition storage.")
-        return store.undo_admin_duplicate_decision(cluster_id, **kwargs)
+        result = store.undo_admin_duplicate_decision(cluster_id, **kwargs)
+        self._emit_acquisition_audit(
+            "duplicate_decision_undone",
+            actor=str(kwargs.get("actor_user_id") or ""),
+            entity_type="duplicate_cluster",
+            entity_id=cluster_id,
+            operation_id=str(result.get("decision_id") or cluster_id),
+            payload={"reason": kwargs.get("reason")},
+        )
+        return result
 
     def list_admin_connector_capabilities(self, *, limit: int = 200) -> list[dict[str, Any]]:
         store = self.repositories.acquisition_store
@@ -1150,7 +1247,15 @@ class BackendApplication:
             return []
         from backend.connectors.ats_expansions import build_capability_snapshots
 
-        return [store.record_connector_capability_snapshot(item) for item in build_capability_snapshots()]
+        result = [store.record_connector_capability_snapshot(item) for item in build_capability_snapshots()]
+        self._emit_acquisition_audit(
+            "provider_capabilities_changed",
+            entity_type="provider_registry",
+            entity_id="acquisition_connectors",
+            operation_id=f"provider_snapshot:{utc_now_iso()}",
+            payload={"provider_count": len(result)},
+        )
+        return result
 
     def get_admin_rules_coverage(self) -> dict[str, Any]:
         store = self.repositories.acquisition_store
@@ -1187,7 +1292,7 @@ class BackendApplication:
             raise ValueError("Reprocessing requires sqlite/Turso acquisition storage.")
         from backend.acquisition.reprocessing import run_reprocessing
 
-        return run_reprocessing(
+        result = run_reprocessing(
             store.db_path,
             apply=bool(apply),
             batch_size=max(1, min(1000, int(batch_size))),
@@ -1196,6 +1301,14 @@ class BackendApplication:
             scope=dict(scope or {}),
             allow_remote_additive_rollback=bool(allow_remote_additive_rollback),
         )
+        self._emit_acquisition_audit(
+            "reprocessing_completed",
+            entity_type="reprocessing_run",
+            entity_id=str(result.get("run_id") or result.get("reprocessing_run_id") or ""),
+            operation_id=str(result.get("run_id") or result.get("reprocessing_run_id") or idempotency_key),
+            payload={"apply": bool(apply), "status": result.get("status")},
+        )
+        return result
 
     def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
         store = self.repositories.acquisition_store
@@ -1313,10 +1426,26 @@ class BackendApplication:
         return self._production_rollout_service.status()
 
     def configure_production_rollout(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        return self._production_rollout_service.configure(payload)
+        result = self._production_rollout_service.configure(payload)
+        self._emit_acquisition_audit(
+            "policy_changed",
+            entity_type="acquisition_policy",
+            entity_id="production_rollout",
+            operation_id=utc_now_iso(),
+            payload={"changed_fields": sorted(str(key) for key in payload.keys())},
+        )
+        return result
 
     def advance_production_rollout(self, stage: str) -> dict[str, Any]:
-        return self._production_rollout_service.advance(stage)
+        result = self._production_rollout_service.advance(stage)
+        self._emit_acquisition_audit(
+            "policy_changed",
+            entity_type="acquisition_policy",
+            entity_id="production_rollout",
+            operation_id=utc_now_iso(),
+            payload={"stage": stage},
+        )
+        return result
 
     def get_production_rollout_health(self) -> dict[str, Any]:
         return self._production_rollout_service.status()["health"]
@@ -1326,6 +1455,52 @@ class BackendApplication:
         if store is None:
             return {"jobs": [], "total": 0, "publication": None, "freshness": "unpublished"}
         return store.get_public_catalog(limit=limit, offset=offset)
+
+    def record_acquisition_audit_event(self, **kwargs: Any) -> dict[str, Any]:
+        store = getattr(self.repositories, "acquisition_audit_store", None)
+        if store is None:
+            raise ValueError("Acquisition audit storage requires sqlite/Turso storage.")
+        return store.append_event(**kwargs)
+
+    def _emit_acquisition_audit(self, event: str, **kwargs: Any) -> None:
+        """Best-effort audit emission; acquisition state changes remain primary."""
+
+        try:
+            self.record_acquisition_audit_event(event=event, **kwargs)
+        except Exception:
+            logging.getLogger("backend.acquisition.audit").exception(
+                "Failed to append acquisition audit event '%s'.", event
+            )
+
+    def query_acquisition_audit_events(self, **kwargs: Any) -> dict[str, Any]:
+        store = getattr(self.repositories, "acquisition_audit_store", None)
+        if store is None:
+            return {
+                "events": [],
+                "pagination": {
+                    "limit": kwargs.get("limit", 100),
+                    "offset": kwargs.get("offset", 0),
+                    "returned": 0,
+                    "total": 0,
+                    "has_more": False,
+                },
+            }
+        return store.query_events(**kwargs)
+
+    def get_acquisition_entity_timeline(self, entity_type: str, entity_id: str, **kwargs: Any) -> dict[str, Any]:
+        store = getattr(self.repositories, "acquisition_audit_store", None)
+        if store is None:
+            return {
+                "events": [],
+                "pagination": {
+                    "limit": kwargs.get("limit", 100),
+                    "offset": kwargs.get("offset", 0),
+                    "returned": 0,
+                    "total": 0,
+                    "has_more": False,
+                },
+            }
+        return store.entity_timeline(entity_type, entity_id, **kwargs)
 
     # Phase C: all methods below read the already-published shared catalog and
     # user-owned state. They deliberately do not call the acquisition scheduler.
@@ -3331,6 +3506,14 @@ class BackendApplication:
 
     def user_has_scope(self, token: ApiTokenRecord, required_scope: str) -> bool:
         return self._identity_access_service.user_has_scope(token, required_scope)
+
+    def user_has_acquisition_permission(
+        self,
+        user: UserRecord,
+        token: ApiTokenRecord,
+        permission: str,
+    ) -> bool:
+        return self._identity_access_service.user_has_acquisition_permission(user, token, permission)
 
     def user_can_access_workspace(self, user: UserRecord, workspace_id: str) -> bool:
         return self._identity_access_service.user_can_access_workspace(user, workspace_id)
