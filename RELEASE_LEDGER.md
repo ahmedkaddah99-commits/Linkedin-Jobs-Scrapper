@@ -29,6 +29,11 @@ were clean at inspection time.
   exposed the stale `MIGRATIONS[:-1]` assumption; repaired in `f048225` to
   locate `049_enrichment_foundation` by identifier.
 - After repair, the combined unit 01/03 suite is `43 passed`.
+- Unit 02 integrated as `ef2ad6d`; its provisional `050_enrichment_operations`
+  was centrally renumbered to `051_enrichment_operations`.
+- Unit 02 integration required preserving the 01 migration and the repaired
+  foundation migration test; the combined 01/02/03/migration suite is
+  `50 passed`.
 
 ## Dependency order
 
