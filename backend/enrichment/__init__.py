@@ -15,6 +15,20 @@ from .contracts import (
     RetentionPolicy,
     VERSION_KINDS,
 )
+from .evaluation import (
+    ALTERNATE_RULE_VERSION,
+    AdjudicationMetadata,
+    DEFAULT_RULE_VERSION,
+    GoldenLabel,
+    OfflineTrialOrchestrator,
+    ReplayComparison,
+    TrialConfig,
+    TrialOutput,
+    TrialRun,
+    compare_replays,
+    render_markdown_report,
+    report_json,
+)
 
 __all__ = [
     "EnrichmentCandidate",
@@ -30,4 +44,16 @@ __all__ = [
     "ProviderResultState",
     "RetentionPolicy",
     "VERSION_KINDS",
+    "ALTERNATE_RULE_VERSION",
+    "AdjudicationMetadata",
+    "DEFAULT_RULE_VERSION",
+    "GoldenLabel",
+    "OfflineTrialOrchestrator",
+    "ReplayComparison",
+    "TrialConfig",
+    "TrialOutput",
+    "TrialRun",
+    "compare_replays",
+    "render_markdown_report",
+    "report_json",
 ]

@@ -200,11 +200,20 @@ class FixturePlaceProvider(_FixtureProvider):
 
     def _lookup_key(self, request: EnrichmentRequest) -> str:
         value = request.input
-        display = str(value.get("display") or value.get("raw_display") or "").strip().casefold()
+        raw_display = str(value.get("display") or value.get("raw_display") or "").strip().casefold()
+        display = raw_display
         if "," in display:
             display = display.split(",", 1)[0].strip()
         country = str(value.get("country_code") or "").strip().casefold()
+        if not country:
+            country = {
+                "france": "fr",
+                "uk": "gb",
+                "united kingdom": "gb",
+                "great britain": "gb",
+            }.get(raw_display.rsplit(",", 1)[-1].strip(), "")
         region = str(value.get("region") or value.get("admin1") or "").strip().casefold()
+        region = {"texas": "tx", "ontario": "on", "massachusetts": "ma"}.get(region, region)
         return f"{display}|{country}|{region}"
 
 
@@ -220,6 +229,9 @@ class FixtureCompanyProvider(_FixtureProvider):
                 "company_id": "fixture-company-lowell",
                 "name": "Lowell",
                 "website": "https://www.lowell.com",
+                "industry": "Financial Services",
+                "company_size": "1001-5000",
+                "headquarters": "Leeds, United Kingdom",
             },
         },
         "domain:example.com": {
@@ -228,6 +240,9 @@ class FixtureCompanyProvider(_FixtureProvider):
                 "company_id": "fixture-company-example",
                 "name": "Example GmbH",
                 "website": "https://example.com",
+                "industry": "Enterprise Software",
+                "company_size": "51-200",
+                "headquarters": "Berlin, Germany",
             },
         },
     }

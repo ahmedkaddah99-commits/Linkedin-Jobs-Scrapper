@@ -9,6 +9,7 @@ from typing import Any
 
 
 FIXTURE_DIRECTORY = Path(__file__).with_name("fixtures")
+GOLDEN_LABELS_PATH = FIXTURE_DIRECTORY / "golden_labels.json"
 PROHIBITED_KEYS = frozenset(
     {
         "description",
@@ -47,6 +48,36 @@ def load_evaluation_fixture(*, include_blind_holdout: bool = False) -> list[dict
     return cases
 
 
+def load_golden_labels() -> dict[str, dict[str, Any]]:
+    """Load adjudicated labels for development/calibration only.
+
+    Blind holdout labels intentionally do not live in the checked-in fixture
+    files.  The evaluator therefore treats holdout outputs as unlabeled
+    replay/safety evidence and reports the resulting data gap.
+    """
+
+    payload = json.loads(GOLDEN_LABELS_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("Golden labels must contain a list")
+    labels: dict[str, dict[str, Any]] = {}
+    for item in payload:
+        if not isinstance(item, dict) or not item.get("fixture_id"):
+            raise ValueError("Golden label needs fixture_id")
+        fixture_id = str(item["fixture_id"])
+        split = str(item.get("split") or "")
+        if split not in {"development", "calibration"}:
+            raise ValueError(f"Golden labels cannot label blind holdout: {fixture_id}")
+        if not isinstance(item.get("labels"), dict):
+            raise ValueError(f"Golden label needs labels: {fixture_id}")
+        adjudication = item.get("adjudication")
+        if not isinstance(adjudication, dict) or adjudication.get("status") != "adjudicated":
+            raise ValueError(f"Golden label needs adjudication metadata: {fixture_id}")
+        if fixture_id in labels:
+            raise ValueError(f"Duplicate golden label: {fixture_id}")
+        labels[fixture_id] = item
+    return labels
+
+
 def assert_sanitized_fixture(record: Mapping[str, Any]) -> None:
     """Fail closed if a fixture accidentally contains sensitive/raw fields."""
 
@@ -61,12 +92,16 @@ def assert_sanitized_fixture(record: Mapping[str, Any]) -> None:
 def validate_fixture_privacy(*, include_blind_holdout: bool = True) -> None:
     for case in load_evaluation_fixture(include_blind_holdout=include_blind_holdout):
         assert_sanitized_fixture(case)
+    for label in load_golden_labels().values():
+        assert_sanitized_fixture(label)
 
 
 __all__ = [
     "FIXTURE_DIRECTORY",
+    "GOLDEN_LABELS_PATH",
     "PROHIBITED_KEYS",
     "assert_sanitized_fixture",
     "load_evaluation_fixture",
+    "load_golden_labels",
     "validate_fixture_privacy",
 ]

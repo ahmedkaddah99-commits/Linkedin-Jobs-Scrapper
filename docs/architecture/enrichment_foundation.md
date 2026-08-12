@@ -64,6 +64,11 @@ evidence excerpts, and expected labels for development/calibration cases. It
 does not contain full descriptions, personal data, secrets, or provider
 payloads. The blind holdout has no labels in the ordinary fixture file.
 
+The current verified production context is **1,789 observations, 217 canonical
+jobs, 17 canonical-company rows, and 15 profiled employers**. Those figures are
+context only: the offline trial never reads production records and does not
+write or publish enrichment results.
+
 ## Replay, rollback, and approval gates
 
 Replay must preserve immutable observations and create new evidence/projections

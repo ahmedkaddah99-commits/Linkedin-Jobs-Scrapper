@@ -1,0 +1,5169 @@
+{
+  "adversarial": {
+    "all_passed": true,
+    "categories": {
+      "Lowell employer plus Leeds": {
+        "cases": [
+          {
+            "fixture_id": "dev_lowell_employer_leeds",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "fixture:company:lowell",
+                "company_candidate_ids": [
+                  "fixture:company:lowell"
+                ],
+                "company_identity_state": "matched",
+                "company_profile": {
+                  "company_id": "fixture-company-lowell",
+                  "name": "Lowell",
+                  "website": "https://www.lowell.com"
+                },
+                "profile_facts": {
+                  "company_id": "fixture-company-lowell",
+                  "company_size": "1001-5000",
+                  "headquarters": "Leeds, United Kingdom",
+                  "industry": "Financial Services",
+                  "name": "Lowell",
+                  "website": "https://www.lowell.com"
+                }
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Operations",
+                "title_function": "Operations"
+              },
+              "place": {
+                "location_count": 1,
+                "locations": [
+                  {
+                    "candidate_ids": [
+                      "fixture:leeds-gb"
+                    ],
+                    "display": "Leeds, UK",
+                    "state": "matched"
+                  }
+                ],
+                "place_candidate_id": "fixture:leeds-gb",
+                "place_candidate_ids": [
+                  "fixture:leeds-gb"
+                ],
+                "place_state": "matched",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          },
+          {
+            "fixture_id": "blind_lowell_leeds_name_order",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "fixture:company:lowell",
+                "company_candidate_ids": [
+                  "fixture:company:lowell"
+                ],
+                "company_identity_state": "matched",
+                "company_profile": {
+                  "company_id": "fixture-company-lowell",
+                  "name": "Lowell",
+                  "website": "https://www.lowell.com"
+                },
+                "profile_facts": {
+                  "company_id": "fixture-company-lowell",
+                  "company_size": "1001-5000",
+                  "headquarters": "Leeds, United Kingdom",
+                  "industry": "Financial Services",
+                  "name": "Lowell",
+                  "website": "https://www.lowell.com"
+                }
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Operations",
+                "title_function": "Operations"
+              },
+              "place": {
+                "location_count": 1,
+                "locations": [
+                  {
+                    "candidate_ids": [
+                      "fixture:leeds-gb"
+                    ],
+                    "display": "Leeds, UK",
+                    "state": "matched"
+                  }
+                ],
+                "place_candidate_id": "fixture:leeds-gb",
+                "place_candidate_ids": [
+                  "fixture:leeds-gb"
+                ],
+                "place_state": "matched",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          }
+        ],
+        "passed": true
+      },
+      "Lowell, Massachusetts": {
+        "cases": [
+          {
+            "fixture_id": "dev_lowell_massachusetts",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "blocked_name_only",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Engineering",
+                "title_function": "Engineering"
+              },
+              "place": {
+                "location_count": 1,
+                "locations": [
+                  {
+                    "candidate_ids": [
+                      "fixture:lowell-ma"
+                    ],
+                    "display": "Lowell",
+                    "state": "matched"
+                  }
+                ],
+                "place_candidate_id": "fixture:lowell-ma",
+                "place_candidate_ids": [
+                  "fixture:lowell-ma"
+                ],
+                "place_state": "matched",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          }
+        ],
+        "passed": true
+      },
+      "Remote Germany/EU/unrestricted": {
+        "cases": [
+          {
+            "fixture_id": "dev_remote_germany",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Engineering",
+                "title_function": "Engineering"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "Germany",
+                "remote_scope_state": "bounded",
+                "workplace_arrangement": "Remote"
+              }
+            }
+          },
+          {
+            "fixture_id": "dev_remote_eu",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Product",
+                "title_function": "Product"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "EU",
+                "remote_scope_state": "bounded",
+                "workplace_arrangement": "Remote"
+              }
+            }
+          },
+          {
+            "fixture_id": "cal_remote_without_scope",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Marketing",
+                "title_function": "Marketing"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "unrestricted",
+                "workplace_arrangement": "Remote"
+              }
+            }
+          },
+          {
+            "fixture_id": "dev_remote_unrestricted",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Engineering",
+                "title_function": "Engineering"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "unrestricted",
+                "workplace_arrangement": "Remote"
+              }
+            }
+          },
+          {
+            "fixture_id": "blind_remote_scope_missing",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Data & Analytics",
+                "title_function": "Data & Analytics"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "unrestricted",
+                "workplace_arrangement": "Remote"
+              }
+            }
+          }
+        ],
+        "passed": true
+      },
+      "ambiguous Paris": {
+        "cases": [
+          {
+            "fixture_id": "cal_unqualified_paris",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Operations",
+                "title_function": "Operations"
+              },
+              "place": {
+                "location_count": 1,
+                "locations": [
+                  {
+                    "candidate_ids": [
+                      "geonames:2988507",
+                      "fixture:paris-tx",
+                      "fixture:paris-on"
+                    ],
+                    "display": "Paris",
+                    "state": "ambiguous"
+                  }
+                ],
+                "place_candidate_id": "",
+                "place_candidate_ids": [
+                  "geonames:2988507",
+                  "fixture:paris-tx",
+                  "fixture:paris-on"
+                ],
+                "place_state": "ambiguous",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          }
+        ],
+        "passed": true
+      },
+      "department/title conflict": {
+        "cases": [
+          {
+            "fixture_id": "cal_contradictory_department_title",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": true,
+                "department_function": "Marketing",
+                "department_state": "known",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Marketing",
+                "title_function": "Engineering"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          }
+        ],
+        "passed": true
+      },
+      "internship and working-student separation": {
+        "cases": [
+          {
+            "fixture_id": "dev_internship_title",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "Engineering",
+                "department_state": "known",
+                "employment_type": "Internship",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Engineering",
+                "title_function": "Engineering"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          },
+          {
+            "fixture_id": "dev_german_title",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Working student",
+                "occupation": {
+                  "label": "Data Analyst",
+                  "occupation_id": "data-analyst",
+                  "taxonomy": "fixture"
+                },
+                "occupation_candidate_id": "fixture:occupation:data-analyst",
+                "occupation_candidate_ids": [
+                  "fixture:occupation:data-analyst"
+                ],
+                "runr_function": "Data & Analytics",
+                "title_function": "Data & Analytics"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          },
+          {
+            "fixture_id": "blind_working_student_professional_duties",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "Engineering",
+                "department_state": "known",
+                "employment_type": "Working student",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Engineering",
+                "title_function": "Engineering"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          }
+        ],
+        "passed": true
+      },
+      "multiple locations": {
+        "cases": [
+          {
+            "fixture_id": "dev_multiple_locations",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "Finance",
+                "title_function": "Finance"
+              },
+              "place": {
+                "location_count": 2,
+                "locations": [
+                  {
+                    "candidate_ids": [],
+                    "display": "Berlin, Germany",
+                    "state": "no_match"
+                  },
+                  {
+                    "candidate_ids": [],
+                    "display": "Munich, Germany",
+                    "state": "no_match"
+                  }
+                ],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "no_match",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          }
+        ],
+        "passed": true
+      },
+      "posting language without language requirement": {
+        "cases": [
+          {
+            "fixture_id": "dev_posting_written_in_language_only",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": true,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "",
+                "title_function": ""
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          },
+          {
+            "fixture_id": "blind_language_in_boilerplate",
+            "passed": true,
+            "predicted": {
+              "company": {
+                "company_candidate_id": "",
+                "company_identity_state": "not_applicable",
+                "profile_facts": {}
+              },
+              "language": {
+                "language": "",
+                "language_state": "not_established",
+                "languages": [],
+                "posting_language_ignored": false,
+                "proficiency": ""
+              },
+              "occupation": {
+                "conflict": false,
+                "department_function": "",
+                "department_state": "unknown",
+                "employment_type": "Professional",
+                "occupation": {},
+                "occupation_candidate_id": "",
+                "occupation_candidate_ids": [],
+                "runr_function": "People",
+                "title_function": "People"
+              },
+              "place": {
+                "location_count": 0,
+                "locations": [],
+                "place_candidate_id": "",
+                "place_candidate_ids": [],
+                "place_state": "not_applicable",
+                "remote_scope": "",
+                "remote_scope_state": "not_remote",
+                "workplace_arrangement": ""
+              }
+            }
+          }
+        ],
+        "passed": true
+      }
+    },
+    "missing_categories": []
+  },
+  "data_gaps": [
+    "blind holdout is intentionally unlabeled in checked-in fixtures; holdout correctness metrics are unavailable",
+    "fixture providers supplied no confidence scores; calibration metrics are unavailable",
+    "small synthetic labeled sample (23 cases); results are directional, not confidence claims",
+    "no external datasets, production observations, or provider responses were evaluated"
+  ],
+  "dimensions": {
+    "company_profile": {
+      "ambiguity_rate": 0.0,
+      "calibration": {
+        "available": false,
+        "brier_score": null,
+        "confidence_count": 0,
+        "data_gap": "fixture providers did not supply confidence scores",
+        "expected_calibration_error": null
+      },
+      "false_positive_rate": 0.0,
+      "fields": {
+        "company_candidate_id": {
+          "evaluated": 23,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "field": "company_candidate_id",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "company_profile": {
+          "evaluated": 1,
+          "f1": 1.0,
+          "false_positive_rate": null,
+          "field": "company_profile",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "macro_f1": 1.0,
+      "outputs": 28,
+      "precision": 1.0,
+      "recall": 1.0,
+      "top_1_accuracy": 1.0,
+      "top_3_accuracy": 1.0
+    },
+    "language_evidence": {
+      "ambiguity_rate": 0.0,
+      "calibration": {
+        "available": false,
+        "brier_score": null,
+        "confidence_count": 0,
+        "data_gap": "fixture providers did not supply confidence scores",
+        "expected_calibration_error": null
+      },
+      "false_positive_rate": 0.0,
+      "fields": {
+        "language": {
+          "evaluated": 1,
+          "f1": 1.0,
+          "false_positive_rate": null,
+          "field": "language",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "language_state": {
+          "evaluated": 4,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "field": "language_state",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "proficiency": {
+          "evaluated": 1,
+          "f1": 1.0,
+          "false_positive_rate": null,
+          "field": "proficiency",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "macro_f1": 1.0,
+      "outputs": 28,
+      "precision": 1.0,
+      "recall": 1.0,
+      "top_1_accuracy": null,
+      "top_3_accuracy": null
+    },
+    "occupation_function": {
+      "ambiguity_rate": 0.035714,
+      "calibration": {
+        "available": false,
+        "brier_score": null,
+        "confidence_count": 0,
+        "data_gap": "fixture providers did not supply confidence scores",
+        "expected_calibration_error": null
+      },
+      "false_positive_rate": 0.0,
+      "fields": {
+        "conflict": {
+          "evaluated": 1,
+          "f1": 1.0,
+          "false_positive_rate": null,
+          "field": "conflict",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "department_state": {
+          "evaluated": 1,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "field": "department_state",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "employment_type": {
+          "evaluated": 3,
+          "f1": 1.0,
+          "false_positive_rate": null,
+          "field": "employment_type",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "occupation_candidate_id": {
+          "evaluated": 23,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "field": "occupation_candidate_id",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "macro_f1": 1.0,
+      "outputs": 28,
+      "precision": 1.0,
+      "recall": 1.0,
+      "top_1_accuracy": 1.0,
+      "top_3_accuracy": 1.0
+    },
+    "place_normalization": {
+      "ambiguity_rate": 0.035714,
+      "calibration": {
+        "available": false,
+        "brier_score": null,
+        "confidence_count": 0,
+        "data_gap": "fixture providers did not supply confidence scores",
+        "expected_calibration_error": null
+      },
+      "false_positive_rate": 0.0,
+      "fields": {
+        "location_count": {
+          "evaluated": 5,
+          "f1": 1.0,
+          "false_positive_rate": null,
+          "field": "location_count",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "place_candidate_id": {
+          "evaluated": 23,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "field": "place_candidate_id",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "place_state": {
+          "evaluated": 5,
+          "f1": 1.0,
+          "false_positive_rate": null,
+          "field": "place_state",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "remote_scope": {
+          "evaluated": 4,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "field": "remote_scope",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "remote_scope_state": {
+          "evaluated": 4,
+          "f1": 1.0,
+          "false_positive_rate": 0.0,
+          "field": "remote_scope_state",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "workplace_arrangement": {
+          "evaluated": 5,
+          "f1": 1.0,
+          "false_positive_rate": null,
+          "field": "workplace_arrangement",
+          "macro_f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "macro_f1": 1.0,
+      "outputs": 28,
+      "precision": 1.0,
+      "recall": 1.0,
+      "top_1_accuracy": 1.0,
+      "top_3_accuracy": 1.0
+    }
+  },
+  "golden_labels": {
+    "adjudicated_cases": 23,
+    "adjudication_metadata": [
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 3,
+        "fixture_id": "cal_contradictory_department_title",
+        "reviewed_at": "2026-08-12",
+        "split": "calibration",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 3,
+        "fixture_id": "cal_language_merely_mentioned",
+        "reviewed_at": "2026-08-12",
+        "split": "calibration",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 3,
+        "fixture_id": "cal_mixed_language_title",
+        "reviewed_at": "2026-08-12",
+        "split": "calibration",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 3,
+        "fixture_id": "cal_remote_without_scope",
+        "reviewed_at": "2026-08-12",
+        "split": "calibration",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 3,
+        "fixture_id": "cal_unqualified_paris",
+        "reviewed_at": "2026-08-12",
+        "split": "calibration",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_english_title",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_explicit_required_language",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_french_title",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_german_title",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_hybrid_role",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_internship_title",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_lowell_employer_leeds",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_lowell_massachusetts",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_missing_department",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_multiple_locations",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_paris_france",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_paris_ontario",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_paris_texas",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_posting_written_in_language_only",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_preferred_language",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_remote_eu",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_remote_germany",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      },
+      {
+        "adjudicator": "fixture-review-board",
+        "annotator_count": 2,
+        "fixture_id": "dev_remote_unrestricted",
+        "reviewed_at": "2026-08-12",
+        "split": "development",
+        "status": "adjudicated"
+      }
+    ],
+    "label_cases": 23
+  },
+  "outputs": [
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "geonames:2988507"
+      ],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_paris_france",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [
+              "geonames:2988507"
+            ],
+            "display": "Paris, France",
+            "state": "matched"
+          }
+        ],
+        "place_candidate_id": "geonames:2988507",
+        "place_candidate_ids": [
+          "geonames:2988507"
+        ],
+        "place_state": "matched",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_paris_france",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "company_profile",
+      "fixture_id": "dev_paris_france",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_paris_france",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_paris_france",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Engineering",
+        "title_function": "Engineering"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_paris_france",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_paris_france",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_paris_france",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:paris-tx"
+      ],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_paris_texas",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [
+              "fixture:paris-tx"
+            ],
+            "display": "Paris",
+            "state": "matched"
+          }
+        ],
+        "place_candidate_id": "fixture:paris-tx",
+        "place_candidate_ids": [
+          "fixture:paris-tx"
+        ],
+        "place_state": "matched",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_paris_texas",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "company_profile",
+      "fixture_id": "dev_paris_texas",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_paris_texas",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_paris_texas",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Product",
+        "title_function": "Product"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_paris_texas",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_paris_texas",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_paris_texas",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:paris-on"
+      ],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_paris_ontario",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [
+              "fixture:paris-on"
+            ],
+            "display": "Paris",
+            "state": "matched"
+          }
+        ],
+        "place_candidate_id": "fixture:paris-on",
+        "place_candidate_ids": [
+          "fixture:paris-on"
+        ],
+        "place_state": "matched",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_paris_ontario",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "company_profile",
+      "fixture_id": "dev_paris_ontario",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_paris_ontario",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_paris_ontario",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Data & Analytics",
+        "title_function": "Data & Analytics"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_paris_ontario",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_paris_ontario",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_paris_ontario",
+      "warnings": []
+    },
+    {
+      "ambiguous": true,
+      "candidate_ids": [
+        "geonames:2988507",
+        "fixture:paris-tx",
+        "fixture:paris-on"
+      ],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "place_normalization",
+      "fixture_id": "cal_unqualified_paris",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [
+              "geonames:2988507",
+              "fixture:paris-tx",
+              "fixture:paris-on"
+            ],
+            "display": "Paris",
+            "state": "ambiguous"
+          }
+        ],
+        "place_candidate_id": "",
+        "place_candidate_ids": [
+          "geonames:2988507",
+          "fixture:paris-tx",
+          "fixture:paris-on"
+        ],
+        "place_state": "ambiguous",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "ambiguous",
+      "split": "calibration",
+      "target_id": "cal_unqualified_paris",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "company_profile",
+      "fixture_id": "cal_unqualified_paris",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_unqualified_paris",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "occupation_function",
+      "fixture_id": "cal_unqualified_paris",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Operations",
+        "title_function": "Operations"
+      },
+      "result_state": "no_match",
+      "split": "calibration",
+      "target_id": "cal_unqualified_paris",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "language_evidence",
+      "fixture_id": "cal_unqualified_paris",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "calibration",
+      "target_id": "cal_unqualified_paris",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:leeds-gb"
+      ],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_lowell_employer_leeds",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [
+              "fixture:leeds-gb"
+            ],
+            "display": "Leeds, UK",
+            "state": "matched"
+          }
+        ],
+        "place_candidate_id": "fixture:leeds-gb",
+        "place_candidate_ids": [
+          "fixture:leeds-gb"
+        ],
+        "place_state": "matched",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_lowell_employer_leeds",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:company:lowell"
+      ],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "company_profile",
+      "fixture_id": "dev_lowell_employer_leeds",
+      "predicted": {
+        "company_candidate_id": "fixture:company:lowell",
+        "company_candidate_ids": [
+          "fixture:company:lowell"
+        ],
+        "company_identity_state": "matched",
+        "company_profile": {
+          "company_id": "fixture-company-lowell",
+          "name": "Lowell",
+          "website": "https://www.lowell.com"
+        },
+        "profile_facts": {
+          "company_id": "fixture-company-lowell",
+          "company_size": "1001-5000",
+          "headquarters": "Leeds, United Kingdom",
+          "industry": "Financial Services",
+          "name": "Lowell",
+          "website": "https://www.lowell.com"
+        }
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_lowell_employer_leeds",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_lowell_employer_leeds",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Operations",
+        "title_function": "Operations"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_lowell_employer_leeds",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_lowell_employer_leeds",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_lowell_employer_leeds",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:lowell-ma"
+      ],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_lowell_massachusetts",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [
+              "fixture:lowell-ma"
+            ],
+            "display": "Lowell",
+            "state": "matched"
+          }
+        ],
+        "place_candidate_id": "fixture:lowell-ma",
+        "place_candidate_ids": [
+          "fixture:lowell-ma"
+        ],
+        "place_state": "matched",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_lowell_massachusetts",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "company_profile",
+      "fixture_id": "dev_lowell_massachusetts",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "blocked_name_only",
+        "profile_facts": {}
+      },
+      "result_state": "blocked_by_policy",
+      "split": "development",
+      "target_id": "dev_lowell_massachusetts",
+      "warnings": [
+        "name_only_company_link_not_allowed"
+      ]
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_lowell_massachusetts",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Engineering",
+        "title_function": "Engineering"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_lowell_massachusetts",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_lowell_massachusetts",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_lowell_massachusetts",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_multiple_locations",
+      "predicted": {
+        "location_count": 2,
+        "locations": [
+          {
+            "candidate_ids": [],
+            "display": "Berlin, Germany",
+            "state": "no_match"
+          },
+          {
+            "candidate_ids": [],
+            "display": "Munich, Germany",
+            "state": "no_match"
+          }
+        ],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "no_match",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_multiple_locations",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "company_profile",
+      "fixture_id": "dev_multiple_locations",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_multiple_locations",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_multiple_locations",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Finance",
+        "title_function": "Finance"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_multiple_locations",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_multiple_locations",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_multiple_locations",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "geonames:2988507"
+      ],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_hybrid_role",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [
+              "geonames:2988507"
+            ],
+            "display": "Paris, France",
+            "state": "matched"
+          }
+        ],
+        "place_candidate_id": "geonames:2988507",
+        "place_candidate_ids": [
+          "geonames:2988507"
+        ],
+        "place_state": "matched",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": "Hybrid"
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_hybrid_role",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "company_profile",
+      "fixture_id": "dev_hybrid_role",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_hybrid_role",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_hybrid_role",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Design",
+        "title_function": "Design"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_hybrid_role",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_hybrid_role",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_hybrid_role",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_remote_germany",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "Germany",
+        "remote_scope_state": "bounded",
+        "workplace_arrangement": "Remote"
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_remote_germany",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "company_profile",
+      "fixture_id": "dev_remote_germany",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_remote_germany",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_remote_germany",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Engineering",
+        "title_function": "Engineering"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_remote_germany",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_remote_germany",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_remote_germany",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_remote_eu",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "EU",
+        "remote_scope_state": "bounded",
+        "workplace_arrangement": "Remote"
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_remote_eu",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "company_profile",
+      "fixture_id": "dev_remote_eu",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_remote_eu",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_remote_eu",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Product",
+        "title_function": "Product"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_remote_eu",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_remote_eu",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_remote_eu",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "place_normalization",
+      "fixture_id": "cal_remote_without_scope",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "unrestricted",
+        "workplace_arrangement": "Remote"
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_remote_without_scope",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "company_profile",
+      "fixture_id": "cal_remote_without_scope",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_remote_without_scope",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "occupation_function",
+      "fixture_id": "cal_remote_without_scope",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Marketing",
+        "title_function": "Marketing"
+      },
+      "result_state": "no_match",
+      "split": "calibration",
+      "target_id": "cal_remote_without_scope",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "language_evidence",
+      "fixture_id": "cal_remote_without_scope",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "calibration",
+      "target_id": "cal_remote_without_scope",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_german_title",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_german_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "company_profile",
+      "fixture_id": "dev_german_title",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_german_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:occupation:data-analyst"
+      ],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_german_title",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Working student",
+        "occupation": {
+          "label": "Data Analyst",
+          "occupation_id": "data-analyst",
+          "taxonomy": "fixture"
+        },
+        "occupation_candidate_id": "fixture:occupation:data-analyst",
+        "occupation_candidate_ids": [
+          "fixture:occupation:data-analyst"
+        ],
+        "runr_function": "Data & Analytics",
+        "title_function": "Data & Analytics"
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_german_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_german_title",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_german_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_english_title",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_english_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "company_profile",
+      "fixture_id": "dev_english_title",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_english_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:occupation:software-developer"
+      ],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_english_title",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {
+          "label": "Software Developer",
+          "occupation_id": "software-developer",
+          "taxonomy": "fixture"
+        },
+        "occupation_candidate_id": "fixture:occupation:software-developer",
+        "occupation_candidate_ids": [
+          "fixture:occupation:software-developer"
+        ],
+        "runr_function": "Engineering",
+        "title_function": "Engineering"
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_english_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_english_title",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_english_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_french_title",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_french_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "company_profile",
+      "fixture_id": "dev_french_title",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_french_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:occupation:accountant"
+      ],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_french_title",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {
+          "label": "Accountant",
+          "occupation_id": "accountant",
+          "taxonomy": "fixture"
+        },
+        "occupation_candidate_id": "fixture:occupation:accountant",
+        "occupation_candidate_ids": [
+          "fixture:occupation:accountant"
+        ],
+        "runr_function": "Finance",
+        "title_function": "Finance"
+      },
+      "result_state": "matched",
+      "split": "development",
+      "target_id": "dev_french_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_french_title",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_french_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "place_normalization",
+      "fixture_id": "cal_mixed_language_title",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_mixed_language_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "company_profile",
+      "fixture_id": "cal_mixed_language_title",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_mixed_language_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "occupation_function",
+      "fixture_id": "cal_mixed_language_title",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Internship",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "",
+        "title_function": ""
+      },
+      "result_state": "no_match",
+      "split": "calibration",
+      "target_id": "cal_mixed_language_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "language_evidence",
+      "fixture_id": "cal_mixed_language_title",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "calibration",
+      "target_id": "cal_mixed_language_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_missing_department",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_missing_department",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "company_profile",
+      "fixture_id": "dev_missing_department",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_missing_department",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_missing_department",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Data & Analytics",
+        "title_function": "Data & Analytics"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_missing_department",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_missing_department",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_missing_department",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "place_normalization",
+      "fixture_id": "cal_contradictory_department_title",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_contradictory_department_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "company_profile",
+      "fixture_id": "cal_contradictory_department_title",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_contradictory_department_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": true,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "occupation_function",
+      "fixture_id": "cal_contradictory_department_title",
+      "predicted": {
+        "conflict": true,
+        "department_function": "Marketing",
+        "department_state": "known",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Marketing",
+        "title_function": "Engineering"
+      },
+      "result_state": "no_match",
+      "split": "calibration",
+      "target_id": "cal_contradictory_department_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "language_evidence",
+      "fixture_id": "cal_contradictory_department_title",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "calibration",
+      "target_id": "cal_contradictory_department_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_explicit_required_language",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_explicit_required_language",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "company_profile",
+      "fixture_id": "dev_explicit_required_language",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_explicit_required_language",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_explicit_required_language",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Sales",
+        "title_function": "Sales"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_explicit_required_language",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_explicit_required_language",
+      "predicted": {
+        "language": "German",
+        "language_state": "required",
+        "languages": [
+          {
+            "evidence": "German C1 required",
+            "extraction_method": "explicit_language_clause",
+            "language": "German",
+            "proficiency": "C1",
+            "status": "required"
+          }
+        ],
+        "posting_language_ignored": false,
+        "proficiency": "C1"
+      },
+      "result_state": "required",
+      "split": "development",
+      "target_id": "dev_explicit_required_language",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_preferred_language",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_preferred_language",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "company_profile",
+      "fixture_id": "dev_preferred_language",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_preferred_language",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_preferred_language",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Sales",
+        "title_function": "Sales"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_preferred_language",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_preferred_language",
+      "predicted": {
+        "language": "French",
+        "language_state": "preferred",
+        "languages": [
+          {
+            "evidence": "Preferred languages: French and English",
+            "extraction_method": "labeled_language_text",
+            "language": "French",
+            "proficiency": "",
+            "status": "preferred"
+          },
+          {
+            "evidence": "Preferred languages: French and English",
+            "extraction_method": "labeled_language_text",
+            "language": "English",
+            "proficiency": "",
+            "status": "preferred"
+          }
+        ],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "preferred",
+      "split": "development",
+      "target_id": "dev_preferred_language",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "place_normalization",
+      "fixture_id": "cal_language_merely_mentioned",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_language_merely_mentioned",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "company_profile",
+      "fixture_id": "cal_language_merely_mentioned",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "calibration",
+      "target_id": "cal_language_merely_mentioned",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "occupation_function",
+      "fixture_id": "cal_language_merely_mentioned",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Operations",
+        "title_function": "Operations"
+      },
+      "result_state": "no_match",
+      "split": "calibration",
+      "target_id": "cal_language_merely_mentioned",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "recruitee",
+      "dimension": "language_evidence",
+      "fixture_id": "cal_language_merely_mentioned",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "calibration",
+      "target_id": "cal_language_merely_mentioned",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_posting_written_in_language_only",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_posting_written_in_language_only",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "company_profile",
+      "fixture_id": "dev_posting_written_in_language_only",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_posting_written_in_language_only",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_posting_written_in_language_only",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "",
+        "title_function": ""
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_posting_written_in_language_only",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_posting_written_in_language_only",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": true,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_posting_written_in_language_only",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_internship_title",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_internship_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "company_profile",
+      "fixture_id": "dev_internship_title",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_internship_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_internship_title",
+      "predicted": {
+        "conflict": false,
+        "department_function": "Engineering",
+        "department_state": "known",
+        "employment_type": "Internship",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Engineering",
+        "title_function": "Engineering"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_internship_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_internship_title",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_internship_title",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "place_normalization",
+      "fixture_id": "dev_remote_unrestricted",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "unrestricted",
+        "workplace_arrangement": "Remote"
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_remote_unrestricted",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "company_profile",
+      "fixture_id": "dev_remote_unrestricted",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "development",
+      "target_id": "dev_remote_unrestricted",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "occupation_function",
+      "fixture_id": "dev_remote_unrestricted",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Engineering",
+        "title_function": "Engineering"
+      },
+      "result_state": "no_match",
+      "split": "development",
+      "target_id": "dev_remote_unrestricted",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "generic_jsonld",
+      "dimension": "language_evidence",
+      "fixture_id": "dev_remote_unrestricted",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "development",
+      "target_id": "dev_remote_unrestricted",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "place_normalization",
+      "fixture_id": "blind_paris_context_conflict",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [],
+            "display": "Paris",
+            "state": "no_match"
+          }
+        ],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "no_match",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "no_match",
+      "split": "blind_holdout",
+      "target_id": "blind_paris_context_conflict",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "company_profile",
+      "fixture_id": "blind_paris_context_conflict",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "blind_holdout",
+      "target_id": "blind_paris_context_conflict",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "occupation_function",
+      "fixture_id": "blind_paris_context_conflict",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Engineering",
+        "title_function": "Engineering"
+      },
+      "result_state": "no_match",
+      "split": "blind_holdout",
+      "target_id": "blind_paris_context_conflict",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "workday",
+      "dimension": "language_evidence",
+      "fixture_id": "blind_paris_context_conflict",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "blind_holdout",
+      "target_id": "blind_paris_context_conflict",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:leeds-gb"
+      ],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "place_normalization",
+      "fixture_id": "blind_lowell_leeds_name_order",
+      "predicted": {
+        "location_count": 1,
+        "locations": [
+          {
+            "candidate_ids": [
+              "fixture:leeds-gb"
+            ],
+            "display": "Leeds, UK",
+            "state": "matched"
+          }
+        ],
+        "place_candidate_id": "fixture:leeds-gb",
+        "place_candidate_ids": [
+          "fixture:leeds-gb"
+        ],
+        "place_state": "matched",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "matched",
+      "split": "blind_holdout",
+      "target_id": "blind_lowell_leeds_name_order",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [
+        "fixture:company:lowell"
+      ],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "company_profile",
+      "fixture_id": "blind_lowell_leeds_name_order",
+      "predicted": {
+        "company_candidate_id": "fixture:company:lowell",
+        "company_candidate_ids": [
+          "fixture:company:lowell"
+        ],
+        "company_identity_state": "matched",
+        "company_profile": {
+          "company_id": "fixture-company-lowell",
+          "name": "Lowell",
+          "website": "https://www.lowell.com"
+        },
+        "profile_facts": {
+          "company_id": "fixture-company-lowell",
+          "company_size": "1001-5000",
+          "headquarters": "Leeds, United Kingdom",
+          "industry": "Financial Services",
+          "name": "Lowell",
+          "website": "https://www.lowell.com"
+        }
+      },
+      "result_state": "matched",
+      "split": "blind_holdout",
+      "target_id": "blind_lowell_leeds_name_order",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "occupation_function",
+      "fixture_id": "blind_lowell_leeds_name_order",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Operations",
+        "title_function": "Operations"
+      },
+      "result_state": "no_match",
+      "split": "blind_holdout",
+      "target_id": "blind_lowell_leeds_name_order",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "greenhouse",
+      "dimension": "language_evidence",
+      "fixture_id": "blind_lowell_leeds_name_order",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "blind_holdout",
+      "target_id": "blind_lowell_leeds_name_order",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "place_normalization",
+      "fixture_id": "blind_remote_scope_missing",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "unrestricted",
+        "workplace_arrangement": "Remote"
+      },
+      "result_state": "not_applicable",
+      "split": "blind_holdout",
+      "target_id": "blind_remote_scope_missing",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "company_profile",
+      "fixture_id": "blind_remote_scope_missing",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "blind_holdout",
+      "target_id": "blind_remote_scope_missing",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "occupation_function",
+      "fixture_id": "blind_remote_scope_missing",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Data & Analytics",
+        "title_function": "Data & Analytics"
+      },
+      "result_state": "no_match",
+      "split": "blind_holdout",
+      "target_id": "blind_remote_scope_missing",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "lever",
+      "dimension": "language_evidence",
+      "fixture_id": "blind_remote_scope_missing",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "blind_holdout",
+      "target_id": "blind_remote_scope_missing",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "place_normalization",
+      "fixture_id": "blind_language_in_boilerplate",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "blind_holdout",
+      "target_id": "blind_language_in_boilerplate",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "company_profile",
+      "fixture_id": "blind_language_in_boilerplate",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "blind_holdout",
+      "target_id": "blind_language_in_boilerplate",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "occupation_function",
+      "fixture_id": "blind_language_in_boilerplate",
+      "predicted": {
+        "conflict": false,
+        "department_function": "",
+        "department_state": "unknown",
+        "employment_type": "Professional",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "People",
+        "title_function": "People"
+      },
+      "result_state": "no_match",
+      "split": "blind_holdout",
+      "target_id": "blind_language_in_boilerplate",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "personio",
+      "dimension": "language_evidence",
+      "fixture_id": "blind_language_in_boilerplate",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "blind_holdout",
+      "target_id": "blind_language_in_boilerplate",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "place_normalization",
+      "fixture_id": "blind_working_student_professional_duties",
+      "predicted": {
+        "location_count": 0,
+        "locations": [],
+        "place_candidate_id": "",
+        "place_candidate_ids": [],
+        "place_state": "not_applicable",
+        "remote_scope": "",
+        "remote_scope_state": "not_remote",
+        "workplace_arrangement": ""
+      },
+      "result_state": "not_applicable",
+      "split": "blind_holdout",
+      "target_id": "blind_working_student_professional_duties",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "company_profile",
+      "fixture_id": "blind_working_student_professional_duties",
+      "predicted": {
+        "company_candidate_id": "",
+        "company_identity_state": "not_applicable",
+        "profile_facts": {}
+      },
+      "result_state": "not_applicable",
+      "split": "blind_holdout",
+      "target_id": "blind_working_student_professional_duties",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "occupation_function",
+      "fixture_id": "blind_working_student_professional_duties",
+      "predicted": {
+        "conflict": false,
+        "department_function": "Engineering",
+        "department_state": "known",
+        "employment_type": "Working student",
+        "occupation": {},
+        "occupation_candidate_id": "",
+        "occupation_candidate_ids": [],
+        "runr_function": "Engineering",
+        "title_function": "Engineering"
+      },
+      "result_state": "no_match",
+      "split": "blind_holdout",
+      "target_id": "blind_working_student_professional_duties",
+      "warnings": []
+    },
+    {
+      "ambiguous": false,
+      "candidate_ids": [],
+      "confidence": null,
+      "connector": "smartrecruiters",
+      "dimension": "language_evidence",
+      "fixture_id": "blind_working_student_professional_duties",
+      "predicted": {
+        "language": "",
+        "language_state": "not_established",
+        "languages": [],
+        "posting_language_ignored": false,
+        "proficiency": ""
+      },
+      "result_state": "not_established",
+      "split": "blind_holdout",
+      "target_id": "blind_working_student_professional_duties",
+      "warnings": []
+    }
+  ],
+  "partitions": {
+    "blind_holdout": {
+      "fixture_cases": 5,
+      "golden_label_cases": 0,
+      "metrics_available": false,
+      "output_count": 20
+    },
+    "calibration": {
+      "fixture_cases": 5,
+      "golden_label_cases": 5,
+      "metrics_available": true,
+      "output_count": 20
+    },
+    "development": {
+      "fixture_cases": 18,
+      "golden_label_cases": 18,
+      "metrics_available": true,
+      "output_count": 72
+    }
+  },
+  "per_connector": {
+    "generic_jsonld": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 3,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "language_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "language_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 3,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 3,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "location_count": {
+              "evaluated": 2,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "location_count",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "remote_scope": {
+              "evaluated": 2,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "remote_scope",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "remote_scope_state": {
+              "evaluated": 2,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "remote_scope_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "workplace_arrangement": {
+              "evaluated": 2,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "workplace_arrangement",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": null,
+          "outputs": 3,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        }
+      },
+      "fixture_cases": 3
+    },
+    "greenhouse": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 7,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "language": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "language",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "language_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "language_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "proficiency": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "proficiency",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 7,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "employment_type": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "employment_type",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "occupation_candidate_id": {
+              "evaluated": 6,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "occupation_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 7,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "location_count": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "location_count",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "place_candidate_id": {
+              "evaluated": 6,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "place_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "place_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "place_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "remote_scope": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "remote_scope",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "remote_scope_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "remote_scope_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "workplace_arrangement": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "workplace_arrangement",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 7,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        }
+      },
+      "fixture_cases": 7
+    },
+    "lever": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 4,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 4,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.25,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "conflict": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "conflict",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": null,
+          "outputs": 4,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "location_count": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "location_count",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "place_candidate_id": {
+              "evaluated": 3,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "place_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "place_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "place_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "remote_scope": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "remote_scope",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "remote_scope_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "remote_scope_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "workplace_arrangement": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "workplace_arrangement",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 4,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        }
+      },
+      "fixture_cases": 4
+    },
+    "personio": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 4,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "language_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "language_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 4,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "employment_type": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "employment_type",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "occupation_candidate_id": {
+              "evaluated": 3,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "occupation_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 4,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.25,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "place_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "place_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": null,
+          "outputs": 4,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        }
+      },
+      "fixture_cases": 4
+    },
+    "recruitee": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 3,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "language_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "language_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 3,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "occupation_candidate_id": {
+              "evaluated": 3,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "occupation_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 3,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "location_count": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "location_count",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": null,
+          "outputs": 3,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        }
+      },
+      "fixture_cases": 3
+    },
+    "smartrecruiters": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 3,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 3,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "department_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "department_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": null,
+          "outputs": 3,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "place_candidate_id": {
+              "evaluated": 2,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "place_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "place_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "place_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "workplace_arrangement": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "workplace_arrangement",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 3,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        }
+      },
+      "fixture_cases": 3
+    },
+    "workday": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "company_candidate_id": {
+              "evaluated": 3,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "company_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "company_profile": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "company_profile",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 4,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 4,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "employment_type": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "employment_type",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": null,
+          "outputs": 4,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "place_candidate_id": {
+              "evaluated": 3,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "place_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "place_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "place_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 4,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        }
+      },
+      "fixture_cases": 4
+    }
+  },
+  "per_language": {
+    "English": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "occupation_candidate_id": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "occupation_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        }
+      },
+      "fixture_cases": 1
+    },
+    "French": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "occupation_candidate_id": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "occupation_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        }
+      },
+      "fixture_cases": 1
+    },
+    "French and English": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "employment_type": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "employment_type",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        }
+      },
+      "fixture_cases": 1
+    },
+    "German": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "employment_type": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "employment_type",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "occupation_candidate_id": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "occupation_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {},
+          "macro_f1": null,
+          "outputs": 1,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        }
+      },
+      "fixture_cases": 1
+    },
+    "unspecified": {
+      "dimensions": {
+        "company_profile": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "company_candidate_id": {
+              "evaluated": 19,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "company_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "company_profile": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "company_profile",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 24,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        },
+        "language_evidence": {
+          "ambiguity_rate": 0.0,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "language": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "language",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "language_state": {
+              "evaluated": 4,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "language_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "proficiency": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "proficiency",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 24,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "occupation_function": {
+          "ambiguity_rate": 0.041667,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": null,
+          "fields": {
+            "conflict": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "conflict",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "department_state": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "department_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "employment_type": {
+              "evaluated": 1,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "employment_type",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": null,
+          "outputs": 24,
+          "precision": null,
+          "recall": null,
+          "top_1_accuracy": null,
+          "top_3_accuracy": null
+        },
+        "place_normalization": {
+          "ambiguity_rate": 0.041667,
+          "calibration": {
+            "available": false,
+            "brier_score": null,
+            "confidence_count": 0,
+            "data_gap": "fixture providers did not supply confidence scores",
+            "expected_calibration_error": null
+          },
+          "false_positive_rate": 0.0,
+          "fields": {
+            "location_count": {
+              "evaluated": 5,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "location_count",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "place_candidate_id": {
+              "evaluated": 19,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "place_candidate_id",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "place_state": {
+              "evaluated": 5,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "place_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "remote_scope": {
+              "evaluated": 4,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "remote_scope",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "remote_scope_state": {
+              "evaluated": 4,
+              "f1": 1.0,
+              "false_positive_rate": 0.0,
+              "field": "remote_scope_state",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            },
+            "workplace_arrangement": {
+              "evaluated": 5,
+              "f1": 1.0,
+              "false_positive_rate": null,
+              "field": "workplace_arrangement",
+              "macro_f1": 1.0,
+              "precision": 1.0,
+              "recall": 1.0
+            }
+          },
+          "macro_f1": 1.0,
+          "outputs": 24,
+          "precision": 1.0,
+          "recall": 1.0,
+          "top_1_accuracy": 1.0,
+          "top_3_accuracy": 1.0
+        }
+      },
+      "fixture_cases": 24
+    }
+  },
+  "promotion": {
+    "allowed_values": [
+      "continue shadow evaluation",
+      "eligible for human-review trial",
+      "reject"
+    ],
+    "reasons": [
+      "blind holdout is intentionally unlabeled in checked-in fixtures; holdout correctness metrics are unavailable",
+      "fixture providers supplied no confidence scores; calibration metrics are unavailable",
+      "small synthetic labeled sample (23 cases); results are directional, not confidence claims",
+      "no external datasets, production observations, or provider responses were evaluated"
+    ],
+    "recommendation": "continue shadow evaluation"
+  },
+  "schema_version": "offline_deterministic_trial_report_v1",
+  "trial": {
+    "ai_called": false,
+    "config_fingerprint": "99adfb48b1c171f6f80ab2c3027457507a494a4fa2394ef61fa1641e0ae07aa4",
+    "configured_rule_versions": [
+      "deterministic_trial_rules_v1"
+    ],
+    "fixture_version": "runr_fixture_v1",
+    "network_called": false,
+    "production_writes": false,
+    "provider_mode": "offline_fixture_only",
+    "publication_changed": false,
+    "rule_version": "deterministic_trial_rules_v1",
+    "trial_id": "offline_deterministic_enrichment_trial"
+  }
+}

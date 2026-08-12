@@ -113,7 +113,7 @@
     "location": "Remote EU",
     "workplace_arrangement": "Remote",
     "remote_scope": "EU",
-    "expected": {"workplace_arrangement": "Remote", "remote_scope": "EU", "location_count": 1}
+    "expected": {"workplace_arrangement": "Remote", "remote_scope": "EU", "location_count": 0}
   },
   {
     "fixture_id": "cal_remote_without_scope",
@@ -226,5 +226,27 @@
     "posting_language": "French",
     "description_excerpt": "Nous construisons des produits utiles pour nos clients.",
     "expected": {"language_state": "not_established"}
+  },
+  {
+    "fixture_id": "dev_internship_title",
+    "split": "development",
+    "synthetic": true,
+    "connector": "greenhouse",
+    "source_observation_id": "fixture-observation-internship-title",
+    "title": "Intern Data Engineer",
+    "department": "Engineering",
+    "expected": {"employment_type": "Internship"}
+  },
+  {
+    "fixture_id": "dev_remote_unrestricted",
+    "split": "development",
+    "synthetic": true,
+    "connector": "generic_jsonld",
+    "source_observation_id": "fixture-observation-remote-unrestricted",
+    "title": "Technical Writer",
+    "location": "Remote",
+    "workplace_arrangement": "Remote",
+    "remote_scope": "",
+    "expected": {"workplace_arrangement": "Remote", "remote_scope": "", "remote_scope_state": "unrestricted", "location_count": 0}
   }
 ]
