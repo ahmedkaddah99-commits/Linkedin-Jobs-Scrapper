@@ -16,6 +16,7 @@ from backend.application.assisted_apply_preparation_service import AssistedApply
 from backend.application.assisted_apply_service import AssistedApplyConnectionService
 from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
 from backend.application.admin_job_import import AdminJobImportService
+from backend.acquisition.analytics import build_acquisition_analytics, parse_analytics_window
 from backend.application.company_enrichment import CompanyEnrichmentProvider, CompanyEnrichmentService
 from backend.application.personalized_jobs_service import PersonalizedJobsService
 from backend.application.production_rollout import ProductionRolloutService
@@ -1008,6 +1009,20 @@ class BackendApplication:
 
     def get_admin_job_import_overview(self) -> dict[str, Any]:
         return self._admin_job_import_service.overview()
+
+    def get_admin_acquisition_analytics(self, **kwargs: Any) -> dict[str, Any]:
+        """Return the bounded, read-only acquisition analytics contract."""
+
+        store = self.repositories.acquisition_store
+        if store is None:
+            return {
+                "schema_version": "acquisition_analytics_v1",
+                "read_only": True,
+                "unavailable": True,
+                "reason": "Acquisition analytics require sqlite/Turso acquisition storage.",
+            }
+        window = parse_analytics_window(**kwargs)
+        return build_acquisition_analytics(store.db_path, window=window)
 
     def list_admin_job_imports(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         store = self.repositories.acquisition_store

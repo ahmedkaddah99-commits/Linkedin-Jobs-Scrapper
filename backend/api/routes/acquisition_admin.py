@@ -30,6 +30,12 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments == ["admin", "acquisition", "overview"]:
         context.send_json(application.get_admin_job_import_overview())
         return True
+    if segments == ["admin", "acquisition", "analytics"]:
+        try:
+            context.send_json(application.get_admin_acquisition_analytics(**_analytics_query(query)))
+        except ValueError as exc:
+            return _error(context, 400, "invalid_analytics_window", str(exc))
+        return True
     if segments == ["admin", "acquisition", "sources"]:
         context.send_json({"sources": application.list_admin_job_import_sources()})
         return True
@@ -429,6 +435,15 @@ def _scope_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
         key: _query_value(query, key)
         for key in ("country", "city", "department", "category", "freshness")
         if _query_value(query, key)
+    }
+
+
+def _analytics_query(query: Mapping[str, list[str]]) -> dict[str, Any]:
+    return {
+        "range_key": _query_value(query, "range") or "7d",
+        "start": _query_value(query, "start"),
+        "end": _query_value(query, "end"),
+        "timezone_name": _query_value(query, "timezone") or "UTC",
     }
 
 

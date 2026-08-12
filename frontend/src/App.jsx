@@ -16,6 +16,7 @@ const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
 const AdminScrapeOpsPage = lazy(() => import("./pages/AdminScrapeOpsPage"));
 const AdminJobImportPage = lazy(() => import("./pages/AdminJobImportPage"));
 const AdminAcquisitionPage = lazy(() => import("./pages/AdminAcquisitionPage"));
+const AdminAcquisitionAnalyticsPage = lazy(() => import("./pages/AdminAcquisitionAnalyticsPage"));
 const AcquisitionOperationsPage = lazy(() => import("./pages/AcquisitionOperationsPage"));
 const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
 const ApplyExtensionSetupPage = lazy(() => import("./pages/ApplyExtensionSetupPage"));
@@ -310,6 +311,14 @@ function AuthenticatedApp() {
                 element={(
                   <RequireAdminRoute>
                     <AcquisitionOperationsPage />
+                  </RequireAdminRoute>
+                )}
+              />
+              <Route
+                path="/admin/acquisition/analytics"
+                element={(
+                  <RequireAdminRoute>
+                    <AdminAcquisitionAnalyticsPage />
                   </RequireAdminRoute>
                 )}
               />

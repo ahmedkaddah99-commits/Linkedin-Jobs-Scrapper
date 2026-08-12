@@ -3051,6 +3051,53 @@ def _apply_company_identity_reconciliation_migration(connection: DatabaseConnect
         )
 
 
+def _apply_acquisition_analytics_indexes_migration(connection: DatabaseConnection) -> None:
+    """Add timestamp indexes used by bounded acquisition analytics reads."""
+
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_acquisition_cycles_scheduled_at
+            ON acquisition_cycles(scheduled_at, status);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_target_attempts_started
+            ON acquisition_target_attempts(started_at, target_id, status);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_requests_started
+            ON acquisition_requests(started_at, target_id, status);
+        CREATE INDEX IF NOT EXISTS idx_job_source_observations_observed_at
+            ON job_source_observations(observed_at, target_id, canonical_job_id);
+        CREATE INDEX IF NOT EXISTS idx_job_posting_versions_created_at
+            ON job_posting_versions(created_at, canonical_job_id, version_number);
+        CREATE INDEX IF NOT EXISTS idx_canonical_jobs_created_at
+            ON canonical_jobs(created_at, canonical_job_id);
+        CREATE INDEX IF NOT EXISTS idx_canonical_companies_created_at
+            ON canonical_companies(created_at, company_id);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_quality_events_created_at
+            ON acquisition_quality_events(created_at, target_id, warning_code);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_completeness_calculated_at
+            ON acquisition_completeness_reports(calculated_at, entity_kind, state);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_duplicate_clusters_created_at
+            ON acquisition_duplicate_clusters(created_at, state);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_duplicate_decisions_created_at
+            ON acquisition_duplicate_decisions(created_at, cluster_id, decision);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_publications_published_at
+            ON acquisition_publications(published_at, status);
+        CREATE INDEX IF NOT EXISTS idx_publication_audit_events_created_at
+            ON publication_audit_events(created_at, event_type);
+        CREATE INDEX IF NOT EXISTS idx_company_identity_evidence_created_at
+            ON company_identity_evidence(created_at, company_id, link_state);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_runs_created_at
+            ON enrichment_operation_runs(created_at, status, provider_id);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_items_updated_at
+            ON enrichment_operation_run_items(updated_at, run_id, attempt_state);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_proposals_created_at
+            ON enrichment_field_proposals(created_at, run_id, target_id);
+        CREATE INDEX IF NOT EXISTS idx_enrichment_actions_created_at
+            ON enrichment_proposal_actions(created_at, action, proposal_id);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_reprocessing_created_at
+            ON acquisition_reprocessing_runs(created_at, status);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3348,5 +3395,10 @@ MIGRATIONS = (
         "Add explicit company entity kinds, profile status, URL lifecycle/type evidence, and read-only reconciliation state.",
         _apply_company_identity_reconciliation_migration,
         dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "055_acquisition_analytics_indexes",
+        "Add timestamp indexes for bounded, read-only acquisition analytics aggregates.",
+        _apply_acquisition_analytics_indexes_migration,
     ),
 )

@@ -2,6 +2,7 @@ import { NavLink, useLocation } from "react-router-dom";
 
 const NAV_ITEMS = [
   { label: "Overview", icon: "dashboard", to: "/admin/acquisition", end: true },
+  { label: "Analytics", icon: "insights", to: "/admin/acquisition/analytics" },
   { label: "Sources", icon: "lan", to: "/admin/acquisition/sources" },
   { label: "Imports", icon: "download", to: "/admin/acquisition/imports" },
   { label: "Jobs", icon: "work_history", to: "/admin/acquisition/jobs" },
