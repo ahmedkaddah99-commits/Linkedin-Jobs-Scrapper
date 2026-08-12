@@ -48,6 +48,12 @@ were clean at inspection time.
   repaired the conflicting legacy batch test accordingly.
 - After Unit 05, the combined audit/publication/enrichment/evaluation/
   acquisition and migration suite is `78 passed`.
+- Unit 06 integrated as `97fde2b1`; its provisional and final migration is
+  `054_company_identity_reconciliation`.
+- Unit 06 migration conflict resolution preserved migrations 050 through 053
+  and kept the foundation test scoped to 049 through 051; the company
+  reconciliation migration is covered by the dedicated company test.
+- After Unit 06, the combined Wave 1 suite is `90 passed`.
 
 ## Dependency order
 
