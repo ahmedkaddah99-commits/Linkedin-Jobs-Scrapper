@@ -34,6 +34,13 @@ were clean at inspection time.
 - Unit 02 integration required preserving the 01 migration and the repaired
   foundation migration test; the combined 01/02/03/migration suite is
   `50 passed`.
+- Unit 04 integrated as `2b656014` plus recovered test-formatting commit
+  `fd4709bb`; its provisional `050_publication_policy_history` was centrally
+  renumbered to `052_publication_policy_history`.
+- Unit 04 migration conflict resolution required restoring the closing SQL
+  definition for `051_enrichment_operations`; repair committed as `9fbf9e19`.
+- After the repair, the combined publication/enrichment/evaluation/acquisition
+  and migration suite is `70 passed`.
 
 ## Dependency order
 
