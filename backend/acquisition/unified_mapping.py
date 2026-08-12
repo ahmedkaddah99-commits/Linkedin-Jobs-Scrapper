@@ -366,7 +366,7 @@ def company_url_records(job: Mapping[str, Any], *, company_id: str = "", observe
     candidates: list[tuple[str, str, str]] = []
     for field, url_type in (
         ("website", "homepage"), ("company_website", "homepage"), ("careers_page", "careers"),
-        ("careers_url", "careers"), ("jobs_url", "employer_jobs"), ("ats_url", "ats_jobs"),
+        ("careers_url", "careers"), ("jobs_url", "careers"), ("ats_url", "ats_jobs"),
         ("job_detail_url", "job_detail"), ("source_url", "source"),
     ):
         value = job.get(field)
@@ -376,7 +376,7 @@ def company_url_records(job: Mapping[str, Any], *, company_id: str = "", observe
             candidates.append((_text(value), url_type, f"job.{field}"))
     for object_name in ("company", "company_profile", "company_details", "employer"):
         nested = job.get(object_name) if isinstance(job.get(object_name), Mapping) else {}
-        for field, url_type in (("website", "homepage"), ("company_website", "homepage"), ("careers_page", "careers"), ("careers_url", "careers"), ("jobs_url", "employer_jobs"), ("ats_url", "ats_jobs")):
+        for field, url_type in (("website", "homepage"), ("company_website", "homepage"), ("careers_page", "careers"), ("careers_url", "careers"), ("jobs_url", "careers"), ("ats_url", "ats_jobs")):
             if _known(nested.get(field)):
                 candidates.append((_text(nested[field]), url_type, f"{object_name}.{field}"))
     result: list[dict[str, Any]] = []
@@ -391,8 +391,9 @@ def company_url_records(job: Mapping[str, Any], *, company_id: str = "", observe
             "company_id": company_id or None, "url_type": url_type, "url": url,
             "canonical_url": url, "source": "configured_official" if configured else "source_observation", "source_field": source_field,
             "first_seen_at": observed_at or None, "last_seen_at": observed_at or None,
-            "validation_status": "configured_official" if configured else "not_validated", "redirect_target": None,
-            "selected_primary": bool(configured and url_type in {"homepage", "careers", "employer_jobs", "ats_jobs"}), "rule_version": UNIFIED_RULE_VERSION,
+            "validation_status": "not_validated", "url_lifecycle": "configured_official" if configured else "discovered",
+            "redirect_target": None,
+            "selected_primary": bool(configured and url_type in {"homepage", "careers", "ats_jobs"}), "rule_version": UNIFIED_RULE_VERSION,
         })
     return result
 

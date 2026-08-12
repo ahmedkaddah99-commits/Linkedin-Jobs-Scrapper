@@ -55,7 +55,14 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
         context.send_json({"clusters": application.list_admin_duplicate_clusters(limit=_int_query(query, "limit", 100, 500))})
         return True
     if segments == ["admin", "job-import", "companies"]:
-        context.send_json({"companies": application.list_admin_companies(limit=_int_query(query, "limit", 100, 500), search=_query_value(query, "search"))})
+        context.send_json({"companies": application.list_admin_companies(
+            limit=_int_query(query, "limit", 100, 500),
+            search=_query_value(query, "search"),
+            entity_kind=_query_value(query, "entity_kind"),
+            profile_status=_query_value(query, "profile_status"),
+            url_type=_query_value(query, "url_type"),
+            url_lifecycle=_query_value(query, "url_lifecycle"),
+        )})
         return True
     if segments == ["admin", "job-import", "rules"]:
         context.send_json(application.get_admin_rules_coverage())

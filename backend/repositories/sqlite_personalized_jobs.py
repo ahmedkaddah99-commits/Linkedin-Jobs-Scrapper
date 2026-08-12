@@ -28,6 +28,21 @@ def _row_payload(row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
 
+def _profile_status(profile: Mapping[str, Any]) -> str:
+    fields = profile.get("fields") if isinstance(profile, Mapping) else {}
+    if not isinstance(fields, Mapping) or not fields:
+        return "absent"
+    states = {str(item.get("state") or "unknown") for item in fields.values() if isinstance(item, Mapping)}
+    if "conflicted" in states:
+        return "conflicted"
+    known = sum(
+        1
+        for item in fields.values()
+        if isinstance(item, Mapping) and str(item.get("state") or "") == "known" and item.get("value") not in (None, "", [])
+    )
+    return "present" if known == len(fields) and known else "incomplete" if known else "absent"
+
+
 class SqlitePersonalizedJobsStore(_SqliteStore):
     """Persistence boundary for user state and read-only catalog projections."""
 
@@ -599,6 +614,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         return {
             "company_id": str(row["company_id"] or ""),
             "profile": _decode(row["profile_json"], {}),
+            "profile_status": str(row["profile_status"] or "absent"),
             "logo_object_key": str(row["logo_object_key"] or ""),
             "logo_source_url": str(row["logo_source_url"] or ""),
             "logo_content_hash": str(row["logo_content_hash"] or ""),
@@ -622,6 +638,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         if not company_id:
             raise ValueError("company_id is required")
         now = utc_now_iso()
+        profile_status = _profile_status(profile)
         with self._connect() as connection:
             existing = connection.execute(
                 "SELECT created_at FROM canonical_company_profiles WHERE company_id = ?",
@@ -631,11 +648,12 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             connection.execute(
                 """
                 INSERT INTO canonical_company_profiles (
-                    company_id, profile_json, logo_object_key, logo_source_url,
+                    company_id, profile_json, profile_status, logo_object_key, logo_source_url,
                     logo_content_hash, logo_content_type, logo_verified_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(company_id) DO UPDATE SET
                     profile_json=excluded.profile_json,
+                    profile_status=excluded.profile_status,
                     logo_object_key=CASE WHEN excluded.logo_object_key != '' THEN excluded.logo_object_key ELSE canonical_company_profiles.logo_object_key END,
                     logo_source_url=CASE WHEN excluded.logo_source_url != '' THEN excluded.logo_source_url ELSE canonical_company_profiles.logo_source_url END,
                     logo_content_hash=CASE WHEN excluded.logo_content_hash != '' THEN excluded.logo_content_hash ELSE canonical_company_profiles.logo_content_hash END,
@@ -646,6 +664,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 (
                     company_id,
                     _json(dict(profile)),
+                    profile_status,
                     str(logo_object_key or ""),
                     str(logo_source_url or ""),
                     str(logo_content_hash or ""),
@@ -670,7 +689,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 FROM canonical_companies c
                 LEFT JOIN canonical_company_profiles p ON p.company_id = c.company_id
                 LEFT JOIN company_enrichment_targets t ON t.company_id = c.company_id
-                WHERE COALESCE(c.entity_kind, 'employer') != 'source'
+                WHERE COALESCE(c.entity_kind, 'unknown') = 'employer'
                   AND (t.next_attempt_at IS NULL OR t.next_attempt_at = '' OR t.next_attempt_at <= ?)
                   AND (t.lease_expires_at IS NULL OR t.lease_expires_at = '' OR t.lease_expires_at <= ?)
                 ORDER BY CASE WHEN t.last_success_at IS NULL OR t.last_success_at = '' THEN 0 ELSE 1 END,
@@ -1231,6 +1250,7 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
                 WHERE ranked.snapshot_rank = 1
             ) aps ON aps.canonical_job_id = j.canonical_job_id
             WHERE pj.publication_id = ?
+              AND c.entity_kind = 'employer'
         """
 
 

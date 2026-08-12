@@ -29,6 +29,15 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from backend.domain.company_identity import (
+    CANONICAL_ENTITY_KINDS,
+    CANONICAL_URL_TYPES,
+    PROFILE_STATUSES,
+    URL_LIFECYCLES,
+    canonical_url_lifecycle,
+    canonical_url_type,
+)
+
 
 COMPANY_URL_TYPES = (
     "homepage",
@@ -39,6 +48,11 @@ COMPANY_URL_TYPES = (
     "source",
     "social_profile",
     "enrichment",
+    # Canonical identity vocabulary. Legacy values above remain accepted for
+    # existing read-model clients and are not used by the new persistence path.
+    "ats_jobs",
+    "job_detail",
+    "other",
 )
 
 _URL_TYPE_ALIASES = {
@@ -201,6 +215,7 @@ class CompanyUrlRecord:
     last_seen_at: str
     validation_status: str
     validation_reason: str
+    url_lifecycle: str
     redirect_target: str
     primary_state: str
     rule_version: str
@@ -221,6 +236,8 @@ class CompanyUrlRecord:
                 "reason": self.validation_reason,
             },
             "validation_status": self.validation_status,
+            "url_lifecycle": self.url_lifecycle,
+            "canonical_url_type": canonical_url_type(self.url_type),
             "redirect_target": self.redirect_target,
             "primary_state": self.primary_state,
             "selected_primary": self.primary_state == "primary",
@@ -430,6 +447,9 @@ def build_company_url_view(
                 last_seen_at=_range_timestamp((row["last_seen_at"] for row in rows), first=False),
                 validation_status=status,
                 validation_reason=";".join(reasons),
+                url_lifecycle=canonical_url_lifecycle(
+                    "validated" if status == "valid" else "invalid" if status in {"invalid", "blocked"} else "discovered"
+                ),
                 redirect_target=redirect_targets[0] if redirect_targets else "",
                 primary_state="candidate",
                 rule_version=rule_version,
@@ -536,6 +556,10 @@ class CompanyOperations:
 
 
 __all__ = [
+    "CANONICAL_ENTITY_KINDS",
+    "CANONICAL_URL_TYPES",
+    "PROFILE_STATUSES",
+    "URL_LIFECYCLES",
     "COMPANY_URL_TYPES",
     "CompanyOperations",
     "CompanyUrlRecord",

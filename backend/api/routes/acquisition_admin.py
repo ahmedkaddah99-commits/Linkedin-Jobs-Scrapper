@@ -33,6 +33,9 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments == ["admin", "acquisition", "sources"]:
         context.send_json({"sources": application.list_admin_job_import_sources()})
         return True
+    if segments == ["admin", "acquisition", "url-reconciliation"]:
+        context.send_json(application.get_admin_company_url_reconciliation())
+        return True
     if segments == ["admin", "acquisition", "jobs"]:
         context.send_json(application.list_admin_job_inspections(**_job_query(query)))
         return True
@@ -51,7 +54,26 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
         context.send_json({"clusters": application.list_admin_duplicate_clusters(limit=_int_query(query, "limit", 100, 500))})
         return True
     if segments == ["admin", "acquisition", "companies"]:
-        context.send_json({"companies": application.list_admin_companies(limit=_int_query(query, "limit", 100, 500), search=_query_value(query, "search"))})
+        context.send_json({"companies": application.list_admin_companies(
+            limit=_int_query(query, "limit", 100, 500),
+            search=_query_value(query, "search"),
+            entity_kind=_query_value(query, "entity_kind"),
+            profile_status=_query_value(query, "profile_status"),
+            url_type=_query_value(query, "url_type"),
+            url_lifecycle=_query_value(query, "url_lifecycle"),
+        )})
+        return True
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "companies"] and segments[4] == "urls":
+        urls = application.list_admin_company_urls(
+            segments[3],
+            url_type=_query_value(query, "url_type"),
+            url_lifecycle=_query_value(query, "url_lifecycle"),
+            include_occurrences=not _flag_query(query, "persisted_only"),
+            limit=_int_query(query, "limit", 500, 1000),
+        )
+        if urls is None:
+            return _error(context, 404, "company_not_found", "Canonical company not found.")
+        context.send_json(urls)
         return True
     if len(segments) == 4 and segments[:3] == ["admin", "acquisition", "companies"]:
         company = application.get_admin_company_detail(segments[3])
@@ -139,6 +161,28 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
     payload = context.read_json_body() or {}
     if not isinstance(payload, Mapping):
         payload = {}
+    if segments == ["admin", "acquisition", "url-reconciliation", "preview"]:
+        context.send_json(
+            context.application.get_admin_company_url_reconciliation(
+                checked_in_urls=[dict(item) for item in payload.get("checked_in_urls") or [] if isinstance(item, Mapping)],
+                imported_urls=[dict(item) for item in payload.get("imported_urls") or [] if isinstance(item, Mapping)],
+            )
+        )
+        return True
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "companies"] and segments[4] == "link-candidate":
+        try:
+            result = context.application.record_admin_company_link_candidate(
+                observed_name=_text(payload.get("observed_name") or payload.get("company_name")),
+                candidate_company_ids=[str(item) for item in payload.get("candidate_company_ids") or []],
+                target_id=_text(payload.get("target_id")),
+                identity_key=_text(payload.get("identity_key")),
+                source_observation_id=_text(payload.get("source_observation_id")),
+                evidence=[dict(item) for item in payload.get("evidence") or [] if isinstance(item, Mapping)],
+            )
+        except ValueError as exc:
+            return _error(context, 400, "invalid_company_link_candidate", str(exc))
+        context.send_json(result, status=202)
+        return True
     if segments == ["admin", "acquisition", "imports", "plan"]:
         try:
             context.send_json(

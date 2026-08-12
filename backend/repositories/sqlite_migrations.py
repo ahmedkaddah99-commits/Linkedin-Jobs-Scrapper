@@ -2830,6 +2830,227 @@ def _apply_acquisition_audit_permissions_migration(connection: DatabaseConnectio
     )
 
 
+def _apply_company_identity_reconciliation_migration(connection: DatabaseConnection) -> None:
+    """Add explicit company identity, URL lifecycle, and review evidence.
+
+    The company table is rebuilt only to remove its legacy name-based unique
+    constraint. All existing rows are copied; immutable source evidence is not
+    removed or rewritten.
+    """
+
+    if _table_columns(connection, "canonical_companies"):
+        connection.execute("ALTER TABLE canonical_companies RENAME TO canonical_companies_identity_legacy")
+        connection.executescript(
+            """
+            CREATE TABLE canonical_companies (
+                company_id TEXT PRIMARY KEY,
+                canonical_name TEXT NOT NULL,
+                entity_kind TEXT NOT NULL DEFAULT 'employer'
+                    CHECK (entity_kind IN ('employer', 'source', 'fixture', 'quarantined', 'unknown')),
+                provenance_url TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO canonical_companies (
+                company_id, canonical_name, entity_kind, provenance_url, created_at, updated_at
+            )
+            SELECT company_id, canonical_name,
+                   CASE entity_kind
+                       WHEN 'source' THEN 'source'
+                       WHEN 'fixture' THEN 'fixture'
+                       WHEN 'quarantined' THEN 'quarantined'
+                       WHEN 'unknown' THEN 'unknown'
+                       ELSE 'employer'
+                   END,
+                   provenance_url, created_at, updated_at
+            FROM canonical_companies_identity_legacy;
+            DROP TABLE canonical_companies_identity_legacy;
+            """
+        )
+
+    for table, column, definition in (
+        ("canonical_company_profiles", "profile_status", "TEXT NOT NULL DEFAULT 'absent'"),
+        ("canonical_company_urls", "url_lifecycle", "TEXT NOT NULL DEFAULT 'discovered'"),
+        ("canonical_company_urls", "validation_reason", "TEXT NOT NULL DEFAULT ''"),
+        ("canonical_company_urls", "ignored_reason", "TEXT NOT NULL DEFAULT ''"),
+        ("canonical_company_urls", "occurrence_count", "INTEGER NOT NULL DEFAULT 1"),
+        ("canonical_company_urls", "source_target_id", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        _ensure_table_column(connection, table, column, definition)
+
+    connection.execute(
+        """
+        UPDATE canonical_company_urls
+        SET url_type=CASE url_type
+                WHEN 'ats_board' THEN 'ats_jobs'
+                WHEN 'application_host' THEN 'ats_jobs'
+                WHEN 'employer_jobs' THEN 'careers'
+                WHEN 'social_profile' THEN 'other'
+                WHEN 'enrichment' THEN 'other'
+                ELSE url_type
+            END,
+            url_lifecycle=CASE
+                WHEN validation_status IN ('invalid', 'blocked') THEN 'invalid'
+                WHEN validation_status IN ('valid', 'validated', 'verified') THEN 'validated'
+                WHEN validation_status='configured_official' THEN 'configured_official'
+                ELSE 'discovered'
+            END
+        """
+    )
+    connection.execute(
+        """
+        UPDATE canonical_company_profiles
+        SET profile_status=CASE
+            WHEN profile_json IS NULL OR profile_json='' OR profile_json='{}' THEN 'absent'
+            WHEN profile_json LIKE '%conflicted%' THEN 'conflicted'
+            WHEN profile_json LIKE '%known%' THEN 'incomplete'
+            ELSE 'absent'
+        END
+        """
+    )
+    connection.execute(
+        """
+        UPDATE canonical_companies
+        SET entity_kind=CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM canonical_jobs j
+                JOIN job_source_observations o ON o.canonical_job_id=j.canonical_job_id
+                JOIN acquisition_targets t ON t.target_id=o.target_id
+                WHERE j.company_id=canonical_companies.company_id
+                  AND (t.target_kind='fixture' OR t.quarantined=1)
+            ) THEN CASE WHEN EXISTS (
+                SELECT 1
+                FROM canonical_jobs j
+                JOIN job_source_observations o ON o.canonical_job_id=j.canonical_job_id
+                JOIN acquisition_targets t ON t.target_id=o.target_id
+                WHERE j.company_id=canonical_companies.company_id AND t.target_kind='fixture'
+            ) THEN 'fixture' ELSE 'quarantined' END
+            WHEN entity_kind IN ('fixture', 'quarantined', 'source') THEN entity_kind
+            ELSE 'employer'
+        END,
+            updated_at=updated_at
+        WHERE EXISTS (
+            SELECT 1
+            FROM canonical_jobs j
+            JOIN job_source_observations o ON o.canonical_job_id=j.canonical_job_id
+            JOIN acquisition_targets t ON t.target_id=o.target_id
+            WHERE j.company_id=canonical_companies.company_id
+        )
+        """
+    )
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS company_identity_keys (
+            identity_key TEXT PRIMARY KEY,
+            company_id TEXT NOT NULL,
+            identity_type TEXT NOT NULL DEFAULT 'external',
+            source TEXT NOT NULL DEFAULT '',
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_identity_keys_company
+            ON company_identity_keys(company_id, identity_type);
+
+        CREATE TABLE IF NOT EXISTS company_identity_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            company_id TEXT NOT NULL DEFAULT '',
+            observed_name TEXT NOT NULL DEFAULT '',
+            normalized_name TEXT NOT NULL DEFAULT '',
+            identity_key TEXT NOT NULL DEFAULT '',
+            target_id TEXT NOT NULL DEFAULT '',
+            source_observation_id TEXT NOT NULL DEFAULT '',
+            evidence_type TEXT NOT NULL DEFAULT 'source_observation',
+            evidence_url TEXT NOT NULL DEFAULT '',
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            confidence REAL NOT NULL DEFAULT 0,
+            link_state TEXT NOT NULL DEFAULT 'needs_review',
+            review_required INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_identity_evidence_company
+            ON company_identity_evidence(company_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_company_identity_evidence_review
+            ON company_identity_evidence(link_state, review_required, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS company_link_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            observed_name TEXT NOT NULL DEFAULT '',
+            normalized_name TEXT NOT NULL DEFAULT '',
+            candidate_company_id TEXT NOT NULL DEFAULT '',
+            target_id TEXT NOT NULL DEFAULT '',
+            source_observation_id TEXT NOT NULL DEFAULT '',
+            decision TEXT NOT NULL DEFAULT 'needs_review',
+            confidence REAL NOT NULL DEFAULT 0,
+            review_required INTEGER NOT NULL DEFAULT 1,
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            reason TEXT NOT NULL DEFAULT '',
+            reviewer_id TEXT NOT NULL DEFAULT '',
+            reviewed_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_link_candidates_review
+            ON company_link_candidates(decision, review_required, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS canonical_company_url_occurrences (
+            occurrence_id TEXT PRIMARY KEY,
+            company_id TEXT NOT NULL DEFAULT '',
+            url_type TEXT NOT NULL,
+            url TEXT NOT NULL DEFAULT '',
+            canonical_url TEXT NOT NULL DEFAULT '',
+            url_lifecycle TEXT NOT NULL DEFAULT 'discovered',
+            source TEXT NOT NULL DEFAULT '',
+            source_observation_id TEXT NOT NULL DEFAULT '',
+            target_id TEXT NOT NULL DEFAULT '',
+            import_id TEXT NOT NULL DEFAULT '',
+            checked_in_path TEXT NOT NULL DEFAULT '',
+            persisted_company_url_id TEXT NOT NULL DEFAULT '',
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            validation_reason TEXT NOT NULL DEFAULT '',
+            ignored_reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_url_occurrences_lookup
+            ON canonical_company_url_occurrences(company_id, url_type, canonical_url, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_company_url_occurrences_lifecycle
+            ON canonical_company_url_occurrences(url_lifecycle, created_at DESC);
+
+        CREATE TRIGGER IF NOT EXISTS trg_company_identity_evidence_immutable_update
+        BEFORE UPDATE ON company_identity_evidence
+        BEGIN
+            SELECT RAISE(ABORT, 'company_identity_evidence is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_company_identity_evidence_immutable_delete
+        BEFORE DELETE ON company_identity_evidence
+        BEGIN
+            SELECT RAISE(ABORT, 'company_identity_evidence is append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_company_url_occurrences_immutable_update
+        BEFORE UPDATE ON canonical_company_url_occurrences
+        BEGIN
+            SELECT RAISE(ABORT, 'canonical_company_url_occurrences are append-only');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_company_url_occurrences_immutable_delete
+        BEFORE DELETE ON canonical_company_url_occurrences
+        BEGIN
+            SELECT RAISE(ABORT, 'canonical_company_url_occurrences are append-only');
+        END;
+        """
+    )
+    now = utc_now_iso()
+    for row in connection.execute("SELECT company_id FROM canonical_companies").fetchall():
+        company_id = str(row["company_id"] or "")
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO company_identity_keys (
+                identity_key, company_id, identity_type, source, evidence_json, created_at, updated_at
+            ) VALUES (?, ?, 'legacy_company_id', 'migration', '{}', ?, ?)
+            """,
+            (f"legacy-company:{company_id}", company_id, now, now),
+        )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3121,5 +3342,11 @@ MIGRATIONS = (
         "053_acquisition_audit_permissions",
         "Create granular acquisition permissions and the unified immutable acquisition audit stream.",
         _apply_acquisition_audit_permissions_migration,
+    ),
+    Migration.from_callable(
+        "054_company_identity_reconciliation",
+        "Add explicit company entity kinds, profile status, URL lifecycle/type evidence, and read-only reconciliation state.",
+        _apply_company_identity_reconciliation_migration,
+        dependencies=(_table_columns, _ensure_table_column),
     ),
 )

@@ -9,6 +9,16 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from backend.domain.models import utc_now_iso, utc_plus_seconds
+from backend.domain.company_identity import (
+    canonical_entity_kind,
+    canonical_profile_status,
+    canonical_url_lifecycle,
+    canonical_url_type,
+    classify_company_link,
+    name_key,
+    structural_url,
+)
+from backend.application.company_reconciliation import build_url_reconciliation_report
 from backend.acquisition.network_policy import hostname_for_url
 from backend.acquisition.phase_g import (
     applicant_source_gate,
@@ -56,6 +66,15 @@ def _decode(value: str | bytes | None, default: Any) -> Any:
 
 def _dict_row(row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
+
+
+def _json_row(row, fields: Iterable[str]) -> dict[str, Any]:
+    item = _dict_row(row)
+    for field in fields:
+        key = str(field)
+        if key in item:
+            item[key[:-5] if key.endswith("_json") else key] = _decode(item.pop(key), {})
+    return item
 
 
 def _bool(value: Any) -> bool:
@@ -166,6 +185,21 @@ def _company_profile_payload(source: Mapping[str, Any] | None, *, provenance_url
     }
 
 
+def _profile_status_from_payload(profile: Mapping[str, Any] | None) -> str:
+    fields = profile.get("fields") if isinstance(profile, Mapping) else {}
+    if not isinstance(fields, Mapping) or not fields:
+        return "absent"
+    states = {str(value.get("state") or "unknown") for value in fields.values() if isinstance(value, Mapping)}
+    if "conflicted" in states:
+        return "conflicted"
+    known = sum(
+        1
+        for value in fields.values()
+        if isinstance(value, Mapping) and str(value.get("state") or "") == "known" and value.get("value") not in (None, "", [])
+    )
+    if known == 0:
+        return "absent"
+    return "present" if known == len(_COMPANY_PROFILE_FIELDS) else "incomplete"
 class SqliteAcquisitionStore(_SqliteStore):
     """Durable repository for system-owned acquisition work and public catalog state."""
 
@@ -949,7 +983,15 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
             target_payload = {**target_for_gate, "target_id": target_id}
             company_name = canonical_employer_name(target_payload) or source_employer_name(str(target["display_name"] or "")) or target_id
-            entity_kind = "employer"
+            target_kind = str(target.get("target_kind") or "").strip().casefold()
+            configured_entity_kind = str(config.get("entity_kind") or "").strip()
+            if not configured_entity_kind:
+                configured_entity_kind = "fixture" if target_kind == "fixture" else "employer"
+            entity_kind = canonical_entity_kind(
+                configured_entity_kind,
+                target_kind=target_kind,
+                quarantined=target.get("quarantined") and target_kind != "fixture",
+            )
             company_id = self._ensure_company(
                 connection,
                 company_name,
@@ -957,6 +999,13 @@ class SqliteAcquisitionStore(_SqliteStore):
                 now,
                 provenance_url=str(target.get("provenance_url") or ""),
                 aliases=(str(target["display_name"] or ""), str(target["source_token"] or "")),
+                identity_key=f"target:{target_id}",
+                identity_type="acquisition_target",
+                identity_evidence={
+                    "target_id": target_id,
+                    "target_kind": str(target.get("target_kind") or ""),
+                    "canonical_target_url": str(target.get("canonical_target_url") or ""),
+                },
             )
             company_source: Mapping[str, Any] = {}
             configured_profile = config.get("company_profile") or config.get("company")
@@ -974,6 +1023,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 company_source,
                 now=now,
                 provenance_url=str(target.get("provenance_url") or ""),
+                persist_configured_urls=bool(configured_profile),
             )
             quality_events: list[dict[str, Any]] = []
             for raw_job in job_rows:
@@ -3775,21 +3825,53 @@ class SqliteAcquisitionStore(_SqliteStore):
             supersedes_decision_id=str(prior["decision_id"]),
         )
 
-    def list_admin_companies(self, *, limit: int = 100, search: str = "") -> list[dict[str, Any]]:
+    def list_admin_companies(
+        self,
+        *,
+        limit: int = 100,
+        search: str = "",
+        entity_kind: str = "",
+        profile_status: str = "",
+        url_type: str = "",
+        url_lifecycle: str = "",
+    ) -> list[dict[str, Any]]:
         normalized = " ".join(str(search or "").casefold().split())
-        predicate = "WHERE LOWER(c.canonical_name || ' ' || COALESCE(c.provenance_url, '')) LIKE ?" if normalized else ""
-        params: tuple[Any, ...] = (f"%{normalized}%",) if normalized else ()
+        conditions: list[str] = []
+        params_list: list[Any] = []
+        if normalized:
+            conditions.append("LOWER(c.canonical_name || ' ' || COALESCE(c.provenance_url, '')) LIKE ?")
+            params_list.append(f"%{normalized}%")
+        if entity_kind:
+            conditions.append("c.entity_kind=?")
+            params_list.append(canonical_entity_kind(entity_kind))
+        if profile_status:
+            conditions.append("COALESCE(p.profile_status, 'absent')=?")
+            params_list.append(canonical_profile_status(profile_status))
+        if url_type:
+            conditions.append(
+                "(EXISTS (SELECT 1 FROM canonical_company_urls u WHERE u.company_id=c.company_id AND u.url_type=?) "
+                "OR EXISTS (SELECT 1 FROM canonical_company_url_occurrences o WHERE o.company_id=c.company_id AND o.url_type=?))"
+            )
+            params_list.extend((canonical_url_type(url_type), canonical_url_type(url_type)))
+        if url_lifecycle:
+            lifecycle = canonical_url_lifecycle(url_lifecycle)
+            conditions.append(
+                "(EXISTS (SELECT 1 FROM canonical_company_urls u WHERE u.company_id=c.company_id AND u.url_lifecycle=?) "
+                "OR EXISTS (SELECT 1 FROM canonical_company_url_occurrences o WHERE o.company_id=c.company_id AND o.url_lifecycle=?))"
+            )
+            params_list.extend((lifecycle, lifecycle))
+        predicate = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT c.*, p.profile_json, p.logo_source_url, p.logo_verified_at,
+                SELECT c.*, p.profile_json, p.profile_status, p.logo_source_url, p.logo_verified_at,
                        (SELECT COUNT(*) FROM canonical_jobs j WHERE j.company_id=c.company_id) AS job_count
                 FROM canonical_companies c
                 LEFT JOIN canonical_company_profiles p ON p.company_id=c.company_id
                 {predicate}
                 ORDER BY c.canonical_name LIMIT ?
                 """,
-                (*params, max(1, min(500, int(limit)))),
+                (*params_list, max(1, min(500, int(limit)))),
             ).fetchall()
             company_ids = [str(row["company_id"]) for row in rows]
             urls = []
@@ -3806,6 +3888,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         for row in rows:
             item = _dict_row(row)
             item["profile"] = _decode(item.pop("profile_json", "{}"), {})
+            item["profile_status"] = canonical_profile_status(item.get("profile_status"))
             item["urls"] = urls_by_company.get(str(item["company_id"]), [])
             result.append(item)
         return result
@@ -3817,7 +3900,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT c.*, p.profile_json, p.logo_source_url, p.logo_verified_at,
+                SELECT c.*, p.profile_json, p.profile_status, p.logo_source_url, p.logo_verified_at,
                        (SELECT COUNT(*) FROM canonical_jobs j WHERE j.company_id=c.company_id) AS job_count
                 FROM canonical_companies c
                 LEFT JOIN canonical_company_profiles p ON p.company_id=c.company_id
@@ -3831,13 +3914,29 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "SELECT * FROM canonical_company_urls WHERE company_id=? ORDER BY url_type, selected_primary DESC, updated_at DESC",
                 (company_id,),
             ).fetchall()
+            occurrences = connection.execute(
+                "SELECT * FROM canonical_company_url_occurrences WHERE company_id=? ORDER BY created_at DESC, occurrence_id DESC",
+                (company_id,),
+            ).fetchall()
+            identity_evidence = connection.execute(
+                "SELECT * FROM company_identity_evidence WHERE company_id=? ORDER BY created_at DESC, evidence_id DESC",
+                (company_id,),
+            ).fetchall()
+            link_candidates = connection.execute(
+                "SELECT * FROM company_link_candidates WHERE candidate_company_id=? ORDER BY created_at DESC, candidate_id DESC",
+                (company_id,),
+            ).fetchall()
             logos = connection.execute(
                 "SELECT * FROM company_logo_enrichments WHERE company_id=? ORDER BY updated_at DESC",
                 (company_id,),
             ).fetchall()
         result = _dict_row(row)
         result["profile"] = _decode(result.pop("profile_json", "{}"), {})
+        result["profile_status"] = canonical_profile_status(result.get("profile_status"))
         result["urls"] = [_dict_row(item) for item in urls]
+        result["url_occurrences"] = [_json_row(item, ("evidence_json",)) for item in occurrences]
+        result["identity_evidence"] = [_json_row(item, ("evidence_json",)) for item in identity_evidence]
+        result["link_candidates"] = [_json_row(item, ("evidence_json",)) for item in link_candidates]
         result["logo_enrichments"] = []
         for item in logos:
             value = _dict_row(item)
@@ -3845,6 +3944,157 @@ class SqliteAcquisitionStore(_SqliteStore):
             value["provenance"] = _decode(value.pop("provenance_json", "{}"), {})
             result["logo_enrichments"].append(value)
         return result
+
+    def list_admin_company_urls(
+        self,
+        company_id: str,
+        *,
+        url_type: str = "",
+        url_lifecycle: str = "",
+        include_occurrences: bool = True,
+        limit: int = 500,
+    ) -> dict[str, Any] | None:
+        company_id = str(company_id or "").strip()
+        if not company_id:
+            return None
+        conditions = ["company_id=?"]
+        params: list[Any] = [company_id]
+        if url_type:
+            conditions.append("url_type=?")
+            params.append(canonical_url_type(url_type))
+        if url_lifecycle:
+            conditions.append("url_lifecycle=?")
+            params.append(canonical_url_lifecycle(url_lifecycle))
+        with self._connect() as connection:
+            company = connection.execute(
+                "SELECT company_id, canonical_name, entity_kind FROM canonical_companies WHERE company_id=?",
+                (company_id,),
+            ).fetchone()
+            if company is None:
+                return None
+            urls = connection.execute(
+                f"SELECT * FROM canonical_company_urls WHERE {' AND '.join(conditions)} ORDER BY url_type, selected_primary DESC, updated_at DESC LIMIT ?",
+                (*params, max(1, min(1000, int(limit)))),
+            ).fetchall()
+            occurrences = []
+            if include_occurrences:
+                occurrence_conditions = ["company_id=?"]
+                occurrence_params: list[Any] = [company_id]
+                if url_type:
+                    occurrence_conditions.append("url_type=?")
+                    occurrence_params.append(canonical_url_type(url_type))
+                if url_lifecycle:
+                    occurrence_conditions.append("url_lifecycle=?")
+                    occurrence_params.append(canonical_url_lifecycle(url_lifecycle))
+                occurrences = connection.execute(
+                    f"SELECT * FROM canonical_company_url_occurrences WHERE {' AND '.join(occurrence_conditions)} ORDER BY created_at DESC, occurrence_id DESC LIMIT ?",
+                    (*occurrence_params, max(1, min(2000, int(limit)))),
+                ).fetchall()
+        return {
+            "company": _dict_row(company),
+            "urls": [_dict_row(row) for row in urls],
+            "occurrences": [_json_row(row, ("evidence_json",)) for row in occurrences],
+            "read_only": True,
+        }
+
+    def get_admin_company_url_reconciliation(
+        self,
+        *,
+        checked_in_urls: Iterable[Mapping[str, Any]] = (),
+        imported_urls: Iterable[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
+        with self._connect() as connection:
+            persisted_rows = connection.execute(
+                "SELECT company_id, url_type, url, canonical_url, url_lifecycle, validation_status, validation_reason, occurrence_count FROM canonical_company_urls ORDER BY company_id, url_type, canonical_url"
+            ).fetchall()
+            occurrence_rows = connection.execute(
+                "SELECT company_id, url_type, url, canonical_url, url_lifecycle, source, source_observation_id, import_id, checked_in_path, persisted_company_url_id, evidence_json, validation_reason, ignored_reason, created_at FROM canonical_company_url_occurrences ORDER BY created_at, occurrence_id"
+            ).fetchall()
+        imported = list(imported_urls) or [_json_row(row, ("evidence_json",)) for row in occurrence_rows]
+        report = build_url_reconciliation_report(
+            checked_in_urls=checked_in_urls,
+            imported_urls=imported,
+            persisted_urls=[_dict_row(row) for row in persisted_rows],
+        )
+        report["source"] = "canonical_company_url_occurrences"
+        report["occurrence_count"] = len(occurrence_rows)
+        return report
+
+    def record_admin_company_link_candidate(
+        self,
+        *,
+        observed_name: str,
+        candidate_company_ids: Iterable[str] = (),
+        target_id: str = "",
+        identity_key: str = "",
+        source_observation_id: str = "",
+        evidence: Iterable[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
+        observed_name = str(observed_name or "").strip()
+        candidate_ids = [str(value).strip() for value in candidate_company_ids if str(value).strip()]
+        evidence_rows = [dict(item) for item in evidence if isinstance(item, Mapping)]
+        with self._connect() as connection:
+            if candidate_ids:
+                placeholders = ",".join("?" for _ in candidate_ids)
+                rows = connection.execute(
+                    f"SELECT c.company_id, c.canonical_name, c.entity_kind, k.identity_key FROM canonical_companies c LEFT JOIN company_identity_keys k ON k.company_id=c.company_id WHERE c.company_id IN ({placeholders}) ORDER BY c.company_id",
+                    tuple(candidate_ids),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT c.company_id, c.canonical_name, c.entity_kind, k.identity_key FROM canonical_companies c LEFT JOIN company_identity_keys k ON k.company_id=c.company_id WHERE LOWER(c.canonical_name)=LOWER(?) ORDER BY c.company_id",
+                    (observed_name,),
+                ).fetchall()
+            candidate_rows = [_dict_row(row) for row in rows]
+            decision = classify_company_link(
+                observed_name,
+                candidate_rows,
+                identity_key=str(identity_key or ""),
+                target_id=str(target_id or ""),
+                evidence=evidence_rows,
+            )
+            now = utc_now_iso()
+            stored = []
+            for candidate in candidate_rows or [{"company_id": ""}]:
+                candidate_id = str(candidate.get("company_id") or "")
+                connection.execute(
+                    """
+                    INSERT INTO company_link_candidates (
+                        candidate_id, observed_name, normalized_name, candidate_company_id,
+                        target_id, source_observation_id, decision, confidence, review_required,
+                        evidence_json, reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"company_link_candidate_{uuid4().hex}", observed_name, name_key(observed_name), candidate_id,
+                        str(target_id or ""), str(source_observation_id or ""), decision.decision, decision.confidence,
+                        int(decision.review_required), _json({"evidence": evidence_rows, "candidate": candidate}),
+                        decision.reason, now,
+                    ),
+                )
+                if candidate_id:
+                    self._record_company_identity_evidence(
+                        connection,
+                        company_id=candidate_id,
+                        observed_name=observed_name,
+                        identity_key=identity_key,
+                        target_id=target_id,
+                        source_observation_id=source_observation_id,
+                        evidence_type="candidate_link",
+                        evidence=dict(candidate=candidate, evidence=evidence_rows),
+                        confidence=decision.confidence,
+                        link_state=decision.decision,
+                        review_required=decision.review_required,
+                        now=now,
+                    )
+                stored.append({"company_id": candidate_id, "decision": decision.as_dict()})
+        return {
+            "observed_name": observed_name,
+            "decision": decision.as_dict(),
+            "candidates": stored,
+            "evidence": evidence_rows,
+            "read_only": False,
+        }
 
     def record_connector_capability_snapshot(self, snapshot: Mapping[str, Any]) -> dict[str, Any]:
         snapshot_id = str(snapshot.get("snapshot_id") or f"capability_{uuid4().hex}")
@@ -4728,31 +4978,23 @@ class SqliteAcquisitionStore(_SqliteStore):
         *,
         provenance_url: str = "",
         aliases: Iterable[str] = (),
+        identity_key: str = "",
+        identity_type: str = "external",
+        identity_evidence: Mapping[str, Any] | None = None,
     ) -> str:
-        normalized_name = company_name_key(name)
-        row = connection.execute(
-            "SELECT company_id FROM canonical_companies WHERE canonical_name = ? AND entity_kind = ?",
-            (name, entity_kind),
-        ).fetchone()
-        if row is None and normalized_name:
-            candidates = connection.execute(
-                "SELECT company_id, canonical_name FROM canonical_companies WHERE entity_kind = ?",
-                (entity_kind,),
-            ).fetchall()
-            row = next(
-                (candidate for candidate in candidates if company_name_key(candidate["canonical_name"]) == normalized_name),
-                None,
-            )
-        if row is None and normalized_name:
-            alias_rows = connection.execute(
-                "SELECT company_id FROM canonical_company_aliases WHERE alias_key=?",
-                (normalized_name,),
-            ).fetchall()
-            if len(alias_rows) == 1:
-                row = connection.execute(
-                    "SELECT company_id FROM canonical_companies WHERE company_id=? AND entity_kind=?",
-                    (str(alias_rows[0]["company_id"]), entity_kind),
-                ).fetchone()
+        normalized_kind = canonical_entity_kind(entity_kind)
+        identity_key = str(identity_key or "").strip()
+        row = None
+        if identity_key:
+            row = connection.execute(
+                """
+                SELECT c.company_id
+                FROM company_identity_keys k
+                JOIN canonical_companies c ON c.company_id=k.company_id
+                WHERE k.identity_key=? AND c.entity_kind=?
+                """,
+                (identity_key, normalized_kind),
+            ).fetchone()
         if row is not None:
             if provenance_url:
                 connection.execute(
@@ -4763,6 +5005,18 @@ class SqliteAcquisitionStore(_SqliteStore):
             company_id = str(row["company_id"])
             for alias in aliases:
                 SqliteAcquisitionStore._ensure_company_alias(connection, company_id, alias, source="target", now=now)
+            SqliteAcquisitionStore._record_company_identity_evidence(
+                connection,
+                company_id=company_id,
+                observed_name=name,
+                identity_key=identity_key,
+                evidence_type=identity_type,
+                evidence=dict(identity_evidence or {}),
+                confidence=1.0,
+                link_state="linked",
+                review_required=False,
+                now=now,
+            )
             return company_id
         company_id = f"canonical_company_{uuid4().hex}"
         connection.execute(
@@ -4771,11 +5025,66 @@ class SqliteAcquisitionStore(_SqliteStore):
                 company_id, canonical_name, entity_kind, provenance_url, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (company_id, name, entity_kind, provenance_url, now, now),
+            (company_id, name, normalized_kind, provenance_url, now, now),
         )
+        if identity_key:
+            connection.execute(
+                """
+                INSERT INTO company_identity_keys (
+                    identity_key, company_id, identity_type, source, evidence_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (identity_key, company_id, str(identity_type or "external"), "acquisition", _json(dict(identity_evidence or {})), now, now),
+            )
         for alias in aliases:
             SqliteAcquisitionStore._ensure_company_alias(connection, company_id, alias, source="target", now=now)
+        SqliteAcquisitionStore._record_company_identity_evidence(
+            connection,
+            company_id=company_id,
+            observed_name=name,
+            identity_key=identity_key,
+            evidence_type=identity_type,
+            evidence=dict(identity_evidence or {}),
+            confidence=1.0,
+            link_state="linked",
+            review_required=False,
+            now=now,
+        )
         return company_id
+
+    @staticmethod
+    def _record_company_identity_evidence(
+        connection,
+        *,
+        company_id: str,
+        observed_name: str,
+        identity_key: str = "",
+        target_id: str = "",
+        source_observation_id: str = "",
+        evidence_type: str = "source_observation",
+        evidence_url: str = "",
+        evidence: Mapping[str, Any] | None = None,
+        confidence: float = 0.0,
+        link_state: str = "needs_review",
+        review_required: bool = True,
+        now: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO company_identity_evidence (
+                evidence_id, company_id, observed_name, normalized_name, identity_key,
+                target_id, source_observation_id, evidence_type, evidence_url,
+                evidence_json, confidence, link_state, review_required, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"company_identity_evidence_{uuid4().hex}", str(company_id or ""), str(observed_name or ""),
+                name_key(observed_name), str(identity_key or ""), str(target_id or ""),
+                str(source_observation_id or ""), str(evidence_type or "source_observation"),
+                str(evidence_url or ""), _json(dict(evidence or {})), float(confidence or 0),
+                str(link_state or "needs_review"), int(bool(review_required)), str(now or utc_now_iso()),
+            ),
+        )
 
     @staticmethod
     def _ensure_company_alias(connection, company_id: str, alias: str, *, source: str, now: str) -> None:
@@ -4928,35 +5237,37 @@ class SqliteAcquisitionStore(_SqliteStore):
         )
         company_urls = mapping.get("company_urls") if isinstance(mapping.get("company_urls"), list) else []
         for item in company_urls:
-            if not isinstance(item, Mapping) or not item.get("canonical_url"):
+            if not isinstance(item, Mapping):
                 continue
-            url_type = str(item.get("url_type") or "source")
-            selected_primary = int(bool(item.get("selected_primary")))
-            if selected_primary:
-                connection.execute(
-                    "UPDATE canonical_company_urls SET selected_primary=0, updated_at=? WHERE company_id=? AND url_type=?",
-                    (now, company_id, url_type),
-                )
-            connection.execute(
-                """
-                INSERT INTO canonical_company_urls (
-                    company_url_id, company_id, url_type, url, canonical_url, source,
-                    source_observation_id, first_seen_at, last_seen_at, validation_status,
-                    redirect_target, selected_primary, rule_version, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(company_id, url_type, canonical_url) DO UPDATE SET
-                    last_seen_at=excluded.last_seen_at, source_observation_id=excluded.source_observation_id,
-                    validation_status=excluded.validation_status,
-                    selected_primary=CASE WHEN excluded.selected_primary=1 THEN 1 ELSE canonical_company_urls.selected_primary END,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    f"company_url_{uuid4().hex}", company_id, url_type,
-                    str(item.get("url") or ""), str(item.get("canonical_url") or ""), str(item.get("source") or ""),
-                    source_observation_id, str(item.get("first_seen_at") or now), str(item.get("last_seen_at") or now),
-                    str(item.get("validation_status") or "not_validated"), str(item.get("redirect_target") or ""), selected_primary,
-                    rule_version, now, now,
-                ),
+            supplied_lifecycle = item.get("url_lifecycle") or item.get("lifecycle")
+            if not supplied_lifecycle:
+                supplied_lifecycle = "configured_official" if str(item.get("source") or "") == "configured_official" else "discovered"
+            validation_status = str(item.get("validation_status") or "").casefold()
+            if validation_status in {"invalid", "blocked"}:
+                supplied_lifecycle = "invalid"
+            _, canonical_url, structural_reason = structural_url(item.get("url") or item.get("canonical_url"))
+            lifecycle = canonical_url_lifecycle(supplied_lifecycle)
+            if not canonical_url:
+                lifecycle = "invalid"
+            SqliteAcquisitionStore._record_company_url_occurrence(
+                connection,
+                company_id=company_id,
+                url_type=canonical_url_type(item.get("url_type") or "other"),
+                url=item.get("url") or item.get("canonical_url") or "",
+                url_lifecycle=lifecycle,
+                source=str(item.get("source") or "source_observation"),
+                source_observation_id=source_observation_id,
+                evidence={
+                    "source_field": str(item.get("source_field") or ""),
+                    "rule_version": rule_version,
+                    "selected_primary": bool(item.get("selected_primary")),
+                    "raw_record": dict(item),
+                },
+                validation_reason=str(item.get("validation_reason") or structural_reason or ""),
+                ignored_reason=str(item.get("ignored_reason") or ""),
+                now=now,
+                selected_primary=bool(item.get("selected_primary")),
+                persist=lifecycle in {"configured_official", "validated"},
             )
         timestamps = mapping.get("timestamps") if isinstance(mapping.get("timestamps"), Mapping) else {}
         timestamp_values = {
@@ -5016,6 +5327,7 @@ class SqliteAcquisitionStore(_SqliteStore):
         *,
         now: str,
         provenance_url: str = "",
+        persist_configured_urls: bool = False,
     ) -> None:
         incoming = _company_profile_payload(source, provenance_url=provenance_url, verified_at=now)
         existing = connection.execute(
@@ -5034,28 +5346,30 @@ class SqliteAcquisitionStore(_SqliteStore):
             new_known = isinstance(new, Mapping) and str(new.get("state") or "") == "known" and new.get("value") not in (None, "", [])
             merged_fields[field] = dict(new if new_known or not old_known else old)
         profile = {"schema_version": "phase_f_v1", "fields": merged_fields}
+        profile_status = _profile_status_from_payload(profile)
         logo = merged_fields.get("logo") if isinstance(merged_fields.get("logo"), Mapping) else {}
         logo_source_url = str(logo.get("value") or "") if str(logo.get("state") or "") == "known" else ""
         if existing is None:
             connection.execute(
                 """
                 INSERT INTO canonical_company_profiles (
-                    company_id, profile_json, logo_source_url, logo_verified_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    company_id, profile_json, profile_status, logo_source_url, logo_verified_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (str(company_id), _json(profile), logo_source_url, str(logo.get("verified_at") or ""), now, now),
+                (str(company_id), _json(profile), profile_status, logo_source_url, str(logo.get("verified_at") or ""), now, now),
             )
         else:
             connection.execute(
                 """
                 UPDATE canonical_company_profiles
-                SET profile_json=?, logo_source_url=CASE WHEN ? != '' THEN ? ELSE logo_source_url END,
+                SET profile_json=?, profile_status=?, logo_source_url=CASE WHEN ? != '' THEN ? ELSE logo_source_url END,
                     logo_verified_at=CASE WHEN ? != '' THEN ? ELSE logo_verified_at END,
                     updated_at=?
                 WHERE company_id=?
                 """,
                 (
                     _json(profile),
+                    profile_status,
                     logo_source_url,
                     logo_source_url,
                     str(logo.get("verified_at") or ""),
@@ -5064,6 +5378,132 @@ class SqliteAcquisitionStore(_SqliteStore):
                     str(company_id),
                 ),
             )
+        if persist_configured_urls:
+            for field_name, url_type in (("website", "homepage"), ("careers_page", "careers")):
+                value = source.get(field_name) if isinstance(source, Mapping) else None
+                if value not in (None, "", []):
+                    SqliteAcquisitionStore._record_company_url_occurrence(
+                        connection,
+                        company_id=str(company_id),
+                        url_type=url_type,
+                        url=value,
+                        url_lifecycle="configured_official",
+                        source="official_employer_source",
+                        evidence={"field": field_name, "provenance_url": provenance_url},
+                        now=now,
+                        persist=True,
+                    )
+
+    @staticmethod
+    def _record_company_url_occurrence(
+        connection,
+        *,
+        company_id: str,
+        url_type: str,
+        url: Any,
+        url_lifecycle: str,
+        source: str = "",
+        source_observation_id: str = "",
+        target_id: str = "",
+        import_id: str = "",
+        checked_in_path: str = "",
+        evidence: Mapping[str, Any] | None = None,
+        validation_reason: str = "",
+        ignored_reason: str = "",
+        now: str,
+        selected_primary: bool = False,
+        persist: bool = False,
+    ) -> dict[str, Any]:
+        original, canonical_url, structural_reason = structural_url(url)
+        lifecycle = canonical_url_lifecycle(url_lifecycle)
+        reason = str(validation_reason or structural_reason or "")
+        if not canonical_url:
+            lifecycle = "invalid"
+        normalized_type = canonical_url_type(url_type)
+        persisted_company_url_id = ""
+        if persist and canonical_url and lifecycle in {"configured_official", "validated"}:
+            existing = connection.execute(
+                "SELECT * FROM canonical_company_urls WHERE company_id=? AND url_type=? AND canonical_url=?",
+                (str(company_id), normalized_type, canonical_url),
+            ).fetchone()
+            if selected_primary:
+                connection.execute(
+                    "UPDATE canonical_company_urls SET selected_primary=0, updated_at=? WHERE company_id=? AND url_type=?",
+                    (now, str(company_id), normalized_type),
+                )
+            if existing is None:
+                persisted_company_url_id = f"company_url_{uuid4().hex}"
+                connection.execute(
+                    """
+                    INSERT INTO canonical_company_urls (
+                        company_url_id, company_id, url_type, url, canonical_url, source,
+                        source_observation_id, first_seen_at, last_seen_at, validation_status,
+                        redirect_target, selected_primary, rule_version, created_at, updated_at,
+                        url_lifecycle, validation_reason, ignored_reason, occurrence_count, source_target_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        persisted_company_url_id, str(company_id), normalized_type, original, canonical_url,
+                        str(source or ""), str(source_observation_id or ""), now, now,
+                        "valid" if lifecycle == "validated" else "not_validated", "", int(bool(selected_primary)),
+                        "company_identity_v1", now, now, lifecycle, reason, str(ignored_reason or ""), 1, str(target_id or ""),
+                    ),
+                )
+            else:
+                persisted_company_url_id = str(existing["company_url_id"] or "")
+                existing_lifecycle = canonical_url_lifecycle(existing["url_lifecycle"] or "discovered")
+                lifecycle_rank = {"discovered": 1, "configured_official": 2, "validated": 3}
+                chosen_lifecycle = lifecycle if lifecycle_rank.get(lifecycle, 0) >= lifecycle_rank.get(existing_lifecycle, 0) else existing_lifecycle
+                connection.execute(
+                    """
+                    UPDATE canonical_company_urls
+                    SET last_seen_at=?, source=CASE WHEN ? != '' THEN ? ELSE source END,
+                        source_observation_id=CASE WHEN ? != '' THEN ? ELSE source_observation_id END,
+                        validation_status=CASE WHEN ?='validated' THEN 'valid' ELSE validation_status END,
+                        selected_primary=CASE WHEN ?=1 THEN 1 ELSE selected_primary END,
+                        url_lifecycle=?, validation_reason=CASE WHEN ? != '' THEN ? ELSE validation_reason END,
+                        occurrence_count=occurrence_count+1, updated_at=?
+                    WHERE company_url_id=?
+                    """,
+                    (
+                        now, str(source or ""), str(source or ""), str(source_observation_id or ""), str(source_observation_id or ""),
+                        lifecycle, int(bool(selected_primary)), chosen_lifecycle, reason, reason, now, persisted_company_url_id,
+                    ),
+                )
+            if existing is not None:
+                lifecycle = "duplicate"
+        else:
+            prior = connection.execute(
+                "SELECT 1 FROM canonical_company_url_occurrences WHERE company_id=? AND url_type=? AND canonical_url=? LIMIT 1",
+                (str(company_id), normalized_type, canonical_url),
+            ).fetchone() if canonical_url else None
+            if prior is not None and lifecycle == "discovered":
+                lifecycle = "duplicate"
+
+        connection.execute(
+            """
+            INSERT INTO canonical_company_url_occurrences (
+                occurrence_id, company_id, url_type, url, canonical_url, url_lifecycle,
+                source, source_observation_id, target_id, import_id, checked_in_path,
+                persisted_company_url_id, evidence_json, validation_reason, ignored_reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"company_url_occurrence_{uuid4().hex}", str(company_id or ""), normalized_type, original,
+                canonical_url, lifecycle, str(source or ""), str(source_observation_id or ""), str(target_id or ""),
+                str(import_id or ""), str(checked_in_path or ""), persisted_company_url_id, _json(dict(evidence or {})),
+                reason, str(ignored_reason or ""), str(now or utc_now_iso()),
+            ),
+        )
+        return {
+            "company_id": str(company_id or ""),
+            "url_type": normalized_type,
+            "url": original,
+            "canonical_url": canonical_url,
+            "url_lifecycle": lifecycle,
+            "persisted_company_url_id": persisted_company_url_id,
+            "validation_reason": reason,
+        }
 
     @staticmethod
     def _find_existing_canonical(
