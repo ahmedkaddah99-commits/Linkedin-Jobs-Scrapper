@@ -1102,13 +1102,52 @@ class BackendApplication:
         store = self.repositories.acquisition_store
         return store.list_admin_duplicate_clusters(limit=limit) if store is not None else []
 
-    def list_admin_companies(self, *, limit: int = 100, search: str = "") -> list[dict[str, Any]]:
+    def list_admin_companies(
+        self,
+        *,
+        limit: int = 100,
+        search: str = "",
+        entity_kind: str = "",
+        profile_status: str = "",
+        url_type: str = "",
+        url_lifecycle: str = "",
+    ) -> list[dict[str, Any]]:
         store = self.repositories.acquisition_store
-        return store.list_admin_companies(limit=limit, search=search) if store is not None else []
+        return (
+            store.list_admin_companies(
+                limit=limit,
+                search=search,
+                entity_kind=entity_kind,
+                profile_status=profile_status,
+                url_type=url_type,
+                url_lifecycle=url_lifecycle,
+            )
+            if store is not None
+            else []
+        )
 
     def get_admin_company_detail(self, company_id: str) -> dict[str, Any] | None:
         store = self.repositories.acquisition_store
         return store.get_admin_company_detail(company_id) if store is not None else None
+
+    def list_admin_company_urls(self, company_id: str, **kwargs: Any) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.list_admin_company_urls(company_id, **kwargs) if store is not None else None
+
+    def get_admin_company_url_reconciliation(self, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.get_admin_company_url_reconciliation(**kwargs) if store is not None else {
+            "schema_version": "company_url_reconciliation_v1",
+            "read_only": True,
+            "counts": {key: 0 for key in ("persisted", "deduplicated", "unlinked", "never_imported", "invalid", "intentionally_ignored")},
+            "persisted": [], "deduplicated": [], "unlinked": [], "never_imported": [], "invalid": [], "intentionally_ignored": [],
+        }
+
+    def record_admin_company_link_candidate(self, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Company linking requires sqlite/Turso acquisition storage.")
+        return store.record_admin_company_link_candidate(**kwargs)
 
     def run_admin_company_enrichment(
         self,

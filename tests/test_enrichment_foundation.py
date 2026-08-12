@@ -256,8 +256,12 @@ class EnrichmentCacheAndPersistenceTests(unittest.TestCase):
         ):
             with database_session(db_path) as connection:
                 connection.executescript(BASE_SCHEMA_SQL)
-                applied_before_foundation = run_migrations(connection, MIGRATIONS[:-1])
-                self.assertEqual(applied_before_foundation, [migration.migration_id for migration in MIGRATIONS[:-1]])
+                foundation_index = next(
+                    index for index, migration in enumerate(MIGRATIONS)
+                    if migration.migration_id == "049_enrichment_foundation"
+                )
+                applied_before_foundation = run_migrations(connection, MIGRATIONS[:foundation_index])
+                self.assertEqual(applied_before_foundation, [migration.migration_id for migration in MIGRATIONS[:foundation_index]])
                 self.assertIsNone(
                     connection.execute(
                         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='enrichment_evidence'"
@@ -266,7 +270,7 @@ class EnrichmentCacheAndPersistenceTests(unittest.TestCase):
                 applied_foundation = run_migrations(connection, MIGRATIONS)
                 rerun = run_migrations(connection, MIGRATIONS)
 
-                self.assertEqual(applied_foundation, ["049_enrichment_foundation"])
+                self.assertEqual(applied_foundation, ["049_enrichment_foundation", "054_company_identity_reconciliation"])
                 self.assertEqual(rerun, [])
                 self.assertIsNotNone(
                     connection.execute(
