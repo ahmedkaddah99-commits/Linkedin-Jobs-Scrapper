@@ -8,6 +8,15 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from backend.acquisition.manifest import load_phase_a_manifest
+from backend.acquisition.collection_controls import (
+    DEFAULT_MAX_CREDITS,
+    DEFAULT_MAX_PAGES,
+    DEFAULT_MAX_REQUESTS,
+    cap_accepted_jobs,
+    collection_metadata,
+    infer_stop_reason,
+    resolve_job_limits,
+)
 from backend.acquisition.network_policy import (
     AcquisitionNetworkPolicyError,
     hostname_for_url,
@@ -15,6 +24,7 @@ from backend.acquisition.network_policy import (
 )
 from backend.connectors.ats_router import fetch_ats_snapshot
 from backend.connectors.ats_expansions import EXPANSION_CONNECTORS
+from backend.connectors.capabilities import get_connector_capabilities
 from backend.connectors.bounded_probe import fetch_bounded_probe
 from backend.connectors.generic_jsonld import fetch_generic_snapshot
 from backend.acquisition.phase_b import PHASE_B_DEFAULT_CONFIG, normalize_phase_b_jobs
@@ -316,10 +326,22 @@ class PhaseAAcquisitionScheduler:
             target = store.get_target(target_id)
             if completed >= cycle_request_ceiling:
                 failures += 1
+                scope = _admin_scope_for_target(target)
+                collection = collection_metadata(
+                    scope=scope,
+                    capability=get_connector_capabilities(str(target.get("connector") or ""), target=target),
+                    fetched={"status": "blocked"},
+                    stop_reason="global_request_ceiling",
+                )
                 store.complete_task(
                     str(task["task_id"]),
                     status="budget_exhausted",
-                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    result={
+                        "complete_snapshot": False,
+                        "valid_snapshot": False,
+                        "credible_evidence": False,
+                        **collection,
+                    },
                     error_code="cycle_request_ceiling",
                     error_message="Global Phase A cycle request ceiling reached.",
                 )
@@ -516,13 +538,44 @@ class PhaseAAcquisitionScheduler:
         )
         store.ensure_cycle_tasks(cycle_id, targets)
         failures = 0
+        global_request_ceiling = max(1, _as_int(self._phase_a_config("global_request_ceiling"), 100))
+        requested_request_ceiling = max(1, _as_int(scope.get("max_requests"), 100))
+        request_ceiling = min(global_request_ceiling, requested_request_ceiling)
+        requests_used = 0
         for _ in targets:
             task = store.claim_next_task(cycle_id=cycle_id, lease_owner=worker_id, lease_seconds=max(self.lease_seconds, 1800))
             if task is None:
                 break
             target = store.get_target(str(task["target_id"]))
+            if requests_used >= request_ceiling:
+                ceiling_reason = (
+                    "global_request_ceiling"
+                    if global_request_ceiling <= requested_request_ceiling
+                    else "max_requests"
+                )
+                collection = collection_metadata(
+                    scope=scope,
+                    capability=get_connector_capabilities(str(target.get("connector") or ""), target=target),
+                    fetched={"status": "blocked"},
+                    stop_reason=ceiling_reason,
+                )
+                store.complete_task(
+                    str(task["task_id"]),
+                    status="budget_exhausted",
+                    result={
+                        "complete_snapshot": False,
+                        "valid_snapshot": False,
+                        "credible_evidence": False,
+                        **collection,
+                    },
+                    error_code=ceiling_reason,
+                    error_message="Admin collection request ceiling reached before dispatch.",
+                )
+                failures += 1
+                continue
             try:
                 result = self._execute_target(cycle_id=cycle_id, task=task, target=target)
+                requests_used += max(1, int(result.get("actual_requests") or 1))
                 if str(result.get("status") or "") in {"failed", "blocked", "budget_exhausted"}:
                     failures += 1
             except AcquisitionRecoveryRequiredError as exc:
@@ -664,6 +717,40 @@ class PhaseAAcquisitionScheduler:
         store = self.repositories.acquisition_store
         target_id = str(target["target_id"])
         task_id = str(task["task_id"])
+        scope = _admin_scope_for_target(target)
+        scope.setdefault("retrieval_mode", "bounded")
+        scope.setdefault("max_pages", DEFAULT_MAX_PAGES)
+        scope.setdefault("max_requests", DEFAULT_MAX_REQUESTS)
+        scope.setdefault("max_credits", DEFAULT_MAX_CREDITS)
+        configured_global_credit_ceiling = _as_int(self._phase_a_config("cycle_credit_ceiling"), 0)
+        target_credit_ceiling = _as_int(
+            dict(self._phase_i_config("target_credit_ceilings", {}) or {}).get(target_id),
+            0,
+        )
+        configured_credit_ceilings = [
+            value for value in (configured_global_credit_ceiling, target_credit_ceiling) if value > 0
+        ]
+        if configured_credit_ceilings:
+            requested_credit_limit = _as_int(scope.get("max_credits"), 0)
+            scope["max_credits"] = min(
+                [requested_credit_limit, *configured_credit_ceilings]
+                if requested_credit_limit > 0
+                else configured_credit_ceilings
+            )
+        connector = str(target.get("connector") or "").casefold()
+        capability = get_connector_capabilities(connector, target=dict(target))
+        job_limits = resolve_job_limits(scope, capability)
+        effective_job_limit = int(job_limits["effective_job_limit"])
+        connector_request_ceiling = max(1, _as_int(capability.get("max_requests"), DEFAULT_MAX_REQUESTS))
+        requested_request_limit = max(1, _as_int(scope.get("max_requests"), DEFAULT_MAX_REQUESTS))
+        target_request_ceiling = max(1, _as_int(target.get("max_direct_requests"), DEFAULT_MAX_REQUESTS))
+        if str(scope.get("retrieval_mode") or "bounded") == "bounded" and capability.get("access_method") == "direct":
+            requested_request_limit = min(requested_request_limit, 1)
+        effective_request_limit = min(
+            requested_request_limit,
+            connector_request_ceiling,
+            target_request_ceiling,
+        )
         portal_audit = portal_audit_gate(target)
         if portal_audit.get("required") and not portal_audit.get("approved"):
             raise AcquisitionDispatchBlockedError(
@@ -728,33 +815,37 @@ class PhaseAAcquisitionScheduler:
             self._failpoint("before_dispatch")
             dispatch_started = True
             started = time.perf_counter()
-            connector = str(target.get("connector") or "")
             usage_events: list[dict[str, Any]] = []
             if connector in {"greenhouse", "lever"}:
                 fetched = fetch_ats_snapshot(
                     str(target.get("canonical_target_url") or target["request_url"]),
                     connector,
                     requester=self.requester,
-                    max_pages=max(1, _as_int(_admin_scope_for_target(target).get("max_pages"), 1)),
+                    max_pages=min(
+                        max(1, _as_int(scope.get("max_pages"), DEFAULT_MAX_PAGES)),
+                        max(1, _as_int(capability.get("max_pages"), DEFAULT_MAX_PAGES)),
+                    ),
+                    max_requests=effective_request_limit,
                 )
             elif connector in EXPANSION_CONNECTORS:
-                scope = _admin_scope_for_target(target)
                 fetched = fetch_ats_snapshot(
                     str(target.get("canonical_target_url") or target["request_url"]),
                     connector,
                     requester=self.requester,
                     enabled=True,
-                    max_requests=max(1, _as_int(target.get("max_direct_requests"), 1)),
-                    max_pages=max(1, _as_int(scope.get("max_pages"), 1)),
+                    max_requests=effective_request_limit,
+                    max_pages=min(
+                        max(1, _as_int(scope.get("max_pages"), DEFAULT_MAX_PAGES)),
+                        max(1, _as_int(capability.get("max_pages"), DEFAULT_MAX_PAGES)),
+                    ),
                     max_retries=max(0, min(2, _as_int(target_config.get("max_retries"), 0))),
                     page_size=max(1, min(100, _as_int(target_config.get("page_size"), 100))),
                 )
             elif connector == "generic_jsonld":
-                scope = _admin_scope_for_target(target)
                 fetched = fetch_generic_snapshot(
                     str(target.get("request_url") or target.get("canonical_target_url") or ""),
                     requester=self.requester,
-                    max_job_links=max(1, min(25, _as_int(scope.get("max_pages"), 6))),
+                    max_job_links=max(1, min(25, _as_int(scope.get("max_pages"), DEFAULT_MAX_PAGES))),
                     allowed_hosts=allowed_hosts,
                 )
             elif connector == "company_career_sites":
@@ -774,6 +865,7 @@ class PhaseAAcquisitionScheduler:
                         target_cities=scope.get("cities") or [],
                         allow_foreign_entrypoints=bool(target_config.get("admin_import_id")),
                         max_sites_per_run=1,
+                        max_jobs_per_site=effective_job_limit,
                         max_job_links_per_site=max(1, _as_int(scope.get("max_pages"), 20) * 25),
                         run_credit_budget=max(0, _as_int(scope.get("max_credits"), 0)),
                         usage_callback=usage_events.append,
@@ -784,6 +876,7 @@ class PhaseAAcquisitionScheduler:
                         "status": "completed" if not failures else "degraded",
                         "status_code": 200 if not failures else 207,
                         "complete_snapshot": not failures,
+                        "pagination_complete": False,
                         "credible_evidence": bool(jobs) or not failures,
                         "request_url": str(target.get("request_url") or ""),
                         "resolved_url": str(target.get("canonical_target_url") or ""),
@@ -814,8 +907,11 @@ class PhaseAAcquisitionScheduler:
             # location or category is unknown.
             raw_jobs = list(fetched.get("jobs") or [])
             normalized = normalize_phase_b_jobs(raw_jobs, target)
-            jobs = list(normalized.get("accepted") or [])
-            rejections = list(normalized.get("rejected") or [])
+            jobs, cap_rejections, accepted_cap_hit = cap_accepted_jobs(
+                list(normalized.get("accepted") or []),
+                effective_job_limit=effective_job_limit,
+            )
+            rejections = list(normalized.get("rejected") or []) + cap_rejections
             quality_warnings = list(dict.fromkeys(
                 str(warning)
                 for job in jobs
@@ -847,16 +943,62 @@ class PhaseAAcquisitionScheduler:
                 "unexplained_count_difference": abs(source_reported_count - len(distinct_external_ids)) if source_reported_count is not None else None,
                 "source_reported_count_available": source_reported_count is not None,
             }
-            complete_snapshot = bool(fetched.get("complete_snapshot"))
+            actual_credits = sum(
+                int(item.get("runner_credits") or item.get("native_credits") or 0)
+                for item in usage_events
+            )
+            actual_requests = max(
+                int(fetched.get("requests_made") or 0),
+                len(usage_events),
+                int(fetched.get("pages_fetched") or 0),
+            )
+            pagination_complete = bool(
+                fetched.get("pagination_complete", fetched.get("complete_snapshot"))
+            )
+            global_request_ceiling = _as_int(self._phase_a_config("global_request_ceiling"), 0)
+            global_credit_ceiling = configured_global_credit_ceiling
+            fetched_with_pagination = {
+                **dict(fetched),
+                "pagination_complete": pagination_complete,
+                "global_request_ceiling_hit": bool(global_request_ceiling and actual_requests >= global_request_ceiling),
+                "global_credit_ceiling_hit": bool(global_credit_ceiling and actual_credits >= global_credit_ceiling),
+            }
+            stop_reason = infer_stop_reason(
+                scope=scope,
+                capability=capability,
+                fetched=fetched_with_pagination,
+                accepted_count=len(jobs),
+                accepted_cap_hit=accepted_cap_hit,
+                actual_credits=actual_credits,
+                actual_requests=actual_requests,
+            )
+            complete_snapshot = bool(
+                fetched.get("complete_snapshot")
+                and pagination_complete
+                and stop_reason == "pagination_complete"
+            )
             credible_evidence = bool(fetched.get("credible_evidence"))
-            valid_snapshot = complete_snapshot and credible_evidence
+            closure_safe = bool(complete_snapshot and stop_reason == "pagination_complete")
+            valid_snapshot = complete_snapshot and credible_evidence and closure_safe
+            collection = collection_metadata(
+                scope=scope,
+                capability=capability,
+                fetched=fetched_with_pagination,
+                observed_count=len(raw_jobs),
+                accepted_count=len(jobs),
+                rejected_count=len(rejections),
+                complete_snapshot=complete_snapshot,
+                closure_safe=closure_safe,
+                pagination_complete=pagination_complete,
+                stop_reason=stop_reason,
+            )
             status = str(fetched.get("status") or "completed")
             request_status = "completed" if status == "completed" else status
             store.complete_request(
                 request_id,
                 status=request_status,
                 provider_status=_as_int(fetched.get("status_code"), 0),
-                credits_actual=sum(int(item.get("runner_credits") or item.get("native_credits") or 0) for item in usage_events),
+                credits_actual=actual_credits,
                 jobs_returned=len(raw_jobs),
                 resolved_url=resolved_url,
                 latency_ms=latency_ms,
@@ -872,6 +1014,7 @@ class PhaseAAcquisitionScheduler:
                     "pages_fetched": int(fetched.get("pages_fetched") or 1),
                     "usage_events": usage_events,
                     "source_log": fetched.get("source_log") or {},
+                    "collection": collection,
                 },
                 error_code="" if status == "completed" else status,
                 error_message=str(fetched.get("error") or "")[:500],
@@ -892,6 +1035,7 @@ class PhaseAAcquisitionScheduler:
                 jobs=jobs,
                 complete_snapshot=complete_snapshot,
                 valid_snapshot=valid_snapshot,
+                closure_safe=closure_safe,
             )
             counts["rejected"] = int(counts.get("rejected") or 0) + len(rejections)
             reconciliation.update(
@@ -957,6 +1101,9 @@ class PhaseAAcquisitionScheduler:
                 "credits_avoided": 0,
                 "reconciliation": reconciliation,
                 "quality_warnings": quality_warnings,
+                "actual_requests": actual_requests,
+                "actual_credits": actual_credits,
+                **collection,
             }
             store.complete_task(
                 task_id,

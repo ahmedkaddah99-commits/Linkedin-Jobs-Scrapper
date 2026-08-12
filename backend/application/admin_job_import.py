@@ -7,13 +7,22 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from backend.acquisition.manifest import load_phase_a_manifest
+from backend.acquisition.collection_controls import (
+    DEFAULT_MAX_CREDITS,
+    DEFAULT_MAX_PAGES,
+    DEFAULT_MAX_REQUESTS,
+    MAX_JOB_LIMIT,
+    normalize_optional_limit,
+    normalize_retrieval_mode,
+    resolve_job_limits,
+)
 from backend.connectors.company_career_sites import estimate_company_site_runner_credit_range
-from backend.connectors.ats_expansions import EXPANSION_CONNECTORS
+from backend.connectors.capabilities import get_connector_capabilities
 
 
-_DEFAULT_MAX_REQUESTS = 100
-_DEFAULT_MAX_PAGES = 20
-_DEFAULT_MAX_CREDITS = 0
+_DEFAULT_MAX_REQUESTS = DEFAULT_MAX_REQUESTS
+_DEFAULT_MAX_PAGES = DEFAULT_MAX_PAGES
+_DEFAULT_MAX_CREDITS = DEFAULT_MAX_CREDITS
 _SUPPORTED_SCOPE_FIELDS = {
     "country",
     "city",
@@ -26,6 +35,8 @@ _SUPPORTED_SCOPE_FIELDS = {
     "max_pages",
     "max_requests",
     "max_credits",
+    "retrieval_mode",
+    "max_jobs",
 }
 
 
@@ -83,9 +94,10 @@ class AdminJobImportService:
         for target in load_phase_a_manifest():
             target_id = _text(target.get("target_id"))
             connector = _text(target.get("connector")).casefold()
-            official = connector in {"greenhouse", "lever", *EXPANSION_CONNECTORS, "generic_jsonld"}
+            capabilities = get_connector_capabilities(connector, target=target)
+            official = capabilities.get("access_method") == "direct"
             admin_import_enabled = official or _bool(target.get("admin_import_enabled"))
-            method = "direct" if official else "scrapeops"
+            method = str(capabilities.get("access_method") or "direct")
             source_type = "Official source" if official else "Web import"
             target_url = _text(target.get("request_url") or target.get("canonical_target_url"))
             source_status = "ready" if admin_import_enabled else "source_paused"
@@ -105,8 +117,18 @@ class AdminJobImportService:
                     "reason": reason,
                     "request_hosts": list(dict.fromkeys(filter(None, [_host(target_url), _host(target.get("canonical_target_url", ""))]))),
                     "target_url": target_url,
-                    "max_pages": 1 if official else _DEFAULT_MAX_PAGES,
+                    "max_pages": min(
+                        int(capabilities.get("max_pages") or _DEFAULT_MAX_PAGES),
+                        1 if official and not capabilities.get("supports_all_available") else _DEFAULT_MAX_PAGES,
+                    ),
                     "available": True,
+                    "retrieval_modes": list(capabilities.get("retrieval_modes") or ("bounded", "custom")),
+                    "all_available": {
+                        "available": bool(capabilities.get("supports_all_available")),
+                        "reliable_pagination": bool(capabilities.get("reliable_pagination")),
+                        "reason": "" if capabilities.get("supports_all_available") else "reliable_pagination_unavailable",
+                    },
+                    "capabilities": capabilities,
                     "advanced": {
                         "target_id": target_id,
                         "provider": _text(target.get("provider")),
@@ -129,6 +151,7 @@ class AdminJobImportService:
         cities = _list(incoming.get("cities") or incoming.get("city"))
         keywords = _list(incoming.get("keywords"))
         scope = {
+            "retrieval_mode": normalize_retrieval_mode(incoming.get("retrieval_mode")),
             "country": _text(incoming.get("country")),
             "cities": cities,
             "remote": _bool(incoming.get("remote")),
@@ -139,6 +162,11 @@ class AdminJobImportService:
             "max_pages": max(1, min(_DEFAULT_MAX_PAGES, _int(incoming.get("max_pages"), _DEFAULT_MAX_PAGES))),
             "max_requests": max(1, min(_DEFAULT_MAX_REQUESTS, _int(incoming.get("max_requests"), _DEFAULT_MAX_REQUESTS))),
             "max_credits": _int(incoming.get("max_credits"), _DEFAULT_MAX_CREDITS),
+            "max_jobs": normalize_optional_limit(
+                incoming.get("max_jobs"),
+                default=0,
+                maximum=MAX_JOB_LIMIT,
+            ),
         }
         if scope["full_source_import"]:
             scope["country"] = ""
@@ -165,14 +193,28 @@ class AdminJobImportService:
         likely_credits = 0
         max_credits = 0
         sources: list[dict[str, Any]] = []
+        limit_errors: list[str] = []
         paid_cost_data_missing = False
         for source_id in normalized_sources:
             target = manifest[source_id]
             connector = _text(target.get("connector")).casefold()
-            official = connector in {"greenhouse", "lever", *EXPANSION_CONNECTORS, "generic_jsonld"}
-            target_max_pages = 1 if official else scope["max_pages"]
+            capabilities = get_connector_capabilities(connector, target=target)
+            official = capabilities.get("access_method") == "direct"
+            connector_max_pages = max(1, _int(capabilities.get("max_pages"), scope["max_pages"]))
+            connector_max_requests = max(1, _int(capabilities.get("max_requests"), scope["max_requests"]))
+            requested_pages = scope["max_pages"]
+            if scope["retrieval_mode"] == "bounded":
+                requested_pages = min(requested_pages, 1 if official else requested_pages)
+            target_max_pages = min(requested_pages, connector_max_pages)
+            target_max_requests = min(scope["max_requests"], connector_max_requests)
+            if target.get("max_direct_requests"):
+                target_max_requests = min(target_max_requests, max(1, _int(target.get("max_direct_requests"), 1)))
+            if scope["retrieval_mode"] == "bounded":
+                target_max_requests = min(target_max_requests, target_max_pages)
+            if scope["retrieval_mode"] == "all_available" and not capabilities.get("supports_all_available"):
+                limit_errors.append(f"all_available_not_supported:{source_id}")
             if official:
-                requests += target_max_pages
+                requests += target_max_requests
             else:
                 estimate = estimate_company_site_runner_credit_range(
                     site_count=1,
@@ -183,23 +225,31 @@ class AdminJobImportService:
                 min_credits += int(estimate["min_runner_credits"])
                 likely_credits += int(estimate["likely_runner_credits"])
                 max_credits += int(estimate["max_runner_credits"])
-                requests += max(1, target_max_pages)
+                requests += max(1, target_max_requests)
                 if not scope["max_credits"] and not configured_max_credits:
                     paid_cost_data_missing = True
+            job_limits = resolve_job_limits(scope, capabilities)
             sources.append(
                 {
                     "id": source_id,
                     "name": _text(target.get("display_name") or source_id),
                     "company": _text(target.get("canonical_company_name") or target.get("display_name")),
-                    "method": "direct" if official else "scrapeops",
+                    "method": str(capabilities.get("access_method") or "direct"),
                     "source_type": "Official source" if official else "Web import",
                     "request_hosts": list(dict.fromkeys(filter(None, [_host(target.get("request_url", "")), _host(target.get("canonical_target_url", ""))]))),
                     "maximum_pages": target_max_pages,
+                    "maximum_requests": target_max_requests,
+                    "retrieval_modes": list(capabilities.get("retrieval_modes") or []),
+                    "capabilities": capabilities,
+                    "requested_job_limit": int(job_limits["requested_job_limit"]),
+                    "effective_job_limit": int(job_limits["effective_job_limit"]),
+                    "safety_ceiling": int(job_limits["safety_ceiling"]),
                 }
             )
         max_credits = max(max_credits, likely_credits, min_credits)
+        # Keep validation in one place after the per-source loop so every
+        # source is represented in the plan, including unsupported modes.
         requested_max_requests = scope["max_requests"]
-        limit_errors: list[str] = []
         if requests > min(configured_max_requests or _DEFAULT_MAX_REQUESTS, requested_max_requests):
             limit_errors.append("maximum_requests_exceeded")
         if max_credits and scope["max_credits"] and max_credits > scope["max_credits"]:
@@ -213,6 +263,7 @@ class AdminJobImportService:
             "scope": scope,
             "maximum_requests": requests,
             "maximum_pages": max(int(item["maximum_pages"]) for item in sources),
+            "maximum_source_requests": sum(int(item.get("maximum_requests") or 0) for item in sources),
             "minimum_credits": min_credits,
             "likely_credits": likely_credits,
             "maximum_credits": max_credits,
@@ -230,6 +281,10 @@ class AdminJobImportService:
             "can_start": not limit_errors,
             "review_first": True,
             "publishes_automatically": False,
+            "retrieval_mode": scope["retrieval_mode"],
+            "compatibility": {
+                "full_source_import": "Legacy scope reset only; it does not imply reliable pagination or all_available.",
+            },
         }
 
     def start_import(
@@ -242,6 +297,8 @@ class AdminJobImportService:
     ) -> dict[str, Any]:
         if self.imports_paused():
             raise PermissionError("Imports are paused. Enable the server-owned import switch before starting a real request.")
+        if not _text(requested_by):
+            raise PermissionError("An authenticated administrator is required to start an import.")
         plan = self.plan_import(source_ids=source_ids, scope_payload=scope_payload)
         if not plan["can_start"]:
             raise ValueError("Import plan is outside the server-enforced limits: " + ", ".join(plan["limit_errors"]))

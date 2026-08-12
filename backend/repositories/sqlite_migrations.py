@@ -2451,6 +2451,18 @@ def _apply_enrichment_foundation_migration(connection: DatabaseConnection) -> No
         """
     )
 
+
+def _apply_collection_controls_migration(connection: DatabaseConnection) -> None:
+    """Persist server-owned collection result metadata on acquisition tasks."""
+
+    _ensure_table_column(
+        connection,
+        "acquisition_tasks",
+        "collection_metadata_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -2720,5 +2732,11 @@ MIGRATIONS = (
         "049_enrichment_foundation",
         "Create inactive provider-neutral enrichment evidence, version, and cache state.",
         _apply_enrichment_foundation_migration,
+    ),
+    Migration.from_callable(
+        "050_collection_controls",
+        "Persist retrieval mode, collection limits, completeness, stop reason, and closure safety metadata.",
+        _apply_collection_controls_migration,
+        dependencies=(_table_columns, _ensure_table_column),
     ),
 )

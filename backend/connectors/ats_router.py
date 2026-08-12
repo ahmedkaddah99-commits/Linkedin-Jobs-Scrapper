@@ -190,8 +190,8 @@ def fetch_ats_snapshot(
     requester: Callable[..., Any] | None = None,
     timeout_seconds: int = ATS_REQUEST_TIMEOUT_SECONDS,
     max_pages: int = 1,
+    max_requests: int = 0,
     enabled: bool = False,
-    max_requests: int = 1,
     max_retries: int = 0,
     page_size: int = 100,
 ) -> dict[str, Any]:
@@ -215,9 +215,13 @@ def fetch_ats_snapshot(
         last_response = None
         total_expected = 0
         pages_fetched = 0
+        page_limit = max(1, min(20, int(max_pages)))
+        if int(max_requests or 0) > 0:
+            page_limit = min(page_limit, max(1, int(max_requests)))
+        pagination_complete = False
         try:
-            for page in range(max(1, min(20, int(max_pages))), 0, -1):
-                page_number = max(1, min(20, int(max_pages))) - page + 1
+            for page in range(page_limit, 0, -1):
+                page_number = page_limit - page + 1
                 page_url = request_url if page_number == 1 else f"{request_url}&page={page_number}"
                 response = request(page_url, timeout=timeout_seconds, allow_redirects=False)
                 response.raise_for_status()
@@ -230,6 +234,7 @@ def fetch_ats_snapshot(
                 meta = payload.get("meta") if isinstance(payload, dict) else {}
                 total_expected = int(meta.get("total") or 0) if isinstance(meta, dict) else 0
                 if not page_jobs or (total_expected and len(jobs) >= total_expected) or len(page_jobs) < 100:
+                    pagination_complete = True
                     break
         except (requests.RequestException, ValueError) as exc:
             LOGGER.warning("Greenhouse API request failed for %s; falling through to proxy: %s", url, exc)
@@ -241,17 +246,27 @@ def fetch_ats_snapshot(
                 "request_url": request_url,
                 "error": str(exc),
                 "pages_fetched": pages_fetched,
+                "requests_made": pages_fetched,
+                "pagination_complete": False,
             }
+        stop_reason = "pagination_complete" if pagination_complete else (
+            "max_requests"
+            if int(max_requests or 0) > 0 and int(max_requests) < int(max_pages)
+            else "max_pages"
+        )
         return {
             "jobs": [_normalize_greenhouse_job(job, board_token) for job in jobs or [] if isinstance(job, dict)],
             "status": "completed",
             "status_code": int(getattr(last_response, "status_code", 200) or 200),
-            "complete_snapshot": pages_fetched > 0,
+            "complete_snapshot": pages_fetched > 0 and pagination_complete,
+            "pagination_complete": pagination_complete,
+            "stop_reason": stop_reason,
             "credible_evidence": pages_fetched > 0,
             "request_url": request_url,
             "resolved_url": str(getattr(last_response, "url", "") or request_url),
             "redirected": str(getattr(last_response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
             "pages_fetched": pages_fetched,
+            "requests_made": pages_fetched,
             "source_reported_count": total_expected or len(jobs),
         }
 
@@ -270,8 +285,12 @@ def fetch_ats_snapshot(
         postings: list[dict[str, Any]] = []
         last_response = None
         pages_fetched = 0
+        page_limit = max(1, min(20, int(max_pages)))
+        if int(max_requests or 0) > 0:
+            page_limit = min(page_limit, max(1, int(max_requests)))
+        pagination_complete = False
         try:
-            for page_number in range(1, max(1, min(20, int(max_pages))) + 1):
+            for page_number in range(1, page_limit + 1):
                 page_url = request_url if page_number == 1 else f"{request_url}&skip={100 * (page_number - 1)}"
                 response = request(page_url, timeout=timeout_seconds, allow_redirects=False)
                 response.raise_for_status()
@@ -281,6 +300,7 @@ def fetch_ats_snapshot(
                 postings.extend(item for item in page_postings if isinstance(item, dict))
                 pages_fetched += 1
                 if len(page_postings) < 100:
+                    pagination_complete = True
                     break
         except (requests.RequestException, ValueError) as exc:
             LOGGER.warning("Lever API request failed for %s; falling through to proxy: %s", url, exc)
@@ -292,17 +312,27 @@ def fetch_ats_snapshot(
                 "request_url": request_url,
                 "error": str(exc),
                 "pages_fetched": pages_fetched,
+                "requests_made": pages_fetched,
+                "pagination_complete": False,
             }
+        stop_reason = "pagination_complete" if pagination_complete else (
+            "max_requests"
+            if int(max_requests or 0) > 0 and int(max_requests) < int(max_pages)
+            else "max_pages"
+        )
         return {
             "jobs": [_normalize_lever_job(job, company_slug) for job in postings if isinstance(job, dict)],
             "status": "completed",
             "status_code": int(getattr(last_response, "status_code", 200) or 200),
-            "complete_snapshot": pages_fetched > 0,
+            "complete_snapshot": pages_fetched > 0 and pagination_complete,
+            "pagination_complete": pagination_complete,
+            "stop_reason": stop_reason,
             "credible_evidence": pages_fetched > 0,
             "request_url": request_url,
             "resolved_url": str(getattr(last_response, "url", "") or request_url),
             "redirected": str(getattr(last_response, "url", "") or request_url).rstrip("/") != request_url.rstrip("/"),
             "pages_fetched": pages_fetched,
+            "requests_made": pages_fetched,
             "source_reported_count": len(postings),
         }
 
