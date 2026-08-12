@@ -24,6 +24,11 @@ were clean at inspection time.
 - Unit 01 focused and combined acquisition/migration tests: `32 passed`.
 - Unit 01 produced no conflict-resolution commit and remains provider-neutral;
   no publication activation was introduced.
+- Unit 03 integrated as `43f2152`.
+- Unit 03 plus foundation/collection/migration regression tests initially
+  exposed the stale `MIGRATIONS[:-1]` assumption; repaired in `f048225` to
+  locate `049_enrichment_foundation` by identifier.
+- After repair, the combined unit 01/03 suite is `43 passed`.
 
 ## Dependency order
 
