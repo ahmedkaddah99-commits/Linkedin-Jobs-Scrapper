@@ -78,3 +78,18 @@ were clean at inspection time.
   none of Wave 1 authorizes an automatic publication.
 - After each unit: focused tests, combined regression tests, migration registry
   uniqueness/order checks, then an integration commit when repairs are needed.
+
+## Production release baseline and recovery
+
+- Production backend/API and worker commit before Wave 1: `0068a5f740d379e896d8f6831c3fa5fc63d434b9`.
+- Production frontend commit before Wave 1: `95990b07b597723ceea826e9401d87b513158e9a`.
+- Migration `049_enrichment_foundation` was applied in production; the
+  production schema reported 49 applied migrations.
+- Publication head before Wave 1: `acq_publication_8378ea4c5aa04ddc9362e4400bb088df`,
+  updated/published `2026-08-12T00:10:53.292665+00:00`, with 163 published jobs.
+- Recoverable pre-migration backup: `logical-wave1-direct-396c45deb36d95e0`,
+  created `2026-08-12T18:36:46.135064+00:00` UTC, SHA-256
+  `396c45deb36d95e084a745a7a22b43bdb81ba35fc6ff0c8ef66df5877444dc`,
+  1,635,259 bytes, 1,490 rows across the directly modified tables. Restore
+  verification passed at
+  `C:\Users\ahmed\Projects_Local\runr-release-evidence\turso-prod-wave1-restore-verification.sqlite3`.
