@@ -1080,9 +1080,23 @@ class BackendApplication:
             },
         }
 
-    def get_admin_job_inspection(self, canonical_job_id: str) -> dict[str, Any] | None:
+    def get_admin_job_inspection(
+        self,
+        canonical_job_id: str,
+        *,
+        include_history: bool = False,
+        history_limit: int | None = None,
+    ) -> dict[str, Any] | None:
         store = self.repositories.acquisition_store
-        return store.get_admin_job_inspection(canonical_job_id) if store is not None else None
+        return (
+            store.get_admin_job_inspection(
+                canonical_job_id,
+                include_history=include_history,
+                history_limit=history_limit,
+            )
+            if store is not None
+            else None
+        )
 
     def list_admin_duplicate_clusters(self, *, limit: int = 100) -> list[dict[str, Any]]:
         store = self.repositories.acquisition_store

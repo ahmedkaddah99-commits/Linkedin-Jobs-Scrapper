@@ -291,6 +291,44 @@ class AdminJobImportDashboardTests(unittest.TestCase):
         self.assertEqual(handler.payload, (200, {"imports": {"status": "Paused"}}))
         application.get_admin_job_import_overview.assert_called_once_with()
 
+    def test_job_import_inspection_omits_history_by_default_and_bounds_explicit_history(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.get_admin_job_inspection.return_value = {"raw": {"field_provenance": {"included": False}}}
+
+        handler = _AdminHandler()
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="GET",
+            segments=("admin", "job-import", "jobs", "job-1", "inspection"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        application.get_admin_job_inspection.assert_called_once_with(
+            "job-1",
+            include_history=False,
+            history_limit=None,
+        )
+
+        application.reset_mock()
+        handler = _AdminHandler()
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="GET",
+            segments=("admin", "job-import", "jobs", "job-1", "inspection"),
+            query={"include_history": ["true"]},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        application.get_admin_job_inspection.assert_called_once_with(
+            "job-1",
+            include_history=True,
+            history_limit=500,
+        )
+
     def test_job_import_resume_switch_enables_imports(self):
         registry = build_route_registry()
         application = Mock()
@@ -409,6 +447,12 @@ class AdminJobImportDashboardTests(unittest.TestCase):
             self.assertTrue(inspection["raw"]["source_observations"])
             self.assertTrue(inspection["raw"]["posting_versions"])
             self.assertTrue(inspection["raw"]["acquisition_requests"])
+            self.assertFalse(inspection["raw"]["field_provenance"]["included"])
+            self.assertGreater(inspection["raw"]["field_provenance"]["rows"], 0)
+
+            full_inspection = app.get_admin_job_inspection(canonical_job_id, include_history=True)
+            self.assertIsInstance(full_inspection["raw"]["field_provenance"], list)
+            self.assertTrue(full_inspection["company"]["field_provenance"])
 
             resolved = app.resolve_admin_job_apply_url(canonical_job_id, actor_user_id="admin-fixture")
             self.assertEqual(resolved["apply_url"]["status"], "unresolved")

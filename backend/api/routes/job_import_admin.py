@@ -92,7 +92,12 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
         )
         return True
     if len(segments) == 5 and segments[2] == "jobs" and segments[4] == "inspection":
-        inspection = application.get_admin_job_inspection(segments[3])
+        include_history = _flag_query(query, "include_history")
+        inspection = application.get_admin_job_inspection(
+            segments[3],
+            include_history=include_history,
+            history_limit=500 if include_history else None,
+        )
         if inspection is None:
             return _error(context, 404, "canonical_job_not_found", "Canonical job not found.")
         context.send_json(inspection)
@@ -231,6 +236,10 @@ def _int_query(query: Mapping[str, list[str]], key: str, default: int, maximum: 
     except (TypeError, ValueError):
         value = default
     return max(0, min(maximum, value))
+
+
+def _flag_query(query: Mapping[str, list[str]], key: str) -> bool:
+    return _text(_query_value(query, key)).casefold() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _int_value(value: Any, default: int, maximum: int) -> int:

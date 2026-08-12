@@ -2795,12 +2795,19 @@ class SqliteAcquisitionStore(_SqliteStore):
             },
         }
 
-    def get_admin_job_inspection(self, canonical_job_id: str) -> dict[str, Any] | None:
+    def get_admin_job_inspection(
+        self,
+        canonical_job_id: str,
+        *,
+        include_history: bool = False,
+        history_limit: int | None = None,
+    ) -> dict[str, Any] | None:
         """Compose one admin-only inspection record from canonical and raw tables."""
 
         job_id = str(canonical_job_id or "").strip()
         if not job_id:
             return None
+        history_limit_value = None if history_limit is None else max(1, min(500, int(history_limit)))
         with self._connect() as connection:
             base_row = connection.execute(
                 """
@@ -2918,10 +2925,34 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "SELECT * FROM acquisition_version_quality WHERE canonical_job_id=? ORDER BY calculated_at DESC, version_id DESC",
                 (job_id,),
             ).fetchall()
-            field_provenance = connection.execute(
-                "SELECT * FROM acquisition_field_provenance WHERE (entity_kind='job' AND entity_id=?) OR (entity_kind='company' AND entity_id=?) ORDER BY entity_kind, field_name, observed_at DESC",
+            provenance_summary_rows = connection.execute(
+                """
+                SELECT entity_kind, field_name, COUNT(*) AS row_count,
+                       COUNT(DISTINCT source_observation_id) AS source_observation_count,
+                       MIN(observed_at) AS first_observed_at,
+                       MAX(observed_at) AS last_observed_at
+                FROM acquisition_field_provenance
+                WHERE (entity_kind='job' AND entity_id=?)
+                   OR (entity_kind='company' AND entity_id=?)
+                GROUP BY entity_kind, field_name
+                ORDER BY entity_kind, field_name
+                """,
                 (job_id, company_id),
             ).fetchall()
+            if include_history:
+                provenance_query = """
+                    SELECT * FROM acquisition_field_provenance
+                    WHERE (entity_kind='job' AND entity_id=?)
+                       OR (entity_kind='company' AND entity_id=?)
+                    ORDER BY observed_at DESC, entity_kind, field_name
+                """
+                provenance_params: tuple[Any, ...] = (job_id, company_id)
+                if history_limit_value is not None:
+                    provenance_query += " LIMIT ?"
+                    provenance_params += (history_limit_value,)
+                field_provenance = connection.execute(provenance_query, provenance_params).fetchall()
+            else:
+                field_provenance = []
             rule_outputs = connection.execute(
                 "SELECT * FROM acquisition_rule_outputs WHERE (entity_kind='job' AND entity_id=?) ORDER BY created_at DESC",
                 (job_id,),
@@ -3151,11 +3182,57 @@ class SqliteAcquisitionStore(_SqliteStore):
             for row in version_quality
         ]
         provenance_payloads = self._inspection_rows(field_provenance, ("raw_value_json", "normalized_value_json", "evidence_json"))
+        provenance_summary: dict[str, Any] = {
+            "included": bool(include_history),
+            "limited": bool(include_history and history_limit_value is not None),
+            "row_limit": history_limit_value,
+            "rows": 0,
+            "by_entity": {},
+        }
+        for row in provenance_summary_rows:
+            entity_kind = str(row["entity_kind"] or "unknown")
+            entity_summary = provenance_summary["by_entity"].setdefault(
+                entity_kind,
+                {
+                    "rows": 0,
+                    "source_observations": 0,
+                    "first_observed_at": row["first_observed_at"],
+                    "last_observed_at": row["last_observed_at"],
+                    "fields": {},
+                },
+            )
+            row_count = int(row["row_count"] or 0)
+            entity_summary["rows"] += row_count
+            entity_summary["source_observations"] = max(
+                entity_summary["source_observations"],
+                int(row["source_observation_count"] or 0),
+            )
+            entity_summary["first_observed_at"] = min(
+                value for value in (
+                    entity_summary["first_observed_at"],
+                    row["first_observed_at"],
+                ) if value
+            )
+            entity_summary["last_observed_at"] = max(
+                value for value in (
+                    entity_summary["last_observed_at"],
+                    row["last_observed_at"],
+                ) if value
+            )
+            entity_summary["fields"][str(row["field_name"] or "unknown")] = row_count
+            provenance_summary["rows"] += row_count
+        provenance_summary["omitted_from_default_response"] = not include_history
         rule_output_payloads = self._inspection_rows(rule_outputs, ("output_json",))
         company_url_payloads = self._inspection_rows(company_urls)
         company["urls"] = company_url_payloads
-        company["field_provenance"] = [item for item in provenance_payloads if item.get("entity_kind") == "company"]
-        job["field_provenance"] = [item for item in provenance_payloads if item.get("entity_kind") == "job"]
+        company_provenance = [item for item in provenance_payloads if item.get("entity_kind") == "company"]
+        job_provenance = [item for item in provenance_payloads if item.get("entity_kind") == "job"]
+        if include_history:
+            company["field_provenance"] = company_provenance
+            job["field_provenance"] = job_provenance
+        else:
+            company["field_provenance_summary"] = provenance_summary["by_entity"].get("company", {"rows": 0, "fields": {}})
+            job["field_provenance_summary"] = provenance_summary["by_entity"].get("job", {"rows": 0, "fields": {}})
         job["rule_outputs"] = rule_output_payloads
         completeness_payloads = [
             {**_dict_row(row), "report": _decode(row["report_json"], {})}
@@ -3225,7 +3302,8 @@ class SqliteAcquisitionStore(_SqliteStore):
             "observation_relationships": observation_relationship_payloads,
             "quality_events": quality_event_payloads,
             "version_quality": version_quality_payloads,
-            "field_provenance": provenance_payloads,
+            "field_provenance": provenance_payloads if include_history else provenance_summary,
+            "field_provenance_summary": provenance_summary,
             "rule_outputs": rule_output_payloads,
             "company_urls": company_url_payloads,
             "completeness_reports": completeness_payloads,
@@ -3671,7 +3749,7 @@ class SqliteAcquisitionStore(_SqliteStore):
     def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
         """Resolve only an employer/official-ATS candidate already in raw data."""
 
-        inspection = self.get_admin_job_inspection(canonical_job_id)
+        inspection = self.get_admin_job_inspection(canonical_job_id, include_history=True)
         if inspection is None:
             raise KeyError(f"Canonical job '{canonical_job_id}' not found.")
         candidates = inspection.get("apply_url", {}).get("candidate_urls") or []
@@ -3741,7 +3819,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 """,
                 (f"admin_audit_{uuid4().hex}", import_id, str(actor_user_id or ""), _json(result), now),
             )
-        return self.get_admin_job_inspection(str(canonical_job_id)) or inspection
+        return self.get_admin_job_inspection(str(canonical_job_id), include_history=True) or inspection
 
     def record_job_review_decision(
         self,
