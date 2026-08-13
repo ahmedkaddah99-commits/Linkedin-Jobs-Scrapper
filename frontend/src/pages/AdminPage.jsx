@@ -54,10 +54,11 @@ function toIsoDateTime(value) {
   return parsed.toISOString();
 }
 
-export default function AdminPage() {
+export default function AdminPage({ deferExternalLoad = false, includePromotions = true, initialTab = "users", pageTitle = "Access and permissions", showTabs = true }) {
   const { request } = useSession();
-  const [activeTab, setActiveTab] = useState("users");
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [showPromoForm, setShowPromoForm] = useState(false);
+  const [externalLoadRequested, setExternalLoadRequested] = useState(!deferExternalLoad);
   const [promoForm, setPromoForm] = useState(defaultPromoForm);
   const [promoState, setPromoState] = useState({
     deletingId: "",
@@ -65,12 +66,14 @@ export default function AdminPage() {
     submitting: false,
     success: "",
   });
-  const activeConfig = tabs.find((tab) => tab.key === activeTab) || tabs[0];
+  const availableTabs = includePromotions ? tabs : tabs.filter((tab) => tab.key !== "promoCodes");
+  const activeConfig = availableTabs.find((tab) => tab.key === activeTab) || availableTabs[0];
   const isPromoCodesTab = activeConfig.key === "promoCodes";
+  const externalLoadDeferred = isPromoCodesTab && deferExternalLoad && !externalLoadRequested;
 
   const { data, loading, error, refresh } = useApiResource(
-    () => request(activeConfig.path),
-    [request, activeConfig.key],
+    () => externalLoadDeferred ? Promise.resolve({ promo_codes: [] }) : request(activeConfig.path),
+    [request, activeConfig.key, externalLoadDeferred],
   );
 
   const rows = useMemo(() => data?.[activeConfig.responseKey] || [], [activeConfig.responseKey, data]);
@@ -88,6 +91,7 @@ export default function AdminPage() {
 
   async function handleCreatePromoCode(event) {
     event.preventDefault();
+    if (!window.confirm(`Create promo code ${promoForm.code.trim().toUpperCase() || "with the entered values"} in Creem? This is an external billing action limited to configured paid Runr plans.`)) return;
     setPromoState({
       deletingId: "",
       error: "",
@@ -166,33 +170,33 @@ export default function AdminPage() {
       <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="flex flex-col gap-2">
           <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
-            Admin
+            {pageTitle}
           </h1>
           <p className="text-sm text-on-surface-variant">
-            Internal control room for users, access, secrets, templates, workers, analytics, ScrapeOps operations, and billing promos.
+            Authenticated controls for users, access, secrets, templates, workers, and billing promotions. Backend authorization remains authoritative.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
           <Link
             className="inline-flex items-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-            to="/admin/acquisition"
+            to="/admin"
           >
             <span className="material-symbols-outlined text-[18px]">hub</span>
-            Acquisition admin
+            Operations overview
           </Link>
           <Link
             className="inline-flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
-            to="/admin/job-import"
+            to="/admin/acquisition/jobs"
           >
             <span className="material-symbols-outlined text-[18px]">work_history</span>
-            Job Import dashboard
+            Acquisition jobs
           </Link>
           <Link
             className="inline-flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
-            to="/admin/scrapeops"
+            to="/admin/provider-policy"
           >
             <span className="material-symbols-outlined text-[18px]">monitoring</span>
-            ScrapeOps Dashboard
+            Provider policy
           </Link>
           <Link
             className="inline-flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
@@ -204,8 +208,8 @@ export default function AdminPage() {
         </div>
       </header>
 
-      <section className="flex flex-wrap gap-2 rounded-xl bg-surface-container-low p-2">
-        {tabs.map((tab) => (
+      {showTabs ? <section className="flex flex-wrap gap-2 rounded-xl bg-surface-container-low p-2">
+        {availableTabs.map((tab) => (
           <button
             key={tab.key}
             className={[
@@ -220,7 +224,13 @@ export default function AdminPage() {
             {tab.label}
           </button>
         ))}
-      </section>
+      </section> : null}
+
+      {externalLoadDeferred ? (
+        <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900" role="status">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><p>Creem promotion data remains unloaded so opening this page does not contact an external billing service.</p><button className="rounded-xl border border-amber-300 bg-white px-4 py-2 font-semibold" onClick={() => setExternalLoadRequested(true)} type="button">Load Creem promotions</button></div>
+        </section>
+      ) : null}
 
       {isPromoCodesTab ? (
         <section className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">

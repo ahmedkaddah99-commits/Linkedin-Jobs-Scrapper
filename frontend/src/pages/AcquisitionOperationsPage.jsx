@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import AcquisitionShell from "../components/acquisition/AcquisitionShell";
+import { AdminSection } from "../components/admin/AdminPrimitives";
 import StatusBadge from "../components/StatusBadge";
 import { useApiResource } from "../hooks/useApiResource";
 import { useSession } from "../context/SessionContext";
@@ -101,7 +101,7 @@ function MetricCard({ label, value, detail, tone = "neutral" }) {
   );
 }
 
-function OverviewPage() {
+export function OverviewPage() {
   const { request } = useSession();
   const resource = useApiResource(
     () => request("/admin/acquisition/overview"),
@@ -119,9 +119,10 @@ function OverviewPage() {
   const imports = data.imports || {};
 
   return (
-    <AcquisitionShell
+    <AdminSection
+      eyebrow="Command center"
       description="A read-only view of collection health, review activity, and the current acquisition read model."
-      title="Overview"
+      title="Operations overview"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-on-surface-variant" role="status">
@@ -179,7 +180,7 @@ function OverviewPage() {
           </div>
         </>
       ) : null}
-    </AcquisitionShell>
+    </AdminSection>
   );
 }
 
@@ -190,7 +191,7 @@ function capabilityMap(rows = []) {
   }));
 }
 
-function SourcesPage() {
+export function SourcesPage() {
   const { request } = useSession();
   const location = useLocation();
   const navigate = useNavigate();
@@ -238,7 +239,8 @@ function SourcesPage() {
   });
 
   return (
-    <AcquisitionShell
+    <AdminSection
+      eyebrow="Acquisition"
       description="Inspect configured acquisition sources and the limits exposed by the current read models."
       title="Sources"
     >
@@ -305,7 +307,7 @@ function SourcesPage() {
           )}
         </>
       ) : null}
-    </AcquisitionShell>
+    </AdminSection>
   );
 }
 
@@ -329,7 +331,7 @@ function FilterSelect({ id, label, onChange, options, value }) {
   );
 }
 
-function JobsPage() {
+export function JobsPage() {
   const { request } = useSession();
   const location = useLocation();
   const navigate = useNavigate();
@@ -383,7 +385,8 @@ function JobsPage() {
   });
 
   return (
-    <AcquisitionShell
+    <AdminSection
+      eyebrow="Acquisition"
       description="Search canonical jobs and open a read-only inspection of source, quality, review, and publication evidence."
       title="Jobs"
     >
@@ -437,7 +440,7 @@ function JobsPage() {
       ) : null}
 
       <InspectionDrawer canonicalJobId={canonicalJobId} onClose={closeInspection} />
-    </AcquisitionShell>
+    </AdminSection>
   );
 }
 

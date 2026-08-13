@@ -145,14 +145,14 @@ export default function AdminEventsPage() {
         <div className="space-y-2">
           <Link className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primary-container" to="/admin">
             <span className="material-symbols-outlined text-[18px]">arrow_back</span>
-            Back to Admin
+            Operations overview
           </Link>
           <div>
             <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
-              Analytics Events
+              General events
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
-              Admin event log for product analytics. Results are ordered newest first and include the raw payload for each event.
+              General admin events — acquisition scope may be incomplete. Results are ordered newest first and include the raw payload for each event.
             </p>
           </div>
         </div>

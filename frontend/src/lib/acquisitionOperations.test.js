@@ -22,16 +22,18 @@ test("acquisition routes use the verified read-only endpoint set", () => {
   ]);
 });
 
-test("App keeps the new acquisition routes and legacy admin routes", () => {
+test("App delegates every admin URL to one operations router", () => {
   const appSource = readFileSync(new URL("../App.jsx", import.meta.url), "utf8");
+  const routerSource = readFileSync(new URL("../admin/AdminOperationsRouter.jsx", import.meta.url), "utf8");
 
-  assert.match(appSource, /path=\"\/admin\/acquisition\"/);
-  assert.match(appSource, /path=\"\/admin\/acquisition\/sources\"/);
-  assert.match(appSource, /path=\"\/admin\/acquisition\/jobs\"/);
-  assert.match(appSource, /path=\"\/admin\/acquisition\/jobs\/:canonicalJobId\"/);
-  assert.match(appSource, /path=\"\/admin\/job-import\"/);
-  assert.match(appSource, /path=\"\/admin\/scrapeops\"/);
-  assert.match(appSource, /path=\"\/admin\/events\"/);
+  assert.match(appSource, /location\.pathname\.startsWith\(\"\/admin\/\"\)/);
+  assert.match(appSource, /<AdminOperationsRouter/);
+  assert.doesNotMatch(appSource, /path=\"\/admin\/acquisition/);
+  assert.match(routerSource, /path=\"\/admin\/acquisition\/sources\"/);
+  assert.match(routerSource, /path=\"\/admin\/acquisition\/jobs\/:canonicalJobId\"/);
+  assert.match(routerSource, /path=\"\/admin\/job-import\"/);
+  assert.match(routerSource, /path=\"\/admin\/scrapeops\"/);
+  assert.match(routerSource, /path=\"\/admin\/events\"/);
 });
 
 test("job filters are parsed and rebuilt as URL-backed pagination", () => {

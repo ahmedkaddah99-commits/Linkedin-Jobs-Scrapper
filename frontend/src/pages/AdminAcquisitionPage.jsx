@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { getApiErrorMessage } from "../lib/api";
 import { formatDateTime, labelize } from "../lib/formatters";
-import AcquisitionShell from "../components/acquisition/AcquisitionShell";
+import { AdminSection } from "../components/admin/AdminPrimitives";
 
 const SECTIONS = [
   ["overview", "Overview", "dashboard"],
@@ -194,6 +194,9 @@ function Companies({ data, request, onMessage }) {
 }
 
 function InteractiveCompanies({ data, request, onMessage }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { canonicalCompanyId } = useParams();
   const [search, setSearch] = useState("");
   const [applied, setApplied] = useState("");
   const [companyData, setCompanyData] = useState(data || {});
@@ -201,7 +204,16 @@ function InteractiveCompanies({ data, request, onMessage }) {
   const companies = companyData?.companies || [];
   useEffect(() => { setCompanyData(data || {}); }, [data]);
   useEffect(() => { const params = new URLSearchParams({ limit: "100" }); if (applied) params.set("search", applied); request(`/admin/acquisition/companies?${params}`).then((value) => setCompanyData(value || {})).catch((error) => onMessage(getApiErrorMessage(error, "Companies could not be loaded."))); }, [applied, request, onMessage]);
-  async function open(company) { try { const value = await request(`/admin/acquisition/companies/${encodeURIComponent(company.company_id)}`); setSelected(value.company || value); } catch (error) { onMessage(getApiErrorMessage(error, "Company detail could not be loaded.")); } }
+  useEffect(() => {
+    let cancelled = false;
+    if (!canonicalCompanyId) { setSelected(null); return undefined; }
+    request(`/admin/acquisition/companies/${encodeURIComponent(canonicalCompanyId)}`)
+      .then((value) => { if (!cancelled) setSelected(value.company || value); })
+      .catch((error) => { if (!cancelled) onMessage(getApiErrorMessage(error, "Company detail could not be loaded.")); });
+    return () => { cancelled = true; };
+  }, [canonicalCompanyId, onMessage, request]);
+  function open(company) { navigate(`/admin/acquisition/companies/${encodeURIComponent(company.company_id)}${location.search}`); }
+  function close() { navigate(`/admin/acquisition/companies${location.search}`); }
   return <>
     <Panel title="Canonical companies" description="Inspect identity, official/homepage/careers/ATS URLs, validation, provenance, logo state, and job counts.">
       <form className="flex flex-col gap-3 border-b border-outline-variant/10 p-5 sm:flex-row" onSubmit={(event) => { event.preventDefault(); setApplied(search.trim()); }}>
@@ -213,7 +225,7 @@ function InteractiveCompanies({ data, request, onMessage }) {
     {selected ? <section aria-label="Company detail" className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><p className="font-mono text-xs text-primary">{selected.company_id}</p><h3 className="mt-1 font-headline text-lg font-bold text-on-surface">{text(selected.canonical_name)}</h3><p className="mt-1 text-sm text-on-surface-variant">{number(selected.job_count)} jobs · identity and enrichment are separate projections</p></div>
-        <button className="rounded-xl border border-outline-variant/20 px-3 py-2 text-xs font-semibold text-on-surface" onClick={() => setSelected(null)} type="button">Close</button>
+        <button className="rounded-xl border border-outline-variant/20 px-3 py-2 text-xs font-semibold text-on-surface" onClick={close} type="button">Close</button>
       </div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {(selected.urls || []).map((url) => <div className="rounded-xl bg-surface-container-low p-3" key={url.company_url_id || url.canonical_url}><p className="text-xs font-semibold uppercase text-on-surface-variant">{text(url.url_type)}</p><a className="mt-1 block break-all text-xs text-primary" href={url.canonical_url || url.url} rel="noreferrer" target="_blank">{text(url.canonical_url || url.url)}</a><p className="mt-1 text-xs text-on-surface-variant">{text(url.validation_status)} · {text(url.source, "unknown source")}</p></div>)}
@@ -265,6 +277,9 @@ function JsonDetails({ label = "Structured payload", value }) {
 }
 
 function Imports({ data, request, onMessage }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { importId: routeImportId } = useParams();
   const [sources, setSources] = useState([]);
   const [selectedSources, setSelectedSources] = useState([]);
   const [scope, setScope] = useState({ country: "Germany", max_pages: 1, max_requests: 20, max_credits: 20 });
@@ -308,9 +323,18 @@ function Imports({ data, request, onMessage }) {
     } catch (error) { onMessage(getApiErrorMessage(error, "Import could not be queued.")); } finally { setBusy(false); }
   }
 
-  async function inspectImport(importId) {
-    try { setDetail(await request(`/admin/acquisition/imports/${encodeURIComponent(importId)}`)); } catch (error) { onMessage(getApiErrorMessage(error, "Import detail could not be loaded.")); }
+  function inspectImport(importId) {
+    navigate(`/admin/acquisition/imports/${encodeURIComponent(importId)}${location.search}`);
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!routeImportId) { setDetail(null); return undefined; }
+    request(`/admin/acquisition/imports/${encodeURIComponent(routeImportId)}`)
+      .then((value) => { if (!cancelled) setDetail(value); })
+      .catch((error) => { if (!cancelled) onMessage(getApiErrorMessage(error, "Import detail could not be loaded.")); });
+    return () => { cancelled = true; };
+  }, [onMessage, request, routeImportId]);
 
   return <div className="space-y-5">
     <Panel title="Plan a bounded import" description="Planning shows scope, request ceilings, and warnings before anything is queued. A completed import is not an exhaustive collection and never publishes automatically.">
@@ -424,9 +448,10 @@ function Inspection({ value, onClose }) {
   return <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/30 p-0 sm:p-5" role="presentation"><button aria-label="Close inspection" className="absolute inset-0 cursor-default" onClick={onClose} type="button" /><aside className="relative max-h-[92vh] w-full overflow-y-auto rounded-t-[1.5rem] bg-surface-container-lowest p-5 shadow-2xl sm:max-w-2xl sm:rounded-[1.5rem]"><div className="flex items-start justify-between gap-4"><div><p className="font-mono text-xs text-primary">{text(value.job?.canonical_job_id)}</p><h2 className="mt-1 font-headline text-2xl font-extrabold text-on-surface">{text(value.job?.title)}</h2><p className="mt-1 text-sm text-on-surface-variant">{text(value.company?.name)} · {text(value.job?.location_raw)}</p></div><button aria-label="Close" className="rounded-xl border border-outline-variant/20 px-3 py-2 text-sm text-on-surface" onClick={onClose} type="button">Close</button></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-xl bg-surface-container-low p-3"><span className="text-xs text-on-surface-variant">Apply URL</span><strong className="mt-1 block text-sm text-on-surface">{text(value.apply_url?.status)}</strong><p className="mt-1 break-all text-xs text-on-surface-variant">{text(value.apply_url?.user_facing_url || value.apply_url?.resolved_url)}</p></div><div className="rounded-xl bg-surface-container-low p-3"><span className="text-xs text-on-surface-variant">Completeness</span><strong className="mt-1 block text-sm text-on-surface">{number(value.completeness?.overall_percent)}%</strong><p className="mt-1 text-xs text-on-surface-variant">Report-only quality result</p></div></div><h3 className="mt-5 font-headline text-base font-bold text-on-surface">Admin provenance</h3><dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">{[["Connector", value.admin?.connector], ["Source observations", value.admin?.source_observation_ids?.length], ["Posting version", value.admin?.posting_version], ["Review state", value.admin?.review_state], ["Publication", value.admin?.publication_status]].map(([key, item]) => <div className="rounded-xl border border-outline-variant/10 p-3" key={key}><dt className="text-xs text-on-surface-variant">{key}</dt><dd className="mt-1 font-medium text-on-surface">{text(item)}</dd></div>)}</dl><p className="mt-5 rounded-xl border border-primary/15 bg-primary/5 p-3 text-xs text-on-surface-variant">Raw source evidence is intentionally not rendered in this panel. It remains available only behind the admin inspection API; the quality result above is report-only.</p></aside></div>;
 }
 
-export default function AdminAcquisitionPage() {
+export default function AdminAcquisitionPage({ section: explicitSection = "" }) {
   const { section: routeSection } = useParams();
-  const section = VALID_SECTIONS.has(routeSection) ? routeSection : "overview";
+  const requestedSection = explicitSection || routeSection;
+  const section = VALID_SECTIONS.has(requestedSection) ? requestedSection : "overview";
   const { request } = useSession();
   const navigate = useNavigate();
   const [data, setData] = useState({});
@@ -466,5 +491,5 @@ export default function AdminAcquisitionPage() {
   useEffect(() => { load(); }, [load]);
   const inspectJob = useCallback(async (row) => { try { setInspection(await request(`/admin/acquisition/jobs/${encodeURIComponent(row.canonical_job_id)}`)); } catch (error) { setMessage(getApiErrorMessage(error, "Job inspection could not be loaded.")); } }, [request]);
   const content = section === "overview" ? <Overview data={data} navigate={navigate} /> : section === "sources" ? <Sources data={data} request={request} onMessage={setMessage} /> : section === "imports" ? <Imports data={data} request={request} onMessage={setMessage} /> : section === "jobs" ? <Jobs data={data} request={request} onMessage={setMessage} onInspect={inspectJob} /> : section === "companies" ? <InteractiveCompanies data={data} request={request} onMessage={setMessage} /> : section === "enrichment" ? <Enrichment data={data} request={request} onMessage={setMessage} /> : section === "data-quality" ? <DataQuality data={data} request={request} onMessage={setMessage} /> : section === "duplicates" ? <InteractiveDuplicates data={data} request={request} onMessage={setMessage} /> : section === "rules" ? <><Rules data={data} /><ConnectorCapabilities request={request} onMessage={setMessage} /></> : section === "reprocessing" ? <Reprocessing data={data} request={request} onMessage={setMessage} /> : section === "publication" ? <Publication data={data} request={request} onMessage={setMessage} /> : section === "live-catalog" ? <LiveCatalog data={data} request={request} onMessage={setMessage} /> : <Audit data={data} request={request} onMessage={setMessage} />;
-  return <AcquisitionShell><div className="space-y-6"><AdminHeader loading={loading} onRefresh={() => load().catch(() => undefined)} section={section} />{loading ? <div aria-label="Loading acquisition section" className="rounded-2xl bg-surface-container p-6 text-sm text-on-surface-variant" role="status">Loading acquisition data…</div> : null}{message ? <div aria-live="polite" className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert">{message}</div> : null}{content}<Inspection onClose={() => setInspection(null)} value={inspection} /></div></AcquisitionShell>;
+  return <AdminSection><div className="space-y-6"><AdminHeader loading={loading} onRefresh={() => load().catch(() => undefined)} section={section} />{loading ? <div aria-label="Loading acquisition section" className="rounded-2xl bg-surface-container p-6 text-sm text-on-surface-variant" role="status">Loading acquisition data…</div> : null}{message ? <div aria-live="polite" className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert">{message}</div> : null}{content}<Inspection onClose={() => setInspection(null)} value={inspection} /></div></AdminSection>;
 }
