@@ -99,6 +99,9 @@ test("desktop, tablet, and mobile console states are visible", async ({ page }, 
     await page.goto("/admin");
     await expect(page.getByRole("heading", { name: "Operations overview" })).toBeVisible();
     if (viewport.width <= 820) {
+      await expect(page.locator(".admin-workspace")).toHaveCSS("margin-left", "0px");
+      const contentBox = await page.locator(".admin-content").boundingBox();
+      expect(contentBox?.x ?? Infinity).toBeLessThan(2);
       await page.getByRole("button", { name: "Open navigation" }).click();
       await expect(page.locator(".admin-sidebar--mobile-open")).toBeVisible();
       await page.keyboard.press("Escape");
