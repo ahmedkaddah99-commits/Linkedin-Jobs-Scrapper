@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../../context/SessionContext";
 import { ADMIN_NAV_GROUPS, ADMIN_NAV_ITEMS, getAdminPageMeta } from "../../admin/adminRoutes";
-import { AdminBadge, AdminState, useDialogFocus } from "./AdminPrimitives";
+import { AdminState, useDialogFocus } from "./AdminPrimitives";
 import "../../admin/adminOperations.css";
 
 function navIsActive(pathname, item) {
@@ -88,20 +88,21 @@ export default function AdminOperationsShell({ children }) {
     <div className={`admin-operations ${collapsed ? "admin-operations--collapsed" : ""}`}>
       <a className="admin-skip-link" href="#admin-main">Skip to admin content</a>
       <aside className={`admin-sidebar ${mobileOpen ? "admin-sidebar--mobile-open" : ""}`} ref={mobileDialogRef}>
-        <div className="admin-sidebar__brand"><Link aria-label="Runr admin overview" to="/admin"><span className="admin-brand-mark">R</span><span className="admin-sidebar__brand-copy"><strong>Runr</strong><small>Operations console</small></span></Link><button aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} className="admin-icon-button admin-sidebar__collapse" onClick={() => setCollapsed((value) => !value)} type="button"><span className="material-symbols-outlined">{collapsed ? "right_panel_open" : "left_panel_close"}</span></button><button aria-label="Close navigation" className="admin-icon-button admin-sidebar__mobile-close" onClick={() => setMobileOpen(false)} type="button"><span className="material-symbols-outlined">close</span></button></div>
+        <div className="admin-sidebar__brand"><Link aria-label="Runr admin overview" to="/admin"><span aria-hidden="true" className="admin-brand-mark"><i /><i /><i /></span><span className="admin-sidebar__brand-copy"><strong>runr</strong><small>Admin operations</small></span></Link><button aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} className="admin-icon-button admin-sidebar__collapse" onClick={() => setCollapsed((value) => !value)} type="button"><span className="material-symbols-outlined">{collapsed ? "right_panel_open" : "left_panel_close"}</span></button><button aria-label="Close navigation" className="admin-icon-button admin-sidebar__mobile-close" onClick={() => setMobileOpen(false)} type="button"><span className="material-symbols-outlined">close</span></button></div>
+        <div className="admin-environment-card"><span aria-hidden="true" className="admin-live-dot" /><span><strong>{environmentLabel}</strong><small>{isConnected ? "All core services healthy" : "Service state requires attention"}</small></span></div>
         <nav aria-label="Admin operations navigation">
           {ADMIN_NAV_GROUPS.map((group) => <section key={group.label}><h2>{group.label}</h2>{group.items.map((item) => <NavLink aria-current={navIsActive(location.pathname, item) ? "page" : undefined} className={navIsActive(location.pathname, item) ? "admin-nav-link admin-nav-link--active" : "admin-nav-link"} end={item.end} key={item.to} title={collapsed ? item.label : undefined} to={item.to}><span className="material-symbols-outlined">{item.icon}</span><span>{item.label}</span></NavLink>)}</section>)}
         </nav>
-        <div className="admin-sidebar__footer"><AdminBadge tone={isConnected ? "success" : "warning"}><span aria-hidden="true" className="admin-live-dot" />{isConnected ? `${environmentLabel} connected` : `${environmentLabel} connection requires attention`}</AdminBadge><p>External providers, AI, and paid calls remain policy-controlled.</p></div>
+        <div className="admin-sidebar__footer"><button aria-label="Current administrator" className="admin-user"><span className="admin-avatar">{String(identity).slice(0, 2).toUpperCase()}</span><span><strong>{identity}</strong><small>{user?.role || "admin"}</small></span><span aria-hidden="true" className="material-symbols-outlined">more_horiz</span></button><p>External providers, AI, and paid calls remain policy-controlled.</p></div>
       </aside>
       {mobileOpen ? <button aria-label="Close navigation" className="admin-mobile-scrim" onClick={() => setMobileOpen(false)} type="button" /> : null}
 
       <div className="admin-workspace">
         <header className="admin-topbar">
           <button aria-label="Open navigation" className="admin-icon-button admin-menu-button" onClick={() => setMobileOpen(true)} type="button"><span className="material-symbols-outlined">menu</span></button>
-          <div className="admin-breadcrumb"><span>{page.group}</span><span aria-hidden="true">/</span><strong>{page.title}</strong></div>
-          <button className="admin-command-trigger" onClick={openCommand} type="button"><span className="material-symbols-outlined">search</span><span>Search admin</span><kbd>⌘K</kbd></button>
-          <div className="admin-topbar__actions"><button aria-expanded={inboxOpen} aria-label="Open operations inbox" className="admin-icon-button" onClick={() => setInboxOpen((value) => !value)} type="button"><span className="material-symbols-outlined">notifications</span></button>{inboxOpen ? <OperationsInbox onClose={() => setInboxOpen(false)} open /> : null}<div className="admin-identity"><span>{String(identity).slice(0, 1).toUpperCase()}</span><div><strong>{identity}</strong><small>{user?.role || "admin"}</small></div></div></div>
+          <div className="admin-breadcrumb"><span>Runr admin</span><span aria-hidden="true">/</span><strong>{page.title}</strong></div>
+          <button className="admin-command-trigger" onClick={openCommand} type="button"><span className="material-symbols-outlined">search</span><span>Search or jump to…</span><kbd>⌘K</kbd></button>
+          <div className="admin-topbar__actions"><button aria-expanded={inboxOpen} aria-label="Open operations inbox" className="admin-icon-button" onClick={() => setInboxOpen((value) => !value)} type="button"><span className="material-symbols-outlined">notifications</span></button>{inboxOpen ? <OperationsInbox onClose={() => setInboxOpen(false)} open /> : null}<button aria-label="Admin settings" className="admin-icon-button" type="button"><span className="material-symbols-outlined">settings</span></button></div>
         </header>
         {!isConnected ? <div className="admin-connection-banner" role="alert"><span className="material-symbols-outlined">cloud_off</span><div><strong>Admin data may be stale</strong><p>{error || "The authenticated API session is not currently connected."}</p></div><button disabled={refreshing} onClick={() => reconnect().catch(() => undefined)} type="button">{refreshing ? "Reconnecting…" : "Reconnect"}</button></div> : null}
         <main id="admin-main" tabIndex="-1"><div className="admin-content">{children}</div><footer className="admin-freshness"><span>Environment: {environmentLabel}</span><span>Session: {isConnected ? "connected" : status}</span><span>View: read and explicit-action controls</span></footer></main>
