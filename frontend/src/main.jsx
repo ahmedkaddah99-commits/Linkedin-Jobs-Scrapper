@@ -9,6 +9,17 @@ import "./styles.css";
 
 const clerkPublishableKey = String(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || "").trim();
 const browserTestMode = import.meta.env.VITE_E2E_AUTH === "1";
+const publicMarketingPaths = new Set([
+  "/",
+  "/how-it-works",
+  "/pricing",
+  "/security",
+  "/terms",
+  "/terms-and-conditions",
+  "/user-agreement",
+  "/privacy",
+]);
+const canRenderPublicMarketing = publicMarketingPaths.has(window.location.pathname);
 
 function AppFrame() {
   return (
@@ -47,6 +58,8 @@ createRoot(document.getElementById("root")).render(
       <ClerkProvider afterSignOutUrl="/sign-in">
         <AppFrame />
       </ClerkProvider>
+    ) : canRenderPublicMarketing ? (
+      <AppFrame />
     ) : (
       <ClerkConfigurationMessage />
     )}
