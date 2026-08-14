@@ -5,6 +5,7 @@ import AppShell from "./components/AppShell";
 import ConnectionPanel from "./components/ConnectionPanel";
 import UpgradeModal from "./components/UpgradeModal";
 import { SessionProvider, useSession } from "./context/SessionContext";
+import MarketingSite from "./pages/MarketingSite";
 import { QUOTA_EXCEEDED_EVENT } from "./lib/api";
 import { logEvent } from "./lib/analytics";
 import { isAdminUser } from "./lib/auth";
@@ -387,6 +388,14 @@ function PublicAuthRoute({ mode }) {
 function AppRoutes() {
   return (
     <Routes>
+      <Route path="/" element={<MarketingSite page="product" />} />
+      <Route path="/how-it-works" element={<MarketingSite page="how" />} />
+      <Route path="/pricing" element={<MarketingSite page="pricing" />} />
+      <Route path="/security" element={<MarketingSite page="security" />} />
+      <Route path="/terms" element={<MarketingSite page="terms" />} />
+      <Route path="/terms-and-conditions" element={<MarketingSite page="terms" />} />
+      <Route path="/user-agreement" element={<MarketingSite page="privacy" />} />
+      <Route path="/privacy" element={<MarketingSite page="privacy" />} />
       <Route path="/sign-in/*" element={<PublicAuthRoute mode="sign-in" />} />
       <Route path="/sign-up/*" element={<PublicAuthRoute mode="sign-up" />} />
       <Route path="*" element={<ProtectedAppRoute />} />
