@@ -634,6 +634,11 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             if logo_url:
                 try:
                     logo_body, logo_type, logo_final_url, logo_attempts, logo_cost = await asyncio.to_thread(self._proxy_fetch, logo_url, raw=True)
+                    # LinkedIn CDN responses can be consent/error HTML even
+                    # when the page exposes an og:image URL. Never let an
+                    # unusable optional logo discard otherwise valid company
+                    # facts; validate before attaching the optional asset.
+                    validate_logo(logo_body, logo_type)
                     result.update({
                         "logo_bytes": logo_body,
                         "logo_content_type": logo_type,
