@@ -581,11 +581,15 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         total_attempts = 0
         total_cost = 0.0
         last_transport = "none"
+        # ScrapeOps is the bounded discovery transport. Direct access is
+        # retained for page and logo reads, but public search engines are
+        # substantially less consistent through urllib on the worker.
+        discovery_prefer_direct = False if self.prefer_direct else self.prefer_direct
         for search_url, search_format in searches:
             try:
                 body, content_type, _, attempts, cost_units, transport = self._fetch_with_fallback(
                     search_url,
-                    prefer_direct=self.prefer_direct,
+                    prefer_direct=discovery_prefer_direct,
                 )
             except Exception:
                 continue
