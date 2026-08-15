@@ -51,6 +51,9 @@ export function findMasterCvBullet(masterCv, bulletId) {
 }
 
 export function getMasterCvGuidance(bullet) {
+  if (bullet?.guidance && typeof bullet.guidance === "object") {
+    return bullet.guidance;
+  }
   const score = Number(bullet?.score || 0);
   const hasMetric = Boolean(bullet?.metric) || /\b\d+%|\b\d+\b/.test(String(bullet?.text || ""));
   const impactStrong = score >= 85 || hasMetric;
