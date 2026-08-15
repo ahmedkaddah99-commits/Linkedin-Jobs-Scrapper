@@ -602,10 +602,8 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                         urls.append(candidate)
                     if len(urls) >= 3:
                         break
-                # Keep the parser tolerant for test doubles and provider
-                # responses that omit the XML content type.
-                if not urls:
-                    soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "html.parser")
+                # Fall through to the HTML parser for test doubles and
+                # provider responses that omit the XML content type.
             if (search_format == "html" or not urls) and "html" in content_type.casefold():
                 soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "html.parser")
                 for anchor in soup.find_all("a", href=True):
