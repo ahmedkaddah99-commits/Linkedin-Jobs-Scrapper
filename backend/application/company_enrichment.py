@@ -10,7 +10,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bs4 import BeautifulSoup
@@ -412,10 +412,259 @@ class ScrapeOpsCompanyProvider(OfficialWebsiteProvider):
         return result
 
 
+def _linkedin_company_url(value: Any) -> str:
+    """Return a canonical public LinkedIn company URL, or an empty string."""
+
+    try:
+        parsed = urlparse(str(value or "").strip())
+    except (TypeError, ValueError):
+        return ""
+    host = str(parsed.hostname or "").casefold()
+    path_parts = [part for part in str(parsed.path or "").split("/") if part]
+    if not (host == "linkedin.com" or host.endswith(".linkedin.com")):
+        return ""
+    if len(path_parts) < 2 or path_parts[0].casefold() != "company":
+        return ""
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "", unquote(path_parts[1])).strip(".-_")
+    if not slug:
+        return ""
+    return f"https://www.linkedin.com/company/{slug}"
+
+
+def _company_name_tokens(value: Any) -> set[str]:
+    legal_suffixes = {
+        "ag", "bv", "co", "company", "corp", "corporation", "gmbh", "inc", "international",
+        "kg", "limited", "llc", "ltd", "plc", "sa", "se", "spa", "the",
+    }
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").casefold())
+        if token not in legal_suffixes and len(token) > 1
+    }
+
+
+def _linkedin_identity_matches(company_name: Any, page_name: Any) -> bool:
+    expected = _company_name_tokens(company_name)
+    observed = _company_name_tokens(page_name)
+    if not expected or not observed:
+        return bool(page_name)
+    if expected <= observed or observed <= expected:
+        return True
+    overlap = len(expected & observed)
+    return overlap >= 1 and overlap / max(1, min(len(expected), len(observed))) >= 0.5
+
+
+class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
+    """Discover and enrich public LinkedIn company pages through ScrapeOps.
+
+    Discovery starts with LinkedIn URLs already present in authoritative
+    Organization metadata. If none is available, a bounded DuckDuckGo HTML
+    search discovers a candidate and the candidate page is identity-checked
+    against the canonical company name before any facts are accepted.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str = "",
+        mode: str = "",
+        timeout_seconds: int = 30,
+        max_html_bytes: int = 1_000_000,
+    ):
+        super().__init__(
+            api_key=api_key,
+            mode=mode or os.getenv("RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE") or "render_js_cheap",
+            timeout_seconds=timeout_seconds,
+            max_html_bytes=max_html_bytes,
+        )
+
+    @staticmethod
+    def _existing_linkedin_urls(company: Mapping[str, Any]) -> list[str]:
+        profile_json = company.get("profile_json")
+        try:
+            profile = json.loads(profile_json) if isinstance(profile_json, str) else profile_json
+        except (TypeError, ValueError):
+            profile = {}
+        if not isinstance(profile, Mapping):
+            return []
+        extra = profile.get("additional_fields") if isinstance(profile.get("additional_fields"), Mapping) else {}
+        candidates: list[Any] = []
+        linkedin_field = extra.get("linkedin_company_url")
+        candidates.append(linkedin_field.get("value") if isinstance(linkedin_field, Mapping) else linkedin_field)
+        social = extra.get("social_profiles")
+        social_value = social.get("value") if isinstance(social, Mapping) else social
+        candidates.extend(social_value if isinstance(social_value, Sequence) and not isinstance(social_value, (str, bytes)) else [social_value])
+        result: list[str] = []
+        for candidate in candidates:
+            normalized = _linkedin_company_url(candidate)
+            if normalized and normalized not in result:
+                result.append(normalized)
+        return result
+
+    def _discover_linkedin_urls(self, company: Mapping[str, Any]) -> tuple[list[str], int, float]:
+        existing = self._existing_linkedin_urls(company)
+        if existing:
+            return existing[:3], 0, 0.0
+        name = str(company.get("canonical_name") or "").strip()
+        if not name:
+            return [], 0, 0.0
+        search_url = (
+            "https://html.duckduckgo.com/html/?q="
+            + quote_plus(f'site:linkedin.com/company "{name}"')
+        )
+        body, content_type, _, attempts, cost_units = self._proxy_fetch(search_url)
+        if "html" not in content_type.casefold():
+            return [], attempts, cost_units
+        soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "html.parser")
+        urls: list[str] = []
+        for anchor in soup.find_all("a", href=True):
+            raw_href = str(anchor.get("href") or "").strip()
+            parsed_href = urlparse(raw_href)
+            redirect = parse_qs(parsed_href.query).get("uddg", [""])[0]
+            candidate = _linkedin_company_url(unquote(redirect or raw_href))
+            if candidate and candidate not in urls:
+                urls.append(candidate)
+            if len(urls) >= 3:
+                break
+        return urls, attempts, cost_units
+
+    @staticmethod
+    def _meta(html_text: str) -> dict[str, str]:
+        return {
+            str(item.get("property") or item.get("name") or "").casefold(): " ".join(str(item.get("content") or "").split())
+            for item in BeautifulSoup(html_text, "html.parser").find_all("meta")
+            if str(item.get("content") or "").strip()
+        }
+
+    def _parse_linkedin_page(
+        self,
+        *,
+        company: Mapping[str, Any],
+        linkedin_url: str,
+        html_text: str,
+        final_url: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        meta = self._meta(html_text)
+        data = self._json_ld(html_text)
+        title = meta.get("og:title") or meta.get("twitter:title") or meta.get("title")
+        if not title:
+            title = BeautifulSoup(html_text, "html.parser").title.get_text(" ", strip=True) if BeautifulSoup(html_text, "html.parser").title else ""
+        page_name = re.sub(r"\s*[|·-]\s*linkedin(?:\s*[:|].*)?$", "", title, flags=re.IGNORECASE).strip()
+        lowered = html_text.casefold()
+        if any(marker in lowered for marker in ("page not found", "profile not found", "this page doesn’t exist")):
+            return None
+        if not _linkedin_identity_matches(company.get("canonical_name"), page_name):
+            return None
+        address = data.get("address") if isinstance(data.get("address"), Mapping) else {}
+        employee = data.get("numberOfEmployees")
+        if isinstance(employee, Mapping):
+            employee_value = employee.get("value")
+            employee_min = employee.get("minValue")
+            employee_max = employee.get("maxValue")
+        else:
+            employee_value = employee
+            employee_min = employee_max = None
+        website = data.get("url") if isinstance(data.get("url"), str) else ""
+        if str(website).casefold().find("linkedin.com") >= 0:
+            website = ""
+        founding_date = data.get("foundingDate")
+        founding_year = None
+        year_match = re.search(r"\b(18\d{2}|19\d{2}|20\d{2})\b", str(founding_date or ""))
+        if year_match:
+            founding_year = int(year_match.group(1))
+        fields = {
+            "website": website,
+            "industry": data.get("industry") or meta.get("industry") or meta.get("linkedin:industry"),
+            "company_size": employee_value or meta.get("linkedin:company_size"),
+            "headquarters": OfficialWebsiteProvider._address(address) or meta.get("linkedin:headquarters"),
+            "founded_year": founding_year,
+        }
+        logo = data.get("logo") if isinstance(data.get("logo"), str) else meta.get("og:image")
+        extra = {
+            "linkedin_company_url": linkedin_url,
+            "linkedin_name": page_name,
+            "linkedin_description": data.get("description") or meta.get("og:description") or meta.get("description"),
+            "linkedin_industry": data.get("industry") or meta.get("industry") or meta.get("linkedin:industry"),
+            "linkedin_company_size": employee_value or meta.get("linkedin:company_size"),
+            "linkedin_employee_min": employee_min,
+            "linkedin_employee_max": employee_max,
+            "linkedin_headquarters": OfficialWebsiteProvider._address(address) or meta.get("linkedin:headquarters"),
+            "linkedin_founded_year": founding_year,
+            "linkedin_logo_url": logo,
+            "linkedin_website": website,
+            "linkedin_meta": {key: value for key, value in meta.items() if key.startswith(("og:", "linkedin:", "twitter:"))},
+            "linkedin_lookup_status": "matched",
+        }
+        return fields, extra
+
+    async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]:
+        del conditional
+        candidates, discovery_attempts, discovery_cost = self._discover_linkedin_urls(company)
+        request_count = discovery_attempts
+        cost_units = discovery_cost
+        for candidate in candidates:
+            try:
+                body, content_type, final_url, attempts, cost = await asyncio.to_thread(self._proxy_fetch, candidate)
+            except Exception:
+                continue
+            request_count += attempts
+            cost_units += cost
+            if "html" not in content_type.casefold():
+                continue
+            parsed = self._parse_linkedin_page(
+                company=company,
+                linkedin_url=_linkedin_company_url(final_url) or candidate,
+                html_text=body.decode("utf-8", errors="replace"),
+                final_url=final_url,
+            )
+            if parsed is None:
+                continue
+            fields, extra = parsed
+            logo_url = str(extra.get("linkedin_logo_url") or "").strip()
+            result: dict[str, Any] = {
+                "fields": fields,
+                "extra_fields": extra,
+                "source": "scrapeops_linkedin_company_page",
+                "provenance_url": _linkedin_company_url(final_url) or candidate,
+                "observed_at": utc_now_iso(),
+                "verified_at": utc_now_iso(),
+                "request_count": request_count,
+                "cost_units": cost_units,
+            }
+            if logo_url:
+                try:
+                    logo_body, logo_type, logo_final_url, logo_attempts, logo_cost = await asyncio.to_thread(self._proxy_fetch, logo_url, raw=True)
+                    result.update({
+                        "logo_bytes": logo_body,
+                        "logo_content_type": logo_type,
+                        "logo_source_url": logo_final_url,
+                        "request_count": request_count + logo_attempts,
+                        "cost_units": cost_units + logo_cost,
+                    })
+                except Exception:
+                    pass
+            return result
+        return {
+            "fields": {},
+            "extra_fields": {
+                "linkedin_lookup_status": "not_found",
+                "linkedin_candidates_checked": candidates,
+            },
+            "source": "scrapeops_linkedin_company_discovery",
+            "provenance_url": str(company.get("provenance_url") or ""),
+            "observed_at": utc_now_iso(),
+            "verified_at": "",
+            "request_count": request_count,
+            "cost_units": cost_units,
+        }
+
+
 def configured_company_enrichment_provider() -> CompanyEnrichmentProvider:
     """Build the explicitly configured provider without starting enrichment."""
 
     provider = str(os.getenv("RUNR_COMPANY_ENRICHMENT_PROVIDER") or "official_website").strip().casefold()
+    if provider in {"scrapeops_linkedin", "linkedin_scrapeops", "scrapeops_linkedin_company"}:
+        return ScrapeOpsLinkedInCompanyProvider()
     if provider in {"scrapeops", "scrapeops_company", "scrapeops_company_website"}:
         return ScrapeOpsCompanyProvider()
     if provider in {"official_website", "company_website"}:
@@ -521,15 +770,19 @@ class CompanyEnrichmentService:
         request_budget: int = 25,
         cycle_key: str = "",
         force: bool = False,
+        force_all: bool = False,
     ) -> dict[str, Any]:
         store = self.store
         if store is None:
             return {"status": "unavailable", "companies_processed": 0}
         now = _now()
         cycle_key = cycle_key or now.strftime("%Y-%m-%d")
-        candidates = store.list_company_enrichment_targets(now=now.isoformat(), limit=max(1, int(max_companies)))
-        if force and not candidates:
+        if force_all:
             candidates = store.list_company_enrichment_targets(now="9999-12-31T00:00:00+00:00", limit=max(1, int(max_companies)))
+        else:
+            candidates = store.list_company_enrichment_targets(now=now.isoformat(), limit=max(1, int(max_companies)))
+            if force and not candidates:
+                candidates = store.list_company_enrichment_targets(now="9999-12-31T00:00:00+00:00", limit=max(1, int(max_companies)))
         semaphore = asyncio.Semaphore(max(1, int(concurrency)))
         budget = max(0, int(request_budget))
         budget_lock = asyncio.Lock()
@@ -560,6 +813,12 @@ class CompanyEnrichmentService:
                     result = raw if isinstance(raw, CompanyEnrichmentResult) else _as_result(raw)
                     observed_at = result.observed_at or current.isoformat()
                     verified_at = result.verified_at or (current.isoformat() if result.fields else "")
+                    try:
+                        existing_payload = json.loads(str(claimed.get("profile_json") or "{}"))
+                    except (TypeError, ValueError):
+                        existing_payload = {}
+                    existing_fields = existing_payload.get("fields") if isinstance(existing_payload, Mapping) and isinstance(existing_payload.get("fields"), Mapping) else {}
+                    existing_extra_fields = existing_payload.get("additional_fields") if isinstance(existing_payload, Mapping) and isinstance(existing_payload.get("additional_fields"), Mapping) else {}
                     fields: dict[str, Any] = {}
                     fields_available = 0
                     for field in COMPANY_ENRICHMENT_FIELDS:
@@ -572,8 +831,17 @@ class CompanyEnrichmentService:
                             field_url = raw_field.get("url") if isinstance(raw_field, Mapping) else result.provenance_url
                             fields[field] = {"value": value, "state": "known", "status": "known", "provenance": {"source": str(field_source or result.source), "url": str(field_url or result.provenance_url)}, "observed_at": str(raw_field.get("observed_at") if isinstance(raw_field, Mapping) else observed_at), "verified_at": str(raw_field.get("verified_at") if isinstance(raw_field, Mapping) else verified_at)}
                         else:
-                            fields[field] = {"value": None, "state": "unknown", "status": "unknown", "provenance": None, "observed_at": None, "verified_at": None, "unknown_reason": UNKNOWN_REASON}
-                    extra_fields: dict[str, Any] = {}
+                            existing_field = existing_fields.get(field)
+                            existing_value = existing_field.get("value") if isinstance(existing_field, Mapping) else None
+                            if isinstance(existing_field, Mapping) and _known(existing_value):
+                                fields[field] = dict(existing_field)
+                            else:
+                                fields[field] = {"value": None, "state": "unknown", "status": "unknown", "provenance": None, "observed_at": None, "verified_at": None, "unknown_reason": UNKNOWN_REASON}
+                    extra_fields: dict[str, Any] = {
+                        str(extra_name): dict(existing_extra)
+                        for extra_name, existing_extra in existing_extra_fields.items()
+                        if isinstance(existing_extra, Mapping) and _known(existing_extra.get("value"))
+                    }
                     for extra_name, raw_extra in (result.extra_fields or {}).items():
                         value = _valid_extra_value(raw_extra.get("value") if isinstance(raw_extra, Mapping) else raw_extra)
                         if value is None:
@@ -619,4 +887,4 @@ class CompanyEnrichmentService:
         return asyncio.run(self.run(**kwargs))
 
 
-__all__ = ["COMPANY_ENRICHMENT_FIELDS", "CompanyEnrichmentResult", "CompanyEnrichmentService", "OfficialWebsiteProvider", "ScrapeOpsCompanyProvider", "configured_company_enrichment_provider"]
+__all__ = ["COMPANY_ENRICHMENT_FIELDS", "CompanyEnrichmentResult", "CompanyEnrichmentService", "OfficialWebsiteProvider", "ScrapeOpsCompanyProvider", "ScrapeOpsLinkedInCompanyProvider", "configured_company_enrichment_provider"]

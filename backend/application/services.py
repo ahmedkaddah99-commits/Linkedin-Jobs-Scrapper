@@ -1549,6 +1549,7 @@ class BackendApplication:
         request_budget: int = 25,
         cycle_key: str = "",
         force: bool = False,
+        force_all: bool = False,
         provider: CompanyEnrichmentProvider | None = None,
     ) -> dict[str, Any]:
         """Worker-only bounded company enrichment; never called by catalog reads."""
@@ -1586,6 +1587,7 @@ class BackendApplication:
                 request_budget=request_budget,
                 cycle_key=cycle_key,
                 force=force,
+                force_all=force_all,
             )
             if inventory_result is not None:
                 result["inventory_sync"] = inventory_result
