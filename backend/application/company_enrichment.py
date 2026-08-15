@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bs4 import BeautifulSoup
+import requests
 
 from backend.integrations.scrapeops import (
     SCRAPEOPS_PROXY_ENDPOINT,
@@ -532,12 +533,37 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
 
         safe_url = validate_official_url(url)
         approved_host = urlparse(safe_url).hostname or ""
-        body, content_type, final_url, _ = self._fetch(
-            safe_url,
-            timeout_seconds=max(2, int(timeout_seconds or self.timeout_seconds)),
-            max_bytes=2 * 1024 * 1024 if raw else self.max_html_bytes,
-            approved_host=approved_host,
-        )
+        max_bytes = 2 * 1024 * 1024 if raw else self.max_html_bytes
+        current_url = safe_url
+        response = None
+        for _ in range(4):
+            response = requests.get(
+                current_url,
+                headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "*/*" if raw else "text/html,application/xhtml+xml"},
+                timeout=max(2, int(timeout_seconds or self.timeout_seconds)),
+                allow_redirects=False,
+            )
+            if int(response.status_code or 0) not in {301, 302, 303, 307, 308}:
+                break
+            location = str(response.headers.get("location") or "").strip()
+            if not location:
+                break
+            current_url = validate_official_url(urljoin(current_url, location), approved_host=approved_host)
+            assert_public_official_host(urlparse(current_url).hostname or "")
+        if response is None:
+            raise RuntimeError("direct_fetch_empty_response")
+        if int(response.status_code or 0) >= 400:
+            raise RuntimeError(f"direct_fetch_http_{int(response.status_code or 0)}")
+        final_url = validate_official_url(str(response.url or current_url), approved_host=approved_host)
+        assert_public_official_host(urlparse(final_url).hostname or "")
+        try:
+            declared_size = int(str(response.headers.get("content-length") or "").strip())
+        except ValueError:
+            declared_size = 0
+        if declared_size > max_bytes or len(response.content) > max_bytes:
+            raise LogoValidationError("official_response_too_large")
+        body = bytes(response.content)
+        content_type = str(response.headers.get("content-type") or "")
         if not content_type:
             if not raw:
                 content_type = "text/html"
