@@ -70,10 +70,10 @@ function emptyReferralWorkspace() {
 
 function ReferralFormField({ label, children, hint = "" }) {
   return (
-    <label className="space-y-1.5">
-      <div className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">{label}</div>
+    <label className="referral-form-field">
+      <div className="referral-form-field__label">{label}</div>
       {children}
-      {hint ? <div className="text-xs text-on-surface-variant">{hint}</div> : null}
+      {hint ? <div className="referral-form-field__hint">{hint}</div> : null}
     </label>
   );
 }
@@ -131,7 +131,7 @@ function LinkedInSyncPanel({ request, refresh, connectionCount }) {
   const canSync = status?.can_sync !== false && !busy;
   const extensionConnected = extensionStatus.state === "ready" && extensionStatus.extension_connected === true;
   return (
-    <div className="rounded-xl border border-primary/20 bg-primary/5 p-6" data-testid="linkedin-network-sync">
+    <div className="referral-sync" data-testid="linkedin-network-sync">
       <div className="mb-5">
         <div className="text-xs font-semibold uppercase tracking-wider text-primary">Recommended</div>
         <h2 className="mt-1 font-headline text-xl font-bold tracking-tight text-on-surface">
@@ -833,17 +833,24 @@ export default function ReferralsPage() {
       : "No personal contacts saved yet. Add people you already know outside LinkedIn or contacts you want to track more deliberately.";
 
   return (
-    <div className="space-y-8">
-      <header>
-        <h1 className="font-headline text-[2.25rem] font-extrabold leading-tight tracking-tight text-on-surface">
+    <div className="referrals-page space-y-8">
+      <header className="referrals-page__header">
+        <div>
+        <div className="referral-eyebrow">Networking workspace</div>
+        <h1 className="referrals-page__title">
           Referrals
         </h1>
-        <p className="mt-1 text-sm text-on-surface-variant">
-          Keep manual warm contacts separate from imported LinkedIn connections, and use both when deciding who to approach for a referral.
+        <p className="referrals-page__intro">
+          Find warm paths into the roles you care about, keep your own contacts organised, and track every follow-up in one place.
         </p>
+        </div>
+        <Link className="referrals-page__header-action" to="/tracker">
+          <span className="material-symbols-outlined text-[17px]">work_outline</span>
+          View applications
+        </Link>
       </header>
 
-      <section className="grid gap-3 lg:grid-cols-3">
+      <section className="referral-tabs">
         {REFERRAL_SECTION_OPTIONS.map((section) => {
           const isActive = activeSection === section.id;
           const count =
@@ -856,10 +863,10 @@ export default function ReferralsPage() {
             <button
               key={section.id}
               className={[
-                "rounded-2xl border p-5 text-left transition-all",
+                "referral-tab",
                 isActive
-                  ? "border-primary/30 bg-primary/10 shadow-sm"
-                  : "border-outline-variant/20 bg-surface-container-lowest hover:border-primary/20 hover:bg-surface-container-low",
+                  ? "is-active"
+                  : "",
               ].join(" ")}
               onClick={() => {
                 setActiveSection(section.id);
@@ -871,13 +878,15 @@ export default function ReferralsPage() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[20px] text-primary">{section.icon}</span>
-                    <div className="text-base font-semibold text-on-surface">{section.label}</div>
+                  <div className="referral-tab__icon">
+                    <span className="material-symbols-outlined text-[20px]">{section.icon}</span>
                   </div>
-                  <div className="mt-2 text-sm text-on-surface-variant">{section.description}</div>
+                  <div className="referral-tab__copy">
+                    <div className="referral-tab__title">{section.label}</div>
+                    <div className="referral-tab__description">{section.description}</div>
+                  </div>
                 </div>
-                <span className="rounded-full bg-surface px-3 py-1 text-xs font-semibold text-on-surface-variant">
+                <span className="referral-tab__count">
                   {count}
                 </span>
               </div>
@@ -887,21 +896,21 @@ export default function ReferralsPage() {
       </section>
 
       {activeSection === "people" ? (
-        <section className="rounded-2xl border border-primary/15 bg-[radial-gradient(circle_at_top_left,rgba(58,130,246,0.12),transparent_45%),linear-gradient(135deg,rgba(15,23,42,0.02),rgba(58,130,246,0.02))] p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <section className="referral-finder">
+        <div className="referral-finder__header">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-wider text-primary">
+            <div className="referral-eyebrow">
               Relevant People Finder
             </div>
-            <div className="mt-1 text-xl font-semibold text-on-surface">
-              Find likely hiring managers, team members, and senior leaders from here
-            </div>
-            <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
-              Use this before writing networking messages or asking for a referral. Runr looks for likely relevant people only, and confidence is based on public profile signals rather than certainty.
+            <h2 className="referral-finder__title">
+              Find the right person before you reach out
+            </h2>
+            <p className="referral-finder__copy">
+              Runr searches public profile signals for likely hiring managers, teammates, and senior leaders. Review the evidence before you send a message or ask for an introduction.
             </p>
           </div>
           <Link
-            className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            className="referral-button referral-button--primary referral-finder__header-action"
             to="/tracker"
           >
             <span className="material-symbols-outlined text-[18px]">work</span>
@@ -910,53 +919,53 @@ export default function ReferralsPage() {
         </div>
 
         {peopleFinderTargets.length ? (
-          <div className="mt-5 grid gap-4 xl:grid-cols-3">
+          <div className="referral-target-grid">
             {peopleFinderTargets.slice(0, 6).map((target) => (
               <article
                 key={target.key}
-                className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-4"
+                className="referral-target-card"
               >
-                <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="referral-target-card__top">
                   <div>
-                    <div className="text-base font-semibold text-on-surface">
+                    <div className="referral-target-card__title">
                       {target.title}
                     </div>
-                    <div className="mt-1 text-sm text-on-surface-variant">
+                    <div className="referral-target-card__company">
                       {[target.company, target.location].filter(Boolean).join(" | ") || "Saved application context"}
                     </div>
                   </div>
-                  <span className="rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-on-surface-variant">
+                  <span className="referral-target-card__source">
                     {target.sourceLabel}
                   </span>
                 </div>
 
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="referral-target-card__tags">
                   {target.workspaceName ? (
-                    <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface">
+                    <span className="referral-tag">
                       {target.workspaceName}
                     </span>
                   ) : null}
                   {target.trackerStatus ? (
-                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                    <span className="referral-tag referral-tag--accent">
                       {target.trackerStatus.replace(/_/g, " ")}
                     </span>
                   ) : null}
                 </div>
 
-                <p className="mt-3 text-sm leading-6 text-on-surface-variant">
-                  Likely relevant only. Use this to review potential matches before outreach, referrals, or tailoring.
+                <p className="referral-target-card__copy">
+                  Open the role workspace to review likely matches before outreach, referrals, or tailoring.
                 </p>
 
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="referral-target-card__actions">
                   <Link
-                    className="rounded-full bg-primary px-3 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                    className="referral-button referral-button--primary"
                     to={target.jobWorkspaceUrl}
                   >
                     Find relevant people
                   </Link>
                   {target.applyLink ? (
                     <a
-                      className="rounded-full bg-surface-container-low px-3 py-1.5 text-sm font-semibold text-on-surface transition-colors hover:bg-surface-container-high"
+                      className="referral-button referral-button--quiet"
                       href={target.applyLink}
                       rel="noreferrer"
                       target="_blank"
@@ -969,14 +978,14 @@ export default function ReferralsPage() {
             ))}
           </div>
         ) : (
-          <div className="mt-5 rounded-2xl border border-dashed border-outline-variant/30 bg-surface-container-lowest p-5 text-sm text-on-surface-variant">
-            No application context is available here yet. Once a job reaches Tracker or has saved outreach history, the Relevant People Finder entry point appears in this section.
+          <div className="referral-empty">
+            No application context is available yet. Add a job to Tracker or save an outreach record, and its finder shortcut will appear here.
           </div>
         )}
         </section>
       ) : null}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="referral-metrics">
         {[
           { label: "Personal Contacts", value: stats.manual },
           { label: "LinkedIn Connections", value: stats.linkedin },
@@ -985,31 +994,32 @@ export default function ReferralsPage() {
         ].map((card) => (
           <div
             key={card.label}
-            className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-5"
+            className="referral-metric"
           >
-            <div className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
+            <div className="referral-metric__label">
               {card.label}
             </div>
-            <div className="mt-3 text-4xl font-extrabold tracking-tight text-on-surface">{card.value}</div>
+            <div className="referral-metric__value">{card.value}</div>
+            <div className="referral-metric__detail">Across your current networking workspace</div>
           </div>
         ))}
       </section>
 
       {activeSection !== "people" ? (
-        <section className="grid gap-8 xl:grid-cols-[1.05fr_1.4fr]">
+        <section className="referral-workspace">
         <div className="space-y-6">
           {!showingLinkedInImportPanel ? (
-            <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
-              <div className="mb-5 flex items-start justify-between gap-4">
+            <div className="referral-panel">
+              <div className="referral-panel__header">
                 <div>
-                  <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
+                  <h2 className="referral-panel__title">
                     {editingLinkedInContact
                       ? "Edit LinkedIn Connection"
                       : editingId
                         ? "Edit Personal Contact"
                         : "Add Personal Contact"}
                   </h2>
-                  <p className="mt-1 text-sm text-on-surface-variant">
+                  <p className="referral-panel__copy">
                     {editingLinkedInContact
                       ? "Keep the LinkedIn import source, but adjust notes, company mapping, or referability."
                       : "Add a person once, then link them to as many relevant companies as needed."}
@@ -1017,7 +1027,7 @@ export default function ReferralsPage() {
                 </div>
                 {editingId ? (
                   <button
-                    className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    className="referral-button referral-button--quiet"
                     onClick={resetForm}
                     type="button"
                   >
@@ -1026,10 +1036,10 @@ export default function ReferralsPage() {
                 ) : null}
               </div>
 
-              <div className="space-y-4">
+              <div className="referral-form">
                 <ReferralFormField label="Contact Name">
                   <input
-                    className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    className="referral-input"
                     onChange={(event) => updateForm({ name: event.target.value })}
                     placeholder="Jane Doe"
                     value={form.name}
@@ -1041,7 +1051,7 @@ export default function ReferralsPage() {
                   hint="Use one company per line. Optional role format: Company Name | Role Title"
                 >
                   <textarea
-                    className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    className="referral-input"
                     onChange={(event) => updateForm({ companies_text: event.target.value })}
                     placeholder={"Acme GmbH | Engineering Manager\nContoso SE | Former Team Lead"}
                     value={form.companies_text}
@@ -1050,7 +1060,7 @@ export default function ReferralsPage() {
 
                 <ReferralFormField label="LinkedIn URL" hint="Used for quick open or copy later.">
                   <input
-                    className="w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    className="referral-input"
                     onChange={(event) => updateForm({ linkedin_url: event.target.value })}
                     placeholder="https://www.linkedin.com/in/jane-doe/"
                     value={form.linkedin_url}
@@ -1059,14 +1069,14 @@ export default function ReferralsPage() {
 
                 <ReferralFormField label="Relationship Note" hint="How you know them or what context to mention.">
                   <textarea
-                    className="min-h-28 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    className="referral-input"
                     onChange={(event) => updateForm({ relationship_note: event.target.value })}
                     placeholder="Worked together on the Berlin product launch."
                     value={form.relationship_note}
                   />
                 </ReferralFormField>
 
-                <label className="flex items-center gap-3 rounded-lg border border-outline-variant/20 bg-surface px-4 py-3">
+                <label className="referral-checkbox">
                   <input
                     checked={Boolean(form.can_refer)}
                     className="h-4 w-4 rounded border-outline-variant/30 text-primary focus:ring-primary/20"
@@ -1074,8 +1084,8 @@ export default function ReferralsPage() {
                     type="checkbox"
                   />
                   <div>
-                    <div className="text-sm font-medium text-on-surface">Can refer me</div>
-                    <div className="text-xs text-on-surface-variant">
+                    <div className="referral-checkbox__title">Can refer me</div>
+                    <div className="referral-checkbox__copy">
                       Applies to the listed companies unless you change it later.
                     </div>
                   </div>
@@ -1087,7 +1097,7 @@ export default function ReferralsPage() {
                   {manualCompanies.map((company) => (
                     <span
                       key={`${company.company_name}-${company.role_title || "role"}`}
-                      className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
+                      className="referral-tag"
                     >
                       {company.company_name}
                       {company.role_title ? ` | ${company.role_title}` : ""}
@@ -1097,14 +1107,14 @@ export default function ReferralsPage() {
               ) : null}
 
               {(actionState.message || actionState.error) && !actionState.busyId ? (
-                <div className={["mt-4 text-sm", actionState.error ? "text-error" : "text-primary"].join(" ")}>
+                <div className={["referral-feedback", actionState.error ? "referral-feedback--error" : "referral-feedback--success"].join(" ")}>
                   {actionState.error || actionState.message}
                 </div>
               ) : null}
 
-              <div className="mt-6 flex flex-wrap gap-3">
+              <div className="referral-form__actions">
                 <button
-                  className="rounded bg-gradient-to-br from-primary to-primary-container px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="referral-button referral-button--primary"
                   disabled={!form.name.trim() || !manualCompanies.length || Boolean(actionState.busyId)}
                   onClick={saveContact}
                   type="button"
@@ -1116,7 +1126,7 @@ export default function ReferralsPage() {
                       : "Add Personal Contact"}
                 </button>
                 <button
-                  className="rounded bg-surface-container-low px-4 py-2.5 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                  className="referral-button referral-button--quiet"
                   onClick={() => refreshContactsFromServer().catch(() => undefined)}
                   type="button"
                 >
@@ -1127,14 +1137,14 @@ export default function ReferralsPage() {
           ) : (
             <div className="space-y-6">
               <LinkedInSyncPanel request={request} refresh={refresh} connectionCount={linkedinContacts.length} />
-              <details className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-6">
-                <summary className="cursor-pointer text-sm font-semibold text-on-surface">Use a Connections.csv export instead</summary>
-                <div className="mt-5">
-                  <p className="mt-1 text-sm text-on-surface-variant">
+              <details className="referral-import">
+                <summary>Use a Connections.csv export instead</summary>
+                <div className="referral-import__body">
+                  <p className="referral-import__copy">
                     Keep the manual CSV import as a fallback if the browser extension is unavailable. The newest upload remains the current source of truth.
                   </p>
                   <Link
-                    className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary hover:text-primary-container"
+                    className="referral-sync__link"
                     to="/referrals/linkedin-csv-guide"
                   >
                     <span className="material-symbols-outlined text-[16px]">help</span>
@@ -1142,8 +1152,8 @@ export default function ReferralsPage() {
                   </Link>
                 </div>
 
-                <div className="mt-5 space-y-4">
-                <label className="inline-flex cursor-pointer items-center gap-3 rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-low">
+                <div className="referral-form">
+                <label className="referral-import__file">
                   <span className="material-symbols-outlined text-[18px]">upload_file</span>
                   {importState.fileName ? `Loaded ${importState.fileName}` : "Choose CSV File"}
                   <input
@@ -1166,7 +1176,7 @@ export default function ReferralsPage() {
                   hint="Runr looks for this LinkedIn header row: First Name, Last Name, URL, Email Address, Company, Position, Connected On. Rows keep the same order as the uploaded file."
                 >
                   <textarea
-                    className="min-h-40 w-full rounded-lg border border-outline-variant/20 bg-surface px-4 py-3 text-sm text-on-surface"
+                    className="referral-input"
                     onChange={(event) =>
                       setImportState((current) => ({
                         ...current,
@@ -1183,30 +1193,30 @@ export default function ReferralsPage() {
               </div>
 
                 {(importState.message || importState.error) ? (
-                <div className={["mt-4 text-sm", importState.error ? "text-error" : "text-primary"].join(" ")}>
+                <div className={["referral-feedback", importState.error ? "referral-feedback--error" : "referral-feedback--success"].join(" ")}>
                   {importState.error || importState.message}
                 </div>
               ) : null}
                 {importState.summary && !importState.error ? (
-                <div className="mt-3 grid gap-2 text-xs text-on-surface-variant sm:grid-cols-4">
-                  <div className="rounded-lg bg-surface-container-low px-3 py-2">
-                    Parsed rows: <span className="font-semibold text-on-surface">{importState.summary.parsed || 0}</span>
+                <div className="referral-import__summary">
+                  <div className="referral-import__stat">
+                    Parsed rows: <strong>{importState.summary.parsed || 0}</strong>
                   </div>
-                  <div className="rounded-lg bg-surface-container-low px-3 py-2">
-                    Added: <span className="font-semibold text-on-surface">{importState.summary.created || 0}</span>
+                  <div className="referral-import__stat">
+                    Added: <strong>{importState.summary.created || 0}</strong>
                   </div>
-                  <div className="rounded-lg bg-surface-container-low px-3 py-2">
-                    Updated: <span className="font-semibold text-on-surface">{importState.summary.updated || 0}</span>
+                  <div className="referral-import__stat">
+                    Updated: <strong>{importState.summary.updated || 0}</strong>
                   </div>
-                  <div className="rounded-lg bg-surface-container-low px-3 py-2">
-                    Total saved: <span className="font-semibold text-on-surface">{importState.summary.total_contacts || 0}</span>
+                  <div className="referral-import__stat">
+                    Total saved: <strong>{importState.summary.total_contacts || 0}</strong>
                   </div>
                 </div>
               ) : null}
 
-                <div className="mt-6 flex flex-wrap gap-3">
+                <div className="referral-form__actions">
                 <button
-                  className="rounded bg-primary px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="referral-button referral-button--primary"
                   disabled={!String(importState.csvText || "").trim() || importState.busy || importState.clearing}
                   onClick={handleImport}
                   type="button"
@@ -1214,7 +1224,7 @@ export default function ReferralsPage() {
                   {importState.busy ? "Importing..." : linkedinContacts.length ? "Update CSV" : "Import CSV"}
                 </button>
                 <button
-                  className="rounded bg-error/10 px-4 py-2.5 text-sm font-medium text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="referral-button referral-button--danger"
                   disabled={!linkedinContacts.length || importState.busy || importState.clearing}
                   onClick={clearLinkedInConnections}
                   type="button"
@@ -1227,70 +1237,68 @@ export default function ReferralsPage() {
           )}
         </div>
 
-        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest">
-          <div className="border-b border-outline-variant/10 px-6 py-5">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <h2 className="font-headline text-xl font-bold tracking-tight text-on-surface">
+        <div className="referral-list">
+          <div className="referral-list__header">
+            <div>
+                <h2 className="referral-list__title">
                   {activeSection === "linkedin" ? "Imported LinkedIn Connections" : "Personal Contacts"}
                 </h2>
-                <p className="mt-1 text-sm text-on-surface-variant">
+                <p className="referral-list__copy">
                   {activeSection === "linkedin"
                     ? "Imported connections stay grouped here so you can separate export-based matches from the contacts you maintain yourself."
                     : "These contacts are matched against generated jobs and keep their outreach history in one place."}
                 </p>
               </div>
             </div>
-          </div>
 
-          <div className="divide-y divide-outline-variant/10">
+          <div className="referral-list__body">
             {loading ? (
-              <div className="px-6 py-10 text-on-surface-variant">Loading contacts...</div>
+              <div className="referral-empty">Loading contacts...</div>
             ) : error ? (
-              <div className="px-6 py-10 text-error">{error}</div>
+              <div className="referral-feedback referral-feedback--error">{error}</div>
             ) : visibleContacts.length ? (
               <>
               {renderedContacts.map((contact) => {
                 const contactOutreach = outreachByContact.get(contact.contact_id) || [];
 
                 return (
-                  <article key={contact.contact_id} className="px-6 py-5">
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div className="space-y-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold text-on-surface">{contact.name}</h3>
+                  <article key={contact.contact_id} className="referral-contact">
+                    <div className="referral-contact__top">
+                      <div className="referral-contact__identity">
+                        <div className="referral-contact__name">
+                          <h3>{contact.name}</h3>
                           {contact.can_refer ? (
-                            <span className="rounded-full bg-teal-500/10 px-2.5 py-1 text-xs font-semibold text-teal-500">
+                            <span className="referral-contact__status referral-contact__status--success">
                               Can Refer
                             </span>
                           ) : (
-                            <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-500">
+                            <span className="referral-contact__status referral-contact__status--warm">
                               Warm Contact
                             </span>
                           )}
                           {contact.is_active === false ? (
-                            <span className="rounded-full bg-error/10 px-2.5 py-1 text-xs font-semibold text-error">
+                            <span className="referral-contact__status referral-contact__status--muted">
                               Removed from latest upload
                             </span>
                           ) : null}
-                          <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-semibold text-on-surface-variant">
+                          <span className="referral-contact__status referral-contact__status--muted">
                             {isLinkedInImportedContact(contact) ? "LinkedIn Import" : "Personal Contact"}
                           </span>
                         </div>
 
-                        <div className="flex flex-wrap gap-2">
+                        <div className="referral-contact__companies">
                           {companyEntries(contact).length ? (
                             companyEntries(contact).map((entry) => (
                               <span
                                 key={`${contact.contact_id}-${entry.company_name || entry.company}`}
-                                className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface"
+                                className="referral-tag"
                               >
                                 {entry.company_name || entry.company}
                                 {entry.role_title ? ` | ${entry.role_title}` : ""}
                               </span>
                             ))
                           ) : (
-                            <span className="rounded-full bg-surface-container-low px-2.5 py-1 text-xs font-medium text-on-surface-variant">
+                            <span className="referral-tag">
                               No company linked yet
                             </span>
                           )}
@@ -1298,7 +1306,7 @@ export default function ReferralsPage() {
 
                         {contact.linkedin_url ? (
                           <a
-                            className="inline-flex items-center gap-1 text-sm text-primary transition-colors hover:text-primary-container"
+                            className="referral-contact__link"
                             href={contact.linkedin_url}
                             rel="noreferrer"
                             target="_blank"
@@ -1309,34 +1317,34 @@ export default function ReferralsPage() {
                         ) : null}
 
                         {importedConnectedDate(contact) ? (
-                          <div className="text-xs text-on-surface-variant">
+                          <div className="referral-contact__date">
                             Connected on LinkedIn: {importedConnectedDate(contact)}
                           </div>
                         ) : null}
 
-                        <p className="max-w-2xl whitespace-pre-wrap text-sm leading-6 text-on-surface-variant">
+                        <p className="referral-contact__note">
                           {contact.relationship_note || "No relationship note saved yet."}
                         </p>
 
                         {detailsLoaded ? (
-                        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+                        <div className="referral-outreach">
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
-                              <h4 className="text-sm font-semibold text-on-surface">Outreach Activity</h4>
-                              <p className="mt-1 text-xs text-on-surface-variant">
+                              <h4 className="referral-outreach__title">Outreach Activity</h4>
+                              <p className="referral-outreach__copy">
                                 Stored per run, job, and contact. Update these statuses directly here.
                               </p>
                             </div>
                           </div>
                           {contactOutreach.length ? (
-                            <div className="mt-4 space-y-3">
+                            <div>
                               {contactOutreach.map((item) => (
                                 <div
                                   key={`${item.run_id}-${item.job_id}-${item.contact_id}`}
-                                  className="rounded-xl border border-outline-variant/15 bg-surface-container-lowest p-4"
+                                  className="referral-outreach__item"
                                 >
-                                  <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div className="space-y-2">
+                                  <div className="referral-outreach__item-top">
+                                    <div>
                                       <div className="flex flex-wrap items-center gap-2">
                                         <StatusBadge tone={outreachStatusTone(item.outreach_status)}>
                                           {item.outreach_status}
@@ -1345,11 +1353,11 @@ export default function ReferralsPage() {
                                           {formatUpdatedAt(item.updated_at)}
                                         </span>
                                       </div>
-                                      <div className="text-sm font-semibold text-on-surface">
+                                      <div className="referral-outreach__job">
                                         {item.job_title || "Untitled job"}
                                         {item.company ? ` at ${item.company}` : ""}
                                       </div>
-                                      <div className="flex flex-wrap items-center gap-2 text-xs text-on-surface-variant">
+                                      <div className="referral-outreach__meta">
                                         <span>{item.workspace_name || "Workspace not set"}</span>
                                         {item.run_id ? (
                                           <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-[11px] text-on-surface-variant">
@@ -1359,9 +1367,9 @@ export default function ReferralsPage() {
                                         {item.source_label ? <span>{item.source_label}</span> : null}
                                       </div>
                                     </div>
-                                    <div className="flex flex-wrap items-center gap-2">
+                                    <div className="referral-outreach__actions">
                                       <select
-                                        className="rounded border border-outline-variant/20 bg-surface-container-low px-3 py-2 text-sm text-on-surface"
+                                        className="referral-select"
                                         disabled={
                                           actionState.busyId ===
                                           `outreach:${item.run_id}:${item.job_id}:${item.contact_id}`
@@ -1379,7 +1387,7 @@ export default function ReferralsPage() {
                                       </select>
                                       {item.contact_linkedin_url ? (
                                         <a
-                                          className="rounded bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+                                          className="referral-button referral-button--quiet"
                                           href={item.contact_linkedin_url}
                                           rel="noreferrer"
                                           target="_blank"
@@ -1389,7 +1397,7 @@ export default function ReferralsPage() {
                                       ) : null}
                                       {item.apply_link ? (
                                         <a
-                                          className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface"
+                                          className="referral-button referral-button--quiet"
                                           href={item.apply_link}
                                           rel="noreferrer"
                                           target="_blank"
@@ -1399,7 +1407,7 @@ export default function ReferralsPage() {
                                       ) : null}
                                       {item.run_id && item.job_id ? (
                                         <Link
-                                          className="rounded bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+                                          className="referral-button referral-button--quiet"
                                           to={buildJobWorkspaceRoute({
                                             runId: item.run_id,
                                             jobId: item.job_id,
@@ -1422,16 +1430,16 @@ export default function ReferralsPage() {
                         ) : null}
                       </div>
 
-                      <div className="flex flex-wrap gap-2">
+                      <div className="referral-contact__actions">
                         <button
-                          className="rounded bg-surface-container-low px-3 py-2 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                          className="referral-button referral-button--quiet"
                           onClick={() => startEditing(contact)}
                           type="button"
                         >
                           Edit
                         </button>
                         <button
-                          className="rounded bg-error/10 px-3 py-2 text-sm font-medium text-error transition-colors hover:bg-error/20 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="referral-button referral-button--danger"
                           disabled={actionState.busyId === contact.contact_id}
                           onClick={() => deleteContact(contact.contact_id)}
                           type="button"
@@ -1444,9 +1452,9 @@ export default function ReferralsPage() {
                 );
               })}
               {hiddenContactCount ? (
-                <div className="px-6 py-5">
+                <div className="referral-load-more">
                   <button
-                    className="w-full rounded bg-surface-container-low px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
+                    className="referral-button referral-button--quiet"
                     onClick={() =>
                       setVisibleContactLimit((current) => current + CONTACT_RENDER_BATCH_SIZE)
                     }

@@ -1,5 +1,15 @@
 const DEFAULT_DISCOVERY_STATUS = "not_started";
 
+function firstValue(payload, ...keys) {
+  for (const key of keys) {
+    const value = payload?.[key];
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
+  }
+  return "";
+}
+
 export const PEOPLE_DISCOVERY_STEPS = [
   "Reading selected job",
   "Generating search hypotheses",
@@ -142,34 +152,51 @@ export function buildJobWorkspaceRoute({
 
 export function normalizePeopleDiscoveryRun(payload, job = {}) {
   const normalized = payload && typeof payload === "object" ? { ...payload } : {};
-  const categories = normalized.categories && typeof normalized.categories === "object" ? { ...normalized.categories } : {};
+  const rawCategories = firstValue(normalized, "categories", "category_results");
+  const categories = rawCategories && typeof rawCategories === "object" ? { ...rawCategories } : {};
   for (const category of PEOPLE_CATEGORY_CONFIG) {
-    categories[category.id] = Array.isArray(categories[category.id]) ? categories[category.id] : [];
+    categories[category.id] = Array.isArray(
+      firstValue(categories, category.id, category.id.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase())),
+    )
+      ? firstValue(categories, category.id, category.id.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()))
+      : [];
   }
   return {
-    runId: String(normalized.runId || ""),
-    workspaceId: String(normalized.workspaceId || ""),
-    jobId: String(normalized.jobId || job.job_id || job.jobId || ""),
-    company: String(normalized.company || job.company || ""),
-    jobTitle: String(normalized.jobTitle || job.title || ""),
-    peopleDiscoveryStatus: String(normalized.peopleDiscoveryStatus || DEFAULT_DISCOVERY_STATUS),
+    runId: String(firstValue(normalized, "runId", "run_id") || ""),
+    workspaceId: String(firstValue(normalized, "workspaceId", "workspace_id") || ""),
+    jobId: String(firstValue(normalized, "jobId", "job_id") || job.job_id || job.jobId || ""),
+    company: String(firstValue(normalized, "company", "company_name") || job.company || ""),
+    jobTitle: String(firstValue(normalized, "jobTitle", "job_title", "title") || job.title || ""),
+    peopleDiscoveryStatus: String(
+      firstValue(normalized, "peopleDiscoveryStatus", "people_discovery_status", "status")
+        || DEFAULT_DISCOVERY_STATUS,
+    ),
     contextExtraction:
-      normalized.contextExtraction && typeof normalized.contextExtraction === "object"
-        ? { ...normalized.contextExtraction }
+      firstValue(normalized, "contextExtraction", "context_extraction")
+      && typeof firstValue(normalized, "contextExtraction", "context_extraction") === "object"
+        ? { ...firstValue(normalized, "contextExtraction", "context_extraction") }
         : {},
-    searchHypotheses: Array.isArray(normalized.searchHypotheses) ? normalized.searchHypotheses : [],
-    publicProfileCandidates: Array.isArray(normalized.publicProfileCandidates)
-      ? normalized.publicProfileCandidates
+    searchHypotheses: Array.isArray(firstValue(normalized, "searchHypotheses", "search_hypotheses"))
+      ? firstValue(normalized, "searchHypotheses", "search_hypotheses")
+      : [],
+    publicProfileCandidates: Array.isArray(
+      firstValue(normalized, "publicProfileCandidates", "public_profile_candidates"),
+    )
+      ? firstValue(normalized, "publicProfileCandidates", "public_profile_candidates")
       : [],
     categories,
-    passes: Array.isArray(normalized.passes) ? normalized.passes : [],
-    provider: normalized.provider && typeof normalized.provider === "object" ? normalized.provider : {},
-    warnings: Array.isArray(normalized.warnings) ? normalized.warnings : [],
-    selectedPeople: Array.isArray(normalized.selectedPeople) ? normalized.selectedPeople : [],
-    error: String(normalized.error || ""),
-    lastStartedAt: String(normalized.lastStartedAt || ""),
-    lastCompletedAt: String(normalized.lastCompletedAt || ""),
-    lastUpdatedAt: String(normalized.lastUpdatedAt || ""),
+    passes: Array.isArray(firstValue(normalized, "passes")) ? firstValue(normalized, "passes") : [],
+    provider: firstValue(normalized, "provider") && typeof firstValue(normalized, "provider") === "object"
+      ? firstValue(normalized, "provider")
+      : {},
+    warnings: Array.isArray(firstValue(normalized, "warnings")) ? firstValue(normalized, "warnings") : [],
+    selectedPeople: Array.isArray(firstValue(normalized, "selectedPeople", "selected_people"))
+      ? firstValue(normalized, "selectedPeople", "selected_people")
+      : [],
+    error: String(firstValue(normalized, "error", "error_message") || ""),
+    lastStartedAt: String(firstValue(normalized, "lastStartedAt", "last_started_at") || ""),
+    lastCompletedAt: String(firstValue(normalized, "lastCompletedAt", "last_completed_at") || ""),
+    lastUpdatedAt: String(firstValue(normalized, "lastUpdatedAt", "last_updated_at") || ""),
   };
 }
 
@@ -212,9 +239,16 @@ export async function startPeopleDiscovery(request, { runId, jobId, job }) {
 }
 
 export async function getPeopleDiscoveryStatus(request, { runId, jobId }) {
-  return request(
+  const payload = await request(
     `/runs/${encodeURIComponent(runId)}/jobs/by-id/${encodeURIComponent(jobId)}/people-discovery/status`,
   );
+  return {
+    ...payload,
+    peopleDiscoveryStatus: String(
+      firstValue(payload, "peopleDiscoveryStatus", "people_discovery_status", "status")
+        || DEFAULT_DISCOVERY_STATUS,
+    ),
+  };
 }
 
 export async function getPeopleDiscoveryResults(request, { runId, jobId, job }) {
@@ -273,7 +307,7 @@ function buildUnavailablePeopleDiscoveryRun({ runId, jobId, job = {} }) {
     jobId,
     company,
     jobTitle: title,
-    peopleDiscoveryStatus: "failed",
+    peopleDiscoveryStatus: "not_configured",
     contextExtraction: {
       company,
       jobTitle: title,
