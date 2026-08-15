@@ -522,6 +522,17 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             max_bytes=2 * 1024 * 1024 if raw else self.max_html_bytes,
             approved_host=approved_host,
         )
+        if not content_type:
+            if not raw:
+                content_type = "text/html"
+            elif body.startswith(b"\x89PNG\r\n\x1a\n"):
+                content_type = "image/png"
+            elif body.startswith(b"\xff\xd8"):
+                content_type = "image/jpeg"
+            elif body.startswith(b"RIFF") and body[8:12] == b"WEBP":
+                content_type = "image/webp"
+            elif body.lstrip().startswith((b"<svg", b"<?xml")):
+                content_type = "image/svg+xml"
         return body, content_type, final_url, 1, 0.0
 
     def _fetch_with_fallback(
