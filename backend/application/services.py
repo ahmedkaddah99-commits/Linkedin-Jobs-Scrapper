@@ -1552,15 +1552,19 @@ class BackendApplication:
         provider: CompanyEnrichmentProvider | None = None,
     ) -> dict[str, Any]:
         """Worker-only bounded company enrichment; never called by catalog reads."""
-        enabled = self.repositories.config_store.get_value(
-            "acquisition.phase_f.company_enrichment_enabled",
-            os.getenv("RUNR_COMPANY_ENRICHMENT_ENABLED", "0"),
+        environment_enabled = os.getenv("RUNR_COMPANY_ENRICHMENT_ENABLED")
+        enabled = (
+            environment_enabled
+            if environment_enabled not in (None, "")
+            else self.repositories.config_store.get_value("acquisition.phase_f.company_enrichment_enabled", "0")
         )
         if not force and str(enabled).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
             return {"status": "disabled", "reason": "phase_f_company_enrichment_disabled"}
-        inventory_enabled = self.repositories.config_store.get_value(
-            "acquisition.phase_f.company_site_inventory_enabled",
-            os.getenv("RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY", "0"),
+        environment_inventory_enabled = os.getenv("RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY")
+        inventory_enabled = (
+            environment_inventory_enabled
+            if environment_inventory_enabled not in (None, "")
+            else self.repositories.config_store.get_value("acquisition.phase_f.company_site_inventory_enabled", "0")
         )
         inventory_result: dict[str, Any] | None = None
         if str(inventory_enabled).strip().casefold() in {"1", "true", "yes", "on", "enabled"}:
