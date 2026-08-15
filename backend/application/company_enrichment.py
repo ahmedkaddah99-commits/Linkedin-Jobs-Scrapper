@@ -15,6 +15,15 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bs4 import BeautifulSoup
 
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_PROXY_ENDPOINT,
+    build_proxy_params,
+    estimate_mode_native_credits,
+    parse_proxy_response_envelope,
+    raise_for_failure,
+    scrapeops_request_with_retry,
+)
+
 from backend.application.company_logo import (
     LogoValidationError,
     assert_public_official_host,
@@ -68,6 +77,7 @@ class CompanyEnrichmentResult:
     logo_bytes: bytes | None = None
     logo_source_url: str = ""
     logo_content_type: str = ""
+    extra_fields: Mapping[str, Any] | None = None
     request_count: int = 1
     cost_units: float = 0.0
 
@@ -241,10 +251,173 @@ class OfficialWebsiteProvider:
         return result
 
 
+class ScrapeOpsCompanyProvider(OfficialWebsiteProvider):
+    """Enrich company pages through the configured ScrapeOps proxy."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str = "",
+        mode: str = "",
+        timeout_seconds: int = 30,
+        max_html_bytes: int = 1_000_000,
+    ):
+        super().__init__(timeout_seconds=timeout_seconds, max_html_bytes=max_html_bytes)
+        self.api_key = str(api_key or os.getenv("SCRAPEOPS_API_KEY") or "").strip()
+        configured_mode = str(mode or os.getenv("RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE") or "basic").strip()
+        allowed_modes = {"basic", "render_js_cheap", "render_js", "residential", "render_js_residential"}
+        self.mode = configured_mode if configured_mode in allowed_modes else "basic"
+
+    def _proxy_fetch(self, url: str, *, raw: bool = False) -> tuple[bytes, str, str, int, float]:
+        if not self.api_key:
+            raise ValueError("SCRAPEOPS_API_KEY is required for ScrapeOps company enrichment.")
+        safe_url = validate_official_url(url)
+        assert_public_official_host(urlparse(safe_url).hostname or "")
+        params = build_proxy_params(api_key=self.api_key, url=safe_url, mode=self.mode)
+        if raw:
+            params.pop("json_response", None)
+        retry = scrapeops_request_with_retry(
+            "GET",
+            SCRAPEOPS_PROXY_ENDPOINT,
+            timeout_seconds=self.timeout_seconds,
+            max_retries=2,
+            params=params,
+            headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "*/*" if raw else "text/html,application/xhtml+xml"},
+        )
+        response = retry.response
+        if response is None:
+            raise_for_failure(None, fallback_message="ScrapeOps company request failed.")
+        if int(response.status_code or 0) >= 400:
+            raise_for_failure(response, fallback_message="ScrapeOps company request failed.")
+        if raw:
+            content_type = str(response.headers.get("content-type") or "")
+            return bytes(response.content), content_type, safe_url, retry.attempts, float(estimate_mode_native_credits(self.mode))
+        envelope = parse_proxy_response_envelope(response)
+        if envelope.target_status_code >= 500:
+            raise_for_failure(response, fallback_message="ScrapeOps could not retrieve the company page.")
+        return (
+            envelope.body.encode("utf-8", errors="replace"),
+            str(envelope.payload.get("content_type") or response.headers.get("content-type") or "text/html"),
+            safe_url,
+            retry.attempts,
+            float(envelope.billed_credits_actual or estimate_mode_native_credits(self.mode)),
+        )
+
+    @staticmethod
+    def _extra_fields(data: Mapping[str, Any], *, final_url: str, html_text: str) -> dict[str, Any]:
+        address = data.get("address") if isinstance(data.get("address"), Mapping) else {}
+        contact_value = data.get("contactPoint")
+        contacts = contact_value if isinstance(contact_value, list) else [contact_value]
+        contact = next((item for item in contacts if isinstance(item, Mapping)), {})
+        employee = data.get("numberOfEmployees")
+        if isinstance(employee, Mapping):
+            employee_count = employee.get("value")
+            employee_min = employee.get("minValue")
+            employee_max = employee.get("maxValue")
+        else:
+            employee_count, employee_min, employee_max = employee, None, None
+        logo = data.get("logo")
+        if isinstance(logo, Mapping):
+            logo = logo.get("url") or logo.get("contentUrl")
+        same_as = data.get("sameAs")
+        if isinstance(same_as, str):
+            same_as = [same_as]
+        knows_about = data.get("knowsAbout")
+        if isinstance(knows_about, str):
+            knows_about = [knows_about]
+        result: dict[str, Any] = {
+            "legal_name": data.get("legalName"),
+            "alternate_names": data.get("alternateName"),
+            "description": data.get("description"),
+            "employee_count": employee_count,
+            "employee_min": employee_min,
+            "employee_max": employee_max,
+            "contact_email": data.get("email") or contact.get("email"),
+            "phone": data.get("telephone") or contact.get("telephone"),
+            "social_profiles": same_as,
+            "logo_url": logo,
+            "address_street": address.get("streetAddress"),
+            "address_locality": address.get("addressLocality"),
+            "address_region": address.get("addressRegion"),
+            "postal_code": address.get("postalCode"),
+            "country": address.get("addressCountry"),
+            "founded_date": data.get("foundingDate"),
+            "specialties": knows_about,
+            "area_served": data.get("areaServed"),
+            "parent_organization": data.get("parentOrganization"),
+            "stock_ticker": data.get("tickerSymbol"),
+            "schema_type": data.get("@type"),
+        }
+        soup = BeautifulSoup(html_text, "html.parser")
+        meta = {
+            str(item.get("property") or item.get("name") or "").casefold(): str(item.get("content") or "").strip()
+            for item in soup.find_all("meta")
+            if str(item.get("content") or "").strip()
+        }
+        result.update({
+            "open_graph_site_name": meta.get("og:site_name"),
+            "open_graph_description": meta.get("og:description"),
+            "open_graph_image": meta.get("og:image"),
+            "canonical_url": final_url,
+        })
+        return {key: value for key, value in result.items() if value not in (None, "", [])}
+
+    async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]:
+        del conditional
+        source_url = str(company.get("provenance_url") or "").strip()
+        try:
+            source_url = validate_official_url(source_url)
+        except LogoValidationError:
+            return {"fields": {}, "extra_fields": {}, "source": "scrapeops_company_website", "provenance_url": source_url, "request_count": 0}
+        body, content_type, final_url, attempts, cost_units = await asyncio.to_thread(self._proxy_fetch, source_url)
+        if len(body) > self.max_html_bytes or "html" not in content_type.casefold():
+            return {"fields": {}, "extra_fields": {}, "source": "scrapeops_company_website", "provenance_url": final_url, "request_count": attempts, "cost_units": cost_units}
+        html_text = body.decode("utf-8", errors="replace")
+        data = self._json_ld(html_text)
+        fields = self._explicit_fields(data)
+        fields.setdefault("website", final_url)
+        soup = BeautifulSoup(html_text, "html.parser")
+        for link in soup.find_all("a", href=True):
+            href = urljoin(final_url, str(link.get("href") or "").strip())
+            label = " ".join(link.get_text(" ", strip=True).casefold().split())
+            path = (urlparse(href).path or "").casefold()
+            if not ("career" in label or "job" in label or "karriere" in label or any(token in path for token in ("/career", "/jobs", "/karriere", "/stellen"))):
+                continue
+            try:
+                safe_careers_url = validate_official_url(href, approved_host=urlparse(final_url).hostname or "")
+                assert_public_official_host(urlparse(safe_careers_url).hostname or "")
+            except LogoValidationError:
+                continue
+            fields.setdefault("careers_page", safe_careers_url)
+            break
+        extra_fields = self._extra_fields(data, final_url=final_url, html_text=html_text)
+        result: dict[str, Any] = {
+            "fields": fields,
+            "extra_fields": extra_fields,
+            "source": "scrapeops_company_website",
+            "provenance_url": final_url,
+            "observed_at": utc_now_iso(),
+            "verified_at": utc_now_iso() if fields or extra_fields else "",
+            "request_count": attempts,
+            "cost_units": cost_units,
+        }
+        logo_url = str(extra_fields.get("logo_url") or extra_fields.get("open_graph_image") or "").strip()
+        try:
+            logo_url = validate_official_url(urljoin(final_url, logo_url), approved_host=urlparse(final_url).hostname or "") if logo_url else ""
+        except LogoValidationError:
+            logo_url = ""
+        if logo_url:
+            logo_body, logo_type, logo_final_url, logo_attempts, logo_cost = await asyncio.to_thread(self._proxy_fetch, logo_url, raw=True)
+            result.update({"logo_bytes": logo_body, "logo_content_type": logo_type, "logo_source_url": logo_final_url, "request_count": attempts + logo_attempts, "cost_units": cost_units + logo_cost})
+        return result
+
+
 def configured_company_enrichment_provider() -> CompanyEnrichmentProvider:
     """Build the explicitly configured provider without starting enrichment."""
 
     provider = str(os.getenv("RUNR_COMPANY_ENRICHMENT_PROVIDER") or "official_website").strip().casefold()
+    if provider in {"scrapeops", "scrapeops_company", "scrapeops_company_website"}:
+        return ScrapeOpsCompanyProvider()
     if provider in {"official_website", "company_website"}:
         return OfficialWebsiteProvider()
     raise ValueError(f"Unsupported RUNR_COMPANY_ENRICHMENT_PROVIDER: {provider}")
@@ -262,6 +435,7 @@ def _as_result(value: Mapping[str, Any]) -> CompanyEnrichmentResult:
         observed_at=str(value.get("observed_at") or ""), verified_at=str(value.get("verified_at") or ""),
         logo_bytes=bytes(value["logo_bytes"]) if value.get("logo_bytes") is not None else None,
         logo_source_url=str(value.get("logo_source_url") or ""), logo_content_type=str(value.get("logo_content_type") or ""),
+        extra_fields=dict(value.get("extra_fields") or {}) if isinstance(value.get("extra_fields"), Mapping) else {},
         request_count=max(0, int(value.get("request_count") or 0)), cost_units=max(0.0, float(value.get("cost_units") or 0)),
     )
 
@@ -298,6 +472,32 @@ def _valid_value(field: str, value: Any, *, now_year: int) -> Any:
         return list(dict.fromkeys(cleaned)) or None
     if isinstance(value, (str, int, float, bool)):
         return value
+    return None
+
+
+def _valid_extra_value(value: Any) -> Any:
+    """Bound arbitrary public company metadata before storing it in JSON."""
+    if value in (None, "", []):
+        return None
+    if isinstance(value, str):
+        cleaned = " ".join(value.split())
+        return cleaned[:4096] or None
+    if isinstance(value, (int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        result = {}
+        for key, item in list(value.items())[:50]:
+            cleaned = _valid_extra_value(item)
+            if cleaned is not None:
+                result[str(key)[:100]] = cleaned
+        return result or None
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        result = []
+        for item in list(value)[:100]:
+            cleaned = _valid_extra_value(item)
+            if cleaned is not None:
+                result.append(cleaned)
+        return result or None
     return None
 
 
@@ -373,12 +573,27 @@ class CompanyEnrichmentService:
                             fields[field] = {"value": value, "state": "known", "status": "known", "provenance": {"source": str(field_source or result.source), "url": str(field_url or result.provenance_url)}, "observed_at": str(raw_field.get("observed_at") if isinstance(raw_field, Mapping) else observed_at), "verified_at": str(raw_field.get("verified_at") if isinstance(raw_field, Mapping) else verified_at)}
                         else:
                             fields[field] = {"value": None, "state": "unknown", "status": "unknown", "provenance": None, "observed_at": None, "verified_at": None, "unknown_reason": UNKNOWN_REASON}
+                    extra_fields: dict[str, Any] = {}
+                    for extra_name, raw_extra in (result.extra_fields or {}).items():
+                        value = _valid_extra_value(raw_extra.get("value") if isinstance(raw_extra, Mapping) else raw_extra)
+                        if value is None:
+                            continue
+                        extra_source = raw_extra.get("source") if isinstance(raw_extra, Mapping) else result.source
+                        extra_url = raw_extra.get("url") if isinstance(raw_extra, Mapping) else result.provenance_url
+                        extra_fields[str(extra_name)] = {
+                            "value": value,
+                            "state": "known",
+                            "status": "known",
+                            "provenance": {"source": str(extra_source or result.source), "url": str(extra_url or result.provenance_url)},
+                            "observed_at": str(raw_extra.get("observed_at") if isinstance(raw_extra, Mapping) else observed_at),
+                            "verified_at": str(raw_extra.get("verified_at") if isinstance(raw_extra, Mapping) else verified_at),
+                        }
                     logo_key = ""
                     logo_cached = False
                     if result.logo_bytes is not None:
                         validated = validate_logo(result.logo_bytes, result.logo_content_type)
                         logo_key, logo_cached = cache_logo(self.object_storage, str(claimed["company_id"]), validated)
-                    payload = {"schema_version": "phase_f_v2", "fields": fields, "source": result.source, "provenance_url": result.provenance_url, "observed_at": observed_at, "verified_at": verified_at}
+                    payload = {"schema_version": "phase_f_v3", "fields": fields, "additional_fields": extra_fields, "source": result.source, "provenance_url": result.provenance_url, "observed_at": observed_at, "verified_at": verified_at}
                     written = self.profile_writer(str(claimed["company_id"]), payload, logo_bytes=result.logo_bytes, logo_source_url=result.logo_source_url, logo_content_type=result.logo_content_type) if result.logo_bytes is not None else self.profile_writer(str(claimed["company_id"]), payload)
                     del written
                     finish = store.finish_company_enrichment_attempt(
@@ -404,4 +619,4 @@ class CompanyEnrichmentService:
         return asyncio.run(self.run(**kwargs))
 
 
-__all__ = ["COMPANY_ENRICHMENT_FIELDS", "CompanyEnrichmentResult", "CompanyEnrichmentService", "OfficialWebsiteProvider", "configured_company_enrichment_provider"]
+__all__ = ["COMPANY_ENRICHMENT_FIELDS", "CompanyEnrichmentResult", "CompanyEnrichmentService", "OfficialWebsiteProvider", "ScrapeOpsCompanyProvider", "configured_company_enrichment_provider"]

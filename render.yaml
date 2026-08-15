@@ -55,9 +55,13 @@ services:
       - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
         value: "true"
       - key: RUNR_COMPANY_ENRICHMENT_PROVIDER
-        value: official_website
+        value: scrapeops
+      - key: RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE
+        value: basic
       - key: RUNR_COMPANY_ENRICHMENT_ENABLED
-        value: "0"
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
+        value: "1"
       - key: DATABASE_BACKEND
         value: turso
       - key: RUNR_STORAGE_BACKEND
@@ -148,9 +152,13 @@ services:
       - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
         value: "true"
       - key: RUNR_COMPANY_ENRICHMENT_PROVIDER
-        value: official_website
+        value: scrapeops
+      - key: RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE
+        value: basic
       - key: RUNR_COMPANY_ENRICHMENT_ENABLED
-        value: "0"
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
+        value: "1"
       - key: DATABASE_BACKEND
         value: turso
       - key: RUNR_STORAGE_BACKEND

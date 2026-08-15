@@ -837,6 +837,9 @@ class PersonalizedJobsService:
 
     def _company_profile(self, row: Mapping[str, Any]) -> dict[str, Any]:
         fields = _company_profile_fields(row)
+        stored_profile = _parse_json(row.get("company_profile_json"))
+        stored_additional_fields = stored_profile.get("additional_fields") if isinstance(stored_profile, Mapping) else {}
+        additional_fields = dict(stored_additional_fields) if isinstance(stored_additional_fields, Mapping) else {}
         for field, record in list(fields.items()):
             if not isinstance(record, Mapping):
                 continue
@@ -860,8 +863,9 @@ class PersonalizedJobsService:
             logo_record["state"] = "known"
         fields["logo"] = logo_record
         return _public_clean({
-            "schema_version": "phase_f_v2",
+            "schema_version": "phase_f_v3",
             "fields": fields,
+            "additional_fields": additional_fields,
             "logo_url": logo_url or None,
             "logo_cached": bool(logo_object_key),
             "monogram": deterministic_monogram(_text(row.get("company")) or _text(row.get("canonical_name"))),
@@ -1445,6 +1449,8 @@ class PersonalizedJobsService:
         existing_profile = existing.get("profile") if isinstance(existing.get("profile"), Mapping) else {}
         existing_fields = existing_profile.get("fields") if isinstance(existing_profile, Mapping) else {}
         existing_fields = existing_fields if isinstance(existing_fields, Mapping) else {}
+        existing_additional_fields = existing_profile.get("additional_fields") if isinstance(existing_profile, Mapping) else {}
+        existing_additional_fields = existing_additional_fields if isinstance(existing_additional_fields, Mapping) else {}
         payload_source = _text(payload.get("source")) if isinstance(payload, Mapping) else ""
         payload_url = _text(payload.get("provenance_url")) if isinstance(payload, Mapping) else ""
         payload_observed = _text(payload.get("observed_at")) if isinstance(payload, Mapping) else ""
@@ -1486,7 +1492,44 @@ class PersonalizedJobsService:
             if not (record.get("state") == "known" and record.get("value") not in (None, "", [])) and old_known:
                 record = dict(old)
             fields[field] = record
-        profile = {"schema_version": "phase_f_v2", "fields": fields}
+        additional_fields: dict[str, Any] = {str(key): value for key, value in existing_additional_fields.items()}
+        incoming_additional_fields = payload.get("additional_fields") if isinstance(payload, Mapping) else {}
+        if isinstance(incoming_additional_fields, Mapping):
+            for extra_name, raw_extra in incoming_additional_fields.items():
+                name = str(extra_name or "").strip()[:100]
+                if not name:
+                    continue
+                record = dict(raw_extra) if isinstance(raw_extra, Mapping) else {"value": raw_extra}
+                value = record.get("value")
+                known = value not in (None, "", []) and not _is_unknown_value(value) and str(record.get("state") or "known") != "unknown"
+                old = additional_fields.get(name)
+                old_known = isinstance(old, Mapping) and old.get("value") not in (None, "", []) and str(old.get("state") or "") == "known"
+                if not known and old_known:
+                    continue
+                if known:
+                    provenance = record.get("provenance") if isinstance(record.get("provenance"), Mapping) else {}
+                    record.update({
+                        "value": value,
+                        "state": "known",
+                        "status": "known",
+                        "provenance": {
+                            "source": _text(provenance.get("source")) or payload_source,
+                            "url": _text(provenance.get("url")) or payload_url,
+                        },
+                        "observed_at": _text(record.get("observed_at")) or payload_observed or None,
+                        "verified_at": _text(record.get("verified_at")) or payload_verified or None,
+                    })
+                else:
+                    record.update({
+                        "value": None,
+                        "state": "unknown",
+                        "status": "unknown",
+                        "provenance": None,
+                        "observed_at": None,
+                        "verified_at": None,
+                    })
+                additional_fields[name] = record
+        profile = {"schema_version": "phase_f_v3", "fields": fields, "additional_fields": additional_fields}
         logo_object_key = ""
         logo_hash = ""
         logo_verified_at = ""
