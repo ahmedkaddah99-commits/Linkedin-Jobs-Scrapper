@@ -28,6 +28,7 @@
 .marketing-site h4,
 .marketing-site p { margin: 0; }
 .marketing-site .material-symbols-outlined { font-size: 1.25rem; }
+.marketing-home section[id] { scroll-margin-top: 80px; }
 
 .marketing-nav {
   align-items: center;

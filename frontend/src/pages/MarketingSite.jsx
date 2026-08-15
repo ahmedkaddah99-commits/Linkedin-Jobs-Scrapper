@@ -1,4 +1,5 @@
-import { Link } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, useLocation } from "react-router-dom";
 import termsMarkdown from "../../../docs/legal/RUNR_TERMS_AND_CONDITIONS.md?raw";
 import userAgreementMarkdown from "../../../docs/legal/RUNR_USER_AGREEMENT.md?raw";
 import "../marketing.css";
@@ -88,9 +89,9 @@ const sprintFeatures = [
 
 function SiteNav({ active }) {
   const links = [
-    ["Product", "/"],
-    ["How it works", "/how-it-works"],
-    ["Pricing", "/pricing"],
+    ["Product", "/#product"],
+    ["How it works", "/#how-it-works"],
+    ["Pricing", "/#pricing"],
     ["Security", "/security"],
     ["Help", "/"],
   ];
@@ -132,8 +133,8 @@ function SiteFooter({ active }) {
           <p>© 2024 runr. Built for performance.</p>
         </div>
         <div className="marketing-footer__links">
-          <Link to="/">Product</Link>
-          <Link className={active === "Pricing" ? "is-active" : ""} to="/pricing">
+          <Link to="/#product">Product</Link>
+          <Link className={active === "Pricing" ? "is-active" : ""} to="/#pricing">
             Pricing
           </Link>
           <Link className={active === "Security" ? "is-active" : ""} to="/security">
@@ -148,12 +149,10 @@ function SiteFooter({ active }) {
   );
 }
 
-function ProductPage() {
+function ProductSection() {
   return (
     <>
-      <SiteNav active="Product" />
-      <main>
-        <section className="product-hero">
+      <section id="product" className="product-hero">
           <div className="product-hero__inner">
             <div className="marketing-kicker">
               <span className="material-symbols-outlined">bolt</span>
@@ -172,7 +171,7 @@ function ProductPage() {
               <Link className="marketing-button marketing-button--primary" to="/sign-up">
                 Start for free
               </Link>
-              <Link className="marketing-button marketing-button--secondary" to="/how-it-works">
+              <Link className="marketing-button marketing-button--secondary" to="/#how-it-works">
                 See how it works
               </Link>
             </div>
@@ -230,9 +229,9 @@ function ProductPage() {
               </div>
             </div>
           </div>
-        </section>
+      </section>
 
-        <section className="product-feature">
+      <section className="product-feature">
           <div className="product-feature__inner">
             <div className="product-feature__copy">
               <h2>Relevant opportunities, already ready for you.</h2>
@@ -273,18 +272,14 @@ function ProductPage() {
               </div>
             </div>
           </div>
-        </section>
-      </main>
-      <SiteFooter active="Product" />
+      </section>
     </>
   );
 }
 
-function HowItWorksPage() {
+function HowItWorksSection() {
   return (
-    <>
-      <SiteNav active="How it works" />
-      <main className="how-page">
+    <section id="how-it-works" className="how-page">
         <section className="how-hero">
           <h1>
             The path to your next role, <span>simplified.</span>
@@ -321,9 +316,7 @@ function HowItWorksPage() {
             Get Started Now
           </Link>
         </section>
-      </main>
-      <SiteFooter active="How it works" />
-    </>
+    </section>
   );
 }
 
@@ -340,11 +333,9 @@ function FeatureList({ items, muted = false }) {
   );
 }
 
-function PricingPage() {
+function PricingSection() {
   return (
-    <>
-      <SiteNav active="Pricing" />
-      <main className="pricing-page">
+    <section id="pricing" className="pricing-page">
         <header className="pricing-hero">
           <h1>Apply as much as you want</h1>
           <p className="pricing-hero__lead">Runr does not charge you for every application.</p>
@@ -391,8 +382,35 @@ function PricingPage() {
             </Link>
           </section>
         </div>
+    </section>
+  );
+}
+
+function MarketingHomePage() {
+  const { hash } = useLocation();
+
+  useEffect(() => {
+    if (!hash) return undefined;
+    const target = document.getElementById(decodeURIComponent(hash.slice(1)));
+    if (!target) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      target.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "start",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [hash]);
+
+  return (
+    <>
+      <SiteNav active="Product" />
+      <main className="marketing-home">
+        <ProductSection />
+        <HowItWorksSection />
+        <PricingSection />
       </main>
-      <SiteFooter active="Pricing" />
+      <SiteFooter active="Product" />
     </>
   );
 }
@@ -653,8 +671,9 @@ function LegalDocumentPage({ kind }) {
 }
 
 export default function MarketingSite({ page = "product" }) {
-  if (page === "how") return <div className="marketing-site"><HowItWorksPage /></div>;
-  if (page === "pricing") return <div className="marketing-site"><PricingPage /></div>;
+  if (page === "home" || page === "product" || page === "how" || page === "pricing") {
+    return <div className="marketing-site"><MarketingHomePage /></div>;
+  }
   if (page === "security") return <div className="marketing-site"><SecurityPage /></div>;
   if (page === "terms") return <div className="marketing-site"><LegalDocumentPage kind="terms" /></div>;
   if (page === "privacy") return <div className="marketing-site"><LegalDocumentPage kind="privacy" /></div>;
