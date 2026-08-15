@@ -9,6 +9,7 @@ import "./styles.css";
 
 const clerkPublishableKey = String(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || "").trim();
 const browserTestMode = import.meta.env.VITE_E2E_AUTH === "1";
+const appSubdomain = window.location.hostname === "app.userunr.com";
 const publicMarketingPaths = new Set([
   "/",
   "/how-it-works",
@@ -19,7 +20,7 @@ const publicMarketingPaths = new Set([
   "/user-agreement",
   "/privacy",
 ]);
-const canRenderPublicMarketing = publicMarketingPaths.has(window.location.pathname);
+const canRenderPublicMarketing = !appSubdomain && publicMarketingPaths.has(window.location.pathname);
 
 function AppFrame() {
   return (
