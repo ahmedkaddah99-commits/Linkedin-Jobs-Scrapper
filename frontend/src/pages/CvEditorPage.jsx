@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 
@@ -35,6 +35,21 @@ function lines(value) {
     .filter(Boolean);
 }
 
+function stripBulletPrefix(value) {
+  return String(value || "").replace(/^\s*(?:[•◦▪·●*-]|\d+[.)])\s*/, "").trim();
+}
+
+function bulletLines(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map(stripBulletPrefix)
+    .filter(Boolean);
+}
+
+function formatBulletLines(value) {
+  return (Array.isArray(value) ? value : bulletLines(value)).map((item) => `• ${stripBulletPrefix(item)}`).join("\n");
+}
+
 function normalizeProfile(raw = {}) {
   const source = raw && typeof raw === "object" ? raw : {};
   return {
@@ -50,7 +65,7 @@ function normalizeProfile(raw = {}) {
         title: text(item?.title || item?.role),
         company: text(item?.company),
         period: text(item?.period),
-        bullets: Array.isArray(item?.bullets) ? item.bullets.map(text).filter(Boolean) : lines(item?.bulletsText),
+        bullets: Array.isArray(item?.bullets) ? item.bullets.map(stripBulletPrefix).filter(Boolean) : bulletLines(item?.bulletsText),
       }))
       : [],
     education: Array.isArray(source.education)
@@ -58,21 +73,21 @@ function normalizeProfile(raw = {}) {
         degree_title: text(item?.degree_title || item?.degree || item?.title),
         institution: text(item?.institution || item?.school),
         period: text(item?.period),
-        details: Array.isArray(item?.details) ? item.details.map(text).filter(Boolean) : lines(item?.detailsText),
+        details: Array.isArray(item?.details) ? item.details.map(stripBulletPrefix).filter(Boolean) : bulletLines(item?.detailsText),
       }))
       : [],
     projects: Array.isArray(source.projects)
       ? source.projects.map((item) => ({
         title: text(item?.title || item?.name),
         period: text(item?.period || item?.date || item?.year),
-        bullets: Array.isArray(item?.bullets) ? item.bullets.map(text).filter(Boolean) : lines(item?.bulletsText),
+        bullets: Array.isArray(item?.bullets) ? item.bullets.map(stripBulletPrefix).filter(Boolean) : bulletLines(item?.bulletsText),
       }))
       : [],
     custom_sections: Array.isArray(source.custom_sections)
       ? source.custom_sections.map((item) => ({
         section_id: text(item?.section_id || item?.id),
         heading: text(item?.heading || item?.title || item?.label),
-        lines: Array.isArray(item?.lines) ? item.lines.map(text).filter(Boolean) : lines(item?.content || item?.text),
+        lines: Array.isArray(item?.lines) ? item.lines.map(stripBulletPrefix).filter(Boolean) : bulletLines(item?.content || item?.text),
       }))
       : [],
   };
@@ -106,13 +121,19 @@ function Field({ label, className = "", ...props }) {
   );
 }
 
-function TextField({ label, className = "", ...props }) {
+function TextField({ highlighted = false, label, className = "", placeholder, value, ...props }) {
+  const bulletInput = /Achievements|Highlights|Details|Content/.test(label);
+
   return (
     <label className={`grid gap-2 ${className}`}>
       <span className="text-xs font-semibold uppercase tracking-[0.12em] text-on-surface-variant">{label}</span>
+      {bulletInput ? <span className="text-xs leading-5 text-on-surface-variant">Each line stays a bullet in the finished CV.</span> : null}
       <textarea
         {...props}
-        className="min-h-24 w-full resize-y rounded-xl border border-outline-variant/25 bg-surface px-3.5 py-3 text-sm leading-6 text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+        className={`min-h-24 w-full resize-y rounded-xl border border-outline-variant/25 bg-surface px-3.5 py-3 text-sm leading-6 text-on-surface outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 ${highlighted ? "ring-2 ring-primary/45 ring-offset-2" : ""}`}
+        data-cv-bullet-field={bulletInput ? "true" : undefined}
+        placeholder={bulletInput ? formatBulletLines(placeholder) : placeholder}
+        value={bulletInput ? formatBulletLines(value) : value}
       />
     </label>
   );
@@ -167,22 +188,29 @@ function RemoveButton({ onClick }) {
   );
 }
 
-function PreviewSection({ children, onEdit, target, title }) {
-  const interactive = Boolean(onEdit && target);
-
+function PreviewSection({ children, highlighted = false, onEdit, target, title }) {
   return (
-    <section className="group mt-5 first:mt-0">
+    <section className={`group mt-5 rounded-xl first:mt-0 ${highlighted ? "bg-amber-50/70 p-2 ring-2 ring-amber-400/80" : ""}`} id={`cv-preview-${target}`}>
       <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-1.5">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700">{title}</h3>
-        {interactive ? <button aria-label={`Edit ${title}`} className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-600 transition-opacity sm:opacity-0 sm:group-hover:opacity-100" onClick={() => onEdit(target)} type="button"><Icon className="text-[13px]">edit</Icon>Edit</button> : null}
+        <button aria-label={`Edit ${title}`} className="text-left text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700" onClick={() => onEdit(target)} type="button">{title}</button>
+        <button aria-label={`Edit ${title}`} className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-600 transition-opacity sm:opacity-0 sm:group-hover:opacity-100" onClick={() => onEdit(target)} type="button"><Icon className="text-[13px]">edit</Icon>Edit</button>
       </div>
       <div className="mt-2.5">{children}</div>
     </section>
   );
 }
 
-function CvPreview({ onEdit, profile }) {
+function PreviewBullet({ children, highlighted = false, id, onEdit, target }) {
+  return (
+    <li id={id}>
+      <button aria-label={`Edit ${target.replaceAll("-", " ")}`} className={`block w-full rounded-md px-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 ${highlighted ? "bg-amber-200/80 text-slate-900 ring-2 ring-amber-400" : "hover:bg-teal-50/70"}`} onClick={() => onEdit(target)} type="button">{children}</button>
+    </li>
+  );
+}
+
+function CvPreview({ highlightedTarget, onEdit, profile }) {
   const contacts = [profile.email, profile.location, profile.website, profile.linkedin_url, profile.github_url].filter(Boolean);
+  const isHighlighted = (target) => highlightedTarget === target;
 
   function activateItem(event, target) {
     if (event.key === "Enter" || event.key === " ") {
@@ -192,25 +220,16 @@ function CvPreview({ onEdit, profile }) {
     }
   }
 
-  function clickableItem(target) {
-    return {
-      "aria-label": `Edit ${target.replaceAll("-", " ")}`,
-      className: "-mx-2 cursor-pointer rounded-lg px-2 py-1 transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50",
-      onClick: (event) => {
-        event.stopPropagation();
-        onEdit(target);
-      },
-      onKeyDown: (event) => activateItem(event, target),
-      role: "button",
-      tabIndex: 0,
-    };
-  }
-
   return (
     <article className="mx-auto min-h-[52rem] max-w-[43rem] bg-white p-7 text-[11px] leading-[1.55] text-slate-700 shadow-xl shadow-slate-900/10 sm:p-10">
+      <div className="mb-5 flex items-start gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2.5 text-[10px] leading-4 text-teal-900 shadow-sm">
+        <Icon className="mt-0.5 shrink-0 text-[15px] text-teal-700">edit</Icon>
+        <div><strong className="font-bold">Edit anywhere</strong><p>Focus a field on the left to highlight it here, or click any section, entry, or bullet in this preview to jump to its editor.</p></div>
+      </div>
       <header
         aria-label="Edit identity and contact"
-        className="group cursor-pointer rounded-xl border-b-2 border-teal-600 pb-4 text-center transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50"
+        className={`group cursor-pointer rounded-xl border-b-2 border-teal-600 pb-4 text-center transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 ${isHighlighted("identity") ? "bg-amber-50/70 p-2 ring-2 ring-amber-400/80" : ""}`}
+        id="cv-preview-identity"
         onClick={() => onEdit("identity")}
         onKeyDown={(event) => activateItem(event, "identity")}
         role="button"
@@ -222,19 +241,18 @@ function CvPreview({ onEdit, profile }) {
         <span className="mt-2 inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"><span className="material-symbols-outlined text-[13px]">edit</span>Click to edit</span>
       </header>
 
-      {profile.summary ? <PreviewSection onEdit={onEdit} target="summary" title="Summary"><p>{profile.summary}</p></PreviewSection> : null}
+      {profile.summary ? <PreviewSection highlighted={isHighlighted("summary")} onEdit={onEdit} target="summary" title="Summary"><button className="w-full rounded-md px-1 text-left transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50" onClick={() => onEdit("summary")} type="button">{profile.summary}</button></PreviewSection> : null}
 
       {profile.recent_experience.length ? (
-        <PreviewSection onEdit={onEdit} target="experience" title="Experience">
+        <PreviewSection highlighted={isHighlighted("experience")} onEdit={onEdit} target="experience" title="Experience">
           <div className="space-y-3">
             {profile.recent_experience.map((item, index) => (
-              <div {...clickableItem(`experience-${index}`)} key={`${item.title}-${index}`}>
-                <div className="flex items-baseline justify-between gap-3">
-                  <strong className="text-[12px] text-[#17324d]">{item.title || "Role"}</strong>
-                  <span className="shrink-0 text-[9px] text-slate-500">{item.period}</span>
-                </div>
-                {item.company ? <p className="text-[10px] font-medium text-teal-700">{item.company}</p> : null}
-                {item.bullets.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.bullets.map((bullet, bulletIndex) => <li key={`${bullet}-${bulletIndex}`}>{bullet}</li>)}</ul> : null}
+              <div className="rounded-lg" id={`cv-preview-experience-${index}`} key={`${item.title}-${index}`}>
+                <button aria-label={`Edit experience ${index + 1}`} className={`block w-full rounded-lg px-1 text-left transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 ${isHighlighted(`experience-${index}`) ? "bg-amber-50/70 ring-2 ring-amber-400/80" : ""}`} onClick={() => onEdit(`experience-${index}`)} type="button">
+                  <div className="flex items-baseline justify-between gap-3"><strong className="text-[12px] text-[#17324d]">{item.title || "Role"}</strong><span className="shrink-0 text-[9px] text-slate-500">{item.period}</span></div>
+                  {item.company ? <p className="text-[10px] font-medium text-teal-700">{item.company}</p> : null}
+                </button>
+                {item.bullets.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.bullets.map((bullet, bulletIndex) => <PreviewBullet id={`cv-preview-experience-${index}-bullet-${bulletIndex}`} key={`${bullet}-${bulletIndex}`} onEdit={onEdit} target={`experience-${index}-bullet-${bulletIndex}`} highlighted={isHighlighted(`experience-${index}-bullet-${bulletIndex}`)}>{bullet}</PreviewBullet>)}</ul> : null}
               </div>
             ))}
           </div>
@@ -242,12 +260,12 @@ function CvPreview({ onEdit, profile }) {
       ) : null}
 
       {profile.projects.length ? (
-        <PreviewSection onEdit={onEdit} target="projects" title="Projects">
+        <PreviewSection highlighted={isHighlighted("projects")} onEdit={onEdit} target="projects" title="Projects">
           <div className="space-y-3">
             {profile.projects.map((item, index) => (
-              <div {...clickableItem(`project-${index}`)} key={`${item.title}-${index}`}>
-                <div className="flex items-baseline justify-between gap-3"><strong className="text-[12px] text-[#17324d]">{item.title || "Project"}</strong><span className="shrink-0 text-[9px] text-slate-500">{item.period}</span></div>
-                {item.bullets.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.bullets.map((bullet, bulletIndex) => <li key={`${bullet}-${bulletIndex}`}>{bullet}</li>)}</ul> : null}
+              <div className="rounded-lg" id={`cv-preview-project-${index}`} key={`${item.title}-${index}`}>
+                <button aria-label={`Edit project ${index + 1}`} className={`block w-full rounded-lg px-1 text-left transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 ${isHighlighted(`project-${index}`) ? "bg-amber-50/70 ring-2 ring-amber-400/80" : ""}`} onClick={() => onEdit(`project-${index}`)} type="button"><div className="flex items-baseline justify-between gap-3"><strong className="text-[12px] text-[#17324d]">{item.title || "Project"}</strong><span className="shrink-0 text-[9px] text-slate-500">{item.period}</span></div></button>
+                {item.bullets.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.bullets.map((bullet, bulletIndex) => <PreviewBullet id={`cv-preview-project-${index}-bullet-${bulletIndex}`} key={`${bullet}-${bulletIndex}`} onEdit={onEdit} target={`project-${index}-bullet-${bulletIndex}`} highlighted={isHighlighted(`project-${index}-bullet-${bulletIndex}`)}>{bullet}</PreviewBullet>)}</ul> : null}
               </div>
             ))}
           </div>
@@ -255,16 +273,16 @@ function CvPreview({ onEdit, profile }) {
       ) : null}
 
       {profile.education.length ? (
-        <PreviewSection onEdit={onEdit} target="education" title="Education">
+        <PreviewSection highlighted={isHighlighted("education")} onEdit={onEdit} target="education" title="Education">
           <div className="space-y-2.5">
-            {profile.education.map((item, index) => <div {...clickableItem(`education-${index}`)} key={`${item.degree_title}-${index}`}><div className="flex items-baseline justify-between gap-3"><strong className="text-[12px] text-[#17324d]">{item.degree_title || "Education"}</strong><span className="shrink-0 text-[9px] text-slate-500">{item.period}</span></div><p className="text-[10px] text-teal-700">{item.institution}</p>{item.details.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.details.map((detail, detailIndex) => <li key={`${detail}-${detailIndex}`}>{detail}</li>)}</ul> : null}</div>)}
+            {profile.education.map((item, index) => <div className="rounded-lg" id={`cv-preview-education-${index}`} key={`${item.degree_title}-${index}`}><button aria-label={`Edit education ${index + 1}`} className={`block w-full rounded-lg px-1 text-left transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50 ${isHighlighted(`education-${index}`) ? "bg-amber-50/70 ring-2 ring-amber-400/80" : ""}`} onClick={() => onEdit(`education-${index}`)} type="button"><div className="flex items-baseline justify-between gap-3"><strong className="text-[12px] text-[#17324d]">{item.degree_title || "Education"}</strong><span className="shrink-0 text-[9px] text-slate-500">{item.period}</span></div><p className="text-[10px] text-teal-700">{item.institution}</p></button>{item.details.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.details.map((detail, detailIndex) => <PreviewBullet id={`cv-preview-education-${index}-detail-${detailIndex}`} key={`${detail}-${detailIndex}`} onEdit={onEdit} target={`education-${index}-detail-${detailIndex}`} highlighted={isHighlighted(`education-${index}-detail-${detailIndex}`)}>{detail}</PreviewBullet>)}</ul> : null}</div>)}
           </div>
         </PreviewSection>
       ) : null}
 
-      {profile.competencies.length ? <PreviewSection onEdit={onEdit} target="skills" title="Skills"><div className="flex flex-wrap gap-1.5">{profile.competencies.map((item) => <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-medium text-slate-700" key={item}>{item}</span>)}</div></PreviewSection> : null}
-      {profile.languages.length ? <PreviewSection onEdit={onEdit} target="languages" title="Languages"><p>{profile.languages.join("  ·  ")}</p></PreviewSection> : null}
-      {profile.custom_sections.map((section, index) => section.heading || section.lines.length ? <PreviewSection onEdit={onEdit} target={`custom-${index}`} key={`${section.section_id || section.heading}-${index}`} title={section.heading || "Additional information"}><ul className="list-disc space-y-0.5 pl-4">{section.lines.map((line, lineIndex) => <li key={`${line}-${lineIndex}`}>{line}</li>)}</ul></PreviewSection> : null)}
+      {profile.competencies.length ? <PreviewSection highlighted={isHighlighted("skills")} onEdit={onEdit} target="skills" title="Skills"><div className="flex flex-wrap gap-1.5">{profile.competencies.map((item) => <button className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-medium text-slate-700 transition-colors hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50" key={item} onClick={() => onEdit("skills")} type="button">{item}</button>)}</div></PreviewSection> : null}
+      {profile.languages.length ? <PreviewSection highlighted={isHighlighted("languages")} onEdit={onEdit} target="languages" title="Languages"><div className="flex flex-wrap gap-1.5">{profile.languages.map((item) => <button className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-medium text-slate-700 transition-colors hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50" key={item} onClick={() => onEdit("languages")} type="button">{item}</button>)}</div></PreviewSection> : null}
+      {profile.custom_sections.map((section, index) => section.heading || section.lines.length ? <PreviewSection highlighted={isHighlighted(`custom-${index}`)} onEdit={onEdit} target={`custom-${index}`} key={`${section.section_id || section.heading}-${index}`} title={section.heading || "Additional information"}><ul className="list-disc space-y-0.5 pl-4">{section.lines.map((line, lineIndex) => <PreviewBullet id={`cv-preview-custom-${index}-line-${lineIndex}`} key={`${line}-${lineIndex}`} onEdit={onEdit} target={`custom-${index}-line-${lineIndex}`} highlighted={isHighlighted(`custom-${index}-line-${lineIndex}`)}>{line}</PreviewBullet>)}</ul></PreviewSection> : null)}
 
       {!profile.summary && !profile.recent_experience.length && !profile.projects.length && !profile.education.length && !profile.competencies.length ? <div className="mt-16 rounded-2xl border border-dashed border-slate-300 p-6 text-center text-slate-400">Your live CV preview will appear here as you add content.</div> : null}
     </article>
@@ -283,7 +301,6 @@ export default function CvEditorPage() {
   const [saveState, setSaveState] = useState({ saving: false, message: "", error: "" });
   const [dirty, setDirty] = useState(false);
   const [activeEditTarget, setActiveEditTarget] = useState("");
-  const editTargetTimerRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -316,23 +333,99 @@ export default function CvEditorPage() {
     return () => window.removeEventListener("beforeunload", confirmUnload);
   }, [dirty]);
 
-  useEffect(() => () => {
-    if (editTargetTimerRef.current) {
-      window.clearTimeout(editTargetTimerRef.current);
+  useEffect(() => {
+    if (!activeEditTarget) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const element = window.document.getElementById(`cv-preview-${activeEditTarget}`);
+      const scroller = element?.closest("[data-cv-preview-scroll]");
+      if (!element || !scroller) return;
+      const elementRect = element.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const nextTop = scroller.scrollTop + elementRect.top - scrollerRect.top - (scroller.clientHeight - elementRect.height) / 2;
+      scroller.scrollTo({ behavior: "smooth", top: Math.max(0, nextTop) });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeEditTarget]);
+
+  function resolveEditorTarget(target) {
+    const lineMatch = target.match(/^(experience|project|education|custom)-(\d+)-(bullet|detail|line)-(\d+)$/);
+    if (lineMatch) {
+      const [, collection, index, lineType, lineIndex] = lineMatch;
+      const fieldName = lineType === "bullet" ? "bullets" : lineType === "detail" ? "details" : "lines";
+      const baseId = `cv-editor-${collection}-${index}`;
+      const element = window.document.getElementById(baseId);
+      const field = window.document.getElementById(`${baseId}-${fieldName}`) || element?.querySelector("textarea");
+      return { element, field, lineIndex: Number(lineIndex) };
     }
-  }, []);
+    const element = window.document.getElementById(`cv-editor-${target}`);
+    return { element, field: element?.matches("input, textarea") ? element : element?.querySelector("input, textarea") };
+  }
+
+  function selectEditorLine(field, lineIndex) {
+    if (!field || lineIndex === undefined) return;
+    const rawLines = field.value.split(/\r?\n/);
+    const line = rawLines[lineIndex];
+    if (line === undefined) return;
+    const lineStart = rawLines.slice(0, lineIndex).reduce((total, item) => total + item.length + 1, 0);
+    const prefixLength = line.match(/^\s*•\s?/)?.[0].length || 0;
+    field.setSelectionRange(lineStart + prefixLength, lineStart + line.length);
+  }
+
+  function activateEditorTarget(target) {
+    setActiveEditTarget(target);
+  }
+
+  function editorTargetForElement(element) {
+    let current = element;
+    while (current && current !== window.document.body) {
+      const id = current.id || "";
+      const itemMatch = id.match(/^cv-editor-(experience|project|education|custom)-(\d+)$/);
+      if (itemMatch) return `${itemMatch[1]}-${itemMatch[2]}`;
+      if (id === "cv-editor-identity") return "identity";
+      if (id === "cv-editor-summary") return "summary";
+      if (id === "cv-editor-experience") return "experience";
+      if (id === "cv-editor-projects") return "projects";
+      if (id === "cv-editor-education") return "education";
+      if (id === "cv-editor-skills" || id === "cv-editor-skills-field") return "skills";
+      if (id === "cv-editor-languages" || id === "cv-editor-languages-field") return "languages";
+      if (id === "cv-editor-custom") return "custom";
+      current = current.parentElement;
+    }
+    return "";
+  }
+
+  function activateEditorElement(element) {
+    const baseTarget = editorTargetForElement(element);
+    if (!baseTarget) return;
+    if (element.dataset.cvBulletField !== "true") {
+      activateEditorTarget(baseTarget);
+      return;
+    }
+    const position = element.selectionStart || 0;
+    const lineIndex = element.value.slice(0, position).split(/\r?\n/).length - 1;
+    const safeIndex = Math.max(0, Math.min(lineIndex, Math.max(bulletLines(element.value).length - 1, 0)));
+    const lineType = baseTarget.startsWith("education-") ? "detail" : baseTarget.startsWith("custom-") ? "line" : "bullet";
+    activateEditorTarget(`${baseTarget}-${lineType}-${safeIndex}`);
+  }
+
+  function handleEditorFocusCapture(event) {
+    if (event.target.matches?.("input, textarea")) activateEditorElement(event.target);
+  }
+
+  function handleEditorSelectionCapture(event) {
+    if (event.target.matches?.("textarea") && event.target.dataset.cvBulletField === "true") activateEditorElement(event.target);
+  }
 
   function focusEditorTarget(target) {
-    const element = window.document.getElementById(`cv-editor-${target}`);
-    if (!element) return;
-    setActiveEditTarget(target);
-    element.scrollIntoView({ behavior: "smooth", block: "center" });
-    const field = element.matches("input, textarea") ? element : element.querySelector("input, textarea");
-    window.setTimeout(() => field?.focus({ preventScroll: true }), 350);
-    if (editTargetTimerRef.current) {
-      window.clearTimeout(editTargetTimerRef.current);
-    }
-    editTargetTimerRef.current = window.setTimeout(() => setActiveEditTarget(""), 2200);
+    const { element, field, lineIndex } = resolveEditorTarget(target);
+    if (!element && !field) return;
+    activateEditorTarget(target);
+    (element || field).scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => {
+      field?.focus({ preventScroll: true });
+      selectEditorLine(field, lineIndex);
+      activateEditorTarget(target);
+    }, 350);
   }
 
   function updateProfileField(field, value) {
@@ -348,7 +441,7 @@ export default function CvEditorPage() {
   }
 
   function updateCollectionLines(collection, index, field, value) {
-    updateCollectionItem(collection, index, { [field]: lines(value) });
+    updateCollectionItem(collection, index, { [field]: bulletLines(value) });
   }
 
   function addCollectionItem(collection, item) {
@@ -435,7 +528,7 @@ export default function CvEditorPage() {
       {saveState.error ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800" role="alert">{saveState.error}</div> : null}
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(30rem,0.95fr)]">
-        <div className="space-y-5">
+        <div className="space-y-5" onFocusCapture={handleEditorFocusCapture} onKeyUpCapture={handleEditorSelectionCapture} onSelectCapture={handleEditorSelectionCapture}>
           <EditorCard description="The details employers see first." highlighted={activeEditTarget === "identity"} icon="person" id="cv-editor-identity" title="Identity and contact">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Full name" onChange={(event) => updateProfileField("name", event.target.value)} value={profile.name} />
@@ -480,7 +573,7 @@ export default function CvEditorPage() {
         <aside className="xl:sticky xl:top-24">
           <div className="overflow-hidden rounded-3xl border border-outline-variant/20 bg-surface-container-lowest shadow-soft">
             <div className="flex items-center justify-between gap-3 border-b border-outline-variant/15 px-5 py-4 sm:px-6"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Live preview</p><h2 className="mt-1 font-headline text-lg font-bold text-on-surface">Your finished CV</h2></div><span className="inline-flex items-center gap-1.5 rounded-full bg-surface-container-low px-2.5 py-1.5 text-[11px] font-semibold text-on-surface-variant"><Icon className="text-[15px]">visibility</Icon>Updates live</span></div>
-            <div className="max-h-[calc(100vh-11rem)] overflow-auto bg-slate-100 p-4 sm:p-6"><CvPreview onEdit={focusEditorTarget} profile={profile} /></div>
+            <div className="max-h-[calc(100vh-11rem)] overflow-auto bg-slate-100 p-4 sm:p-6" data-cv-preview-scroll><CvPreview highlightedTarget={activeEditTarget} onEdit={focusEditorTarget} profile={profile} /></div>
           </div>
           <div className="mt-4 rounded-2xl border border-outline-variant/15 bg-surface-container-low px-4 py-3 text-xs leading-5 text-on-surface-variant"><Icon className="mr-1 align-middle text-[16px] text-primary">info</Icon>Saving creates a new CV version in your private Documents library. Your previous version remains recoverable.</div>
         </aside>
