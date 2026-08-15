@@ -277,6 +277,36 @@ class SqliteCompanyIdentityTests(unittest.TestCase):
         self.assertEqual({str(row["company_id"]) for row in persisted}, {"company-a", "company-b"})
         self.assertEqual(int(occurrences["count"]), 4)
 
+    def test_company_site_inventory_is_idempotent_and_domain_scoped(self):
+        app = self._backend()
+        store = app.repositories.acquisition_store
+
+        first = store.sync_company_site_inventory(
+            [
+                {"company_name": "Acme Example", "url": "https://acme.example/careers"},
+                {"company_name": "Acme Example", "url": "https://acme.example/careers"},
+                {"company_name": "Other Example", "url": "https://other.example/jobs"},
+            ],
+            checked_in_path="inventory.jsonl",
+            import_id="inventory-test",
+        )
+        second = store.sync_company_site_inventory(
+            [
+                {"company_name": "Acme Example", "url": "https://acme.example/careers"},
+                {"company_name": "Other Example", "url": "https://other.example/jobs"},
+            ],
+            checked_in_path="inventory.jsonl",
+            import_id="inventory-test",
+        )
+
+        self.assertEqual(first["companies_created"], 2)
+        self.assertEqual(first["urls_persisted"], 2)
+        self.assertEqual(first["duplicates_skipped"], 1)
+        self.assertEqual(second["companies_created"], 0)
+        self.assertEqual(second["urls_persisted"], 0)
+        self.assertEqual(second["duplicates_skipped"], 2)
+        self.assertEqual(len(store.list_admin_companies(entity_kind="employer", limit=20)), 2)
+
 
 class CompanyIdentityApiTests(unittest.TestCase):
     def test_company_filters_and_url_inspection_are_admin_authorized_and_bounded(self):

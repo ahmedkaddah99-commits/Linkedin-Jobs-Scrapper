@@ -1,8 +1,12 @@
+import asyncio
+import json
 from io import BytesIO
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -15,6 +19,7 @@ from backend.application.company_logo import (
     validate_logo,
     validate_official_url,
 )
+from backend.application.company_enrichment import ScrapeOpsCompanyProvider, configured_company_enrichment_provider
 from backend.bootstrap import create_backend
 from tests.test_phase_f_company_profiles import _seed_catalog
 
@@ -210,6 +215,62 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(profile["leadership_type"]["value"], "manager")
         self.assertEqual(profile["sponsorship"]["state"], "unknown")
         self.assertEqual(profile["sponsorship"]["unknown_reason"], "not_verified_from_authoritative_company_source")
+
+    def test_scrapeops_provider_parses_typed_extra_fields_and_logo(self):
+        html = """
+        <html><head>
+          <meta property="og:image" content="https://acme.example/brand.svg">
+          <script type="application/ld+json">
+          {"@type":"Organization","url":"https://acme.example","legalName":"Acme GmbH",
+           "description":"A software company.","sameAs":["https://www.linkedin.com/company/acme"],
+           "numberOfEmployees":{"value":125},"email":"hello@acme.example",
+           "address":{"addressLocality":"Berlin","addressCountry":"DE"},
+           "logo":"https://acme.example/brand.svg"}
+          </script></head><body><a href="/careers">Careers</a></body></html>
+        """
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#0d628c"/></svg>'
+        page_response = type("Response", (), {"status_code": 200, "headers": {"content-type": "application/json"}, "text": json.dumps({"status_code": 200, "content_type": "text/html", "body": html, "sops_api_credits": 1})})()
+        logo_response = type("Response", (), {"status_code": 200, "headers": {"content-type": "image/svg+xml"}, "content": svg, "text": ""})()
+        responses = iter([SimpleNamespace(response=page_response, attempts=1), SimpleNamespace(response=logo_response, attempts=1)])
+        provider = ScrapeOpsCompanyProvider(api_key="test-key", mode="basic")
+        with patch("backend.application.company_enrichment.scrapeops_request_with_retry", side_effect=lambda *args, **kwargs: next(responses)), patch("backend.application.company_enrichment.assert_public_official_host", return_value=None):
+            result = asyncio.run(provider.enrich({"provenance_url": "https://acme.example"}, conditional={}))
+        self.assertEqual(result["fields"]["website"], "https://acme.example")
+        self.assertEqual(result["fields"]["careers_page"], "https://acme.example/careers")
+        self.assertEqual(result["extra_fields"]["employee_count"], 125)
+        self.assertEqual(result["extra_fields"]["legal_name"], "Acme GmbH")
+        self.assertEqual(result["request_count"], 2)
+        self.assertEqual(result["cost_units"], 2.0)
+        self.assertEqual(result["logo_bytes"], svg)
+
+    def test_scrapeops_provider_is_selected_by_worker_configuration(self):
+        original = os.environ.get("RUNR_COMPANY_ENRICHMENT_PROVIDER")
+        os.environ["RUNR_COMPANY_ENRICHMENT_PROVIDER"] = "scrapeops"
+        try:
+            provider = configured_company_enrichment_provider()
+        finally:
+            if original is None:
+                os.environ.pop("RUNR_COMPANY_ENRICHMENT_PROVIDER", None)
+            else:
+                os.environ["RUNR_COMPANY_ENRICHMENT_PROVIDER"] = original
+        self.assertIsInstance(provider, ScrapeOpsCompanyProvider)
+
+    def test_scrapeops_additional_fields_are_retained_by_profile_writer(self):
+        app, _ = self.backend()
+        app._personalized_jobs_service.upsert_company_profile(
+            "company-a",
+            {
+                "schema_version": "phase_f_v3",
+                "fields": {},
+                "additional_fields": {
+                    "legal_name": {"value": "Acme Example GmbH", "state": "known"},
+                    "employee_count": {"value": 42, "state": "known"},
+                },
+            },
+        )
+        profile = app.repositories.personalized_jobs_store.get_company_profile("company-a")["profile"]
+        self.assertEqual(profile["additional_fields"]["legal_name"]["value"], "Acme Example GmbH")
+        self.assertEqual(profile["additional_fields"]["employee_count"]["value"], 42)
 
 
 class PhaseFLogoValidationTests(unittest.TestCase):

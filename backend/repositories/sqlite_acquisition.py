@@ -3893,6 +3893,147 @@ class SqliteAcquisitionStore(_SqliteStore):
             result.append(item)
         return result
 
+    def sync_company_site_inventory(
+        self,
+        entries: Iterable[Mapping[str, Any]],
+        *,
+        checked_in_path: str = "",
+        import_id: str = "",
+    ) -> dict[str, Any]:
+        """Materialize checked-in employer career sites as canonical companies.
+
+        The inventory is durable evidence, not a job observation.  A stable
+        hostname identity is used when available; existing companies are only
+        reused when that hostname is already linked to exactly one employer.
+        This keeps same-name employers from being silently merged.
+        """
+
+        rows = [dict(item) for item in entries if isinstance(item, Mapping)]
+        now = utc_now_iso()
+        source_path = str(checked_in_path or "company_site_inventory")
+        stable_import_id = str(import_id or f"company-site-inventory:{now[:10]}")
+
+        def write(connection) -> dict[str, Any]:
+            result = {
+                "status": "completed",
+                "import_id": stable_import_id,
+                "source_path": source_path,
+                "entries_received": len(rows),
+                "companies_created": 0,
+                "companies_reused": 0,
+                "urls_persisted": 0,
+                "duplicates_skipped": 0,
+                "invalid_entries": 0,
+            }
+            employer_rows = connection.execute(
+                """
+                SELECT c.company_id, c.provenance_url, u.canonical_url
+                FROM canonical_companies c
+                LEFT JOIN canonical_company_urls u ON u.company_id=c.company_id
+                WHERE c.entity_kind='employer'
+                """
+            ).fetchall()
+            domain_to_company: dict[str, str | None] = {}
+            for row in employer_rows:
+                company_id = str(row["company_id"] or "")
+                candidate_urls = (str(row["provenance_url"] or ""), str(row["canonical_url"] or ""))
+                for candidate_url in candidate_urls:
+                    host = (urlsplit(candidate_url).hostname or "").casefold().removeprefix("www.")
+                    if not host:
+                        continue
+                    if host in domain_to_company and domain_to_company[host] != company_id:
+                        domain_to_company[host] = None
+                    else:
+                        domain_to_company[host] = company_id
+            for identity in connection.execute(
+                "SELECT identity_key, company_id FROM company_identity_keys WHERE identity_key LIKE 'domain:%'"
+            ).fetchall():
+                host = str(identity["identity_key"] or "")[len("domain:"):].casefold().removeprefix("www.")
+                company_id = str(identity["company_id"] or "")
+                if host:
+                    if host in domain_to_company and domain_to_company[host] not in {company_id, None}:
+                        domain_to_company[host] = None
+                    else:
+                        domain_to_company[host] = company_id
+
+            for entry in rows:
+                name = " ".join(str(entry.get("company_name") or "").split()).strip()
+                original_url, canonical_url, structural_reason = structural_url(entry.get("url") or "")
+                host = (urlsplit(canonical_url).hostname or "").casefold().removeprefix("www.") if canonical_url else ""
+                if not name or not canonical_url or not host:
+                    result["invalid_entries"] += 1
+                    continue
+                identity_key = f"domain:{host}"
+                company_id = ""
+                identity_row = connection.execute(
+                    "SELECT company_id FROM company_identity_keys WHERE identity_key=?",
+                    (identity_key,),
+                ).fetchone()
+                if identity_row is not None:
+                    company_id = str(identity_row["company_id"] or "")
+                elif domain_to_company.get(host):
+                    company_id = str(domain_to_company[host] or "")
+                    connection.execute(
+                        "INSERT OR IGNORE INTO company_identity_keys (identity_key, company_id, identity_type, source, evidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (identity_key, company_id, "inventory_domain", "company_site_inventory", _json({"url": canonical_url}), now, now),
+                    )
+                if not company_id:
+                    company_id = SqliteAcquisitionStore._ensure_company(
+                        connection,
+                        name,
+                        "employer",
+                        now,
+                        provenance_url=canonical_url,
+                        aliases=(name,),
+                        identity_key=identity_key,
+                        identity_type="inventory_domain",
+                        identity_evidence={"url": canonical_url, "source": source_path},
+                    )
+                    result["companies_created"] += 1
+                    domain_to_company[host] = company_id
+                else:
+                    result["companies_reused"] += 1
+                    SqliteAcquisitionStore._ensure_company_alias(connection, company_id, name, source="company_site_inventory", now=now)
+                    SqliteAcquisitionStore._record_company_identity_evidence(
+                        connection,
+                        company_id=company_id,
+                        observed_name=name,
+                        identity_key=identity_key,
+                        evidence_type="company_site_inventory",
+                        evidence={"url": canonical_url, "source": source_path},
+                        evidence_url=canonical_url,
+                        confidence=1.0,
+                        link_state="linked",
+                        review_required=False,
+                        now=now,
+                    )
+                existing_url = connection.execute(
+                    "SELECT 1 FROM canonical_company_urls WHERE company_id=? AND url_type='careers' AND canonical_url=?",
+                    (company_id, canonical_url),
+                ).fetchone()
+                if existing_url is not None:
+                    result["duplicates_skipped"] += 1
+                    continue
+                SqliteAcquisitionStore._record_company_url_occurrence(
+                    connection,
+                    company_id=company_id,
+                    url_type="careers",
+                    url=original_url,
+                    url_lifecycle="configured_official",
+                    source="company_site_inventory",
+                    import_id=stable_import_id,
+                    checked_in_path=source_path,
+                    evidence={"company_name": name, "hostname": host},
+                    validation_reason=structural_reason,
+                    now=now,
+                    selected_primary=True,
+                    persist=True,
+                )
+                result["urls_persisted"] += 1
+            return result
+
+        return self._run_transaction(write)
+
     def get_admin_company_detail(self, company_id: str) -> dict[str, Any] | None:
         company_id = str(company_id or "").strip()
         if not company_id:

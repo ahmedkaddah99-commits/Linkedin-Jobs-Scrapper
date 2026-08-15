@@ -203,7 +203,13 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "required": False,
         "scope": "backend",
         "default": "0",
-        "description": "Execution switch for scheduled company enrichment. Keep disabled until a separate logo/profile run is approved.",
+        "description": "Execution switch for scheduled ScrapeOps company profile and logo enrichment.",
+    },
+    "RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY": {
+        "required": False,
+        "scope": "backend",
+        "default": "0",
+        "description": "Import checked-in regular employer career-site inventory into the canonical admin company catalog before enrichment.",
     },
     "RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": {
         "required": False,

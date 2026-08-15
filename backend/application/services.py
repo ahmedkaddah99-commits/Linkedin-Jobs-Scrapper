@@ -1558,17 +1558,34 @@ class BackendApplication:
         )
         if not force and str(enabled).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
             return {"status": "disabled", "reason": "phase_f_company_enrichment_disabled"}
+        inventory_enabled = self.repositories.config_store.get_value(
+            "acquisition.phase_f.company_site_inventory_enabled",
+            os.getenv("RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY", "0"),
+        )
+        inventory_result: dict[str, Any] | None = None
+        if str(inventory_enabled).strip().casefold() in {"1", "true", "yes", "on", "enabled"}:
+            acquisition_store = self.repositories.acquisition_store
+            if acquisition_store is not None:
+                entries = load_discovered_company_site_entries(REGULAR_COMPANY_SITE_FILES)
+                inventory_result = acquisition_store.sync_company_site_inventory(
+                    entries,
+                    checked_in_path=str(REGULAR_COMPANY_SITE_FILES[0]),
+                    import_id=f"company-site-inventory:{datetime.now(timezone.utc).date().isoformat()}",
+                )
         previous = self._company_enrichment_service.provider
         if provider is not None:
             self._company_enrichment_service.provider = provider
         try:
-            return self._company_enrichment_service.run_sync(
+            result = self._company_enrichment_service.run_sync(
                 max_companies=max_companies,
                 concurrency=concurrency,
                 request_budget=request_budget,
                 cycle_key=cycle_key,
                 force=force,
             )
+            if inventory_result is not None:
+                result["inventory_sync"] = inventory_result
+            return result
         finally:
             self._company_enrichment_service.provider = previous
 

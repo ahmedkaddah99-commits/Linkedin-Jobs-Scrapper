@@ -681,7 +681,17 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT c.company_id, c.canonical_name, c.entity_kind, c.provenance_url,
+                SELECT c.company_id, c.canonical_name, c.entity_kind,
+                       COALESCE(
+                           (SELECT u.canonical_url
+                            FROM canonical_company_urls u
+                            WHERE u.company_id=c.company_id AND u.url_type='homepage'
+                              AND u.url_lifecycle IN ('validated', 'configured_official', 'discovered')
+                            ORDER BY CASE u.url_lifecycle WHEN 'validated' THEN 0 WHEN 'configured_official' THEN 1 ELSE 2 END,
+                                     u.selected_primary DESC, u.updated_at DESC
+                            LIMIT 1),
+                           c.provenance_url
+                       ) AS provenance_url,
                        p.profile_json, p.logo_object_key, p.logo_source_url,
                        p.logo_content_hash, p.logo_content_type, p.logo_verified_at,
                        t.status AS enrichment_status, t.attempt_count,
@@ -755,7 +765,17 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             )
             row = connection.execute(
                 """
-                SELECT c.company_id, c.canonical_name, c.entity_kind, c.provenance_url,
+                SELECT c.company_id, c.canonical_name, c.entity_kind,
+                       COALESCE(
+                           (SELECT u.canonical_url
+                            FROM canonical_company_urls u
+                            WHERE u.company_id=c.company_id AND u.url_type='homepage'
+                              AND u.url_lifecycle IN ('validated', 'configured_official', 'discovered')
+                            ORDER BY CASE u.url_lifecycle WHEN 'validated' THEN 0 WHEN 'configured_official' THEN 1 ELSE 2 END,
+                                     u.selected_primary DESC, u.updated_at DESC
+                            LIMIT 1),
+                           c.provenance_url
+                       ) AS provenance_url,
                        p.profile_json, p.logo_object_key, p.logo_source_url,
                        p.logo_content_hash, p.logo_content_type, p.logo_verified_at,
                        ? AS attempt_id, ? AS cycle_key
