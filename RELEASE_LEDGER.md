@@ -183,3 +183,63 @@ were clean at inspection time.
   configured `RENDER_API_KEY` returned HTTP 401. Live API readiness, the new
   frontend asset, authenticated dashboard routes, and worker Online state were
   used as deployment evidence.
+
+## Wave 3 read-only acquisition analytics
+
+- Implementation branch: `feature/admin-analytics-final-production`.
+- Implementation commit: `12f342fb8964685682e264188a971d03b88a4af9`.
+- Verified base: `6a01d2cc24ed68bc0dabd1805ee37b51fdf709a0`, the current
+  `deployment/render-turso-r2` production history before this integration.
+- Authorized scope: read-only acquisition analytics API and admin UI,
+  URL-backed 24-hour/7-day/30-day windows, bounded custom timestamps, and
+  read-performance indexes. No provider, AI, publication, reconciliation, or
+  paid-service activation was authorized.
+- Migration reserved centrally: `055_acquisition_analytics_indexes`.
+  Registry verification passed: all migration identifiers are unique and in
+  numeric order; `055` is additive index creation only.
+- Dependencies: existing acquisition/enrichment/publication/audit/company
+  tables and migrations `049` through `054`; all are present in the
+  integration history and the verified production backup baseline.
+- Changed paths matched the recovery report exactly: the analytics module,
+  admin route/service/migration registry, two frontend route/navigation/page
+  surfaces, and `tests/test_acquisition_analytics.py`.
+- Integration validation: combined backend regression `98 passed in 45.28s`;
+  frontend check `157 passed`, ESLint passed, Vite production build passed;
+  Ruff and Python compilation passed. Full backend suite is not claimed because
+  the submitted full-suite run exceeded its execution limit without a result.
+- Pre-migration backup re-verification: reused
+  `logical-wave1-direct-396c45deb36d95e0`, timestamp
+  `2026-08-12T18:36:46.135064Z`, SHA-256
+  `396c45deb36d95e084a745a7a22b43bdb81ba35fc6ff0c8ef66df5877444dc`,
+  1,635,259 bytes. Restore verification artifact exists and matches the
+  recorded 49-migration baseline counts. No database write has been performed
+  by this integration before deployment.
+- Deployment: pending production push and Render rollout.
+- Smoke test: pending.
+- Unresolved release visibility defect: the supplied Render API credential
+  returns HTTP 401, so Render deploy IDs/logs cannot be inspected; Docker is
+  unavailable locally. The reported base-commit build failure is therefore not
+  source-reproducible or independently log-verifiable. Local source, Python,
+  frontend, and migration checks pass; no speculative Docker/configuration
+  change was made.
+
+## Wave 3 deployment hold
+
+- Production branch push completed: `deployment/render-turso-r2` points to
+  `d969f43b3466e776025cad3130ecf96e63fce20a`, whose parent is the analytics
+  implementation commit `12f342fb8964685682e264188a971d03b88a4af9`.
+- Render accepted the auto-deploy event for `runr-api`, `runr-worker`, and
+  `runr-frontend`, but each deployment for `d969f43` is `Build blocked` because
+  the workspace has run out of pipeline minutes. The last live deployment for
+  all three services remains `3c5e609acd9661d4f114e0f487bd9fb15f4dabbe`.
+- The pre-existing API readiness endpoint still returns HTTP 200, and the
+  authenticated pre-deploy live-catalog baseline still reports the unchanged
+  publication head and 163 jobs. The frontend still serves the pre-analytics
+  bundle `/assets/index-BygCU6S-.js`; the analytics route is not live.
+- `055_acquisition_analytics_indexes` was not applied because the API
+  pre-deploy/build never ran. No production database write, provider call, AI
+  call, publication, or mutation was performed by Wave 3.
+- Deployment smoke tests are pending the external Render pipeline-minute
+  constraint. No repair or redeploy commit was created; the local source and
+  release checks are green. This hold requires Render workspace authority or
+  restored pipeline capacity.

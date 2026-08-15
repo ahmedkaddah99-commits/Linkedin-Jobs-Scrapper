@@ -12,13 +12,7 @@ import { isAdminUser } from "./lib/auth";
 import { personalizedJobsDataMode, personalizedJobsExperienceEnabled } from "./lib/personalizedJobsConfig";
 import { hasAuthenticatedSession } from "./lib/sessionState";
 
-const AdminPage = lazy(() => import("./pages/AdminPage"));
-const AdminEventsPage = lazy(() => import("./pages/AdminEventsPage"));
-const AdminScrapeOpsPage = lazy(() => import("./pages/AdminScrapeOpsPage"));
-const AdminJobImportPage = lazy(() => import("./pages/AdminJobImportPage"));
-const AdminAcquisitionPage = lazy(() => import("./pages/AdminAcquisitionPage"));
-const AdminAcquisitionAnalyticsPage = lazy(() => import("./pages/AdminAcquisitionAnalyticsPage"));
-const AcquisitionOperationsPage = lazy(() => import("./pages/AcquisitionOperationsPage"));
+const AdminOperationsRouter = lazy(() => import("./admin/AdminOperationsRouter"));
 const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConnectionPage"));
 const ApplyExtensionSetupPage = lazy(() => import("./pages/ApplyExtensionSetupPage"));
 const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
@@ -221,13 +215,15 @@ function AuthenticatedApp() {
     });
   }, [hasSession, location.hash, location.pathname, location.search, userId]);
 
-  if (hasSession && location.pathname === "/admin/job-import") {
+  if (location.pathname === "/admin" || location.pathname.startsWith("/admin/")) {
     return (
       <RouteErrorBoundary>
         <Suspense fallback={<RouteLoadingFallback />}>
-          <RequireAdminRoute>
-            <AdminJobImportPage />
-          </RequireAdminRoute>
+          {hasSession ? (
+            <RequireAdminRoute>
+              <AdminOperationsRouter />
+            </RequireAdminRoute>
+          ) : <BackendConnectionPanel />}
         </Suspense>
       </RouteErrorBoundary>
     );
@@ -277,86 +273,6 @@ function AuthenticatedApp() {
               <Route path="/settings/assisted-apply" element={<AssistedApplyConnectionPage />} />
               <Route path="/apply-extension" element={<ApplyExtensionSetupPage />} />
               <Route path="/pricing" element={<PricingPage />} />
-              <Route
-                path="/admin"
-                element={(
-                  <RequireAdminRoute>
-                    <AdminPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/events"
-                element={(
-                  <RequireAdminRoute>
-                    <AdminEventsPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/scrapeops"
-                element={(
-                  <RequireAdminRoute>
-                    <AdminScrapeOpsPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/job-import"
-                element={(
-                  <RequireAdminRoute>
-                    <AdminJobImportPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/acquisition"
-                element={(
-                  <RequireAdminRoute>
-                    <AcquisitionOperationsPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/acquisition/analytics"
-                element={(
-                  <RequireAdminRoute>
-                    <AdminAcquisitionAnalyticsPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/acquisition/sources"
-                element={(
-                  <RequireAdminRoute>
-                    <AcquisitionOperationsPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/acquisition/jobs"
-                element={(
-                  <RequireAdminRoute>
-                    <AcquisitionOperationsPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/acquisition/jobs/:canonicalJobId"
-                element={(
-                  <RequireAdminRoute>
-                    <AcquisitionOperationsPage />
-                  </RequireAdminRoute>
-                )}
-              />
-              <Route
-                path="/admin/acquisition/:section"
-                element={(
-                  <RequireAdminRoute>
-                    <AdminAcquisitionPage />
-                  </RequireAdminRoute>
-                )}
-              />
               <Route path="*" element={<Navigate replace to="/" />} />
             </Routes>
           </Suspense>

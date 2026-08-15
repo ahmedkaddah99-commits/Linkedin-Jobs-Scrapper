@@ -185,6 +185,7 @@ function extractDomainStatsRows(domainStats) {
 
 export default function AdminScrapeOpsPage() {
   const { request } = useSession();
+  const [telemetryRequested, setTelemetryRequested] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const appliedFilters = useMemo(
     () => ({
@@ -227,13 +228,14 @@ export default function AdminScrapeOpsPage() {
       params.set("date", appliedFilters.reconciliationDate);
     }
     const query = params.toString();
+    if (!telemetryRequested) return "/admin/scrapeops/policy";
     return query ? `/admin/scrapeops/usage?${query}` : "/admin/scrapeops/usage";
-  }, [appliedFilters]);
+  }, [appliedFilters, telemetryRequested]);
 
   const { data, loading, error, refresh } = useApiResource(() => request(requestPath), [request, requestPath]);
   const usage = data?.usage || {};
   const reconciliation = data?.reconciliation || {};
-  const policy = data?.policy || {};
+  const policy = telemetryRequested ? data?.policy || {} : data || {};
   const usageSeries = data?.usage_series || [];
   const reconciliationSeries = data?.reconciliation_series || [];
   const alerts = data?.alerts || {};
@@ -290,7 +292,7 @@ export default function AdminScrapeOpsPage() {
 
   async function savePolicy() {
     setPolicyError("");
-    setPolicyStatus("Saving policy...");
+    setPolicyStatus("");
     let parsedPolicy = {};
     try {
       parsedPolicy = JSON.parse(policyDraft || "{}");
@@ -299,6 +301,8 @@ export default function AdminScrapeOpsPage() {
       setPolicyError("Policy JSON is not valid.");
       return;
     }
+    if (!window.confirm("Save this provider policy? This changes server-enforced limits and alert behavior, but does not activate a provider.")) return;
+    setPolicyStatus("Saving policy...");
     try {
       const savedPolicy = await request("/admin/scrapeops/policy", {
         method: "PUT",
@@ -315,6 +319,7 @@ export default function AdminScrapeOpsPage() {
   }
 
   async function runReconciliationNow() {
+    if (!window.confirm("Run provider reconciliation now? This may contact the configured ScrapeOps account and records an immutable reconciliation event.")) return;
     setReconciliationStatus("Running reconciliation...");
     try {
       const result = await request("/admin/scrapeops/reconciliation/run", {
@@ -375,21 +380,31 @@ export default function AdminScrapeOpsPage() {
         <div className="space-y-2">
           <Link className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:text-primary-container" to="/admin">
             <span className="material-symbols-outlined text-[18px]">arrow_back</span>
-            Back to Admin
+            Operations overview
           </Link>
           <div>
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="font-headline text-4xl font-extrabold tracking-tight text-on-surface">
-                ScrapeOps Dashboard
+                Provider policy
               </h1>
               <StatusBadge tone="primary">Admin Only</StatusBadge>
             </div>
             <p className="mt-2 max-w-3xl text-sm leading-7 text-on-surface-variant">
-              Operator view for request usage, runner-credit burn, account health, and reconciliation against the shared ScrapeOps account.
+              Provider-neutral policy, request usage, runner-credit burn, account health, and reconciliation evidence. Viewing this page never activates a provider.
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-3">
+          <button
+            className="inline-flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
+            onClick={() => {
+              if (telemetryRequested || window.confirm("Load live provider telemetry? This may contact the configured ScrapeOps account but does not change provider policy.")) setTelemetryRequested(true);
+            }}
+            type="button"
+          >
+            <span className="material-symbols-outlined text-[18px]">network_check</span>
+            {telemetryRequested ? "Provider telemetry loaded" : "Load provider telemetry"}
+          </button>
           <button
             className="inline-flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
             onClick={runReconciliationNow}
@@ -414,6 +429,11 @@ export default function AdminScrapeOpsPage() {
           </button>
         </div>
       </header>
+      {!telemetryRequested ? (
+        <section className="rounded-[1.25rem] border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900" role="status">
+          Stored provider policy is shown without contacting ScrapeOps. Live account usage and domain telemetry remain unloaded until an administrator explicitly requests them.
+        </section>
+      ) : null}
       {reconciliationStatus ? (
         <section className="rounded-[1.25rem] border border-primary/15 bg-primary/10 px-5 py-3 text-sm text-primary">
           {reconciliationStatus}

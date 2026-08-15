@@ -509,9 +509,10 @@ def _post_permission(segments: list[str]) -> str:
         ["admin", "acquisition", "imports"],
         ["admin", "acquisition", "reprocessing", "run"],
         ["admin", "acquisition", "reprocessing", "apply"],
-        ["admin", "acquisition", "recover"],
     ):
         return "acquisition.collect"
+    if segments == ["admin", "acquisition", "recover"]:
+        return "acquisition.override"
     if segments == ["admin", "acquisition", "publication", "preview"]:
         return "acquisition.preview"
     if segments == ["admin", "acquisition", "publication", "publish"]:
@@ -535,6 +536,8 @@ def _post_permission(segments: list[str]) -> str:
         ["admin", "acquisition", "rollout", "advance"],
         ["admin", "acquisition", "requests", "decision"],
     ):
+        return "acquisition.override"
+    if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "requests"] and segments[4] == "decision":
         return "acquisition.override"
     if len(segments) == 5 and segments[:3] == ["admin", "acquisition", "targets"] and segments[4] == "validate":
         return "acquisition.providers"

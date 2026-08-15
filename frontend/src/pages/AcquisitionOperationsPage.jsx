@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import AcquisitionShell from "../components/acquisition/AcquisitionShell";
+import { AdminBadge, AdminMetric, AdminPanel, AdminSection } from "../components/admin/AdminPrimitives";
 import StatusBadge from "../components/StatusBadge";
 import { useApiResource } from "../hooks/useApiResource";
 import { useSession } from "../context/SessionContext";
@@ -101,7 +101,7 @@ function MetricCard({ label, value, detail, tone = "neutral" }) {
   );
 }
 
-function OverviewPage() {
+function LegacyOverviewPage() {
   const { request } = useSession();
   const resource = useApiResource(
     () => request("/admin/acquisition/overview"),
@@ -119,9 +119,10 @@ function OverviewPage() {
   const imports = data.imports || {};
 
   return (
-    <AcquisitionShell
+    <AdminSection
+      eyebrow="Command center"
       description="A read-only view of collection health, review activity, and the current acquisition read model."
-      title="Overview"
+      title="Operations overview"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-on-surface-variant" role="status">
@@ -179,7 +180,114 @@ function OverviewPage() {
           </div>
         </>
       ) : null}
-    </AcquisitionShell>
+    </AdminSection>
+  );
+}
+
+export function OverviewPage() {
+  const { request } = useSession();
+  const resource = useApiResource(
+    () => request("/admin/acquisition/overview"),
+    [request],
+    { cacheKey: "acquisition:overview", staleMs: 15000 },
+  );
+  const state = getResourceViewState({
+    data: resource.data,
+    loading: resource.loading,
+    error: resource.error,
+    unavailable: resource.data?.unavailable === true,
+  });
+  const data = resource.data || {};
+  const review = data.review || {};
+  const imports = data.imports || {};
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  const known = (value) => value !== null && value !== undefined && value !== "";
+  const display = (value) => known(value) ? formatCount(value) : "Unknown";
+  const latestPublication = data.last_publication?.publication_id || "Unavailable";
+  const attentionCount = known(review.needs_review) || warnings.length
+    ? Number(review.needs_review || 0) + warnings.length
+    : null;
+  const sourceReady = known(data.sources_ready) && known(data.sources_total)
+    ? `${display(data.sources_ready)} / ${display(data.sources_total)}`
+    : "Unknown";
+  const activeOperations = data.active_operations?.count ?? data.operations?.active_count;
+  const pipeline = [
+    ["Observed", data.observed_count ?? data.observations_count, "Immutable evidence"],
+    ["Canonical", data.canonical_jobs_count ?? data.canonical_count, "Distinct jobs"],
+    ["Reviewed", data.reviewed_jobs_count ?? data.reviewed_count, "Durable review state"],
+    ["Published", data.current_live_jobs, "Current live head"],
+  ];
+
+  return (
+    <AdminSection
+      eyebrow="Command center"
+      description="A read-only view of collection health, review activity, and the current acquisition read model."
+      title="Operations overview"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-on-surface-variant" role="status">
+          {resource.refreshing ? "Refreshing the latest read model…" : "No acquisition operation is started from this screen."}
+        </p>
+        <RefreshButton onClick={() => resource.refresh({ showLoading: false }).catch(() => undefined)} refreshing={resource.refreshing} />
+      </div>
+      {resource.error && resource.data ? <ErrorBlock error={resource.error} onRetry={() => resource.refresh({ showLoading: false }).catch(() => undefined)} /> : null}
+      {state === "loading" ? <LoadingBlock label="Loading acquisition overview" /> : null}
+      {state === "error" ? <ErrorBlock error={resource.error} onRetry={() => resource.refresh().catch(() => undefined)} /> : null}
+      {state === "unavailable" ? <EmptyBlock description="The acquisition overview is not available from the current backend response." title="Overview unavailable" /> : null}
+      {state === "ready" || state === "partial" ? (
+        <>
+          {imports.paused ? <Notice role="status" tone="warning">Collection is paused. This read-only screen does not change that state.</Notice> : null}
+          {warnings.length ? <Notice tone="warning">Partial data: {warnings.join(" ")}</Notice> : null}
+
+          <div className="priority-strip">
+            <div className="priority-primary">
+              <span aria-hidden="true" className="priority-icon material-symbols-outlined">{attentionCount === null ? "help" : attentionCount ? "warning" : "check_circle"}</span>
+              <div>
+                <strong>{attentionCount === null ? "Attention queue unavailable" : `${display(attentionCount)} item${attentionCount === 1 ? "" : "s"} need attention`}</strong>
+                <p>{attentionCount === null ? "The backend did not provide a bounded attention count." : attentionCount ? "Review the affected durable records before taking an explicit action." : "The current read model reports no prioritized attention items."}</p>
+              </div>
+            </div>
+            <a className="admin-button admin-button--secondary" href="/admin/acquisition/data-quality">Open review queue</a>
+          </div>
+
+          <div className="metric-grid metric-grid-4">
+            <AdminMetric detail={latestPublication === "Unavailable" ? "Current publication head unavailable" : latestPublication} label="Live jobs" tone="success" value={display(data.current_live_jobs)} />
+            <AdminMetric detail={known(review.approved) ? `${display(review.approved)} approved` : "Approved count unavailable"} label="Jobs in review" tone="warning" value={display(review.needs_review)} />
+            <AdminMetric detail="Source readiness is returned by Sources" label="Sources ready" tone="warning" value={sourceReady} />
+            <AdminMetric detail={known(activeOperations) ? "Durable operations" : "Active operation count unavailable"} label="Active operations" tone="success" value={display(activeOperations)} />
+          </div>
+
+          <div className="content-grid overview-grid">
+            <AdminPanel actions={<a className="link-button" href="/admin/analytics">View analytics <span aria-hidden="true" className="material-symbols-outlined">arrow_forward</span></a>} description="Current durable state from collection to live catalog." title="Pipeline health">
+              <div className="pipeline">
+                {pipeline.map(([label, value, note], index) => <div className="pipeline-step" key={label}>
+                  <div className="pipeline-top"><span className="pipeline-number">{index + 1}</span><div><strong>{display(value)}</strong><p>{label}</p></div></div>
+                  <div aria-hidden="true" className="pipeline-progress"><span style={{ width: known(value) && known(data.current_live_jobs) && Number(data.current_live_jobs) > 0 ? `${Math.min(100, Math.round((Number(value) / Math.max(Number(data.current_live_jobs), Number(value))) * 100))}%` : "0%" }} /></div>
+                  <small>{note}</small>
+                </div>)}
+              </div>
+              <div className="boundary-note"><span aria-hidden="true" className="material-symbols-outlined">info</span><span>Source collection is bounded. These numbers describe Runr&apos;s retained evidence—not the entire external job market.</span></div>
+            </AdminPanel>
+            <AdminPanel actions={<a className="link-button" href="/admin/acquisition/sources">Manage sources <span aria-hidden="true" className="material-symbols-outlined">arrow_forward</span></a>} description="Live connector state and most recent outcome." title="Source readiness">
+              <div className="compact-list"><div className="compact-row"><span className="company-mark">SR</span><span className="compact-main"><strong>{sourceReady === "Unknown" ? "Source readiness" : sourceReady}</strong><small>Open Sources for connector details</small></span><AdminBadge tone={sourceReady === "Unknown" ? "neutral" : "success"}>{sourceReady === "Unknown" ? "Unknown" : "Reported"}</AdminBadge></div></div>
+            </AdminPanel>
+          </div>
+
+          <div className="content-grid lower-grid">
+            <AdminPanel description="Imports, publication, and review work in one timeline." title="Recent operations">
+              {(data.history || []).length ? <div className="timeline">{data.history.slice(0, 5).map((item) => <div className="timeline-item" key={item.import_id || item.created_at}><span className="timeline-dot good material-symbols-outlined">check</span><div><strong>{item.import_id || "Import operation"}</strong><p>{formatCount((item.source_ids || []).length)} sources</p><small>{formatDateTime(item.created_at)}</small></div><Status value={item.status} /></div>)}</div> : <div className="compact-empty">No recent operations are available.</div>}
+            </AdminPanel>
+            <AdminPanel description="Production capabilities currently held inactive or requiring explicit authority." title="Safety boundaries">
+              <div className="safety-grid"><div><span className="safety-icon good material-symbols-outlined">shield</span><strong>Publication</strong><p>Explicit preview and permission required</p></div><div><span className="safety-icon neutral material-symbols-outlined">auto_awesome</span><strong>AI &amp; providers</strong><p>Policy-controlled; external budget remains zero</p></div><div><span className="safety-icon neutral material-symbols-outlined">compare_arrows</span><strong>Duplicate actions</strong><p>Decision events only; no automatic merge</p></div><div><span className="safety-icon good material-symbols-outlined">database</span><strong>Evidence</strong><p>Append-only observations and versions</p></div></div>
+            </AdminPanel>
+          </div>
+
+          <AdminPanel description="Read-only service facts returned by the current backend." title="Read-model status">
+            <dl className="overview-status-grid"><div><dt>Worker</dt><dd>{data.worker?.status || "Unavailable"}</dd></div><div><dt>Estimated spend</dt><dd>{data.estimated_spend_today?.known ? `${display(data.estimated_spend_today.credits)} ${data.estimated_spend_today.currency || "credits"}` : "Unknown"}</dd></div><div><dt>Last publication reference</dt><dd>{latestPublication}</dd></div><div><dt>Import state</dt><dd>{imports.status || "Unavailable"}</dd></div></dl>
+          </AdminPanel>
+        </>
+      ) : null}
+    </AdminSection>
   );
 }
 
@@ -190,7 +298,7 @@ function capabilityMap(rows = []) {
   }));
 }
 
-function SourcesPage() {
+export function SourcesPage() {
   const { request } = useSession();
   const location = useLocation();
   const navigate = useNavigate();
@@ -238,7 +346,8 @@ function SourcesPage() {
   });
 
   return (
-    <AcquisitionShell
+    <AdminSection
+      eyebrow="Acquisition"
       description="Inspect configured acquisition sources and the limits exposed by the current read models."
       title="Sources"
     >
@@ -305,7 +414,7 @@ function SourcesPage() {
           )}
         </>
       ) : null}
-    </AcquisitionShell>
+    </AdminSection>
   );
 }
 
@@ -329,7 +438,7 @@ function FilterSelect({ id, label, onChange, options, value }) {
   );
 }
 
-function JobsPage() {
+export function JobsPage() {
   const { request } = useSession();
   const location = useLocation();
   const navigate = useNavigate();
@@ -383,7 +492,8 @@ function JobsPage() {
   });
 
   return (
-    <AcquisitionShell
+    <AdminSection
+      eyebrow="Acquisition"
       description="Search canonical jobs and open a read-only inspection of source, quality, review, and publication evidence."
       title="Jobs"
     >
@@ -437,7 +547,7 @@ function JobsPage() {
       ) : null}
 
       <InspectionDrawer canonicalJobId={canonicalJobId} onClose={closeInspection} />
-    </AcquisitionShell>
+    </AdminSection>
   );
 }
 

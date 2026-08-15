@@ -1080,6 +1080,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 canonical = self._find_existing_canonical(
                     connection,
                     identity_key=identity_key,
+                    identity_signature=identity_signature,
                     original_url=original_url,
                 )
                 canonical_was_new = canonical is None
@@ -5807,13 +5808,38 @@ class SqliteAcquisitionStore(_SqliteStore):
         connection,
         *,
         identity_key: str,
+        identity_signature: str,
         original_url: str,
     ):
-        """Resolve only the canonical listing URL; never merge by content."""
+        """Resolve a source URL or a deterministic active cross-source match.
+
+        A closed canonical posting is intentionally excluded from the signature
+        lookup so a later matching observation creates a new repost record and
+        preserves the closed posting's immutable history.
+        """
 
         row = connection.execute(
             "SELECT * FROM canonical_jobs WHERE identity_key = ?",
             (identity_key,),
+        ).fetchone()
+        if row is not None:
+            return row
+        row = connection.execute(
+            """
+            SELECT * FROM canonical_jobs
+            WHERE identity_signature=?
+              AND lifecycle_state IN ('active', 'stale', 'reposted')
+            ORDER BY
+                CASE lifecycle_state
+                    WHEN 'active' THEN 0
+                    WHEN 'stale' THEN 1
+                    ELSE 2
+                END,
+                first_seen_at,
+                canonical_job_id
+            LIMIT 1
+            """,
+            (str(identity_signature or ""),),
         ).fetchone()
         if row is not None:
             return row

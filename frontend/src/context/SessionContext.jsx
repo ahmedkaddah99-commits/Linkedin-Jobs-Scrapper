@@ -15,6 +15,7 @@ import {
 } from "../lib/sessionState";
 
 const SessionContext = createContext(null);
+const browserTestAdminMode = import.meta.env.VITE_E2E_ADMIN === "1";
 
 export function BrowserTestSessionProvider({ children }) {
   const request = useCallback(
@@ -23,7 +24,7 @@ export function BrowserTestSessionProvider({ children }) {
   );
   const value = useMemo(() => ({
     apiBaseUrl: "/v1",
-    user: { user_id: "e2e-user", email: "e2e@runr.test", role: "user" },
+    user: { user_id: "e2e-user", email: "e2e@runr.test", role: browserTestAdminMode ? "admin" : "user" },
     tokenInfo: { source: "browser-test" },
     status: "connected",
     error: "",
