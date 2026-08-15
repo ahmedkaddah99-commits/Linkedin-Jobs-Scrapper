@@ -270,7 +270,13 @@ class ScrapeOpsCompanyProvider(OfficialWebsiteProvider):
         allowed_modes = {"basic", "render_js_cheap", "render_js", "residential", "render_js_residential"}
         self.mode = configured_mode if configured_mode in allowed_modes else "basic"
 
-    def _proxy_fetch(self, url: str, *, raw: bool = False) -> tuple[bytes, str, str, int, float]:
+    def _proxy_fetch(
+        self,
+        url: str,
+        *,
+        raw: bool = False,
+        timeout_seconds: int | None = None,
+    ) -> tuple[bytes, str, str, int, float]:
         if not self.api_key:
             raise ValueError("SCRAPEOPS_API_KEY is required for ScrapeOps company enrichment.")
         safe_url = validate_official_url(url)
@@ -281,7 +287,7 @@ class ScrapeOpsCompanyProvider(OfficialWebsiteProvider):
         retry = scrapeops_request_with_retry(
             "GET",
             SCRAPEOPS_PROXY_ENDPOINT,
-            timeout_seconds=self.timeout_seconds,
+            timeout_seconds=max(2, int(timeout_seconds or self.timeout_seconds)),
             max_retries=self.max_retries,
             params=params,
             headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "*/*" if raw else "text/html,application/xhtml+xml"},
@@ -509,7 +515,13 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                 result.append(normalized)
         return result
 
-    def _direct_fetch(self, url: str, *, raw: bool = False) -> tuple[bytes, str, str, int, float]:
+    def _direct_fetch(
+        self,
+        url: str,
+        *,
+        raw: bool = False,
+        timeout_seconds: int | None = None,
+    ) -> tuple[bytes, str, str, int, float]:
         """Fetch a public LinkedIn/search response when the proxy is unavailable.
 
         ScrapeOps remains the primary transport. The direct fallback is bounded,
@@ -522,7 +534,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         approved_host = urlparse(safe_url).hostname or ""
         body, content_type, final_url, _ = self._fetch(
             safe_url,
-            timeout_seconds=self.timeout_seconds,
+            timeout_seconds=max(2, int(timeout_seconds or self.timeout_seconds)),
             max_bytes=2 * 1024 * 1024 if raw else self.max_html_bytes,
             approved_host=approved_host,
         )
@@ -545,6 +557,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         *,
         raw: bool = False,
         prefer_direct: bool = False,
+        timeout_seconds: int | None = None,
     ) -> tuple[bytes, str, str, int, float, str]:
         transports = (
             (("direct_fallback", self._direct_fetch), ("scrapeops", self._proxy_fetch))
@@ -554,7 +567,11 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         last_error: Exception | None = None
         for transport, fetcher in transports:
             try:
-                body, content_type, final_url, attempts, cost_units = fetcher(url, raw=raw)
+                body, content_type, final_url, attempts, cost_units = fetcher(
+                    url,
+                    raw=raw,
+                    timeout_seconds=timeout_seconds,
+                )
                 return body, content_type, final_url, attempts, cost_units, transport
             except Exception as exc:
                 last_error = exc
@@ -590,6 +607,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                 body, content_type, _, attempts, cost_units, transport = self._fetch_with_fallback(
                     search_url,
                     prefer_direct=discovery_prefer_direct,
+                    timeout_seconds=max(3, min(self.timeout_seconds, 5)),
                 )
             except Exception:
                 continue
