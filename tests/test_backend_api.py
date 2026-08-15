@@ -35,6 +35,7 @@ from backend.capabilities.tracker.email_integration import TrackerMailboxMessage
 from backend.domain.models import ArtifactRecord, JobRecord, ReviewRecord, StageDefinition
 from backend.orchestration import BaseStage, StageOutcome
 from backend.profiles.cv_profile_extraction import extract_cv_profile_fallback
+from backend.profiles.document_text import extract_document_text
 
 
 class _ApiSeedStage(BaseStage):
@@ -3266,6 +3267,92 @@ class BackendApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertIn(b"Jane Candidate", downloaded)
+
+    @patch.dict(os.environ, {"RUNR_DISABLE_QUOTAS": "1"}, clear=False)
+    def test_cv_editor_loads_saves_and_keeps_previous_docx_version(self):
+        status, upload_payload = self._multipart_request(
+            "/cv-upload",
+            "cv_file",
+            "editable_resume.txt",
+            (
+                b"Alex Candidate\n"
+                b"Product Analyst\n"
+                b"alex@example.com | Berlin\n"
+                b"Summary\nAnalyst who turns messy operations data into useful decisions.\n"
+                b"Skills\nSQL, Experimentation\n"
+                b"Experience\nProduct Analyst | Example GmbH\n2022 - Present\n"
+                b"- Built a reporting workflow\n"
+                b"Education\nMSc Analytics | Example University\n2020 - 2022\n"
+            ),
+        )
+        self.assertEqual(status, 202)
+        self.app.process_next_queued_run(auto_retry_failed=False)
+        status, ready_payload = self._request("GET", upload_payload["status_url"])
+        self.assertEqual(status, 200)
+        asset_id = ready_payload["asset_id"]
+        original_key = ready_payload["asset"]["file"]["object_key"]
+        self.assertTrue(self.app.object_storage.exists(original_key))
+
+        status, editor_payload = self._request(
+            "GET",
+            f"/documents/assets/{asset_id}/editor",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(editor_payload["editor"]["revision"], 0)
+        self.assertEqual(editor_payload["editor"]["profile"]["name"], "Alex Candidate")
+        self.assertEqual(editor_payload["editor"]["profile"]["recent_experience"][0]["title"], "Product Analyst")
+
+        edited_profile = editor_payload["editor"]["profile"]
+        edited_profile["name"] = "Alex Updated"
+        edited_profile["summary"] = "Product analyst focused on measurable workflow improvements."
+        edited_profile["recent_experience"][0]["bullets"] = ["Built and shipped a reporting workflow"]
+        status, saved_payload = self._request(
+            "PUT",
+            f"/documents/assets/{asset_id}/editor",
+            {"base_revision": 0, "profile": edited_profile},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(saved_payload["editor"]["revision"], 1)
+        self.assertTrue(saved_payload["document"]["display_name"].endswith(".docx"))
+        self.assertNotEqual(saved_payload["document"]["download_url"], "")
+        persisted_user = self.app.get_user(self.user.user_id)
+        persisted_assets = (persisted_user.metadata or {}).get("candidate_assets") or []
+        persisted_asset = next(item for item in persisted_assets if item.get("asset_id") == asset_id)
+        updated_key = persisted_asset["file"]["object_key"]
+        self.assertNotEqual(updated_key, original_key)
+        self.assertTrue(self.app.object_storage.exists(original_key))
+        self.assertTrue(self.app.object_storage.exists(updated_key))
+
+        status, refreshed_payload = self._request(
+            "GET",
+            f"/documents/assets/{asset_id}/editor",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(refreshed_payload["editor"]["revision"], 1)
+        self.assertEqual(refreshed_payload["editor"]["profile"]["name"], "Alex Updated")
+        self.assertEqual(
+            refreshed_payload["editor"]["profile"]["recent_experience"][0]["bullets"],
+            ["Built and shipped a reporting workflow"],
+        )
+
+        status, _, downloaded = self._binary_request(
+            "GET",
+            refreshed_payload["document"]["download_url"],
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(downloaded.startswith(b"PK"))
+        extracted = extract_document_text("edited_resume.docx", downloaded)
+        self.assertIn("Alex Updated", extracted["text"])
+        self.assertIn("Built and shipped a reporting workflow", extracted["text"])
+
+        status, conflict_payload = self._request(
+            "PUT",
+            f"/documents/assets/{asset_id}/editor",
+            {"base_revision": 0, "profile": edited_profile},
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict_payload["error"]["code"], "cv_editor_conflict")
+        self.assertEqual(conflict_payload["error"]["details"]["current_revision"], 1)
 
     def test_candidate_asset_upload_rolls_back_objects_when_metadata_persistence_fails(self):
         stored_keys: list[str] = []

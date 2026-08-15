@@ -293,6 +293,15 @@ export default function DocumentsPage() {
     navigate("/cv-studio");
   }
 
+  function editDocument(document) {
+    const assetId = String(document?.asset_id || "").trim();
+    if (assetId && String(document?.asset_kind || "").trim().toLowerCase() === "workspace_cv") {
+      navigate(`/documents/assets/${encodeURIComponent(assetId)}/edit`);
+      return;
+    }
+    setPreviewDocument(document);
+  }
+
   function createMasterCv() {
     navigate("/master-cv");
   }
@@ -402,7 +411,7 @@ export default function DocumentsPage() {
                   <span className="documents-date-cell">{formatDateTime(document.created_at)}</span>
                   <span className="documents-date-cell">{formatDateTime(documentDate(document))}</span>
                   <div className="documents-row-actions">
-                    <button className="documents-edit-button" onClick={() => setPreviewDocument(document)} type="button"><Icon>edit</Icon>Edit</button>
+                    <button className="documents-edit-button" onClick={() => editDocument(document)} type="button"><Icon>edit</Icon>Edit</button>
                     <span className="documents-row-actions__divider" />
                     <div className="documents-row-menu">
                       <button aria-expanded={openMenuId === document.document_id} className="documents-more-button" onClick={() => setOpenMenuId((current) => current === document.document_id ? "" : document.document_id)} type="button">More <Icon>expand_more</Icon></button>

@@ -1,9 +1,18 @@
 # ruff: noqa: F821
 from __future__ import annotations
 
+from http import HTTPStatus
+
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
+from backend.domain.models import TOKEN_SCOPE_ARTIFACTS_READ, TOKEN_SCOPE_ARTIFACTS_WRITE
 from backend.domain.phase0_contracts import CAREER_ASSET_KINDS, CAREER_ASSET_PURPOSES
+from backend.profiles.cv_editor import (
+    CvEditorRevisionConflict,
+    build_cv_editor_payload,
+    save_cv_editor_asset,
+)
+from backend.profiles.document_text import extract_document_text
 
 
 # Documents, uploads, exports, CV preview, and ATS export gate.
@@ -19,6 +28,44 @@ _SERVER_BIND_RESERVED = {
 
 def _bind_server_globals() -> None:
     bind_server_globals(globals())
+
+
+def _editor_source_text(application, asset: dict) -> str:
+    metadata = dict(asset.get("metadata") or {})
+    source_text = str(metadata.get("source_text") or "").strip()
+    if source_text:
+        return source_text
+    file_payload = dict(asset.get("file") or {})
+    object_key = str(file_payload.get("object_key") or "").strip()
+    if not object_key:
+        return ""
+    try:
+        raw_bytes = application.object_storage.get(object_key)
+    except Exception:
+        return ""
+    return str(
+        extract_document_text(
+            str(asset.get("display_name") or "workspace-cv"),
+            raw_bytes,
+            allow_ocr=False,
+        ).get("text")
+        or ""
+    ).strip()
+
+
+def _editor_document_item(application, user, asset: dict) -> dict:
+    workspace_names = {
+        workspace.id: workspace.name
+        for workspace in application.list_workspaces()
+        if application.user_can_access_workspace(user, workspace.id)
+    }
+    shared_profile = dict((user.metadata or {}).get("profile") or {})
+    return _candidate_asset_to_document_item(
+        asset,
+        workspace_names,
+        shared_profile,
+        include_preview_profile=True,
+    )
 
 
 def register_routes(registry: RouteRegistry) -> None:
@@ -41,6 +88,37 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     application = context.application
     segments = list(context.segments)
     query = context.query
+    if len(segments) == 4 and segments[:2] == ["documents", "assets"] and segments[3] == "editor":
+                        user, _ = self._require_scope(TOKEN_SCOPE_ARTIFACTS_READ)
+                        try:
+                            asset = _get_candidate_asset_by_id(user, segments[2])
+                        except ValueError as exc:
+                            context.send_error(HTTPStatus.NOT_FOUND, "asset_not_found", str(exc))
+                            return True
+                        if str(asset.get("asset_kind") or "").strip().lower() != "workspace_cv":
+                            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY, "invalid_asset_kind", "Asset must be a workspace CV.")
+                            return True
+                        source_text = _editor_source_text(application, asset)
+                        if not source_text:
+                            context.send_error(
+                                HTTPStatus.UNPROCESSABLE_ENTITY,
+                                "cv_editor_source_unavailable",
+                                "This CV does not contain readable source text.",
+                            )
+                            return True
+                        editor = build_cv_editor_payload(
+                            asset,
+                            source_text=source_text,
+                            shared_profile=dict((user.metadata or {}).get("profile") or {}),
+                        )
+                        self._send_json(
+                            {
+                                "editor": editor,
+                                "document": _editor_document_item(application, user, asset),
+                            },
+                            status=HTTPStatus.OK,
+                        )
+                        return True
     if segments == ["cv"]:
                         user, _ = self._require_identity()
                         metadata = dict(user.metadata or {})
@@ -471,6 +549,67 @@ def _handle_put(context: ApiRouteContext) -> bool | None:
     segments = list(context.segments)
     query = context.query
     payload = self._read_json_body()
+
+    if len(segments) == 4 and segments[:2] == ["documents", "assets"] and segments[3] == "editor":
+                        user, _ = self._require_scope(TOKEN_SCOPE_ARTIFACTS_WRITE)
+                        try:
+                            asset = _get_candidate_asset_by_id(user, segments[2])
+                        except ValueError as exc:
+                            context.send_error(HTTPStatus.NOT_FOUND, "asset_not_found", str(exc))
+                            return True
+                        if str(asset.get("asset_kind") or "").strip().lower() != "workspace_cv":
+                            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY, "invalid_asset_kind", "Asset must be a workspace CV.")
+                            return True
+                        try:
+                            updated_asset, editor = save_cv_editor_asset(
+                                asset,
+                                user_id=str(user.user_id),
+                                payload=payload if isinstance(payload, dict) else {},
+                                object_storage=application.object_storage,
+                                download_url=f"/documents/assets/{segments[2]}/download",
+                            )
+                        except CvEditorRevisionConflict as exc:
+                            context.send_error(
+                                HTTPStatus.CONFLICT,
+                                "cv_editor_conflict",
+                                str(exc),
+                                details={"current_revision": exc.current_revision},
+                            )
+                            return True
+                        except ValueError as exc:
+                            context.send_error(HTTPStatus.UNPROCESSABLE_ENTITY, "validation_error", str(exc))
+                            return True
+                        new_object_key = str((updated_asset.get("file") or {}).get("object_key") or "").strip()
+                        try:
+                            persisted_assets = _load_candidate_assets(user)
+                            persisted_assets = [
+                                updated_asset
+                                if str(item.get("asset_id") or "") == str(updated_asset.get("asset_id") or "")
+                                else item
+                                for item in persisted_assets
+                            ]
+                            if not any(
+                                str(item.get("asset_id") or "") == str(updated_asset.get("asset_id") or "")
+                                for item in persisted_assets
+                            ):
+                                persisted_assets.append(updated_asset)
+                            refreshed_user = _persist_candidate_assets(application, user, persisted_assets)
+                        except Exception:
+                            if new_object_key:
+                                try:
+                                    application.object_storage.delete(new_object_key)
+                                except Exception:
+                                    pass
+                            raise
+                        refreshed_asset = _get_candidate_asset_by_id(refreshed_user, segments[2])
+                        self._send_json(
+                            {
+                                "editor": editor,
+                                "document": _editor_document_item(application, refreshed_user, refreshed_asset),
+                            },
+                            status=HTTPStatus.OK,
+                        )
+                        return True
 
     if segments[:2] == ["documents", "assets"] and len(segments) == 4 and segments[3] == "sections":
                         user, _ = self._require_identity()

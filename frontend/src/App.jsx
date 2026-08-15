@@ -24,6 +24,7 @@ const HomePage = lazy(() => import("./pages/HomePage"));
 const CareerEvidencePage = lazy(() => import("./pages/CareerEvidencePage"));
 const CvStudioPage = lazy(() => import("./pages/CvStudioPage"));
 const DocumentsPage = lazy(() => import("./pages/DocumentsPage"));
+const CvEditorPage = lazy(() => import("./pages/CvEditorPage"));
 const MasterCvPage = lazy(() => import("./pages/MasterCvPage"));
 const CareerAssetsPage = lazy(() => import("./pages/ArtifactsPage"));
 const JobDescriptionPage = lazy(() => import("./pages/JobDescriptionPage"));
@@ -254,6 +255,7 @@ function AuthenticatedApp() {
               <Route path="/tracker" element={<TrackerPage />} />
               <Route path="/tracker/:reviewId/ats" element={<TrackerAtsPage />} />
               <Route path="/tracker/job-descriptions/:reviewId" element={<JobDescriptionPage />} />
+              <Route path="/documents/assets/:assetId/edit" element={<CvEditorPage />} />
               <Route path="/documents" element={<DocumentsPage />} />
               <Route path="/master-cv" element={<MasterCvPage />} />
               <Route path="/career-assets" element={<CareerAssetsPage />} />
