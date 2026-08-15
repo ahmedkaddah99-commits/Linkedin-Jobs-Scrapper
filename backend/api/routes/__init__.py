@@ -12,6 +12,7 @@ from backend.api.routes.assisted_apply_packages import register_routes as regist
 from backend.api.routes.assisted_apply_preparations import register_routes as register_assisted_apply_preparation_routes
 from backend.api.routes.assisted_apply_telemetry import register_routes as register_assisted_apply_telemetry_routes
 from backend.api.routes.career_profiles import register_routes as register_career_profiles_routes
+from backend.api.routes.master_cv import register_routes as register_master_cv_routes
 from backend.api.routes.career_evidence import register_routes as register_career_evidence_routes
 from backend.api.routes.cv_bullet_suggestions import register_routes as register_cv_bullet_suggestions_routes
 from backend.api.routes.motivation_letters import register_routes as register_motivation_letters_routes
@@ -48,6 +49,7 @@ def build_route_registry() -> RouteRegistry:
     register_job_import_admin_routes(registry)
     register_admin_routes(registry)
     register_career_profiles_routes(registry)
+    register_master_cv_routes(registry)
     register_application_bindings_routes(registry)
 
     register_career_evidence_routes(registry)
