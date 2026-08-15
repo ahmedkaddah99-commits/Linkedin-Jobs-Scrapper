@@ -3914,6 +3914,40 @@ class SqliteAcquisitionStore(_SqliteStore):
         source_path = str(checked_in_path or "company_site_inventory")
         stable_import_id = str(import_id or f"company-site-inventory:{now[:10]}")
 
+        # Keep remote Turso write transactions bounded.  A full inventory can
+        # contain thousands of companies and each entry may create identity,
+        # evidence, URL, and occurrence rows.  Committing smaller batches
+        # lets the admin catalog become visible incrementally and avoids
+        # holding the shared database write lock for the entire import.
+        batch_size = 200
+        if len(rows) > batch_size:
+            aggregate = {
+                "status": "completed",
+                "import_id": stable_import_id,
+                "source_path": source_path,
+                "entries_received": len(rows),
+                "companies_created": 0,
+                "companies_reused": 0,
+                "urls_persisted": 0,
+                "duplicates_skipped": 0,
+                "invalid_entries": 0,
+            }
+            for offset in range(0, len(rows), batch_size):
+                partial = self.sync_company_site_inventory(
+                    rows[offset : offset + batch_size],
+                    checked_in_path=source_path,
+                    import_id=stable_import_id,
+                )
+                for key in (
+                    "companies_created",
+                    "companies_reused",
+                    "urls_persisted",
+                    "duplicates_skipped",
+                    "invalid_entries",
+                ):
+                    aggregate[key] += int(partial.get(key) or 0)
+            return aggregate
+
         def write(connection) -> dict[str, Any]:
             result = {
                 "status": "completed",
