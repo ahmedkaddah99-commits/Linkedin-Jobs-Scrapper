@@ -570,12 +570,12 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         query = quote_plus(f'site:linkedin.com/company "{name}"')
         searches = (
             (
-                "https://www.bing.com/search?q=" + query + "&format=rss&setlang=en-US&cc=US",
-                "rss",
-            ),
-            (
                 "https://html.duckduckgo.com/html/?q=" + query,
                 "html",
+            ),
+            (
+                "https://www.bing.com/search?q=" + query + "&format=rss&setlang=en-US&cc=US",
+                "rss",
             ),
         )
         total_attempts = 0
