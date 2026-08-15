@@ -306,6 +306,7 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["extra_fields"]["linkedin_company_url"], "https://www.linkedin.com/company/acme")
         self.assertEqual(result["extra_fields"]["linkedin_description"], "A software company.")
         self.assertEqual(result["extra_fields"]["linkedin_lookup_status"], "matched")
+        self.assertEqual(result["extra_fields"]["linkedin_jsonld"]["@type"], "Organization")
         self.assertEqual(result["logo_bytes"], svg)
         self.assertEqual(result["request_count"], 3)
         self.assertEqual(result["cost_units"], 3.0)
