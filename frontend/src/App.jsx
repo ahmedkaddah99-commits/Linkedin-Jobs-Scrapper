@@ -23,6 +23,8 @@ const AssistedApplyConnectionPage = lazy(() => import("./pages/AssistedApplyConn
 const ApplyExtensionSetupPage = lazy(() => import("./pages/ApplyExtensionSetupPage"));
 const CareerProfilesPage = lazy(() => import("./pages/CareerProfilesPage"));
 
+const appSubdomain = typeof window !== "undefined" && window.location.hostname === "app.userunr.com";
+
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const HomePage = lazy(() => import("./pages/HomePage"));
 const CareerEvidencePage = lazy(() => import("./pages/CareerEvidencePage"));
@@ -388,14 +390,20 @@ function PublicAuthRoute({ mode }) {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<MarketingSite page="home" />} />
-      <Route path="/how-it-works" element={<Navigate replace to="/#how-it-works" />} />
-      <Route path="/pricing" element={<Navigate replace to="/#pricing" />} />
-      <Route path="/security" element={<MarketingSite page="security" />} />
-      <Route path="/terms" element={<MarketingSite page="terms" />} />
-      <Route path="/terms-and-conditions" element={<MarketingSite page="terms" />} />
-      <Route path="/user-agreement" element={<MarketingSite page="privacy" />} />
-      <Route path="/privacy" element={<MarketingSite page="privacy" />} />
+      {appSubdomain ? (
+        <Route path="/" element={<ProtectedAppRoute />} />
+      ) : (
+        <>
+          <Route path="/" element={<MarketingSite page="home" />} />
+          <Route path="/how-it-works" element={<Navigate replace to="/#how-it-works" />} />
+          <Route path="/pricing" element={<Navigate replace to="/#pricing" />} />
+          <Route path="/security" element={<MarketingSite page="security" />} />
+          <Route path="/terms" element={<MarketingSite page="terms" />} />
+          <Route path="/terms-and-conditions" element={<MarketingSite page="terms" />} />
+          <Route path="/user-agreement" element={<MarketingSite page="privacy" />} />
+          <Route path="/privacy" element={<MarketingSite page="privacy" />} />
+        </>
+      )}
       <Route path="/sign-in/*" element={<PublicAuthRoute mode="sign-in" />} />
       <Route path="/sign-up/*" element={<PublicAuthRoute mode="sign-up" />} />
       <Route path="*" element={<ProtectedAppRoute />} />
