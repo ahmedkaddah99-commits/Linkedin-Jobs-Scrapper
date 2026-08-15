@@ -310,6 +310,25 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(result["request_count"], 3)
         self.assertEqual(result["cost_units"], 3.0)
 
+    def test_linkedin_provider_uses_bounded_direct_fallback_when_scrapeops_times_out(self):
+        discovery_html = '<html><body><a href="https://www.linkedin.com/company/acme">Acme GmbH | LinkedIn</a></body></html>'
+        linkedin_html = """
+        <html><head><meta property="og:title" content="Acme GmbH | LinkedIn">
+        <script type="application/ld+json">{"@type":"Organization","industry":"Software","url":"https://acme.example"}</script>
+        </head></html>
+        """
+        direct_responses = iter([
+            (discovery_html.encode(), "text/html", "https://html.duckduckgo.com/html/", 1, 0.0),
+            (linkedin_html.encode(), "text/html", "https://www.linkedin.com/company/acme", 1, 0.0),
+        ])
+        provider = ScrapeOpsLinkedInCompanyProvider(api_key="test-key", mode="basic")
+        with patch.object(provider, "_proxy_fetch", side_effect=RuntimeError("proxy_timeout")), patch.object(provider, "_direct_fetch", side_effect=lambda *args, **kwargs: next(direct_responses)):
+            result = asyncio.run(provider.enrich({"canonical_name": "Acme GmbH"}, conditional={}))
+        self.assertEqual(result["source"], "linkedin_company_page_direct_fallback")
+        self.assertEqual(result["fields"]["industry"], "Software")
+        self.assertEqual(result["extra_fields"]["linkedin_fetch_transport"], "direct_fallback")
+        self.assertEqual(result["cost_units"], 0.0)
+
     def test_linkedin_scrapeops_provider_is_selected_by_worker_configuration(self):
         original = os.environ.get("RUNR_COMPANY_ENRICHMENT_PROVIDER")
         os.environ["RUNR_COMPANY_ENRICHMENT_PROVIDER"] = "scrapeops_linkedin"

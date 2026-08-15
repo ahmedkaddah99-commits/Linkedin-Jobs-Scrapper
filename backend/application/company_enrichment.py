@@ -505,20 +505,60 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                 result.append(normalized)
         return result
 
-    def _discover_linkedin_urls(self, company: Mapping[str, Any]) -> tuple[list[str], int, float]:
+    def _direct_fetch(self, url: str, *, raw: bool = False) -> tuple[bytes, str, str, int, float]:
+        """Fetch a public LinkedIn/search response when the proxy is unavailable.
+
+        ScrapeOps remains the primary transport. The direct fallback is bounded,
+        HTTPS-only, public-host validated, and recorded separately in provenance
+        so a transient proxy outage does not discard otherwise usable LinkedIn
+        facts.
+        """
+
+        safe_url = validate_official_url(url)
+        approved_host = urlparse(safe_url).hostname or ""
+        body, content_type, final_url, _ = self._fetch(
+            safe_url,
+            timeout_seconds=self.timeout_seconds,
+            max_bytes=2 * 1024 * 1024 if raw else self.max_html_bytes,
+            approved_host=approved_host,
+        )
+        return body, content_type, final_url, 1, 0.0
+
+    def _fetch_with_fallback(
+        self,
+        url: str,
+        *,
+        raw: bool = False,
+        prefer_direct: bool = False,
+    ) -> tuple[bytes, str, str, int, float, str]:
+        transports = (
+            (("direct_fallback", self._direct_fetch), ("scrapeops", self._proxy_fetch))
+            if prefer_direct
+            else (("scrapeops", self._proxy_fetch), ("direct_fallback", self._direct_fetch))
+        )
+        last_error: Exception | None = None
+        for transport, fetcher in transports:
+            try:
+                body, content_type, final_url, attempts, cost_units = fetcher(url, raw=raw)
+                return body, content_type, final_url, attempts, cost_units, transport
+            except Exception as exc:
+                last_error = exc
+        raise last_error or RuntimeError("linkedin_fetch_failed")
+
+    def _discover_linkedin_urls(self, company: Mapping[str, Any]) -> tuple[list[str], int, float, str]:
         existing = self._existing_linkedin_urls(company)
         if existing:
-            return existing[:3], 0, 0.0
+            return existing[:3], 0, 0.0, "existing_profile"
         name = str(company.get("canonical_name") or "").strip()
         if not name:
-            return [], 0, 0.0
+            return [], 0, 0.0, "none"
         search_url = (
             "https://html.duckduckgo.com/html/?q="
             + quote_plus(f'site:linkedin.com/company "{name}"')
         )
-        body, content_type, _, attempts, cost_units = self._proxy_fetch(search_url)
+        body, content_type, _, attempts, cost_units, transport = self._fetch_with_fallback(search_url)
         if "html" not in content_type.casefold():
-            return [], attempts, cost_units
+            return [], attempts, cost_units, transport
         soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "html.parser")
         urls: list[str] = []
         for anchor in soup.find_all("a", href=True):
@@ -530,7 +570,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                 urls.append(candidate)
             if len(urls) >= 3:
                 break
-        return urls, attempts, cost_units
+        return urls, attempts, cost_units, transport
 
     @staticmethod
     def _meta(html_text: str) -> dict[str, str]:
@@ -603,12 +643,16 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
 
     async def enrich(self, company: Mapping[str, Any], *, conditional: Mapping[str, Any]) -> Mapping[str, Any]:
         del conditional
-        candidates, discovery_attempts, discovery_cost = self._discover_linkedin_urls(company)
+        candidates, discovery_attempts, discovery_cost, discovery_transport = self._discover_linkedin_urls(company)
         request_count = discovery_attempts
         cost_units = discovery_cost
         for candidate in candidates:
             try:
-                body, content_type, final_url, attempts, cost = await asyncio.to_thread(self._proxy_fetch, candidate)
+                body, content_type, final_url, attempts, cost, transport = await asyncio.to_thread(
+                    self._fetch_with_fallback,
+                    candidate,
+                    prefer_direct=discovery_transport == "direct_fallback",
+                )
             except Exception:
                 continue
             request_count += attempts
@@ -628,16 +672,22 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             result: dict[str, Any] = {
                 "fields": fields,
                 "extra_fields": extra,
-                "source": "scrapeops_linkedin_company_page",
+                "source": "scrapeops_linkedin_company_page" if transport == "scrapeops" else "linkedin_company_page_direct_fallback",
                 "provenance_url": _linkedin_company_url(final_url) or candidate,
                 "observed_at": utc_now_iso(),
                 "verified_at": utc_now_iso(),
                 "request_count": request_count,
                 "cost_units": cost_units,
             }
+            extra["linkedin_fetch_transport"] = transport
             if logo_url:
                 try:
-                    logo_body, logo_type, logo_final_url, logo_attempts, logo_cost = await asyncio.to_thread(self._proxy_fetch, logo_url, raw=True)
+                    logo_body, logo_type, logo_final_url, logo_attempts, logo_cost, _ = await asyncio.to_thread(
+                        self._fetch_with_fallback,
+                        logo_url,
+                        raw=True,
+                        prefer_direct=transport == "direct_fallback",
+                    )
                     # LinkedIn CDN responses can be consent/error HTML even
                     # when the page exposes an og:image URL. Never let an
                     # unusable optional logo discard otherwise valid company
