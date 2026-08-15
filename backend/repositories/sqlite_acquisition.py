@@ -3945,17 +3945,51 @@ class SqliteAcquisitionStore(_SqliteStore):
                         domain_to_company[host] = None
                     else:
                         domain_to_company[host] = company_id
-            for identity in connection.execute(
-                "SELECT identity_key, company_id FROM company_identity_keys WHERE identity_key LIKE 'domain:%'"
-            ).fetchall():
+            identity_rows = connection.execute(
+                "SELECT identity_key, company_id FROM company_identity_keys"
+            ).fetchall()
+            identity_to_company = {
+                str(identity["identity_key"] or ""): str(identity["company_id"] or "")
+                for identity in identity_rows
+                if str(identity["identity_key"] or "") and str(identity["company_id"] or "")
+            }
+            for identity in identity_rows:
                 host = str(identity["identity_key"] or "")[len("domain:"):].casefold().removeprefix("www.")
                 company_id = str(identity["company_id"] or "")
-                if host:
+                if str(identity["identity_key"] or "").startswith("domain:") and host:
                     if host in domain_to_company and domain_to_company[host] not in {company_id, None}:
                         domain_to_company[host] = None
                     else:
                         domain_to_company[host] = company_id
-
+            alias_owners = {
+                str(alias["alias_key"] or ""): str(alias["company_id"] or "")
+                for alias in connection.execute("SELECT alias_key, company_id FROM canonical_company_aliases").fetchall()
+                if str(alias["alias_key"] or "")
+            }
+            persisted_urls = {
+                (str(url["company_id"] or ""), str(url["url_type"] or ""), str(url["canonical_url"] or ""))
+                for url in connection.execute(
+                    "SELECT company_id, url_type, canonical_url FROM canonical_company_urls"
+                ).fetchall()
+            }
+            primary_urls = {
+                (str(url["company_id"] or ""), str(url["url_type"] or ""))
+                for url in connection.execute(
+                    "SELECT company_id, url_type FROM canonical_company_urls WHERE selected_primary=1"
+                ).fetchall()
+            }
+            evidence_keys = {
+                (str(item["company_id"] or ""), str(item["identity_key"] or ""), str(item["evidence_url"] or ""))
+                for item in connection.execute(
+                    "SELECT company_id, identity_key, evidence_url FROM company_identity_evidence WHERE evidence_type='company_site_inventory'"
+                ).fetchall()
+            }
+            new_companies: list[tuple[Any, ...]] = []
+            new_identities: list[tuple[Any, ...]] = []
+            new_aliases: list[tuple[Any, ...]] = []
+            new_evidence: list[tuple[Any, ...]] = []
+            new_urls: list[tuple[Any, ...]] = []
+            new_occurrences: list[tuple[Any, ...]] = []
             for entry in rows:
                 name = " ".join(str(entry.get("company_name") or "").split()).strip()
                 original_url, canonical_url, structural_reason = structural_url(entry.get("url") or "")
@@ -3963,73 +3997,161 @@ class SqliteAcquisitionStore(_SqliteStore):
                 if not name or not canonical_url or not host:
                     result["invalid_entries"] += 1
                     continue
-                identity_key = f"domain:{host}"
-                company_id = ""
-                identity_row = connection.execute(
-                    "SELECT company_id FROM company_identity_keys WHERE identity_key=?",
-                    (identity_key,),
-                ).fetchone()
-                if identity_row is not None:
-                    company_id = str(identity_row["company_id"] or "")
-                elif domain_to_company.get(host):
-                    company_id = str(domain_to_company[host] or "")
-                    connection.execute(
-                        "INSERT OR IGNORE INTO company_identity_keys (identity_key, company_id, identity_type, source, evidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (identity_key, company_id, "inventory_domain", "company_site_inventory", _json({"url": canonical_url}), now, now),
-                    )
+                identity_key = f"domain:{host}" if host not in domain_to_company or domain_to_company.get(host) is not None else f"inventory_url:{canonical_url}"
+                company_id = str(identity_to_company.get(identity_key) or domain_to_company.get(host) or "")
                 if not company_id:
-                    company_id = SqliteAcquisitionStore._ensure_company(
-                        connection,
-                        name,
-                        "employer",
-                        now,
-                        provenance_url=canonical_url,
-                        aliases=(name,),
-                        identity_key=identity_key,
-                        identity_type="inventory_domain",
-                        identity_evidence={"url": canonical_url, "source": source_path},
+                    company_id = f"canonical_company_{uuid4().hex}"
+                    new_companies.append((company_id, name, "employer", canonical_url, now, now))
+                    new_identities.append(
+                        (
+                            identity_key,
+                            company_id,
+                            "inventory_domain" if identity_key.startswith("domain:") else "inventory_url",
+                            "company_site_inventory",
+                            _json({"url": canonical_url, "source": source_path}),
+                            now,
+                            now,
+                        )
                     )
                     result["companies_created"] += 1
-                    domain_to_company[host] = company_id
+                    identity_to_company[identity_key] = company_id
+                    if identity_key.startswith("domain:"):
+                        domain_to_company[host] = company_id
                 else:
                     result["companies_reused"] += 1
-                    SqliteAcquisitionStore._ensure_company_alias(connection, company_id, name, source="company_site_inventory", now=now)
-                    SqliteAcquisitionStore._record_company_identity_evidence(
-                        connection,
-                        company_id=company_id,
-                        observed_name=name,
-                        identity_key=identity_key,
-                        evidence_type="company_site_inventory",
-                        evidence={"url": canonical_url, "source": source_path},
-                        evidence_url=canonical_url,
-                        confidence=1.0,
-                        link_state="linked",
-                        review_required=False,
-                        now=now,
+                alias_key = company_name_key(name)
+                if alias_key and alias_key not in alias_owners:
+                    new_aliases.append(
+                        (
+                            f"company_alias_{uuid4().hex}",
+                            company_id,
+                            alias_key,
+                            name,
+                            "company_site_inventory",
+                            "verified",
+                            now,
+                            now,
+                        )
                     )
-                existing_url = connection.execute(
-                    "SELECT 1 FROM canonical_company_urls WHERE company_id=? AND url_type='careers' AND canonical_url=?",
-                    (company_id, canonical_url),
-                ).fetchone()
-                if existing_url is not None:
+                    alias_owners[alias_key] = company_id
+                evidence_key = (company_id, identity_key, canonical_url)
+                if evidence_key not in evidence_keys:
+                    new_evidence.append(
+                        (
+                            f"company_identity_evidence_{uuid4().hex}",
+                            company_id,
+                            name,
+                            name_key(name),
+                            identity_key,
+                            "",
+                            "",
+                            "company_site_inventory",
+                            canonical_url,
+                            _json({"url": canonical_url, "source": source_path}),
+                            1.0,
+                            "linked",
+                            0,
+                            now,
+                        )
+                    )
+                    evidence_keys.add(evidence_key)
+                url_key = (company_id, "careers", canonical_url)
+                if url_key in persisted_urls:
                     result["duplicates_skipped"] += 1
                     continue
-                SqliteAcquisitionStore._record_company_url_occurrence(
-                    connection,
-                    company_id=company_id,
-                    url_type="careers",
-                    url=original_url,
-                    url_lifecycle="configured_official",
-                    source="company_site_inventory",
-                    import_id=stable_import_id,
-                    checked_in_path=source_path,
-                    evidence={"company_name": name, "hostname": host},
-                    validation_reason=structural_reason,
-                    now=now,
-                    selected_primary=True,
-                    persist=True,
+                company_url_id = f"company_url_{uuid4().hex}"
+                selected_primary = (company_id, "careers") not in primary_urls
+                new_urls.append(
+                    (
+                        company_url_id,
+                        company_id,
+                        "careers",
+                        original_url,
+                        canonical_url,
+                        "company_site_inventory",
+                        "",
+                        now,
+                        now,
+                        "not_validated",
+                        "",
+                        int(selected_primary),
+                        "company_identity_v1",
+                        now,
+                        now,
+                        "configured_official",
+                        str(structural_reason or ""),
+                        "",
+                        1,
+                        "",
+                    )
                 )
+                new_occurrences.append(
+                    (
+                        f"company_url_occurrence_{uuid4().hex}",
+                        company_id,
+                        "careers",
+                        original_url,
+                        canonical_url,
+                        "configured_official",
+                        "company_site_inventory",
+                        "",
+                        "",
+                        stable_import_id,
+                        source_path,
+                        company_url_id,
+                        _json({"company_name": name, "hostname": host}),
+                        str(structural_reason or ""),
+                        "",
+                        now,
+                    )
+                )
+                persisted_urls.add(url_key)
+                if selected_primary:
+                    primary_urls.add((company_id, "careers"))
                 result["urls_persisted"] += 1
+            if new_companies:
+                connection.executemany(
+                    "INSERT INTO canonical_companies (company_id, canonical_name, entity_kind, provenance_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    new_companies,
+                )
+            if new_identities:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO company_identity_keys (identity_key, company_id, identity_type, source, evidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    new_identities,
+                )
+            if new_aliases:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO canonical_company_aliases (alias_id, company_id, alias_key, alias_display, source, confidence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    new_aliases,
+                )
+            if new_evidence:
+                connection.executemany(
+                    "INSERT INTO company_identity_evidence (evidence_id, company_id, observed_name, normalized_name, identity_key, target_id, source_observation_id, evidence_type, evidence_url, evidence_json, confidence, link_state, review_required, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    new_evidence,
+                )
+            if new_urls:
+                connection.executemany(
+                    """
+                    INSERT INTO canonical_company_urls (
+                        company_url_id, company_id, url_type, url, canonical_url, source,
+                        source_observation_id, first_seen_at, last_seen_at, validation_status,
+                        redirect_target, selected_primary, rule_version, created_at, updated_at,
+                        url_lifecycle, validation_reason, ignored_reason, occurrence_count, source_target_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    new_urls,
+                )
+            if new_occurrences:
+                connection.executemany(
+                    """
+                    INSERT INTO canonical_company_url_occurrences (
+                        occurrence_id, company_id, url_type, url, canonical_url, url_lifecycle,
+                        source, source_observation_id, target_id, import_id, checked_in_path,
+                        persisted_company_url_id, evidence_json, validation_reason, ignored_reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    new_occurrences,
+                )
             return result
 
         return self._run_transaction(write)
