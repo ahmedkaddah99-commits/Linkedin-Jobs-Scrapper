@@ -211,6 +211,24 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "default": "0",
         "description": "Import checked-in regular employer career-site inventory into the canonical admin company catalog before enrichment.",
     },
+    "RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES": {
+        "required": False,
+        "scope": "backend",
+        "default": "25",
+        "description": "Maximum company enrichment targets processed per scheduled worker cycle.",
+    },
+    "RUNR_COMPANY_ENRICHMENT_CONCURRENCY": {
+        "required": False,
+        "scope": "backend",
+        "default": "5",
+        "description": "Maximum concurrent ScrapeOps company requests in a worker cycle.",
+    },
+    "RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET": {
+        "required": False,
+        "scope": "backend",
+        "default": "25",
+        "description": "Maximum provider request budget per scheduled worker cycle.",
+    },
     "RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY": {
         "required": False,
         "scope": "backend",

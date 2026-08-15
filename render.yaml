@@ -62,6 +62,12 @@ services:
         value: "1"
       - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
         value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES
+        value: "100"
+      - key: RUNR_COMPANY_ENRICHMENT_CONCURRENCY
+        value: "10"
+      - key: RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET
+        value: "100"
       - key: DATABASE_BACKEND
         value: turso
       - key: RUNR_STORAGE_BACKEND
