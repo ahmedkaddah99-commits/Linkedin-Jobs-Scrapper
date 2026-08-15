@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 
@@ -118,9 +118,12 @@ function TextField({ label, className = "", ...props }) {
   );
 }
 
-function EditorCard({ action, children, description, icon, title }) {
+function EditorCard({ action, children, description, highlighted = false, icon, id, title }) {
   return (
-    <section className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft sm:p-6">
+    <section
+      className={`scroll-mt-28 rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft transition-shadow duration-300 sm:p-6 ${highlighted ? "ring-2 ring-primary/40 ring-offset-2" : ""}`}
+      id={id}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 gap-3">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary">
@@ -164,32 +167,68 @@ function RemoveButton({ onClick }) {
   );
 }
 
-function PreviewSection({ children, title }) {
+function PreviewSection({ children, onEdit, target, title }) {
+  const interactive = Boolean(onEdit && target);
+
   return (
-    <section className="mt-5 first:mt-0">
-      <h3 className="border-b border-slate-200 pb-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700">{title}</h3>
+    <section className="group mt-5 first:mt-0">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-200 pb-1.5">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700">{title}</h3>
+        {interactive ? <button aria-label={`Edit ${title}`} className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-600 transition-opacity sm:opacity-0 sm:group-hover:opacity-100" onClick={() => onEdit(target)} type="button"><Icon className="text-[13px]">edit</Icon>Edit</button> : null}
+      </div>
       <div className="mt-2.5">{children}</div>
     </section>
   );
 }
 
-function CvPreview({ profile }) {
+function CvPreview({ onEdit, profile }) {
   const contacts = [profile.email, profile.location, profile.website, profile.linkedin_url, profile.github_url].filter(Boolean);
+
+  function activateItem(event, target) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+      onEdit(target);
+    }
+  }
+
+  function clickableItem(target) {
+    return {
+      "aria-label": `Edit ${target.replaceAll("-", " ")}`,
+      className: "-mx-2 cursor-pointer rounded-lg px-2 py-1 transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50",
+      onClick: (event) => {
+        event.stopPropagation();
+        onEdit(target);
+      },
+      onKeyDown: (event) => activateItem(event, target),
+      role: "button",
+      tabIndex: 0,
+    };
+  }
+
   return (
     <article className="mx-auto min-h-[52rem] max-w-[43rem] bg-white p-7 text-[11px] leading-[1.55] text-slate-700 shadow-xl shadow-slate-900/10 sm:p-10">
-      <header className="border-b-2 border-teal-600 pb-4 text-center">
+      <header
+        aria-label="Edit identity and contact"
+        className="group cursor-pointer rounded-xl border-b-2 border-teal-600 pb-4 text-center transition-colors hover:bg-teal-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/50"
+        onClick={() => onEdit("identity")}
+        onKeyDown={(event) => activateItem(event, "identity")}
+        role="button"
+        tabIndex={0}
+      >
         <h2 className="font-headline text-3xl font-extrabold tracking-tight text-[#17324d]">{profile.name || "Your name"}</h2>
         <p className="mt-1 text-sm font-medium text-teal-700">{profile.role_title || "Professional headline"}</p>
         {contacts.length ? <p className="mt-2 text-[9px] text-slate-500">{contacts.join("  ·  ")}</p> : null}
+        <span className="mt-2 inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"><span className="material-symbols-outlined text-[13px]">edit</span>Click to edit</span>
       </header>
 
-      {profile.summary ? <PreviewSection title="Summary"><p>{profile.summary}</p></PreviewSection> : null}
+      {profile.summary ? <PreviewSection onEdit={onEdit} target="summary" title="Summary"><p>{profile.summary}</p></PreviewSection> : null}
 
       {profile.recent_experience.length ? (
-        <PreviewSection title="Experience">
+        <PreviewSection onEdit={onEdit} target="experience" title="Experience">
           <div className="space-y-3">
             {profile.recent_experience.map((item, index) => (
-              <div key={`${item.title}-${index}`}>
+              <div {...clickableItem(`experience-${index}`)} key={`${item.title}-${index}`}>
                 <div className="flex items-baseline justify-between gap-3">
                   <strong className="text-[12px] text-[#17324d]">{item.title || "Role"}</strong>
                   <span className="shrink-0 text-[9px] text-slate-500">{item.period}</span>
@@ -203,10 +242,10 @@ function CvPreview({ profile }) {
       ) : null}
 
       {profile.projects.length ? (
-        <PreviewSection title="Projects">
+        <PreviewSection onEdit={onEdit} target="projects" title="Projects">
           <div className="space-y-3">
             {profile.projects.map((item, index) => (
-              <div key={`${item.title}-${index}`}>
+              <div {...clickableItem(`project-${index}`)} key={`${item.title}-${index}`}>
                 <div className="flex items-baseline justify-between gap-3"><strong className="text-[12px] text-[#17324d]">{item.title || "Project"}</strong><span className="shrink-0 text-[9px] text-slate-500">{item.period}</span></div>
                 {item.bullets.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.bullets.map((bullet, bulletIndex) => <li key={`${bullet}-${bulletIndex}`}>{bullet}</li>)}</ul> : null}
               </div>
@@ -216,16 +255,16 @@ function CvPreview({ profile }) {
       ) : null}
 
       {profile.education.length ? (
-        <PreviewSection title="Education">
+        <PreviewSection onEdit={onEdit} target="education" title="Education">
           <div className="space-y-2.5">
-            {profile.education.map((item, index) => <div key={`${item.degree_title}-${index}`}><div className="flex items-baseline justify-between gap-3"><strong className="text-[12px] text-[#17324d]">{item.degree_title || "Education"}</strong><span className="shrink-0 text-[9px] text-slate-500">{item.period}</span></div><p className="text-[10px] text-teal-700">{item.institution}</p>{item.details.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.details.map((detail, detailIndex) => <li key={`${detail}-${detailIndex}`}>{detail}</li>)}</ul> : null}</div>)}
+            {profile.education.map((item, index) => <div {...clickableItem(`education-${index}`)} key={`${item.degree_title}-${index}`}><div className="flex items-baseline justify-between gap-3"><strong className="text-[12px] text-[#17324d]">{item.degree_title || "Education"}</strong><span className="shrink-0 text-[9px] text-slate-500">{item.period}</span></div><p className="text-[10px] text-teal-700">{item.institution}</p>{item.details.length ? <ul className="mt-1 list-disc space-y-0.5 pl-4">{item.details.map((detail, detailIndex) => <li key={`${detail}-${detailIndex}`}>{detail}</li>)}</ul> : null}</div>)}
           </div>
         </PreviewSection>
       ) : null}
 
-      {profile.competencies.length ? <PreviewSection title="Skills"><div className="flex flex-wrap gap-1.5">{profile.competencies.map((item) => <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-medium text-slate-700" key={item}>{item}</span>)}</div></PreviewSection> : null}
-      {profile.languages.length ? <PreviewSection title="Languages"><p>{profile.languages.join("  ·  ")}</p></PreviewSection> : null}
-      {profile.custom_sections.map((section, index) => section.heading || section.lines.length ? <PreviewSection key={`${section.section_id || section.heading}-${index}`} title={section.heading || "Additional information"}><ul className="list-disc space-y-0.5 pl-4">{section.lines.map((line, lineIndex) => <li key={`${line}-${lineIndex}`}>{line}</li>)}</ul></PreviewSection> : null)}
+      {profile.competencies.length ? <PreviewSection onEdit={onEdit} target="skills" title="Skills"><div className="flex flex-wrap gap-1.5">{profile.competencies.map((item) => <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-medium text-slate-700" key={item}>{item}</span>)}</div></PreviewSection> : null}
+      {profile.languages.length ? <PreviewSection onEdit={onEdit} target="languages" title="Languages"><p>{profile.languages.join("  ·  ")}</p></PreviewSection> : null}
+      {profile.custom_sections.map((section, index) => section.heading || section.lines.length ? <PreviewSection onEdit={onEdit} target={`custom-${index}`} key={`${section.section_id || section.heading}-${index}`} title={section.heading || "Additional information"}><ul className="list-disc space-y-0.5 pl-4">{section.lines.map((line, lineIndex) => <li key={`${line}-${lineIndex}`}>{line}</li>)}</ul></PreviewSection> : null)}
 
       {!profile.summary && !profile.recent_experience.length && !profile.projects.length && !profile.education.length && !profile.competencies.length ? <div className="mt-16 rounded-2xl border border-dashed border-slate-300 p-6 text-center text-slate-400">Your live CV preview will appear here as you add content.</div> : null}
     </article>
@@ -243,6 +282,8 @@ export default function CvEditorPage() {
   const [loadError, setLoadError] = useState("");
   const [saveState, setSaveState] = useState({ saving: false, message: "", error: "" });
   const [dirty, setDirty] = useState(false);
+  const [activeEditTarget, setActiveEditTarget] = useState("");
+  const editTargetTimerRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -274,6 +315,25 @@ export default function CvEditorPage() {
     window.addEventListener("beforeunload", confirmUnload);
     return () => window.removeEventListener("beforeunload", confirmUnload);
   }, [dirty]);
+
+  useEffect(() => () => {
+    if (editTargetTimerRef.current) {
+      window.clearTimeout(editTargetTimerRef.current);
+    }
+  }, []);
+
+  function focusEditorTarget(target) {
+    const element = window.document.getElementById(`cv-editor-${target}`);
+    if (!element) return;
+    setActiveEditTarget(target);
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    const field = element.matches("input, textarea") ? element : element.querySelector("input, textarea");
+    window.setTimeout(() => field?.focus({ preventScroll: true }), 350);
+    if (editTargetTimerRef.current) {
+      window.clearTimeout(editTargetTimerRef.current);
+    }
+    editTargetTimerRef.current = window.setTimeout(() => setActiveEditTarget(""), 2200);
+  }
 
   function updateProfileField(field, value) {
     setProfile((current) => ({ ...current, [field]: value }));
@@ -376,7 +436,7 @@ export default function CvEditorPage() {
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(30rem,0.95fr)]">
         <div className="space-y-5">
-          <EditorCard description="The details employers see first." icon="person" title="Identity and contact">
+          <EditorCard description="The details employers see first." highlighted={activeEditTarget === "identity"} icon="person" id="cv-editor-identity" title="Identity and contact">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Full name" onChange={(event) => updateProfileField("name", event.target.value)} value={profile.name} />
               <Field label="Headline" onChange={(event) => updateProfileField("role_title", event.target.value)} value={profile.role_title} />
@@ -389,38 +449,38 @@ export default function CvEditorPage() {
             </div>
           </EditorCard>
 
-          <EditorCard description="A focused introduction that connects your experience to the role." icon="short_text" title="Professional summary">
+          <EditorCard description="A focused introduction that connects your experience to the role." highlighted={activeEditTarget === "summary"} icon="short_text" id="cv-editor-summary" title="Professional summary">
             <TextField label="Summary" onChange={(event) => updateProfileField("summary", event.target.value)} placeholder="Describe your strongest professional value in two or three sentences." value={profile.summary} />
           </EditorCard>
 
-          <EditorCard action={<AddButton onClick={() => addCollectionItem("recent_experience", makeExperience())}>Add role</AddButton>} description="Show the work, scope, and outcomes you want to be remembered for." icon="work_history" title="Experience">
+          <EditorCard action={<AddButton onClick={() => addCollectionItem("recent_experience", makeExperience())}>Add role</AddButton>} description="Show the work, scope, and outcomes you want to be remembered for." highlighted={activeEditTarget === "experience"} icon="work_history" id="cv-editor-experience" title="Experience">
             <div className="space-y-4">
-              {profile.recent_experience.map((item, index) => <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4" key={`experience-${index}`}><div className="mb-4 flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Role {index + 1}</span><RemoveButton onClick={() => removeCollectionItem("recent_experience", index)} /></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Role title" onChange={(event) => updateCollectionItem("recent_experience", index, { title: event.target.value })} value={item.title} /><Field label="Company" onChange={(event) => updateCollectionItem("recent_experience", index, { company: event.target.value })} value={item.company} /><Field className="sm:col-span-2" label="Dates" onChange={(event) => updateCollectionItem("recent_experience", index, { period: event.target.value })} placeholder="2022 — Present" value={item.period} /><TextField className="sm:col-span-2" label="Achievements · one per line" onChange={(event) => updateCollectionLines("recent_experience", index, "bullets", event.target.value)} placeholder="Built...\nImproved..." value={item.bullets.join("\n")} /></div></div>)}
+              {profile.recent_experience.map((item, index) => <div className={`scroll-mt-28 rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4 transition-shadow duration-300 ${activeEditTarget === `experience-${index}` ? "ring-2 ring-primary/40 ring-offset-2" : ""}`} id={`cv-editor-experience-${index}`} key={`experience-${index}`}><div className="mb-4 flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Role {index + 1}</span><RemoveButton onClick={() => removeCollectionItem("recent_experience", index)} /></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Role title" onChange={(event) => updateCollectionItem("recent_experience", index, { title: event.target.value })} value={item.title} /><Field label="Company" onChange={(event) => updateCollectionItem("recent_experience", index, { company: event.target.value })} value={item.company} /><Field className="sm:col-span-2" label="Dates" onChange={(event) => updateCollectionItem("recent_experience", index, { period: event.target.value })} placeholder="2022 — Present" value={item.period} /><TextField className="sm:col-span-2" label="Achievements · one per line" onChange={(event) => updateCollectionLines("recent_experience", index, "bullets", event.target.value)} placeholder="Built...\nImproved..." value={item.bullets.join("\n")} /></div></div>)}
               {!profile.recent_experience.length ? <div className="rounded-2xl border border-dashed border-outline-variant/25 p-6 text-center text-sm text-on-surface-variant">No experience added yet. Start with the role most relevant to your next opportunity.</div> : null}
             </div>
           </EditorCard>
 
-          <EditorCard action={<AddButton onClick={() => addCollectionItem("projects", makeProject())}>Add project</AddButton>} description="Keep selected work that proves your capabilities beyond job titles." icon="rocket_launch" title="Projects">
-            <div className="space-y-4">{profile.projects.map((item, index) => <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4" key={`project-${index}`}><div className="mb-4 flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Project {index + 1}</span><RemoveButton onClick={() => removeCollectionItem("projects", index)} /></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Project name" onChange={(event) => updateCollectionItem("projects", index, { title: event.target.value })} value={item.title} /><Field label="Date or period" onChange={(event) => updateCollectionItem("projects", index, { period: event.target.value })} value={item.period} /><TextField className="sm:col-span-2" label="Highlights · one per line" onChange={(event) => updateCollectionLines("projects", index, "bullets", event.target.value)} value={item.bullets.join("\n")} /></div></div>)}{!profile.projects.length ? <div className="rounded-2xl border border-dashed border-outline-variant/25 p-6 text-center text-sm text-on-surface-variant">Projects are optional. Add one when it strengthens your story.</div> : null}</div>
+          <EditorCard action={<AddButton onClick={() => addCollectionItem("projects", makeProject())}>Add project</AddButton>} description="Keep selected work that proves your capabilities beyond job titles." highlighted={activeEditTarget === "projects"} icon="rocket_launch" id="cv-editor-projects" title="Projects">
+            <div className="space-y-4">{profile.projects.map((item, index) => <div className={`scroll-mt-28 rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4 transition-shadow duration-300 ${activeEditTarget === `project-${index}` ? "ring-2 ring-primary/40 ring-offset-2" : ""}`} id={`cv-editor-project-${index}`} key={`project-${index}`}><div className="mb-4 flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Project {index + 1}</span><RemoveButton onClick={() => removeCollectionItem("projects", index)} /></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Project name" onChange={(event) => updateCollectionItem("projects", index, { title: event.target.value })} value={item.title} /><Field label="Date or period" onChange={(event) => updateCollectionItem("projects", index, { period: event.target.value })} value={item.period} /><TextField className="sm:col-span-2" label="Highlights · one per line" onChange={(event) => updateCollectionLines("projects", index, "bullets", event.target.value)} value={item.bullets.join("\n")} /></div></div>)}{!profile.projects.length ? <div className="rounded-2xl border border-dashed border-outline-variant/25 p-6 text-center text-sm text-on-surface-variant">Projects are optional. Add one when it strengthens your story.</div> : null}</div>
           </EditorCard>
 
-          <EditorCard action={<AddButton onClick={() => addCollectionItem("education", makeEducation())}>Add education</AddButton>} description="Add the qualifications that are relevant to your target roles." icon="school" title="Education">
-            <div className="space-y-4">{profile.education.map((item, index) => <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4" key={`education-${index}`}><div className="mb-4 flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Education {index + 1}</span><RemoveButton onClick={() => removeCollectionItem("education", index)} /></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Degree or qualification" onChange={(event) => updateCollectionItem("education", index, { degree_title: event.target.value })} value={item.degree_title} /><Field label="Institution" onChange={(event) => updateCollectionItem("education", index, { institution: event.target.value })} value={item.institution} /><Field className="sm:col-span-2" label="Dates" onChange={(event) => updateCollectionItem("education", index, { period: event.target.value })} value={item.period} /><TextField className="sm:col-span-2" label="Details · one per line" onChange={(event) => updateCollectionLines("education", index, "details", event.target.value)} value={item.details.join("\n")} /></div></div>)}{!profile.education.length ? <div className="rounded-2xl border border-dashed border-outline-variant/25 p-6 text-center text-sm text-on-surface-variant">No education entries added yet.</div> : null}</div>
+          <EditorCard action={<AddButton onClick={() => addCollectionItem("education", makeEducation())}>Add education</AddButton>} description="Add the qualifications that are relevant to your target roles." highlighted={activeEditTarget === "education"} icon="school" id="cv-editor-education" title="Education">
+            <div className="space-y-4">{profile.education.map((item, index) => <div className={`scroll-mt-28 rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4 transition-shadow duration-300 ${activeEditTarget === `education-${index}` ? "ring-2 ring-primary/40 ring-offset-2" : ""}`} id={`cv-editor-education-${index}`} key={`education-${index}`}><div className="mb-4 flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Education {index + 1}</span><RemoveButton onClick={() => removeCollectionItem("education", index)} /></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Degree or qualification" onChange={(event) => updateCollectionItem("education", index, { degree_title: event.target.value })} value={item.degree_title} /><Field label="Institution" onChange={(event) => updateCollectionItem("education", index, { institution: event.target.value })} value={item.institution} /><Field className="sm:col-span-2" label="Dates" onChange={(event) => updateCollectionItem("education", index, { period: event.target.value })} value={item.period} /><TextField className="sm:col-span-2" label="Details · one per line" onChange={(event) => updateCollectionLines("education", index, "details", event.target.value)} value={item.details.join("\n")} /></div></div>)}{!profile.education.length ? <div className="rounded-2xl border border-dashed border-outline-variant/25 p-6 text-center text-sm text-on-surface-variant">No education entries added yet.</div> : null}</div>
           </EditorCard>
 
-          <EditorCard description="Use one line per skill or language. These are rendered as compact, scannable lists." icon="auto_awesome" title="Skills and languages">
-            <div className="grid gap-4 sm:grid-cols-2"><TextField label="Skills · one per line" onChange={(event) => updateProfileField("competencies", lines(event.target.value))} value={profile.competencies.join("\n")} /><TextField label="Languages · one per line" onChange={(event) => updateProfileField("languages", lines(event.target.value))} value={profile.languages.join("\n")} /></div>
+          <EditorCard description="Use one line per skill or language. These are rendered as compact, scannable lists." highlighted={activeEditTarget === "skills" || activeEditTarget === "languages"} icon="auto_awesome" id="cv-editor-skills-section" title="Skills and languages">
+            <div className="grid gap-4 sm:grid-cols-2"><div className="scroll-mt-28" id="cv-editor-skills"><TextField label="Skills · one per line" onChange={(event) => updateProfileField("competencies", lines(event.target.value))} value={profile.competencies.join("\n")} /></div><div className="scroll-mt-28" id="cv-editor-languages"><TextField label="Languages · one per line" onChange={(event) => updateProfileField("languages", lines(event.target.value))} value={profile.languages.join("\n")} /></div></div>
           </EditorCard>
 
-          <EditorCard action={<AddButton onClick={() => addCollectionItem("custom_sections", makeCustomSection())}>Add section</AddButton>} description="Preserve publications, awards, certifications, or other evidence from your original CV." icon="widgets" title="Additional sections">
-            <div className="space-y-4">{profile.custom_sections.map((item, index) => <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4" key={`custom-${index}`}><div className="mb-4 flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Additional section {index + 1}</span><RemoveButton onClick={() => removeCollectionItem("custom_sections", index)} /></div><div className="grid gap-4"><Field label="Section title" onChange={(event) => updateCollectionItem("custom_sections", index, { heading: event.target.value })} value={item.heading} /><TextField label="Content - one per line" onChange={(event) => updateCollectionLines("custom_sections", index, "lines", event.target.value)} value={item.lines.join("\n")} /></div></div>)}{!profile.custom_sections.length ? <div className="rounded-2xl border border-dashed border-outline-variant/25 p-6 text-center text-sm text-on-surface-variant">Nothing extra to add? That is okay - the core sections are enough.</div> : null}</div>
+          <EditorCard action={<AddButton onClick={() => addCollectionItem("custom_sections", makeCustomSection())}>Add section</AddButton>} description="Preserve publications, awards, certifications, or other evidence from your original CV." highlighted={activeEditTarget.startsWith("custom-")} icon="widgets" id="cv-editor-custom" title="Additional sections">
+            <div className="space-y-4">{profile.custom_sections.map((item, index) => <div className={`scroll-mt-28 rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4 transition-shadow duration-300 ${activeEditTarget === `custom-${index}` ? "ring-2 ring-primary/40 ring-offset-2" : ""}`} id={`cv-editor-custom-${index}`} key={`custom-${index}`}><div className="mb-4 flex items-center justify-between gap-3"><span className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Additional section {index + 1}</span><RemoveButton onClick={() => removeCollectionItem("custom_sections", index)} /></div><div className="grid gap-4"><Field label="Section title" onChange={(event) => updateCollectionItem("custom_sections", index, { heading: event.target.value })} value={item.heading} /><TextField label="Content - one per line" onChange={(event) => updateCollectionLines("custom_sections", index, "lines", event.target.value)} value={item.lines.join("\n")} /></div></div>)}{!profile.custom_sections.length ? <div className="rounded-2xl border border-dashed border-outline-variant/25 p-6 text-center text-sm text-on-surface-variant">Nothing extra to add? That is okay - the core sections are enough.</div> : null}</div>
           </EditorCard>
         </div>
 
         <aside className="xl:sticky xl:top-24">
           <div className="overflow-hidden rounded-3xl border border-outline-variant/20 bg-surface-container-lowest shadow-soft">
             <div className="flex items-center justify-between gap-3 border-b border-outline-variant/15 px-5 py-4 sm:px-6"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">Live preview</p><h2 className="mt-1 font-headline text-lg font-bold text-on-surface">Your finished CV</h2></div><span className="inline-flex items-center gap-1.5 rounded-full bg-surface-container-low px-2.5 py-1.5 text-[11px] font-semibold text-on-surface-variant"><Icon className="text-[15px]">visibility</Icon>Updates live</span></div>
-            <div className="max-h-[calc(100vh-11rem)] overflow-auto bg-slate-100 p-4 sm:p-6"><CvPreview profile={profile} /></div>
+            <div className="max-h-[calc(100vh-11rem)] overflow-auto bg-slate-100 p-4 sm:p-6"><CvPreview onEdit={focusEditorTarget} profile={profile} /></div>
           </div>
           <div className="mt-4 rounded-2xl border border-outline-variant/15 bg-surface-container-low px-4 py-3 text-xs leading-5 text-on-surface-variant"><Icon className="mr-1 align-middle text-[16px] text-primary">info</Icon>Saving creates a new CV version in your private Documents library. Your previous version remains recoverable.</div>
         </aside>
