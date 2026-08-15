@@ -304,9 +304,9 @@ function PublicAuthRoute({ mode }) {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<MarketingSite page="product" />} />
-      <Route path="/how-it-works" element={<MarketingSite page="how" />} />
-      <Route path="/pricing" element={<MarketingSite page="pricing" />} />
+      <Route path="/" element={<MarketingSite page="home" />} />
+      <Route path="/how-it-works" element={<Navigate replace to="/#how-it-works" />} />
+      <Route path="/pricing" element={<Navigate replace to="/#pricing" />} />
       <Route path="/security" element={<MarketingSite page="security" />} />
       <Route path="/terms" element={<MarketingSite page="terms" />} />
       <Route path="/terms-and-conditions" element={<MarketingSite page="terms" />} />
