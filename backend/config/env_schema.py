@@ -205,6 +205,12 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "default": "render_js_cheap",
         "description": "ScrapeOps request mode used when enriching public LinkedIn company pages.",
     },
+    "RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT": {
+        "required": False,
+        "scope": "backend",
+        "default": "0",
+        "description": "Prefer bounded direct public LinkedIn HTTPS fetches when the ScrapeOps LinkedIn route is unavailable.",
+    },
     "RUNR_COMPANY_ENRICHMENT_ENABLED": {
         "required": False,
         "scope": "backend",

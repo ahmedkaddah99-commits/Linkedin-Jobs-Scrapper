@@ -473,6 +473,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         timeout_seconds: int = 12,
         max_html_bytes: int = 1_000_000,
         max_retries: int = 0,
+        prefer_direct: bool | None = None,
     ):
         super().__init__(
             api_key=api_key,
@@ -481,6 +482,8 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             max_html_bytes=max_html_bytes,
             max_retries=max_retries,
         )
+        configured_preference = str(os.getenv("RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT") or "0").strip().casefold()
+        self.prefer_direct = prefer_direct if prefer_direct is not None else configured_preference in {"1", "true", "yes", "on", "enabled"}
 
     @staticmethod
     def _existing_linkedin_urls(company: Mapping[str, Any]) -> list[str]:
@@ -567,7 +570,10 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             "https://html.duckduckgo.com/html/?q="
             + quote_plus(f'site:linkedin.com/company "{name}"')
         )
-        body, content_type, _, attempts, cost_units, transport = self._fetch_with_fallback(search_url)
+        body, content_type, _, attempts, cost_units, transport = self._fetch_with_fallback(
+            search_url,
+            prefer_direct=self.prefer_direct,
+        )
         if "html" not in content_type.casefold():
             return [], attempts, cost_units, transport
         soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "html.parser")
@@ -662,7 +668,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                 body, content_type, final_url, attempts, cost, transport = await asyncio.to_thread(
                     self._fetch_with_fallback,
                     candidate,
-                    prefer_direct=discovery_transport == "direct_fallback",
+                    prefer_direct=self.prefer_direct or discovery_transport == "direct_fallback",
                 )
             except Exception:
                 continue
@@ -697,7 +703,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
                         self._fetch_with_fallback,
                         logo_url,
                         raw=True,
-                        prefer_direct=transport == "direct_fallback",
+                        prefer_direct=self.prefer_direct or transport == "direct_fallback",
                     )
                     # LinkedIn CDN responses can be consent/error HTML even
                     # when the page exposes an og:image URL. Never let an
