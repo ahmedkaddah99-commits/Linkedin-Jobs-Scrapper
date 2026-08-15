@@ -197,7 +197,13 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "required": False,
         "scope": "backend",
         "default": "official_website",
-        "description": "Explicit bounded company enrichment provider; official_website reads authoritative company pages only.",
+        "description": "Explicit bounded company enrichment provider; supports official_website, scrapeops, and scrapeops_linkedin.",
+    },
+    "RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE": {
+        "required": False,
+        "scope": "backend",
+        "default": "render_js_cheap",
+        "description": "ScrapeOps request mode used when enriching public LinkedIn company pages.",
     },
     "RUNR_COMPANY_ENRICHMENT_ENABLED": {
         "required": False,

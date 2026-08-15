@@ -53,8 +53,10 @@ services:
       - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
         value: "true"
       - key: RUNR_COMPANY_ENRICHMENT_PROVIDER
-        value: scrapeops
+        value: scrapeops_linkedin
       - key: RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE
+        value: basic
+      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE
         value: basic
       - key: RUNR_COMPANY_ENRICHMENT_ENABLED
         value: "1"
@@ -63,7 +65,7 @@ services:
       - key: RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES
         value: "100"
       - key: RUNR_COMPANY_ENRICHMENT_CONCURRENCY
-        value: "10"
+        value: "1"
       - key: RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET
         value: "100"
       - key: DATABASE_BACKEND
@@ -156,13 +158,21 @@ services:
       - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
         value: "true"
       - key: RUNR_COMPANY_ENRICHMENT_PROVIDER
-        value: scrapeops
+        value: scrapeops_linkedin
       - key: RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE
+        value: basic
+      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE
         value: basic
       - key: RUNR_COMPANY_ENRICHMENT_ENABLED
         value: "1"
       - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
         value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES
+        value: "100"
+      - key: RUNR_COMPANY_ENRICHMENT_CONCURRENCY
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET
+        value: "100"
       - key: DATABASE_BACKEND
         value: turso
       - key: RUNR_STORAGE_BACKEND
