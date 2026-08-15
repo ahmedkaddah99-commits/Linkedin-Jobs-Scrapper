@@ -44,6 +44,14 @@ def _is_handled_worker_cleanup_failure(exc: BaseException) -> bool:
     return isinstance(exc, Exception) or _direct_database_error_category(exc) is not None
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(str(os.getenv(name) or "").strip())
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else default
+
+
 @dataclass(slots=True)
 class WorkerService:
     application: BackendApplication
@@ -413,7 +421,11 @@ class WorkerService:
                 if should_check_company_enrichment and isinstance(self.application, BackendApplication):
                     last_company_enrichment_check = now
                     try:
-                        enrichment_result = self.application.run_due_company_enrichment()
+                        enrichment_result = self.application.run_due_company_enrichment(
+                            max_companies=_positive_int_env("RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES", 25),
+                            concurrency=_positive_int_env("RUNR_COMPANY_ENRICHMENT_CONCURRENCY", 5),
+                            request_budget=_positive_int_env("RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET", 25),
+                        )
                     except BaseException as exc:
                         if not _is_handled_worker_failure(exc):
                             raise
