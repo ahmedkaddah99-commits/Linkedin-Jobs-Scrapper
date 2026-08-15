@@ -31,7 +31,7 @@ const DISCOVERY_TERMINAL_STATUSES = new Set([
 
 function StepProgress({ activeIndex, completed, running }) {
   return (
-    <div className="rounded-2xl border border-outline-variant/20 bg-surface p-5">
+    <div className="people-step-progress rounded-2xl border border-outline-variant/20 bg-surface p-5">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
         Two-Pass Discovery
       </div>
@@ -85,7 +85,7 @@ function ContextChip({ label, value, tone = "default" }) {
   return (
     <div
       className={[
-        "rounded-2xl border px-4 py-3",
+        "context-chip rounded-2xl border px-4 py-3",
         tone === "primary"
           ? "border-primary/20 bg-primary/5"
           : "border-outline-variant/15 bg-surface-container-low",
@@ -129,7 +129,7 @@ function RelevantPersonCard({ person, busy, onConfirm, onReject, onSave }) {
   const status = String(person.status || "unreviewed");
 
   return (
-    <article className="rounded-3xl border border-outline-variant/20 bg-surface p-5 shadow-soft">
+    <article className="relevant-person-card rounded-3xl border border-outline-variant/20 bg-surface p-5 shadow-soft">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -230,7 +230,7 @@ function RelevantPersonCard({ person, busy, onConfirm, onReject, onSave }) {
 
 function EmptyCategoryState({ message, noMatches }) {
   return (
-    <div className="rounded-3xl border border-dashed border-outline-variant/30 bg-surface p-6 text-sm text-on-surface-variant">
+    <div className="relevant-empty rounded-3xl border border-dashed border-outline-variant/30 bg-surface p-6 text-sm text-on-surface-variant">
       {noMatches
         ? "No strong matches found yet. Try broadening the location, checking the company name, or continuing without people context."
         : message}
@@ -500,7 +500,7 @@ export default function JobWorkspacePage() {
 
   if (loading && !data) {
     return (
-      <div className="rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-8 text-on-surface-variant shadow-soft">
+      <div className="people-workspace-page rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-8 text-on-surface-variant shadow-soft">
         Loading selected job workspace...
       </div>
     );
@@ -508,7 +508,7 @@ export default function JobWorkspacePage() {
 
   if (error && !data) {
     return (
-      <div className="space-y-4 rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
+      <div className="people-workspace-page space-y-4 rounded-3xl border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
         <div className="text-error">{error}</div>
         <div className="flex flex-wrap gap-3">
           <button
@@ -531,8 +531,8 @@ export default function JobWorkspacePage() {
   }
 
   return (
-    <div className="space-y-8">
-      <header className="rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
+    <div className="people-workspace-page space-y-8">
+      <header className="people-workspace__header rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-3">
             <button
@@ -603,7 +603,7 @@ export default function JobWorkspacePage() {
         </section>
       ) : null}
 
-      <section className="rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
+      <section className="people-workspace__finder rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="font-headline text-2xl font-bold text-on-surface">
@@ -761,7 +761,7 @@ export default function JobWorkspacePage() {
       </section>
 
       {isPreGeneration ? (
-        <section className="rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
+        <section className="people-workspace__continue rounded-[2rem] border border-outline-variant/20 bg-surface-container-lowest p-8 shadow-soft">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="font-headline text-2xl font-bold text-on-surface">
