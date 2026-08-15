@@ -87,7 +87,10 @@ const navItems = [
     label: "Referrals",
     icon: "group_add",
     to: "/referrals",
-    matchers: [{ path: "/referrals", end: false }],
+    matchers: [
+      { path: "/referrals", end: false },
+      { path: "/refer", end: false },
+    ],
   },
   {
     label: "Account",
@@ -155,11 +158,10 @@ function BrandMark() {
 function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme }) {
   const links = [
     { label: "Home", icon: "home", to: "/" },
-    { label: "Matches", icon: "favorite", to: "/matches" },
     { label: "Jobs", icon: "work_outline", to: "/jobs" },
     { label: "Job tracker", icon: "history", to: "/tracker" },
     { label: "Documents", icon: "description", to: "/documents" },
-    { label: "Refer", icon: "group_add", to: "/refer" },
+    { label: "Refer", icon: "group_add", to: "/referrals" },
   ];
   const location = useLocation();
 
@@ -173,8 +175,6 @@ function JobsTopNav({ displayName, isDark, onOpenWorkspaceMenu, onToggleTheme })
         {links.map((link) => {
           const active = link.label === "Jobs"
             ? location.pathname.startsWith("/jobs")
-            : link.label === "Matches"
-              ? location.pathname.startsWith("/matches")
             : link.label === "Home"
               ? location.pathname === "/"
               : link.label === "Documents"
@@ -543,7 +543,7 @@ export default function AppShell({ children, muteSidebar = false }) {
   const routeParent = resolveRouteParent(location);
   const isDocumentsExperience = location.pathname === "/documents" || location.pathname === "/master-cv";
   const isMasterCvExperience = location.pathname === "/master-cv";
-  const productRoutes = ["/", "/matches", "/jobs", "/tracker", "/documents", "/master-cv", "/refer", "/profile", "/apply-extension", "/referrals/linkedin-csv-guide"];
+  const productRoutes = ["/", "/jobs", "/tracker", "/documents", "/master-cv", "/profile", "/apply-extension"];
   const isJobsExperience = productRoutes.some((route) => route === "/" ? location.pathname === "/" : location.pathname === route || location.pathname.startsWith(`${route}/`));
   const isCareerAssetsRoute = navItems
     .find((item) => item.label === "Career Assets")

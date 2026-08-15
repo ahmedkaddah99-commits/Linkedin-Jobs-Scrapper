@@ -16,13 +16,13 @@ const setupSteps = [
 ];
 
 const focusItems = [
-  ["Complete your job preferences", "Improve ranking across Matches and Jobs.", "/profile?section=preferences", "Continue"],
-  ["Review your strongest matches", "Prioritize jobs using v1 and v2 evidence.", "/matches", "View matches"],
+  ["Complete your job preferences", "Improve your personalized job ranking.", "/profile?section=preferences", "Continue"],
+  ["Review recommended jobs", "Prioritized using v1 and v2 evidence.", "/jobs", "View jobs"],
   ["Follow up on active applications", "Keep your application pipeline moving.", "/tracker", "Open tracker"],
 ];
 
-const freshMatches = [
-  ["Operations & Strategy", "Based on your target roles and evidence", "/matches"],
+const freshJobs = [
+  ["Operations & Strategy", "Based on your target roles and evidence", "/jobs"],
   ["Business Analysis", "Explore newly ranked roles in your preferred locations", "/jobs?category=Business%20Analysis"],
   ["Business & Strategy", "Compare v1 keyword fit with v2 evidence fit", "/jobs?category=Business%20%26%20Strategy"],
 ];
@@ -43,7 +43,7 @@ export default function HomePage() {
     </section>
 
     <section className="runr-home__stats" aria-label="Search overview">
-      <article><span><Icon>auto_awesome</Icon></span><div><strong>New matches</strong><small>Ranked from your profile</small></div><Link to="/matches">Review</Link></article>
+      <article><span><Icon>auto_awesome</Icon></span><div><strong>Recommended jobs</strong><small>Ranked from your profile</small></div><Link to="/jobs">Review</Link></article>
       <article><span><Icon>bookmark</Icon></span><div><strong>Saved jobs</strong><small>Your shortlist in one place</small></div><Link to="/jobs">Open</Link></article>
       <article><span><Icon>description</Icon></span><div><strong>Career documents</strong><small>CVs, motivation letters, Master CV</small></div><Link to="/documents">Manage</Link></article>
       <article><span><Icon>history</Icon></span><div><strong>Application tracker</strong><small>Follow-ups and outcomes</small></div><Link to="/tracker">View</Link></article>
@@ -55,7 +55,7 @@ export default function HomePage() {
     </div>
     <div className="runr-home__dashboard-grid">
       <section className="runr-home-card"><div className="runr-home-card__heading"><div><span className="runr-eyebrow">Suggested rhythm</span><h2>Build weekly momentum</h2></div><Link to="/tracker">Open tracker</Link></div><div className="runr-activity-chart" aria-label="Suggested weekly job-search rhythm"><div><i style={{height:"30%"}}/><span>Mon</span></div><div><i style={{height:"52%"}}/><span>Tue</span></div><div><i style={{height:"42%"}}/><span>Wed</span></div><div><i style={{height:"78%"}}/><span>Thu</span></div><div><i style={{height:"64%"}}/><span>Fri</span></div><div><i style={{height:"88%"}}/><span>Sat</span></div><div><i style={{height:"58%"}}/><span>Sun</span></div></div><p className="runr-home-card__note">Use this cadence as a guide for reviewing, saving, and progressing opportunities. Your actual pipeline stays in Tracker.</p></section>
-      <section className="runr-home-card"><div className="runr-home-card__heading"><div><span className="runr-eyebrow">Discover</span><h2>Fresh matches</h2></div><Link to="/matches">View all</Link></div><div className="runr-fresh-list">{freshMatches.map(([title, copy, to], index) => <Link key={title} to={to}><span>{index + 1}</span><div><strong>{title}</strong><small>{copy}</small></div><Icon>arrow_forward</Icon></Link>)}</div></section>
+      <section className="runr-home-card"><div className="runr-home-card__heading"><div><span className="runr-eyebrow">Discover</span><h2>Fresh jobs</h2></div><Link to="/jobs">View all</Link></div><div className="runr-fresh-list">{freshJobs.map(([title, copy, to], index) => <Link key={title} to={to}><span>{index + 1}</span><div><strong>{title}</strong><small>{copy}</small></div><Icon>arrow_forward</Icon></Link>)}</div></section>
       <section className="runr-home-card"><div className="runr-home-card__heading"><div><span className="runr-eyebrow">Application funnel</span><h2>Move work forward</h2></div><Link to="/tracker">Manage</Link></div><div className="runr-funnel"><Link to="/jobs"><b>Discover</b><span>Find and evaluate roles</span></Link><Link to="/documents"><b>Prepare</b><span>Tailor your documents</span></Link><Link to="/tracker"><b>Track</b><span>Follow up and record outcomes</span></Link></div></section>
     </div>
   </div>;
