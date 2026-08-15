@@ -158,3 +158,37 @@ def test_master_cv_routes_persist_entry_and_bullet_mutations():
     assert status == 201
     assert updated["status"]["extraEvidenceCount"] == 1
     assert stored_users[-1].metadata["master_cv"]["sections"][0]["entries"][0]["bullets"][0]["extra"] is True
+
+
+def test_master_cv_get_returns_public_contract_for_existing_documents():
+    user = _user()
+    document = add_entry(build_initial_document(user), {"section_id": "experience", "title": "Existing role"})
+    entry_id = document["sections"][0]["entries"][0]["id"]
+    document = add_bullet(document, entry_id, {"text": "Built a customer workflow."})
+    application = SimpleNamespace(
+        repositories=SimpleNamespace(
+            auth_repository=SimpleNamespace(upsert_user=lambda value: None)
+        )
+    )
+    persist_document(application, user, document)
+
+    class Handler:
+        def __init__(self):
+            self.response = None
+
+        def _require_identity(self):
+            return user, None
+
+        def _send_json(self, payload, status=200, *, headers=None):
+            self.response = (status, payload)
+
+        def _send_error(self, status, code, message, *, details=None, headers=None):
+            self.response = (status, {"code": code, "message": message})
+
+    handler = Handler()
+    context = ApiRouteContext(application, handler, "GET", ("master-cv",), {})
+    assert build_route_registry().dispatch(context, auth_required=True) is True
+    status, loaded = handler.response
+    assert status == 200
+    assert loaded["status"]["experienceCount"] == 1
+    assert loaded["sections"][0]["entries"][0]["bullets"][0]["guidance"]["checks"]

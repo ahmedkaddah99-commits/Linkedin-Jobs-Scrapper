@@ -20,6 +20,7 @@ from backend.master_cv import (
     get_document,
     improve_bullet,
     persist_document,
+    public_document,
     select_relevant_bullets,
     update_bullet,
     update_document,
@@ -65,7 +66,7 @@ def _send_mutation_error(context: ApiRouteContext, error: Exception, *, missing_
 
 def _handle_get(context: ApiRouteContext) -> bool | None:
     _, document = _load(context)
-    context.send_json(document, status=HTTPStatus.OK)
+    context.send_json(public_document(document), status=HTTPStatus.OK)
     return True
 
 
