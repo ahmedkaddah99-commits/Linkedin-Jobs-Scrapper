@@ -261,9 +261,11 @@ class ScrapeOpsCompanyProvider(OfficialWebsiteProvider):
         mode: str = "",
         timeout_seconds: int = 30,
         max_html_bytes: int = 1_000_000,
+        max_retries: int = 2,
     ):
         super().__init__(timeout_seconds=timeout_seconds, max_html_bytes=max_html_bytes)
         self.api_key = str(api_key or os.getenv("SCRAPEOPS_API_KEY") or "").strip()
+        self.max_retries = max(0, int(max_retries))
         configured_mode = str(mode or os.getenv("RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE") or "basic").strip()
         allowed_modes = {"basic", "render_js_cheap", "render_js", "residential", "render_js_residential"}
         self.mode = configured_mode if configured_mode in allowed_modes else "basic"
@@ -280,7 +282,7 @@ class ScrapeOpsCompanyProvider(OfficialWebsiteProvider):
             "GET",
             SCRAPEOPS_PROXY_ENDPOINT,
             timeout_seconds=self.timeout_seconds,
-            max_retries=2,
+            max_retries=self.max_retries,
             params=params,
             headers={"User-Agent": "Runr-company-verifier/1.0", "Accept": "*/*" if raw else "text/html,application/xhtml+xml"},
         )
@@ -468,14 +470,16 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         *,
         api_key: str = "",
         mode: str = "",
-        timeout_seconds: int = 30,
+        timeout_seconds: int = 12,
         max_html_bytes: int = 1_000_000,
+        max_retries: int = 0,
     ):
         super().__init__(
             api_key=api_key,
             mode=mode or os.getenv("RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE") or "render_js_cheap",
             timeout_seconds=timeout_seconds,
             max_html_bytes=max_html_bytes,
+            max_retries=max_retries,
         )
 
     @staticmethod
