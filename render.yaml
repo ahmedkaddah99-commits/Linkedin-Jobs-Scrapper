@@ -60,6 +60,8 @@ services:
         value: basic
       - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE
         value: basic
+      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT
+        value: "1"
       - key: RUNR_COMPANY_ENRICHMENT_ENABLED
         value: "1"
       - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
@@ -165,6 +167,8 @@ services:
         value: basic
       - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE
         value: basic
+      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT
+        value: "1"
       - key: RUNR_COMPANY_ENRICHMENT_ENABLED
         value: "1"
       - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
