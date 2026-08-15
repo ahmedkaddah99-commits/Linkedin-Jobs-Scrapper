@@ -87,6 +87,15 @@ const sprintFeatures = [
   "Advanced application insights",
 ];
 
+const publicProductionHosts = new Set(["userunr.com", "www.userunr.com", "runr-frontend.onrender.com"]);
+
+function appUrl(path) {
+  if (typeof window !== "undefined" && publicProductionHosts.has(window.location.hostname)) {
+    return `https://app.userunr.com${path}`;
+  }
+  return path;
+}
+
 function SiteNav({ active }) {
   const links = [
     ["Product", "/#product"],
@@ -112,10 +121,10 @@ function SiteNav({ active }) {
           </div>
         </div>
         <div className="marketing-nav__actions">
-          <Link className="marketing-sign-in" to="/sign-in">
+          <Link className="marketing-sign-in" to={appUrl("/sign-in")}>
             Sign in
           </Link>
-          <Link className="marketing-account-button" to="/sign-up">
+          <Link className="marketing-account-button" to={appUrl("/sign-up")}>
             {active === "Pricing" ? "Get Started" : "Create account"}
           </Link>
         </div>
@@ -168,7 +177,7 @@ function ProductSection() {
               momentum, less career admin.
             </p>
             <div className="product-hero__actions">
-              <Link className="marketing-button marketing-button--primary" to="/sign-up">
+              <Link className="marketing-button marketing-button--primary" to={appUrl("/sign-up")}>
                 Start for free
               </Link>
               <Link className="marketing-button marketing-button--secondary" to="/#how-it-works">
@@ -312,7 +321,7 @@ function HowItWorksSection() {
         <section className="how-cta">
           <h2>Your next opportunity is already waiting.</h2>
           <p>Stop searching and start applying with precision. Join runr. today.</p>
-          <Link className="marketing-button marketing-button--primary" to="/sign-up">
+          <Link className="marketing-button marketing-button--primary" to={appUrl("/sign-up")}>
             Get Started Now
           </Link>
         </section>
@@ -357,7 +366,7 @@ function PricingSection() {
               <FeatureList items={freeFeatures} />
               <FeatureList items={limitedFeatures} muted />
             </div>
-            <Link className="pricing-card__button pricing-card__button--secondary" to="/sign-up">
+            <Link className="pricing-card__button pricing-card__button--secondary" to={appUrl("/sign-up")}>
               Start for free
             </Link>
           </section>
@@ -377,7 +386,7 @@ function PricingSection() {
               <h3>Everything in Free, plus:</h3>
               <FeatureList items={sprintFeatures} />
             </div>
-            <Link className="pricing-card__button pricing-card__button--primary" to="/sign-up">
+            <Link className="pricing-card__button pricing-card__button--primary" to={appUrl("/sign-up")}>
               Start your Sprint
             </Link>
           </section>
