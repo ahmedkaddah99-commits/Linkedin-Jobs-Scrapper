@@ -139,6 +139,23 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(provider.calls, 0)
         self.assertEqual(storage.put_calls, [])
 
+    def test_explicit_environment_enable_overrides_durable_disabled_config(self):
+        app, _ = self.backend()
+        provider = FixtureProvider()
+        app.repositories.config_store.set_value("acquisition.phase_f.company_enrichment_enabled", False)
+        previous = os.environ.get("RUNR_COMPANY_ENRICHMENT_ENABLED")
+        os.environ["RUNR_COMPANY_ENRICHMENT_ENABLED"] = "1"
+        self.addCleanup(
+            lambda: os.environ.__setitem__("RUNR_COMPANY_ENRICHMENT_ENABLED", previous)
+            if previous is not None
+            else os.environ.pop("RUNR_COMPANY_ENRICHMENT_ENABLED", None)
+        )
+
+        result = app.run_due_company_enrichment(provider=provider, cycle_key="environment-enable")
+
+        self.assertEqual(result["companies_processed"], 1)
+        self.assertEqual(provider.calls, 1)
+
     def test_bounded_idempotent_company_target_process_records_yield_and_reuses_logo(self):
         app, storage = self.backend()
         provider = FixtureProvider()
