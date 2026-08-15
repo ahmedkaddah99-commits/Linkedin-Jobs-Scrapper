@@ -28,20 +28,20 @@ const LINKEDIN_SOURCE_KINDS = new Set(["linkedin_csv", "linkedin_csv_import", "l
 const REFERRAL_SECTION_OPTIONS = [
   {
     id: "people",
-    label: "Find people",
-    description: "See who can help at companies you are targeting.",
+    label: "Relevant People Finder",
+    description: "Find likely hiring managers, team members, and senior leaders.",
     icon: "person_search",
   },
   {
     id: "manual",
-    label: "My contacts",
-    description: "Keep relationships and context in one place.",
+    label: "Personal Contacts",
+    description: "People you add or maintain yourself.",
     icon: "person_add",
   },
   {
     id: "linkedin",
-    label: "LinkedIn network",
-    description: "Bring your network into the search.",
+    label: "LinkedIn Connections",
+    description: "Imported from your LinkedIn connections export.",
     icon: "group",
   },
 ];
@@ -829,60 +829,26 @@ export default function ReferralsPage() {
   const showingLinkedInImportPanel = activeSection === "linkedin" && !editingLinkedInContact;
   const visibleSectionEmptyCopy =
     activeSection === "linkedin"
-      ? "No LinkedIn connections imported yet. Connect your network here to turn your export into searchable referral paths."
-      : "No personal contacts saved yet. Add people you already know outside LinkedIn and keep the relationship context close to your job search.";
+      ? "No LinkedIn connections imported yet. Upload your CSV here to turn your export into searchable referral matches."
+      : "No personal contacts saved yet. Add people you already know outside LinkedIn or contacts you want to track more deliberately.";
 
   return (
-    <div className="referrals-page">
+    <div className="referrals-page space-y-8">
       <header className="referrals-page__header">
         <div>
-        <div className="referral-eyebrow">Referral network</div>
+        <div className="referral-eyebrow">Networking workspace</div>
         <h1 className="referrals-page__title">
-          Find your warm path
+          Referrals
         </h1>
         <p className="referrals-page__intro">
-          Search your network by company, role, or relationship. Runr keeps warm paths and follow-ups connected to the jobs you care about.
+          Find warm paths into the roles you care about, keep your own contacts organised, and track every follow-up in one place.
         </p>
         </div>
         <Link className="referrals-page__header-action" to="/tracker">
           <span className="material-symbols-outlined text-[17px]">work_outline</span>
-          Open application tracker
+          View applications
         </Link>
       </header>
-
-      <section className="referral-hero">
-        <div className="referral-hero__content">
-          <div className="referral-hero__kicker">Networking, connected to your search</div>
-          <h2 className="referral-hero__title">The right introduction can change the whole application.</h2>
-          <p className="referral-hero__copy">
-            Start with the company you want, understand who is already in your orbit, then reach out with the role and relationship context already in Runr.
-          </p>
-          <div className="referral-hero__signal">
-            <span className="material-symbols-outlined">auto_awesome</span>
-            <span>Find people. Know the connection. Follow up with intent.</span>
-          </div>
-        </div>
-        <div className="referral-hero__aside">
-          <div className="referral-hero__aside-heading">
-            <span className="material-symbols-outlined">hub</span>
-            <span>Network coverage</span>
-          </div>
-          <div className="referral-hero__stats">
-            <div>
-              <strong>{stats.total}</strong>
-              <span>saved people</span>
-            </div>
-            <div>
-              <strong>{stats.companies}</strong>
-              <span>companies covered</span>
-            </div>
-          </div>
-          <Link className="referral-hero__link" to="/referrals?section=linkedin">
-            Connect LinkedIn
-            <span className="material-symbols-outlined">arrow_forward</span>
-          </Link>
-        </div>
-      </section>
 
       <section className="referral-tabs">
         {REFERRAL_SECTION_OPTIONS.map((section) => {
@@ -934,13 +900,13 @@ export default function ReferralsPage() {
         <div className="referral-finder__header">
           <div>
             <div className="referral-eyebrow">
-              Find people around an opportunity
+              Relevant People Finder
             </div>
             <h2 className="referral-finder__title">
-              See who can help before you apply
+              Find the right person before you reach out
             </h2>
             <p className="referral-finder__copy">
-              Runr searches public profile signals for likely hiring managers, teammates, and senior leaders. Review the context before you send a message or ask for an introduction.
+              Runr searches public profile signals for likely hiring managers, teammates, and senior leaders. Review the evidence before you send a message or ask for an introduction.
             </p>
           </div>
           <Link
@@ -948,7 +914,7 @@ export default function ReferralsPage() {
             to="/tracker"
           >
             <span className="material-symbols-outlined text-[18px]">work</span>
-            Open application tracker
+            Open all applications
           </Link>
         </div>
 
@@ -1021,10 +987,10 @@ export default function ReferralsPage() {
 
       <section className="referral-metrics">
         {[
-          { label: "Saved contacts", value: stats.manual },
-          { label: "LinkedIn network", value: stats.linkedin },
-          { label: "Companies covered", value: stats.companies },
-          { label: "Outreach in motion", value: stats.outreachTracked },
+          { label: "Personal Contacts", value: stats.manual },
+          { label: "LinkedIn Connections", value: stats.linkedin },
+          { label: "Target Companies", value: stats.companies },
+          { label: "Tracked Outreach", value: stats.outreachTracked },
         ].map((card) => (
           <div
             key={card.label}
@@ -1034,7 +1000,7 @@ export default function ReferralsPage() {
               {card.label}
             </div>
             <div className="referral-metric__value">{card.value}</div>
-            <div className="referral-metric__detail">Across your current referral network</div>
+            <div className="referral-metric__detail">Across your current networking workspace</div>
           </div>
         ))}
       </section>
@@ -1055,8 +1021,8 @@ export default function ReferralsPage() {
                   </h2>
                   <p className="referral-panel__copy">
                     {editingLinkedInContact
-                        ? "Keep the LinkedIn source, then add the context that makes this connection useful."
-                        : "Add a person once, then connect them to every relevant company and opportunity."}
+                      ? "Keep the LinkedIn import source, but adjust notes, company mapping, or referability."
+                      : "Add a person once, then link them to as many relevant companies as needed."}
                   </p>
                 </div>
                 {editingId ? (
@@ -1157,7 +1123,7 @@ export default function ReferralsPage() {
                     ? "Save Connection"
                     : editingId
                       ? "Save Contact"
-                    : "Save contact"}
+                      : "Add Personal Contact"}
                 </button>
                 <button
                   className="referral-button referral-button--quiet"
