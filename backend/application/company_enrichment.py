@@ -731,6 +731,7 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             "linkedin_founded_year": founding_year,
             "linkedin_logo_url": logo,
             "linkedin_website": website,
+            "linkedin_jsonld": data,
             "linkedin_meta": {key: value for key, value in meta.items() if key.startswith(("og:", "linkedin:", "twitter:"))},
             "linkedin_lookup_status": "matched",
         }
