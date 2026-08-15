@@ -371,6 +371,19 @@ class PhaseFCompanyEnrichmentTests(unittest.TestCase):
         self.assertEqual(profile["additional_fields"]["legal_name"]["value"], "Acme Example GmbH")
         self.assertEqual(profile["additional_fields"]["employee_count"]["value"], 42)
 
+    def test_nested_provider_metadata_is_retained_as_an_extra_field(self):
+        app, _ = self.backend()
+
+        class NestedMetadataProvider(FixtureProvider):
+            async def enrich(self, company, *, conditional):
+                result = await super().enrich(company, conditional=conditional)
+                result["extra_fields"] = {"linkedin_jsonld": {"@type": "Organization", "name": "Acme"}}
+                return result
+
+        app.run_due_company_enrichment(provider=NestedMetadataProvider(), cycle_key="nested-extra", force=True)
+        profile = app.repositories.personalized_jobs_store.get_company_profile("company-a")["profile"]
+        self.assertEqual(profile["additional_fields"]["linkedin_jsonld"]["value"]["@type"], "Organization")
+
 
 class PhaseFLogoValidationTests(unittest.TestCase):
     def test_logo_requires_mime_signature_safe_decode_and_dimensions(self):

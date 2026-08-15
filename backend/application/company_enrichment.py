@@ -1012,18 +1012,20 @@ class CompanyEnrichmentService:
                         if isinstance(existing_extra, Mapping) and _known(existing_extra.get("value"))
                     }
                     for extra_name, raw_extra in (result.extra_fields or {}).items():
-                        value = _valid_extra_value(raw_extra.get("value") if isinstance(raw_extra, Mapping) else raw_extra)
+                        typed_extra = isinstance(raw_extra, Mapping) and "value" in raw_extra
+                        raw_value = raw_extra.get("value") if typed_extra else raw_extra
+                        value = _valid_extra_value(raw_value)
                         if value is None:
                             continue
-                        extra_source = raw_extra.get("source") if isinstance(raw_extra, Mapping) else result.source
-                        extra_url = raw_extra.get("url") if isinstance(raw_extra, Mapping) else result.provenance_url
+                        extra_source = raw_extra.get("source") if typed_extra else result.source
+                        extra_url = raw_extra.get("url") if typed_extra else result.provenance_url
                         extra_fields[str(extra_name)] = {
                             "value": value,
                             "state": "known",
                             "status": "known",
                             "provenance": {"source": str(extra_source or result.source), "url": str(extra_url or result.provenance_url)},
-                            "observed_at": str(raw_extra.get("observed_at") if isinstance(raw_extra, Mapping) else observed_at),
-                            "verified_at": str(raw_extra.get("verified_at") if isinstance(raw_extra, Mapping) else verified_at),
+                            "observed_at": str(raw_extra.get("observed_at") if typed_extra else observed_at),
+                            "verified_at": str(raw_extra.get("verified_at") if typed_extra else verified_at),
                         }
                     logo_key = ""
                     logo_cached = False
