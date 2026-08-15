@@ -460,9 +460,10 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
     """Discover and enrich public LinkedIn company pages through ScrapeOps.
 
     Discovery starts with LinkedIn URLs already present in authoritative
-    Organization metadata. If none is available, a bounded DuckDuckGo HTML
-    search discovers a candidate and the candidate page is identity-checked
-    against the canonical company name before any facts are accepted.
+    Organization metadata. If none is available, a bounded Bing RSS or
+    DuckDuckGo search discovers candidates and each candidate page is
+    identity-checked against the canonical company name before any facts are
+    accepted.
     """
 
     def __init__(
@@ -566,28 +567,59 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
         name = str(company.get("canonical_name") or "").strip()
         if not name:
             return [], 0, 0.0, "none"
-        search_url = (
-            "https://html.duckduckgo.com/html/?q="
-            + quote_plus(f'site:linkedin.com/company "{name}"')
+        query = quote_plus(f'site:linkedin.com/company "{name}"')
+        searches = (
+            (
+                "https://www.bing.com/search?q=" + query + "&format=rss&setlang=en-US&cc=US",
+                "rss",
+            ),
+            (
+                "https://html.duckduckgo.com/html/?q=" + query,
+                "html",
+            ),
         )
-        body, content_type, _, attempts, cost_units, transport = self._fetch_with_fallback(
-            search_url,
-            prefer_direct=self.prefer_direct,
-        )
-        if "html" not in content_type.casefold():
-            return [], attempts, cost_units, transport
-        soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "html.parser")
-        urls: list[str] = []
-        for anchor in soup.find_all("a", href=True):
-            raw_href = str(anchor.get("href") or "").strip()
-            parsed_href = urlparse(raw_href)
-            redirect = parse_qs(parsed_href.query).get("uddg", [""])[0]
-            candidate = _linkedin_company_url(unquote(redirect or raw_href))
-            if candidate and candidate not in urls:
-                urls.append(candidate)
-            if len(urls) >= 3:
-                break
-        return urls, attempts, cost_units, transport
+        total_attempts = 0
+        total_cost = 0.0
+        last_transport = "none"
+        for search_url, search_format in searches:
+            try:
+                body, content_type, _, attempts, cost_units, transport = self._fetch_with_fallback(
+                    search_url,
+                    prefer_direct=self.prefer_direct,
+                )
+            except Exception:
+                continue
+            total_attempts += attempts
+            total_cost += cost_units
+            last_transport = transport
+            urls: list[str] = []
+            if search_format == "rss":
+                soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "xml")
+                for item in soup.find_all("item"):
+                    link = item.find("link")
+                    candidate = _linkedin_company_url(link.get_text(" ", strip=True) if link else "")
+                    if candidate and candidate not in urls:
+                        urls.append(candidate)
+                    if len(urls) >= 3:
+                        break
+                # Keep the parser tolerant for test doubles and provider
+                # responses that omit the XML content type.
+                if not urls:
+                    soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "html.parser")
+            if (search_format == "html" or not urls) and "html" in content_type.casefold():
+                soup = BeautifulSoup(body.decode("utf-8", errors="replace"), "html.parser")
+                for anchor in soup.find_all("a", href=True):
+                    raw_href = str(anchor.get("href") or "").strip()
+                    parsed_href = urlparse(raw_href)
+                    redirect = parse_qs(parsed_href.query).get("uddg", [""])[0]
+                    candidate = _linkedin_company_url(unquote(redirect or raw_href))
+                    if candidate and candidate not in urls:
+                        urls.append(candidate)
+                    if len(urls) >= 3:
+                        break
+            if urls:
+                return urls, total_attempts, total_cost, last_transport
+        return [], total_attempts, total_cost, last_transport
 
     @staticmethod
     def _meta(html_text: str) -> dict[str, str]:
