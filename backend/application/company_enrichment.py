@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
+import threading
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
@@ -490,8 +491,21 @@ class ScrapeOpsLinkedInCompanyProvider(ScrapeOpsCompanyProvider):
             max_html_bytes=max_html_bytes,
             max_retries=max_retries,
         )
+        self._scrapeops_lock = threading.Lock()
         configured_preference = str(os.getenv("RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT") or "0").strip().casefold()
         self.prefer_direct = prefer_direct if prefer_direct is not None else configured_preference in {"1", "true", "yes", "on", "enabled"}
+
+    def _proxy_fetch(
+        self,
+        url: str,
+        *,
+        raw: bool = False,
+        timeout_seconds: int | None = None,
+    ) -> tuple[bytes, str, str, int, float]:
+        # ScrapeOps account concurrency is one. Direct LinkedIn reads can run
+        # concurrently, but proxy calls must remain serialized per worker.
+        with self._scrapeops_lock:
+            return super()._proxy_fetch(url, raw=raw, timeout_seconds=timeout_seconds)
 
     @staticmethod
     def _existing_linkedin_urls(company: Mapping[str, Any]) -> list[str]:
