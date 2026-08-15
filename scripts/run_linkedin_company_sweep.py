@@ -68,7 +68,7 @@ def main() -> None:
         result = application.run_due_company_enrichment(
             provider=provider,
             max_companies=BATCH_SIZE,
-            concurrency=4,
+            concurrency=8,
             request_budget=100,
             cycle_key=cycle_key,
             force=True,
