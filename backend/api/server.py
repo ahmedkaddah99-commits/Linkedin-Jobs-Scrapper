@@ -4537,6 +4537,30 @@ def _collect_artifact_entries(
     return entries
 
 
+def _collect_lightweight_document_artifact_entries(
+    application,
+    workspaces: Mapping[str, object],
+    runs: list[object],
+) -> list[dict]:
+    """List library artifacts without loading every run's job-set payload."""
+
+    artifacts_by_run = _load_artifacts_by_run(application, runs)
+    entries: list[dict] = []
+    for run in runs:
+        workspace = workspaces.get(run.workspace_id)
+        for artifact in artifacts_by_run.get(run.id, []):
+            for entry in _expand_artifact_entries(run, workspace, artifact):
+                if _artifact_entry_is_user_facing_document(entry):
+                    entries.append(
+                        _artifact_entry_to_document_item(
+                            entry,
+                            include_full_metadata=False,
+                        )
+                    )
+    entries.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return entries
+
+
 _CANDIDATE_ASSET_METADATA_KEY = "candidate_assets"
 _WORKSPACE_CV_RUNTIME_SETTING_KEYS = (
     "workspace_cv_text",
@@ -5590,27 +5614,44 @@ def _collect_document_entries(
     )
     entries = []
     if run_artifacts_requested:
-        entries = [
-            _artifact_entry_to_document_item(
-                entry,
-                include_full_metadata=include_preview_profile,
-            )
-            for entry in _collect_artifact_entries(
+        use_lightweight_library_path = (
+            not include_preview_profile
+            and not run_id
+            and run_records is None
+        )
+        if use_lightweight_library_path:
+            library_workspaces, library_runs = _collect_authorized_runs(
                 application,
                 user,
                 workspace_id=workspace_id,
-                run_id=run_id,
-                run_record=run_record,
-                workspace_record=workspace_record,
-                run_jobs=run_jobs,
-                run_records=run_records,
-                workspace_records=workspace_records,
-                job_sets_by_run=job_sets_by_run,
-                artifacts_by_run=artifacts_by_run,
-                access_checked=access_checked,
             )
-            if _artifact_entry_is_user_facing_document(entry)
-        ]
+            entries = _collect_lightweight_document_artifact_entries(
+                application,
+                library_workspaces,
+                library_runs,
+            )
+        else:
+            entries = [
+                _artifact_entry_to_document_item(
+                    entry,
+                    include_full_metadata=include_preview_profile,
+                )
+                for entry in _collect_artifact_entries(
+                    application,
+                    user,
+                    workspace_id=workspace_id,
+                    run_id=run_id,
+                    run_record=run_record,
+                    workspace_record=workspace_record,
+                    run_jobs=run_jobs,
+                    run_records=run_records,
+                    workspace_records=workspace_records,
+                    job_sets_by_run=job_sets_by_run,
+                    artifacts_by_run=artifacts_by_run,
+                    access_checked=access_checked,
+                )
+                if _artifact_entry_is_user_facing_document(entry)
+            ]
 
     candidate_assets_requested = not run_id
     if candidate_assets_requested:
