@@ -273,8 +273,8 @@ def _normalize_url(raw_url: str) -> str:
     url = compact_whitespace(raw_url)
     if not url:
         return ""
-    if url.lower().startswith("www."):
-        return f"https://{url}"
+    if url.lower().startswith("www.") or "://" not in url:
+        return f"https://{url.lstrip('//')}"
     return url
 
 
@@ -822,13 +822,15 @@ def _normalize_custom_section_list(raw_value: Any) -> list[dict[str, Any]]:
 
 def normalize_profile_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = dict(payload or {})
+    portfolio_value = raw.get("portfolio") if isinstance(raw.get("portfolio"), str) else ""
+    website_value = raw.get("website") or raw.get("portfolio_url") or portfolio_value
     return {
         "name": compact_whitespace(str(raw.get("name") or "")),
         "role_title": compact_whitespace(str(raw.get("role_title") or raw.get("headline") or "")),
         "industry": compact_whitespace(str(raw.get("industry") or "")),
         "email": compact_whitespace(str(raw.get("email") or "")),
         "location": compact_whitespace(str(raw.get("location") or "")),
-        "website": _normalize_url(str(raw.get("website") or "")),
+        "website": _normalize_url(str(website_value or "")),
         "linkedin_url": _normalize_url(str(raw.get("linkedin_url") or raw.get("linkedin") or "")),
         "github_url": _normalize_url(str(raw.get("github_url") or raw.get("github") or "")),
         "summary": compact_whitespace(str(raw.get("summary") or "")),

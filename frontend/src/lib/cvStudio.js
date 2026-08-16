@@ -1,4 +1,6 @@
-﻿export const CV_STUDIO_ROUTE = "/cv-studio";
+import { buildCvSocialLinks, normalizeCvLink, socialLinkIconSvg } from "./cvSocialLinks.js";
+
+export const CV_STUDIO_ROUTE = "/cv-studio";
 export const CV_STUDIO_SETTINGS_SEED_KEY = "runr.cvStudio.seed";
 export const CV_STUDIO_SESSION_KEY = "runr.cvStudio.session";
 
@@ -686,9 +688,9 @@ function normalizeModel(state) {
     targetCompany: String(state.targetCompany || ""),
     location: String(state.location || ""),
     email: String(state.email || ""),
-    website: String(state.website || ""),
-    linkedin: String(state.linkedin || ""),
-    github: String(state.github || ""),
+    website: String(state.website || state.portfolio_url || ""),
+    linkedin: String(state.linkedin || state.linkedin_url || ""),
+    github: String(state.github || state.github_url || ""),
     summary: String(state.summary || ""),
     skills: toList(state.skillsText),
     languages: toList(state.languagesText),
@@ -711,17 +713,12 @@ function buildContactLinks(model, className = "contact-list") {
       `<a href="mailto:${escapeHtml(model.email)}">${escapeHtml(model.email)}</a>`,
     );
   }
-  if (model.website) {
-    items.push(
-      `<a href="${escapeHtml(model.website)}">${escapeHtml(model.website)}</a>`,
-    );
-  }
-  if (model.linkedin) {
-    items.push(`<a href="${escapeHtml(model.linkedin)}">LinkedIn</a>`);
-  }
-  if (model.github) {
-    items.push(`<a href="${escapeHtml(model.github)}">GitHub</a>`);
-  }
+  items.push(
+    ...buildCvSocialLinks(model).map(
+      (link) =>
+        `<a class="cv-social-link" href="${escapeHtml(normalizeCvLink(link.href))}" rel="noreferrer"><span class="cv-social-mark">${socialLinkIconSvg(link.kind)}</span><span>${escapeHtml(link.label)}</span></a>`,
+    ),
+  );
   return `<div class="${className}">${items.join("")}</div>`;
 }
 
@@ -1424,6 +1421,25 @@ function buildBaseCss(model, { forIframe = false } = {}) {
       margin-top: 14px;
       color: var(--cv-muted);
       font-size: 0.9rem;
+    }
+    .cv-social-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+    .cv-social-mark,
+    .cv-social-icon {
+      display: inline-flex;
+      width: 0.95em;
+      height: 0.95em;
+      flex: 0 0 auto;
+    }
+    .cv-social-mark svg {
+      display: block;
+      width: 100%;
+      height: 100%;
     }
     .contact-list-column {
       display: grid;
