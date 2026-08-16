@@ -3835,12 +3835,21 @@ class BackendApplication:
     def delete_run(self, run_id: str) -> None:
         self._run_lifecycle_service.delete_run(run_id)
 
-    def list_runs(self, *, limit: int = 50, offset: int = 0, status: str = "", workspace_id: str = ""):
+    def list_runs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str = "",
+        workspace_id: str = "",
+        hydrate_payload: bool = True,
+    ):
         return self._run_lifecycle_service.list_runs(
             limit=limit,
             offset=offset,
             status=status,
             workspace_id=workspace_id,
+            hydrate_payload=hydrate_payload,
         )
 
     def list_job_sets(self, run_id: str) -> dict[str, list[JobRecord]]:

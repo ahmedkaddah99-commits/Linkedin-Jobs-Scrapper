@@ -120,10 +120,24 @@ class RunLifecycleService:
 
         self.repositories.run_repository.delete(run_id)
 
-    def list_runs(self, *, limit: int = 50, offset: int = 0, status: str = "", workspace_id: str = ""):
+    def list_runs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str = "",
+        workspace_id: str = "",
+        hydrate_payload: bool = True,
+    ):
         repository = self.repositories.run_repository
         try:
-            return repository.list_runs(limit=limit, offset=offset, status=status, workspace_id=workspace_id)
+            return repository.list_runs(
+                limit=limit,
+                offset=offset,
+                status=status,
+                workspace_id=workspace_id,
+                hydrate_payload=hydrate_payload,
+            )
         except TypeError:
             runs = repository.list_runs(
                 limit=max(1, int(limit)) + max(0, int(offset)),

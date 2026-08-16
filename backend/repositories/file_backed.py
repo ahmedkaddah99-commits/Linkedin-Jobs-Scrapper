@@ -192,6 +192,7 @@ class FileRunRepository:
         offset: int = 0,
         status: str = "",
         workspace_id: str = "",
+        hydrate_payload: bool = True,
     ) -> list[RunRecord]:
         run_files = sorted(self.runs_dir.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
         runs = [RunRecord.from_dict(_read_json(path, {})) for path in run_files]

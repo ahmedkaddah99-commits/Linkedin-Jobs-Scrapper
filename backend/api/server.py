@@ -2896,9 +2896,24 @@ def _collect_authorized_runs(application, user, *, workspace_id: str = "", max_r
         for workspace in application.list_workspaces()
         if _user_can_access_workspace_record(user, workspace)
     }
+    try:
+        candidate_runs = application.list_runs(
+            limit=effective_max,
+            offset=0,
+            status="",
+            workspace_id=workspace_id,
+            hydrate_payload=False,
+        )
+    except TypeError:
+        candidate_runs = application.list_runs(
+            limit=effective_max,
+            offset=0,
+            status="",
+            workspace_id=workspace_id,
+        )
     runs = [
         run
-        for run in application.list_runs(limit=effective_max, offset=0, status="", workspace_id=workspace_id)
+        for run in candidate_runs
         if _user_can_access_run_from_workspace_map(user, run, workspaces)
     ]
     return workspaces, runs

@@ -577,9 +577,10 @@ class SqliteRunRepository(_SqliteStore):
         connection,
         *,
         hydrate_documents: bool = True,
+        hydrate_payload: bool = True,
         stage_rows: list | None = None,
     ) -> RunRecord:
-        raw_payload = _deserialize(row["payload_json"], {})
+        raw_payload = _deserialize(row["payload_json"], {}) if hydrate_payload else {}
         payload = _hydrate_run_payload(connection, raw_payload) if hydrate_documents else raw_payload
         run = RunRecord.from_dict(payload if isinstance(payload, dict) else {})
         run.id = str(row["id"])
@@ -599,7 +600,7 @@ class SqliteRunRepository(_SqliteStore):
         run.attempt_count = int(row["attempt_count"] or 0)
         run.max_attempts = max(1, int(row["max_attempts"] or 1))
         run.run_input_overrides = dict(_deserialize(row["run_input_overrides_json"], run.run_input_overrides or {}))
-        raw_run_plan_payload = _deserialize(row["run_plan_json"], {})
+        raw_run_plan_payload = _deserialize(row["run_plan_json"], {}) if hydrate_payload else {}
         run_plan_payload = (
             _hydrate_run_payload(
                 connection,
@@ -655,6 +656,7 @@ class SqliteRunRepository(_SqliteStore):
         offset: int = 0,
         status: str = "",
         workspace_id: str = "",
+        hydrate_payload: bool = True,
     ) -> list[RunRecord]:
         query = "SELECT * FROM runs"
         where_parts: list[str] = []
@@ -691,6 +693,7 @@ class SqliteRunRepository(_SqliteStore):
                     row,
                     connection,
                     hydrate_documents=False,
+                    hydrate_payload=hydrate_payload,
                     stage_rows=stage_rows_by_run.get(str(row["id"]), []),
                 )
                 for row in rows
