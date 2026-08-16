@@ -7307,7 +7307,20 @@ def _serialize_authenticated_user(
     plan_id: str = DEFAULT_PLAN_ID,
     quota_overrides: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    payload = user.to_dict()
+    # The authenticated session only needs identity and authorization fields.
+    # User metadata contains private CV/document payloads and can be megabytes
+    # in size; document-specific routes load that data when it is actually
+    # needed instead of sending it on every page bootstrap.
+    payload = {
+        "user_id": str(user.user_id or ""),
+        "email": str(user.email or ""),
+        "display_name": str(user.display_name or ""),
+        "role": str(user.role or ""),
+        "allowed_workspace_ids": list(user.allowed_workspace_ids or []),
+        "is_active": bool(user.is_active),
+        "created_at": str(user.created_at or ""),
+        "updated_at": str(user.updated_at or ""),
+    }
     payload["display_name"] = _public_user_display_name(user)
     payload["email"] = _public_user_email(user)
     public_metadata = {
