@@ -42,7 +42,7 @@ export default function CareerEvidencePage() {
     loading: documentsLoading,
     refresh: refreshDocuments,
   } = useApiResource(
-    () => request("/documents?limit=500", { timeoutMs: DOCUMENTS_REQUEST_TIMEOUT_MS }),
+    () => request("/documents?limit=500&include_preview_profile=false", { timeoutMs: DOCUMENTS_REQUEST_TIMEOUT_MS }),
     [request],
     { cacheKey: "documents:all", staleMs: 30000, backgroundRefresh: true },
   );

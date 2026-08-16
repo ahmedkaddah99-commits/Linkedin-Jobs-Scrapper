@@ -34,7 +34,7 @@ export default function CareerProfileSourceSelector({
   const { request } = useSession();
 
   const { data: documentsPayload, loading } = useApiResource(
-    () => request("/documents?limit=500", { timeoutMs: 60000 }),
+    () => request("/documents?limit=500&include_preview_profile=false", { timeoutMs: 60000 }),
     [request],
     { cacheKey: "documents:all", staleMs: 30000, backgroundRefresh: true },
   );

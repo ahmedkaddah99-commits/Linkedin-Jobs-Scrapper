@@ -177,7 +177,7 @@ export default function DocumentsPage() {
     loading: documentsLoading,
     error: documentsError,
     refresh: refreshDocuments,
-  } = useApiResource(() => request("/documents?limit=500", { timeoutMs: DOCUMENTS_REQUEST_TIMEOUT_MS }), [request], {
+  } = useApiResource(() => request("/documents?limit=500&include_preview_profile=false", { timeoutMs: DOCUMENTS_REQUEST_TIMEOUT_MS }), [request], {
     cacheKey: "documents:all",
     staleMs: 30000,
     backgroundRefresh: true,
