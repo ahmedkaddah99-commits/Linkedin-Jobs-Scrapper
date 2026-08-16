@@ -5357,10 +5357,89 @@ def _artifact_entry_is_user_facing_document(entry: dict) -> bool:
     )
 
 
-def _artifact_entry_to_document_item(entry: dict) -> dict:
+_DOCUMENT_LIST_HEAVY_METADATA_KEYS = frozenset(
+    {
+        "candidate_assets",
+        "cv_section_decisions",
+        "cv_text",
+        "document_text",
+        "parsed_profile",
+        "source_text",
+        "workspace_cv_asset",
+        "workspace_cv_text",
+        "ats_attempt_history",
+    }
+)
+_DOCUMENT_LIST_METADATA_MAX_BYTES = 4096
+_DOCUMENT_LIST_METADATA_FALLBACK_KEYS = frozenset(
+    {
+        "application_id",
+        "applied_cv_asset_id",
+        "applied_cv_display_name",
+        "asset_kind",
+        "ats_can_export_final",
+        "ats_export_anyway_allowed",
+        "ats_gate_state",
+        "ats_last_warning",
+        "ats_max_attempts",
+        "ats_missing_requirements",
+        "ats_score",
+        "ats_stop_reason",
+        "ats_target_score",
+        "company",
+        "content_sha256",
+        "created_at",
+        "cv_generation_mode",
+        "document_asset_kind",
+        "document_display_name",
+        "document_name",
+        "extension",
+        "file_name",
+        "job_id",
+        "job_title",
+        "mime_type",
+        "status",
+        "text_extraction",
+    }
+)
+
+
+def _compact_document_list_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Keep document-library metadata small while preserving card fields."""
+
+    def strip_heavy_values(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): strip_heavy_values(item)
+                for key, item in value.items()
+                if str(key).strip().lower() not in _DOCUMENT_LIST_HEAVY_METADATA_KEYS
+            }
+        if isinstance(value, list):
+            return [strip_heavy_values(item) for item in value]
+        if isinstance(value, tuple):
+            return [strip_heavy_values(item) for item in value]
+        return value
+
+    compacted = strip_heavy_values(dict(metadata or {}))
+    try:
+        compacted_size = len(json.dumps(compacted, ensure_ascii=False, separators=(",", ":")))
+    except (TypeError, ValueError):
+        compacted_size = _DOCUMENT_LIST_METADATA_MAX_BYTES + 1
+    if compacted_size <= _DOCUMENT_LIST_METADATA_MAX_BYTES:
+        return compacted
+    return {
+        key: compacted[key]
+        for key in _DOCUMENT_LIST_METADATA_FALLBACK_KEYS
+        if key in compacted
+    }
+
+
+def _artifact_entry_to_document_item(entry: dict, *, include_full_metadata: bool = False) -> dict:
     asset_kind = _artifact_asset_kind(entry)
     group_id, group_label = _document_group_for_asset_kind(asset_kind)
     metadata = dict(entry.get("metadata") or {})
+    if not include_full_metadata:
+        metadata = _compact_document_list_metadata(metadata)
     raw_display_name = str(
         metadata.get("document_display_name")
         or metadata.get("document_name")
@@ -5497,7 +5576,10 @@ def _collect_document_entries(
     entries = []
     if run_artifacts_requested:
         entries = [
-            _artifact_entry_to_document_item(entry)
+            _artifact_entry_to_document_item(
+                entry,
+                include_full_metadata=include_preview_profile,
+            )
             for entry in _collect_artifact_entries(
                 application,
                 user,

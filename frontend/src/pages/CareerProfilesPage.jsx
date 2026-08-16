@@ -85,7 +85,7 @@ export default function CareerProfilesPage() {
 
   // Fetch documents for baseline CV replacement UI
   const { data: documentsData } = useApiResource(
-    () => request("/documents?limit=200", { timeoutMs: 60000 }),
+    () => request("/documents?limit=200&include_preview_profile=false", { timeoutMs: 60000 }),
     [request],
     { cacheKey: "documents:list", staleMs: 30000, backgroundRefresh: true },
   );
