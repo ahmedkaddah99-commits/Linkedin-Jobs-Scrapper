@@ -4,6 +4,7 @@ import hashlib
 import io
 from copy import deepcopy
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Mapping
 
 from backend.profiles.cv_profile_extraction import (
@@ -15,6 +16,60 @@ from backend.storage.keys import build_private_object_key
 
 CV_EDITOR_SCHEMA_VERSION = "cv_editor_v1"
 MAX_EDITOR_HISTORY = 12
+
+
+def _normalize_profile_link(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw or raw.lower().startswith(("javascript:", "data:", "vbscript:")):
+        return ""
+    if "://" not in raw:
+        return f"https://{raw.lstrip('//')}"
+    return raw
+
+
+def _profile_social_links(profile: Mapping[str, Any]) -> list[dict[str, str]]:
+    values = (
+        ("linkedin", "LinkedIn", profile.get("linkedin_url") or profile.get("linkedin")),
+        ("github", "GitHub", profile.get("github_url") or profile.get("github")),
+        ("website", "Website", profile.get("website") or profile.get("portfolio_url")),
+    )
+    return [
+        {"kind": kind, "label": label, "url": normalized_url}
+        for kind, label, value in values
+        if (normalized_url := _normalize_profile_link(value))
+    ]
+
+
+@lru_cache(maxsize=3)
+def _social_icon_png(kind: str) -> bytes:
+    from PIL import Image, ImageDraw
+
+    size = 48
+    image = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(image)
+    color = (13, 148, 136, 255)
+    white = (255, 255, 255, 255)
+    if kind == "linkedin":
+        draw.rounded_rectangle((2, 2, 46, 46), radius=7, fill=color)
+        draw.ellipse((10, 10, 16, 16), fill=white)
+        draw.rectangle((10, 19, 16, 38), fill=white)
+        draw.rectangle((20, 19, 26, 38), fill=white)
+        draw.arc((23, 16, 39, 34), start=270, end=90, fill=white, width=6)
+    elif kind == "github":
+        draw.ellipse((7, 7, 41, 41), fill=color)
+        draw.polygon([(10, 14), (14, 4), (21, 11)], fill=color)
+        draw.polygon([(38, 14), (34, 4), (27, 11)], fill=color)
+        draw.ellipse((16, 18, 20, 22), fill=white)
+        draw.ellipse((28, 18, 32, 22), fill=white)
+        draw.arc((16, 20, 32, 34), start=0, end=180, fill=white, width=2)
+    else:
+        draw.ellipse((5, 5, 43, 43), outline=color, width=4)
+        draw.line((5, 24, 43, 24), fill=color, width=3)
+        draw.arc((14, 5, 34, 43), start=90, end=270, fill=color, width=3)
+        draw.arc((14, 5, 34, 43), start=270, end=90, fill=color, width=3)
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 
 class CvEditorRevisionConflict(ValueError):
@@ -174,6 +229,9 @@ def create_cv_docx_bytes(profile: Mapping[str, Any], *, title: str = "") -> byte
     try:
         from docx import Document
         from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
         from docx.shared import Inches, Pt, RGBColor
     except Exception as exc:
         raise RuntimeError("python-docx is required to create editable CV files.") from exc
@@ -202,17 +260,45 @@ def create_cv_docx_bytes(profile: Mapping[str, Any], *, title: str = "") -> byte
         role_run = role.add_run(normalized["role_title"])
         role_run.font.size = Pt(11)
         role_run.font.color.rgb = RGBColor(13, 148, 136)
-    contact_values = [
-        normalized["email"],
-        normalized["location"],
-        normalized["website"],
-        normalized["linkedin_url"],
-        normalized["github_url"],
-    ]
-    if any(contact_values):
+    contact_values = [normalized["email"], normalized["location"]]
+    social_links = _profile_social_links(normalized)
+
+    def add_hyperlink(paragraph, label: str, url: str, kind: str) -> None:
+        relationship_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("r:id"), relationship_id)
+        icon_run = paragraph.add_run()
+        icon_run.add_picture(io.BytesIO(_social_icon_png(kind)), width=Inches(0.12), height=Inches(0.12))
+        icon_element = icon_run._r
+        icon_element.getparent().remove(icon_element)
+        hyperlink.append(icon_element)
+        text_run = OxmlElement("w:r")
+        run_properties = OxmlElement("w:rPr")
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "0D9488")
+        run_properties.append(color)
+        underline = OxmlElement("w:u")
+        underline.set(qn("w:val"), "single")
+        run_properties.append(underline)
+        text_run.append(run_properties)
+        text_node = OxmlElement("w:t")
+        text_node.text = label
+        text_run.append(text_node)
+        hyperlink.append(text_run)
+        paragraph._p.append(hyperlink)
+
+    if any(contact_values) or social_links:
         contact = document.add_paragraph()
         contact.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        contact.add_run("  ·  ".join(value for value in contact_values if value)).font.size = Pt(8.5)
+        visible_values = [value for value in contact_values if value]
+        if visible_values:
+            contact_run = contact.add_run("  |  ".join(visible_values))
+            contact_run.font.size = Pt(8.5)
+        for index, link in enumerate(social_links):
+            if visible_values or index:
+                separator = contact.add_run("  |  ")
+                separator.font.size = Pt(8.5)
+            add_hyperlink(contact, link["label"], link["url"], link["kind"])
 
     def add_heading(text: str) -> None:
         paragraph = document.add_paragraph()

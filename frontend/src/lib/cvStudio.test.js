@@ -167,3 +167,25 @@ test("plain resume preview keeps resolved photo in the right header column", () 
     /<header class="plain-resume-head has-photo">\s*<div class="plain-resume-identity">[\s\S]*?<div class="plain-resume-contact">[\s\S]*?<\/div>\s*<\/div>\s*<div class="cv-photo-shell plain-resume-photo">/,
   );
 });
+
+test("renders social links as branded labels instead of raw URLs", () => {
+  const html = buildCvStudioHtml({
+    templateId: "plain",
+    name: "Alex Morgan",
+    headline: "Operations Leader",
+    email: "alex@example.com",
+    website: "portfolio.example/alex",
+    linkedin: "https://www.linkedin.com/in/alex",
+    github: "github.com/alex",
+  });
+
+  assert.match(html, /href="https:\/\/portfolio\.example\/alex"/);
+  assert.match(html, /href="https:\/\/www\.linkedin\.com\/in\/alex"/);
+  assert.match(html, /href="https:\/\/github\.com\/alex"/);
+  assert.match(html, />Website<\/span>/);
+  assert.match(html, />LinkedIn<\/span>/);
+  assert.match(html, />GitHub<\/span>/);
+  assert.doesNotMatch(html, />https:\/\/www\.linkedin\.com\/in\/alex<\/a>/);
+  assert.doesNotMatch(html, />https:\/\/github\.com\/alex<\/a>/);
+  assert.match(html, /cv-social-mark/);
+});

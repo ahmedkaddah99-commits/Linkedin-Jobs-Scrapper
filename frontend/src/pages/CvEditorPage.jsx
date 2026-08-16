@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
+import { CvContactLinks } from "../components/CvSocialLinks";
 
 const EMPTY_PROFILE = {
   name: "",
@@ -237,7 +238,7 @@ function CvPreview({ highlightedTarget, onEdit, profile }) {
       >
         <h2 className="font-headline text-3xl font-extrabold tracking-tight text-[#17324d]">{profile.name || "Your name"}</h2>
         <p className="mt-1 text-sm font-medium text-teal-700">{profile.role_title || "Professional headline"}</p>
-        {contacts.length ? <p className="mt-2 text-[9px] text-slate-500">{contacts.join("  ·  ")}</p> : null}
+        {contacts.length ? <CvContactLinks className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[9px] text-slate-500" linkClassName="font-medium text-teal-700" source={profile} /> : null}
         <span className="mt-2 inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-teal-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"><span className="material-symbols-outlined text-[13px]">edit</span>Click to edit</span>
       </header>
 

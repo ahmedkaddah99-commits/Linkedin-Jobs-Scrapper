@@ -1,3 +1,5 @@
+import { CvContactLinks } from "./CvSocialLinks";
+
 export function profilePlaceholderSrc(name = "") {
   return `data:image/svg+xml,${encodeURIComponent(profilePlaceholderSvg(name))}`;
 }
@@ -142,13 +144,7 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
   const languages = (Array.isArray(profile.languages) ? profile.languages : [])
     .map((item) => String(item || "").trim())
     .filter(Boolean);
-  const contacts = [
-    profile.location,
-    profile.email,
-    profile.website,
-    profile.linkedin_url,
-    profile.github_url,
-  ]
+  const contacts = [profile.location, profile.email, profile.website, profile.linkedin_url, profile.github_url]
     .map((item) => String(item || "").trim())
     .filter(Boolean);
   const education = (Array.isArray(profile.education) ? profile.education : [])
@@ -180,6 +176,11 @@ function buildPreviewModel(profile = {}, documents = {}, options = {}) {
     showPhoto: Boolean(documents.include_photo),
     name: firstNonEmpty(profile.name, "Candidate Name"),
     headline: firstNonEmpty(profile.role_title, template.label),
+    location: firstNonEmpty(profile.location),
+    email: firstNonEmpty(profile.email),
+    website: firstNonEmpty(profile.website, profile.portfolio_url),
+    linkedin_url: firstNonEmpty(profile.linkedin_url, profile.linkedin),
+    github_url: firstNonEmpty(profile.github_url, profile.github),
     summary: firstNonEmpty(
       profile.summary,
       "Tailored summary preview for the selected export template.",
@@ -683,9 +684,7 @@ function ClassicPreview({ model }) {
             {model.headline}
           </div>
           {model.contacts.length ? (
-            <div className="mt-2 text-xs leading-5" style={{ color: model.palette.muted }}>
-              {model.contacts.join(" | ")}
-            </div>
+            <CvContactLinks className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs leading-5" linkClassName="font-medium" source={model} />
           ) : null}
         </div>
         <PreviewPhoto model={model} />
@@ -750,20 +749,20 @@ function ModernPreview({ model }) {
           <PreviewPhoto model={model} roundedClass="rounded-2xl" sizeClass="h-20 w-20" />
         </div>
         {model.contacts.length ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {model.contacts.map((item) => (
-              <span
-                className="rounded-full px-2.5 py-1 text-[11px]"
-                key={item}
-                style={{
-                  color: model.palette.primary,
-                  backgroundColor: withAlpha(model.palette.primary.replace(/^#/, ""), 0.08),
-                }}
-              >
-                {item}
-              </span>
-            ))}
-          </div>
+          <CvContactLinks
+            className="mt-4 flex flex-wrap gap-2"
+            detailClassName="rounded-full px-2.5 py-1 text-[11px]"
+            linkClassName="rounded-full px-2.5 py-1 text-[11px]"
+            source={model}
+            detailStyle={{
+              color: model.palette.primary,
+              backgroundColor: withAlpha(model.palette.primary.replace(/^#/, ""), 0.08),
+            }}
+            linkStyle={{
+              color: model.palette.primary,
+              backgroundColor: withAlpha(model.palette.primary.replace(/^#/, ""), 0.08),
+            }}
+          />
         ) : null}
       </div>
 
@@ -864,9 +863,9 @@ function CompactPreview({ model }) {
             <div className="text-xs font-bold tracking-[0.18em]" style={{ color: model.palette.primary }}>
               {model.name}
             </div>
-            <div className="mt-1 text-[11px] leading-5" style={{ color: model.palette.muted }}>
-              {model.contacts.join(" | ") || model.headline}
-            </div>
+            {model.contacts.length ? (
+              <CvContactLinks className="mt-1 flex flex-col gap-1 text-[11px] leading-5" linkClassName="font-medium" source={model} />
+            ) : <div className="mt-1 text-[11px] leading-5" style={{ color: model.palette.muted }}>{model.headline}</div>}
           </div>
           <div>
             <div className="text-[10px] font-bold tracking-[0.18em]" style={{ color: model.palette.primary }}>
@@ -975,9 +974,7 @@ function EuropassPreview({ model }) {
             {model.headline}
           </div>
           {model.contacts.length ? (
-            <div className="mt-2 text-xs leading-5" style={{ color: model.palette.muted }}>
-              {model.contacts.join(" | ")}
-            </div>
+            <CvContactLinks className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs leading-5" linkClassName="font-medium" source={model} />
           ) : null}
         </div>
         <PreviewPhoto model={model} roundedClass="rounded-lg" sizeClass="h-20 w-16" />
@@ -1019,9 +1016,7 @@ function PlainPreview({ model }) {
         <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="h-20 w-16" />
       </div>
       {model.contacts.length ? (
-        <div className="text-[11px] leading-5" style={{ color: model.palette.text }}>
-          {model.contacts.join(" | ")}
-        </div>
+        <CvContactLinks className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] leading-5" linkClassName="font-medium" source={model} />
       ) : null}
 
       <div>
@@ -1084,9 +1079,7 @@ function SectionBarsPreview({ model }) {
             {model.name}
           </div>
           {model.contacts.length ? (
-            <div className="mt-2 text-[11px] font-semibold leading-5" style={{ color: model.palette.muted }}>
-              {model.contacts.join(" | ")}
-            </div>
+            <CvContactLinks className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] font-semibold leading-5" linkClassName="font-semibold" source={model} />
           ) : null}
         </div>
         <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="h-20 w-16" />
@@ -1120,9 +1113,7 @@ function ModernMinimalPreview({ model }) {
             {model.headline}
           </div>
           {model.contacts.length ? (
-            <div className="mt-2 text-[11px] leading-5" style={{ color: model.palette.muted }}>
-              {model.contacts.join(" • ")}
-            </div>
+            <CvContactLinks className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] leading-5" linkClassName="font-medium" source={model} />
           ) : null}
         </div>
         <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="h-20 w-16" />
@@ -1152,9 +1143,9 @@ function ModernSidebarPreview({ model }) {
         <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="h-20 w-full" />
         <div>
           <div className="text-[11px] font-bold uppercase">Contact</div>
-          <div className="mt-2 space-y-1 text-[11px] leading-5 opacity-90">
-            {model.contacts.slice(0, 4).map((item) => <div className="break-words" key={item}>{item}</div>)}
-          </div>
+          {model.contacts.length ? (
+            <CvContactLinks className="mt-2 flex flex-col gap-1 text-[11px] leading-5 opacity-90" linkClassName="break-words font-medium" limit={4} source={model} />
+          ) : null}
         </div>
         <div>
           <div className="text-[11px] font-bold uppercase">Skills</div>
@@ -1192,9 +1183,7 @@ function ClassicExecutivePreview({ model }) {
         <div className="text-right">
           <PreviewPhoto model={model} roundedClass="rounded-md" sizeClass="ml-auto h-16 w-14" />
           {model.contacts.length ? (
-            <div className="mt-2 text-[11px] leading-5" style={{ color: model.palette.muted }}>
-              {model.contacts.slice(0, 3).join(" | ")}
-            </div>
+            <CvContactLinks className="mt-2 flex flex-wrap justify-end gap-x-3 gap-y-1 text-[11px] leading-5" linkClassName="font-medium" limit={3} source={model} />
           ) : null}
         </div>
       </div>

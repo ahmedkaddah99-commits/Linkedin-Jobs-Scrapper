@@ -3305,6 +3305,9 @@ class BackendApiTests(unittest.TestCase):
         edited_profile = editor_payload["editor"]["profile"]
         edited_profile["name"] = "Alex Updated"
         edited_profile["summary"] = "Product analyst focused on measurable workflow improvements."
+        edited_profile["website"] = "portfolio.example/alex"
+        edited_profile["linkedin_url"] = "https://www.linkedin.com/in/alex"
+        edited_profile["github_url"] = "github.com/alex"
         edited_profile["recent_experience"][0]["bullets"] = ["Built and shipped a reporting workflow"]
         status, saved_payload = self._request(
             "PUT",
@@ -3344,6 +3347,12 @@ class BackendApiTests(unittest.TestCase):
         extracted = extract_document_text("edited_resume.docx", downloaded)
         self.assertIn("Alex Updated", extracted["text"])
         self.assertIn("Built and shipped a reporting workflow", extracted["text"])
+        self.assertIn("Website", extracted["text"])
+        self.assertIn("LinkedIn", extracted["text"])
+        self.assertIn("GitHub", extracted["text"])
+        self.assertNotIn("portfolio.example/alex", extracted["text"])
+        self.assertNotIn("linkedin.com/in/alex", extracted["text"])
+        self.assertNotIn("github.com/alex", extracted["text"])
 
         status, conflict_payload = self._request(
             "PUT",
