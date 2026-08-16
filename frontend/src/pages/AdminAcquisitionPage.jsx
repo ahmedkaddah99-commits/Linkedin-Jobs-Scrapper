@@ -36,6 +36,26 @@ function date(value) {
   return value ? formatDateTime(value) : "—";
 }
 
+function profileValue(profile, section, key) {
+  const value = profile?.[section]?.[key];
+  return value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, "value") ? value.value : value;
+}
+
+function profileText(profile, section, key, fallback = "—") {
+  const value = profileValue(profile, section, key);
+  if (Array.isArray(value)) return value.length ? value.join(", ") : fallback;
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return text(value, fallback);
+}
+
+function profileFirst(profile, candidates, fallback = "—") {
+  for (const [section, key] of candidates) {
+    const value = profileText(profile, section, key, "");
+    if (value) return value;
+  }
+  return fallback;
+}
+
 function tone(value) {
   const normalized = String(value || "").toLowerCase();
   if (["ready", "completed", "published", "valid", "online", "approved", "pass", "report_only"].some((item) => normalized.includes(item))) return "green";
@@ -202,6 +222,20 @@ function InteractiveCompanies({ data, request, onMessage }) {
   const [companyData, setCompanyData] = useState(data || {});
   const [selected, setSelected] = useState(null);
   const companies = companyData?.companies || [];
+  const companyRows = companies.map((company) => {
+    const profile = company.profile || {};
+    const linkedin = profileText(profile, "additional_fields", "linkedin_company_url", "");
+    return {
+      ...company,
+      linkedin: linkedin ? <a className="max-w-[16rem] truncate text-primary underline-offset-2 hover:underline" href={linkedin} onClick={(event) => event.stopPropagation()} rel="noreferrer" target="_blank">{linkedin}</a> : "—",
+      linkedin_status: profileText(profile, "additional_fields", "linkedin_lookup_status"),
+      industry: profileText(profile, "fields", "industry"),
+      company_size: profileText(profile, "fields", "company_size"),
+      headquarters: profileText(profile, "fields", "headquarters"),
+      founded_year: profileText(profile, "fields", "founded_year"),
+      logo: company.logo_source_url ? "Available" : "—",
+    };
+  });
   useEffect(() => { setCompanyData(data || {}); }, [data]);
   useEffect(() => { const params = new URLSearchParams({ limit: "100" }); if (applied) params.set("search", applied); request(`/admin/acquisition/companies?${params}`).then((value) => setCompanyData(value || {})).catch((error) => onMessage(getApiErrorMessage(error, "Companies could not be loaded."))); }, [applied, request, onMessage]);
   useEffect(() => {
@@ -214,13 +248,15 @@ function InteractiveCompanies({ data, request, onMessage }) {
   }, [canonicalCompanyId, onMessage, request]);
   function open(company) { navigate(`/admin/acquisition/companies/${encodeURIComponent(company.company_id)}${location.search}`); }
   function close() { navigate(`/admin/acquisition/companies${location.search}`); }
+  const selectedProfile = selected?.profile || {};
+  const selectedAdditionalFields = selectedProfile.additional_fields || {};
   return <>
     <Panel title="Canonical companies" description="Inspect identity, official/homepage/careers/ATS URLs, validation, provenance, logo state, and job counts.">
       <form className="flex flex-col gap-3 border-b border-outline-variant/10 p-5 sm:flex-row" onSubmit={(event) => { event.preventDefault(); setApplied(search.trim()); }}>
         <input aria-label="Search companies" className="min-w-0 flex-1 rounded-xl border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface" onChange={(event) => setSearch(event.target.value)} placeholder="Search company or provenance URL" value={search} />
         <button className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white" type="submit">Search</button>
       </form>
-      <Table columns={[["canonical_name", "Company"], ["job_count", "Jobs"], ["provenance_url", "Provenance"], ["profile", "Profile"], ["urls", "URLs"]]} rows={companies.map((company) => ({ ...company, profile: company.profile && Object.keys(company.profile).length ? "Available" : "Not enriched", urls: company.urls?.length || 0 }))} rowKey={(row) => row.company_id} onRowClick={open} />
+      <Table columns={[["canonical_name", "Company"], ["linkedin", "LinkedIn"], ["industry", "Industry"], ["company_size", "Size"], ["headquarters", "Headquarters"], ["founded_year", "Founded"], ["linkedin_status", "LinkedIn status"], ["logo", "Logo"], ["job_count", "Jobs"]]} rows={companyRows} rowKey={(row) => row.company_id} onRowClick={open} />
     </Panel>
     {selected ? <section aria-label="Company detail" className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -235,7 +271,15 @@ function InteractiveCompanies({ data, request, onMessage }) {
         <div className="rounded-xl bg-surface-container-low p-3 text-sm text-on-surface-variant"><b className="text-on-surface">Reconciliation:</b> {text(selected.reconciliation_state, "identity projection only")}</div>
       </div>
       {(selected.logo_enrichments || []).length ? <div className="mt-3 space-y-2 text-xs text-on-surface-variant">{selected.logo_enrichments.map((logo) => <div className="rounded-xl bg-surface-container-low p-3" key={logo.logo_enrichment_id}><b className="text-on-surface">{text(logo.provider)}</b> · {text(logo.status)} · {text(logo.source_url)}</div>)}</div> : null}
-      <JsonDetails label="Company identity and provenance" value={{ profile: selected.profile, aliases: selected.aliases, link_candidates: selected.link_candidates, source_relationships: selected.source_relationships }} />
+       <section aria-label="LinkedIn enrichment" className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-4">
+         <div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="font-semibold text-on-surface">LinkedIn enrichment</h4><p className="mt-1 text-xs text-on-surface-variant">Scraped company facts stored in the profile read model.</p></div><StatusPill value={profileText(selectedProfile, "additional_fields", "linkedin_lookup_status", "not scraped")} /></div>
+         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+           {[['LinkedIn URL', [['additional_fields', 'linkedin_company_url']]], ['Name', [['additional_fields', 'linkedin_name']]], ['Industry', [['additional_fields', 'linkedin_industry'], ['fields', 'industry']]], ['Company size', [['additional_fields', 'linkedin_company_size'], ['fields', 'company_size']]], ['Headquarters', [['additional_fields', 'linkedin_headquarters'], ['fields', 'headquarters']]], ['Founded', [['additional_fields', 'linkedin_founded_year'], ['fields', 'founded_year']]], ['Website', [['additional_fields', 'linkedin_website'], ['fields', 'website']]], ['Logo URL', [['additional_fields', 'linkedin_logo_url'], ['fields', 'logo']]], ['Transport', [['additional_fields', 'linkedin_fetch_transport']]]].map(([label, candidates]) => <div className="rounded-lg bg-surface-container-low p-3" key={label}><span className="text-xs text-on-surface-variant">{label}</span><p className="mt-1 break-words text-sm text-on-surface">{profileFirst(selectedProfile, candidates)}</p></div>)}
+         </div>
+         <div className="mt-3 rounded-lg bg-surface-container-low p-3"><span className="text-xs text-on-surface-variant">Description</span><p className="mt-1 whitespace-pre-wrap text-sm text-on-surface">{profileFirst(selectedProfile, [["additional_fields", "linkedin_description"], ["fields", "description"]])}</p></div>
+         <div className="mt-3"><JsonDetails label="All stored LinkedIn fields" value={selectedAdditionalFields} /></div>
+       </section>
+       <JsonDetails label="Company identity and provenance" value={{ profile: selected.profile, aliases: selected.aliases, link_candidates: selected.link_candidates, source_relationships: selected.source_relationships }} />
       <p className="mt-3 text-xs text-on-surface-variant">Identity reconciliation is inspectable here; physical merges and automatic enrichment are not exposed without a supported, explicitly scoped backend operation.</p>
     </section> : null}
   </>;
