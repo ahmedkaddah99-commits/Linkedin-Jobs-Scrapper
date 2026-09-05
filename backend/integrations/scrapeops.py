@@ -121,8 +121,8 @@ def build_proxy_params(
     target_host = (urlparse(str(url or "").strip()).hostname or "").casefold()
     if target_host == "linkedin.com" or target_host.endswith(".linkedin.com"):
         LOGGER.warning(
-            "LinkedIn proxy request initiated - documented cost is 70 credits/request. "
-            "Ensure this is intentional and budgeted."
+            "LinkedIn proxy request initiated; verify the current provider credit rate "
+            "and keep the run within its configured budget."
         )
     params = {
         "api_key": str(api_key or "").strip(),

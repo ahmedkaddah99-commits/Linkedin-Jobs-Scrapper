@@ -129,6 +129,7 @@ class FetchResult:
     content_type: str = ""
     text: str = ""
     error: str = ""
+    transport: str = "direct"
 
 
 @dataclass(frozen=True, slots=True)
@@ -482,7 +483,7 @@ def discover_from_sitemaps(homepage_url: str, fetch: Fetcher, max_sitemaps: int 
     candidates: list[CareerUrlCandidate] = []
     seen_sitemaps: set[str] = set()
 
-    for sitemap_url in sitemap_urls[:max(1, int(max_sitemaps))]:
+    for sitemap_url in sitemap_urls[: max(1, int(max_sitemaps))]:
         normalized_sitemap = canonicalize_url(sitemap_url)
         if not normalized_sitemap or normalized_sitemap in seen_sitemaps:
             continue
@@ -512,11 +513,9 @@ def shallow_same_domain_crawl(
         homepage_url=homepage_url,
         source="shallow_crawl_link",
     )
-    crawl_urls = [
-        candidate.url
-        for candidate in seed_links
-        if same_domain_or_subdomain(candidate.url, homepage_url)
-    ][: max(0, int(max_pages))]
+    crawl_urls = [candidate.url for candidate in seed_links if same_domain_or_subdomain(candidate.url, homepage_url)][
+        : max(0, int(max_pages))
+    ]
 
     candidates = list(seed_links)
     for crawl_url in crawl_urls:

@@ -117,7 +117,11 @@ def _job_from_json_ld(item: Mapping[str, object], *, page_url: str, raw_html: st
 def _labelled_fields(soup: BeautifulSoup) -> dict[str, str]:
     fields: dict[str, str] = {}
     for node in soup.select(".article__content__view__field"):
-        label = _text(node.select_one(".article__content__view__field__label").get_text(" ", strip=True) if node.select_one(".article__content__view__field__label") else "")
+        label = _text(
+            node.select_one(".article__content__view__field__label").get_text(" ", strip=True)
+            if node.select_one(".article__content__view__field__label")
+            else ""
+        )
         value = node.select_one(".article__content__view__field__value")
         value_text = _text(value.get_text(" ", strip=True) if value else node.get_text(" ", strip=True))
         if label and value_text:
@@ -134,13 +138,17 @@ def _job_from_html(*, page_url: str, html: str) -> dict[str, object]:
     title_node = soup.select_one(".article__header__text, h1")
     title = _text(title_node.get_text(" ", strip=True) if title_node else "")
     if not title:
-        meta_title = soup.find("meta", attrs={"property": "og:title"}) or soup.find("meta", attrs={"name": re.compile(r"^title$", re.I)})
+        meta_title = soup.find("meta", attrs={"property": "og:title"}) or soup.find(
+            "meta", attrs={"name": re.compile(r"^title$", re.I)}
+        )
         title = _text(meta_title.get("content") if meta_title else "")
+
     def field(*labels: str) -> str:
         for label in labels:
             if fields.get(label):
                 return fields[label]
         return ""
+
     apply_link = ""
     for anchor in soup.find_all("a", href=True):
         label = _text(anchor.get_text(" ", strip=True)).casefold()
@@ -192,7 +200,7 @@ def fetch_generic_snapshot(
     allowed_hosts: Iterable[str] = (),
 ) -> dict[str, object]:
     request = requester or requests.get
-    bounded_links = max(1, min(25, int(max_job_links)))
+    bounded_links = max(1, min(250, int(max_job_links)))
     target_host = _host(target_url)
     hosts = {target_host, *(str(value).casefold().strip() for value in allowed_hosts if str(value).strip())}
     logs: list[dict[str, object]] = []
@@ -200,12 +208,40 @@ def fetch_generic_snapshot(
         listing_response = _request(request, target_url, timeout_seconds)
         status_code = int(getattr(listing_response, "status_code", 0) or 0)
         if status_code >= 400:
-            return {"jobs": [], "status": "failed", "status_code": status_code, "complete_snapshot": False, "credible_evidence": False, "request_url": target_url, "resolved_url": target_url, "error": f"http_{status_code}", "request_log": logs}
+            return {
+                "jobs": [],
+                "status": "failed",
+                "status_code": status_code,
+                "complete_snapshot": False,
+                "credible_evidence": False,
+                "request_url": target_url,
+                "resolved_url": target_url,
+                "error": f"http_{status_code}",
+                "request_log": logs,
+            }
         listing_url = str(getattr(listing_response, "url", "") or target_url)
         listing_html = str(getattr(listing_response, "text", "") or "")
-        logs.append({"url": target_url, "resolved_url": listing_url, "status_code": status_code, "outcome": "success"})
+        logs.append(
+            {
+                "url": target_url,
+                "resolved_url": listing_url,
+                "status_code": status_code,
+                "outcome": "success",
+                "transport": str(getattr(listing_response, "transport_used", "direct") or "direct"),
+            }
+        )
     except (requests.RequestException, OSError, TypeError, ValueError) as exc:
-        return {"jobs": [], "status": "failed", "status_code": 0, "complete_snapshot": False, "credible_evidence": False, "request_url": target_url, "resolved_url": target_url, "error": type(exc).__name__, "request_log": logs}
+        return {
+            "jobs": [],
+            "status": "failed",
+            "status_code": 0,
+            "complete_snapshot": False,
+            "credible_evidence": False,
+            "request_url": target_url,
+            "resolved_url": target_url,
+            "error": type(exc).__name__,
+            "request_log": logs,
+        }
 
     listing_soup = BeautifulSoup(listing_html, "html.parser")
     jobs: list[dict[str, object]] = []
@@ -217,9 +253,15 @@ def fetch_generic_snapshot(
         candidate = _url(anchor.get("href"), listing_url)
         path = urlsplit(candidate).path.casefold()
         label = _text(anchor.get_text(" ", strip=True)).casefold()
-        if not candidate or not _allowed_host(_host(candidate), hosts) or candidate.rstrip("/") == listing_url.rstrip("/"):
+        if (
+            not candidate
+            or not _allowed_host(_host(candidate), hosts)
+            or candidate.rstrip("/") == listing_url.rstrip("/")
+        ):
             continue
-        if any(token in path for token in ("/faq", "/searchjobs", "/aiRecommendations", "/home")) or any(token in label for token in ("faq", "support", "ai recommendations", "all jobs", "home")):
+        if any(token in path for token in ("/faq", "/searchjobs", "/aiRecommendations", "/home")) or any(
+            token in label for token in ("faq", "support", "ai recommendations", "all jobs", "home")
+        ):
             continue
         if not any(token in path for token in ("jobdetail", "/job/", "/position/", "/vacanc", "/stellen")):
             if not any(token in path for token in ("/job", "/position", "/career")):
@@ -242,7 +284,15 @@ def fetch_generic_snapshot(
                 continue
             html = str(getattr(response, "text", "") or "")
             jobs.append(_job_from_html(page_url=str(getattr(response, "url", "") or detail_url), html=html))
-            logs.append({"url": detail_url, "resolved_url": str(getattr(response, "url", "") or detail_url), "status_code": status_code, "outcome": "success"})
+            logs.append(
+                {
+                    "url": detail_url,
+                    "resolved_url": str(getattr(response, "url", "") or detail_url),
+                    "status_code": status_code,
+                    "outcome": "success",
+                    "transport": str(getattr(response, "transport_used", "direct") or "direct"),
+                }
+            )
         except (requests.RequestException, OSError, TypeError, ValueError, AttributeError) as exc:
             detail_failures.append({"url": detail_url, "error": type(exc).__name__})
     unique: dict[str, dict[str, object]] = {}
@@ -266,6 +316,7 @@ def fetch_generic_snapshot(
         "request_log": logs,
         "observation_failures": detail_failures,
         "warnings": ["bounded_detail_limit_reached"] if partial else [],
+        "transport": "webshare" if any(item.get("transport") == "webshare" for item in logs) else "direct",
     }
 
 
