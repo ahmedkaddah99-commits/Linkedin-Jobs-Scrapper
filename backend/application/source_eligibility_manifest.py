@@ -900,7 +900,8 @@ def load_manifest(path: str | Path, *, verify_sidecar: bool = True) -> dict[str,
             # the creator's absolute path.  A restored immutable bundle keeps
             # the sidecar beside the manifest, so make that bundle portable
             # without changing the manifest's recorded provenance or hash.
-            colocated = manifest_path.parent / sidecar_path.name
+            recorded_sidecar_name = PureWindowsPath(recorded_sidecar_path).name
+            colocated = manifest_path.parent / recorded_sidecar_name
             if colocated.exists():
                 sidecar_path = colocated
         if not sidecar_path.exists():
