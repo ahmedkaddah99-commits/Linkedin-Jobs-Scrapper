@@ -31,6 +31,8 @@ def test_acquisition_role_has_a_separate_environment_boundary() -> None:
     example = (ROOT / "deploy" / "acquisition.env.example").read_text(encoding="utf-8")
 
     assert "EnvironmentFile=/opt/runr/.env.acquisition" in acquisition
+    assert "User=runr-acquisition" in acquisition
+    assert "Group=runr-acquisition" in acquisition
     assert "Environment=WORKER_ROLE=acquisition" in acquisition
     assert "Environment=WORKER_ID=vps_acquisition_worker" in acquisition
     assert "EnvironmentFile=/opt/runr/.env\n" not in acquisition
@@ -41,7 +43,7 @@ def test_acquisition_role_has_a_separate_environment_boundary() -> None:
 
 
 def test_systemd_units_use_non_root_runtime_and_bounded_resources() -> None:
-    for name in ("runr-api.service", "runr-worker.service", "runr-acquisition-worker.service", "runr-frontend.service"):
+    for name in ("runr-api.service", "runr-worker.service", "runr-frontend.service"):
         unit = _read_unit(name)
         assert "User=runr" in unit
         assert "Group=runr" in unit
@@ -52,6 +54,9 @@ def test_systemd_units_use_non_root_runtime_and_bounded_resources() -> None:
         assert "TasksMax=" in unit
 
     acquisition = _read_unit("runr-acquisition-worker.service")
+    assert "User=runr-acquisition" in acquisition
+    assert "Group=runr-acquisition" in acquisition
+    assert "User=root" not in acquisition
     assert "CPUQuota=300%" in acquisition
     assert "MemoryHigh=9G" in acquisition
     assert "MemoryMax=12G" in acquisition

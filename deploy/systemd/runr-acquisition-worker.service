@@ -7,8 +7,8 @@ PartOf=runr.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/runr
-User=runr
-Group=runr
+User=runr-acquisition
+Group=runr-acquisition
 UMask=0077
 EnvironmentFile=/opt/runr/.env.acquisition
 Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python

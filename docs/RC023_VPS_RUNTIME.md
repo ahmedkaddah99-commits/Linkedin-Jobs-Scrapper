@@ -40,8 +40,8 @@ benchmark before production use.
 - `deploy/acquisition.env.example` — non-secret acquisition-only environment
   template; customer document/email/OAuth/billing/Clerk values are excluded.
 - `deploy/systemd/runr-acquisition-worker.service` — non-root acquisition
-  worker, unique ID, explicit acquisition roots, resource ceilings, and
-  protected writable paths.
+  worker under the dedicated `runr-acquisition` account, unique ID, explicit
+  acquisition roots, resource ceilings, and protected writable paths.
 - `deploy/systemd/runr-api.service` and `runr-worker.service` — non-root
   customer/API services with explicit Python venv, data roots, limits, and
   hardened systemd settings.
@@ -72,12 +72,16 @@ The acquisition unit is explicitly assigned `WORKER_ROLE=acquisition` and
 `WORKER_ID=vps_acquisition_worker`; the customer unit uses
 `WORKER_ROLE=customer` and `WORKER_ID=vps_customer_worker`.
 
-All services run as `runr:runr`, use mode `0077`, disallow privilege
-escalation, protect the host filesystem/home, and expose no public scraper
-API. The VPS API unit binds to `127.0.0.1`; firewall policy must still deny
-inbound ports. Inputs are not included in the acquisition unit's writable
-paths. Credentials are referenced by environment variable name only and must
-be supplied by the host secret mechanism.
+API/customer services run as `runr:runr`; the acquisition service runs as the
+separate non-root `runr-acquisition:runr-acquisition` account. All services
+use mode `0077`, disallow privilege escalation, protect the host filesystem/
+home, and expose no public scraper API. The VPS API unit binds to
+`127.0.0.1`; firewall policy must still deny inbound ports. Inputs are not
+included in the acquisition unit's writable paths. Credentials are referenced
+by environment variable name only and must be supplied by the host secret
+mechanism. Provider/database least-privilege is not verifiable offline; if
+Turso/R2 credentials are shared at full scope, that residual blast radius must
+be recorded and reduced before customer cutover.
 
 ## Offline verification
 

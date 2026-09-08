@@ -12,7 +12,11 @@
     "os": "Ubuntu 24.04 LTS (record provider image identifier before purchase)",
     "python_version": "3.12.7",
     "python_binary": "/opt/runr/.venv/bin/python",
-    "service_user": "runr",
+    "service_users": {
+      "api": "runr",
+      "customer": "runr",
+      "acquisition": "runr-acquisition"
+    },
     "time_sync": "chrony",
     "public_scraper_api": false,
     "inbound_ports": []
@@ -47,6 +51,7 @@
     },
     "acquisition": {
       "unit": "runr-acquisition-worker.service",
+      "service_user": "runr-acquisition",
       "worker_role": "acquisition",
       "environment_file": "/opt/runr/.env.acquisition",
       "forbidden_secret_families": [
@@ -56,6 +61,10 @@
         "DEEPSEEK_"
       ]
     }
+  },
+  "credential_granularity": {
+    "environment_boundary": "verified offline",
+    "provider_database_permissions": "must be verified on the authorized host; shared full-database credentials remain a documented residual risk until then"
   },
   "retention": {
     "journald_max_use": "1G",

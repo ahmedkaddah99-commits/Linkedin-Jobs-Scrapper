@@ -38,16 +38,20 @@ fi
 if ! id -u runr >/dev/null 2>&1; then
   sudo useradd --system --home-dir "$INSTALL_DIR" --shell /usr/sbin/nologin runr
 fi
+if ! id -u runr-acquisition >/dev/null 2>&1; then
+  sudo useradd --system --home-dir "$INSTALL_DIR" --shell /usr/sbin/nologin runr-acquisition
+fi
 
 sudo install -d -o runr -g runr -m 0750 \
   /var/lib/runr/api-data \
   /var/lib/runr/customer-data \
-  /var/lib/runr/acquisition-data \
   /var/log/runr \
+sudo install -d -o runr-acquisition -g runr-acquisition -m 0750 \
+  /var/lib/runr/acquisition-data \
   /srv/runr/state \
   /srv/runr/exports \
   /srv/runr/backups
-sudo install -d -o root -g runr -m 0750 /srv/runr/shared/inputs
+sudo install -d -o root -g runr-acquisition -m 0750 /srv/runr/shared/inputs
 if [ "$PROJECT_DIR/.env" != "$INSTALL_DIR/.env" ]; then
   sudo install -o root -g runr -m 0640 "$PROJECT_DIR/.env" "$INSTALL_DIR/.env"
 else
