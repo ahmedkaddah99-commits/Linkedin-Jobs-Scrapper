@@ -11,17 +11,18 @@ acquisition, a production migration, a Render deployment, or a GitHub push.
 | C worktree | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-c-release-integration` |
 | C branch | `temp/rc-c-release-integration` |
 | C starting launch commit | `b0f47788c1a5d385ae4c3c770d5cd990f586a626` |
-| C accepted candidate | `3050cd8ac77919e9ff8d0fea450d82235269aa8b` |
+| C accepted release candidate before this documentation amendment | `96869170a4d5e173b08c4fb0868a7c3c5503c32f` |
 | Persistent integration target | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview` |
 | Persistent target branch | `deployment/render-turso-r2` |
 | Persistent target before this slice | `9003fabc9fba9e2b7449d03b912d991c4bbdc873` |
 | Shared launch base | `b0f47788c1a5d385ae4c3c770d5cd990f586a626` |
 
 C was created from the exact S0 launch commit, then fast-forwarded over the
-target's documentation-only manifest commits so a later accepted C commit can
-fast-forward the persistent target. A/B have no implementation commits at this
-checkpoint; both remain clean at the shared launch commit and are not merged by
-this handoff.
+target's documentation-only manifest commits so an accepted C commit can
+fast-forward the persistent target. A remains clean at the shared launch
+commit. B remains based at the shared launch commit but has visible, uncommitted
+RC-023 runtime files; it has not supplied a clean freeze tip and is not merged
+by this handoff.
 
 ## RC-022 verification
 
