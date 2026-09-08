@@ -1,0 +1,795 @@
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import requests
+from bs4 import BeautifulSoup
+
+from backend.domain.job_identity import canonicalize_url, compact_whitespace, dedupe_job_records
+from backend.domain.pipeline_jobs import (
+    FILTER_STATUS_BYPASSED_MANUAL_APPROVAL,
+    SOURCE_TYPE_MANUAL_URL,
+    PipelineJob,
+    stable_manual_job_id,
+)
+from backend.acquisition.quality import (
+    DIRECT_APPLICATION_CLASSIFICATIONS,
+    URL_ATS_APPLICATION,
+    URL_EMPLOYER_APPLICATION,
+    extract_application_candidates_from_html,
+    normalize_description,
+)
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_PROXY_ENDPOINT,
+    ScrapeOpsOutOfCreditsError,
+    ScrapeOpsRequestError,
+    billed_status_code,
+    build_proxy_params,
+    build_proxy_usage_record,
+    estimate_mode_native_credits,
+    parse_proxy_response_envelope,
+    raise_for_failure,
+    request_mode_label,
+    require_scrapeops_proxy_health,
+    sanitize_scrapeops_text,
+    sanitize_url_for_logs,
+)
+
+from .linkedin_connector import build_scrape_requests_client, enrich_job
+
+
+LOGGER = logging.getLogger(__name__)
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 45
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+LINKEDIN_JOB_ID_PATTERN = re.compile(r"/jobs/view/(?:[^/]+/)?(?P<job_id>\d+)")
+
+
+def is_valid_job_url(raw_url: str) -> bool:
+    value = compact_whitespace(raw_url)
+    if not value:
+        return False
+
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return False
+
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc.strip())
+
+
+def extract_linkedin_job_id(url: str) -> str | None:
+    match = LINKEDIN_JOB_ID_PATTERN.search(url or "")
+    if match:
+        return match.group("job_id")
+
+    parsed = urlparse(url or "")
+    if "linkedin.com" not in (parsed.netloc or "").lower():
+        return None
+
+    path_match = re.search(r"/jobs/view/(?P<job_id>\d+)", parsed.path or "")
+    if path_match:
+        return path_match.group("job_id")
+    return None
+
+
+def load_manual_urls(file_path: str | Path) -> tuple[list[str], list[dict[str, Any]]]:
+    path = Path(file_path).expanduser()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Manual URL file not found: {path}")
+
+    return normalize_manual_urls(path.read_text(encoding="utf-8").splitlines())
+
+
+def normalize_manual_urls(raw_entries: Any) -> tuple[list[str], list[dict[str, Any]]]:
+    if isinstance(raw_entries, str):
+        iterable = raw_entries.replace(",", "\n").splitlines()
+    elif isinstance(raw_entries, (list, tuple, set)):
+        iterable = []
+        for item in raw_entries:
+            if isinstance(item, str):
+                iterable.extend(item.replace(",", "\n").splitlines())
+            else:
+                iterable.append(item)
+    else:
+        iterable = []
+
+    valid_urls: list[str] = []
+    invalid_entries: list[dict[str, Any]] = []
+    seen = set()
+
+    for line_number, raw_line in enumerate(iterable, start=1):
+        stripped_line = str(raw_line or "").strip()
+        if not stripped_line or stripped_line.startswith("#"):
+            continue
+        if not is_valid_job_url(stripped_line):
+            invalid_entries.append(
+                {
+                    "line_number": line_number,
+                    "url": stripped_line,
+                    "error": "invalid_url_format",
+                }
+            )
+            continue
+
+        canonical_url = canonicalize_url(stripped_line) or stripped_line
+        if canonical_url in seen:
+            LOGGER.info("Skipping duplicate manual URL on line %s: %s", line_number, stripped_line)
+            continue
+
+        seen.add(canonical_url)
+        valid_urls.append(stripped_line)
+
+    return valid_urls, invalid_entries
+
+
+def extract_jobposting_jsonld(soup: BeautifulSoup) -> dict[str, Any]:
+    def walk(node: Any) -> dict[str, Any] | None:
+        if isinstance(node, list):
+            for item in node:
+                found = walk(item)
+                if found:
+                    return found
+            return None
+        if not isinstance(node, dict):
+            return None
+
+        node_type = node.get("@type")
+        if node_type == "JobPosting" or (isinstance(node_type, list) and "JobPosting" in node_type):
+            return node
+
+        for value in node.values():
+            found = walk(value)
+            if found:
+                return found
+        return None
+
+    for script in soup.select("script[type='application/ld+json']"):
+        raw_text = compact_whitespace(script.get_text(" ", strip=True))
+        if not raw_text:
+            continue
+        try:
+            payload = json.loads(raw_text)
+        except Exception:
+            continue
+        found = walk(payload)
+        if found:
+            return found
+
+    return {}
+
+
+def extract_canonical_url(soup: BeautifulSoup, fallback_url: str) -> str:
+    canonical_tag = soup.select_one("link[rel='canonical']")
+    canonical_href = canonical_tag.get("href") if canonical_tag else ""
+    return canonicalize_url(canonical_href) or canonicalize_url(fallback_url) or fallback_url
+
+
+def extract_text_from_selectors(soup: BeautifulSoup, selectors: list[str]) -> str:
+    for selector in selectors:
+        node = soup.select_one(selector)
+        if not node:
+            continue
+        text = compact_whitespace(
+            node.get("content") or node.get("value") or node.get_text(" ", strip=True)
+        )
+        if text:
+            return text
+    return ""
+
+
+def html_to_text(raw_html: str) -> str:
+    if not raw_html:
+        return ""
+    return compact_whitespace(BeautifulSoup(raw_html, "html.parser").get_text("\n", strip=True))
+
+
+def extract_generic_description(soup: BeautifulSoup, jsonld_payload: dict[str, Any]) -> str:
+    jsonld_description = html_to_text(str(jsonld_payload.get("description") or ""))
+    if jsonld_description:
+        return jsonld_description
+
+    selectors = [
+        "section[class*='description']",
+        "div[class*='description']",
+        "section[id*='description']",
+        "div[id*='description']",
+        "main",
+        "body",
+    ]
+    for selector in selectors:
+        node = soup.select_one(selector)
+        if not node:
+            continue
+        text = compact_whitespace(node.get_text("\n", strip=True))
+        if len(text) >= 80:
+            return text
+    return ""
+
+
+def extract_generic_description_source(soup: BeautifulSoup, jsonld_payload: dict[str, Any]) -> str:
+    """Return source description markup before the plain-text projection."""
+
+    jsonld_description = jsonld_payload.get("description")
+    if jsonld_description not in (None, ""):
+        return str(jsonld_description)
+    selectors = [
+        "section[class*='description']",
+        "div[class*='description']",
+        "section[id*='description']",
+        "div[id*='description']",
+        "main",
+        "body",
+    ]
+    for selector in selectors:
+        node = soup.select_one(selector)
+        if node:
+            source = str(node)
+            if len(html_to_text(source)) >= 80:
+                return source
+    return ""
+
+
+def extract_generic_company(soup: BeautifulSoup, jsonld_payload: dict[str, Any], fallback_title: str) -> str:
+    hiring_org = jsonld_payload.get("hiringOrganization")
+    if isinstance(hiring_org, dict):
+        name = compact_whitespace(str(hiring_org.get("name") or ""))
+        if name:
+            return name
+
+    site_name = soup.select_one("meta[property='og:site_name']")
+    if site_name and compact_whitespace(site_name.get("content", "")):
+        return compact_whitespace(site_name.get("content", ""))
+
+    title = compact_whitespace(fallback_title)
+    title_match = re.search(r"\s+(?:at|@|\|)\s+(.+)$", title, flags=re.IGNORECASE)
+    if title_match:
+        return compact_whitespace(title_match.group(1))
+
+    return ""
+
+
+def _jsonld_location_label(location: Any) -> str:
+    if not isinstance(location, dict):
+        return compact_whitespace(str(location or ""))
+
+    address = location.get("address")
+    if isinstance(address, dict):
+        parts: list[str] = []
+        for key in ("addressLocality", "addressRegion", "addressCountry"):
+            value = address.get(key)
+            if isinstance(value, dict):
+                value = value.get("name") or value.get("value")
+            text = compact_whitespace(str(value or ""))
+            if text and text not in parts:
+                parts.append(text)
+        if parts:
+            return ", ".join(parts)
+    elif address:
+        address_text = compact_whitespace(str(address))
+        if address_text:
+            return address_text
+
+    return compact_whitespace(str(location.get("name") or ""))
+
+
+def extract_generic_locations(jsonld_payload: dict[str, Any]) -> list[str]:
+    locations = jsonld_payload.get("jobLocation")
+    if not locations:
+        return []
+
+    if not isinstance(locations, list):
+        locations = [locations]
+
+    location_values: list[str] = []
+    for location in locations:
+        label = _jsonld_location_label(location)
+        if label and label not in location_values:
+            location_values.append(label)
+
+    return location_values
+
+
+def extract_generic_location(jsonld_payload: dict[str, Any]) -> str:
+    return "; ".join(extract_generic_locations(jsonld_payload))
+
+
+def extract_generic_html_locations(soup: BeautifulSoup) -> list[str]:
+    """Read one conservative location signal from common employer-page markup."""
+
+    selectors = (
+        "meta[name='jobLocation']",
+        "meta[property='job:location']",
+        "[data-location]",
+        "[itemprop='jobLocation']",
+        "[class*='location']",
+        "[id*='location']",
+    )
+    for selector in selectors:
+        node = soup.select_one(selector)
+        if not node:
+            continue
+        value = node.get("content") or node.get("data-location") or node.get_text(" ", strip=True)
+        text = compact_whitespace(str(value or ""))
+        if text and len(text) <= 200:
+            return [text]
+
+    return []
+
+
+def extract_public_posted_age(date_posted: Any) -> tuple[str, float | None, str | None]:
+    posted_text = compact_whitespace(str(date_posted or ""))
+    if not posted_text:
+        return "", None, None
+    try:
+        parsed = datetime.fromisoformat(posted_text.replace("Z", "+00:00"))
+    except ValueError:
+        return posted_text, None, None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    posted_utc = parsed.astimezone(timezone.utc)
+    age_hours = max(0.0, (datetime.now(timezone.utc) - posted_utc).total_seconds() / 3600)
+    return posted_text, round(age_hours, 2), posted_utc.isoformat()
+
+
+def fetch_generic_manual_job(
+    url: str,
+    *,
+    request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    force_scrapeops: bool = False,
+    scrapeops_api_key: str = "",
+    scrapeops_mode: str = "render_js_residential",
+    scrapeops_country_code: str = "",
+    usage_callback=None,
+    usage_stage: str = "normalize_company_job",
+    usage_company_name: str = "",
+    proxy_health_check=None,
+) -> dict[str, Any]:
+    if force_scrapeops:
+        resolved_api_key = str(scrapeops_api_key or "").strip()
+        proxy_health_confirmed = False
+        if not resolved_api_key:
+            resolved_api_key, _ = build_scrape_requests_client(proxy_health_check=proxy_health_check)
+            proxy_health_confirmed = True
+        if not proxy_health_confirmed:
+            if callable(proxy_health_check):
+                proxy_health_check()
+            else:
+                require_scrapeops_proxy_health(resolved_api_key, usage_callback=usage_callback)
+        response = None
+        request_started = time.perf_counter()
+        target_domain = (urlparse(url).netloc or "").lower()
+        try:
+            response = requests.get(
+                SCRAPEOPS_PROXY_ENDPOINT,
+                params=build_proxy_params(
+                    api_key=resolved_api_key,
+                    url=url,
+                    mode=scrapeops_mode,
+                    country_code=scrapeops_country_code,
+                ),
+                headers=DEFAULT_HEADERS,
+                timeout=max(10, int(request_timeout_seconds)),
+            )
+        except requests.RequestException as exc:
+            safe_message = sanitize_scrapeops_text(str(exc)) or "ScrapeOps request failed."
+            if callable(usage_callback):
+                usage_callback(
+                    {
+                        **build_proxy_usage_record(
+                            source_id=usage_company_name or target_domain,
+                            target_url=url,
+                            request_mode=scrapeops_mode,
+                            target_status_code=0,
+                            provider_status_code=0,
+                            latency_ms=round((time.perf_counter() - request_started) * 1000),
+                            billed_credits_actual=0,
+                            billed_credits_estimated=0,
+                            error_category="network_error",
+                        ),
+                        "target_url": sanitize_url_for_logs(url),
+                        "domain": target_domain,
+                        "status_code": 0,
+                        "billed": False,
+                        "request_mode": scrapeops_mode,
+                        "request_mode_label": request_mode_label(scrapeops_mode),
+                        "native_credits": 0,
+                        "runner_credits": 0,
+                        "request_stage": usage_stage,
+                        "company_name": usage_company_name,
+                        "error_category": "network_error",
+                        "error_message": safe_message,
+                    }
+            )
+            raise RuntimeError(f"scrapeops: {safe_message}") from exc
+        envelope = parse_proxy_response_envelope(response)
+        response.status_code = envelope.target_status_code
+        response._content = envelope.body.encode(response.encoding or "utf-8")
+        billed = billed_status_code(envelope.target_status_code)
+        estimated_credits = estimate_mode_native_credits(scrapeops_mode) if billed else 0
+        actual_credits = envelope.billed_credits_actual if billed else 0
+        accounted_credits = actual_credits if actual_credits is not None else estimated_credits
+        failure: ScrapeOpsRequestError | None = None
+        if response.status_code >= 400:
+            try:
+                raise_for_failure(response, fallback_message="ScrapeOps request failed.")
+            except ScrapeOpsRequestError as exc:
+                failure = exc
+        if callable(usage_callback):
+            usage_callback(
+                {
+                    **build_proxy_usage_record(
+                        source_id=usage_company_name or target_domain,
+                        target_url=url,
+                        request_mode=scrapeops_mode,
+                        target_status_code=envelope.target_status_code,
+                        provider_status_code=envelope.provider_status_code,
+                        latency_ms=round((time.perf_counter() - request_started) * 1000),
+                        billed_credits_actual=actual_credits,
+                        billed_credits_estimated=estimated_credits,
+                        error_category=failure.failure.category if failure else "",
+                    ),
+                    "target_url": sanitize_url_for_logs(url),
+                    "domain": target_domain,
+                    "status_code": envelope.target_status_code,
+                    "billed": billed,
+                    "request_mode": scrapeops_mode,
+                    "request_mode_label": request_mode_label(scrapeops_mode),
+                    "native_credits": accounted_credits,
+                    "runner_credits": accounted_credits,
+                    "request_stage": usage_stage,
+                    "company_name": usage_company_name,
+                    "error_category": failure.failure.category if failure else "",
+                    "error_message": str(failure) if failure else "",
+                }
+            )
+        if failure is not None:
+            if isinstance(failure, ScrapeOpsOutOfCreditsError):
+                raise failure
+            raise RuntimeError(f"scrapeops: {failure}") from failure
+    else:
+        response = requests.get(url, headers=DEFAULT_HEADERS, timeout=request_timeout_seconds)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    jsonld_payload = extract_jobposting_jsonld(soup)
+    canonical_url = extract_canonical_url(soup, url)
+
+    title = (
+        compact_whitespace(str(jsonld_payload.get("title") or ""))
+        or extract_text_from_selectors(soup, ["meta[property='og:title']", "h1", "title"])
+    )
+    if title and "<" in title:
+        title = html_to_text(title)
+
+    if not title:
+        og_title = soup.select_one("meta[property='og:title']")
+        title = compact_whitespace(og_title.get("content", "")) if og_title else ""
+
+    company = extract_generic_company(soup, jsonld_payload, title)
+    location_collection = extract_generic_locations(jsonld_payload) or extract_generic_html_locations(soup)
+    location_raw = "; ".join(location_collection)
+    description_source = extract_generic_description_source(soup, jsonld_payload)
+    description_bundle = normalize_description(description_source or extract_generic_description(soup, jsonld_payload))
+    description = description_bundle["plain_text"]
+    posted_time_text, posted_age_hours, posted_datetime_utc = extract_public_posted_age(
+        jsonld_payload.get("datePosted")
+    )
+    official_host = (urlparse(canonical_url).hostname or "").strip()
+    html_candidates = extract_application_candidates_from_html(
+        response.text,
+        canonical_url,
+        target={"canonical_target_url": canonical_url, "official_employer_hosts": [official_host]},
+    )
+    direct_html_candidate = next(
+        (candidate for candidate in html_candidates if candidate.get("classification") in DIRECT_APPLICATION_CLASSIFICATIONS),
+        None,
+    )
+
+    job_record = PipelineJob(
+        job_id=stable_manual_job_id(canonical_url),
+        title=title or "Manual job",
+        company=company,
+        location_raw=location_raw,
+        source_type=SOURCE_TYPE_MANUAL_URL,
+        filter_status=FILTER_STATUS_BYPASSED_MANUAL_APPROVAL,
+        source_url=canonical_url,
+        link=canonical_url,
+        linkedin_link=canonical_url if "linkedin.com" in canonical_url.lower() else "",
+        apply_link=str((direct_html_candidate or {}).get("url") or canonical_url),
+        apply_link_source="html_apply_link" if direct_html_candidate else "manual_url",
+        full_description=description_bundle["raw_source"],
+        easy_apply_status="unknown",
+        posted_time_text=posted_time_text,
+        posted_age_hours=posted_age_hours,
+        posted_datetime_estimated_utc=posted_datetime_utc,
+        enrich_error=None if description else "Description container not found",
+        enrich_status_code=response.status_code,
+        manual_approved=True,
+    )
+    record = job_record.to_record()
+    record.update(
+        {
+            "description_raw": description_bundle["raw_source"],
+            "description_html": description_bundle["sanitized_html"],
+            "description_text": description_bundle["plain_text"],
+            "description_decoding": description_bundle["decoding"],
+            "location_collection": location_collection,
+            "source_posted_at": jsonld_payload.get("datePosted") or "",
+            "source_page_html": response.text,
+            "source_raw_payload": {
+                "source_page_html": response.text,
+                "jobposting_jsonld": jsonld_payload,
+                "canonical_url": canonical_url,
+                "datePosted": jsonld_payload.get("datePosted") or "",
+                "location_collection": location_collection,
+                "status_code": response.status_code,
+            },
+            "application_candidates": html_candidates,
+        }
+    )
+    if direct_html_candidate:
+        record["application_url"] = str(direct_html_candidate["url"])
+        record["application_classification"] = str(direct_html_candidate["classification"])
+        if direct_html_candidate["classification"] == URL_EMPLOYER_APPLICATION:
+            record["employer_application_url"] = str(direct_html_candidate["url"])
+        elif direct_html_candidate["classification"] == URL_ATS_APPLICATION:
+            record["ats_application_url"] = str(direct_html_candidate["url"])
+    return record
+
+
+def fetch_manual_linkedin_job(
+    url: str,
+    *,
+    so_requests,
+    scrapeops_api_key: str,
+    debug_enrich_blocks: bool,
+    use_proxy_fallback: bool,
+    request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    usage_callback=None,
+    proxy_health_check=None,
+) -> dict[str, Any]:
+    job_id = extract_linkedin_job_id(url)
+    if not job_id:
+        raise ValueError(f"Could not extract LinkedIn job ID from URL: {url}")
+
+    enrich_payload = enrich_job(
+        job_id=job_id,
+        so_requests=so_requests,
+        scrapeops_api_key=scrapeops_api_key,
+        debug_enrich_blocks=debug_enrich_blocks,
+        use_proxy_fallback=use_proxy_fallback,
+        usage_callback=usage_callback,
+        proxy_health_check=proxy_health_check,
+    )
+
+    fallback_payload: dict[str, Any] = {}
+    if not enrich_payload.get("title") or not enrich_payload.get("company") or not enrich_payload.get("description"):
+        try:
+            fallback_payload = fetch_generic_manual_job(
+                url,
+                request_timeout_seconds=request_timeout_seconds,
+            )
+        except Exception:
+            fallback_payload = {}
+
+    canonical_source_url = canonicalize_url(url) or url
+    linkedin_url = f"https://www.linkedin.com/jobs/view/{job_id}"
+    description_bundle = normalize_description(enrich_payload.get("description") or fallback_payload.get("full_description") or "")
+    job_record = PipelineJob(
+        job_id=str(job_id),
+        title=compact_whitespace(str(enrich_payload.get("title") or fallback_payload.get("title") or "")) or f"LinkedIn job {job_id}",
+        company=compact_whitespace(str(enrich_payload.get("company") or fallback_payload.get("company") or "")),
+        location_raw=compact_whitespace(
+            str(enrich_payload.get("location_raw") or fallback_payload.get("location_raw") or "")
+        ),
+        source_type=SOURCE_TYPE_MANUAL_URL,
+        filter_status=FILTER_STATUS_BYPASSED_MANUAL_APPROVAL,
+        source_url=canonical_source_url,
+        link=linkedin_url,
+        linkedin_link=linkedin_url,
+        apply_link=str(enrich_payload.get("apply_link") or fallback_payload.get("apply_link") or linkedin_url),
+        apply_link_source=str(enrich_payload.get("apply_link_source") or "manual_url"),
+        full_description=description_bundle["raw_source"],
+        easy_apply_status=enrich_payload.get("easy_apply_status", "unknown"),
+        posted_time_text=str(enrich_payload.get("posted_time_text") or ""),
+        posted_age_hours=enrich_payload.get("posted_age_hours"),
+        posted_datetime_estimated_utc=enrich_payload.get("posted_datetime_estimated_utc"),
+        applicant_count=enrich_payload.get("applicant_count"),
+        enrich_error=enrich_payload.get("enrich_error"),
+        enrich_status_code=enrich_payload.get("status_code"),
+        manual_approved=True,
+    )
+    record = job_record.to_record()
+    record.update(
+        {
+            "description_raw": description_bundle["raw_source"],
+            "description_html": description_bundle["sanitized_html"],
+            "description_text": description_bundle["plain_text"],
+            "description_decoding": description_bundle["decoding"],
+            "source_raw_payload": {
+                "provider_payload": enrich_payload,
+                "fallback_payload": fallback_payload,
+            },
+        }
+    )
+    provider_apply = str(enrich_payload.get("apply_link") or fallback_payload.get("apply_link") or "").strip()
+    if provider_apply and "linkedin.com" not in (urlparse(provider_apply).hostname or "").casefold():
+        # Provider evidence is explicit, so the shared resolver can classify
+        # an employer/ATS destination without treating the LinkedIn detail
+        # page as an application URL.
+        record["employer_application_url"] = provider_apply
+        record["application_url"] = provider_apply
+    return record
+
+
+def fetch_and_normalize_manual_job(
+    url: str,
+    *,
+    so_requests=None,
+    scrapeops_api_key: str = "",
+    debug_enrich_blocks: bool = False,
+    use_proxy_fallback: bool = False,
+    request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    force_scrapeops: bool = False,
+    scrapeops_mode: str = "render_js_residential",
+    scrapeops_country_code: str = "",
+    usage_callback=None,
+    usage_stage: str = "",
+    usage_company_name: str = "",
+    proxy_health_check=None,
+) -> dict[str, Any]:
+    if extract_linkedin_job_id(url):
+        if so_requests is None or not scrapeops_api_key:
+            scrapeops_api_key, so_requests = build_scrape_requests_client(proxy_health_check=proxy_health_check)
+        return fetch_manual_linkedin_job(
+            url,
+            so_requests=so_requests,
+            scrapeops_api_key=scrapeops_api_key,
+            debug_enrich_blocks=debug_enrich_blocks,
+            use_proxy_fallback=use_proxy_fallback,
+            request_timeout_seconds=request_timeout_seconds,
+            usage_callback=usage_callback,
+            proxy_health_check=proxy_health_check,
+        )
+
+    return fetch_generic_manual_job(
+        url,
+        request_timeout_seconds=request_timeout_seconds,
+        force_scrapeops=force_scrapeops,
+        scrapeops_api_key=scrapeops_api_key,
+        scrapeops_mode=scrapeops_mode,
+        scrapeops_country_code=scrapeops_country_code,
+        usage_callback=usage_callback,
+        usage_stage=usage_stage or "manual_url_fetch",
+        usage_company_name=usage_company_name,
+        proxy_health_check=proxy_health_check,
+    )
+
+
+def fetch_manual_jobs_from_file(
+    file_path: str | Path,
+    *,
+    debug_enrich_blocks: bool = False,
+    use_proxy_fallback: bool = False,
+    request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    logger: logging.Logger | None = None,
+    usage_callback=None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    active_logger = logger or LOGGER
+    urls, invalid_entries = load_manual_urls(file_path)
+    return fetch_manual_jobs_from_urls(
+        urls,
+        invalid_entries=invalid_entries,
+        debug_enrich_blocks=debug_enrich_blocks,
+        use_proxy_fallback=use_proxy_fallback,
+        request_timeout_seconds=request_timeout_seconds,
+        logger=active_logger,
+        usage_callback=usage_callback,
+    )
+
+
+def fetch_manual_jobs_from_urls(
+    urls: list[str],
+    *,
+    invalid_entries: list[dict[str, Any]] | None = None,
+    debug_enrich_blocks: bool = False,
+    use_proxy_fallback: bool = False,
+    request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    logger: logging.Logger | None = None,
+    usage_callback=None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    active_logger = logger or LOGGER
+    failures: list[dict[str, Any]] = list(invalid_entries or [])
+    jobs: list[dict[str, Any]] = []
+
+    scrapeops_api_key = ""
+    so_requests = None
+    proxy_health_confirmed = False
+
+    def ensure_proxy_health() -> None:
+        nonlocal proxy_health_confirmed
+        if proxy_health_confirmed:
+            return
+        require_scrapeops_proxy_health(scrapeops_api_key, usage_callback=usage_callback)
+        proxy_health_confirmed = True
+
+    if any(extract_linkedin_job_id(url) for url in urls):
+        scrapeops_api_key, so_requests = build_scrape_requests_client()
+
+    for index, url in enumerate(urls, start=1):
+        active_logger.info("Fetching manual job %s/%s: %s", index, len(urls), url)
+        try:
+            job = fetch_and_normalize_manual_job(
+                url,
+                so_requests=so_requests,
+                scrapeops_api_key=scrapeops_api_key,
+                debug_enrich_blocks=debug_enrich_blocks,
+                use_proxy_fallback=use_proxy_fallback,
+                request_timeout_seconds=request_timeout_seconds,
+                usage_callback=usage_callback,
+                proxy_health_check=ensure_proxy_health,
+            )
+            jobs.append(job)
+        except Exception as exc:
+            active_logger.exception("Manual URL ingestion failed for %s", url)
+            failures.append(
+                {
+                    "url": url,
+                    "error": str(exc),
+                    "stage": "fetch_parse_normalize",
+                }
+            )
+
+    deduped_jobs, dropped_duplicates = dedupe_job_records(jobs, logger=active_logger)
+    for dropped_record in dropped_duplicates:
+        failures.append(
+            {
+                "url": dropped_record.get("source_url") or dropped_record.get("apply_link") or dropped_record.get("link"),
+                "error": dropped_record.get("dedupe_reason"),
+                "stage": "dedupe",
+            }
+        )
+
+    return deduped_jobs, failures
+
+
+__all__ = [
+    "DEFAULT_HEADERS",
+    "DEFAULT_REQUEST_TIMEOUT_SECONDS",
+    "LINKEDIN_JOB_ID_PATTERN",
+    "extract_canonical_url",
+    "extract_generic_company",
+    "extract_generic_description",
+    "extract_generic_description_source",
+    "extract_generic_location",
+    "extract_generic_locations",
+    "extract_generic_html_locations",
+    "extract_jobposting_jsonld",
+    "extract_public_posted_age",
+    "extract_linkedin_job_id",
+    "extract_text_from_selectors",
+    "fetch_and_normalize_manual_job",
+    "fetch_generic_manual_job",
+    "fetch_manual_jobs_from_file",
+    "fetch_manual_jobs_from_urls",
+    "fetch_manual_linkedin_job",
+    "html_to_text",
+    "is_valid_job_url",
+    "load_manual_urls",
+    "normalize_manual_urls",
+]

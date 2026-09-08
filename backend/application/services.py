@@ -1,0 +1,4372 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Mapping
+from uuid import uuid4
+
+from backend.application.assisted_apply_package_service import (
+    ApplicationPackageService,
+)
+from backend.application.assisted_apply_preparation_service import AssistedApplyPreparationService
+from backend.application.assisted_apply_service import AssistedApplyConnectionService
+from backend.application.acquisition_scheduler import PhaseAAcquisitionScheduler
+from backend.application.admin_job_import import AdminJobImportService
+from backend.acquisition.analytics import build_acquisition_analytics, parse_analytics_window
+from backend.application.company_enrichment import CompanyEnrichmentProvider, CompanyEnrichmentService
+from backend.application.personalized_jobs_service import PersonalizedJobsService
+from backend.application.production_rollout import ProductionRolloutService
+from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
+from backend.application.domain_services import IdentityAccessService, WorkspaceCatalogService
+from backend.application.quota import get_usage_snapshot
+from backend.application.run_services import RunLifecycleService
+from backend.application.tracker_services import TrackerApplicationService
+from backend.capabilities.networking import build_relevant_people_discovery
+from backend.capabilities.tailored_documents.manual_urls import normalize_manual_urls
+from backend.config.plans import DEFAULT_PLAN_ID, get_limit, normalize_plan_id
+from backend.enrichment.operations import EnrichmentOperationService
+from backend.config.scrapeops_admin_policy import (
+    SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY,
+    default_scrapeops_admin_policy,
+    normalize_scrapeops_admin_policy,
+    plan_policy_limits,
+)
+from backend.connectors.company_career_sites import (
+    ACADEMIC_CAREER_SITE_FILES,
+    REGULAR_COMPANY_SITE_FILES,
+    estimate_company_site_runner_credit_range,
+    load_discovered_company_site_entries,
+    parse_company_site_entries,
+    plan_company_site_scope,
+)
+from backend.domain.assisted_apply import AssistedApplyConnectionRecord, AssistedApplyPreferences
+from backend.domain.models import (
+    CareerProfile,
+    RUN_STATUS_CANCEL_REQUESTED,
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_PLANNED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+    WORKER_STATUS_IDLE,
+    WORKER_STATUS_RUNNING,
+    WORKER_STATUS_STALE,
+    WORKER_STATUS_STOPPED,
+    ArtifactRecord,
+    ApiTokenRecord,
+    JobRecord,
+    ReferralContactRecord,
+    ReviewRecord,
+    RunRecord,
+    SecretRecord,
+    StageDefinition,
+    UserRecord,
+    WorkerRecord,
+    WorkflowTemplate,
+    WorkspaceDefinition,
+    utc_now_iso,
+)
+from backend.integrations.scrapeops import (
+    SCRAPEOPS_POLICY_VERSION,
+    SCRAPEOPS_USAGE_EVENT_NAME,
+    fetch_account_usage,
+    fetch_domain_stats,
+)
+from backend.orchestration import (
+    build_quick_apply_workflow_template,
+    build_workspace_from_scratch,
+    validate_workspace_source_configuration,
+    workspace_builder_catalog,
+)
+from backend.orchestration.workspace_builder import (
+    SOURCE_ACADEMIC_CAREER_SITES,
+    SOURCE_COMPANY_CAREER_SITES,
+)
+from backend.repositories.contracts import BackendRepositories
+
+
+BUILDER_WORKSPACE_FLOW_IDS = {"tailored_documents", "reusable_packages"}
+BUILDER_CONNECTOR_SOURCE_IDS = {
+    "linkedin_jobs": "linkedin_jobs",
+    "curated_job_urls": "curated_job_urls",
+    "company_career_sites": "company_career_sites",
+    "academic_career_sites": "academic_career_sites",
+    "job_board_collection": "job_board_collection",
+}
+BUILDER_MODULE_FEATURE_FLAGS = {
+    "screening_filter": "screening_filter",
+    "priority_ranking": "priority_ranking",
+    "role_classification": "role_classification",
+    "reusable_profile_builder": "reusable_profile_builder",
+    "tailored_document_generation": "tailored_document_generation",
+    "application_packaging": "application_packaging",
+}
+AUTO_APPROVE_REVIEW_STAGE_TYPES = {
+    "applications.generate.documents",
+    "legacy.white_collar.docs",
+}
+WORKSPACE_RUN_SCHEDULE_METADATA_KEY = "run_schedule"
+SCHEDULED_RUN_ACTIVE_STATUSES = {
+    RUN_STATUS_PLANNED,
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+    RUN_STATUS_CANCEL_REQUESTED,
+}
+SCHEDULED_RUN_REQUESTED_BY = "scheduler"
+SCRAPEOPS_RECONCILIATION_EVENT_NAME = "scrapeops_reconciliation_snapshot"
+SCRAPEOPS_ALERT_EVENT_NAME = "scrapeops_alert"
+
+
+class BackendValidationError(ValueError):
+    def __init__(self, error_code: str, message: str, *, details: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.error_code = str(error_code or "validation_failed")
+        self.details = dict(details or {})
+
+
+def _field_error(
+    field: str,
+    code: str,
+    message: str,
+    *,
+    source_id: str = "",
+) -> dict[str, str]:
+    error = {
+        "field": str(field or "").strip(),
+        "code": str(code or "").strip(),
+        "message": str(message or "").strip(),
+    }
+    if source_id:
+        error["source_id"] = str(source_id).strip()
+    return error
+
+
+def _dedupe_field_errors(errors: list[dict[str, Any]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw_error in errors:
+        if not isinstance(raw_error, dict):
+            continue
+        field = str(raw_error.get("field") or "").strip()
+        code = str(raw_error.get("code") or "").strip()
+        message = str(raw_error.get("message") or "").strip()
+        source_id = str(raw_error.get("source_id") or "").strip()
+        if not field or not code or not message:
+            continue
+        dedupe_key = (field, code, source_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append(_field_error(field, code, message, source_id=source_id))
+    return deduped
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _schedule_interval_days(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _next_schedule_timestamp(*, from_dt: datetime, interval_days: int) -> str:
+    return (from_dt + timedelta(days=max(1, int(interval_days)))).isoformat()
+
+
+def _workspace_run_schedule_payload(workspace: WorkspaceDefinition) -> dict[str, Any]:
+    raw_schedule = dict((workspace.metadata or {}).get(WORKSPACE_RUN_SCHEDULE_METADATA_KEY) or {})
+    interval_days = _schedule_interval_days(raw_schedule.get("interval_days"))
+    enabled = bool(raw_schedule.get("enabled")) and interval_days >= 1
+    return {
+        "enabled": enabled,
+        "interval_days": interval_days if enabled else 0,
+        "next_run_at": str(raw_schedule.get("next_run_at") or ""),
+        "last_enqueued_at": str(raw_schedule.get("last_enqueued_at") or ""),
+        "last_run_id": str(raw_schedule.get("last_run_id") or ""),
+        "last_error": str(raw_schedule.get("last_error") or ""),
+        "last_error_at": str(raw_schedule.get("last_error_at") or ""),
+    }
+
+
+def _is_builder_created_workspace(workspace: WorkspaceDefinition) -> bool:
+    metadata = dict(workspace.metadata or {})
+    return str(metadata.get("builder_mode") or "").strip() == "scratch" or bool(
+        metadata.get("workspace_configuration_v2")
+    )
+
+
+def _builder_workspace_flow_id(workspace: WorkspaceDefinition) -> str:
+    metadata = dict(workspace.metadata or {})
+    return str(metadata.get("automation_flow") or workspace.settings.get("automation_flow") or "").strip()
+
+
+def _builder_workspace_source_ids(workspace: WorkspaceDefinition) -> list[str]:
+    metadata = dict(workspace.metadata or {})
+    source_ids = [str(item).strip() for item in metadata.get("source_ids") or [] if str(item).strip()]
+    if source_ids:
+        return source_ids
+    return _builder_workspace_connector_source_ids(workspace)
+
+
+def _builder_workspace_connector_source_ids(workspace: WorkspaceDefinition) -> list[str]:
+    derived_source_ids: list[str] = []
+    for source in workspace.sources:
+        source_id = BUILDER_CONNECTOR_SOURCE_IDS.get(str(source.connector_id or "").strip())
+        if source_id and source_id not in derived_source_ids:
+            derived_source_ids.append(source_id)
+    return derived_source_ids
+
+
+def _builder_workspace_module_ids(workspace: WorkspaceDefinition) -> list[str]:
+    metadata = dict(workspace.metadata or {})
+    return [str(item).strip() for item in metadata.get("modules") or [] if str(item).strip()]
+
+
+def _builder_workspace_enabled_module_ids(workspace: WorkspaceDefinition) -> list[str]:
+    return [
+        module_id
+        for module_id, feature_flag in BUILDER_MODULE_FEATURE_FLAGS.items()
+        if bool((workspace.feature_flags or {}).get(feature_flag))
+    ]
+
+
+def _workspace_cv_asset_id(workspace: WorkspaceDefinition) -> str:
+    metadata = dict(workspace.metadata or {})
+    workspace_configuration_v2 = metadata.get("workspace_configuration_v2") or {}
+    cv_binding = dict(workspace_configuration_v2.get("cv_binding") or {})
+    return str(workspace.settings.get("workspace_cv_asset_id") or cv_binding.get("asset_id") or "").strip()
+
+
+def _workspace_cv_asset_is_available(
+    *,
+    file_path: str,
+    object_key: str,
+    object_storage: Any = None,
+) -> bool:
+    if object_key:
+        exists = getattr(object_storage, "exists", None)
+        if not callable(exists):
+            return True
+        try:
+            return bool(exists(object_key))
+        except Exception:
+            return False
+    return bool(file_path and Path(file_path).is_file())
+
+
+def _builder_workspace_cv_asset_field_errors(
+    workspace: WorkspaceDefinition,
+    *,
+    object_storage: Any = None,
+) -> list[dict[str, str]]:
+    asset_id = _workspace_cv_asset_id(workspace)
+    if not asset_id:
+        if _builder_workspace_flow_id(workspace) != "tailored_documents":
+            return []
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "required",
+                "Select a workspace CV before saving or running this workspace.",
+            )
+        ]
+
+    metadata = dict(workspace.metadata or {})
+    asset = dict(metadata.get("workspace_cv_asset") or {})
+    if not asset:
+        settings = dict(workspace.settings or {})
+        if settings.get("workspace_cv_asset_object_key") or settings.get("workspace_cv_asset_path"):
+            asset = {
+                "asset_id": asset_id,
+                "asset_kind": "workspace_cv",
+                "display_name": str(settings.get("workspace_cv_asset_display_name") or ""),
+                "workspace_binding": {"workspace_id": ""},
+                "file": {
+                    "path": str(settings.get("workspace_cv_asset_path") or ""),
+                    "object_key": str(settings.get("workspace_cv_asset_object_key") or ""),
+                    "mime_type": str(settings.get("workspace_cv_asset_mime_type") or ""),
+                    "extension": str(settings.get("workspace_cv_asset_extension") or ""),
+                },
+            }
+        else:
+            return [
+                _field_error(
+                    "workspace_cv_asset_id",
+                    "workspace_cv_asset_unresolved",
+                    "Select an accessible workspace CV before saving or running this workspace.",
+                )
+            ]
+
+    snapshot_asset_id = str(asset.get("asset_id") or "").strip()
+    if snapshot_asset_id != asset_id:
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_mismatch",
+                "The saved workspace CV no longer matches the selected workspace_cv_asset_id.",
+            )
+        ]
+
+    asset_kind = str(asset.get("asset_kind") or "").strip()
+    if asset_kind != "workspace_cv":
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_invalid_kind",
+                "workspace_cv_asset_id must reference an uploaded workspace CV.",
+            )
+        ]
+
+    bound_workspace_id = str(
+        asset.get("workspace_binding", {}).get("workspace_id") or asset.get("workspace_id") or ""
+    ).strip()
+    if bound_workspace_id and bound_workspace_id != workspace.id:
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_inaccessible",
+                "The selected workspace CV is bound to a different workspace.",
+            )
+        ]
+
+    file_payload = dict(asset.get("file") or {})
+    file_path = str(file_payload.get("path") or asset.get("path") or "").strip()
+    object_key = str(file_payload.get("object_key") or "").strip()
+    if not _workspace_cv_asset_is_available(
+        file_path=file_path,
+        object_key=object_key,
+        object_storage=object_storage,
+    ):
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_missing_file",
+                "The selected workspace CV is no longer available in durable storage.",
+            )
+        ]
+    return []
+
+
+def _auto_approve_review_job_set_keys(workflow: WorkflowTemplate) -> list[str]:
+    job_set_keys: list[str] = []
+    for stage in workflow.stages:
+        if stage.stage_type not in AUTO_APPROVE_REVIEW_STAGE_TYPES:
+            continue
+        output_key = str(stage.output_key or "").strip()
+        if output_key and output_key not in job_set_keys:
+            job_set_keys.append(output_key)
+    return job_set_keys
+
+
+def _builder_workspace_run_preflight_field_errors(
+    workspace: WorkspaceDefinition,
+    *,
+    run_plan_settings: Mapping[str, Any] | None = None,
+    object_storage: Any = None,
+) -> list[dict[str, str]]:
+    saved_asset_id = _workspace_cv_asset_id(workspace)
+    asset_id = str((run_plan_settings or {}).get("workspace_cv_asset_id") or saved_asset_id or "").strip()
+    if asset_id and saved_asset_id and asset_id != saved_asset_id:
+        return [
+            _field_error(
+                "workspace_cv_asset_id",
+                "workspace_cv_asset_mismatch",
+                "Run workspace_cv_asset_id does not match the saved workspace CV.",
+            )
+        ]
+    if not asset_id:
+        return _builder_workspace_cv_asset_field_errors(workspace, object_storage=object_storage)
+
+    settings = dict(run_plan_settings or {})
+    file_path = str(settings.get("workspace_cv_asset_path") or "").strip()
+    object_key = str(settings.get("workspace_cv_asset_object_key") or "").strip()
+    if file_path or object_key:
+        if not _workspace_cv_asset_is_available(
+            file_path=file_path,
+            object_key=object_key,
+            object_storage=object_storage,
+        ):
+            return [
+                _field_error(
+                    "workspace_cv_asset_id",
+                    "workspace_cv_asset_missing_file",
+                    "The selected workspace CV is no longer available in durable storage.",
+                )
+            ]
+
+    workspace_cv_text = str(settings.get("workspace_cv_text") or "").strip()
+    if workspace_cv_text:
+        return []
+
+    return [
+        _field_error(
+            "workspace_cv_asset_id",
+            "workspace_cv_snapshot_missing",
+            "Builder-created tailored-document runs require a resolved workspace CV snapshot. Re-save the workspace and start a new run.",
+        )
+    ]
+
+
+def _builder_workspace_validation_report(
+    *,
+    flow_id: str,
+    source_ids: list[str],
+    module_ids: list[str],
+    settings: Mapping[str, Any],
+) -> dict[str, Any]:
+    catalog = workspace_builder_catalog().to_dict()
+    catalog_sources = {str(item["id"]): set(item.get("compatible_flows") or []) for item in catalog["sources"]}
+    catalog_modules = {str(item["id"]): set(item.get("compatible_flows") or []) for item in catalog["modules"]}
+    field_errors: list[dict[str, str]] = []
+    valid_source_ids: list[str] = []
+
+    if flow_id not in BUILDER_WORKSPACE_FLOW_IDS:
+        field_errors.append(
+            _field_error(
+                "flow_id",
+                "unsupported",
+                "flow_id must be one of: tailored_documents, reusable_packages.",
+            )
+        )
+
+    if not source_ids:
+        field_errors.append(
+            _field_error(
+                "source_ids",
+                "required",
+                "Choose at least one source for this workspace.",
+            )
+        )
+    else:
+        for source_id in source_ids:
+            compatible_flows = catalog_sources.get(source_id)
+            if compatible_flows is None:
+                field_errors.append(
+                    _field_error(
+                        "source_ids",
+                        "unknown_source",
+                        f"Unknown source_id '{source_id}'.",
+                        source_id=source_id,
+                    )
+                )
+                continue
+            if flow_id in compatible_flows:
+                valid_source_ids.append(source_id)
+                continue
+            field_errors.append(
+                _field_error(
+                    "source_ids",
+                    "incompatible_source",
+                    f"Source '{source_id}' is not compatible with flow '{flow_id}'.",
+                    source_id=source_id,
+                )
+            )
+
+    if not module_ids:
+        field_errors.append(
+            _field_error(
+                "module_ids",
+                "required",
+                "Enable at least one automation module for this workspace.",
+            )
+        )
+    else:
+        for module_id in module_ids:
+            compatible_flows = catalog_modules.get(module_id)
+            if compatible_flows is None:
+                field_errors.append(
+                    _field_error(
+                        "module_ids",
+                        "unknown_module",
+                        f"Unknown module_id '{module_id}'.",
+                    )
+                )
+            elif flow_id not in compatible_flows:
+                field_errors.append(
+                    _field_error(
+                        "module_ids",
+                        "incompatible_module",
+                        f"Module '{module_id}' is not compatible with flow '{flow_id}'.",
+                    )
+                )
+
+    if flow_id == "tailored_documents":
+        required_modules = {
+            "screening_filter": "Enable the screening_filter module for tailored-document workspaces.",
+            "tailored_document_generation": (
+                "Enable the tailored_document_generation module for tailored-document workspaces."
+            ),
+        }
+        for module_id, message in required_modules.items():
+            if module_id not in module_ids:
+                field_errors.append(
+                    _field_error(
+                        "module_ids",
+                        "required_module",
+                        message,
+                    )
+                )
+    elif flow_id == "reusable_packages":
+        if "application_packaging" in module_ids and "reusable_profile_builder" not in module_ids:
+            field_errors.append(
+                _field_error(
+                    "module_ids",
+                    "module_dependency",
+                    "application_packaging requires the reusable_profile_builder module.",
+                )
+            )
+        if "reusable_profile_builder" in module_ids and "role_classification" not in module_ids:
+            field_errors.append(
+                _field_error(
+                    "module_ids",
+                    "module_dependency",
+                    "reusable_profile_builder requires the role_classification module.",
+                )
+            )
+
+    validation_payload = {
+        "flow_id": flow_id,
+        "source_ids": valid_source_ids,
+        "settings": dict(settings or {}),
+    }
+    source_report = validate_workspace_source_configuration(validation_payload)
+    merged_field_errors = _dedupe_field_errors([*field_errors, *(source_report.get("field_errors") or [])])
+    return {
+        "flow_id": flow_id,
+        "source_ids": list(source_ids),
+        "module_ids": list(module_ids),
+        "field_errors": merged_field_errors,
+        "source_results": list(source_report.get("source_results") or []),
+        "derived_runtime_defaults": dict(source_report.get("derived_runtime_defaults") or {}),
+        "valid": not merged_field_errors,
+    }
+
+
+def _raise_builder_validation_error(
+    *,
+    error_code: str,
+    message: str,
+    phase: str,
+    workspace_id: str,
+    report: Mapping[str, Any],
+) -> None:
+    raise BackendValidationError(
+        error_code,
+        message,
+        details={
+            "phase": phase,
+            "workspace_id": workspace_id,
+            "flow_id": str(report.get("flow_id") or ""),
+            "source_ids": [str(item) for item in report.get("source_ids") or [] if str(item).strip()],
+            "module_ids": [str(item) for item in report.get("module_ids") or [] if str(item).strip()],
+            "field_errors": list(report.get("field_errors") or []),
+            "source_results": list(report.get("source_results") or []),
+        },
+    )
+
+
+def _validate_builder_workspace_payload(payload: Mapping[str, Any], *, workspace_id: str = "") -> None:
+    flow_id = str(payload.get("flow_id") or "tailored_documents").strip()
+    source_ids = [str(item).strip() for item in payload.get("source_ids") or [] if str(item).strip()]
+    module_ids = [str(item).strip() for item in payload.get("module_ids") or [] if str(item).strip()]
+    report = _builder_workspace_validation_report(
+        flow_id=flow_id,
+        source_ids=source_ids,
+        module_ids=module_ids,
+        settings=dict(payload.get("settings") or {}),
+    )
+    settings = dict(payload.get("settings") or {})
+    if (
+        flow_id == "tailored_documents"
+        and not str(settings.get("workspace_cv_asset_id") or payload.get("workspace_cv_asset_id") or "").strip()
+    ):
+        report["field_errors"] = _dedupe_field_errors(
+            [
+                *(report.get("field_errors") or []),
+                _field_error(
+                    "workspace_cv_asset_id",
+                    "required",
+                    "Select a workspace CV before saving or running this workspace.",
+                ),
+            ]
+        )
+        report["valid"] = False
+    if report["valid"]:
+        return
+    _raise_builder_validation_error(
+        error_code="workspace_validation_failed",
+        message="Workspace validation failed.",
+        phase="save",
+        workspace_id=workspace_id,
+        report=report,
+    )
+
+
+def _validate_builder_workspace_definition(
+    workspace: WorkspaceDefinition,
+    *,
+    phase: str,
+    error_code: str,
+    run_plan_settings: Mapping[str, Any] | None = None,
+    object_storage: Any = None,
+) -> None:
+    if not _is_builder_created_workspace(workspace):
+        return
+
+    report = _builder_workspace_validation_report(
+        flow_id=_builder_workspace_flow_id(workspace),
+        source_ids=_builder_workspace_source_ids(workspace),
+        module_ids=_builder_workspace_module_ids(workspace),
+        settings=dict(workspace.settings or {}),
+    )
+    configured_source_ids = _builder_workspace_connector_source_ids(workspace)
+    if sorted(configured_source_ids) != sorted(_builder_workspace_source_ids(workspace)):
+        report["field_errors"] = _dedupe_field_errors(
+            [
+                *(report.get("field_errors") or []),
+                _field_error(
+                    "source_ids",
+                    "source_configuration_mismatch",
+                    "Saved source_ids do not match the workspace connector configuration.",
+                ),
+            ]
+        )
+    if sorted(_builder_workspace_enabled_module_ids(workspace)) != sorted(_builder_workspace_module_ids(workspace)):
+        report["field_errors"] = _dedupe_field_errors(
+            [
+                *(report.get("field_errors") or []),
+                _field_error(
+                    "module_ids",
+                    "module_configuration_mismatch",
+                    "Saved module_ids do not match the enabled workspace automation modules.",
+                ),
+            ]
+        )
+    if phase == "run_preflight" and run_plan_settings is not None:
+        cv_field_errors = _builder_workspace_run_preflight_field_errors(
+            workspace,
+            run_plan_settings=run_plan_settings,
+            object_storage=object_storage,
+        )
+    else:
+        cv_field_errors = _builder_workspace_cv_asset_field_errors(workspace, object_storage=object_storage)
+    merged_field_errors = _dedupe_field_errors([*(report.get("field_errors") or []), *cv_field_errors])
+    report["field_errors"] = merged_field_errors
+    report["valid"] = not merged_field_errors
+    if report["valid"]:
+        return
+    _raise_builder_validation_error(
+        error_code=error_code,
+        message="Workspace validation failed." if phase == "save" else "Run preflight failed.",
+        phase=phase,
+        workspace_id=workspace.id,
+        report=report,
+    )
+
+
+def _load_scrapeops_admin_policy(repositories: BackendRepositories) -> dict[str, Any]:
+    config_store = getattr(repositories, "config_store", None)
+    if config_store is None or not hasattr(config_store, "get_value"):
+        return default_scrapeops_admin_policy()
+    payload = config_store.get_value(SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY, default_scrapeops_admin_policy())
+    return normalize_scrapeops_admin_policy(payload if isinstance(payload, Mapping) else {})
+
+
+def _save_scrapeops_admin_policy(repositories: BackendRepositories, payload: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = normalize_scrapeops_admin_policy(payload)
+    normalized["updated_at"] = utc_now_iso()
+    config_store = getattr(repositories, "config_store", None)
+    if config_store is None or not hasattr(config_store, "set_value"):
+        raise ValueError("The configured repository does not support app configuration persistence.")
+    config_store.set_value(SCRAPEOPS_ADMIN_POLICY_CONFIG_KEY, normalized)
+    return normalized
+
+
+def _effective_scrapeops_policy_limits(
+    repositories: BackendRepositories,
+    *,
+    user_id: str,
+    plan_id: str,
+    quota_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, int | str]:
+    admin_policy = _load_scrapeops_admin_policy(repositories)
+    limits = plan_policy_limits(
+        admin_policy,
+        plan_id=plan_id,
+        user_id=user_id,
+    )
+    if isinstance(quota_overrides, Mapping):
+        for field_name in ("runner_credits_per_month", "company_sites_per_run", "runner_credits_per_run"):
+            override_value = quota_overrides.get(field_name)
+            if override_value in {None, ""}:
+                continue
+            try:
+                limits[field_name] = int(override_value)
+            except (TypeError, ValueError):
+                continue
+    return limits
+
+
+def _plan_limit_for_user(
+    repositories: BackendRepositories,
+    *,
+    user_id: str,
+    plan_id: str,
+    limit_type: str,
+    quota_overrides: Mapping[str, Any] | None = None,
+) -> int:
+    limits = _effective_scrapeops_policy_limits(
+        repositories,
+        user_id=user_id,
+        plan_id=plan_id,
+        quota_overrides=quota_overrides,
+    )
+    if limit_type in limits:
+        return int(limits.get(limit_type) or 0)
+    return int(get_limit(plan_id, limit_type))
+
+
+def _company_site_discovery_paths_for_source_id(source_id: str) -> tuple[Path, ...]:
+    if str(source_id or "").strip() == BUILDER_CONNECTOR_SOURCE_IDS.get("academic_career_sites"):
+        return tuple(ACADEMIC_CAREER_SITE_FILES)
+    return tuple(REGULAR_COMPANY_SITE_FILES)
+
+
+def _merge_company_site_entries(*raw_sources: Any) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen_urls = set()
+    for raw_source in raw_sources:
+        for entry in parse_company_site_entries(raw_source, limit=None):
+            url = str(entry.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            merged.append(
+                {
+                    "company_name": str(entry.get("company_name") or "").strip(),
+                    "url": url,
+                }
+            )
+            seen_urls.add(url)
+    return merged
+
+
+def _current_company_site_policy_snapshot(
+    repositories: Any,
+    *,
+    user_id: str,
+    plan_id: str,
+    quota_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    effective_limits = _effective_scrapeops_policy_limits(
+        repositories,
+        user_id=user_id,
+        plan_id=plan_id,
+        quota_overrides=quota_overrides,
+    )
+    normalized_plan_id = normalize_plan_id(effective_limits.get("plan_id") or plan_id)
+    effective_quota_overrides = {
+        **dict(quota_overrides or {}),
+        "runner_credits_per_month": int(effective_limits.get("runner_credits_per_month") or 0),
+    }
+    runner_credit_usage = get_usage_snapshot(
+        repositories,
+        user_id,
+        "runner_credits_per_month",
+        normalized_plan_id,
+        quota_overrides=effective_quota_overrides,
+    )
+    monthly_remaining = int(runner_credit_usage.get("remaining") or 0)
+    per_run_budget = _plan_limit_for_user(
+        repositories,
+        user_id=user_id,
+        plan_id=normalized_plan_id,
+        limit_type="runner_credits_per_run",
+        quota_overrides=effective_quota_overrides,
+    )
+    if per_run_budget == -1:
+        effective_run_budget = monthly_remaining if monthly_remaining != -1 else -1
+    elif monthly_remaining == -1:
+        effective_run_budget = per_run_budget
+    else:
+        effective_run_budget = max(0, min(per_run_budget, monthly_remaining))
+    return {
+        "policy_version": SCRAPEOPS_POLICY_VERSION,
+        "plan_id": normalized_plan_id,
+        "runner_credits_per_month": runner_credit_usage,
+        "company_sites_per_run": _plan_limit_for_user(
+            repositories,
+            user_id=user_id,
+            plan_id=normalized_plan_id,
+            limit_type="company_sites_per_run",
+            quota_overrides=effective_quota_overrides,
+        ),
+        "runner_credits_per_run": per_run_budget,
+        "effective_runner_credits_per_run": effective_run_budget,
+    }
+
+
+def _scrapeops_account_state() -> dict[str, Any]:
+    api_key = str(os.getenv("SCRAPEOPS_API_KEY") or "").strip()
+    if not api_key:
+        return {
+            "available": False,
+            "status": "missing_api_key",
+            "summary": "SCRAPEOPS_API_KEY is not configured.",
+            "usage": {},
+        }
+    try:
+        usage_payload = fetch_account_usage(api_key, timeout_seconds=6)
+    except Exception as exc:
+        return {
+            "available": False,
+            "status": "unavailable",
+            "summary": str(exc),
+            "usage": {},
+        }
+    usage_values = usage_payload.get("results") if isinstance(usage_payload.get("results"), Mapping) else usage_payload
+    used = int(
+        usage_values.get("API Credits Used")
+        or usage_values.get("credits_used")
+        or usage_values.get("used_api_credits")
+        or 0
+    )
+    limit = int(
+        usage_values.get("API Credit Limit")
+        or usage_values.get("credit_limit")
+        or usage_values.get("plan_api_credits")
+        or 0
+    )
+    remaining = max(0, limit - used) if limit > 0 else 0
+    status = "healthy" if remaining > 0 else "out_of_credits"
+    summary = "ScrapeOps account is healthy." if remaining > 0 else "ScrapeOps account is out of credits."
+    return {
+        "available": True,
+        "status": status,
+        "summary": summary,
+        "usage": {
+            "used": used,
+            "limit": limit,
+            "remaining": remaining,
+        },
+    }
+
+
+@dataclass(slots=True)
+class BackendApplication:
+    repositories: BackendRepositories
+    registries: BackendRegistriesProtocol
+    stage_engine: StageEngineProtocol
+    object_storage: Any
+    _workspace_catalog_service: WorkspaceCatalogService = field(init=False, repr=False)
+    _identity_access_service: IdentityAccessService = field(init=False, repr=False)
+    _assisted_apply_connection_service: AssistedApplyConnectionService = field(init=False, repr=False)
+    _assisted_apply_package_service: ApplicationPackageService = field(init=False, repr=False)
+    _assisted_apply_preparation_service: AssistedApplyPreparationService = field(init=False, repr=False)
+    _tracker_application_service: TrackerApplicationService = field(init=False, repr=False)
+    _run_lifecycle_service: RunLifecycleService = field(init=False, repr=False)
+    _acquisition_scheduler: PhaseAAcquisitionScheduler = field(init=False, repr=False)
+    _admin_job_import_service: AdminJobImportService = field(init=False, repr=False)
+    _production_rollout_service: ProductionRolloutService = field(init=False, repr=False)
+    _personalized_jobs_service: PersonalizedJobsService = field(init=False, repr=False)
+    _company_enrichment_service: CompanyEnrichmentService = field(init=False, repr=False)
+    _enrichment_operation_service: EnrichmentOperationService | None = field(init=False, default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        self._workspace_catalog_service = WorkspaceCatalogService(
+            repositories=self.repositories,
+            registries=self.registries,
+            validate_workspace=self._validate_workspace_definition,
+        )
+        self._identity_access_service = IdentityAccessService(repositories=self.repositories)
+        self._assisted_apply_connection_service = AssistedApplyConnectionService(repositories=self.repositories)
+        self._assisted_apply_package_service = ApplicationPackageService(
+            repositories=self.repositories,
+            object_storage=self.object_storage,
+        )
+        self._assisted_apply_preparation_service = AssistedApplyPreparationService(
+            repositories=self.repositories,
+            package_service=self._assisted_apply_package_service,
+        )
+        self._tracker_application_service = TrackerApplicationService(
+            repositories=self.repositories,
+            build_relevant_people_discovery=lambda **kwargs: build_relevant_people_discovery(**kwargs),
+        )
+        self._run_lifecycle_service = RunLifecycleService(
+            repositories=self.repositories,
+            registries=self.registries,
+            stage_engine=self.stage_engine,
+            validate_workspace=self._validate_workspace_definition,
+            validation_error_type=BackendValidationError,
+            resolve_runtime_value=self.resolve_runtime_value,
+            review_is_actionable_tracker_item=self._tracker_application_service.review_is_actionable_tracker_item,
+            find_duplicate_user_tracker_posting=self._tracker_application_service.find_duplicate_user_tracker_posting,
+            auto_approve_generated_job_reviews=self._auto_approve_generated_job_reviews,
+            enqueue_due_scheduled_runs=self.enqueue_due_scheduled_runs,
+            object_storage=self.object_storage,
+        )
+        self._acquisition_scheduler = PhaseAAcquisitionScheduler(
+            repositories=self.repositories,
+            event_emitter=self.emit_event,
+            lease_owner="system-acquisition",
+        )
+        self._admin_job_import_service = AdminJobImportService(
+            repositories=self.repositories,
+            scheduler=self._acquisition_scheduler,
+        )
+        self._production_rollout_service = ProductionRolloutService(
+            repositories=self.repositories,
+            event_emitter=self.emit_event,
+        )
+        self._personalized_jobs_service = PersonalizedJobsService(
+            repositories=self.repositories,
+            object_storage=self.object_storage,
+        )
+        self._company_enrichment_service = CompanyEnrichmentService(
+            repositories=self.repositories,
+            object_storage=self.object_storage,
+            profile_writer=self._personalized_jobs_service.upsert_company_profile,
+        )
+        acquisition_store = getattr(self.repositories, "acquisition_store", None)
+        if acquisition_store is not None and getattr(acquisition_store, "db_path", None):
+            self._enrichment_operation_service = EnrichmentOperationService(acquisition_store.db_path)
+
+    def run_due_acquisition(self) -> dict[str, Any] | None:
+        """Worker-only entry point for the disabled-by-default Phase A scheduler."""
+
+        return self._acquisition_scheduler.run_due_cycle()
+
+    def list_admin_job_import_sources(self) -> list[dict[str, Any]]:
+        return self._admin_job_import_service.list_sources()
+
+    def plan_admin_job_import(self, *, source_ids: list[str], scope: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        result = self._admin_job_import_service.plan_import(source_ids=source_ids, scope_payload=scope)
+        self._emit_acquisition_audit(
+            "import_planned",
+            entity_type="import",
+            entity_id=str(result.get("import_id") or result.get("plan_id") or ""),
+            operation_id=str(result.get("import_id") or result.get("plan_id") or ""),
+            payload={"source_count": len(source_ids), "scope": dict(scope or {})},
+        )
+        return result
+
+    def start_admin_job_import(
+        self,
+        *,
+        requested_by: str,
+        idempotency_key: str,
+        source_ids: list[str],
+        scope: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = self._admin_job_import_service.start_import(
+            requested_by=requested_by,
+            idempotency_key=idempotency_key,
+            source_ids=source_ids,
+            scope_payload=scope,
+        )
+        self._emit_acquisition_audit(
+            "import_queued",
+            actor=requested_by,
+            entity_type="import",
+            entity_id=str(result.get("import_id") or ""),
+            operation_id=str(result.get("import_id") or idempotency_key),
+            payload={"source_count": len(source_ids), "scope": dict(scope or {})},
+        )
+        return result
+
+    def process_next_admin_job_import(
+        self,
+        *,
+        worker_id: str = "runr-worker",
+        worker_role: str = "acquisition",
+    ) -> dict[str, Any] | None:
+        result = self._admin_job_import_service.process_next_import(worker_id=worker_id, worker_role=worker_role)
+        if result:
+            self._emit_acquisition_audit(
+                "import_processed",
+                actor=worker_id,
+                entity_type="import",
+                entity_id=str(result.get("import_id") or ""),
+                operation_id=str(result.get("import_id") or ""),
+                payload={"status": result.get("status")},
+            )
+        return result
+
+    def get_admin_job_import_overview(self) -> dict[str, Any]:
+        return self._admin_job_import_service.overview()
+
+    def get_admin_acquisition_analytics(self, **kwargs: Any) -> dict[str, Any]:
+        """Return the bounded, read-only acquisition analytics contract."""
+
+        store = self.repositories.acquisition_store
+        if store is None:
+            return {
+                "schema_version": "acquisition_analytics_v1",
+                "read_only": True,
+                "unavailable": True,
+                "reason": "Acquisition analytics require sqlite/Turso acquisition storage.",
+            }
+        window = parse_analytics_window(**kwargs)
+        return build_acquisition_analytics(store.db_path, window=window)
+
+    def list_admin_job_imports(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_job_imports(limit=limit, offset=offset) if store is not None else []
+
+    def get_admin_job_import(self, import_id: str) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.get_job_import(import_id) if store is not None else None
+
+    def list_admin_review_jobs(self, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.list_review_jobs(**kwargs) if store is not None else {"jobs": [], "total": 0}
+
+    def decide_admin_review_job(self, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Admin review requires sqlite/Turso acquisition storage.")
+        result = store.record_job_review_decision(**kwargs)
+        self._emit_acquisition_audit(
+            "review_decision",
+            actor=str(kwargs.get("actor_user_id") or ""),
+            entity_type="job",
+            entity_id=str(kwargs.get("canonical_job_id") or ""),
+            operation_id=str(kwargs.get("import_id") or ""),
+            payload={"decision": kwargs.get("decision"), "reason_code": kwargs.get("reason_code")},
+        )
+        return result
+
+    def undo_admin_review_decision(self, **kwargs: Any) -> None:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Admin review requires sqlite/Turso acquisition storage.")
+        store.undo_job_review_decision(**kwargs)
+        self._emit_acquisition_audit(
+            "review_decision_undone",
+            actor=str(kwargs.get("actor_user_id") or ""),
+            entity_type="job",
+            entity_id=str(kwargs.get("canonical_job_id") or ""),
+            operation_id=str(kwargs.get("import_id") or ""),
+            payload={},
+        )
+
+    def preview_admin_job_import(self, import_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication preview requires sqlite/Turso acquisition storage.")
+        result = store.create_job_import_preview(import_id, actor_user_id=actor_user_id)
+        self._emit_acquisition_audit(
+            "publication_preview_created",
+            actor=actor_user_id,
+            entity_type="import",
+            entity_id=import_id,
+            operation_id=str(result.get("publication_id") or import_id),
+            payload={"publication_id": result.get("publication_id")},
+        )
+        return result
+
+    def publish_admin_job_import(self, publication_id: str, *, actor_user_id: str = "") -> str:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication requires sqlite/Turso acquisition storage.")
+        result = store.publish_job_import_preview(publication_id, actor_user_id=actor_user_id)
+        self._emit_acquisition_audit(
+            "publication_published",
+            actor=actor_user_id,
+            entity_type="publication",
+            entity_id=publication_id,
+            operation_id=publication_id,
+            payload={},
+        )
+        return result
+
+    def undo_admin_job_publication(self, *, actor_user_id: str = "") -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication undo requires sqlite/Turso acquisition storage.")
+        result = store.undo_last_job_publication(actor_user_id=actor_user_id)
+        self._emit_acquisition_audit(
+            "publication_rollback",
+            actor=actor_user_id,
+            entity_type="publication",
+            entity_id=str(result.get("publication_id") or ""),
+            operation_id=str(result.get("publication_id") or ""),
+            payload={"status": result.get("status")},
+        )
+        return result
+
+    def restore_admin_publication(
+        self,
+        *,
+        target_publication_id: str,
+        expected_head_publication_id: str,
+        actor_user_id: str,
+        confirmation: str,
+    ) -> dict[str, Any]:
+        """Restore a prior publication through the repository's guarded contract."""
+
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Publication restore requires sqlite/Turso acquisition storage.")
+        from backend.acquisition.publication import RestorePublicationConfirmation
+
+        request = RestorePublicationConfirmation.from_values(
+            target_publication_id=target_publication_id,
+            expected_head_publication_id=expected_head_publication_id,
+            actor_user_id=actor_user_id,
+            confirmation=confirmation,
+        )
+        publication_id = store.restore_publication(request)
+        self._emit_acquisition_audit(
+            "publication_restored",
+            actor=actor_user_id,
+            entity_type="publication",
+            entity_id=str(publication_id or ""),
+            operation_id=str(publication_id or ""),
+            payload={"target_publication_id": target_publication_id},
+        )
+        return {"publication_id": publication_id, "status": "restored"}
+
+    def get_admin_job_import_preview(self, publication_id: str = "") -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.get_job_import_preview(publication_id) if store is not None else None
+
+    def list_admin_publication_audit_events(self, *, publication_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return (
+            store.list_publication_audit_events(publication_id=publication_id, limit=limit)
+            if store is not None
+            else []
+        )
+
+    def list_admin_job_import_history(self, *, import_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_job_import_audit_events(import_id=import_id, limit=limit) if store is not None else []
+
+    def list_admin_job_inspections(
+        self,
+        *,
+        search: str = "",
+        function: str = "",
+        subfunction: str = "",
+        employment_type: str = "",
+        workplace: str = "",
+        location: str = "",
+        language: str = "",
+        seniority: str = "",
+        source: str = "",
+        freshness: str = "",
+        completeness_state: str = "",
+        warning_type: str = "",
+        duplicate_state: str = "",
+        application_method: str = "",
+        publication_state: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_job_inspections(
+            search=search,
+            function=function,
+            subfunction=subfunction,
+            employment_type=employment_type,
+            workplace=workplace,
+            location=location,
+            language=language,
+            seniority=seniority,
+            source=source,
+            freshness=freshness,
+            completeness_state=completeness_state,
+            warning_type=warning_type,
+            duplicate_state=duplicate_state,
+            application_method=application_method,
+            publication_state=publication_state,
+            limit=limit,
+            offset=offset,
+        ) if store is not None else {
+            "jobs": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "summary": {
+                "catalog_records": 0,
+                "apply_url_present": 0,
+                "apply_url_missing_or_invalid": 0,
+                "company_profiles_incomplete": 0,
+            },
+        }
+
+    def get_admin_job_inspection(
+        self,
+        canonical_job_id: str,
+        *,
+        include_history: bool = False,
+        history_limit: int | None = None,
+    ) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return (
+            store.get_admin_job_inspection(
+                canonical_job_id,
+                include_history=include_history,
+                history_limit=history_limit,
+            )
+            if store is not None
+            else None
+        )
+
+    def list_admin_duplicate_clusters(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_duplicate_clusters(limit=limit) if store is not None else []
+
+    def list_admin_companies(
+        self,
+        *,
+        limit: int = 100,
+        search: str = "",
+        entity_kind: str = "",
+        profile_status: str = "",
+        url_type: str = "",
+        url_lifecycle: str = "",
+    ) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return (
+            store.list_admin_companies(
+                limit=limit,
+                search=search,
+                entity_kind=entity_kind,
+                profile_status=profile_status,
+                url_type=url_type,
+                url_lifecycle=url_lifecycle,
+            )
+            if store is not None
+            else []
+        )
+
+    def get_admin_company_detail(self, company_id: str) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.get_admin_company_detail(company_id) if store is not None else None
+
+    def list_admin_company_urls(self, company_id: str, **kwargs: Any) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        return store.list_admin_company_urls(company_id, **kwargs) if store is not None else None
+
+    def get_admin_company_url_reconciliation(self, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.get_admin_company_url_reconciliation(**kwargs) if store is not None else {
+            "schema_version": "company_url_reconciliation_v1",
+            "read_only": True,
+            "counts": {key: 0 for key in ("persisted", "deduplicated", "unlinked", "never_imported", "invalid", "intentionally_ignored")},
+            "persisted": [], "deduplicated": [], "unlinked": [], "never_imported": [], "invalid": [], "intentionally_ignored": [],
+        }
+
+    def record_admin_company_link_candidate(self, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Company linking requires sqlite/Turso acquisition storage.")
+        return store.record_admin_company_link_candidate(**kwargs)
+
+    def run_admin_company_enrichment(
+        self,
+        *,
+        max_companies: int = 1,
+        concurrency: int = 1,
+        request_budget: int = 5,
+        cycle_key: str = "",
+    ) -> dict[str, Any]:
+        """Reject the former implicit batch boundary.
+
+        Company enrichment must be represented by an explicit company-scoped
+        plan and durable run. Keeping this method as a hard failure prevents
+        the legacy admin route from broadening a company operation to a batch.
+        """
+
+        del max_companies, concurrency, request_budget, cycle_key
+        raise ValueError(
+            "Company enrichment requires an explicit company-scoped enrichment plan; batch execution is disabled."
+        )
+
+    def _require_enrichment_operations(self) -> EnrichmentOperationService:
+        if self._enrichment_operation_service is None:
+            raise ValueError("Enrichment operations require sqlite/Turso acquisition storage.")
+        return self._enrichment_operation_service
+
+    def plan_admin_enrichment(self, **kwargs: Any) -> dict[str, Any]:
+        result = self._require_enrichment_operations().create_plan(**kwargs)
+        self._emit_acquisition_audit(
+            "enrichment_plan_created",
+            actor=str(kwargs.get("requested_by") or ""),
+            entity_type="enrichment_plan",
+            entity_id=str(result.get("plan_id") or ""),
+            operation_id=str(result.get("plan_id") or ""),
+            payload={"scope_type": result.get("scope_type"), "scope_id": result.get("scope_id")},
+        )
+        return result
+
+    def get_admin_enrichment_plan(self, plan_id: str) -> dict[str, Any] | None:
+        return self._require_enrichment_operations().get_plan(plan_id)
+
+    def list_admin_enrichment_plans(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_plans(**kwargs)
+
+    def start_admin_enrichment_run(self, **kwargs: Any) -> dict[str, Any]:
+        result = self._require_enrichment_operations().start_run(**kwargs)
+        self._emit_acquisition_audit(
+            "enrichment_run_started",
+            actor=str(kwargs.get("requested_by") or ""),
+            entity_type="enrichment_run",
+            entity_id=str(result.get("run_id") or ""),
+            operation_id=str(result.get("run_id") or ""),
+            payload={"plan_id": result.get("plan_id"), "status": result.get("status")},
+        )
+        return result
+
+    def get_admin_enrichment_run(self, run_id: str, *, include_items: bool = False) -> dict[str, Any] | None:
+        return self._require_enrichment_operations().get_run(run_id, include_items=include_items)
+
+    def list_admin_enrichment_runs(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_runs(**kwargs)
+
+    def process_admin_enrichment_run(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
+        result = self._require_enrichment_operations().process_run(run_id, **kwargs)
+        self._emit_acquisition_audit(
+            "enrichment_run_processed",
+            actor=str(kwargs.get("worker_id") or ""),
+            entity_type="enrichment_run",
+            entity_id=run_id,
+            operation_id=run_id,
+            payload={"status": result.get("status"), "report_only": True},
+        )
+        return result
+
+    def process_next_admin_enrichment_run(self, **kwargs: Any) -> dict[str, Any] | None:
+        result = self._require_enrichment_operations().process_next_run(**kwargs)
+        if result:
+            self._emit_acquisition_audit(
+                "enrichment_run_processed",
+                actor=str(kwargs.get("worker_id") or ""),
+                entity_type="enrichment_run",
+                entity_id=str(result.get("run_id") or ""),
+                operation_id=str(result.get("run_id") or ""),
+                payload={"status": result.get("status"), "report_only": True},
+            )
+        return result
+
+    def cancel_admin_enrichment_run(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
+        result = self._require_enrichment_operations().cancel_run(run_id, **kwargs)
+        self._emit_acquisition_audit(
+            "enrichment_run_cancelled",
+            actor=str(kwargs.get("actor_id") or ""),
+            entity_type="enrichment_run",
+            entity_id=run_id,
+            operation_id=run_id,
+            payload={"status": result.get("status")},
+        )
+        return result
+
+    def pause_admin_enrichment_run(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
+        result = self._require_enrichment_operations().pause_run(run_id, **kwargs)
+        self._emit_acquisition_audit(
+            "enrichment_run_paused",
+            actor=str(kwargs.get("actor_id") or ""),
+            entity_type="enrichment_run",
+            entity_id=run_id,
+            operation_id=run_id,
+            payload={"status": result.get("status")},
+        )
+        return result
+
+    def get_admin_enrichment_result(self, run_id: str) -> dict[str, Any]:
+        return self._require_enrichment_operations().get_result(run_id)
+
+    def list_admin_enrichment_proposals(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_proposals(**kwargs)
+
+    def get_admin_enrichment_proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        return self._require_enrichment_operations().get_proposal(proposal_id)
+
+    def review_admin_enrichment_proposal(self, proposal_id: str, **kwargs: Any) -> dict[str, Any]:
+        result = self._require_enrichment_operations().review_proposal(proposal_id, **kwargs)
+        self._emit_acquisition_audit(
+            "enrichment_proposal_reviewed",
+            actor=str(kwargs.get("reviewer_id") or ""),
+            entity_type="enrichment_proposal",
+            entity_id=proposal_id,
+            operation_id=str(result.get("run_id") or proposal_id),
+            payload={"action": kwargs.get("action"), "report_only": True},
+        )
+        return result
+
+    def list_admin_enrichment_audit(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_audit_events(**kwargs)
+
+    def get_admin_enrichment_capabilities(self, **kwargs: Any) -> dict[str, Any]:
+        return self._require_enrichment_operations().capabilities(**kwargs)
+
+    def list_admin_enrichment_budgets(self) -> list[dict[str, Any]]:
+        return self._require_enrichment_operations().list_provider_budgets()
+
+    def configure_admin_enrichment_budget(self, provider_id: str, **kwargs: Any) -> dict[str, Any]:
+        result = self._require_enrichment_operations().configure_provider_budget(provider_id, **kwargs)
+        self._emit_acquisition_audit(
+            "enrichment_budget_configured",
+            actor=str(kwargs.get("actor_id") or ""),
+            entity_type="enrichment_provider",
+            entity_id=provider_id,
+            operation_id=provider_id,
+            payload={"enabled": result.get("enabled"), "max_requests": result.get("max_requests")},
+        )
+        return result
+
+    def record_admin_duplicate_decision(self, cluster_id: str, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Duplicate decisions require sqlite/Turso acquisition storage.")
+        result = store.record_admin_duplicate_decision(cluster_id, **kwargs)
+        self._emit_acquisition_audit(
+            "duplicate_decision",
+            actor=str(kwargs.get("actor_user_id") or ""),
+            entity_type="duplicate_cluster",
+            entity_id=cluster_id,
+            operation_id=str(result.get("decision_id") or cluster_id),
+            payload={"decision": kwargs.get("decision"), "reason": kwargs.get("reason")},
+        )
+        return result
+
+    def undo_admin_duplicate_decision(self, cluster_id: str, **kwargs: Any) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Duplicate decisions require sqlite/Turso acquisition storage.")
+        result = store.undo_admin_duplicate_decision(cluster_id, **kwargs)
+        self._emit_acquisition_audit(
+            "duplicate_decision_undone",
+            actor=str(kwargs.get("actor_user_id") or ""),
+            entity_type="duplicate_cluster",
+            entity_id=cluster_id,
+            operation_id=str(result.get("decision_id") or cluster_id),
+            payload={"reason": kwargs.get("reason")},
+        )
+        return result
+
+    def list_admin_connector_capabilities(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_connector_capabilities(limit=limit) if store is not None else []
+
+    def record_admin_connector_capability_snapshots(self) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return []
+        from backend.connectors.ats_expansions import build_capability_snapshots
+
+        result = [store.record_connector_capability_snapshot(item) for item in build_capability_snapshots()]
+        self._emit_acquisition_audit(
+            "provider_capabilities_changed",
+            entity_type="provider_registry",
+            entity_id="acquisition_connectors",
+            operation_id=f"provider_snapshot:{utc_now_iso()}",
+            payload={"provider_count": len(result)},
+        )
+        return result
+
+    def get_admin_rules_coverage(self) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.get_admin_rules_coverage() if store is not None else {"rule_version": "unavailable", "report_only": True}
+
+    def list_admin_reprocessing_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        return store.list_admin_reprocessing_runs(limit=limit) if store is not None else []
+
+    def get_admin_publication_read_model(self) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        return store.get_admin_publication_read_model() if store is not None else {"automatic_promotion": False}
+
+    def get_admin_reprocessing_plan(self, *, scope: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Reprocessing requires sqlite/Turso acquisition storage.")
+        from backend.acquisition.reprocessing import build_reprocessing_plan
+
+        return build_reprocessing_plan(store.db_path, scope=scope)
+
+    def run_admin_reprocessing(
+        self,
+        *,
+        apply: bool = False,
+        batch_size: int = 100,
+        idempotency_key: str = "",
+        resume_id: str = "",
+        scope: Mapping[str, Any] | None = None,
+        allow_remote_additive_rollback: bool = False,
+    ) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Reprocessing requires sqlite/Turso acquisition storage.")
+        from backend.acquisition.reprocessing import run_reprocessing
+
+        result = run_reprocessing(
+            store.db_path,
+            apply=bool(apply),
+            batch_size=max(1, min(1000, int(batch_size))),
+            idempotency_key=str(idempotency_key or "").strip(),
+            resume_id=str(resume_id or "").strip(),
+            scope=dict(scope or {}),
+            allow_remote_additive_rollback=bool(allow_remote_additive_rollback),
+        )
+        self._emit_acquisition_audit(
+            "reprocessing_completed",
+            entity_type="reprocessing_run",
+            entity_id=str(result.get("run_id") or result.get("reprocessing_run_id") or ""),
+            operation_id=str(result.get("run_id") or result.get("reprocessing_run_id") or idempotency_key),
+            payload={"apply": bool(apply), "status": result.get("status")},
+        )
+        return result
+
+    def resolve_admin_job_apply_url(self, canonical_job_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Apply URL resolution requires sqlite/Turso acquisition storage.")
+        return store.resolve_admin_job_apply_url(canonical_job_id, actor_user_id=actor_user_id)
+
+    def run_due_company_enrichment(
+        self,
+        *,
+        max_companies: int = 25,
+        concurrency: int = 5,
+        request_budget: int = 25,
+        cycle_key: str = "",
+        force: bool = False,
+        force_all: bool = False,
+        provider: CompanyEnrichmentProvider | None = None,
+    ) -> dict[str, Any]:
+        """Worker-only bounded company enrichment; never called by catalog reads."""
+        environment_enabled = os.getenv("RUNR_COMPANY_ENRICHMENT_ENABLED")
+        enabled = (
+            environment_enabled
+            if environment_enabled not in (None, "")
+            else self.repositories.config_store.get_value("acquisition.phase_f.company_enrichment_enabled", "0")
+        )
+        if not force and str(enabled).strip().casefold() not in {"1", "true", "yes", "on", "enabled"}:
+            return {"status": "disabled", "reason": "phase_f_company_enrichment_disabled"}
+        environment_inventory_enabled = os.getenv("RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY")
+        inventory_enabled = (
+            environment_inventory_enabled
+            if environment_inventory_enabled not in (None, "")
+            else self.repositories.config_store.get_value("acquisition.phase_f.company_site_inventory_enabled", "0")
+        )
+        inventory_result: dict[str, Any] | None = None
+        if str(inventory_enabled).strip().casefold() in {"1", "true", "yes", "on", "enabled"}:
+            acquisition_store = self.repositories.acquisition_store
+            if acquisition_store is not None:
+                entries = load_discovered_company_site_entries(REGULAR_COMPANY_SITE_FILES)
+                inventory_result = acquisition_store.sync_company_site_inventory(
+                    entries,
+                    checked_in_path=str(REGULAR_COMPANY_SITE_FILES[0]),
+                    import_id=f"company-site-inventory:{datetime.now(timezone.utc).date().isoformat()}",
+                )
+        previous = self._company_enrichment_service.provider
+        if provider is not None:
+            self._company_enrichment_service.provider = provider
+        try:
+            result = self._company_enrichment_service.run_sync(
+                max_companies=max_companies,
+                concurrency=concurrency,
+                request_budget=request_budget,
+                cycle_key=cycle_key,
+                force=force,
+                force_all=force_all,
+            )
+            if inventory_result is not None:
+                result["inventory_sync"] = inventory_result
+            return result
+        finally:
+            self._company_enrichment_service.provider = previous
+
+    async def enrich_company_targets(
+        self,
+        *,
+        max_companies: int = 25,
+        concurrency: int = 5,
+        request_budget: int = 25,
+        cycle_key: str = "",
+        force: bool = False,
+        provider: CompanyEnrichmentProvider | None = None,
+    ) -> dict[str, Any]:
+        """Async worker entry point for bounded fixture/provider adapters."""
+        previous = self._company_enrichment_service.provider
+        if provider is not None:
+            self._company_enrichment_service.provider = provider
+        try:
+            return await self._company_enrichment_service.run(
+                max_companies=max_companies,
+                concurrency=concurrency,
+                request_budget=request_budget,
+                cycle_key=cycle_key,
+                force=force,
+            )
+        finally:
+            self._company_enrichment_service.provider = previous
+
+    def list_company_enrichment_attempts(self, *, company_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        store = self.repositories.personalized_jobs_store
+        if store is None:
+            return []
+        return store.list_company_enrichment_attempts(company_id=company_id, limit=limit)
+
+    def recover_acquisition_cycle(self) -> dict[str, Any] | None:
+        """Admin-only recovery entry point; no user/workspace run is created."""
+
+        self._emit_acquisition_audit(
+            "manual_recovery_requested",
+            actor="administrator",
+            entity_type="acquisition_cycle",
+            entity_id="",
+            operation_id=utc_now_iso(),
+            payload={"reason": "admin_recovery"},
+        )
+        return self._acquisition_scheduler.recover_cycle()
+
+    def decide_acquisition_request_recovery(
+        self,
+        request_id: str,
+        *,
+        decision: str,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Acquisition recovery requires sqlite storage support.")
+        return store.decide_uncertain_request(request_id, decision=decision, reason=reason)
+
+    def list_acquisition_cycles(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return []
+        return store.list_cycles(limit=limit, offset=offset)
+
+    def get_acquisition_cycle_report(self, cycle_id: str) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Acquisition reporting requires sqlite storage support.")
+        return store.get_cycle_report(cycle_id)
+
+    def get_acquisition_cycle_source_metrics(self, cycle_id: str) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        if store is None or not hasattr(store, "get_cycle_source_metrics"):
+            return []
+        return store.get_cycle_source_metrics(cycle_id)
+
+    def get_production_rollout_evidence(self, cycle_id: str) -> dict[str, Any]:
+        return self._production_rollout_service.evidence_report(cycle_id)
+
+    def get_latest_acquisition_report(self) -> dict[str, Any] | None:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return None
+        return store.get_latest_report()
+
+    def get_production_rollout_status(self) -> dict[str, Any]:
+        return self._production_rollout_service.status()
+
+    def configure_production_rollout(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        result = self._production_rollout_service.configure(payload)
+        self._emit_acquisition_audit(
+            "policy_changed",
+            entity_type="acquisition_policy",
+            entity_id="production_rollout",
+            operation_id=utc_now_iso(),
+            payload={"changed_fields": sorted(str(key) for key in payload.keys())},
+        )
+        return result
+
+    def advance_production_rollout(self, stage: str) -> dict[str, Any]:
+        result = self._production_rollout_service.advance(stage)
+        self._emit_acquisition_audit(
+            "policy_changed",
+            entity_type="acquisition_policy",
+            entity_id="production_rollout",
+            operation_id=utc_now_iso(),
+            payload={"stage": stage},
+        )
+        return result
+
+    def get_production_rollout_health(self) -> dict[str, Any]:
+        return self._production_rollout_service.status()["health"]
+
+    def get_public_acquisition_catalog(self, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return {"jobs": [], "total": 0, "publication": None, "freshness": "unpublished"}
+        return store.get_public_catalog(limit=limit, offset=offset)
+
+    def record_acquisition_audit_event(self, **kwargs: Any) -> dict[str, Any]:
+        store = getattr(self.repositories, "acquisition_audit_store", None)
+        if store is None:
+            raise ValueError("Acquisition audit storage requires sqlite/Turso storage.")
+        return store.append_event(**kwargs)
+
+    def _emit_acquisition_audit(self, event: str, **kwargs: Any) -> None:
+        """Best-effort audit emission; acquisition state changes remain primary."""
+
+        try:
+            self.record_acquisition_audit_event(event=event, **kwargs)
+        except Exception:
+            logging.getLogger("backend.acquisition.audit").exception(
+                "Failed to append acquisition audit event '%s'.", event
+            )
+
+    def query_acquisition_audit_events(self, **kwargs: Any) -> dict[str, Any]:
+        store = getattr(self.repositories, "acquisition_audit_store", None)
+        if store is None:
+            return {
+                "events": [],
+                "pagination": {
+                    "limit": kwargs.get("limit", 100),
+                    "offset": kwargs.get("offset", 0),
+                    "returned": 0,
+                    "total": 0,
+                    "has_more": False,
+                },
+            }
+        return store.query_events(**kwargs)
+
+    def get_acquisition_entity_timeline(self, entity_type: str, entity_id: str, **kwargs: Any) -> dict[str, Any]:
+        store = getattr(self.repositories, "acquisition_audit_store", None)
+        if store is None:
+            return {
+                "events": [],
+                "pagination": {
+                    "limit": kwargs.get("limit", 100),
+                    "offset": kwargs.get("offset", 0),
+                    "returned": 0,
+                    "total": 0,
+                    "has_more": False,
+                },
+            }
+        return store.entity_timeline(entity_type, entity_id, **kwargs)
+
+    # Phase C: all methods below read the already-published shared catalog and
+    # user-owned state. They deliberately do not call the acquisition scheduler.
+    def get_personalized_jobs(
+        self,
+        user_id: str,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        cursor: str = "",
+        limit: int = 25,
+        include_hidden: bool = False,
+        hidden_only: bool = False,
+        plan_id: str = DEFAULT_PLAN_ID,
+        card_view: bool = False,
+    ) -> dict[str, Any]:
+        return self._personalized_jobs_service.feed(
+            user_id,
+            filters=filters,
+            cursor=cursor,
+            limit=limit,
+            include_hidden=include_hidden,
+            hidden_only=hidden_only,
+            plan_id=plan_id,
+            card_view=card_view,
+        )
+
+    def get_personalized_preferences(self, user_id: str) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.get_preferences(user_id)
+
+    def save_personalized_preferences(
+        self,
+        user_id: str,
+        payload: Mapping[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        return self._personalized_jobs_service.upsert_preferences(
+            user_id,
+            payload,
+            expected_revision=expected_revision,
+        )
+
+    def get_personalized_saved_search(self, user_id: str) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.get_saved_search(user_id)
+
+    def save_personalized_saved_search(self, user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._personalized_jobs_service.upsert_saved_search(user_id, payload)
+
+    def get_personalized_job_detail(self, user_id: str, posting_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
+
+    def process_next_personalized_intelligence(
+        self,
+        *,
+        worker_role: str = "customer",
+        worker_id: str = "runr-worker",
+        lease_seconds: int = 300,
+        max_attempts: int = 3,
+    ) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.process_next_intelligence(
+            worker_role=worker_role,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+        )
+
+    def customer_tasks_async_enabled(self) -> bool:
+        from backend.application.customer_tasks import customer_tasks_async_enabled
+
+        return customer_tasks_async_enabled()
+
+    def enqueue_customer_task(
+        self,
+        *,
+        user_id: str,
+        task_type: str,
+        idempotency_key: str,
+        payload: Mapping[str, Any],
+        max_attempts: int = 3,
+    ) -> dict[str, Any]:
+        store = getattr(self.repositories, "personalized_jobs_store", None)
+        if store is None:
+            raise RuntimeError("customer_task_store_unavailable")
+        return store.enqueue_customer_task(
+            user_id=user_id,
+            task_type=task_type,
+            idempotency_key=idempotency_key,
+            payload=payload,
+            max_attempts=max_attempts,
+        )
+
+    def get_customer_task(self, task_id: str, *, user_id: str = "") -> dict[str, Any] | None:
+        store = getattr(self.repositories, "personalized_jobs_store", None)
+        if store is None:
+            return None
+        return store.get_customer_task(task_id, user_id=user_id)
+
+    def process_next_customer_task(
+        self,
+        *,
+        worker_role: str = "customer",
+        worker_id: str = "runr-worker",
+        lease_seconds: int = 300,
+        max_attempts: int = 3,
+    ) -> dict[str, Any] | None:
+        if str(worker_role or "").casefold() != "customer":
+            return None
+        store = getattr(self.repositories, "personalized_jobs_store", None)
+        if store is None:
+            return None
+        store.recover_stale_customer_tasks(max_attempts=max_attempts)
+        task = store.claim_next_customer_task(
+            worker_role=worker_role,
+            lease_owner=worker_id,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+        )
+        if task is None:
+            return None
+        from backend.application.customer_tasks import execute_customer_task
+
+        task_id = str(task.get("task_id") or "")
+        attempt_count = int(task.get("attempt_count") or 0) or None
+        try:
+            result = execute_customer_task(self, task)
+        except Exception as exc:
+            completed = store.complete_customer_task(
+                task_id,
+                state="failed",
+                error_code="customer_task_failed",
+                error_message=str(exc),
+                lease_owner=str(task.get("lease_owner") or worker_id),
+                lease_token=str(task.get("lease_token") or ""),
+                attempt_count=attempt_count,
+                retryable=True,
+            )
+            return {"task": completed, "result": completed.get("result") or {}}
+        completed = store.complete_customer_task(
+            task_id,
+            state="completed",
+            result=result,
+            lease_owner=str(task.get("lease_owner") or worker_id),
+            lease_token=str(task.get("lease_token") or ""),
+            attempt_count=attempt_count,
+        )
+        return {"task": completed, "result": completed.get("result") or {}}
+
+    def enqueue_personalized_job_intelligence(self, user_id: str, posting_id: str) -> dict[str, Any]:
+        """Worker/precompute entry point; never called by a Jobs or Company GET."""
+        return self._personalized_jobs_service.enqueue_intelligence_for_job(user_id, posting_id)
+
+    def improve_personalized_resume(self, user_id: str, posting_id: str, *, mode: str = "review", plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any]:
+        return self._personalized_jobs_service.improve_resume(user_id, posting_id, mode=mode, plan_id=plan_id)
+
+    def get_personalized_company_detail(self, user_id: str, company_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.company_detail(user_id, company_id, plan_id=plan_id)
+
+    def upsert_personalized_company_profile(
+        self,
+        company_id: str,
+        payload: Mapping[str, Any],
+        *,
+        logo_bytes: bytes | None = None,
+        logo_source_url: str = "",
+        logo_content_type: str = "image/png",
+    ) -> dict[str, Any]:
+        """Worker/admin enrichment hook; never exposed through user Jobs routes."""
+        return self._personalized_jobs_service.upsert_company_profile(
+            company_id,
+            payload,
+            logo_bytes=logo_bytes,
+            logo_source_url=logo_source_url,
+            logo_content_type=logo_content_type,
+        )
+
+    def set_personalized_job_state(
+        self,
+        user_id: str,
+        posting_id: str,
+        state: str,
+        *,
+        reason_code: str = "",
+    ) -> dict[str, Any]:
+        return self._personalized_jobs_service.set_state(
+            user_id,
+            posting_id,
+            state,
+            reason_code=reason_code,
+        )
+
+    def report_personalized_job(self, user_id: str, posting_id: str, *, reason_code: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return self._personalized_jobs_service.report(
+            user_id,
+            posting_id,
+            reason_code=reason_code,
+            payload=payload,
+        )
+
+    def report_personalized_filter(self, user_id: str, *, reason_code: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return self._personalized_jobs_service.report_filter(user_id, reason_code=reason_code, payload=payload)
+
+    def get_hidden_personalized_jobs(self, user_id: str, *, limit: int = 25, cursor: str = "") -> dict[str, Any]:
+        return self._personalized_jobs_service.hidden(user_id, limit=limit, cursor=cursor)
+
+    def validate_phase_b_target(self, target_id: str, *, validation_key: str = "") -> dict[str, Any]:
+        """Admin/worker-only single-target Phase B validation."""
+
+        return self._acquisition_scheduler.validate_target(target_id, validation_key=validation_key)
+
+    def get_staging_acquisition_catalog(
+        self,
+        *,
+        publication_id: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None or not hasattr(store, "get_staging_catalog"):
+            return {"jobs": [], "total": 0, "publication": None, "freshness": "unpublished"}
+        return store.get_staging_catalog(publication_id=publication_id, limit=limit, offset=offset)
+
+    def promote_staging_acquisition_catalog(self, publication_id: str) -> str:
+        store = self.repositories.acquisition_store
+        if store is None or not hasattr(store, "promote_staging_publication"):
+            raise ValueError("Staging catalog promotion requires sqlite storage support.")
+        if not bool(self._acquisition_scheduler._phase_b_config("promotion_enabled")):
+            raise ValueError("Phase B catalog promotion is disabled.")
+        return store.promote_staging_publication(publication_id)
+
+    def list_acquisition_cycle_targets(self, cycle_id: str) -> list[dict[str, Any]]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            return []
+        return store.list_cycle_targets(cycle_id)
+
+    def get_acquisition_target_history(self, target_id: str) -> dict[str, Any]:
+        store = self.repositories.acquisition_store
+        if store is None:
+            raise ValueError("Acquisition reporting requires sqlite storage support.")
+        return store.get_target_history(target_id)
+
+    def _validate_workspace_definition(
+        self,
+        workspace: WorkspaceDefinition,
+        *,
+        phase: str,
+        error_code: str,
+        run_plan_settings: Mapping[str, Any] | None = None,
+    ) -> None:
+        _validate_builder_workspace_definition(
+            workspace,
+            phase=phase,
+            error_code=error_code,
+            run_plan_settings=run_plan_settings,
+            object_storage=self.object_storage,
+        )
+
+    def list_workspaces(self):
+        return self._workspace_catalog_service.list_workspaces()
+
+    def get_workspace(self, workspace_id: str):
+        return self._workspace_catalog_service.get_workspace(workspace_id)
+
+    def upsert_workspace(self, payload: Mapping[str, Any] | WorkspaceDefinition):
+        return self._workspace_catalog_service.upsert_workspace(payload)
+
+    def delete_workspace(self, workspace_id: str) -> None:
+        self._workspace_catalog_service.delete_workspace(workspace_id)
+
+    def list_workflow_templates(self):
+        return self._workspace_catalog_service.list_workflow_templates()
+
+    def get_workflow_template(self, template_id: str):
+        return self._workspace_catalog_service.get_workflow_template(template_id)
+
+    def emit_event(
+        self,
+        event_name: str,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
+        review_id: str | None = None,
+        session_id: str | None = None,
+        route: str = "",
+        source: str = "",
+        payload: Mapping[str, Any] | None = None,
+        **extra_payload,
+    ) -> None:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        if analytics_store is None or not hasattr(analytics_store, "emit_event"):
+            return
+        try:
+            merged_payload = dict(payload or {})
+            merged_payload.update(extra_payload)
+            analytics_store.emit_event(
+                event_id=f"evt_{uuid4().hex[:16]}",
+                event_name=str(event_name or "").strip(),
+                occurred_at=utc_now_iso(),
+                user_id=str(user_id or "").strip(),
+                workspace_id=str(workspace_id or "").strip(),
+                run_id=str(run_id or "").strip(),
+                job_id=str(job_id or "").strip(),
+                review_id=str(review_id or "").strip(),
+                session_id=str(session_id or "").strip(),
+                route=str(route or "").strip(),
+                source=str(source or "").strip(),
+                payload={key: value for key, value in merged_payload.items() if value is not None},
+            )
+        except Exception:
+            logging.getLogger("backend.analytics").exception(
+                "Failed to emit analytics event '%s'.",
+                event_name,
+            )
+
+    def get_analytics_overview(self) -> dict[str, Any]:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        query_rows = getattr(analytics_store, "query_rows", None)
+        if not callable(query_rows):
+            raise ValueError("Analytics overview requires the sqlite storage backend.")
+
+        queries: dict[str, str] = {
+            "automation_success_rate": """
+                SELECT
+                  date(created_at) AS day,
+                  COUNT(*) AS total_runs,
+                  SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_runs,
+                  ROUND(
+                    100.0 * SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) / COUNT(*),
+                    1
+                  ) AS success_rate_pct
+                FROM runs
+                GROUP BY date(created_at)
+                ORDER BY day DESC
+            """,
+            "automation_failure_rate_by_stage_type": """
+                SELECT
+                  stage_type,
+                  COUNT(*) AS failed_steps
+                FROM run_stage_results
+                WHERE status = 'failed'
+                GROUP BY stage_type
+                ORDER BY failed_steps DESC
+            """,
+            "jobs_discovered_by_source": """
+                SELECT
+                  COALESCE(NULLIF(portal, ''), NULLIF(source_type, ''), 'unknown') AS source,
+                  COUNT(*) AS jobs
+                FROM run_jobs
+                GROUP BY 1
+                ORDER BY jobs DESC
+            """,
+            "screening_generation_funnel": """
+                SELECT
+                  stage_type,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.jobs_found') AS INTEGER), 0)) AS jobs_found,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.approved') AS INTEGER), 0)) AS approved,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.rejected') AS INTEGER), 0)) AS rejected,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.generated_jobs') AS INTEGER), 0)) AS generated_jobs,
+                  SUM(COALESCE(CAST(json_extract(metrics_json, '$.packaged_jobs') AS INTEGER), 0)) AS packaged_jobs
+                FROM run_stage_results
+                GROUP BY stage_type
+                ORDER BY stage_type
+            """,
+            "applications_per_user": """
+                WITH run_owners AS (
+                  SELECT id AS run_id, user_id
+                  FROM runs
+                  WHERE user_id != ''
+                )
+                SELECT
+                  ro.user_id,
+                  COUNT(*) AS approved_reviews,
+                  SUM(
+                    CASE
+                      WHEN COALESCE(json_extract(r.payload_json, '$.metadata.tracker_status'), '') != ''
+                      THEN 1 ELSE 0
+                    END
+                  ) AS explicit_tracker_updates,
+                  SUM(
+                    CASE
+                      WHEN COALESCE(json_extract(r.payload_json, '$.metadata.email_confirmed'), 0) = 1
+                      THEN 1 ELSE 0
+                    END
+                  ) AS email_confirmed
+                FROM reviews r
+                JOIN run_owners ro ON ro.run_id = r.run_id
+                WHERE json_extract(r.payload_json, '$.decision') = 'approved'
+                GROUP BY ro.user_id
+                ORDER BY email_confirmed DESC, approved_reviews DESC
+            """,
+            "quick_apply_adoption": """
+                SELECT
+                  date(created_at) AS day,
+                  COUNT(*) AS quick_apply_runs,
+                  SUM(COALESCE(CAST(json_extract(metadata_json, '$.accepted_url_count') AS INTEGER), 0)) AS accepted_urls
+                FROM runs
+                WHERE json_extract(metadata_json, '$.run_kind') = 'quick_apply'
+                GROUP BY date(created_at)
+                ORDER BY day DESC
+            """,
+            "referral_outreach_funnel": """
+                SELECT
+                  u.user_id,
+                  COUNT(ro.key) AS outreach_records,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'Not contacted' THEN 1 ELSE 0 END) AS not_contacted,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'Contacted' THEN 1 ELSE 0 END) AS contacted,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'Replied' THEN 1 ELSE 0 END) AS replied,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'Referral offered' THEN 1 ELSE 0 END) AS referral_offered,
+                  SUM(CASE WHEN json_extract(ro.value, '$.outreach_status') = 'No referral' THEN 1 ELSE 0 END) AS no_referral
+                FROM users u
+                LEFT JOIN json_each(COALESCE(json_extract(u.payload_json, '$.metadata.referral_outreach'), '{}')) ro
+                GROUP BY u.user_id
+                ORDER BY referral_offered DESC, replied DESC
+            """,
+            "users_with_repeated_failures": """
+                WITH run_owners AS (
+                  SELECT id AS run_id, user_id
+                  FROM runs
+                  WHERE user_id != ''
+                )
+                SELECT
+                  ro.user_id,
+                  rs.stage_type,
+                  rs.error,
+                  COUNT(*) AS occurrences
+                FROM run_stage_results rs
+                JOIN run_owners ro ON ro.run_id = rs.run_id
+                WHERE rs.status = 'failed'
+                GROUP BY ro.user_id, rs.stage_type, rs.error
+                HAVING COUNT(*) >= 2
+                ORDER BY occurrences DESC
+            """,
+            "users_not_returned_after_signup": """
+                SELECT
+                  u.user_id,
+                  json_extract(u.payload_json, '$.created_at') AS user_created_at,
+                  MAX(json_extract(t.payload_json, '$.last_used_at')) AS last_token_use
+                FROM users u
+                LEFT JOIN api_tokens t ON t.user_id = u.user_id AND t.is_active = 1
+                GROUP BY u.user_id
+                HAVING COALESCE(MAX(json_extract(t.payload_json, '$.last_used_at')), '') = ''
+            """,
+            "most_successful_job_sources": """
+                SELECT
+                  COALESCE(NULLIF(j.portal, ''), NULLIF(j.source_type, ''), 'unknown') AS source,
+                  COUNT(*) AS reviewed_jobs,
+                  SUM(
+                    CASE
+                      WHEN json_extract(r.payload_json, '$.metadata.application_status') IN ('Interviewing', 'Offer')
+                      THEN 1 ELSE 0
+                    END
+                  ) AS positive_outcomes
+                FROM run_jobs j
+                JOIN reviews r
+                  ON r.run_id = j.run_id
+                 AND r.job_id = j.job_id
+                GROUP BY 1
+                ORDER BY positive_outcomes DESC, reviewed_jobs DESC
+            """,
+        }
+        overview = {"generated_at": utc_now_iso()}
+        for metric_name, sql in queries.items():
+            overview[metric_name] = query_rows(sql)
+        return overview
+
+    def list_analytics_events(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        event_name: str = "",
+        user_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> dict[str, Any]:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        list_events = getattr(analytics_store, "list_events", None)
+        count_events = getattr(analytics_store, "count_events", None)
+        if not callable(list_events) or not callable(count_events):
+            raise ValueError("Analytics event listing requires analytics storage support.")
+
+        normalized_filters = {
+            "event_name": str(event_name or "").strip(),
+            "user_id": str(user_id or "").strip(),
+            "occurred_from": str(occurred_from or "").strip(),
+            "occurred_to": str(occurred_to or "").strip(),
+        }
+        return {
+            "events": list_events(limit=int(limit), offset=int(offset), **normalized_filters),
+            "total": int(count_events(**normalized_filters)),
+        }
+
+    def _scrapeops_event_rows(
+        self,
+        *,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> list[dict[str, Any]]:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        query_rows = getattr(analytics_store, "query_rows", None)
+        if not callable(query_rows):
+            raise ValueError("ScrapeOps usage reporting requires analytics storage support.")
+        filters = ["event_name = ?"]
+        params: list[Any] = [SCRAPEOPS_USAGE_EVENT_NAME]
+        if str(user_id or "").strip():
+            filters.append("user_id = ?")
+            params.append(str(user_id).strip())
+        if str(workspace_id or "").strip():
+            filters.append("workspace_id = ?")
+            params.append(str(workspace_id).strip())
+        if str(run_id or "").strip():
+            filters.append("run_id = ?")
+            params.append(str(run_id).strip())
+        if str(occurred_from or "").strip():
+            filters.append("occurred_at >= ?")
+            params.append(str(occurred_from).strip())
+        if str(occurred_to or "").strip():
+            filters.append("occurred_at < ?")
+            params.append(str(occurred_to).strip())
+        where_clause = " AND ".join(filters)
+        rows = query_rows(
+            (
+                "SELECT occurred_at, user_id, workspace_id, run_id, payload_json "
+                f"FROM analytics_events WHERE {where_clause} "
+                "ORDER BY occurred_at DESC"
+            ),
+            tuple(params),
+        )
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            payload = json.loads(row.get("payload_json") or "{}")
+            if not isinstance(payload, dict):
+                payload = {}
+            events.append(
+                {
+                    "occurred_at": str(row.get("occurred_at") or ""),
+                    "user_id": str(row.get("user_id") or ""),
+                    "workspace_id": str(row.get("workspace_id") or ""),
+                    "run_id": str(row.get("run_id") or ""),
+                    **payload,
+                }
+            )
+        return events
+
+    def get_scrapeops_usage_summary(
+        self,
+        *,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+    ) -> dict[str, Any]:
+        events = self._scrapeops_event_rows(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        totals = {
+            "requests": len(events),
+            "billed_requests": 0,
+            "failed_requests": 0,
+            "runner_credits": 0,
+            "native_credits": 0,
+        }
+        by_mode: dict[str, dict[str, Any]] = {}
+        by_domain: dict[str, dict[str, Any]] = {}
+        by_run: dict[str, dict[str, Any]] = {}
+        for event in events:
+            billed = bool(event.get("billed"))
+            runner_credits = int(event.get("runner_credits") or 0)
+            native_credits = int(event.get("native_credits") or 0)
+            request_mode = str(event.get("request_mode") or "basic").strip() or "basic"
+            domain = str(event.get("domain") or "unknown").strip() or "unknown"
+            event_run_id = str(event.get("run_id") or "").strip()
+            totals["runner_credits"] += runner_credits
+            totals["native_credits"] += native_credits
+            if billed:
+                totals["billed_requests"] += 1
+            else:
+                totals["failed_requests"] += 1
+
+            mode_bucket = by_mode.setdefault(
+                request_mode,
+                {
+                    "request_mode": request_mode,
+                    "requests": 0,
+                    "billed_requests": 0,
+                    "runner_credits": 0,
+                    "native_credits": 0,
+                },
+            )
+            mode_bucket["requests"] += 1
+            mode_bucket["runner_credits"] += runner_credits
+            mode_bucket["native_credits"] += native_credits
+            if billed:
+                mode_bucket["billed_requests"] += 1
+
+            domain_bucket = by_domain.setdefault(
+                domain,
+                {"domain": domain, "requests": 0, "billed_requests": 0, "runner_credits": 0, "native_credits": 0},
+            )
+            domain_bucket["requests"] += 1
+            domain_bucket["runner_credits"] += runner_credits
+            domain_bucket["native_credits"] += native_credits
+            if billed:
+                domain_bucket["billed_requests"] += 1
+
+            if event_run_id:
+                run_bucket = by_run.setdefault(
+                    event_run_id,
+                    {
+                        "run_id": event_run_id,
+                        "requests": 0,
+                        "billed_requests": 0,
+                        "runner_credits": 0,
+                        "native_credits": 0,
+                        "jobs_found": 0,
+                        "runner_credits_per_job": 0,
+                    },
+                )
+                run_bucket["requests"] += 1
+                run_bucket["runner_credits"] += runner_credits
+                run_bucket["native_credits"] += native_credits
+                if billed:
+                    run_bucket["billed_requests"] += 1
+
+        job_store = getattr(self.repositories, "job_store", None)
+        load_all_job_sets = getattr(job_store, "load_all_job_sets", None)
+        if callable(load_all_job_sets):
+            for run_bucket in by_run.values():
+                run_id_value = str(run_bucket.get("run_id") or "")
+                try:
+                    job_sets = load_all_job_sets(run_id_value)
+                except Exception:
+                    continue
+                seen_job_ids: set[str] = set()
+                jobs_found = 0
+                for jobs in job_sets.values():
+                    for job_record in jobs:
+                        job_payload = job_record.to_dict() if hasattr(job_record, "to_dict") else dict(job_record or {})
+                        source_type = str(job_payload.get("source_type") or "").strip()
+                        portal = str(job_payload.get("portal") or "").strip()
+                        if source_type != "company_career_site" and portal != "company_career_site":
+                            continue
+                        job_id = str(
+                            job_payload.get("job_id")
+                            or job_payload.get("apply_link")
+                            or job_payload.get("source_url")
+                            or job_payload.get("link")
+                            or ""
+                        ).strip()
+                        if job_id and job_id in seen_job_ids:
+                            continue
+                        if job_id:
+                            seen_job_ids.add(job_id)
+                        jobs_found += 1
+                run_bucket["jobs_found"] = jobs_found
+                run_bucket["runner_credits_per_job"] = (
+                    round(float(run_bucket["runner_credits"]) / jobs_found, 2) if jobs_found > 0 else 0
+                )
+
+        return {
+            "filters": {
+                "user_id": str(user_id or "").strip(),
+                "workspace_id": str(workspace_id or "").strip(),
+                "run_id": str(run_id or "").strip(),
+                "occurred_from": str(occurred_from or "").strip(),
+                "occurred_to": str(occurred_to or "").strip(),
+            },
+            "totals": totals,
+            "by_request_mode": sorted(
+                by_mode.values(), key=lambda item: (-int(item["runner_credits"]), str(item["request_mode"]))
+            ),
+            "by_domain": sorted(
+                by_domain.values(), key=lambda item: (-int(item["runner_credits"]), str(item["domain"]))
+            ),
+            "by_run": sorted(by_run.values(), key=lambda item: (-int(item["runner_credits"]), str(item["run_id"]))),
+        }
+
+    def get_scrapeops_user_usage_summary(
+        self,
+        *,
+        user_id: str,
+        plan_id: str,
+        quota_overrides: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        current_period = datetime.now(timezone.utc).strftime("%Y-%m")
+        month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        usage = self.get_scrapeops_usage_summary(
+            user_id=user_id,
+            occurred_from=month_start.isoformat(),
+        )
+        policy_snapshot = _current_company_site_policy_snapshot(
+            self.repositories,
+            user_id=user_id,
+            plan_id=plan_id,
+            quota_overrides=quota_overrides,
+        )
+        return {
+            "period": current_period,
+            "policy": policy_snapshot,
+            "usage": usage,
+        }
+
+    def get_scrapeops_reconciliation(self, *, date: str = "") -> dict[str, Any]:
+        account_state = _scrapeops_account_state()
+        month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        internal_usage = self.get_scrapeops_usage_summary(occurred_from=month_start.isoformat())
+        internal_native_credits = int(internal_usage.get("totals", {}).get("native_credits") or 0)
+        remote_usage = dict(account_state.get("usage") or {})
+        remote_used_credits = int(remote_usage.get("used") or 0)
+        discrepancy = remote_used_credits - internal_native_credits
+        domain_stats: dict[str, Any] = {}
+        if account_state.get("available"):
+            try:
+                domain_stats = fetch_domain_stats(
+                    str(os.getenv("SCRAPEOPS_API_KEY") or "").strip(),
+                    date=str(date or "").strip(),
+                    timeout_seconds=6,
+                )
+            except Exception as exc:
+                domain_stats = {"error": str(exc)}
+        return {
+            "generated_at": utc_now_iso(),
+            "account_state": account_state,
+            "internal_native_credits": internal_native_credits,
+            "remote_used_credits": remote_used_credits,
+            "discrepancy": discrepancy,
+            "domain_stats": domain_stats,
+        }
+
+    def get_scrapeops_admin_policy(self) -> dict[str, Any]:
+        return _load_scrapeops_admin_policy(self.repositories)
+
+    def save_scrapeops_admin_policy(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        normalized = _save_scrapeops_admin_policy(self.repositories, payload)
+        self.emit_event(
+            "scrapeops_admin_policy_updated",
+            source="admin",
+            payload={
+                "policy_version": str(normalized.get("policy_version") or ""),
+                "updated_at": str(normalized.get("updated_at") or ""),
+                "domain_policy_count": len(normalized.get("domain_policies") or []),
+                "user_override_count": len(normalized.get("user_overrides") or []),
+            },
+        )
+        return normalized
+
+    def build_scrapeops_quota_overrides(
+        self,
+        *,
+        user_id: str,
+        plan_id: str,
+        quota_overrides: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        limits = _effective_scrapeops_policy_limits(
+            self.repositories,
+            user_id=user_id,
+            plan_id=plan_id,
+            quota_overrides=quota_overrides,
+        )
+        return {
+            **dict(quota_overrides or {}),
+            "runner_credits_per_month": int(limits.get("runner_credits_per_month") or 0),
+            "company_sites_per_run": int(limits.get("company_sites_per_run") or 0),
+            "runner_credits_per_run": int(limits.get("runner_credits_per_run") or 0),
+        }
+
+    def _list_named_analytics_events(
+        self,
+        *,
+        event_name: str,
+        occurred_from: str = "",
+        occurred_to: str = "",
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        analytics_store = getattr(self.repositories, "analytics_store", None)
+        list_events = getattr(analytics_store, "list_events", None)
+        if not callable(list_events):
+            return []
+        return list_events(
+            limit=max(1, int(limit)),
+            offset=0,
+            event_name=str(event_name or "").strip(),
+            occurred_from=str(occurred_from or "").strip(),
+            occurred_to=str(occurred_to or "").strip(),
+        )
+
+    def get_scrapeops_usage_series(
+        self,
+        *,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+        days: int = 30,
+    ) -> list[dict[str, Any]]:
+        if not str(occurred_from or "").strip():
+            occurred_from = (
+                datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                - timedelta(days=max(1, int(days)) - 1)
+            ).isoformat()
+        events = self._scrapeops_event_rows(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        by_day: dict[str, dict[str, Any]] = {}
+        for event in events:
+            day = str(event.get("occurred_at") or "")[:10]
+            if not day:
+                continue
+            bucket = by_day.setdefault(
+                day,
+                {
+                    "day": day,
+                    "requests": 0,
+                    "billed_requests": 0,
+                    "failed_requests": 0,
+                    "runner_credits": 0,
+                    "native_credits": 0,
+                },
+            )
+            bucket["requests"] += 1
+            if bool(event.get("billed")):
+                bucket["billed_requests"] += 1
+            else:
+                bucket["failed_requests"] += 1
+            bucket["runner_credits"] += int(event.get("runner_credits") or 0)
+            bucket["native_credits"] += int(event.get("native_credits") or 0)
+        return [by_day[key] for key in sorted(by_day)]
+
+    def get_scrapeops_reconciliation_history(self, *, days: int = 30) -> list[dict[str, Any]]:
+        occurred_from = (
+            datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=max(1, int(days)) - 1)
+        ).isoformat()
+        events = self._list_named_analytics_events(
+            event_name=SCRAPEOPS_RECONCILIATION_EVENT_NAME,
+            occurred_from=occurred_from,
+            limit=max(100, int(days) * 8),
+        )
+        history: list[dict[str, Any]] = []
+        for event in reversed(events):
+            payload = dict(event.get("payload") or {})
+            account_state = dict(payload.get("account_state") or {})
+            account_usage = dict(account_state.get("usage") or {})
+            history.append(
+                {
+                    "day": str(event.get("occurred_at") or "")[:10],
+                    "occurred_at": str(event.get("occurred_at") or ""),
+                    "remote_used_credits": int(payload.get("remote_used_credits") or 0),
+                    "internal_native_credits": int(payload.get("internal_native_credits") or 0),
+                    "discrepancy": int(payload.get("discrepancy") or 0),
+                    "remaining_credits": int(account_usage.get("remaining") or 0),
+                    "account_status": str(account_state.get("status") or ""),
+                }
+            )
+        return history
+
+    def get_scrapeops_alert_history(self, *, days: int = 30, limit: int = 50) -> dict[str, Any]:
+        occurred_from = (
+            datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=max(1, int(days)) - 1)
+        ).isoformat()
+        events = self._list_named_analytics_events(
+            event_name=SCRAPEOPS_ALERT_EVENT_NAME,
+            occurred_from=occurred_from,
+            limit=max(int(limit), int(days) * 8),
+        )
+        latest: list[dict[str, Any]] = []
+        by_day: dict[str, dict[str, Any]] = {}
+        for event in events:
+            payload = dict(event.get("payload") or {})
+            occurred_at = str(event.get("occurred_at") or "")
+            day = occurred_at[:10]
+            severity = str(payload.get("severity") or "warning")
+            bucket = by_day.setdefault(day, {"day": day, "alerts": 0, "critical_alerts": 0})
+            bucket["alerts"] += 1
+            if severity in {"critical", "error"}:
+                bucket["critical_alerts"] += 1
+            latest.append(
+                {
+                    "occurred_at": occurred_at,
+                    "alert_type": str(payload.get("alert_type") or ""),
+                    "severity": severity,
+                    "message": str(payload.get("message") or ""),
+                }
+            )
+        latest.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
+        return {
+            "latest": latest[: max(1, int(limit))],
+            "series": [by_day[key] for key in sorted(by_day)],
+        }
+
+    def run_scrapeops_reconciliation_cycle(self, *, force: bool = False, source: str = "system") -> dict[str, Any]:
+        policy = self.get_scrapeops_admin_policy()
+        alert_policy = dict(policy.get("alert_policy") or {})
+        cadence_hours = max(1, int(alert_policy.get("cadence_hours") or 6))
+        now = datetime.now(timezone.utc)
+        bucket_hour = now.hour - (now.hour % cadence_hours)
+        bucket_start = now.replace(hour=bucket_hour, minute=0, second=0, microsecond=0)
+        bucket_end = bucket_start + timedelta(hours=cadence_hours)
+        bucket_key = bucket_start.strftime("%Y%m%d%H")
+        if not force:
+            existing = self._list_named_analytics_events(
+                event_name=SCRAPEOPS_RECONCILIATION_EVENT_NAME,
+                occurred_from=bucket_start.isoformat(),
+                occurred_to=bucket_end.isoformat(),
+                limit=1,
+            )
+            if existing:
+                return {
+                    "status": "skipped",
+                    "reason": "not_due",
+                    "snapshot": dict(existing[0].get("payload") or {}),
+                    "alerts": [],
+                }
+
+        snapshot = self.get_scrapeops_reconciliation(date=now.strftime("%Y-%m-%d"))
+        snapshot_payload = {
+            **snapshot,
+            "bucket_start": bucket_start.isoformat(),
+            "bucket_end": bucket_end.isoformat(),
+            "policy_version": str(policy.get("policy_version") or SCRAPEOPS_POLICY_VERSION),
+            "source": str(source or "system"),
+        }
+        self.emit_event(
+            SCRAPEOPS_RECONCILIATION_EVENT_NAME,
+            source=source,
+            payload=snapshot_payload,
+        )
+
+        alerts: list[dict[str, Any]] = []
+        account_state = dict(snapshot.get("account_state") or {})
+        account_usage = dict(account_state.get("usage") or {})
+        discrepancy = int(snapshot.get("discrepancy") or 0)
+        low_remaining_threshold = max(0, int(alert_policy.get("low_remaining_credits_threshold") or 0))
+        discrepancy_threshold = max(0, int(alert_policy.get("discrepancy_threshold") or 0))
+
+        if str(account_state.get("status") or "") == "out_of_credits":
+            alerts.append(
+                {
+                    "alert_type": "out_of_credits",
+                    "severity": "critical",
+                    "message": "ScrapeOps account is out of credits.",
+                }
+            )
+        elif (
+            account_state.get("available")
+            and low_remaining_threshold > 0
+            and int(account_usage.get("remaining") or 0) <= low_remaining_threshold
+        ):
+            alerts.append(
+                {
+                    "alert_type": "low_remaining_credits",
+                    "severity": "warning",
+                    "message": (
+                        f"ScrapeOps account is below the remaining-credit threshold "
+                        f"({int(account_usage.get('remaining') or 0)} <= {low_remaining_threshold})."
+                    ),
+                }
+            )
+        if discrepancy_threshold > 0 and abs(discrepancy) >= discrepancy_threshold:
+            alerts.append(
+                {
+                    "alert_type": "reconciliation_discrepancy",
+                    "severity": "warning",
+                    "message": (
+                        f"ScrapeOps reconciliation discrepancy reached {discrepancy}, "
+                        f"which exceeds the threshold of {discrepancy_threshold}."
+                    ),
+                }
+            )
+
+        for alert in alerts:
+            self.emit_event(
+                SCRAPEOPS_ALERT_EVENT_NAME,
+                source=source,
+                payload={
+                    **alert,
+                    "bucket_key": bucket_key,
+                    "snapshot_generated_at": str(snapshot.get("generated_at") or ""),
+                    "account_status": str(account_state.get("status") or ""),
+                    "remaining_credits": int(account_usage.get("remaining") or 0),
+                    "discrepancy": discrepancy,
+                },
+            )
+
+        return {
+            "status": "completed",
+            "snapshot": snapshot_payload,
+            "alerts": alerts,
+        }
+
+    def maybe_run_scheduled_scrapeops_maintenance(self, *, source: str = "system") -> dict[str, Any]:
+        policy = self.get_scrapeops_admin_policy()
+        alert_policy = dict(policy.get("alert_policy") or {})
+        if not bool(alert_policy.get("enabled", True)):
+            return {"status": "disabled", "reason": "alert_policy_disabled"}
+        try:
+            return self.run_scrapeops_reconciliation_cycle(force=False, source=source)
+        except Exception as exc:
+            self.emit_event(
+                SCRAPEOPS_ALERT_EVENT_NAME,
+                source=source,
+                payload={
+                    "alert_type": "reconciliation_cycle_failed",
+                    "severity": "warning",
+                    "message": str(exc),
+                },
+            )
+            return {"status": "failed", "reason": str(exc)}
+
+    def get_scrapeops_admin_dashboard(
+        self,
+        *,
+        user_id: str = "",
+        workspace_id: str = "",
+        run_id: str = "",
+        occurred_from: str = "",
+        occurred_to: str = "",
+        date: str = "",
+    ) -> dict[str, Any]:
+        policy = self.get_scrapeops_admin_policy()
+        history_days = max(7, int(dict(policy.get("alert_policy") or {}).get("history_days") or 30))
+        usage = self.get_scrapeops_usage_summary(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            occurred_from=occurred_from,
+            occurred_to=occurred_to,
+        )
+        return {
+            "policy": policy,
+            "usage": usage,
+            "usage_series": self.get_scrapeops_usage_series(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                occurred_from=occurred_from,
+                occurred_to=occurred_to,
+                days=history_days,
+            ),
+            "reconciliation": self.get_scrapeops_reconciliation(date=date),
+            "reconciliation_series": self.get_scrapeops_reconciliation_history(days=history_days),
+            "alerts": self.get_scrapeops_alert_history(days=history_days),
+        }
+
+    def upsert_workflow_template(self, payload: Mapping[str, Any] | WorkflowTemplate):
+        return self._workspace_catalog_service.upsert_workflow_template(payload)
+
+    def delete_workflow_template(self, template_id: str) -> None:
+        self._workspace_catalog_service.delete_workflow_template(template_id)
+
+    def list_connectors(self):
+        return self._workspace_catalog_service.list_connectors()
+
+    def list_generations(self):
+        return self._workspace_catalog_service.list_generations()
+
+    def list_renderers(self):
+        return self._workspace_catalog_service.list_renderers()
+
+    def get_workspace_builder_catalog(self) -> dict[str, Any]:
+        return self._workspace_catalog_service.get_workspace_builder_catalog()
+
+    def validate_workspace_builder_sources(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        user_id: str = "",
+        plan_id: str = "",
+        quota_overrides: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        report = validate_workspace_source_configuration(dict(payload))
+        source_ids = [str(item).strip() for item in report.get("source_ids") or [] if str(item).strip()]
+        if not source_ids:
+            return report
+
+        selected_company_sources = [
+            source_id
+            for source_id in source_ids
+            if source_id in {SOURCE_COMPANY_CAREER_SITES, SOURCE_ACADEMIC_CAREER_SITES}
+        ]
+        if not selected_company_sources:
+            return report
+
+        effective_settings = dict(payload.get("settings") or {})
+        for key, value in dict(report.get("derived_runtime_defaults") or {}).items():
+            current_value = effective_settings.get(key)
+            if (
+                key not in effective_settings
+                or current_value is None
+                or current_value == ""
+                or current_value == []
+                or current_value == {}
+            ):
+                effective_settings[key] = value
+
+        locality_mode = (
+            str(effective_settings.get("company_site_locality_mode") or "local_preferred").strip() or "local_preferred"
+        )
+        account_state = _scrapeops_account_state()
+        admin_policy = self.get_scrapeops_admin_policy()
+        active_domain_policies = [
+            dict(item)
+            for item in admin_policy.get("domain_policies") or []
+            if isinstance(item, Mapping) and bool(item.get("is_active", True))
+        ]
+        policy_snapshot = (
+            _current_company_site_policy_snapshot(
+                self.repositories,
+                user_id=user_id,
+                plan_id=plan_id,
+                quota_overrides=quota_overrides,
+            )
+            if user_id and plan_id
+            else {}
+        )
+        runtime_quota_overrides = (
+            self.build_scrapeops_quota_overrides(
+                user_id=user_id,
+                plan_id=plan_id,
+                quota_overrides=quota_overrides,
+            )
+            if user_id and plan_id
+            else dict(quota_overrides or {})
+        )
+        source_results = list(report.get("source_results") or [])
+        updated_results: list[dict[str, Any]] = []
+        for result in source_results:
+            source_id = str(result.get("source_id") or "").strip()
+            if source_id not in {SOURCE_COMPANY_CAREER_SITES, SOURCE_ACADEMIC_CAREER_SITES}:
+                updated_results.append(result)
+                continue
+            configured_sites = effective_settings.get(source_id) or []
+            discovered_sites = load_discovered_company_site_entries(
+                _company_site_discovery_paths_for_source_id(source_id)
+            )
+            merged_sites = _merge_company_site_entries(configured_sites, discovered_sites)
+            scope_plan = plan_company_site_scope(
+                company_sites=merged_sites,
+                target_country_codes=effective_settings.get("country_codes") or [],
+                target_cities=effective_settings.get("cities") or [],
+                locality_mode=locality_mode,
+                max_sites_per_run=int(policy_snapshot.get("company_sites_per_run") or 0),
+                domain_policies=active_domain_policies,
+            )
+            run_budget = int(policy_snapshot.get("effective_runner_credits_per_run") or 0)
+            estimate = estimate_company_site_runner_credit_range(
+                site_count=int(scope_plan.stats.get("selected_site_count") or 0),
+                locality_mode=locality_mode,
+                has_target_country=bool(effective_settings.get("country_codes") or []),
+                run_credit_budget=run_budget,
+            )
+            details = list(result.get("details") or [])
+            details.append(
+                (
+                    f"{int(scope_plan.stats.get('selected_site_count') or 0)} of "
+                    f"{int(scope_plan.stats.get('input_site_count') or 0)} site(s) remain after locality filtering."
+                )
+            )
+            if int(scope_plan.stats.get("plan_site_limit_applied_count") or 0) > 0:
+                details.append(
+                    f"Plan policy trims {int(scope_plan.stats['plan_site_limit_applied_count'])} site(s) from this run."
+                )
+            details.append(
+                (
+                    "Estimated runner credits: "
+                    f"{int(estimate.get('min_runner_credits') or 0)}-"
+                    f"{int(estimate.get('max_runner_credits') or 0)} "
+                    f"(likely {int(estimate.get('likely_runner_credits') or 0)})."
+                )
+            )
+            if policy_snapshot:
+                remaining_runner_credits = dict(policy_snapshot.get("runner_credits_per_month") or {}).get("remaining")
+                details.append(
+                    "Remaining monthly runner credits: "
+                    + (
+                        "Unlimited"
+                        if int(remaining_runner_credits or 0) == -1
+                        else str(int(remaining_runner_credits or 0))
+                    )
+                )
+            source_field_errors = list(result.get("field_errors") or [])
+            status = str(result.get("status") or "valid")
+            summary = str(result.get("summary") or "")
+            if account_state.get("status") in {"missing_api_key", "out_of_credits"}:
+                status = "invalid"
+                summary = str(account_state.get("summary") or summary)
+                if summary and summary not in details:
+                    details.insert(0, summary)
+                source_field_errors.append(
+                    _field_error(
+                        "company_career_sites",
+                        str(account_state.get("status") or "scrapeops_unavailable"),
+                        str(account_state.get("summary") or "ScrapeOps is not available."),
+                        source_id=source_id,
+                    )
+                )
+            updated_results.append(
+                {
+                    **dict(result),
+                    "status": status,
+                    "summary": summary,
+                    "details": details,
+                    "field_errors": _dedupe_field_errors(source_field_errors),
+                    "scope_plan": {
+                        "selected_site_count": int(scope_plan.stats.get("selected_site_count") or 0),
+                        "input_site_count": int(scope_plan.stats.get("input_site_count") or 0),
+                        "skipped_site_count": int(scope_plan.stats.get("skipped_site_count") or 0),
+                        "local_site_count": int(scope_plan.stats.get("local_site_count") or 0),
+                        "global_site_count": int(scope_plan.stats.get("global_site_count") or 0),
+                        "unknown_site_count": int(scope_plan.stats.get("unknown_site_count") or 0),
+                    },
+                    "runner_credit_estimate": estimate,
+                }
+            )
+
+        report["source_results"] = updated_results
+        report["field_errors"] = _dedupe_field_errors(
+            [
+                *(report.get("field_errors") or []),
+                *[
+                    item
+                    for result in updated_results
+                    if str(result.get("status") or "") == "invalid"
+                    for item in result.get("field_errors") or []
+                ],
+            ]
+        )
+        report["valid"] = not report["field_errors"] and all(
+            str(item.get("status") or "") == "valid" for item in updated_results
+        )
+        report["company_site_policy"] = {
+            **dict(policy_snapshot or {}),
+            "account_state": account_state,
+            "locality_mode": locality_mode,
+            "policy_version": SCRAPEOPS_POLICY_VERSION,
+            "domain_policy_count": len(active_domain_policies),
+        }
+        report["policy_run_overrides"] = {
+            "company_site_locality_mode": locality_mode,
+            "company_site_max_sites_per_run": int(policy_snapshot.get("company_sites_per_run") or 0),
+            "company_site_runner_credit_budget": int(policy_snapshot.get("effective_runner_credits_per_run") or 0),
+            "company_site_max_job_links_per_site": 25,
+            "company_site_policy_version": SCRAPEOPS_POLICY_VERSION,
+            "scrapeops_domain_policies": active_domain_policies,
+            "run_user_plan_id": normalize_plan_id(plan_id) if plan_id else "",
+            "run_user_quota_overrides": runtime_quota_overrides,
+        }
+        return report
+
+    def start_quick_apply_run(
+        self,
+        workspace_id: str,
+        *,
+        manual_urls: list[str] | tuple[str, ...] | set[str] | str,
+        run_input_overrides: Mapping[str, Any] | None = None,
+        execute: bool = True,
+        enqueue: bool = False,
+        requested_by: str = "api",
+        max_attempts: int = 1,
+    ) -> tuple[RunRecord, list[dict[str, Any]]]:
+        if execute and enqueue:
+            raise ValueError("run cannot be both queued and synchronously executed")
+
+        workspace = self.repositories.workspace_repository.get_workspace(workspace_id)
+        automation_flow = str(
+            workspace.metadata.get("automation_flow") or workspace.settings.get("automation_flow") or ""
+        ).strip()
+        if automation_flow and automation_flow != "tailored_documents":
+            raise ValueError("Quick apply requires a tailored-documents workspace.")
+
+        valid_urls, invalid_entries = normalize_manual_urls(manual_urls)
+        if not valid_urls:
+            raise ValueError("Add at least one valid exact job URL.")
+
+        workflow = build_quick_apply_workflow_template()
+        effective_run_input_overrides = dict(run_input_overrides or {})
+        effective_run_input_overrides.update(
+            {
+                "manual_urls_inline": list(valid_urls),
+                "manual_url_seed_list": list(valid_urls),
+                "stage4_max_jobs": len(valid_urls),
+            }
+        )
+        planned_run_settings = dict(workspace.settings or {})
+        planned_run_settings.update(effective_run_input_overrides)
+        _validate_builder_workspace_definition(
+            workspace,
+            phase="run_preflight",
+            error_code="run_preflight_failed",
+            run_plan_settings=planned_run_settings,
+            object_storage=self.object_storage,
+        )
+        run = RunRecord.create(
+            workspace_id=workspace.id,
+            workflow_template_id=workflow.id,
+            run_input_overrides=effective_run_input_overrides,
+            requested_by=requested_by,
+            max_attempts=max_attempts,
+            metadata={
+                "workspace_type": workspace.workspace_type,
+                "run_kind": "quick_apply",
+                "accepted_url_count": len(valid_urls),
+                "invalid_url_count": len(invalid_entries),
+            },
+        )
+        run.run_plan = self.stage_engine.build_run_plan(
+            workspace=workspace,
+            workflow=workflow,
+            run_input_overrides=effective_run_input_overrides,
+        )
+        self.repositories.run_repository.save(run)
+
+        if enqueue:
+            return self._queue_run(run), invalid_entries
+        if not execute:
+            return self.repositories.run_repository.get(run.id), invalid_entries
+        return self._execute_run(run, workspace=workspace, workflow=workflow, auto_retry_failed=False), invalid_entries
+
+    def create_workspace_from_scratch(self, payload: Mapping[str, Any]) -> WorkspaceDefinition:
+        builder_payload = dict(payload)
+        _validate_builder_workspace_payload(
+            builder_payload,
+            workspace_id=str(builder_payload.get("workspace_id") or "").strip(),
+        )
+        workflow_template, workspace = build_workspace_from_scratch(builder_payload)
+        self.upsert_workflow_template(workflow_template)
+        return self.upsert_workspace(workspace)
+
+    def update_workspace_from_scratch(self, workspace_id: str, payload: Mapping[str, Any]) -> WorkspaceDefinition:
+        existing_workspace = self.get_workspace(workspace_id)
+        builder_payload = dict(payload)
+        builder_payload["workspace_id"] = existing_workspace.id
+        builder_payload.setdefault("workflow_template_id", existing_workspace.workflow_template_id)
+        _validate_builder_workspace_payload(builder_payload, workspace_id=existing_workspace.id)
+        workflow_template, workspace = build_workspace_from_scratch(builder_payload)
+        workspace.owner_user_id = existing_workspace.owner_user_id
+        existing_schedule = (existing_workspace.metadata or {}).get(WORKSPACE_RUN_SCHEDULE_METADATA_KEY)
+        if isinstance(existing_schedule, dict):
+            workspace.metadata = dict(workspace.metadata or {})
+            workspace.metadata[WORKSPACE_RUN_SCHEDULE_METADATA_KEY] = _workspace_run_schedule_payload(
+                existing_workspace
+            )
+        self.upsert_workflow_template(workflow_template)
+        return self.upsert_workspace(workspace)
+
+    def update_workspace_schedule(self, workspace_id: str, payload: Mapping[str, Any]) -> WorkspaceDefinition:
+        workspace = self.get_workspace(workspace_id)
+        schedule = _workspace_run_schedule_payload(workspace)
+        interval_days = _schedule_interval_days(payload.get("interval_days"))
+        enabled = bool(payload.get("enabled"))
+        if "enabled" not in payload and interval_days >= 1:
+            enabled = True
+
+        if enabled and interval_days < 1:
+            raise ValueError("interval_days must be at least 1 when recurring scheduling is enabled.")
+
+        if not enabled:
+            schedule.update(
+                {
+                    "enabled": False,
+                    "interval_days": 0,
+                    "next_run_at": "",
+                    "last_error": "",
+                    "last_error_at": "",
+                }
+            )
+            return self._persist_workspace_run_schedule(workspace, schedule)
+
+        preserve_existing_next_run = (
+            schedule["enabled"]
+            and schedule["interval_days"] == interval_days
+            and _parse_utc_datetime(schedule["next_run_at"]) is not None
+        )
+        schedule.update(
+            {
+                "enabled": True,
+                "interval_days": interval_days,
+                "next_run_at": (
+                    schedule["next_run_at"]
+                    if preserve_existing_next_run
+                    else _next_schedule_timestamp(from_dt=_utc_now(), interval_days=interval_days)
+                ),
+                "last_error": "",
+                "last_error_at": "",
+            }
+        )
+        return self._persist_workspace_run_schedule(workspace, schedule)
+
+    def enqueue_due_scheduled_runs(self) -> list[RunRecord]:
+        scheduler_logger = logging.getLogger("backend.scheduler")
+        now = _utc_now()
+        now_iso = now.isoformat()
+        active_workspace_ids = {
+            run.workspace_id
+            for run in self.list_runs(limit=100000, offset=0, status="", workspace_id="")
+            if run.status in SCHEDULED_RUN_ACTIVE_STATUSES
+        }
+        queued_runs: list[RunRecord] = []
+
+        for workspace in self.list_workspaces():
+            schedule = _workspace_run_schedule_payload(workspace)
+            if not schedule["enabled"] or schedule["interval_days"] < 1:
+                continue
+
+            next_run_at = _parse_utc_datetime(schedule["next_run_at"])
+            if next_run_at is None:
+                schedule["next_run_at"] = _next_schedule_timestamp(
+                    from_dt=now,
+                    interval_days=schedule["interval_days"],
+                )
+                self._persist_workspace_run_schedule(workspace, schedule)
+                continue
+
+            if next_run_at > now or workspace.id in active_workspace_ids:
+                continue
+
+            try:
+                owner_user_id = str(workspace.owner_user_id or "").strip()
+                if not owner_user_id:
+                    raise ValueError(f"Workspace '{workspace.id}' has no owner and cannot enqueue scheduled runs.")
+                run = self.enqueue_run(
+                    workspace.id,
+                    requested_by=SCHEDULED_RUN_REQUESTED_BY,
+                    user_id=owner_user_id,
+                    max_attempts=1,
+                )
+            except Exception as exc:
+                scheduler_logger.exception(
+                    "Unable to enqueue scheduled run for workspace %s",
+                    workspace.id,
+                )
+                schedule.update(
+                    {
+                        "next_run_at": _next_schedule_timestamp(
+                            from_dt=now,
+                            interval_days=schedule["interval_days"],
+                        ),
+                        "last_error": str(exc),
+                        "last_error_at": now_iso,
+                    }
+                )
+                self._persist_workspace_run_schedule(workspace, schedule)
+                continue
+
+            schedule.update(
+                {
+                    "next_run_at": _next_schedule_timestamp(
+                        from_dt=now,
+                        interval_days=schedule["interval_days"],
+                    ),
+                    "last_enqueued_at": now_iso,
+                    "last_run_id": run.id,
+                    "last_error": "",
+                    "last_error_at": "",
+                }
+            )
+            self._persist_workspace_run_schedule(workspace, schedule)
+            active_workspace_ids.add(workspace.id)
+            queued_runs.append(run)
+
+        return queued_runs
+
+    def _find_job_payload(self, run_id: str, job_id: str) -> dict[str, Any]:
+        for jobs in self.repositories.job_store.load_all_job_sets(run_id).values():
+            for job in jobs:
+                if job.job_id == job_id:
+                    return job.to_dict()
+        for key, value in self.repositories.job_store.load_all_blobs(run_id).items():
+            if not (str(key).endswith("_rejected") or str(key).endswith("_dropped_duplicates")) or not isinstance(
+                value, list
+            ):
+                continue
+            for item in value:
+                if isinstance(item, dict) and str(item.get("job_id") or "") == job_id:
+                    return dict(item)
+        raise KeyError(f"Job '{job_id}' not found in run '{run_id}'.")
+
+    def _persist_workspace_run_schedule(
+        self,
+        workspace: WorkspaceDefinition,
+        schedule: Mapping[str, Any],
+    ) -> WorkspaceDefinition:
+        updated_workspace = WorkspaceDefinition.from_dict(workspace.to_dict())
+        updated_workspace.metadata = dict(updated_workspace.metadata or {})
+        updated_workspace.metadata[WORKSPACE_RUN_SCHEDULE_METADATA_KEY] = dict(schedule)
+        self.repositories.workspace_repository.upsert_workspace(updated_workspace)
+        return self.repositories.workspace_repository.get_workspace(updated_workspace.id)
+
+    def _workflow_from_run_snapshot(self, run: RunRecord) -> WorkflowTemplate:
+        if run.run_plan and run.run_plan.workflow_snapshot:
+            return WorkflowTemplate.from_dict(run.run_plan.workflow_snapshot)
+        return self.repositories.workspace_repository.get_workflow_template(run.workflow_template_id)
+
+    def _workspace_from_run_snapshot(self, run: RunRecord) -> WorkspaceDefinition:
+        if run.run_plan and run.run_plan.workspace_snapshot:
+            return WorkspaceDefinition.from_dict(run.run_plan.workspace_snapshot)
+        return self.repositories.workspace_repository.get_workspace(run.workspace_id)
+
+    def _build_requeue_workflow(self, workflow: WorkflowTemplate) -> WorkflowTemplate:
+        requeue_stages = [
+            StageDefinition.from_dict(stage.to_dict())
+            for stage in workflow.stages
+            if stage.stage_type in AUTO_APPROVE_REVIEW_STAGE_TYPES
+            or bool((stage.metadata or {}).get("supports_requeue"))
+        ]
+        if not requeue_stages:
+            raise ValueError("This workspace does not expose a document-generation stage that can be requeued.")
+        requeue_stages[0].input_keys = ["requeued_jobs"]
+        return WorkflowTemplate(
+            id=f"{workflow.id}_requeue",
+            name=f"{workflow.name} Requeue",
+            description=f"Requeue workflow for {workflow.name}.",
+            stages=requeue_stages,
+            default_run_settings=dict(workflow.default_run_settings),
+        )
+
+    def _auto_approve_generated_job_reviews(
+        self,
+        *,
+        run_id: str,
+        workflow: WorkflowTemplate,
+        reviewer: str = "system",
+    ) -> None:
+        review_job_set_keys = _auto_approve_review_job_set_keys(workflow)
+        if not review_job_set_keys:
+            return
+
+        run = self.repositories.run_repository.get(run_id)
+        existing_user_postings = self._user_tracker_posting_urls(
+            user_id=run.normalized_user_id,
+            exclude_run_id=run_id,
+        )
+        job_sets = self.list_job_sets(run_id)
+        existing_reviews_by_job = {
+            review.job_id: review for review in self.list_reviews(run_id=run_id, limit=100000, offset=0)
+        }
+
+        for set_key in review_job_set_keys:
+            for job in job_sets.get(set_key, []):
+                existing_review = existing_reviews_by_job.get(job.job_id)
+                if existing_review and existing_review.status == "approved" and existing_review.decision == "approved":
+                    continue
+                if existing_review and existing_review.decision == "rejected":
+                    continue
+
+                posting_url = self._job_record_posting_url(job)
+                duplicate_posting = dict(existing_user_postings.get(posting_url) or {}) if posting_url else {}
+                if duplicate_posting:
+                    duplicate_review = self.upsert_review(
+                        run_id=run_id,
+                        review_id=existing_review.review_id if existing_review else "",
+                        payload={
+                            "job_id": job.job_id,
+                            "status": "duplicate",
+                            "decision": "duplicate",
+                            "reviewer": reviewer,
+                            "notes": "Duplicate posting URL already exists in this user's tracker.",
+                            "job_set_key": set_key,
+                            "metadata": {
+                                "auto_duplicate": True,
+                                "duplicate_scope": "user_posting_url",
+                                "canonical_posting_url": posting_url,
+                                "duplicate_of": duplicate_posting,
+                            },
+                        },
+                    )
+                    existing_reviews_by_job[job.job_id] = duplicate_review
+                    continue
+
+                review = self.upsert_review(
+                    run_id=run_id,
+                    review_id=existing_review.review_id if existing_review else "",
+                    payload={
+                        "job_id": job.job_id,
+                        "status": "approved",
+                        "decision": "approved",
+                        "reviewer": (
+                            existing_review.reviewer if existing_review and existing_review.reviewer else reviewer
+                        ),
+                        "notes": existing_review.notes if existing_review else "",
+                        "job_set_key": set_key,
+                        "metadata": {"auto_approved": True, "canonical_posting_url": posting_url},
+                    },
+                )
+                existing_reviews_by_job[job.job_id] = review
+                if posting_url:
+                    existing_user_postings[posting_url] = {
+                        "posting_url": posting_url,
+                        "run_id": run_id,
+                        "workspace_id": run.workspace_id,
+                        "review_id": review.review_id,
+                        "job_id": job.job_id,
+                    }
+
+    def backfill_completed_test_run_tracker_reviews(self, *, run_ids: list[str]) -> int:
+        backfilled_reviews = 0
+        logger = logging.getLogger("backend.tracker.test_run_backfill")
+        for run_id in run_ids:
+            try:
+                run = self.get_run(run_id)
+            except KeyError:
+                continue
+            if run.status != RUN_STATUS_COMPLETED or not run.is_test_run:
+                continue
+            if self.list_reviews(run_id=run.id, limit=1, offset=0):
+                continue
+            try:
+                workflow = self._workflow_from_run_snapshot(run)
+                self._auto_approve_generated_job_reviews(run_id=run.id, workflow=workflow)
+            except Exception:
+                logger.exception("Unable to backfill tracker review for completed test run %s", run.id)
+                continue
+            backfilled_reviews += len(self.list_reviews(run_id=run.id, limit=1000, offset=0))
+        return backfilled_reviews
+
+    def requeue_job_for_generation(
+        self,
+        *,
+        run_id: str,
+        job_id: str,
+        requested_by: str = "api",
+        max_attempts: int = 1,
+        execute: bool = False,
+        notes: str = "",
+    ) -> RunRecord:
+        original_run = self.get_run(run_id)
+        workspace = self.get_workspace(original_run.workspace_id)
+        original_workflow = self.repositories.workspace_repository.get_workflow_template(workspace.workflow_template_id)
+        job_payload = self._find_job_payload(run_id, job_id)
+        requeue_workflow = self._build_requeue_workflow(original_workflow)
+        run_overrides = dict(original_run.run_input_overrides or {})
+        run_overrides["force_regenerate"] = True
+
+        requeue_run = RunRecord.create(
+            workspace_id=workspace.id,
+            workflow_template_id=requeue_workflow.id,
+            run_input_overrides=run_overrides,
+            requested_by=requested_by,
+            max_attempts=max_attempts,
+            metadata={
+                "workspace_type": workspace.workspace_type,
+                "requeue_origin": {
+                    "run_id": run_id,
+                    "job_id": job_id,
+                    "notes": str(notes or ""),
+                },
+            },
+        )
+        requeue_run.run_plan = self.stage_engine.build_run_plan(
+            workspace=workspace,
+            workflow=requeue_workflow,
+            run_input_overrides=run_overrides,
+        )
+        self.repositories.run_repository.save(requeue_run)
+        self.repositories.job_store.save_job_set(
+            requeue_run.id,
+            "requeued_jobs",
+            [JobRecord.from_mapping(job_payload)],
+        )
+        self._refresh_run_job_keys(requeue_run.id)
+
+        if execute:
+            return self._execute_run(
+                requeue_run,
+                workspace=workspace,
+                workflow=requeue_workflow,
+                auto_retry_failed=False,
+            )
+        return self._queue_run(requeue_run)
+
+    def list_users(self) -> list[UserRecord]:
+        return self._identity_access_service.list_users()
+
+    def get_user(self, user_id: str) -> UserRecord:
+        return self._identity_access_service.get_user(user_id)
+
+    def upsert_user(self, payload: Mapping[str, Any] | UserRecord):
+        return self._identity_access_service.upsert_user(payload)
+
+    def delete_user(self, user_id: str) -> None:
+        self._identity_access_service.delete_user(user_id)
+
+    def delete_user(self, user_id: str) -> None:
+        self._identity_access_service.delete_user(user_id)
+
+    def list_career_profiles(self, *, user_id: str = "") -> list:
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            return []
+        return store.list_profiles(user_id=user_id)
+
+    def get_career_profile(self, profile_id: str):
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            raise ValueError("Career profile storage is not configured.")
+        return store.get_profile(profile_id)
+
+    def create_career_profile(self, payload: Mapping[str, Any]):
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            raise ValueError("Career profile storage is not configured.")
+        profile = CareerProfile.create(
+            user_id=str(payload.get("user_id") or "").strip(),
+            name=str(payload.get("name") or "").strip(),
+            description=str(payload.get("description") or "").strip(),
+            preferred_language=str(payload.get("preferred_language") or "en").strip(),
+            target_direction=str(payload.get("target_direction") or "").strip(),
+        )
+        store.upsert_profile(profile)
+        return profile
+
+    def update_career_profile(self, profile_id: str, payload: Mapping[str, Any]):
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            raise ValueError("Career profile storage is not configured.")
+        profile = store.get_profile(profile_id)
+        if "name" in payload:
+            name = str(payload["name"] or "").strip()
+            if name:
+                profile.name = name
+        if "description" in payload:
+            profile.description = str(payload["description"] or "").strip()
+        if "preferred_language" in payload:
+            lang = str(payload["preferred_language"] or "").strip()
+            if lang:
+                profile.preferred_language = lang
+        if "target_direction" in payload:
+            profile.target_direction = str(payload["target_direction"] or "").strip()
+        if "target_direction" in payload:
+            profile.target_direction = str(payload["target_direction"] or "").strip()
+        if "baseline_cv_asset_id" in payload:
+            profile.baseline_cv_asset_id = str(payload["baseline_cv_asset_id"] or "").strip()
+        if "baseline_cv_display_name" in payload:
+            profile.baseline_cv_display_name = str(payload["baseline_cv_display_name"] or "").strip()
+        if "baseline_cv_extraction_date" in payload:
+            profile.baseline_cv_extraction_date = str(payload["baseline_cv_extraction_date"] or "").strip()
+        if "baseline_cv_source_version" in payload:
+            profile.baseline_cv_source_version = str(payload["baseline_cv_source_version"] or "").strip()
+        if "status" in payload:
+            from backend.domain.models import CAREER_PROFILE_STATUSES
+
+            status = str(payload["status"] or "").strip()
+            if status in CAREER_PROFILE_STATUSES:
+                profile.status = status
+        profile.updated_at = utc_now_iso()
+        store.upsert_profile(profile)
+        return profile
+
+    def delete_career_profile(self, profile_id: str) -> None:
+        store = getattr(self.repositories, "career_profile_store", None)
+        if store is None:
+            raise ValueError("Career profile storage is not configured.")
+        store.delete_profile(profile_id)
+
+    def list_referral_contacts(self, user_id: str) -> list[ReferralContactRecord]:
+        return self._tracker_application_service.list_referral_contacts(user_id)
+
+    def get_referral_contact(self, user_id: str, contact_id: str) -> ReferralContactRecord:
+        return self._tracker_application_service.get_referral_contact(user_id, contact_id)
+
+    def upsert_referral_contact(
+        self,
+        *,
+        user_id: str,
+        payload: Mapping[str, Any] | ReferralContactRecord,
+        contact_id: str = "",
+    ) -> ReferralContactRecord:
+        return self._tracker_application_service.upsert_referral_contact(
+            user_id=user_id,
+            payload=payload,
+            contact_id=contact_id,
+        )
+
+    def import_referral_contacts(
+        self,
+        *,
+        user_id: str,
+        csv_text: str,
+        source_kind: str = "linkedin_csv",
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.import_referral_contacts(
+            user_id=user_id,
+            csv_text=csv_text,
+            source_kind=source_kind,
+        )
+
+    def linkedin_sync_status(self, user_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any]:
+        return self._tracker_application_service.linkedin_sync_status(user_id, plan_id=plan_id)
+
+    def get_user_plan_id(self, user_id: str, *, fallback_plan_id: str = DEFAULT_PLAN_ID) -> str:
+        lookup = getattr(self.repositories.auth_repository, "get_current_subscription_by_user_id", None)
+        if callable(lookup):
+            try:
+                subscription = lookup(user_id) or {}
+                return normalize_plan_id(subscription.get("plan_id") or fallback_plan_id)
+            except KeyError:
+                pass
+        return normalize_plan_id(fallback_plan_id)
+
+    def sync_linkedin_connections(
+        self,
+        *,
+        user_id: str,
+        csv_text: str,
+        plan_id: str = DEFAULT_PLAN_ID,
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.sync_linkedin_connections(
+            user_id=user_id,
+            csv_text=csv_text,
+            plan_id=plan_id,
+        )
+
+    def delete_imported_referral_contacts(self, *, user_id: str) -> dict[str, Any]:
+        return self._tracker_application_service.delete_imported_referral_contacts(user_id=user_id)
+
+    def delete_referral_contact(self, user_id: str, contact_id: str) -> None:
+        self._tracker_application_service.delete_referral_contact(user_id, contact_id)
+
+    def generate_referral_outreach(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+        contact_id: str = "",
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.generate_referral_outreach(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+            contact_id=contact_id,
+        )
+
+    def generate_hiring_manager_outreach(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.generate_hiring_manager_outreach(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+
+    def generate_target_contact_discovery(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.generate_target_contact_discovery(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+
+    def get_job_workspace(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.get_job_workspace(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+
+    def get_relevant_people_discovery_status(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.get_relevant_people_discovery_status(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+
+    def get_relevant_people_discovery_results(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.get_relevant_people_discovery_results(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+
+    def start_relevant_people_discovery(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.start_relevant_people_discovery(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+        )
+
+    def set_relevant_people_status(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        job_id: str,
+        person_id: str,
+        status: str,
+    ) -> dict[str, Any]:
+        return self._tracker_application_service.set_relevant_people_status(
+            user_id=user_id,
+            run_id=run_id,
+            job_id=job_id,
+            person_id=person_id,
+            status=status,
+        )
+
+    def list_api_tokens(
+        self,
+        *,
+        user_id: str = "",
+        include_inactive: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ApiTokenRecord]:
+        return self._identity_access_service.list_api_tokens(
+            user_id=user_id,
+            include_inactive=include_inactive,
+            limit=limit,
+            offset=offset,
+        )
+
+    def create_assisted_apply_connection_request(
+        self,
+        *,
+        extension_origin: str,
+        state: str,
+        challenge: str,
+        installation_id: str,
+        version: str,
+    ) -> AssistedApplyConnectionRecord:
+        return self._assisted_apply_connection_service.create_request(
+            extension_origin=extension_origin,
+            state=state,
+            challenge=challenge,
+            installation_id=installation_id,
+            version=version,
+        )
+
+    def get_assisted_apply_connection_dashboard(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+    ) -> dict[str, Any]:
+        return self._assisted_apply_connection_service.dashboard(
+            user_id=user_id,
+            request_id=request_id,
+        )
+
+    def authorize_assisted_apply_connection(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+        preferences: Mapping[str, Any] | None = None,
+    ) -> str:
+        return self._assisted_apply_connection_service.authorize(
+            user_id=user_id,
+            request_id=request_id,
+            preferences=preferences,
+        )
+
+    def reject_assisted_apply_connection(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+    ) -> AssistedApplyConnectionRecord:
+        return self._assisted_apply_connection_service.reject(
+            user_id=user_id,
+            request_id=request_id,
+        )
+
+    def exchange_assisted_apply_authorization(
+        self,
+        *,
+        extension_origin: str,
+        request_id: str,
+        code: str,
+        verifier: str,
+    ) -> tuple[AssistedApplyConnectionRecord, str]:
+        return self._assisted_apply_connection_service.exchange(
+            extension_origin=extension_origin,
+            request_id=request_id,
+            code=code,
+            verifier=verifier,
+        )
+
+    def authenticate_assisted_apply_session(
+        self,
+        *,
+        raw_session: str,
+        extension_origin: str,
+    ) -> tuple[UserRecord, AssistedApplyConnectionRecord]:
+        return self._assisted_apply_connection_service.authenticate_session(
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def get_assisted_apply_preferences(self, user_id: str) -> AssistedApplyPreferences:
+        return self._assisted_apply_connection_service.get_preferences(user_id)
+
+    def update_assisted_apply_preferences(
+        self,
+        *,
+        user_id: str,
+        preferences: Mapping[str, Any] | None,
+    ) -> AssistedApplyPreferences:
+        return self._assisted_apply_connection_service.update_preferences(
+            user_id,
+            preferences,
+        )
+
+    def revoke_current_assisted_apply_session(
+        self,
+        *,
+        raw_session: str,
+        extension_origin: str,
+    ) -> AssistedApplyConnectionRecord:
+        return self._assisted_apply_connection_service.revoke_current(
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def revoke_owned_assisted_apply_connection(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+    ) -> AssistedApplyConnectionRecord:
+        return self._assisted_apply_connection_service.revoke_owned(
+            user_id=user_id,
+            request_id=request_id,
+        )
+
+    def issue_api_token(
+        self,
+        *,
+        user_id: str,
+        name: str,
+        scopes: list[str] | None = None,
+        expires_at: str = "",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> tuple[ApiTokenRecord, str]:
+        return self._identity_access_service.issue_api_token(
+            user_id=user_id,
+            name=name,
+            scopes=scopes,
+            expires_at=expires_at,
+            metadata=metadata,
+        )
+
+    def revoke_api_token(self, token_id: str) -> ApiTokenRecord:
+        return self._identity_access_service.revoke_api_token(token_id)
+
+    def authenticate_access_token(self, raw_token: str) -> tuple[UserRecord, ApiTokenRecord]:
+        return self._identity_access_service.authenticate_access_token(raw_token)
+
+    def user_has_scope(self, token: ApiTokenRecord, required_scope: str) -> bool:
+        return self._identity_access_service.user_has_scope(token, required_scope)
+
+    def user_has_acquisition_permission(
+        self,
+        user: UserRecord,
+        token: ApiTokenRecord,
+        permission: str,
+    ) -> bool:
+        return self._identity_access_service.user_has_acquisition_permission(user, token, permission)
+
+    def user_can_access_workspace(self, user: UserRecord, workspace_id: str) -> bool:
+        return self._identity_access_service.user_can_access_workspace(user, workspace_id)
+
+    def user_can_access_run(self, user: UserRecord, run: RunRecord) -> bool:
+        return self._identity_access_service.user_can_access_run(user, run)
+
+    def list_secrets(self, *, workspace_id: str = "", limit: int = 100, offset: int = 0) -> list[SecretRecord]:
+        return self._identity_access_service.list_secrets(
+            workspace_id=workspace_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def get_secret(self, secret_id: str) -> SecretRecord:
+        return self._identity_access_service.get_secret(secret_id)
+
+    def upsert_secret(self, payload: Mapping[str, Any] | SecretRecord):
+        return self._identity_access_service.upsert_secret(payload)
+
+    def delete_secret(self, secret_id: str) -> None:
+        self._identity_access_service.delete_secret(secret_id)
+
+    def resolve_secret_value(self, secret_id: str) -> str:
+        return self._identity_access_service.resolve_secret_value(secret_id)
+
+    def resolve_runtime_value(self, payload: Any) -> Any:
+        return self._identity_access_service.resolve_runtime_value(payload)
+
+    @staticmethod
+    def _review_is_actionable_tracker_item(review: ReviewRecord) -> bool:
+        return TrackerApplicationService.review_is_actionable_tracker_item(review)
+
+    def _job_record_posting_url(self, job: JobRecord | None) -> str:
+        return self._tracker_application_service.job_record_posting_url(job)
+
+    def _user_tracker_posting_urls(
+        self,
+        *,
+        user_id: str,
+        exclude_review_id: str = "",
+        exclude_run_id: str = "",
+        exclude_job_id: str = "",
+    ) -> dict[str, dict[str, str]]:
+        return self._tracker_application_service.user_tracker_posting_urls(
+            user_id=user_id,
+            exclude_review_id=exclude_review_id,
+            exclude_run_id=exclude_run_id,
+            exclude_job_id=exclude_job_id,
+        )
+
+    def _find_duplicate_user_tracker_posting(
+        self,
+        *,
+        run_id: str,
+        job_id: str,
+        review_id: str = "",
+    ) -> dict[str, str]:
+        return self._tracker_application_service.find_duplicate_user_tracker_posting(
+            run_id=run_id,
+            job_id=job_id,
+            review_id=review_id,
+        )
+
+    def _get_job_for_run(self, *, run_id: str, job_id: str) -> JobRecord:
+        return self._tracker_application_service.get_job_for_run(run_id=run_id, job_id=job_id)
+
+    def get_run(self, run_id: str) -> RunRecord:
+        return self._run_lifecycle_service.get_run(run_id)
+
+    def delete_run(self, run_id: str) -> None:
+        self._run_lifecycle_service.delete_run(run_id)
+
+    def list_runs(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        status: str = "",
+        workspace_id: str = "",
+        hydrate_payload: bool = True,
+    ):
+        return self._run_lifecycle_service.list_runs(
+            limit=limit,
+            offset=offset,
+            status=status,
+            workspace_id=workspace_id,
+            hydrate_payload=hydrate_payload,
+        )
+
+    def list_job_sets(self, run_id: str) -> dict[str, list[JobRecord]]:
+        return self._run_lifecycle_service.list_job_sets(run_id)
+
+    def get_job_set(self, run_id: str, set_key: str) -> list[JobRecord]:
+        return self._run_lifecycle_service.get_job_set(run_id, set_key)
+
+    def upsert_job_set(self, run_id: str, set_key: str, jobs: list[Mapping[str, Any] | JobRecord]) -> list[JobRecord]:
+        return self._run_lifecycle_service.upsert_job_set(run_id, set_key, jobs)
+
+    def delete_job_set(self, run_id: str, set_key: str) -> None:
+        self._run_lifecycle_service.delete_job_set(run_id, set_key)
+
+    def delete_job(self, run_id: str, job_id: str) -> None:
+        self._run_lifecycle_service.delete_job(run_id, job_id)
+
+    def list_artifacts(self, run_id: str) -> list[ArtifactRecord]:
+        return self._run_lifecycle_service.list_artifacts(run_id)
+
+    def get_artifact(self, run_id: str, artifact_id: str) -> ArtifactRecord:
+        return self._run_lifecycle_service.get_artifact(run_id, artifact_id)
+
+    def upsert_artifact(self, run_id: str, payload: Mapping[str, Any] | ArtifactRecord) -> ArtifactRecord:
+        return self._run_lifecycle_service.upsert_artifact(run_id, payload)
+
+    def delete_artifact(self, run_id: str, artifact_id: str) -> None:
+        self._run_lifecycle_service.delete_artifact(run_id, artifact_id)
+
+    def list_reviews(
+        self,
+        *,
+        run_id: str = "",
+        job_id: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[ReviewRecord]:
+        return self._run_lifecycle_service.list_reviews(
+            run_id=run_id,
+            job_id=job_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def get_review(self, review_id: str) -> ReviewRecord:
+        return self._run_lifecycle_service.get_review(review_id)
+
+    def upsert_review(
+        self,
+        *,
+        run_id: str,
+        payload: Mapping[str, Any] | ReviewRecord,
+        review_id: str = "",
+    ) -> ReviewRecord:
+        return self._run_lifecycle_service.upsert_review(
+            run_id=run_id,
+            payload=payload,
+            review_id=review_id,
+        )
+
+    def delete_review(self, review_id: str) -> None:
+        self._run_lifecycle_service.delete_review(review_id)
+
+    def list_workers(self, *, limit: int = 50, offset: int = 0, status: str = "") -> list[WorkerRecord]:
+        return self._run_lifecycle_service.list_workers(limit=limit, offset=offset, status=status)
+
+    def get_worker(self, worker_id: str) -> WorkerRecord:
+        return self._run_lifecycle_service.get_worker(worker_id)
+
+    def heartbeat_worker(
+        self,
+        *,
+        worker_id: str,
+        status: str = WORKER_STATUS_IDLE,
+        current_run_id: str = "",
+        host_name: str = "",
+        process_id: int = 0,
+        lease_seconds: int = 60,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> WorkerRecord:
+        return self._run_lifecycle_service.heartbeat_worker(
+            worker_id=worker_id,
+            status=status,
+            current_run_id=current_run_id,
+            host_name=host_name,
+            process_id=process_id,
+            lease_seconds=lease_seconds,
+            metadata=metadata,
+        )
+
+    def renew_worker_lease(
+        self,
+        *,
+        worker_id: str,
+        current_run_id: str,
+        run_attempt_count: int,
+        host_name: str = "",
+        process_id: int = 0,
+        lease_seconds: int = 60,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> WorkerRecord:
+        return self._run_lifecycle_service.renew_worker_lease(
+            worker_id=worker_id,
+            current_run_id=current_run_id,
+            run_attempt_count=run_attempt_count,
+            host_name=host_name,
+            process_id=process_id,
+            lease_seconds=lease_seconds,
+            metadata=metadata,
+        )
+
+    def stop_worker(self, worker_id: str) -> WorkerRecord:
+        return self._run_lifecycle_service.stop_worker(worker_id)
+
+    def recover_stale_workers(self) -> list[WorkerRecord]:
+        return self._run_lifecycle_service.recover_stale_workers()
+
+    def _fail_run_preflight(self, run: RunRecord, exc: BackendValidationError) -> RunRecord:
+        return self._run_lifecycle_service.fail_run_preflight(run, exc)
+
+    def start_run(
+        self,
+        workspace_id: str,
+        *,
+        run_input_overrides: Mapping[str, Any] | None = None,
+        execute: bool = True,
+        enqueue: bool = False,
+        requested_by: str = "cli",
+        user_id: str = "",
+        max_attempts: int = 1,
+    ) -> RunRecord:
+        return self._run_lifecycle_service.start_run(
+            workspace_id,
+            run_input_overrides=run_input_overrides,
+            execute=execute,
+            enqueue=enqueue,
+            requested_by=requested_by,
+            user_id=user_id,
+            max_attempts=max_attempts,
+        )
+
+    def enqueue_run(
+        self,
+        workspace_id: str,
+        *,
+        run_input_overrides: Mapping[str, Any] | None = None,
+        requested_by: str = "api",
+        user_id: str = "",
+        max_attempts: int = 1,
+    ) -> RunRecord:
+        return self._run_lifecycle_service.enqueue_run(
+            workspace_id,
+            run_input_overrides=run_input_overrides,
+            requested_by=requested_by,
+            user_id=user_id,
+            max_attempts=max_attempts,
+        )
+
+    def claim_next_queued_run(
+        self,
+        *,
+        worker_id: str = "",
+        host_name: str = "",
+        process_id: int = 0,
+        lease_seconds: int = 60,
+        recover_stale_workers: bool = True,
+        enqueue_scheduled_runs: bool = True,
+        worker_role: str = "customer",
+        worker_metadata: Mapping[str, Any] | None = None,
+    ) -> RunRecord | None:
+        return self._run_lifecycle_service.claim_next_queued_run(
+            worker_id=worker_id,
+            host_name=host_name,
+            process_id=process_id,
+            lease_seconds=lease_seconds,
+            recover_stale_workers=recover_stale_workers,
+            enqueue_scheduled_runs=enqueue_scheduled_runs,
+            worker_role=worker_role,
+            worker_metadata=worker_metadata,
+        )
+
+    def execute_claimed_run(self, run_id: str, *, auto_retry_failed: bool = True) -> RunRecord:
+        return self._run_lifecycle_service.execute_claimed_run(run_id, auto_retry_failed=auto_retry_failed)
+
+    def release_worker(self, worker_id: str, *, status: str = WORKER_STATUS_IDLE) -> WorkerRecord | None:
+        return self._run_lifecycle_service.release_worker(worker_id, status=status)
+
+    def process_next_queued_run(
+        self,
+        *,
+        auto_retry_failed: bool = True,
+        worker_id: str = "",
+        host_name: str = "",
+        process_id: int = 0,
+        lease_seconds: int = 60,
+    ) -> RunRecord | None:
+        return self._run_lifecycle_service.process_next_queued_run(
+            auto_retry_failed=auto_retry_failed,
+            worker_id=worker_id,
+            host_name=host_name,
+            process_id=process_id,
+            lease_seconds=lease_seconds,
+        )
+
+    def cancel_run(self, run_id: str) -> RunRecord:
+        return self._run_lifecycle_service.cancel_run(run_id)
+
+    def retry_run(self, run_id: str) -> RunRecord:
+        return self._run_lifecycle_service.retry_run(run_id)
+
+    def resume_run(self, run_id: str) -> RunRecord:
+        return self._run_lifecycle_service.resume_run(run_id)
+
+    def _execute_run(
+        self,
+        run: RunRecord,
+        *,
+        workspace: WorkspaceDefinition,
+        workflow: WorkflowTemplate,
+        auto_retry_failed: bool,
+    ) -> RunRecord:
+        return self._run_lifecycle_service.execute_run(
+            run,
+            workspace=workspace,
+            workflow=workflow,
+            auto_retry_failed=auto_retry_failed,
+        )
+
+    def _queue_run(self, run: RunRecord) -> RunRecord:
+        return self._run_lifecycle_service.queue_run(run)
+
+    def _trim_to_resumable_prefix(self, run: RunRecord) -> None:
+        self._run_lifecycle_service.trim_to_resumable_prefix(run)
+
+    def _refresh_run_job_keys(self, run_id: str) -> None:
+        self._run_lifecycle_service.refresh_run_job_keys(run_id)
+
+    # --- AA-03: Application Package delegation ---
+
+    def create_application_package(
+        self,
+        *,
+        user_id: str,
+        job: Any,
+        answers: Any = None,
+        documents: Any = None,
+        warnings_items: Any = None,
+        candidate: Any = None,
+        experiences: Any = None,
+        education: Any = None,
+        skills: Any = None,
+        languages: Any = None,
+        standard_answers: Any = None,
+    ):
+        return self._assisted_apply_package_service.create_package(
+            user_id=user_id,
+            job=job,
+            answers=answers,
+            documents=documents,
+            warnings_items=warnings_items,
+            candidate=candidate,
+            experiences=experiences,
+            education=education,
+            skills=skills,
+            languages=languages,
+            standard_answers=standard_answers,
+        )
+
+    def launch_application_package(self, *, user_id: str, package_id: str):
+        return self._assisted_apply_package_service.launch_package(
+            user_id=user_id,
+            package_id=package_id,
+        )
+
+    def bind_application_package(self, *, binding_id: str, extension_origin: str):
+        return self._assisted_apply_package_service.bind_package(
+            binding_id=binding_id,
+            extension_origin=extension_origin,
+        )
+
+    def get_application_package_for_extension(
+        self,
+        *,
+        package_id: str,
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.get_package_for_extension(
+            package_id=package_id,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def get_or_bind_application_package_for_extension(
+        self,
+        *,
+        package_id: str,
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.get_or_bind_package_for_extension(
+            package_id=package_id,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def save_assisted_apply_correction(
+        self,
+        *,
+        package_id: str,
+        field_intent: str,
+        corrected_value: str,
+        scope: str,
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.save_correction_for_extension(
+            package_id=package_id,
+            field_intent=field_intent,
+            corrected_value=corrected_value,
+            scope=scope,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def create_assisted_apply_document_grant(
+        self,
+        *,
+        package_id: str,
+        document_id: str,
+        adapter: str = "",
+        upload_field_intent: str = "",
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.create_document_grant(
+            package_id=package_id,
+            document_id=document_id,
+            adapter=adapter,
+            upload_field_intent=upload_field_intent,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def consume_assisted_apply_document_grant(self, *, raw_grant: str, raw_session: str, extension_origin: str):
+        return self._assisted_apply_package_service.consume_document_grant(
+            raw_grant=raw_grant,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def respond_to_assisted_apply_outcome(
+        self,
+        *,
+        package_id: str,
+        package_version: int,
+        adapter: str,
+        adapter_version: str,
+        evidence_category: str,
+        decision: str,
+        uploaded_documents: list[Mapping[str, Any]],
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.respond_to_application_outcome(
+            package_id=package_id,
+            package_version=package_version,
+            adapter=adapter,
+            adapter_version=adapter_version,
+            evidence_category=evidence_category,
+            decision=decision,
+            uploaded_documents=uploaded_documents,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def save_assisted_apply_exact_standard_answer(
+        self,
+        *,
+        package_id: str,
+        question_label: str,
+        answer_value: str,
+        raw_session: str,
+        extension_origin: str,
+    ):
+        return self._assisted_apply_package_service.save_exact_standard_answer_for_extension(
+            package_id=package_id,
+            question_label=question_label,
+            answer_value=answer_value,
+            raw_session=raw_session,
+            extension_origin=extension_origin,
+        )
+
+    def create_assisted_apply_preparation(self, *, user_id: str, package_id: str):
+        return self._assisted_apply_preparation_service.create(user_id=user_id, package_id=package_id)
+
+    def get_assisted_apply_preparation(self, *, user_id: str, preparation_id: str):
+        return self._assisted_apply_preparation_service.get_for_user(user_id=user_id, preparation_id=preparation_id)
+
+    def list_assisted_apply_preparations(self, *, user_id: str):
+        return self._assisted_apply_preparation_service.list_for_user(user_id=user_id)
+
+    def report_assisted_apply_preparation(self, **kwargs):
+        return self._assisted_apply_preparation_service.report_from_extension(**kwargs)
+
+    def act_on_assisted_apply_preparation_from_extension(self, **kwargs):
+        return self._assisted_apply_preparation_service.apply_action_from_extension(**kwargs)
+
+    def act_on_assisted_apply_preparation(self, *, user_id: str, preparation_id: str, action: str):
+        return self._assisted_apply_preparation_service.apply_action(
+            user_id=user_id,
+            preparation_id=preparation_id,
+            action=action,
+        )

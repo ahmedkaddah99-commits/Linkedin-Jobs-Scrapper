@@ -1,0 +1,3 @@
+# Preserve authoritative CSV seed bytes exactly; embedded prose legitimately
+# contains trailing spaces and must retain the recorded SHA-256.
+data/acquisition/inputs/*.csv binary

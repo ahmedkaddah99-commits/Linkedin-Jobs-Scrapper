@@ -1,0 +1,13 @@
+[Unit]
+Description=Runr API
+After=network.target
+PartOf=runr.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/runr
+EnvironmentFile=/opt/runr/.env
+ExecStart=/opt/runr/deploy/start.sh api
+Restart=always
+RestartSec=5
+

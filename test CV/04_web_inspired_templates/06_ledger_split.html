@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ledger Split CV (With Photo)</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background:
+        radial-gradient(circle at top left, rgba(194, 214, 255, 0.25), transparent 32%),
+        linear-gradient(180deg, #f6f4ef 0%, #ece9e2 100%);
+      color: #111827;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+    }
+    a {
+      color: inherit;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.15em;
+    }
+    .screen-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.9rem 1.2rem;
+      backdrop-filter: blur(10px);
+      background: rgba(255, 255, 255, 0.82);
+      border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+    }
+    .screen-toolbar .meta {
+      font-size: 0.92rem;
+      color: #475569;
+    }
+    .toolbar-actions {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .toolbar-button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.72rem 1rem;
+      background: #111827;
+      color: white;
+      font: inherit;
+      cursor: pointer;
+    }
+    .toolbar-link {
+      font-size: 0.92rem;
+      color: #334155;
+    }
+    .page-wrap {
+      padding: 1.5rem;
+    }
+    .sheet {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      background: white;
+      box-shadow: 0 28px 70px rgba(15, 23, 42, 0.15);
+      overflow: hidden;
+    }
+    .muted {
+      color: #64748b;
+    }
+    .caps {
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+    }
+    .tag {
+      display: inline-block;
+      padding: 0.22rem 0.58rem;
+      border-radius: 999px;
+      background: #e2e8f0;
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .photo-shell {
+      width: 34mm;
+      height: 44mm;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      background: linear-gradient(180deg, #eef2f7 0%, #dfe8f1 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .profile-photo {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .photo-shell-placeholder {
+      border-style: dashed;
+      background:
+        repeating-linear-gradient(
+          135deg,
+          rgba(148, 163, 184, 0.12),
+          rgba(148, 163, 184, 0.12) 8px,
+          rgba(255, 255, 255, 0.8) 8px,
+          rgba(255, 255, 255, 0.8) 16px
+        );
+    }
+    .photo-placeholder-copy {
+      padding: 0.6rem;
+      text-align: center;
+      font-size: 0.72rem;
+      line-height: 1.35;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    @media print {
+      html, body {
+        background: white;
+      }
+      .screen-toolbar {
+        display: none;
+      }
+      .page-wrap {
+        padding: 0;
+      }
+      .sheet {
+        width: auto;
+        min-height: auto;
+        margin: 0;
+        box-shadow: none;
+      }
+      @page {
+        size: A4;
+        margin: 10mm;
+      }
+    }
+    
+      .ledger-sheet {
+        padding: 16mm 16mm 18mm;
+        font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      }
+      .ledger-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        padding-bottom: 14px;
+        border-bottom: 2px solid #18324a;
+      }
+      .ledger-header h1 {
+        margin: 8px 0 0;
+        font-size: 2.25rem;
+      }
+      .ledger-headline {
+        margin: 10px 0 0;
+        color: #475569;
+        font-size: 1rem;
+      }
+      .ledger-side {
+        display: grid;
+        gap: 10px;
+        justify-items: end;
+      }
+      .ledger-photo-shell {
+        border-radius: 20px;
+      }
+      .ledger-links {
+        text-align: right;
+        font-size: 0.84rem;
+        color: #5b6b7b;
+      }
+      .ledger-links p {
+        margin: 0;
+      }
+      .ledger-links p + p {
+        margin-top: 4px;
+      }
+      .ledger-grid {
+        display: grid;
+        grid-template-columns: 0.84fr 1.16fr;
+        gap: 22px;
+        margin-top: 16px;
+      }
+      .ledger-section + .ledger-section {
+        margin-top: 18px;
+      }
+      .ledger-section h2 {
+        margin: 0 0 10px;
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #18324a;
+      }
+      .ledger-section p {
+        margin: 0;
+        line-height: 1.6;
+      }
+      .ledger-skill-list {
+        margin: 0;
+        padding-left: 18px;
+      }
+      .ledger-skill-list li + li {
+        margin-top: 5px;
+      }
+      .ledger-role + .ledger-role {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(24, 50, 74, 0.1);
+      }
+      .ledger-role .role-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .ledger-role h3 {
+        margin: 0;
+        font-size: 1rem;
+      }
+      .ledger-role .company {
+        margin: 4px 0 0;
+        color: #5b6b7b;
+      }
+      .ledger-role .period {
+        color: #5b6b7b;
+        font-weight: 700;
+      }
+      .ledger-bullets {
+        margin: 8px 0 0 18px;
+        padding: 0;
+      }
+      .ledger-bullets li + li {
+        margin-top: 5px;
+      }
+    
+  </style>
+</head>
+<body>
+  <div class="screen-toolbar">
+    <div class="meta">Ledger Split CV (With Photo) · print-ready HTML prototype</div>
+    <div class="toolbar-actions">
+      <a class="toolbar-link" href="index.html">Back to gallery</a>
+      <button class="toolbar-button" onclick="window.print()">Print / Save PDF</button>
+    </div>
+  </div>
+  <div class="page-wrap">
+    
+    <main class="sheet ledger-sheet">
+      <header class="ledger-header">
+        <div class="ledger-headline-block">
+          <p class="caps">Compact detail-heavy layout</p>
+          <h1>Ahmed Kaddah</h1>
+          <p class="ledger-headline">Operations and Logistics Support</p>
+        </div>
+        <div class="ledger-side">
+          <div class="photo-shell ledger-photo-shell"><img class="profile-photo" src="_assets/profile_photo.png" alt="Candidate profile photo"></div>
+          <div class="ledger-links">
+            <p>Erlangen / Nuremberg, Germany</p>
+            <p><a href="mailto:ahmed.kaddah@tutamail.com">ahmed.kaddah@tutamail.com</a></p>
+            <p><a href="https://www.linkedin.com/in/ahmed-kaddah-3a1a88183/">LinkedIn</a></p>
+            <p><a href="https://github.com/ahmedkaddah99-commits?tab=repositories">GitHub</a></p>
+          </div>
+        </div>
+      </header>
+      <div class="ledger-grid">
+        <aside class="ledger-rail">
+          <section class="ledger-section">
+            <h2>Profile</h2>
+            <p>Operations and logistics support professional with hands-on experience managing more than 1,600 e-scooters across 7 cities, coordinating 7 transport vans, completing daily readiness checks, and supporting customer-facing field operations. Recognized for fast response times, reliable execution, onboarding new team members, and disciplined daily documentation. Available immediately for warehouse, logistics, operational support, and service roles.</p>
+          </section>
+          <section class="ledger-section">
+            <h2>Skills</h2>
+            <ul class="ledger-skill-list"><li>Fleet coordination</li><li>Warehouse and field operations</li><li>Transport van logistics</li><li>Daily inspections and readiness checks</li><li>Inventory counting and documentation</li><li>Customer-facing service</li><li>Team onboarding</li><li>Shift reliability</li><li>Arabic (Native)</li><li>English (C1)</li><li>German (B1/B2)</li></ul>
+          </section>
+          <section class="ledger-section">
+            <h2>Education</h2>
+            <p><strong>M.Sc. Information Systems</strong></p>
+            <p>University Example</p>
+            <p>Focus on analytics, business systems, and digital operations.</p>
+          </section>
+        </aside>
+        <section class="ledger-main">
+          <section class="ledger-section">
+            <h2>Experience</h2>
+            
+            <section class="ledger-role">
+              <div class="role-line">
+                <div>
+                  <h3>Logistics and Fleet Operations Associate</h3>
+                  <p class="company">Zeus Scooters GmbH</p>
+                </div>
+                <div class="period">Dec 2023 - Jul 2024</div>
+              </div>
+              <ul class="ledger-bullets"><li>Managed day-to-day support for a fleet of more than 1,600 e-scooters across 7 cities.</li><li>Coordinated logistics using 7 transport vans to keep assets available and operational.</li><li>Completed daily maintenance checks and readiness inspections to support reliable service.</li><li>Trained new team members on operational routines and day-to-day execution.</li></ul>
+            </section>
+            
+
+            <section class="ledger-role">
+              <div class="role-line">
+                <div>
+                  <h3>Service and Operations Associate</h3>
+                  <p class="company">Roxy Mobility GmbH</p>
+                </div>
+                <div class="period">Dec 2020 - Oct 2024</div>
+              </div>
+              <ul class="ledger-bullets"><li>Handled daily field service and customer support in a fast-moving operating environment.</li><li>Coordinated with partners including Deutsche Bahn on site and logistics-related tasks.</li><li>Earned top recognition for the fastest response time in the city.</li><li>Maintained daily records and inventory tracking for operational equipment.</li></ul>
+            </section>
+            
+
+            <section class="ledger-role">
+              <div class="role-line">
+                <div>
+                  <h3>Project and Team Assistant</h3>
+                  <p class="company">General Administration and Logistics</p>
+                </div>
+                <div class="period">Nov 2024 - Present</div>
+              </div>
+              <ul class="ledger-bullets"><li>Supported daily data capture and task tracking for ongoing team activities.</li><li>Prepared materials for workshops and team sessions.</li><li>Provided general administrative support to improve workflow consistency.</li></ul>
+            </section>
+            
+          </section>
+          <section class="ledger-section">
+            <h2>Availability</h2>
+            <p>Available immediately for full-time or mini-job roles.</p>
+          </section>
+        </section>
+      </div>
+    </main>
+    
+  </div>
+</body>
+</html>

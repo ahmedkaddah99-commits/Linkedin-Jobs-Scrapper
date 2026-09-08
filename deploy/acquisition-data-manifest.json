@@ -1,0 +1,271 @@
+{
+  "schema_version": "runr.acquisition.data-manifest.v1",
+  "branch": "deployment/render-turso-r2",
+  "release_commit": "39d15b8f3da9870b03102525ed03431194edaad6",
+  "generated_at": "2026-09-08T00:00:00Z",
+  "policy": {
+    "no_live_acquisition": true,
+    "no_production_migration": true,
+    "mutable_state_is_not_committed": true,
+    "secrets_are_environment_only": true
+  },
+  "server_roots": {
+    "input_root": "/srv/runr/shared/inputs",
+    "state_root": "/srv/runr/state",
+    "export_root": "/srv/runr/exports",
+    "backup_root": "/srv/runr/backups"
+  },
+  "seed_inputs": [
+    {
+      "logical_name": "company_master",
+      "repo_path": "data/acquisition/inputs/company_master.csv",
+      "server_path": "/srv/runr/shared/inputs/company_master.csv",
+      "format": "utf-8-sig CSV",
+      "rows": 9129,
+      "columns": 82,
+      "bytes": 17491851,
+      "sha256": "680b4c5cd1fb9309e81f04d8e8ee3b28aba0af154dc70811ca716654231967fc",
+      "committed_in_git": true,
+      "restore_separately": false,
+      "startup_validation": "exact SHA-256 and required company/LinkedIn columns"
+    },
+    {
+      "logical_name": "company_registry_canonical",
+      "repo_path": "data/acquisition/inputs/company_registry_canonical.csv",
+      "server_path": "/srv/runr/shared/inputs/company_registry_canonical.csv",
+      "format": "utf-8-sig CSV",
+      "rows": 17601,
+      "columns": 42,
+      "bytes": 11986132,
+      "sha256": "31ed996ab2b2d0723b00a6634cdcba02901862f95ffb1b2f3c9d8432bb457446",
+      "committed_in_git": true,
+      "restore_separately": false,
+      "startup_validation": "exact SHA-256 and canonical_CompanyID column"
+    },
+    {
+      "logical_name": "company_sources_linkedin_ids",
+      "repo_path": "data/acquisition/inputs/company_sources_linkedin_ids.csv",
+      "server_path": "/srv/runr/shared/inputs/company_sources_linkedin_ids.csv",
+      "format": "utf-8-sig CSV",
+      "rows": 17601,
+      "columns": 118,
+      "bytes": 18807047,
+      "sha256": "7f416ec6ebbcb936a42061ef0adaa07e4a6c04d2959d0eb579779126682440d9",
+      "committed_in_git": true,
+      "restore_separately": false,
+      "startup_validation": "exact SHA-256, 118-column contract, and required eligibility columns"
+    },
+    {
+      "logical_name": "rc005_reconciled_source_eligibility_manifest",
+      "repo_path": null,
+      "server_path": "/srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json",
+      "format": "JSON manifest",
+      "bytes": 43035445,
+      "sha256": "72b61f100a0d9edbba315b5f19db589f40cfecd42c19ce3ef95b78b331621873",
+      "manifest_hash": "6bfcba5c01985402d2d1278e8b726baa8e4ac3332e6527be40bc433ab663e447",
+      "committed_in_git": false,
+      "restore_separately": true,
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-admin-linkedin-preview/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json",
+      "startup_validation": "schema runr_source_eligibility_manifest_v1, manifest hash, sidecar hash, and unresolved ownership gate"
+    },
+    {
+      "logical_name": "rc005_reconciled_source_eligibility_raw_sidecar",
+      "repo_path": null,
+      "server_path": "/srv/runr/shared/inputs/SOURCE_ELIGIBILITY_RAW_RC005_RECONCILED.jsonl",
+      "format": "JSONL sidecar",
+      "bytes": 63665149,
+      "sha256": "cda46fee441e2e6e02d52ffe2fc86ae33121c82edc9f0636562367b63cbb5ef7",
+      "rows": 17601,
+      "committed_in_git": false,
+      "restore_separately": true,
+      "source_path": "C:/Users/ahmed/Projects_Local/runr-admin-linkedin-preview/SOURCE_ELIGIBILITY_RAW_RC005_RECONCILED.jsonl",
+      "startup_validation": "sidecar schema runr_source_eligibility_raw_sidecar_v1 and exact SHA-256"
+    }
+  ],
+  "state_snapshots": [
+    {
+      "logical_name": "linkedin_authoritative_state",
+      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Jobs-Urls/master linkedin jobs url/master_linkedin_jobs_state.db",
+      "server_path": "/srv/runr/state/linkedin/master_linkedin_jobs_state.db",
+      "bytes": 3479191552,
+      "sha256": "26b81012177f40949b6b3ede3187860129db9fdaf3392d2195d78ac050244317",
+      "schema": {
+        "user_version": 0,
+        "tables": {
+          "runs": 2,
+          "source_company_groups": 11896,
+          "company_slug_aliases": 312,
+          "company_scans": 11921,
+          "query_partitions": 42,
+          "search_pages": 52386,
+          "search_cards": 198491,
+          "jobs": 188206,
+          "job_company_observations": 188206,
+          "detail_queue": 198491,
+          "detail_attempts": 198493,
+          "ownership_exclusions": 8689,
+          "lifecycle_events": 187415,
+          "proxy_health": 0
+        },
+        "integrity_check": "ok"
+      },
+      "committed_in_git": false,
+      "restore_separately": true,
+      "required_on_first_acquisition_start": true,
+      "backup_method": "SQLite online backup or filesystem copy only while no writer is active; hash the immutable copy",
+      "recovery_method": "stop acquisition owner, restore verified copy, run validation, resume with explicit state path"
+    },
+    {
+      "logical_name": "employer_state",
+      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Jobs-Urls/master linkedin jobs url/master_employer_jobs_state.db",
+      "server_path": "/srv/runr/state/employer/master_employer_jobs_state.db",
+      "bytes": 83841024,
+      "sha256": "b1eee3b449afd075d9b860f12a5880da6769fcc666473bbfe8f08e7e4cb36737",
+      "schema": {"user_version": 0, "tables": {"companies": 428, "jobs": 2612}, "integrity_check": "ok"},
+      "committed_in_git": false,
+      "restore_separately": true,
+      "required_on_first_acquisition_start": true,
+      "backup_method": "SQLite online backup or filesystem copy while no writer is active",
+      "recovery_method": "restore verified checkpoint and resume employer collector"
+    },
+    {
+      "logical_name": "linkedin_legacy_archive",
+      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Jobs-Urls/archive/2026-08-21/linkedin_germany_discovery_state_pre_v2.db",
+      "server_path": "/srv/runr/backups/linkedin/linkedin_germany_discovery_state_pre_v2.db",
+      "bytes": 2038747136,
+      "sha256": "01559b47d6ca0e0e1c8186e8d3de0ebd6fa2214149043c1bfb42f58ceaf9304d",
+      "schema": {"user_version": 0, "tables": {"discovery_provenance": 299616, "jobs_seen": 29651, "meta": 0, "proxy_stats": 10, "query_nodes": 4675135, "query_stats": 30212}, "integrity_check": "ok"},
+      "committed_in_git": false,
+      "restore_separately": true,
+      "required_on_first_acquisition_start": false,
+      "backup_method": "retain immutable archive copy and checksum",
+      "recovery_method": "use only for forensic comparison or explicitly reviewed migration"
+    },
+    {
+      "logical_name": "linkedin_id_resolution_state",
+      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Company-Urls/Master-Company-Url/cleaned/linkedin_company_enrichment_state/linkedin_id_resolution/linkedin_id_resolution.sqlite3",
+      "server_path": "/srv/runr/state/enrichment/linkedin_id_resolution.sqlite3",
+      "bytes": 413691904,
+      "sha256": "4da05480f291dbdf47c4bbd7988d1da8b79206cb2310332f3f5a32dfba627f2e",
+      "schema": {"integrity_check": "not run in this pass; preserve as an enrichment-state snapshot"},
+      "committed_in_git": false,
+      "restore_separately": true,
+      "required_on_first_acquisition_start": false,
+      "backup_method": "stop resolver writers, immutable filesystem copy, hash and inspect before restore",
+      "recovery_method": "restore only for authorized enrichment/resolution work; RC-006b remains pending"
+    },
+    {
+      "logical_name": "linkedin_legacy_v2_state",
+      "source_path": "C:/Users/ahmed/Projects_Local/job-automation/Linkedin Jobs Scrapper/Jobs-Urls/linkedin_germany_discovery_state_v2.db",
+      "server_path": "/srv/runr/backups/linkedin/linkedin_germany_discovery_state_v2.db",
+      "bytes": 116367360,
+      "sha256": "6e39e6f0733337533a1e78be90dc856d59f43ab242e0c5f0fa79a6722aba2ce5",
+      "schema": {"user_version": 0, "integrity_check": "ok"},
+      "committed_in_git": false,
+      "restore_separately": true,
+      "required_on_first_acquisition_start": false,
+      "backup_method": "immutable copy and checksum",
+      "recovery_method": "retain for historical comparison; do not use as the 14-table producer state"
+    }
+  ],
+  "scripts": [
+    {
+      "path": "scripts/master_linkedin_jobs_catalog.py",
+      "classification": "canonical_producer",
+      "runtime_command": "python scripts/master_linkedin_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/linkedin",
+      "required_input_files": ["company_sources_linkedin_ids", "rc005_reconciled_source_eligibility_manifest"],
+      "required_state_databases": ["linkedin_authoritative_state"],
+      "required_output_directories": ["/srv/runr/exports/linkedin"],
+      "environment_variables": ["SCRAPEOPS_API_KEY", "WEBSHARE_PROXY_URL", "WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD", "RUNR_ACQUISITION_MAX_REQUESTS"],
+      "committed_in_git": true,
+      "restore_separately": true,
+      "schema_checks": ["exact 14-table StateStore schema", "input hash recorded in runs", "generation manifest and pointer hash"],
+      "startup_validation": "deploy/validate_acquisition_runtime.py --role linkedin"
+    },
+    {
+      "path": "scripts/master_employer_jobs_catalog.py",
+      "classification": "canonical_producer",
+      "runtime_command": "python scripts/master_employer_jobs_catalog.py --input-csv /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --output-dir /srv/runr/exports/employer",
+      "required_input_files": ["company_sources_linkedin_ids", "rc005_reconciled_source_eligibility_manifest"],
+      "required_state_databases": ["employer_state"],
+      "required_output_directories": ["/srv/runr/exports/employer"],
+      "environment_variables": ["SCRAPEOPS_API_KEY", "WEBSHARE_PROXY_URL", "WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD", "RUNR_ACQUISITION_MAX_REQUESTS"],
+      "committed_in_git": true,
+      "restore_separately": true,
+      "schema_checks": ["companies/jobs checkpoint tables", "validated CSV/JSONL/metrics generation"],
+      "startup_validation": "deploy/validate_acquisition_runtime.py --role employer"
+    },
+    {
+      "path": "scripts/build_master_jobs_catalog.py",
+      "classification": "canonical_publication_builder",
+      "runtime_command": "python scripts/build_master_jobs_catalog.py --linkedin-csv /srv/runr/exports/linkedin/master_linkedin_jobs.csv --employer-csv /srv/runr/exports/employer/master_employer_jobs.csv --output /srv/runr/exports/combined/master_jobs.csv",
+      "required_input_files": ["linkedin_catalog_export", "employer_catalog_export"],
+      "required_state_databases": [],
+      "required_output_directories": ["/srv/runr/exports/combined"],
+      "environment_variables": [],
+      "committed_in_git": true,
+      "restore_separately": false,
+      "schema_checks": ["source generation IDs", "input hashes", "CSV row/header validation"],
+      "startup_validation": "validate source exports before publication"
+    },
+    {
+      "path": "scripts/run_manifested_linkedin.py",
+      "classification": "production_wrapper",
+      "runtime_command": "python scripts/run_manifested_linkedin.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/linkedin",
+      "required_input_files": ["rc005_reconciled_source_eligibility_manifest", "rc005_reconciled_source_eligibility_raw_sidecar"],
+      "required_state_databases": ["linkedin_authoritative_state"],
+      "required_output_directories": ["/srv/runr/exports/linkedin"],
+      "environment_variables": ["SCRAPEOPS_API_KEY", "WEBSHARE_PROXY_URL", "WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD"],
+      "committed_in_git": true,
+      "restore_separately": true,
+      "schema_checks": ["manifest hash", "sidecar hash", "canonical-ID and ownership eligibility"],
+      "startup_validation": "manifest loader plus role validation"
+    },
+    {
+      "path": "scripts/run_manifested_employer.py",
+      "classification": "production_wrapper",
+      "runtime_command": "python scripts/run_manifested_employer.py --manifest /srv/runr/shared/inputs/SOURCE_ELIGIBILITY_MANIFEST_RC005_RECONCILED.json --output-dir /srv/runr/exports/employer",
+      "required_input_files": ["rc005_reconciled_source_eligibility_manifest", "rc005_reconciled_source_eligibility_raw_sidecar"],
+      "required_state_databases": ["employer_state"],
+      "required_output_directories": ["/srv/runr/exports/employer"],
+      "environment_variables": ["SCRAPEOPS_API_KEY", "WEBSHARE_PROXY_URL", "WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD"],
+      "committed_in_git": true,
+      "restore_separately": true,
+      "schema_checks": ["manifest hash", "sidecar hash", "canonical-ID and ownership eligibility"],
+      "startup_validation": "manifest loader plus role validation"
+    },
+    {
+      "path": "scripts/audit_employer_coverage.py",
+      "classification": "supporting_read_only_audit",
+      "runtime_command": "python scripts/audit_employer_coverage.py --state-db /srv/runr/state/employer/master_employer_jobs_state.db --output /srv/runr/exports/employer/coverage-audit.json",
+      "required_input_files": [],
+      "required_state_databases": ["employer_state"],
+      "required_output_directories": ["/srv/runr/exports/employer"],
+      "environment_variables": [],
+      "committed_in_git": true,
+      "restore_separately": true,
+      "schema_checks": ["open_existing checkpoint schema"],
+      "startup_validation": "state validation before read-only audit"
+    },
+    {
+      "path": "scripts/run_linkedin_company_id_resolution.py",
+      "classification": "supporting_enrichment_not_first_start",
+      "runtime_command": "python scripts/run_linkedin_company_id_resolution.py --input /srv/runr/shared/inputs/company_registry_canonical.csv --output /srv/runr/shared/inputs/company_sources_linkedin_ids.csv --state-dir /srv/runr/state/enrichment/linkedin_id_resolution",
+      "required_input_files": ["company_registry_canonical"],
+      "required_state_databases": ["linkedin_id_resolution_state"],
+      "required_output_directories": ["/srv/runr/shared/inputs"],
+      "environment_variables": ["SCRAPEOPS_API_KEY", "WEBSHARE_PROXY_URL", "WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD"],
+      "committed_in_git": true,
+      "restore_separately": true,
+      "schema_checks": ["resolver state schema and request-budget state"],
+      "startup_validation": "explicit RC-006b authorization and state validation"
+    }
+  ],
+  "excluded_from_git": {
+    "mutable_state": ["linkedin_authoritative_state", "employer_state", "linkedin_id_resolution_state"],
+    "large_exports": ["master_linkedin_jobs.csv", "master_linkedin_jobs.jsonl", "master_jobs.csv", "master_employer_jobs.csv", "master_employer_jobs.jsonl"],
+    "archives": ["linkedin_legacy_archive", "linkedin_legacy_v2_state"],
+    "sensitive": ["SCRAPEOPS_API_KEY", "WEBSHARE_PROXY_URL", "WEBSHARE_PROXY_USERNAME", "WEBSHARE_PROXY_PASSWORD", "provider cookies and authenticated request logs"],
+    "disposable": ["WAL/SHM files", "temporary worker transport caches", "unbounded logs", "duplicate backups and experimental exports"]
+  }
+}

@@ -1,0 +1,573 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import Mock, call
+
+from backend.api.routes import build_route_registry
+from backend.api.routes.registry import ApiRouteContext
+from backend.bootstrap import create_backend
+from backend.connectors.ats_router import fetch_ats_snapshot
+from backend.connectors.company_career_sites import plan_company_site_scope
+
+
+class _Response:
+    def __init__(self, url: str, payload: object):
+        self.url = url
+        self.status_code = 200
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _AdminHandler:
+    def __init__(self, body=None):
+        self.body = body or {}
+        self.payload = None
+        self.admin_calls = 0
+
+    def _require_admin(self):
+        self.admin_calls += 1
+        return {"id": "admin-fixture"}, object()
+
+    def _read_json_body(self):
+        return self.body
+
+    def _send_json(self, payload, status=200, *, headers=None):
+        self.payload = (status, payload)
+
+
+class AdminJobImportDashboardTests(unittest.TestCase):
+    def test_global_admin_entrypoint_is_not_rejected_by_locale_path(self):
+        site = {"company_name": "Siemens Industry Software", "url": "https://www.siemens.com/en-us/company/jobs"}
+
+        default_plan = plan_company_site_scope(
+            company_sites=[site],
+            target_country_codes=["Germany"],
+        )
+        admin_plan = plan_company_site_scope(
+            company_sites=[site],
+            target_country_codes=["Germany"],
+            allow_foreign_entrypoints=True,
+        )
+
+        self.assertEqual(default_plan.selected_sites, [])
+        self.assertEqual(default_plan.skipped_sites[0]["skip_reason"], "foreign_market_site")
+        self.assertEqual(len(admin_plan.selected_sites), 1)
+        self.assertEqual(admin_plan.selected_sites[0]["url"], "https://siemens.com/en-us/company/jobs")
+
+    def test_siemens_is_available_for_admin_imports_and_cost_is_bounded(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            siemens = next(item for item in app.list_admin_job_import_sources() if item["id"] == "siemens")
+
+            self.assertEqual(siemens["status"], "ready")
+            self.assertEqual(siemens["reason"], "")
+
+            plan = app.plan_admin_job_import(
+                source_ids=["siemens"],
+                scope={"country": "Germany", "max_credits": 1000},
+            )
+            self.assertTrue(plan["can_start"])
+            self.assertTrue(plan["estimated_cost"]["known"])
+            self.assertEqual(plan["estimated_cost"]["currency"], "USD")
+
+    def test_greenhouse_pagination_is_bounded_and_durable(self):
+        calls = []
+        first_page = [
+            {
+                "id": f"job-{index}",
+                "title": f"Operations Analyst {index}",
+                "absolute_url": f"https://boards.greenhouse.io/n26/jobs/{index}",
+            }
+            for index in range(100)
+        ]
+
+        def requester(url, **_kwargs):
+            calls.append(url)
+            if "page=2" in url:
+                return _Response(url, {"meta": {"total": 101}, "jobs": [
+                    {"id": "job-100", "title": "Operations Analyst 100", "absolute_url": "https://boards.greenhouse.io/n26/jobs/100"}
+                ]})
+            return _Response(url, {"meta": {"total": 101}, "jobs": first_page})
+
+        result = fetch_ats_snapshot(
+            "https://job-boards.greenhouse.io/n26",
+            "greenhouse",
+            requester=requester,
+            max_pages=2,
+        )
+
+        self.assertEqual(result["pages_fetched"], 2)
+        self.assertEqual(len(result["jobs"]), 101)
+        self.assertEqual(calls, [
+            "https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true",
+            "https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true&page=2",
+        ])
+
+    def test_admin_import_preserves_registered_expansion_connector(self):
+        calls = []
+
+        def requester(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response(
+                url,
+                {
+                    "jobPostings": [
+                        {
+                            "externalId": "lowell-1",
+                            "title": "Operations Analyst",
+                            "externalPath": "/job/lowell-1",
+                            "jobPostingInfo": {"location": "Berlin"},
+                        }
+                    ]
+                },
+            )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
+            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
+            app._acquisition_scheduler.requester = requester
+            queued = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="expansion-direct-1",
+                source_ids=["lowell_workday"],
+                scope={"country": "Germany"},
+            )
+
+            processed = app.process_next_admin_job_import(worker_id="fixture-worker")
+
+            self.assertEqual(processed["import"]["status"], "completed")
+            self.assertEqual(processed["report"]["cycle"]["status"], "completed")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], "https://lowell.wd3.myworkdayjobs.com/wday/cxs/lowell/LowellGroup_Careers2/jobs")
+            self.assertIn("json", calls[0][1])
+            review = app.list_admin_review_jobs(import_id=queued["import_id"], status="all", limit=20)
+            self.assertEqual(review["total"], 1)
+            self.assertEqual(review["jobs"][0]["title"], "Operations Analyst")
+
+    def test_import_review_publish_undo_and_failed_import_are_offline_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
+            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
+            responses = {"job-1": True, "job-2": True}
+            requests_seen = []
+
+            def requester(url, **_kwargs):
+                requests_seen.append(url)
+                if not responses:
+                    raise AssertionError("The fixture should not make an unexpected request.")
+                job_id = next(iter(responses))
+                include_job = responses[job_id]
+                if job_id == "job-failed":
+                    raise RuntimeError("fixture source outage")
+                jobs = [
+                    {
+                        "id": job_id,
+                        "title": f"Operations Analyst {job_id}",
+                        "absolute_url": f"https://boards.greenhouse.io/n26/jobs/{job_id}",
+                        "location": {"name": "Berlin, Germany"},
+                        "content": "Own operational reporting and controls.",
+                    },
+                    {
+                        "id": f"quick-{job_id}",
+                        "title": "Quick Apply Analyst",
+                        "absolute_url": f"https://boards.greenhouse.io/n26/jobs/quick-{job_id}",
+                        "application_method": "quick_apply",
+                    },
+                ] if include_job else []
+                return _Response(url, {"jobs": jobs})
+
+            app._acquisition_scheduler.requester = requester
+
+            plan = app.plan_admin_job_import(source_ids=["n26_greenhouse"], scope={"country": "Germany", "max_pages": 2})
+            self.assertTrue(plan["can_start"])
+            self.assertEqual(plan["maximum_requests"], 1)
+            self.assertTrue(plan["review_first"])
+            self.assertFalse(plan["publishes_automatically"])
+
+            first = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="offline-import-1",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            replay = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="offline-import-1",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            self.assertEqual(first["import_id"], replay["import_id"])
+            processed = app.process_next_admin_job_import(worker_id="fixture-worker")
+            self.assertEqual(processed["import"]["status"], "completed")
+            self.assertEqual(processed["report"]["cycle"]["status"], "completed")
+            self.assertEqual(len(requests_seen), 1)
+
+            review = app.list_admin_review_jobs(import_id=first["import_id"], status="all", limit=20)
+            self.assertEqual(review["total"], 2)
+            accepted = next(item for item in review["jobs"] if not item["rejected"])
+            rejected = next(item for item in review["jobs"] if item["rejected"])
+            self.assertEqual(rejected["review_state"], "not_accepted")
+            self.assertEqual(rejected["reason_code"], "unsupported_application_method")
+
+            decision = app.decide_admin_review_job(
+                import_id=first["import_id"],
+                canonical_job_id=accepted["canonical_job_id"],
+                decision="approve",
+                actor_user_id="admin-fixture",
+            )
+            self.assertEqual(decision["canonical_job_id"], accepted["canonical_job_id"])
+            self.assertEqual(decision["review_state"], "approved")
+            preview_one = app.preview_admin_job_import(first["import_id"], actor_user_id="admin-fixture")
+            self.assertEqual(preview_one["total"], 1)
+            publication_one = app.publish_admin_job_import(preview_one["publication_id"], actor_user_id="admin-fixture")
+            self.assertEqual(app.get_public_acquisition_catalog()["total"], 1)
+
+            responses.clear()
+            responses["job-2"] = True
+            second = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="offline-import-2",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            app.process_next_admin_job_import(worker_id="fixture-worker")
+            second_review = app.list_admin_review_jobs(import_id=second["import_id"], status="all", limit=20)
+            second_job = next(item for item in second_review["jobs"] if not item["rejected"])
+            app.decide_admin_review_job(
+                import_id=second["import_id"],
+                canonical_job_id=second_job["canonical_job_id"],
+                decision="approved",
+                actor_user_id="admin-fixture",
+            )
+            preview_two = app.preview_admin_job_import(second["import_id"], actor_user_id="admin-fixture")
+            self.assertEqual(preview_two["previous_publication_id"], publication_one)
+            app.publish_admin_job_import(preview_two["publication_id"], actor_user_id="admin-fixture")
+            self.assertEqual(app.get_public_acquisition_catalog()["total"], 2)
+            undone = app.undo_admin_job_publication(actor_user_id="admin-fixture")
+            self.assertEqual(undone["status"], "undone")
+            self.assertEqual(app.get_public_acquisition_catalog()["total"], 1)
+            self.assertEqual(app.get_public_acquisition_catalog()["publication"]["publication_id"], publication_one)
+
+            responses.clear()
+            responses["job-failed"] = True
+            failed = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="offline-import-failed",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            failed_result = app.process_next_admin_job_import(worker_id="fixture-worker")
+            self.assertEqual(failed_result["import"]["status"], "needs_attention")
+            self.assertEqual(failed_result["report"]["cycle"]["status"], "degraded")
+            self.assertEqual(app.get_public_acquisition_catalog()["total"], 1)
+            self.assertEqual(app.get_admin_job_import(failed["import_id"])["publication_id"], "")
+
+    def test_job_import_api_route_requires_admin_and_exposes_overview(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.get_admin_job_import_overview.return_value = {"imports": {"status": "Paused"}}
+        handler = _AdminHandler()
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="GET",
+            segments=("admin", "job-import", "overview"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        self.assertEqual(handler.admin_calls, 1)
+        self.assertEqual(handler.payload, (200, {"imports": {"status": "Paused"}}))
+        application.get_admin_job_import_overview.assert_called_once_with()
+
+    def test_job_import_inspection_omits_history_by_default_and_bounds_explicit_history(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.get_admin_job_inspection.return_value = {"raw": {"field_provenance": {"included": False}}}
+
+        handler = _AdminHandler()
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="GET",
+            segments=("admin", "job-import", "jobs", "job-1", "inspection"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        application.get_admin_job_inspection.assert_called_once_with(
+            "job-1",
+            include_history=False,
+            history_limit=None,
+        )
+
+        application.reset_mock()
+        handler = _AdminHandler()
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="GET",
+            segments=("admin", "job-import", "jobs", "job-1", "inspection"),
+            query={"include_history": ["true"]},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        application.get_admin_job_inspection.assert_called_once_with(
+            "job-1",
+            include_history=True,
+            history_limit=500,
+        )
+
+    def test_job_import_resume_switch_enables_imports(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.repositories.config_store = Mock()
+        handler = _AdminHandler({"paused": False})
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="POST",
+            segments=("admin", "job-import", "pause"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.kill_switch", False)
+        application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.enabled", True)
+        application.repositories.config_store.set_value.assert_any_call("acquisition.admin_imports.allow_proxy", True)
+
+    def test_acquisition_admin_alias_forwards_job_filters(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.list_admin_job_inspections.return_value = {"jobs": [], "total": 0}
+        handler = _AdminHandler()
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="GET",
+            segments=("admin", "acquisition", "jobs"),
+            query={"search": ["backend"], "publication_state": ["unpublished"], "limit": ["25"]},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        self.assertEqual(handler.payload, (200, {"jobs": [], "total": 0}))
+        application.list_admin_job_inspections.assert_called_once_with(
+            search="backend",
+            function="",
+            subfunction="",
+            employment_type="",
+            workplace="",
+            location="",
+            language="",
+            seniority="",
+            source="",
+            freshness="",
+            completeness_state="",
+            warning_type="",
+            duplicate_state="",
+            application_method="",
+            publication_state="unpublished",
+            limit=25,
+            offset=0,
+        )
+
+    def test_acquisition_dashboard_read_models_expose_import_detail_preview_and_live_catalog(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.get_admin_job_import.return_value = {"import_id": "import-1", "status": "completed"}
+        application.get_admin_job_import_preview.return_value = {"publication_id": "preview-1", "status": "preview"}
+        application.get_public_acquisition_catalog.return_value = {"jobs": [], "total": 0}
+
+        for segments, expected_method, expected_call, expected_payload in (
+            (("admin", "acquisition", "imports", "import-1"), "get_admin_job_import", call("import-1"), {"import_id": "import-1", "status": "completed"}),
+            (("admin", "acquisition", "publication", "previews", "preview-1"), "get_admin_job_import_preview", call("preview-1"), {"publication_id": "preview-1", "status": "preview"}),
+            (("admin", "acquisition", "live-catalog"), "get_public_acquisition_catalog", call(limit=25, offset=10), {"jobs": [], "total": 0}),
+        ):
+            handler = _AdminHandler()
+            query = {"limit": ["25"], "offset": ["10"]} if segments[-1] == "live-catalog" else {}
+            context = ApiRouteContext(application=application, handler=handler, method="GET", segments=segments, query=query)
+
+            self.assertTrue(registry.dispatch(context, auth_required=True))
+            self.assertEqual(handler.payload, (200, expected_payload))
+            getattr(application, expected_method).assert_called_with(*expected_call.args, **expected_call.kwargs)
+
+    def test_acquisition_dashboard_restore_requires_explicit_confirmation_and_expected_head(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.restore_admin_publication.return_value = {"publication_id": "publication-1", "status": "restored"}
+        handler = _AdminHandler({
+            "target_publication_id": "publication-1",
+            "expected_head_publication_id": "publication-2",
+            "confirmation": "restore_publication",
+        })
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="POST",
+            segments=("admin", "acquisition", "publication", "restore"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        self.assertEqual(handler.payload, (202, {"publication_id": "publication-1", "status": "restored"}))
+        application.restore_admin_publication.assert_called_once_with(
+            target_publication_id="publication-1",
+            expected_head_publication_id="publication-2",
+            actor_user_id="admin-fixture",
+            confirmation="restore_publication",
+        )
+
+    def test_acquisition_admin_reprocessing_alias_is_admin_only_and_explicit(self):
+        registry = build_route_registry()
+        application = Mock()
+        application.run_admin_reprocessing.return_value = {"status": "planned"}
+        handler = _AdminHandler({"apply": False, "batch_size": 5, "scope": {"country": "Germany"}})
+        context = ApiRouteContext(
+            application=application,
+            handler=handler,
+            method="POST",
+            segments=("admin", "acquisition", "reprocessing", "run"),
+            query={},
+        )
+
+        self.assertTrue(registry.dispatch(context, auth_required=True))
+        self.assertEqual(handler.admin_calls, 1)
+        self.assertEqual(handler.payload, (202, {"status": "planned"}))
+        application.run_admin_reprocessing.assert_called_once_with(
+            apply=False,
+            batch_size=5,
+            idempotency_key="",
+            resume_id="",
+            scope={"country": "Germany"},
+            allow_remote_additive_rollback=False,
+        )
+
+    def test_admin_inspection_composes_canonical_job_company_provenance_and_apply_state(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
+            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
+
+            def requester(url, **_kwargs):
+                return _Response(url, {"jobs": [{
+                    "id": "job-inspection-1",
+                    "title": "Senior Backend Engineer",
+                    "absolute_url": "https://job-boards.greenhouse.io/n26/jobs/job-inspection-1",
+                    "location": {"name": "Berlin, Germany"},
+                    "content": "Build reliable payment services.",
+                }]})
+
+            app._acquisition_scheduler.requester = requester
+            imported = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="inspection-import-1",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            app.process_next_admin_job_import(worker_id="inspection-worker")
+
+            listed = app.list_admin_job_inspections(search="N26", limit=10)
+            self.assertEqual(listed["total"], 1)
+            canonical_job_id = listed["jobs"][0]["canonical_job_id"]
+            inspection = app.get_admin_job_inspection(canonical_job_id)
+            self.assertIsNotNone(inspection)
+            self.assertEqual(inspection["job"]["title"], "Senior Backend Engineer")
+            self.assertEqual(inspection["company"]["name"], "N26")
+            self.assertEqual(inspection["admin"]["target_id"], "n26_greenhouse")
+            self.assertEqual(inspection["apply_url"]["classification"], "listing_fallback")
+            self.assertEqual(inspection["apply_url"]["url_type"], "ats_job_detail")
+            self.assertEqual(inspection["apply_url"]["status"], "unresolved")
+            self.assertEqual(inspection["apply_url"]["application_method"], "job_detail")
+            self.assertTrue(inspection["raw"]["source_observations"])
+            self.assertTrue(inspection["raw"]["posting_versions"])
+            self.assertTrue(inspection["raw"]["acquisition_requests"])
+            self.assertFalse(inspection["raw"]["field_provenance"]["included"])
+            self.assertGreater(inspection["raw"]["field_provenance"]["rows"], 0)
+
+            full_inspection = app.get_admin_job_inspection(canonical_job_id, include_history=True)
+            self.assertIsInstance(full_inspection["raw"]["field_provenance"], list)
+            self.assertTrue(full_inspection["company"]["field_provenance"])
+
+            resolved = app.resolve_admin_job_apply_url(canonical_job_id, actor_user_id="admin-fixture")
+            self.assertEqual(resolved["apply_url"]["status"], "unresolved")
+            self.assertTrue(any(
+                event.get("event_type") == "apply_url_resolution"
+                for event in resolved["raw"]["audit_events"]
+            ))
+            self.assertEqual(app.get_admin_job_import(imported["import_id"])["status"], "completed")
+
+    def test_job_url_is_identity_and_posting_age_anchor_survives_reposts(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_backend(Path(temporary_directory), storage_backend="sqlite")
+            app.repositories.config_store.set_value("acquisition.admin_imports.enabled", True)
+            app.repositories.config_store.set_value("acquisition.admin_imports.kill_switch", False)
+            app.repositories.config_store.set_value("acquisition.admin_imports.allow_proxy", True)
+            payloads = [
+                [{
+                    "id": "source-job-1",
+                    "title": "Platform Engineer",
+                    "absolute_url": "https://boards.greenhouse.io/n26/jobs/platform-engineer",
+                    "location": {"name": "Berlin, Germany"},
+                    "content": "Build payment infrastructure.",
+                }],
+                [{
+                    "id": "source-job-reposted",
+                    "title": "Platform Engineer",
+                    "absolute_url": "https://boards.greenhouse.io/n26/jobs/platform-engineer",
+                    "location": {"name": "Berlin, Germany"},
+                    "content": "Build payment infrastructure.",
+                    "posted_time_text": "1 day ago",
+                }],
+            ]
+
+            def requester(url, **_kwargs):
+                return _Response(url, {"jobs": payloads.pop(0)})
+
+            app._acquisition_scheduler.requester = requester
+            first = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="url-identity-first",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            app.process_next_admin_job_import(worker_id="url-identity-worker")
+            first_row = app.list_admin_job_inspections(limit=10)["jobs"][0]
+            first_inspection = app.get_admin_job_inspection(first_row["canonical_job_id"])
+            first_seen_at = first_inspection["job"]["first_seen_at"]
+
+            second = app.start_admin_job_import(
+                requested_by="admin-fixture",
+                idempotency_key="url-identity-repost",
+                source_ids=["n26_greenhouse"],
+                scope={"country": "Germany"},
+            )
+            app.process_next_admin_job_import(worker_id="url-identity-worker")
+            listed = app.list_admin_job_inspections(limit=10)
+            self.assertEqual(listed["total"], 1)
+            self.assertEqual(listed["jobs"][0]["canonical_job_id"], first_row["canonical_job_id"])
+
+            inspection = app.get_admin_job_inspection(first_row["canonical_job_id"])
+            self.assertEqual(inspection["job"]["first_seen_at"], first_seen_at)
+            self.assertEqual(inspection["job"]["posting_age"]["anchor_source"], "first_seen_at")
+            self.assertEqual(inspection["job"]["posting_age"]["anchor_at"], first_seen_at)
+            self.assertIsNotNone(inspection["job"]["posted_age_hours"])
+            self.assertEqual(len(inspection["raw"]["posting_versions"]), 1)
+            self.assertEqual(len(inspection["raw"]["source_observations"]), 2)
+            self.assertEqual(app.get_admin_job_import(first["import_id"])["status"], "completed")
+            self.assertEqual(app.get_admin_job_import(second["import_id"])["status"], "completed")
+
+
+if __name__ == "__main__":
+    unittest.main()

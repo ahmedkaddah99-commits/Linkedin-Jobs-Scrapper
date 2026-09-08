@@ -1,0 +1,15 @@
+[Unit]
+Description=Runr worker
+After=runr-api.service
+PartOf=runr.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/runr
+EnvironmentFile=/opt/runr/.env
+Environment=WORKER_ROLE=customer
+Environment=WORKER_ID=prod_worker
+ExecStart=/opt/runr/deploy/start.sh worker
+Restart=always
+RestartSec=5
+

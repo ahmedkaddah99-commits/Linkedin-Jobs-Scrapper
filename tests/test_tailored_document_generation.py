@@ -1,0 +1,1585 @@
+import json
+import subprocess
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from docx import Document
+
+from backend.capabilities.tailored_documents.application_requirements import detect_application_requirements
+from backend.capabilities.tailored_documents.common import build_custom_document_filename
+from backend.capabilities.tailored_documents.cv_structuring import ensure_structured_cv_fields
+from backend.capabilities.tailored_documents.cv_structuring import extract_cv_strategic_initiatives
+from backend.capabilities.tailored_documents.documents import (
+    _resolve_candidate_identity,
+    _resolve_profile_link_url,
+    _stage4_generation_fingerprint,
+)
+from backend.capabilities.tailored_documents.generation import build_docs_prompt, generate_docs_for_job
+from backend.capabilities.tailored_documents.language_rules import detect_reasons
+from backend.capabilities.tailored_documents.modes import resolve_cv_generation_prompt_settings
+from backend.capabilities.tailored_documents.provenance import propagate_tailored_provenance
+from backend.capabilities.tailored_documents.rendering import (
+    build_cv_html_export_payload,
+    create_cv_document,
+    create_cv_pdf_document,
+)
+from backend.capabilities.tailored_documents.runtime import build_main_defaults, build_stage4_args
+
+
+def _draft(summary: str, *, skill: str = "SQL", bullet: str = "Delivered reporting improvements.") -> dict:
+    return {
+        "cv_professional_summary": summary,
+        "cv_professional_experience": [
+            {
+                "role_title": "Business Analyst",
+                "company": "ACME",
+                "period": "2022-2024",
+                "bullets": [bullet, "Improved stakeholder reporting."],
+            }
+        ],
+        "cv_education": [
+            {
+                "degree_title": "MSc Information Systems",
+                "thesis_title": "Analytics Thesis",
+                "thesis_bullets": ["Built dashboards."],
+            }
+        ],
+        "cv_skills": [skill, "Stakeholder Management", "Requirements Gathering"],
+        "tailored_cv": f"Professional Summary: {summary}",
+    }
+
+
+class TailoredDocumentGenerationTests(unittest.TestCase):
+    def setUp(self):
+        self.job = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "full_description": "Need SQL, stakeholder management, and dashboarding.",
+        }
+        self.cv_text = "\n".join(
+            [
+                "Professional Summary",
+                "Trusted analyst with delivery experience.",
+                "",
+                "Professional Experience",
+                "Business Analyst | ACME | 2022-2024",
+                "- Baseline bullet one.",
+                "- Baseline bullet two.",
+                "",
+                "Education",
+                "MSc Information Systems",
+                "Master Thesis: Analytics Thesis",
+                "- Built baseline dashboards.",
+                "",
+                "Projects",
+                "Insight Automation",
+                "- Built a baseline workflow.",
+            ]
+        )
+
+    def test_custom_generated_document_filename_is_short_and_keeps_identity(self):
+        filename = build_custom_document_filename(
+            "Alexandria Very Long Candidate Name",
+            "Principal Backend Integrations Software Engineer",
+            "Supermove Global Technology Company",
+            "MotivationLetter",
+            ".docx",
+        )
+
+        self.assertLessEqual(len(filename), 50)
+        self.assertTrue(filename.endswith(".docx"))
+        self.assertIn("Alex", filename)
+        self.assertIn("MotivationLetter", filename)
+
+    def test_default_cv_output_uses_custom_job_filename(self):
+        record = {
+            **self.job,
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [],
+            "cv_skills": ["Python"],
+            "cv_education": [],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record,
+                docs_dir=Path(temp_dir),
+                run_date="2026-08-01",
+                candidate_name="Alex Candidate",
+                candidate_email="alex@example.com",
+                cv_font_name="Calibri",
+                cv_template_id="plain",
+                cv_color_scheme="classic_navy",
+                languages=[],
+                profile_image_path=None,
+                include_profile_image=False,
+                profile_links=[],
+            )
+
+        self.assertLessEqual(len(Path(output_path).name), 50)
+        self.assertIn("AlexCandidate", Path(output_path).name)
+        self.assertIn("SeniorAnalyst", Path(output_path).name)
+        self.assertIn("ACME", Path(output_path).name)
+
+    def test_render_payload_repairs_malformed_experience_and_preserves_identity(self):
+        malformed_record = {
+            "job_id": "job_roxy",
+            "title": "Consultant",
+            "company": "Example Client",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Secured financing for 7 transporter vehicles without traditional bank support.",
+                    "company": "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+                    "period": "Operations Lead and Co-Founder | Roxy Mobility GmbH | Dec 2020 - Oct 2024 (fulltime)",
+                    "bullets": [
+                        "Directed operations in Freiburg.",
+                        "Reduced operational costs.",
+                    ],
+                }
+            ],
+            "cv_skills": ["Operations"],
+            "cv_education": [],
+        }
+
+        payload = build_cv_html_export_payload(
+            malformed_record,
+            candidate_name="Ahmed Kaddah",
+            candidate_email="ahmed@example.com",
+            cv_font_name="Calibri",
+            cv_template_id="plain",
+            cv_color_scheme="classic_navy",
+            languages=["English - C1"],
+            profile_image_path=None,
+            include_profile_image=True,
+            profile_links=[],
+        )
+
+        experience = payload["profile"]["recent_experience"][0]
+        self.assertEqual(payload["profile"]["name"], "Ahmed Kaddah")
+        self.assertEqual(experience["title"], "Operations Lead and Co-Founder")
+        self.assertEqual(experience["company"], "Roxy Mobility GmbH")
+        self.assertEqual(experience["period"], "Dec 2020 - Oct 2024 (fulltime)")
+        self.assertNotIn("photo_path", payload)
+        self.assertEqual(
+            experience["bullets"][:2],
+            [
+                "Secured financing for 7 transporter vehicles without traditional bank support.",
+                "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+            ],
+        )
+
+    def test_aa211_propagates_source_ids_approved_text_versions_and_generation_provenance(self):
+        approved_text = "Approved wording  —  preserve spacing exactly."
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [{
+                "source_experience_id": "exp_source_1",
+                "role_title": "Business Analyst",
+                "company": "ACME",
+                "period": "2022-2024",
+                "bullets": [{"approved_text": approved_text}],
+            }],
+            "cv_skills": ["SQL"],
+            "cv_education": [],
+        }
+        ensure_structured_cv_fields(record, "Ahmed", self.cv_text)
+        propagate_tailored_provenance(
+            record,
+            selected_cv_version={"asset_id": "asset_cv", "version_id": "cvv_2", "version_no": 2},
+            generation_provenance={"provenance_id": "prov_1", "run_id": "run_1", "renderer_version": "3"},
+        )
+        record["package_version"] = 7
+        propagate_tailored_provenance(record)
+        experience = record["cv_professional_experience"][0]
+        bullet = experience["bullets"][0]
+        self.assertEqual(experience["source_experience_id"], "exp_source_1")
+        self.assertEqual(experience["provenance_confidence"], "full")
+        self.assertEqual(bullet["approved_text"], approved_text)
+        self.assertEqual(bullet["text"], approved_text)
+        self.assertTrue(bullet["bullet_id"].startswith("exp_source_1:bullet:"))
+        self.assertEqual(experience["selected_cv_version"]["version_no"], 2)
+        self.assertEqual(experience["generation_provenance"]["provenance_id"], "prov_1")
+        self.assertEqual(record["selected_package_version"], 7)
+        serialized = json.loads(json.dumps(record, ensure_ascii=False))
+        self.assertEqual(serialized["cv_professional_experience"][0]["bullets"][0]["approved_text"], approved_text)
+
+    def test_aa211_legacy_experience_remains_readable_with_reduced_confidence(self):
+        record = {
+            "cv_professional_experience": [{
+                "role_title": "Business Analyst",
+                "company": "ACME",
+                "period": "2022-2024",
+                "bullets": ["Legacy bullet text."],
+            }],
+        }
+        propagate_tailored_provenance(record)
+        self.assertEqual(record["provenance_status"], "legacy_reduced_confidence")
+        self.assertEqual(record["provenance_confidence"], "reduced")
+        self.assertEqual(record["cv_professional_experience"][0]["bullets"], ["Legacy bullet text."])
+        self.assertNotIn("source_experience_id", record["cv_professional_experience"][0])
+
+    def test_aa211_render_regression_preserves_approved_bullet_text(self):
+        approved_text = "Approved tailored outcome with metric  —  kept verbatim."
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "location_raw": "Berlin, Germany",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [{
+                "source_experience_id": "exp_source_1",
+                "role_title": "Business Analyst",
+                "company": "ACME",
+                "period": "2022-2024",
+                "bullets": [{"approved_text": approved_text}],
+            }],
+            "cv_skills": ["SQL"],
+            "cv_education": [],
+        }
+        propagate_tailored_provenance(record)
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record, Path(temp_dir), "2026-08-01", "Ahmed", "ahmed@example.com",
+                "Calibri", "plain", "classic_navy", [], None, False, [],
+            )
+            text = "\n".join(paragraph.text for paragraph in Document(output_path).paragraphs)
+        self.assertIn(approved_text, text)
+
+    def test_word_cv_templates_repair_malformed_experience_before_rendering(self):
+        malformed_record = {
+            "job_id": "job_roxy",
+            "title": "Consultant",
+            "company": "Example Client",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Secured financing for 7 transporter vehicles without traditional bank support.",
+                    "company": "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+                    "period": "Operations Lead and Co-Founder | Roxy Mobility GmbH | Dec 2020 - Oct 2024 (fulltime)",
+                    "bullets": ["Directed operations in Freiburg."],
+                }
+            ],
+            "cv_strategic_initiatives": [],
+            "cv_skills": [],
+            "cv_education": [],
+        }
+
+        with TemporaryDirectory() as tmp:
+            docs_dir = Path(tmp)
+            for template_id in ("plain", "section_bars", "modern_minimal"):
+                output_path = docs_dir / f"{template_id}.docx"
+                create_cv_document(
+                    malformed_record,
+                    docs_dir,
+                    "2026-07-02",
+                    "Ahmed Kaddah",
+                    "ahmed@example.com",
+                    "Calibri",
+                    template_id,
+                    "classic_navy",
+                    ["English - C1"],
+                    None,
+                    False,
+                    [],
+                    output_path=output_path,
+                )
+
+                document = Document(output_path)
+                paragraph_text = [paragraph.text for paragraph in document.paragraphs]
+                table_text = [
+                    paragraph.text
+                    for table in document.tables
+                    for row in table.rows
+                    for cell in row.cells
+                    for paragraph in cell.paragraphs
+                ]
+                text = "\n".join(paragraph_text + table_text)
+                self.assertIn("operations lead and co-founder", text.lower())
+                self.assertIn("roxy mobility gmbh", text.lower())
+                self.assertIn("Secured financing for 7 transporter vehicles", text)
+                self.assertIn("Ahmed Kaddah", text)
+                self.assertNotIn("Kaddah Ahmed", text)
+
+    def test_language_rules_do_not_treat_german_umlauts_as_french(self):
+        reasons = detect_reasons(
+            {
+                "title": "Product Manager",
+                "full_description": "Wir suchen Produktarbeit fuer Muenchen mit Verantwortung f\u00fcr Teams.",
+            },
+            german_special_char_threshold=9999,
+            french_special_char_threshold=0,
+            spanish_special_char_threshold=9999,
+            max_german_level="B2",
+            profile_languages=["English - C1", "German - B2"],
+        )
+
+        self.assertFalse(any("French" in reason for reason in reasons))
+
+    def test_language_rules_use_configured_language_levels(self):
+        reasons = detect_reasons(
+            {
+                "title": "Product Analyst",
+                "full_description": "This role requires fluent English at C1 level.",
+            },
+            german_special_char_threshold=9999,
+            french_special_char_threshold=9999,
+            spanish_special_char_threshold=9999,
+            max_german_level="B2",
+            profile_languages=["Chinese - C1", "English - B2"],
+        )
+
+        self.assertIn("English level requirement (C1) is above saved level (B2).", reasons)
+
+    def test_language_rules_allow_required_language_when_profile_matches(self):
+        reasons = detect_reasons(
+            {
+                "title": "Market Analyst",
+                "full_description": "Mandarin Chinese proficiency is required for this role.",
+            },
+            german_special_char_threshold=9999,
+            french_special_char_threshold=9999,
+            spanish_special_char_threshold=9999,
+            max_german_level="B2",
+            profile_languages=["Chinese - C1", "English - B2"],
+        )
+
+        self.assertEqual(reasons, [])
+
+    def test_application_requirements_plan_translation_for_requested_german_cv(self):
+        requirements = detect_application_requirements(
+            {
+                "title": "Operations Analyst",
+                "full_description": "Please submit your CV in German together with a cover letter.",
+            },
+            cv_text=self.cv_text,
+            cv_can_translate=True,
+        )
+
+        language = requirements["cv_requirements"]["language"]
+        self.assertEqual(language["target_language"], "German")
+        self.assertEqual(language["source_language"], "English")
+        self.assertEqual(language["output_language"], "German")
+        self.assertTrue(language["translation_required"])
+        self.assertTrue(language["will_translate"])
+        self.assertTrue(
+            any(item["code"] == "cv_language_translation_planned" for item in requirements["warnings"])
+        )
+        self.assertTrue(
+            any(item["document_type"] == "motivation_letter" for item in requirements["required_documents"])
+        )
+
+    def test_application_requirements_block_standard_cv_language_conflict(self):
+        requirements = detect_application_requirements(
+            {
+                "title": "Operations Analyst",
+                "full_description": "Bitte reichen Sie Ihren Lebenslauf auf Deutsch ein.",
+            },
+            cv_text=self.cv_text,
+            cv_can_translate=False,
+        )
+
+        self.assertTrue(
+            any(
+                item["code"] == "cv_language_conflict" and item["severity"] == "blocking"
+                for item in requirements["warnings"]
+            )
+        )
+
+    def test_application_requirements_do_not_mistake_language_skill_for_cv_language(self):
+        requirements = detect_application_requirements(
+            {
+                "title": "Operations Analyst",
+                "full_description": "German B2 is required. Please submit your CV and certificates online.",
+            },
+            cv_text=self.cv_text,
+            cv_can_translate=True,
+        )
+
+        self.assertEqual(requirements["cv_requirements"]["language"]["target_language"], "")
+
+    def test_build_docs_prompt_uses_selected_output_language(self):
+        prompt = build_docs_prompt(
+            cv_text=self.cv_text,
+            job={**self.job, "full_description": "Bitte reichen Sie Ihren Lebenslauf auf Deutsch ein."},
+            candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
+            output_language="German",
+        )
+
+        self.assertIn("Write tailored CV content in German.", prompt)
+        self.assertIn("Keep JSON keys exactly as specified in English.", prompt)
+        self.assertNotIn("Write tailored CV content in English.", prompt)
+
+    @patch("backend.capabilities.tailored_documents.generation._improve_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_generate_docs_for_job_passes_after_first_score(
+        self,
+        generate_mock,
+        score_mock,
+        improve_mock,
+    ):
+        generate_mock.return_value = _draft("Strong first draft.")
+        score_mock.return_value = {
+            "score": 93,
+            "missing_requirements": [],
+            "improvement_actions": [],
+            "rationale": "Strong fit.",
+        }
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+        )
+
+        self.assertEqual(result["ats_attempt_count"], 1)
+        self.assertEqual(result["ats_score"], 93)
+        self.assertEqual(result["ats_gate_state"], "passed")
+        self.assertTrue(result["ats_can_export_final"])
+        self.assertFalse(result["ats_export_anyway_allowed"])
+        self.assertEqual(result["ats_export_gate"]["gate_state"], "passed")
+        improve_mock.assert_not_called()
+
+    @patch("backend.capabilities.tailored_documents.generation._improve_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_generate_docs_for_job_stops_when_score_stalls_and_keeps_best_attempt(
+        self,
+        generate_mock,
+        score_mock,
+        improve_mock,
+    ):
+        first_draft = _draft("First ATS draft.", skill="SQL")
+        second_draft = _draft("Second ATS draft.", skill="Python", bullet="Refined the wording.")
+        generate_mock.return_value = first_draft
+        improve_mock.return_value = second_draft
+        score_mock.side_effect = [
+            {
+                "score": 84,
+                "missing_requirements": ["SQL"],
+                "improvement_actions": ["Make SQL evidence more explicit."],
+                "rationale": "Close match.",
+            },
+            {
+                "score": 84,
+                "missing_requirements": ["Python"],
+                "improvement_actions": ["Add more evidence."],
+                "rationale": "No improvement.",
+            },
+        ]
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+        )
+
+        self.assertEqual(result["cv_professional_summary"], first_draft["cv_professional_summary"])
+        self.assertEqual(result["ats_score"], 84)
+        self.assertEqual(result["ats_attempt_count"], 2)
+        self.assertEqual(result["ats_stop_reason"], "score_stalled")
+        self.assertEqual(result["ats_missing_requirements"], ["SQL"])
+        self.assertEqual(result["ats_gate_state"], "blocked")
+        self.assertFalse(result["ats_can_export_final"])
+        self.assertTrue(result["ats_export_anyway_allowed"])
+        self.assertEqual(result["ats_export_gate"]["metadata"]["stop_reason"], "score_stalled")
+        self.assertIn("Best score reached: 84%", result["ats_last_warning"])
+        self.assertEqual(len(result["ats_attempt_history"]), 2)
+        self.assertEqual(result["ats_attempt_history"][0]["changed_sections"], ["initial_draft"])
+        self.assertEqual(result["ats_attempt_history"][1]["changed_sections"], ["summary", "experience", "skills"])
+        self.assertEqual(improve_mock.call_count, 1)
+
+    @patch("backend.capabilities.tailored_documents.generation._improve_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_generate_docs_for_job_blocks_after_third_scored_attempt(
+        self,
+        generate_mock,
+        score_mock,
+        improve_mock,
+    ):
+        generate_mock.return_value = _draft("Draft one.", skill="Excel")
+        improve_mock.side_effect = [
+            _draft("Draft two.", skill="SQL"),
+            _draft("Draft three.", skill="Dashboarding"),
+        ]
+        score_mock.side_effect = [
+            {
+                "score": 80,
+                "missing_requirements": ["SQL"],
+                "improvement_actions": ["Add SQL evidence."],
+                "rationale": "Weak SQL coverage.",
+            },
+            {
+                "score": 85,
+                "missing_requirements": ["Dashboarding"],
+                "improvement_actions": ["Highlight dashboard work."],
+                "rationale": "Improved.",
+            },
+            {
+                "score": 88,
+                "missing_requirements": ["Leadership"],
+                "improvement_actions": ["Clarify leadership scope."],
+                "rationale": "Best attempt but under target.",
+            },
+        ]
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+        )
+
+        self.assertEqual(result["cv_professional_summary"], "Draft three.")
+        self.assertEqual(result["ats_score"], 88)
+        self.assertEqual(result["ats_attempt_count"], 3)
+        self.assertEqual(result["ats_stop_reason"], "max_attempts_reached")
+        self.assertEqual(result["ats_gate_state"], "blocked")
+        self.assertTrue(result["ats_export_anyway_allowed"])
+        self.assertEqual(result["ats_export_gate"]["best_score"], 88)
+        self.assertIn("Best score reached: 88%", result["ats_export_gate"]["last_warning"])
+        self.assertEqual(
+            [entry["change_summary"] for entry in result["ats_attempt_history"]],
+            [
+                "Initial tailored CV draft scored.",
+                "Updated summary, skills since the previous scored pass.",
+                "Updated summary, skills since the previous scored pass.",
+            ],
+        )
+        self.assertEqual(improve_mock.call_count, 2)
+
+    @patch("backend.capabilities.tailored_documents.generation._improve_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_generate_docs_for_job_can_limit_ats_scoring_to_one_attempt(
+        self,
+        generate_mock,
+        score_mock,
+        improve_mock,
+    ):
+        generate_mock.return_value = _draft("Single pass draft.", skill="SQL")
+        score_mock.return_value = {
+            "score": 82,
+            "missing_requirements": ["Python"],
+            "improvement_actions": ["Add Python evidence."],
+            "rationale": "Needs one missing keyword.",
+        }
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+            ats_max_attempts=1,
+        )
+
+        self.assertEqual(result["ats_score"], 82)
+        self.assertEqual(result["ats_attempt_count"], 1)
+        self.assertEqual(result["ats_max_attempts"], 1)
+        self.assertEqual(result["ats_stop_reason"], "max_attempts_reached")
+        self.assertEqual(result["ats_missing_requirements"], ["Python"])
+        self.assertEqual(result["ats_gate_state"], "blocked")
+        self.assertTrue(result["ats_export_anyway_allowed"])
+        score_mock.assert_called_once()
+        improve_mock.assert_not_called()
+
+    def test_resolve_cv_generation_prompt_settings_uses_mode_specific_fields(self):
+        settings = SimpleNamespace(
+            light_customization_extra_prompt="Light extra",
+            light_customization_prompt_override="Light override",
+            aggressive_customization_extra_prompt="Aggressive extra",
+            aggressive_customization_prompt_override="Aggressive override",
+            stage4_extra_prompt="Legacy extra",
+            stage4_prompt_override="Legacy override",
+        )
+
+        self.assertEqual(
+            resolve_cv_generation_prompt_settings("light_customization", settings),
+            ("Light extra", "Light override"),
+        )
+        self.assertEqual(
+            resolve_cv_generation_prompt_settings("aggressive_customization", settings),
+            ("Aggressive extra", "Aggressive override"),
+        )
+        self.assertEqual(
+            resolve_cv_generation_prompt_settings(
+                "aggressive_customization",
+                SimpleNamespace(
+                    aggressive_customization_extra_prompt="",
+                    aggressive_customization_prompt_override="",
+                    stage4_extra_prompt="Legacy extra",
+                    stage4_prompt_override="Legacy override",
+                ),
+            ),
+            ("Legacy extra", "Legacy override"),
+        )
+
+    def test_stage4_generation_fingerprint_changes_when_export_style_changes(self):
+        base = dict(
+            cv_generation_mode="aggressive_customization",
+            extra_prompt="",
+            prompt_override="",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            candidate_email="ahmed@example.com",
+            cv_font_name="Calibri",
+            cv_template_id="classic",
+            cv_color_scheme="classic_navy",
+            include_photo=True,
+            languages=["English - C1"],
+            profile_image_path="user_config/photo.png",
+        )
+
+        original = _stage4_generation_fingerprint(**base)
+        styled = _stage4_generation_fingerprint(
+            **{
+                **base,
+                "cv_template_id": "modern",
+                "cv_color_scheme": "forest",
+                "cv_font_name": "Georgia",
+                "include_photo": False,
+            }
+        )
+
+        self.assertNotEqual(original, styled)
+
+    def test_stage4_generation_fingerprint_changes_when_job_description_changes(self):
+        base = dict(
+            cv_generation_mode="aggressive_customization",
+            extra_prompt="",
+            prompt_override="",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            candidate_email="ahmed@example.com",
+            cv_font_name="Calibri",
+            cv_template_id="classic",
+            cv_color_scheme="classic_navy",
+            include_photo=True,
+            languages=["English - C1"],
+            profile_image_path="user_config/photo.png",
+        )
+
+        original = _stage4_generation_fingerprint(**base)
+        changed_job = {**self.job, "full_description": "Need SQL, product analytics, and German B2."}
+        changed = _stage4_generation_fingerprint(**{**base, "job": changed_job})
+
+        self.assertNotEqual(original, changed)
+
+    def test_stage4_generation_fingerprint_changes_when_output_language_changes(self):
+        base = dict(
+            cv_generation_mode="aggressive_customization",
+            extra_prompt="",
+            prompt_override="",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            candidate_email="ahmed@example.com",
+            cv_font_name="Calibri",
+            cv_template_id="classic",
+            cv_color_scheme="classic_navy",
+            include_photo=True,
+            languages=["English - C1"],
+            profile_image_path="user_config/photo.png",
+        )
+
+        english = _stage4_generation_fingerprint(**{**base, "cv_output_language": "English"})
+        german = _stage4_generation_fingerprint(**{**base, "cv_output_language": "German"})
+
+        self.assertNotEqual(english, german)
+
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_light_mode_clamps_forbidden_changes_after_generation(self, generate_mock, score_mock):
+        generate_mock.return_value = {
+            "cv_professional_summary": "Light-mode summary tuned to the role.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Senior Analyst",
+                    "company": "Different Company",
+                    "period": "2020-2021",
+                    "bullets": ["Rewritten forbidden bullet."],
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "Renamed Degree",
+                    "thesis_title": "Renamed Thesis",
+                    "thesis_bullets": ["Forbidden education rewrite."],
+                }
+            ],
+            "cv_skills": ["SQL", "Dashboarding", "Stakeholder Management"],
+            "tailored_cv": "Light-mode summary tuned to the role.",
+        }
+        score_mock.return_value = {
+            "score": 92,
+            "missing_requirements": [],
+            "improvement_actions": [],
+            "rationale": "Looks good.",
+        }
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="light_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+            payload_postprocessor=lambda payload: self._clamp_payload(payload, "light_customization"),
+        )
+
+        self.assertEqual(result["cv_professional_summary"], "Light-mode summary tuned to the role.")
+        self.assertEqual(result["cv_skills"], ["SQL", "Dashboarding", "Stakeholder Management"])
+        self.assertEqual(result["cv_professional_experience"][0]["role_title"], "Business Analyst")
+        self.assertEqual(result["cv_professional_experience"][0]["company"], "ACME")
+        self.assertEqual(result["cv_professional_experience"][0]["period"], "2022-2024")
+        self.assertEqual(
+            result["cv_professional_experience"][0]["bullets"],
+            ["Baseline bullet one.", "Baseline bullet two."],
+        )
+        self.assertEqual(result["cv_education"][0]["degree_title"], "MSc Information Systems")
+        self.assertEqual(result["cv_education"][0]["thesis_bullets"], ["Built baseline dashboards."])
+
+    def test_light_mode_keeps_generated_translation_when_cv_language_changes(self):
+        record = {
+            "cv_output_language": "German",
+            "application_requirements": {
+                "cv_requirements": {
+                    "language": {
+                        "source_language": "English",
+                        "output_language": "German",
+                        "target_language": "German",
+                        "will_translate": True,
+                    }
+                }
+            },
+            "cv_professional_summary": "Deutsch zugeschnittenes Profil.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Business Analyst",
+                    "company": "ACME",
+                    "period": "2022-2024",
+                    "bullets": ["Uebersetzte Basisleistung.", "Verbesserte Stakeholder-Berichte."],
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "MSc Information Systems",
+                    "thesis_title": "Analytics Thesis",
+                    "thesis_bullets": ["Erstellte Dashboards."],
+                }
+            ],
+            "cv_skills": ["SQL"],
+        }
+
+        ensure_structured_cv_fields(
+            record,
+            candidate_name="Ahmed",
+            cv_text=self.cv_text,
+            cv_generation_mode="light_customization",
+        )
+
+        self.assertEqual(
+            record["cv_professional_experience"][0]["bullets"],
+            ["Uebersetzte Basisleistung.", "Verbesserte Stakeholder-Berichte."],
+        )
+        self.assertEqual(record["cv_education"][0]["thesis_bullets"], ["Erstellte Dashboards."])
+
+    @patch("backend.capabilities.tailored_documents.generation._score_structured_cv_once")
+    @patch("backend.capabilities.tailored_documents.generation._generate_structured_cv_once")
+    def test_aggressive_mode_keeps_identity_but_allows_bullet_rewrites(self, generate_mock, score_mock):
+        generate_mock.return_value = {
+            "cv_professional_summary": "Aggressive summary tuned to the role.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Business Analyst",
+                    "company": "ACME",
+                    "period": "2022-2024",
+                    "bullets": [
+                        "Rewritten aggressive bullet one.",
+                        "Rewritten aggressive bullet two.",
+                        "Extra bullet that should be discarded.",
+                    ],
+                }
+            ],
+            "cv_education": [
+                {
+                    "degree_title": "Renamed Degree",
+                    "thesis_title": "Renamed Thesis",
+                    "thesis_bullets": ["Forbidden education rewrite."],
+                }
+            ],
+            "cv_skills": ["SQL", "Dashboarding", "Stakeholder Management"],
+            "tailored_cv": "Aggressive summary tuned to the role.",
+        }
+        score_mock.return_value = {
+            "score": 91,
+            "missing_requirements": [],
+            "improvement_actions": [],
+            "rationale": "Looks good.",
+        }
+
+        result = generate_docs_for_job(
+            deepseek_api_key=None,
+            deepseek_model="deepseek-chat",
+            cv_text=self.cv_text,
+            job=self.job,
+            candidate_name="Ahmed",
+            cv_generation_mode="aggressive_customization",
+            extra_instructions="",
+            prompt_override="",
+            retries=1,
+            retry_sleep=0.0,
+            payload_postprocessor=lambda payload: self._clamp_payload(payload, "aggressive_customization"),
+        )
+
+        self.assertEqual(
+            result["cv_professional_experience"][0]["bullets"],
+            ["Rewritten aggressive bullet one.", "Rewritten aggressive bullet two."],
+        )
+        self.assertEqual(result["cv_professional_experience"][0]["role_title"], "Business Analyst")
+        self.assertEqual(result["cv_education"][0]["degree_title"], "MSc Information Systems")
+        self.assertEqual(result["cv_education"][0]["thesis_bullets"], ["Built baseline dashboards."])
+
+    def test_extracts_baseline_experience_from_plain_experience_heading(self):
+        record = {
+            "title": "Product Analyst",
+            "company": "Example",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [],
+            "cv_skills": [],
+        }
+        cv_text = "\n".join(
+            [
+                "Summary",
+                "Experienced analyst.",
+                "Experience",
+                "Business Analyst | Example GmbH",
+                "2022 - Present",
+                "- Built dashboard reporting",
+                "- Improved fulfillment workflow",
+                "Skills",
+                "SQL",
+            ]
+        )
+
+        ensure_structured_cv_fields(
+            record,
+            candidate_name="Ahmed",
+            cv_text=cv_text,
+            cv_generation_mode="aggressive_customization",
+        )
+
+        self.assertEqual(record["cv_professional_experience"][0]["role_title"], "Business Analyst")
+        self.assertEqual(record["cv_professional_experience"][0]["company"], "Example GmbH")
+        self.assertEqual(record["cv_professional_experience"][0]["period"], "2022 - Present")
+        self.assertEqual(
+            record["cv_professional_experience"][0]["bullets"],
+            ["Built dashboard reporting", "Improved fulfillment workflow"],
+        )
+
+    def test_recovers_tailored_cv_bullets_when_structured_experience_is_empty(self):
+        record = {
+            "title": "Product Support Specialist",
+            "company": "Bruker",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Allianz Technology",
+                    "company": "Germany",
+                    "period": "May 2025 - Sep 2025",
+                    "bullets": [],
+                }
+            ],
+            "cv_skills": ["Product Support"],
+            "tailored_cv": "\n".join(
+                [
+                    "Professional Experience:",
+                    "Technology Transformation & Strategy Consulting (Internship) | Allianz Technology | May 2025 - Sep 2025",
+                    "- Supported enterprise AI transformation programs for product teams.",
+                    "- Designed AI-enabled workflows for support analytics.",
+                    "Skills:",
+                    "- Product Support",
+                ]
+            ),
+        }
+        cv_text = "\n".join(
+            [
+                "Professional Experience",
+                "Allianz Technology | Germany | May 2025 - Sep 2025",
+            ]
+        )
+
+        ensure_structured_cv_fields(
+            record,
+            candidate_name="Ahmed",
+            cv_text=cv_text,
+            cv_generation_mode="aggressive_customization",
+        )
+
+        self.assertEqual(
+            record["cv_professional_experience"][0]["role_title"],
+            "Technology Transformation & Strategy Consulting (Internship)",
+        )
+        self.assertEqual(record["cv_professional_experience"][0]["company"], "Allianz Technology")
+        self.assertEqual(
+            record["cv_professional_experience"][0]["bullets"],
+            [
+                "Supported enterprise AI transformation programs for product teams.",
+                "Designed AI-enabled workflows for support analytics.",
+            ],
+        )
+
+    def test_keeps_baseline_role_headers_when_generated_title_is_promoted_bullet(self):
+        record = {
+            "title": "Decision Scientist Supply",
+            "company": "Vinted",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Technology Transformation & Strategy Consulting (Internship)",
+                    "company": "Allianz Technology",
+                    "period": "May 2025 - Sep 2025",
+                    "bullets": [
+                        "Contributed to enterprise AI transformation programs.",
+                        "Produced structured analyses and presentations for senior stakeholders.",
+                    ],
+                },
+                {
+                    "role_title": "Produced structured analyses and presentations for senior stakeholders",
+                    "company": "Business Transformation & AI Associate (Internship)",
+                    "period": "Nov 2024 - Apr 2025",
+                    "bullets": [
+                        "Identified and prioritized AI use cases across business units.",
+                        "Established feedback loops to improve solution adoption and performance.",
+                    ],
+                },
+            ],
+            "cv_skills": ["Python"],
+        }
+        cv_text = "\n".join(
+            [
+                "Professional Experience",
+                "Technology Transformation & Strategy Consulting (Internship)",
+                "Allianz Technology | Germany | May 2025 - Sep 2025",
+                "Contributed to enterprise AI transformation programs.",
+                "Produced structured analyses and presentations for senior stakeholders.",
+                "",
+                "Business Transformation & AI Associate (Internship)",
+                "Allianz SE | Germany | Nov 2024 - Apr 2025",
+                "Identified and prioritized AI use cases across business units.",
+                "Established feedback loops to improve solution adoption and performance.",
+                "Education",
+            ]
+        )
+
+        ensure_structured_cv_fields(
+            record,
+            candidate_name="Ahmed",
+            cv_text=cv_text,
+            cv_generation_mode="aggressive_customization",
+        )
+
+        self.assertEqual(
+            record["cv_professional_experience"][0]["role_title"],
+            "Technology Transformation & Strategy Consulting (Internship)",
+        )
+        self.assertEqual(record["cv_professional_experience"][0]["company"], "Allianz Technology")
+        self.assertEqual(record["cv_professional_experience"][0]["location"], "Germany")
+        self.assertEqual(
+            record["cv_professional_experience"][1]["role_title"],
+            "Business Transformation & AI Associate (Internship)",
+        )
+        self.assertEqual(record["cv_professional_experience"][1]["company"], "Allianz SE")
+        self.assertNotIn(
+            "Produced structured analyses",
+            record["cv_professional_experience"][1]["role_title"],
+        )
+
+    def test_repairs_generated_experience_when_role_header_is_trapped_in_period(self):
+        record = {
+            "title": "Product Owner",
+            "company": "Siemens Energy",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Secured financing for 7 transporter vehicles without traditional bank support.",
+                    "company": "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+                    "period": "Operations Lead and Co-Founder | Roxy Mobility GmbH | Dec 2020 - Oct 2024 (fulltime)",
+                    "bullets": [
+                        "Directed operations in Freiburg.",
+                        "Negotiated partner agreements.",
+                    ],
+                }
+            ],
+            "cv_skills": ["Product Ownership"],
+        }
+
+        ensure_structured_cv_fields(
+            record,
+            candidate_name="Ahmed",
+            cv_text="",
+            cv_generation_mode="aggressive_customization",
+        )
+
+        [experience] = record["cv_professional_experience"]
+        self.assertEqual(experience["role_title"], "Operations Lead and Co-Founder")
+        self.assertEqual(experience["company"], "Roxy Mobility GmbH")
+        self.assertEqual(experience["period"], "Dec 2020 - Oct 2024 (fulltime)")
+        self.assertEqual(
+            experience["bullets"][:2],
+            [
+                "Secured financing for 7 transporter vehicles without traditional bank support.",
+                "Developed operational strategies projecting a 5% increase in revenue and efficiency.",
+            ],
+        )
+
+    def test_project_outcome_lines_stay_under_project_titles(self):
+        cv_text = "\n".join(
+            [
+                "Projects",
+                "AI-Driven Job Application Automation Pipeline | 2026",
+                "Designed an end-to-end automation system for LinkedIn job discovery.",
+                "Developed automated finding referrals and CV personalization.",
+                "ERP Growth Strategy for Odoo Implementation Partner | 2026",
+                "Built a client acquisition framework.",
+                "Skills",
+                "Python",
+            ]
+        )
+
+        initiatives = extract_cv_strategic_initiatives(cv_text)
+
+        self.assertEqual(len(initiatives), 2)
+        self.assertEqual(initiatives[0]["title"], "AI-Driven Job Application Automation Pipeline | 2026")
+        self.assertEqual(
+            initiatives[0]["bullets"],
+            [
+                "Designed an end-to-end automation system for LinkedIn job discovery.",
+                "Developed automated finding referrals and CV personalization.",
+            ],
+        )
+        self.assertEqual(initiatives[1]["title"], "ERP Growth Strategy for Odoo Implementation Partner | 2026")
+        self.assertEqual(initiatives[1]["bullets"], ["Built a client acquisition framework."])
+
+    def test_aggressive_rewrites_project_bullets_but_light_keeps_baseline_projects(self):
+        cv_text = "\n".join(
+            [
+                "Projects",
+                "AI-Driven Job Application Automation Pipeline | 2026",
+                "- Built baseline automation.",
+                "- Generated baseline documents.",
+                "Skills",
+                "Python",
+            ]
+        )
+        generated_project = {
+            "title": "AI-Driven Job Application Automation Pipeline | 2026",
+            "bullets": [
+                "Reframed automation around product-owner workflow orchestration.",
+                "Connected document generation to stakeholder-ready delivery outputs.",
+            ],
+        }
+        aggressive_record = {
+            "title": "Product Owner",
+            "company": "Siemens Energy",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [],
+            "cv_strategic_initiatives": [generated_project],
+            "cv_skills": ["Product Ownership"],
+        }
+        light_record = {**aggressive_record, "cv_strategic_initiatives": [generated_project]}
+
+        ensure_structured_cv_fields(
+            aggressive_record,
+            candidate_name="Ahmed",
+            cv_text=cv_text,
+            cv_generation_mode="aggressive_customization",
+        )
+        ensure_structured_cv_fields(
+            light_record,
+            candidate_name="Ahmed",
+            cv_text=cv_text,
+            cv_generation_mode="light_customization",
+        )
+
+        self.assertEqual(
+            aggressive_record["cv_strategic_initiatives"][0]["bullets"],
+            generated_project["bullets"],
+        )
+        self.assertEqual(
+            light_record["cv_strategic_initiatives"][0]["bullets"],
+            ["Built baseline automation.", "Generated baseline documents."],
+        )
+
+    def test_candidate_identity_falls_back_to_cv_text_for_clerk_placeholders(self):
+        cv_text = "\n".join(
+            [
+                "Ahmed Kaddah",
+                "Düsseldorf, Germany | ahmed.kaddah@tutamail.com",
+                "Professional Summary",
+                "Business transformation specialist.",
+            ]
+        )
+
+        name, email = _resolve_candidate_identity(
+            "user_3DtxNJbFAnuqOgglJN4MwHY6cRx",
+            "user_3DtxNJbFAnuqOgglJN4MwHY6cRx@clerk.local",
+            cv_text,
+        )
+
+        self.assertEqual(name, "Ahmed Kaddah")
+        self.assertEqual(email, "ahmed.kaddah@tutamail.com")
+
+    def test_create_cv_document_writes_semantic_experience_bullets(self):
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "location_raw": "Berlin, Germany",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Business Analyst",
+                    "company": "ACME",
+                    "period": "2022-2024",
+                    "bullets": [
+                        "Delivered reporting improvements.",
+                        {"text": "Included a nested implementation detail.", "level": 1},
+                    ],
+                }
+            ],
+            "cv_skills": ["SQL"],
+            "cv_education": [],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record,
+                docs_dir=Path(temp_dir),
+                run_date="2026-05-28",
+                candidate_name="Ahmed",
+                candidate_email="ahmed@example.com",
+                cv_font_name="Calibri",
+                cv_template_id="classic",
+                cv_color_scheme="classic_navy",
+                languages=[],
+                profile_image_path=None,
+                include_profile_image=False,
+                profile_links=[],
+            )
+            exported = Document(output_path)
+            bullet_paragraph = next(
+                paragraph
+                for paragraph in exported.paragraphs
+                if paragraph.text.strip() == "Delivered reporting improvements."
+            )
+            nested_paragraph = next(
+                paragraph
+                for paragraph in exported.paragraphs
+                if paragraph.text.strip() == "Included a nested implementation detail."
+            )
+
+        self.assertEqual(bullet_paragraph.style.name, "List Bullet")
+        self.assertEqual(nested_paragraph.style.name, "List Bullet 2")
+
+    def test_create_plain_document_uses_reference_layout_with_selected_design_tokens(self):
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "location_raw": "Buffalo, New York",
+            "cv_professional_summary": "Friendly and engaging team leader.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Restaurant Manager",
+                    "company": "Contoso Bar and Grill",
+                    "period": "2022-Present",
+                    "bullets": ["Improved customer satisfaction."],
+                }
+            ],
+            "cv_skills": ["Budgeting", "POS systems", "Communication", "Team leadership"],
+            "cv_education": [
+                {
+                    "degree_title": "B.S. in Business Administration | Bigtown College",
+                    "thesis_title": "",
+                    "thesis_bullets": [],
+                }
+            ],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record,
+                docs_dir=Path(temp_dir),
+                run_date="2026-06-05",
+                candidate_name="May Riley",
+                candidate_email="m.riley@example.com",
+                cv_font_name="Georgia",
+                cv_template_id="plain",
+                cv_color_scheme="burgundy",
+                languages=[],
+                profile_image_path=Path(temp_dir) / "unused.png",
+                include_profile_image=True,
+                profile_links=[
+                    {"text": "LinkedIn", "url": "https://linkedin.example/may"},
+                    {"text": "GitHub", "url": "https://github.example/may"},
+                ],
+            )
+            exported = Document(output_path)
+
+        section = exported.sections[0]
+        paragraph_texts = [paragraph.text.strip() for paragraph in exported.paragraphs if paragraph.text.strip()]
+        header_cell = exported.tables[0].cell(0, 0)
+        header_run = header_cell.paragraphs[0].runs[0]
+
+        self.assertAlmostEqual(section.page_width.inches, 8.5, places=2)
+        self.assertAlmostEqual(section.page_height.inches, 11.0, places=2)
+        self.assertAlmostEqual(section.left_margin.inches, 0.8, places=2)
+        self.assertEqual(header_cell.text.strip(), "May Riley")
+        self.assertEqual(header_run.font.size.pt, 28.0)
+        self.assertEqual(header_run.font.name, "Georgia")
+        self.assertEqual(str(header_run.font.color.rgb), "7C2D12")
+        self.assertIn('w:color="EA580C"', header_cell._tc.xml)
+        self.assertIn("Profile", paragraph_texts)
+        self.assertIn("Experience", paragraph_texts)
+        self.assertIn("Education", paragraph_texts)
+        self.assertIn("Skills & Abilities", paragraph_texts)
+        self.assertIn("RESTAURANT MANAGER | CONTOSO BAR AND GRILL | 2022-PRESENT", paragraph_texts)
+        self.assertIn("Budgeting | POS systems | Communication | Team leadership", paragraph_texts)
+        hyperlink_targets = {
+            relationship.target_ref
+            for relationship in exported.part.rels.values()
+            if relationship.reltype.endswith("/hyperlink")
+        }
+        self.assertIn("https://linkedin.example/may", hyperlink_targets)
+        self.assertIn("https://github.example/may", hyperlink_targets)
+        self.assertFalse(exported.inline_shapes)
+
+    def test_legacy_teal_resume_id_resolves_to_plain_layout(self):
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [],
+            "cv_skills": [],
+            "cv_education": [],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record,
+                docs_dir=Path(temp_dir),
+                run_date="2026-06-05",
+                candidate_name="May Riley",
+                candidate_email="m.riley@example.com",
+                cv_font_name="Calibri",
+                cv_template_id="teal_resume",
+                cv_color_scheme="ocean_teal",
+                languages=[],
+                profile_image_path=None,
+                include_profile_image=False,
+                profile_links=[],
+            )
+            exported = Document(output_path)
+
+        self.assertAlmostEqual(exported.sections[0].page_width.inches, 8.5, places=2)
+        self.assertEqual(exported.tables[0].cell(0, 0).text.strip(), "May Riley")
+
+    def test_section_bars_template_uses_centered_bar_layout(self):
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "location_raw": "New York, NY",
+            "cv_professional_summary": "Known for structured execution and clear communication.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Analyst",
+                    "company": "ACME",
+                    "location": "New York",
+                    "period": "2023 - Present",
+                    "bullets": ["Improved reporting quality."],
+                }
+            ],
+            "cv_skills": ["Analysis", "Communication"],
+            "cv_education": [
+                {
+                    "degree_title": "BSc Business",
+                    "institution": "Example University",
+                    "period": "2022",
+                    "thesis_bullets": [],
+                }
+            ],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record,
+                docs_dir=Path(temp_dir),
+                run_date="2026-06-05",
+                candidate_name="Roy J. Weatherspoon",
+                candidate_email="roy@example.com",
+                cv_font_name="Georgia",
+                cv_template_id="section_bars",
+                cv_color_scheme="classic_navy",
+                languages=[],
+                profile_image_path=None,
+                include_profile_image=False,
+                profile_links=[],
+            )
+            exported = Document(output_path)
+
+        paragraph_texts = [paragraph.text.strip() for paragraph in exported.paragraphs if paragraph.text.strip()]
+        table_texts = [
+            cell.text.strip()
+            for table in exported.tables
+            for row in table.rows
+            for cell in row.cells
+            if cell.text.strip()
+        ]
+
+        self.assertAlmostEqual(exported.sections[0].page_width.inches, 8.5, places=2)
+        self.assertIn("SUMMARY", paragraph_texts)
+        self.assertIn("PROFESSIONAL EXPERIENCE", paragraph_texts)
+        self.assertIn("EDUCATION", paragraph_texts)
+        self.assertIn("SKILLS", paragraph_texts)
+        self.assertIn("Roy J. Weatherspoon", table_texts[0])
+        self.assertIn("Analyst", table_texts)
+        self.assertIn("2023 - Present", table_texts)
+
+    def test_create_cv_document_localizes_section_labels_for_german_output(self):
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "location_raw": "Berlin, Germany",
+            "cv_output_language": "German",
+            "cv_professional_summary": "Zielgerichtetes Profil.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Business Analyst",
+                    "company": "ACME",
+                    "period": "2022-2024",
+                    "bullets": ["Verbesserte Reporting-Prozesse."],
+                }
+            ],
+            "cv_skills": ["SQL"],
+            "cv_education": [
+                {
+                    "degree_title": "MSc Information Systems",
+                    "thesis_title": "",
+                    "thesis_bullets": [],
+                }
+            ],
+        }
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = create_cv_document(
+                record,
+                docs_dir=Path(temp_dir),
+                run_date="2026-05-31",
+                candidate_name="Ahmed",
+                candidate_email="ahmed@example.com",
+                cv_font_name="Calibri",
+                cv_template_id="classic",
+                cv_color_scheme="classic_navy",
+                languages=["Deutsch - B2"],
+                profile_image_path=None,
+                include_profile_image=False,
+                profile_links=[],
+            )
+            exported = Document(output_path)
+            texts = [paragraph.text.strip() for paragraph in exported.paragraphs if paragraph.text.strip()]
+
+        self.assertIn("Profil", texts)
+        self.assertIn("Berufserfahrung", texts)
+        self.assertIn("Kompetenzen", texts)
+        self.assertIn("Ausbildung", texts)
+
+    def test_html_pdf_payload_uses_same_structured_cv_content_as_docx(self):
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "location_raw": "Berlin, Germany",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Business Analyst",
+                    "company": "ACME",
+                    "period": "2022-2024",
+                    "bullets": ["Delivered reporting improvements."],
+                }
+            ],
+            "cv_strategic_initiatives": [
+                {
+                    "title": "Analytics Automation",
+                    "bullets": ["Built reusable reporting workflows."],
+                }
+            ],
+            "cv_skills": ["SQL"],
+            "cv_education": [
+                {
+                    "degree_title": "MSc Information Systems",
+                    "thesis_title": "Analytics Thesis",
+                    "thesis_bullets": ["Built dashboards."],
+                }
+            ],
+        }
+
+        payload = build_cv_html_export_payload(
+            record,
+            candidate_name="Ahmed",
+            candidate_email="ahmed@example.com",
+            cv_font_name="Calibri",
+            cv_template_id="modern",
+            cv_color_scheme="forest",
+            languages=["English - C1"],
+            profile_image_path=None,
+            include_profile_image=False,
+            profile_links=[{"text": "LinkedIn", "url": "https://linkedin.example/ahmed"}],
+        )
+
+        self.assertEqual(payload["documents"]["cv_template"], "plain")
+        self.assertEqual(payload["documents"]["cv_output_language"], "English")
+        self.assertEqual(payload["profile"]["summary"], "Tailored summary.")
+        self.assertEqual(payload["profile"]["recent_experience"][0]["bullets"], ["Delivered reporting improvements."])
+        self.assertEqual(payload["profile"]["projects"][0]["bullets"], ["Built reusable reporting workflows."])
+        self.assertEqual(payload["profile"]["education"][0]["thesis_title"], "Analytics Thesis")
+        self.assertEqual(payload["profile"]["linkedin_url"], "https://linkedin.example/ahmed")
+
+    def test_stage4_profile_link_overrides_replace_config_urls(self):
+        args = SimpleNamespace(
+            linkedin_url="https://linkedin.example/workspace",
+            github_url="https://github.example/workspace",
+        )
+        config = {
+            "candidate": {
+                "profile_links": {
+                    "linkedin": {"url": "https://linkedin.example/config"},
+                    "github": {"url": "https://github.example/config"},
+                }
+            }
+        }
+
+        self.assertEqual(
+            _resolve_profile_link_url(args, config, "linkedin"),
+            "https://linkedin.example/workspace",
+        )
+        self.assertEqual(
+            _resolve_profile_link_url(args, config, "github"),
+            "https://github.example/workspace",
+        )
+        runtime_defaults = build_main_defaults(config)
+        runtime_defaults.update(
+            linkedin_url=args.linkedin_url,
+            github_url=args.github_url,
+        )
+        stage4_args = build_stage4_args(SimpleNamespace(**runtime_defaults))
+        self.assertEqual(stage4_args.linkedin_url, "https://linkedin.example/workspace")
+        self.assertEqual(stage4_args.github_url, "https://github.example/workspace")
+
+    def test_create_cv_pdf_document_invokes_shared_browser_renderer(self):
+        record = {
+            "job_id": "job_1",
+            "title": "Senior Analyst",
+            "company": "ACME",
+            "cv_professional_summary": "Tailored summary.",
+            "cv_professional_experience": [
+                {
+                    "role_title": "Business Analyst",
+                    "company": "ACME",
+                    "period": "2022-2024",
+                    "bullets": ["Delivered reporting improvements."],
+                }
+            ],
+            "cv_skills": ["SQL"],
+            "cv_education": [],
+        }
+
+        captured_payloads = []
+
+        def fake_run(command, **kwargs):
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_bytes(b"%PDF-1.4\n")
+            captured_payloads.append(kwargs["input"])
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with TemporaryDirectory() as temp_dir, patch(
+            "backend.capabilities.tailored_documents.rendering.subprocess.run",
+            side_effect=fake_run,
+        ):
+            output_path = Path(temp_dir) / "cv.pdf"
+            rendered_path = create_cv_pdf_document(
+                record,
+                output_path=output_path,
+                candidate_name="Ahmed",
+                candidate_email="ahmed@example.com",
+                cv_font_name="Calibri",
+                cv_template_id="classic",
+                cv_color_scheme="classic_navy",
+                languages=[],
+                profile_image_path=None,
+                include_profile_image=False,
+                profile_links=[],
+            )
+
+        self.assertEqual(Path(rendered_path), output_path.resolve())
+        self.assertIn("Delivered reporting improvements.", captured_payloads[0])
+
+    def _clamp_payload(self, payload, mode):
+        normalized_payload = dict(payload)
+        ensure_structured_cv_fields(
+            normalized_payload,
+            candidate_name="Ahmed",
+            cv_text=self.cv_text,
+            cv_generation_mode=mode,
+        )
+        return normalized_payload
+
+
+if __name__ == "__main__":
+    unittest.main()

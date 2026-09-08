@@ -1,0 +1,38 @@
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 53270)
+Traceback (most recent call last):
+  File "C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\backend\api\server.py", line 3637, in do_GET
+    self._send_json(
+  File "C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\backend\api\server.py", line 3090, in _send_json
+    self.wfile.write(body)
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 840, in write
+    self._sock.sendall(b)
+ConnectionAbortedError: [WinError 10053] An established connection was aborted by the software in your host machine
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 692, in process_request_thread
+    self.finish_request(request, client_address)
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 761, in __init__
+    self.handle()
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\http\server.py", line 436, in handle
+    self.handle_one_request()
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\http\server.py", line 424, in handle_one_request
+    method()
+  File "C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\backend\api\server.py", line 3794, in do_GET
+    self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", str(exc))
+  File "C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\backend\api\server.py", line 3108, in _send_error
+    self._send_json(payload, status=status, headers=headers)
+  File "C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\backend\api\server.py", line 3089, in _send_json
+    self.end_headers()
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\http\server.py", line 538, in end_headers
+    self.flush_headers()
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\http\server.py", line 542, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+  File "C:\Users\ahmed\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 840, in write
+    self._sock.sendall(b)
+ConnectionAbortedError: [WinError 10053] An established connection was aborted by the software in your host machine
+----------------------------------------

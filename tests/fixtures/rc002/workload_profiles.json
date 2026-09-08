@@ -1,0 +1,43 @@
+{
+  "country_scope": "Germany",
+  "fixture_representative": {
+    "description": "Deterministic adapter/publication fixture; not a production capacity claim.",
+    "input_rows": 5,
+    "companies": 5,
+    "source_tasks": 5,
+    "size_mix": {
+      "small_employers": 2,
+      "large_employers": 3,
+      "large_employer_fixture_jobs": 32
+    },
+    "execution_mode": "measured_offline_fixture"
+  },
+  "dual_field_ready": {
+    "description": "RC-001 field-presence cohort; eligibility is not verified.",
+    "input_rows": 1666,
+    "candidate_companies": 1666,
+    "source_tasks_if_reviewed": 3332,
+    "execution_mode": "shape_only_not_executed"
+  },
+  "identity_first_expansion": {
+    "description": "RC-001 W/L/I cohort without a canonical Runr ID; identity work precedes eligibility.",
+    "input_rows": 4371,
+    "candidate_companies": 4371,
+    "source_tasks_if_reviewed": 8742,
+    "execution_mode": "shape_only_not_executed"
+  },
+  "reviewed_eligible": {
+    "description": "Reviewed, verified population after RC-003 through RC-005; not known yet.",
+    "input_rows": null,
+    "candidate_companies": null,
+    "source_tasks": null,
+    "execution_mode": "deferred_until_identity_review"
+  },
+  "existing_linkedin_state": {
+    "description": "Historical state shape, not a single-run workload.",
+    "stored_jobs": 188206,
+    "source_groups": 11896,
+    "scans": 11921,
+    "execution_mode": "historical_aggregate_not_executed"
+  }
+}

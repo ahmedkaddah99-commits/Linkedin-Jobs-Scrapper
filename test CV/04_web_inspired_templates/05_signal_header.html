@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signal Header CV (With Photo)</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background:
+        radial-gradient(circle at top left, rgba(194, 214, 255, 0.25), transparent 32%),
+        linear-gradient(180deg, #f6f4ef 0%, #ece9e2 100%);
+      color: #111827;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+    }
+    a {
+      color: inherit;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.15em;
+    }
+    .screen-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.9rem 1.2rem;
+      backdrop-filter: blur(10px);
+      background: rgba(255, 255, 255, 0.82);
+      border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+    }
+    .screen-toolbar .meta {
+      font-size: 0.92rem;
+      color: #475569;
+    }
+    .toolbar-actions {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .toolbar-button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.72rem 1rem;
+      background: #111827;
+      color: white;
+      font: inherit;
+      cursor: pointer;
+    }
+    .toolbar-link {
+      font-size: 0.92rem;
+      color: #334155;
+    }
+    .page-wrap {
+      padding: 1.5rem;
+    }
+    .sheet {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      background: white;
+      box-shadow: 0 28px 70px rgba(15, 23, 42, 0.15);
+      overflow: hidden;
+    }
+    .muted {
+      color: #64748b;
+    }
+    .caps {
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+    }
+    .tag {
+      display: inline-block;
+      padding: 0.22rem 0.58rem;
+      border-radius: 999px;
+      background: #e2e8f0;
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .photo-shell {
+      width: 34mm;
+      height: 44mm;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      background: linear-gradient(180deg, #eef2f7 0%, #dfe8f1 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .profile-photo {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .photo-shell-placeholder {
+      border-style: dashed;
+      background:
+        repeating-linear-gradient(
+          135deg,
+          rgba(148, 163, 184, 0.12),
+          rgba(148, 163, 184, 0.12) 8px,
+          rgba(255, 255, 255, 0.8) 8px,
+          rgba(255, 255, 255, 0.8) 16px
+        );
+    }
+    .photo-placeholder-copy {
+      padding: 0.6rem;
+      text-align: center;
+      font-size: 0.72rem;
+      line-height: 1.35;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    @media print {
+      html, body {
+        background: white;
+      }
+      .screen-toolbar {
+        display: none;
+      }
+      .page-wrap {
+        padding: 0;
+      }
+      .sheet {
+        width: auto;
+        min-height: auto;
+        margin: 0;
+        box-shadow: none;
+      }
+      @page {
+        size: A4;
+        margin: 10mm;
+      }
+    }
+    
+      .signal-sheet {
+        padding: 0 0 18mm;
+        font-family: "Aptos", "Segoe UI", sans-serif;
+      }
+      .signal-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: flex-start;
+        padding: 18mm 18mm 14mm;
+        background:
+          radial-gradient(circle at top right, rgba(251, 191, 36, 0.28), transparent 34%),
+          linear-gradient(135deg, #18324a 0%, #0f172a 100%);
+        color: white;
+      }
+      .signal-kicker {
+        margin: 0 0 10px;
+        color: rgba(255, 255, 255, 0.72);
+      }
+      .signal-header h1 {
+        margin: 0;
+        font-size: 2.45rem;
+      }
+      .signal-headline {
+        margin: 10px 0 0;
+        font-size: 1.08rem;
+        color: rgba(255, 255, 255, 0.88);
+      }
+      .signal-summary {
+        margin: 14px 0 0;
+        max-width: 88%;
+        line-height: 1.7;
+        color: rgba(255, 255, 255, 0.84);
+      }
+      .signal-photo-shell {
+        border-radius: 22px;
+        border-color: rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .signal-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        padding: 12px 18mm 0;
+        color: #475569;
+        font-size: 0.9rem;
+      }
+      .signal-grid {
+        display: grid;
+        grid-template-columns: 0.78fr 1.22fr;
+        gap: 22px;
+        padding: 12px 18mm 0;
+      }
+      .signal-section + .signal-section {
+        margin-top: 18px;
+      }
+      .signal-section h2 {
+        margin: 0 0 10px;
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #18324a;
+      }
+      .signal-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .signal-tags span {
+        display: inline-flex;
+        padding: 0.36rem 0.7rem;
+        border-radius: 999px;
+        background: #eef4fa;
+        border: 1px solid rgba(24, 50, 74, 0.1);
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+      .signal-role + .signal-role {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(24, 50, 74, 0.1);
+      }
+      .signal-role h3 {
+        margin: 0;
+        font-size: 1rem;
+      }
+      .signal-role .company {
+        margin: 4px 0 0;
+        color: #5b6b7b;
+      }
+      .signal-role .period {
+        color: #5b6b7b;
+        font-weight: 700;
+      }
+      .signal-role .role-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .signal-bullets {
+        margin: 8px 0 0 18px;
+        padding: 0;
+      }
+      .signal-bullets li + li {
+        margin-top: 5px;
+      }
+    
+  </style>
+</head>
+<body>
+  <div class="screen-toolbar">
+    <div class="meta">Signal Header CV (With Photo) · print-ready HTML prototype</div>
+    <div class="toolbar-actions">
+      <a class="toolbar-link" href="index.html">Back to gallery</a>
+      <button class="toolbar-button" onclick="window.print()">Print / Save PDF</button>
+    </div>
+  </div>
+  <div class="page-wrap">
+    
+    <main class="sheet signal-sheet">
+      <header class="signal-header">
+        <div class="signal-copy">
+          <p class="caps signal-kicker">Browser-editable concept</p>
+          <h1>Ahmed Kaddah</h1>
+          <p class="signal-headline">Operations and Logistics Support</p>
+          <p class="signal-summary">Operations and logistics support professional with hands-on experience managing more than 1,600 e-scooters across 7 cities, coordinating 7 transport vans, completing daily readiness checks, and supporting customer-facing field operations. Recognized for fast response times, reliable execution, onboarding new team members, and disciplined daily documentation. Available immediately for warehouse, logistics, operational support, and service roles.</p>
+        </div>
+        <div class="photo-shell signal-photo-shell"><img class="profile-photo" src="_assets/profile_photo.png" alt="Candidate profile photo"></div>
+      </header>
+      <section class="signal-meta">
+        <span>Erlangen / Nuremberg, Germany</span>
+        <a href="mailto:ahmed.kaddah@tutamail.com">ahmed.kaddah@tutamail.com</a>
+        <a href="https://www.linkedin.com/in/ahmed-kaddah-3a1a88183/">LinkedIn</a>
+        <a href="https://github.com/ahmedkaddah99-commits?tab=repositories">GitHub</a>
+      </section>
+      <div class="signal-grid">
+        <div>
+          <section class="signal-section">
+            <h2>Skills</h2>
+            <div class="signal-tags"><span>Fleet coordination</span><span>Warehouse and field operations</span><span>Transport van logistics</span><span>Daily inspections and readiness checks</span><span>Inventory counting and documentation</span><span>Customer-facing service</span><span>Team onboarding</span><span>Shift reliability</span><span>Arabic (Native)</span><span>English (C1)</span><span>German (B1/B2)</span></div>
+          </section>
+          <section class="signal-section">
+            <h2>Education</h2>
+            <p><strong>M.Sc. Information Systems</strong></p>
+            <p>University Example</p>
+            <p>Focus on analytics, business systems, and digital operations.</p>
+          </section>
+        </div>
+        <div>
+          <section class="signal-section">
+            <h2>Experience</h2>
+            
+            <section class="signal-role">
+              <div class="role-line">
+                <div>
+                  <h3>Logistics and Fleet Operations Associate</h3>
+                  <p class="company">Zeus Scooters GmbH</p>
+                </div>
+                <div class="period">Dec 2023 - Jul 2024</div>
+              </div>
+              <ul class="signal-bullets"><li>Managed day-to-day support for a fleet of more than 1,600 e-scooters across 7 cities.</li><li>Coordinated logistics using 7 transport vans to keep assets available and operational.</li><li>Completed daily maintenance checks and readiness inspections to support reliable service.</li><li>Trained new team members on operational routines and day-to-day execution.</li></ul>
+            </section>
+            
+
+            <section class="signal-role">
+              <div class="role-line">
+                <div>
+                  <h3>Service and Operations Associate</h3>
+                  <p class="company">Roxy Mobility GmbH</p>
+                </div>
+                <div class="period">Dec 2020 - Oct 2024</div>
+              </div>
+              <ul class="signal-bullets"><li>Handled daily field service and customer support in a fast-moving operating environment.</li><li>Coordinated with partners including Deutsche Bahn on site and logistics-related tasks.</li><li>Earned top recognition for the fastest response time in the city.</li><li>Maintained daily records and inventory tracking for operational equipment.</li></ul>
+            </section>
+            
+
+            <section class="signal-role">
+              <div class="role-line">
+                <div>
+                  <h3>Project and Team Assistant</h3>
+                  <p class="company">General Administration and Logistics</p>
+                </div>
+                <div class="period">Nov 2024 - Present</div>
+              </div>
+              <ul class="signal-bullets"><li>Supported daily data capture and task tracking for ongoing team activities.</li><li>Prepared materials for workshops and team sessions.</li><li>Provided general administrative support to improve workflow consistency.</li></ul>
+            </section>
+            
+          </section>
+        </div>
+      </div>
+    </main>
+    
+  </div>
+</body>
+</html>

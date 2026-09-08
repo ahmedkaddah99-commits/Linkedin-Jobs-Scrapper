@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mono Nav CV (No Photo)</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background:
+        radial-gradient(circle at top left, rgba(194, 214, 255, 0.25), transparent 32%),
+        linear-gradient(180deg, #f6f4ef 0%, #ece9e2 100%);
+      color: #111827;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+    }
+    a {
+      color: inherit;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.15em;
+    }
+    .screen-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.9rem 1.2rem;
+      backdrop-filter: blur(10px);
+      background: rgba(255, 255, 255, 0.82);
+      border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+    }
+    .screen-toolbar .meta {
+      font-size: 0.92rem;
+      color: #475569;
+    }
+    .toolbar-actions {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .toolbar-button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.72rem 1rem;
+      background: #111827;
+      color: white;
+      font: inherit;
+      cursor: pointer;
+    }
+    .toolbar-link {
+      font-size: 0.92rem;
+      color: #334155;
+    }
+    .page-wrap {
+      padding: 1.5rem;
+    }
+    .sheet {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      background: white;
+      box-shadow: 0 28px 70px rgba(15, 23, 42, 0.15);
+      overflow: hidden;
+    }
+    .muted {
+      color: #64748b;
+    }
+    .caps {
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+    }
+    .tag {
+      display: inline-block;
+      padding: 0.22rem 0.58rem;
+      border-radius: 999px;
+      background: #e2e8f0;
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .photo-shell {
+      width: 34mm;
+      height: 44mm;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      background: linear-gradient(180deg, #eef2f7 0%, #dfe8f1 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .profile-photo {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .photo-shell-placeholder {
+      border-style: dashed;
+      background:
+        repeating-linear-gradient(
+          135deg,
+          rgba(148, 163, 184, 0.12),
+          rgba(148, 163, 184, 0.12) 8px,
+          rgba(255, 255, 255, 0.8) 8px,
+          rgba(255, 255, 255, 0.8) 16px
+        );
+    }
+    .photo-placeholder-copy {
+      padding: 0.6rem;
+      text-align: center;
+      font-size: 0.72rem;
+      line-height: 1.35;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    @media print {
+      html, body {
+        background: white;
+      }
+      .screen-toolbar {
+        display: none;
+      }
+      .page-wrap {
+        padding: 0;
+      }
+      .sheet {
+        width: auto;
+        min-height: auto;
+        margin: 0;
+        box-shadow: none;
+      }
+      @page {
+        size: A4;
+        margin: 10mm;
+      }
+    }
+    
+      .mono-sheet {
+        display: grid;
+        grid-template-columns: 58mm 1fr;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      }
+      .mono-rail {
+        background:
+          linear-gradient(180deg, #081b2d 0%, #0d2e4b 100%);
+        color: white;
+        padding: 16mm 8mm;
+      }
+      .rail-card {
+        position: sticky;
+        top: 24px;
+      }
+      .rail-label {
+        margin: 0 0 12px;
+        font-size: 0.72rem;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.66);
+      }
+      .mono-photo-wrap {
+        margin-bottom: 14px;
+      }
+      .mono-photo-shell {
+        width: 100%;
+        height: 50mm;
+        border-radius: 24px;
+        border-color: rgba(255, 255, 255, 0.14);
+      }
+      .mono-rail h1 {
+        margin: 0;
+        font-size: 1.76rem;
+        line-height: 1.02;
+      }
+      .rail-headline {
+        margin: 10px 0 0;
+        color: rgba(255, 255, 255, 0.82);
+        line-height: 1.45;
+      }
+      .rail-nav {
+        margin-top: 22px;
+        display: grid;
+        gap: 10px;
+      }
+      .rail-nav a {
+        color: white;
+        text-decoration: none;
+        font-weight: 700;
+      }
+      .rail-contact {
+        margin-top: 22px;
+        font-size: 0.92rem;
+        color: rgba(255, 255, 255, 0.82);
+      }
+      .mono-main {
+        padding: 16mm;
+        background:
+          radial-gradient(circle at 85% 0%, rgba(135, 206, 235, 0.18), transparent 28%),
+          linear-gradient(180deg, #fbfdff 0%, #ffffff 100%);
+      }
+      .mono-block + .mono-block {
+        margin-top: 18px;
+      }
+      .hero-block {
+        padding: 14px 16px;
+        border: 1px solid rgba(13, 46, 75, 0.1);
+        background: #f4f8fb;
+      }
+      .hero-block p {
+        margin: 12px 0 0;
+        line-height: 1.6;
+      }
+      .mono-block h2 {
+        margin: 0 0 10px;
+        font-size: 0.82rem;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        color: #3b4f63;
+      }
+      .mono-card + .mono-card {
+        margin-top: 16px;
+      }
+      .role-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+      }
+      .role-line h3 {
+        margin: 0;
+        font-size: 1rem;
+      }
+      .company {
+        margin: 4px 0 0 !important;
+      }
+      .period {
+        font-size: 0.82rem;
+        white-space: nowrap;
+        color: #64748b;
+      }
+      .mono-bullets {
+        margin: 8px 0 0 18px;
+        padding: 0;
+      }
+      .mono-bullets li + li {
+        margin-top: 5px;
+      }
+      .skill-cloud {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .skill-cloud span {
+        padding: 0.38rem 0.65rem;
+        border-radius: 999px;
+        background: #e8f0f7;
+        color: #17324d;
+        font-size: 0.86rem;
+      }
+      .two-up {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 22px;
+      }
+      .two-up p {
+        margin: 0;
+        line-height: 1.55;
+      }
+      .two-up p + p {
+        margin-top: 8px;
+      }
+    
+  </style>
+</head>
+<body>
+  <div class="screen-toolbar">
+    <div class="meta">Mono Nav CV (No Photo) · print-ready HTML prototype</div>
+    <div class="toolbar-actions">
+      <a class="toolbar-link" href="index.html">Back to gallery</a>
+      <button class="toolbar-button" onclick="window.print()">Print / Save PDF</button>
+    </div>
+  </div>
+  <div class="page-wrap">
+    
+    <main class="sheet mono-sheet">
+      <aside class="mono-rail">
+        <div class="rail-card">
+          <p class="rail-label">Navigation rail</p>
+          <div class="mono-photo-wrap"><div class="photo-shell mono-photo-shell photo-shell-placeholder"><div class="photo-placeholder-copy">Optional photo</div></div></div>
+          <h1>Ahmed Kaddah</h1>
+          <p class="rail-headline">Operations and Logistics Support</p>
+          <nav class="rail-nav">
+            <a href="#summary">Summary</a>
+            <a href="#experience">Experience</a>
+            <a href="#skills">Skills</a>
+            <a href="#education">Education</a>
+          </nav>
+          <div class="rail-contact">
+            <p>Erlangen / Nuremberg, Germany</p>
+            <p><a href="mailto:ahmed.kaddah@tutamail.com">ahmed.kaddah@tutamail.com</a></p>
+          </div>
+        </div>
+      </aside>
+      <section class="mono-main">
+        <section id="summary" class="mono-block hero-block">
+          <span class="tag">Mono Nav</span>
+          <p>Operations and logistics support professional with hands-on experience managing more than 1,600 e-scooters across 7 cities, coordinating 7 transport vans, completing daily readiness checks, and supporting customer-facing field operations. Recognized for fast response times, reliable execution, onboarding new team members, and disciplined daily documentation. Available immediately for warehouse, logistics, operational support, and service roles.</p>
+        </section>
+        <section id="experience" class="mono-block">
+          <h2>Experience</h2>
+          
+            <section class="mono-card">
+              <div class="role-line">
+                <div>
+                  <h3>Logistics and Fleet Operations Associate</h3>
+                  <p class="company">Zeus Scooters GmbH</p>
+                </div>
+                <div class="period">Dec 2023 - Jul 2024</div>
+              </div>
+              <ul class="mono-bullets"><li>Managed day-to-day support for a fleet of more than 1,600 e-scooters across 7 cities.</li><li>Coordinated logistics using 7 transport vans to keep assets available and operational.</li><li>Completed daily maintenance checks and readiness inspections to support reliable service.</li><li>Trained new team members on operational routines and day-to-day execution.</li></ul>
+            </section>
+            
+
+            <section class="mono-card">
+              <div class="role-line">
+                <div>
+                  <h3>Service and Operations Associate</h3>
+                  <p class="company">Roxy Mobility GmbH</p>
+                </div>
+                <div class="period">Dec 2020 - Oct 2024</div>
+              </div>
+              <ul class="mono-bullets"><li>Handled daily field service and customer support in a fast-moving operating environment.</li><li>Coordinated with partners including Deutsche Bahn on site and logistics-related tasks.</li><li>Earned top recognition for the fastest response time in the city.</li><li>Maintained daily records and inventory tracking for operational equipment.</li></ul>
+            </section>
+            
+
+            <section class="mono-card">
+              <div class="role-line">
+                <div>
+                  <h3>Project and Team Assistant</h3>
+                  <p class="company">General Administration and Logistics</p>
+                </div>
+                <div class="period">Nov 2024 - Present</div>
+              </div>
+              <ul class="mono-bullets"><li>Supported daily data capture and task tracking for ongoing team activities.</li><li>Prepared materials for workshops and team sessions.</li><li>Provided general administrative support to improve workflow consistency.</li></ul>
+            </section>
+            
+        </section>
+        <section id="skills" class="mono-block">
+          <h2>Skills</h2>
+          <div class="skill-cloud"><span>Fleet coordination</span><span>Warehouse and field operations</span><span>Transport van logistics</span><span>Daily inspections and readiness checks</span><span>Inventory counting and documentation</span><span>Customer-facing service</span><span>Team onboarding</span><span>Shift reliability</span><span>Arabic (Native)</span><span>English (C1)</span><span>German (B1/B2)</span></div>
+        </section>
+        <section id="education" class="mono-block two-up">
+          <div>
+            <h2>Education</h2>
+            <p><strong>M.Sc. Information Systems</strong><br>University Example</p>
+            <p class="muted">Focus on analytics, business systems, and digital operations.</p>
+          </div>
+          <div>
+            <h2>Links</h2>
+            <p><a href="https://www.linkedin.com/in/ahmed-kaddah-3a1a88183/">LinkedIn profile</a></p>
+            <p><a href="https://github.com/ahmedkaddah99-commits?tab=repositories">GitHub profile</a></p>
+            <p>Available immediately for full-time or mini-job roles.</p>
+          </div>
+        </section>
+      </section>
+    </main>
+    
+  </div>
+</body>
+</html>

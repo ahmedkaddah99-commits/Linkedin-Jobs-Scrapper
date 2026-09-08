@@ -1,0 +1,95 @@
+{
+  "phase": "B",
+  "validated_at": "2026-08-05",
+  "execution_boundary": {
+    "mode": "controlled_single_target",
+    "database": "isolated_temporary_sqlite",
+    "daily_scheduler_enabled": false,
+    "user_triggered_acquisition": false,
+    "public_head_changed": false,
+    "publication_mode": "staging_only",
+    "live_network_gate": "explicitly enabled for this validation only"
+  },
+  "ats_connector_validation": [
+    {
+      "target_id": "n26_greenhouse",
+      "canonical_company_name": "N26",
+      "request_url": "https://boards-api.greenhouse.io/v1/boards/n26/jobs?content=true",
+      "requests": 1,
+      "provider_status": 200,
+      "raw_jobs_returned": 81,
+      "canonical_jobs_observed": 81,
+      "new_canonical_jobs": 80,
+      "rejected_jobs": 0,
+      "staging_jobs": 80,
+      "actual_credits": 0,
+      "cost_per_new_job": 0.0,
+      "cost_per_new_published_job": 0.0,
+      "apply_destination_policy": "N26 employer or official Greenhouse destination"
+    },
+    {
+      "target_id": "qonto_lever",
+      "canonical_company_name": "Qonto",
+      "request_url": "https://api.lever.co/v0/postings/qonto?mode=json",
+      "requests": 1,
+      "provider_status": 200,
+      "raw_jobs_returned": 40,
+      "canonical_jobs_observed": 40,
+      "new_canonical_jobs": 40,
+      "rejected_jobs": 0,
+      "staging_jobs": 40,
+      "actual_credits": 0,
+      "cost_per_new_job": 0.0,
+      "cost_per_new_published_job": 0.0,
+      "apply_destination_policy": "Qonto employer or official Lever destination"
+    }
+  ],
+  "employer_probes": [
+    {
+      "target_id": "siemens",
+      "request_url": "https://www.siemens.com/en-us/company/jobs",
+      "provider_status": 302,
+      "request_status": "blocked",
+      "jobs_observed": 0,
+      "maturity_state": "unproven"
+    },
+    {
+      "target_id": "basf",
+      "request_url": "https://basf.jobs/",
+      "provider_status": 200,
+      "request_status": "completed",
+      "jobs_observed": 0,
+      "maturity_state": "candidate"
+    },
+    {
+      "target_id": "bosch",
+      "request_url": "https://jobs.bosch.de/",
+      "provider_status": 200,
+      "request_status": "completed",
+      "jobs_observed": 0,
+      "maturity_state": "candidate"
+    },
+    {
+      "target_id": "dhl",
+      "request_url": "https://careers.dhl.com/eu/de",
+      "provider_status": 200,
+      "request_status": "completed",
+      "jobs_observed": 0,
+      "maturity_state": "candidate"
+    },
+    {
+      "target_id": "adidas",
+      "request_url": "https://careers.adidas-group.com/",
+      "provider_status": 0,
+      "request_status": "failed",
+      "jobs_observed": 0,
+      "maturity_state": "unproven"
+    }
+  ],
+  "interpretation": [
+    "N26 and Qonto produced real canonical jobs in isolated staging catalogs.",
+    "No staging publication was promoted to the public head during validation.",
+    "Employer probes were bounded to one direct request each and produced no job records.",
+    "The previous valid publication remains untouched when a source is blocked or fails."
+  ]
+}

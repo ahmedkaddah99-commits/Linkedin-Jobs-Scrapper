@@ -1,22 +1,80 @@
+# Python and local environments
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node dependencies and frontend build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/public/runr-release.json
+apps/browser-extension/.output/
+apps/browser-extension/.wxt/
+apps/browser-extension/extension-test/
+apps/browser-extension/playwright-report/
+apps/browser-extension/test-results/
+
+# Local secrets and editor state
 .env
+dev.env
+.env.local
+.env.*.local
+frontend/.env.local
+frontend/.env.*.local
 user_config/.env
-bc_automation
+.vscode/
+
+# Runtime data, logs, databases, and temp folders
+.backend_*
+.runr_*
+.backend_data/
+.backend_data_test/
+.backend_test_tmp/
+.backend_auth_cli_test/
+.backend_data_cli_test/
+.backend_storage/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+tmp/
+temp/
+
+# Generated product outputs
+backend/config/outputs/
+generated_docs/*
+!generated_docs/_assets/
+!generated_docs/_assets/.gitkeep
 final_jobs_with_docs.xlsx
+working-file.xlsx
 deepseek_excluded_jobs.json
 highly_curated_jobs.json
-stage1_scrape_snapshot.json
-stage2_filtered_local.json
-stage2_rejected_local.json
-stage3_filtered_ai.json
-stage4_checkpoint.json
-stage4_documents.json
-# Ignore the entire folder
-generated_docs/*
-# But do not ignore the assets folder inside it
-!generated_docs/_assets/
+manual_url_jobs.json
+manual_url_failures.json
+stage*_scrape_snapshot.json
+stage*_local.json
+stage*_ai.json
+stage*_checkpoint.json
+stage*_documents.json
 
-working-file.xlsx
+# Local user-owned data
+user_config/cv_master.txt
+user_config/_profile_from_cv.png
+user_config/profile_photos/
+user_config/candidate_assets/
+user_config/manual_job_urls.txt
+user_config/job_seeker_config.json
+user_config/*.live.txt
+
+# Archive data and external datasets
+Archive/
+Jobs-Urls/
+test CV/
+test-CV/
+
+# Legacy local folders
+bc_automation
 

@@ -1,0 +1,266 @@
+services:
+  - type: web
+    name: runr-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    buildFilter:
+      paths:
+        - frontend/**
+        - render.yaml
+    autoDeployTrigger: commit
+    domains:
+      - userunr.com
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://runr-api.onrender.com/v1
+      - key: VITE_API_EXTERNAL_HOSTNAME
+        fromService:
+          type: web
+          name: runr-api
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+      - key: VITE_CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: RUNR_RELEASE_BRANCH
+        value: deployment/render-turso-r2
+      - key: RUNR_RELEASE_CONTRACT_VERSION
+        value: runr-contract-v1
+      # Frontend-only personalized jobs preview; enabled for Runr verification.
+      - key: VITE_PERSONALIZED_JOBS_EXPERIENCE
+        value: "1"
+      # Production Jobs reads the published catalog and retires the legacy user navigation.
+      - key: VITE_PERSONALIZED_JOBS_DATA_MODE
+        value: "real"
+      - key: VITE_REPLACE_LEGACY_JOBS_NAV
+        value: "1"
+      # Controlled pilot switch; leave unset/false outside the AA-226 pilot.
+      - key: VITE_ENABLE_ASSISTED_APPLY_PREPARATION
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  - type: web
+    name: runr-api
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile.api
+    dockerCommand: ./deploy/start.sh api
+    preDeployCommand: ./deploy/start.sh migrate
+    buildFilter:
+      paths:
+        - backend/**
+        - workspace_runner.py
+        - requirements-linux.txt
+        - Dockerfile.api
+        - deploy/start.sh
+        - frontend/package.json
+        - frontend/package-lock.json
+        - frontend/scripts/render-cv-pdf.mjs
+        - frontend/src/lib/cvStudio.js
+        - frontend/src/lib/cvSocialLinks.js
+        - render.yaml
+    healthCheckPath: /health/live
+    autoDeployTrigger: commit
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: RUNR_ENV
+        value: production
+      - key: RUNR_RELEASE_BRANCH
+        value: deployment/render-turso-r2
+      - key: RUNR_RELEASE_CONTRACT_VERSION
+        value: runr-contract-v1
+      - key: RUNR_MIGRATION_HEAD
+        value: 058_customer_task_queue
+      - key: RUNR_CUSTOMER_TASKS_ASYNC
+        value: "true"
+      - key: RUNR_PRIVATE_TEST_DEPLOYMENT
+        value: "false"
+      - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
+        value: "true"
+      - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
+        value: "true"
+      - key: RUNR_COMPANY_ENRICHMENT_PROVIDER
+        value: scrapeops_linkedin
+      - key: RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE
+        value: basic
+      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE
+        value: basic
+      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_ENABLED
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES
+        value: "100"
+      - key: RUNR_COMPANY_ENRICHMENT_CONCURRENCY
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET
+        value: "100"
+      - key: DATABASE_BACKEND
+        value: turso
+      - key: RUNR_STORAGE_BACKEND
+        value: sqlite
+      - key: RUNR_DATA_DIR
+        value: .backend_data
+      - key: BACKEND_ALLOWED_ORIGINS
+        value: https://runr-frontend.onrender.com,https://app.userunr.com
+      - key: RUNR_ASSISTED_APPLY_EXTENSION_ORIGINS
+        sync: false
+      # Controlled pilot switch; leave unset/false outside the AA-226 pilot.
+      - key: RUNR_ENABLE_ASSISTED_APPLY_PREPARATION
+        sync: false
+      - key: RENDER_FRONTEND_EXTERNAL_HOSTNAME
+        fromService:
+          type: web
+          name: runr-frontend
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: OBJECT_STORAGE_BACKEND
+        value: r2
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_WEBHOOK_SECRET
+        sync: false
+      - key: CREEM_API_KEY
+        sync: false
+      - key: CREEM_WEBHOOK_SECRET
+        sync: false
+      - key: CREEM_RUNR_PRO_PRODUCT_ID
+        sync: false
+      - key: CREEM_RUNR_PRO_WEEKLY_PRODUCT_ID
+        sync: false
+      - key: CREEM_RUNR_PRO_MONTHLY_PRODUCT_ID
+        sync: false
+      - key: CREEM_RUNR_PRO_QUARTERLY_PRODUCT_ID
+        sync: false
+      - key: CREEM_LAUNCH_PRODUCT_ID
+        sync: false
+      - key: CREEM_MOMENTUM_PRODUCT_ID
+        sync: false
+      - key: CREEM_SCALE_PRODUCT_ID
+        sync: false
+      - key: SCRAPEOPS_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: TRACKER_GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: TRACKER_GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: TRACKER_GOOGLE_OAUTH_REDIRECT_URI
+        sync: false
+
+  - type: worker
+    name: runr-worker
+    runtime: docker
+    plan: standard
+    region: frankfurt
+    dockerfilePath: ./Dockerfile.worker
+    dockerCommand: ./deploy/start.sh worker
+    buildFilter:
+      paths:
+        - backend/**
+        - scripts/**
+        - workspace_runner.py
+        - requirements-linux.txt
+        - Dockerfile.worker
+        - deploy/start.sh
+        - frontend/package.json
+        - frontend/package-lock.json
+        - frontend/scripts/render-cv-pdf.mjs
+        - frontend/src/lib/cvStudio.js
+        - frontend/src/lib/cvSocialLinks.js
+        - render.yaml
+    autoDeployTrigger: commit
+    previews:
+      plan: starter
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: RUNR_ENV
+        value: production
+      - key: RUNR_RELEASE_BRANCH
+        value: deployment/render-turso-r2
+      - key: RUNR_RELEASE_CONTRACT_VERSION
+        value: runr-contract-v1
+      - key: RUNR_MIGRATION_HEAD
+        value: 058_customer_task_queue
+      - key: RUNR_CUSTOMER_TASKS_ASYNC
+        value: "true"
+      - key: RUNR_PRIVATE_TEST_DEPLOYMENT
+        value: "false"
+      - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
+        value: "true"
+      - key: RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY
+        value: "true"
+      - key: RUNR_COMPANY_ENRICHMENT_PROVIDER
+        value: scrapeops_linkedin
+      - key: RUNR_COMPANY_ENRICHMENT_SCRAPEOPS_MODE
+        value: basic
+      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_SCRAPEOPS_MODE
+        value: basic
+      - key: RUNR_COMPANY_ENRICHMENT_LINKEDIN_PREFER_DIRECT
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_ENABLED
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_IMPORT_INVENTORY
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES
+        value: "100"
+      - key: RUNR_COMPANY_ENRICHMENT_CONCURRENCY
+        value: "1"
+      - key: RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET
+        value: "100"
+      - key: DATABASE_BACKEND
+        value: turso
+      - key: RUNR_STORAGE_BACKEND
+        value: sqlite
+      - key: RUNR_DATA_DIR
+        value: .backend_data
+      - key: WORKER_ID
+        value: render_customer_worker
+      - key: WORKER_ROLE
+        value: customer
+      - key: RUNR_WORKER_VERSION
+        value: rc018-v1
+      - key: RUNR_WORKER_CAPACITY_SLOTS
+        value: "1"
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: OBJECT_STORAGE_BACKEND
+        value: r2
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: SCRAPEOPS_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false

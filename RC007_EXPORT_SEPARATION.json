@@ -1,0 +1,77 @@
+{
+  "ticket": "RC-007",
+  "status": "completed_offline",
+  "target_worktree": "C:\\Users\\ahmed\\Projects_Local\\runr-admin-linkedin-preview",
+  "target_branch": "deployment/render-turso-r2",
+  "head_at_validation": "e7662c63082d605d8ae6de090d3a04a55bba6556",
+  "python": {
+    "executable": "C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe",
+    "version": "Python 3.12.7"
+  },
+  "implementation_files": [
+    "scripts/master_employer_jobs_catalog.py",
+    "scripts/build_master_jobs_catalog.py"
+  ],
+  "test_files": [
+    "tests/test_master_employer_jobs_catalog.py",
+    "tests/test_master_linkedin_jobs_catalog.py",
+    "tests/test_master_linkedin_jobs_url_catalog.py"
+  ],
+  "evidence_files": ["RC007_EXPORT_SEPARATION.md", "RC007_EXPORT_SEPARATION.json"],
+  "ownership_note": "The implementation was already present in preserved dirty worktree changes at the start of this turn. It was audited and validated; no producer file was overwritten.",
+  "implemented": [
+    "Employer collection and employer-only export use employer checkpoint state without requiring a LinkedIn CSV.",
+    "Employer export-only bypasses dotenv loading, network client setup, and collection.",
+    "A valid zero-job employer state exports an empty employer artifact and does not require a combined artifact.",
+    "LinkedIn source exports remain independently testable.",
+    "Combined projection is separately invocable and requires both source inputs and generation IDs.",
+    "Combined projection streams validated source rows, preserves real producer fields, retains explicit legacy compatibility fields, and writes a generation-input manifest.",
+    "Malformed/missing combined inputs fail clearly without replacing the successful employer artifact.",
+    "Temporary export validation and interrupted promotion preserve existing artifacts."
+  ],
+  "verification": [
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' --version",
+      "result": "Python 3.12.7"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m pytest tests/test_master_employer_jobs_catalog.py tests/test_master_linkedin_jobs_catalog.py tests/test_master_linkedin_jobs_url_catalog.py -q",
+      "result": "114 passed in 27.78s"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m ruff check scripts/master_employer_jobs_catalog.py scripts/build_master_jobs_catalog.py tests/test_master_employer_jobs_catalog.py tests/test_master_linkedin_jobs_catalog.py",
+      "result": "All checks passed"
+    },
+    {
+      "command": "& 'C:\\Users\\ahmed\\Projects_Local\\job-automation\\Linkedin Jobs Scrapper\\.venv\\Scripts\\python.exe' -m py_compile scripts/master_employer_jobs_catalog.py scripts/build_master_jobs_catalog.py scripts/master_linkedin_jobs_catalog.py tests/test_master_employer_jobs_catalog.py tests/test_master_linkedin_jobs_catalog.py",
+      "result": "exit code 0"
+    },
+    {
+      "command": "scripts/master_employer_jobs_catalog.py --help; scripts/build_master_jobs_catalog.py --help",
+      "result": "both exit code 0; export-only and generation-ID options visible"
+    }
+  ],
+  "offline_proof": {
+    "network_calls": 0,
+    "missing_linkedin_source": "employer export-only succeeds; combined export fails clearly and leaves employer artifact unchanged",
+    "missing_or_corrupt_source": "combined export rejects missing/corrupt input before promotion",
+    "zero_jobs": "employer export-only produces a valid empty employer CSV and no combined CSV",
+    "streaming": "large projection path consumes generators and avoids build_master_rows materialization",
+    "generation_lineage": "combined manifest records both source paths, hashes, row counts, and generation IDs",
+    "rollback": "temporary validation/promotion interruption leaves prior snapshots intact"
+  },
+  "limitations": [
+    "No live HTTP, proxy, browser, provider, credential, deployment, or production-state check was performed.",
+    "No production artifact was generated or changed by this validation turn; test artifacts were temporary.",
+    "The target worktree has no commit isolating RC-007 from other user-owned dirty changes, so rollback must reverse only the reviewed RC-007 hunks.",
+    "RC-008 remains outside this ticket and would require explicit producer handoff before any producer edits."
+  ],
+  "rollback": [
+    "Stop collector/export processes and back up the employer state database and current output directory.",
+    "Reverse only the RC-007 hunks in scripts/master_employer_jobs_catalog.py and scripts/build_master_jobs_catalog.py; do not reset, clean, or restore the whole dirty files.",
+    "Preserve source-specific state and existing employer/LinkedIn snapshots unless the operator explicitly requests artifact rollback.",
+    "If only a failed combined projection must be removed, delete the newly generated combined CSV/manifest after confirming the employer CSV and employer metrics remain intact.",
+    "Restore the backed-up output directory/state database if an artifact-level rollback is required."
+  ],
+  "next_gate": "Stop after RC-007. RC-008 requires a separate handoff for producer-adapter work."
+}
