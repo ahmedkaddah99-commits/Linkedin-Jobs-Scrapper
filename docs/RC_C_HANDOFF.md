@@ -11,7 +11,7 @@ acquisition, a production migration, a Render deployment, or a GitHub push.
 | C worktree | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-c-release-integration` |
 | C branch | `temp/rc-c-release-integration` |
 | C starting launch commit | `b0f47788c1a5d385ae4c3c770d5cd990f586a626` |
-| C current candidate | `9003fabc9fba9e2b7449d03b912d991c4bbdc873` |
+| C accepted candidate | `3050cd8ac77919e9ff8d0fea450d82235269aa8b` |
 | Persistent integration target | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview` |
 | Persistent target branch | `deployment/render-turso-r2` |
 | Persistent target before this slice | `9003fabc9fba9e2b7449d03b912d991c4bbdc873` |
