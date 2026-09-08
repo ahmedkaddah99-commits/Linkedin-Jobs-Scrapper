@@ -312,13 +312,20 @@ class AdminJobImportService:
             plan=plan,
         )
 
-    def process_next_import(self, *, worker_id: str = "runr-worker") -> dict[str, Any] | None:
+    def process_next_import(
+        self,
+        *,
+        worker_id: str = "runr-worker",
+        worker_role: str = "acquisition",
+    ) -> dict[str, Any] | None:
+        if str(worker_role or "").strip().casefold() != "acquisition":
+            return None
         store = getattr(self.repositories, "acquisition_store", None)
         if store is None:
             return None
         store.requeue_stale_job_imports()
         store.reconcile_terminal_job_imports()
-        queued = store.claim_next_job_import(lease_owner=worker_id)
+        queued = store.claim_next_job_import(lease_owner=worker_id, worker_role=worker_role)
         if queued is None:
             return None
         import_id = _text(queued.get("import_id"))

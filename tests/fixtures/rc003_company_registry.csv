@@ -1,0 +1,13 @@
+canonical_CompanyID,companyenrich_id,merge_basis,company_name,website_url,linkedin_company_url,linkedin_slug,linkedin_page_type,linkedin_company_id,linkedin_company_id_status,linkedin_company_id_source,linkedin_company_id_confidence,enrichment_status,description,logo_url,website_discovery_status,Column1
+master-alpha,ce-alpha,unique,Acme,https://acme.example,https://www.linkedin.com/company/acme,acme,company,100,RESOLVED,reviewed_fixture,1.0,complete,Acme profile,https://cdn.example/acme.png,found,retain-me
+master-alpha-legacy,ce-alpha,rename,Acme Incorporated,https://acme.example,https://www.linkedin.com/company/acme,acme,company,100,RESOLVED,reviewed_fixture,1.0,complete,Acme profile,https://cdn.example/acme.png,found,retain-me
+master-beta,ce-beta,distinct,Acme Europe,https://eu.acme.example,https://www.linkedin.com/company/acme,acme,company,101,RESOLVED,reviewed_fixture,1.0,partial,European subsidiary,,found,keep-beta
+master-beta-subsidiary,ce-beta-subsidiary,distinct,Acme Europe Services,https://services.eu.acme.example,https://www.linkedin.com/company/acme,acme,company,101,RESOLVED,reviewed_fixture,1.0,partial,European subsidiary,,found,keep-beta-subsidiary
+master-gamma,ce-gamma,unique,Gamma,https://gamma.example,,,,,,,,complete,Gamma profile,https://cdn.example/gamma.png,found,keep-gamma
+,ce-delta,unique,Delta,https://delta.example,https://www.linkedin.com/company/delta,delta,company,200,RESOLVED,reviewed_fixture,1.0,complete,Delta profile,https://cdn.example/delta.png,found,keep-delta
+master-school,ce-school,unique,Acme School,,https://www.linkedin.com/school/acme-school,acme-school,school,300,RESOLVED,reviewed_fixture,1.0,complete,School profile,,found,keep-school
+master-showcase,ce-showcase,unique,Acme Showcase,,https://www.linkedin.com/showcase/acme-showcase,acme-showcase,showcase,301,RESOLVED,reviewed_fixture,1.0,complete,Showcase profile,,found,keep-showcase
+master-unresolved-a,ce-ua,unique,North Holdings,https://north.example,https://www.linkedin.com/company/north, north,company,102,RESOLVED,reviewed_fixture,1.0,partial,North profile,,found,keep-unresolved-a
+master-unresolved-b,ce-ub,unique,North Services,https://services.north.example,https://www.linkedin.com/company/north, north,company,102,RESOLVED,reviewed_fixture,1.0,partial,Services profile,,found,keep-unresolved-b
+,,,Unidentified,,,,,,,,,,,,,preserve-unknown
+,ce-name,unique,Acme,,,acme,company,,, , ,partial,Name-only profile,,unknown,keep-name

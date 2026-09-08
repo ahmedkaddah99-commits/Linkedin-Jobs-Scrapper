@@ -168,7 +168,7 @@ from backend.profiles.cv_upload_jobs import (
     enqueue_cv_upload_processing_run,
 )
 from backend.profiles.cv_text import extract_cv_text_from_path
-from backend.storage import build_private_object_key, materialize_object
+from backend.storage import build_private_object_key, materialize_object, validate_object_download
 from backend.integrations.clerk import (
     build_synthetic_token,
     get_user as get_clerk_user,
@@ -404,7 +404,22 @@ def _expand_artifact_entries(run, workspace, artifact) -> list[dict]:
     ]
 
 
-def _resolve_artifact_download(application, run_id: str, artifact_id: str) -> tuple[str, str]:
+def _metadata_size(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _artifact_download_descriptor(
+    application,
+    run_id: str,
+    artifact_id: str,
+) -> tuple[str, str, str, str, int | None]:
+    """Return object key plus fallback path without touching the worker cache."""
+
     try:
         artifact = application.get_artifact(run_id, artifact_id)
     except KeyError:
@@ -413,17 +428,35 @@ def _resolve_artifact_download(application, run_id: str, artifact_id: str) -> tu
             raise
         parent_artifact = application.get_artifact(run_id, parent_artifact_id)
         target = _resolve_expanded_artifact_path(parent_artifact.path, relative_path)
-        return str(target), target.name
+        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        return "", str(target), target.name, content_type, None
     object_key = str((artifact.metadata or {}).get("object_key") or "").strip()
-    if object_key:
-        target = materialize_object(
-            application.object_storage,
-            object_key,
-            filename=Path(str(artifact.path or "")).name or artifact.artifact_id,
-        )
-        return str(target), (target.name or artifact.artifact_id)
     target = Path(artifact.path)
-    return artifact.path, (target.name or artifact.artifact_id)
+    filename = target.name or str((artifact.metadata or {}).get("file_name") or "") or artifact.artifact_id
+    content_type = str(
+        (artifact.metadata or {}).get("object_content_type")
+        or mimetypes.guess_type(filename)[0]
+        or "application/octet-stream"
+    )
+    return (
+        object_key,
+        artifact.path,
+        filename,
+        content_type,
+        _metadata_size((artifact.metadata or {}).get("object_size")),
+    )
+
+
+def _resolve_artifact_download(application, run_id: str, artifact_id: str) -> tuple[str, str]:
+    object_key, file_path, download_name, _content_type, _object_size = _artifact_download_descriptor(
+        application,
+        run_id,
+        artifact_id,
+    )
+    if object_key:
+        target = materialize_object(application.object_storage, object_key, filename=download_name)
+        return str(target), (target.name or download_name)
+    return file_path, download_name
 
 
 # ---------------------------------------------------------------------------
@@ -4971,6 +5004,7 @@ def _store_candidate_asset_upload(
         record_duration("r2_storage", storage_started)
     normalized_metadata = dict(metadata or {})
     normalized_metadata["content_sha256"] = content_hash
+    normalized_metadata["content_size"] = len(file_bytes)
     try:
         if asset_kind == "workspace_cv" and extension != "docx":
             source_text = str(normalized_metadata.get("source_text") or "").strip()
@@ -5727,6 +5761,36 @@ def _resolve_candidate_asset_download(application, user, asset_id: str) -> tuple
     raise KeyError(f"Candidate asset '{asset_id}' not found.")
 
 
+def _candidate_asset_download_descriptor(
+    application,
+    user,
+    asset_id: str,
+) -> tuple[str, str, str, str, int | None]:
+    for asset in _load_candidate_assets(user):
+        if str(asset.get("asset_id") or "") != str(asset_id or ""):
+            continue
+        file_payload = dict(asset.get("file") or {})
+        raw_path = str(file_payload.get("path") or asset.get("path") or "").strip()
+        object_key = str(file_payload.get("object_key") or asset.get("object_key") or "").strip()
+        filename = str(asset.get("display_name") or Path(raw_path).name or asset_id)
+        metadata = dict(asset.get("metadata") or {})
+        content_type = str(
+            file_payload.get("mime_type")
+            or asset.get("mime_type")
+            or metadata.get("mime_type")
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
+        return (
+            object_key,
+            raw_path,
+            filename,
+            content_type,
+            _metadata_size(metadata.get("content_size") or metadata.get("object_size")),
+        )
+    raise KeyError(f"Candidate asset '{asset_id}' not found.")
+
+
 def _find_document_entry(application, user, document_id: str) -> dict:
     for item in _collect_document_entries(application, user):
         if str(item.get("document_id") or "") == str(document_id or ""):
@@ -5928,13 +5992,49 @@ def _create_bulk_export_bundle(
                 bundle_path.unlink()
         raise ValueError("None of the selected documents could be exported.")
     bundle_name = f"{label.strip() or 'application_documents'}_{datetime.now(timezone.utc).date().isoformat()}.zip"
-    return {
+    bundle_payload = {
         "bundle_id": bundle_id,
         "file_name": bundle_name,
         "document_count": written_count,
         "download_url": _bulk_export_download_url(bundle_id),
         "path": str(bundle_path.resolve()),
     }
+    storage = getattr(application, "object_storage", None)
+    if storage is None:
+        return bundle_payload
+    body = bundle_path.read_bytes()
+    validate_object_download(content_type="application/zip", size=len(body), filename=bundle_name)
+    object_key = build_private_object_key(
+        namespace="users",
+        owner_id=str(user.user_id),
+        category="bulk_exports",
+        object_id=bundle_id,
+        filename=bundle_name,
+    )
+    stored = storage.put(
+        object_key,
+        body,
+        content_type="application/zip",
+        metadata={"user_id": str(user.user_id), "bundle_id": bundle_id},
+    )
+    bundle_payload.update(
+        {
+            "object_key": stored.key,
+            "object_size": stored.size,
+            "object_content_type": stored.content_type,
+        }
+    )
+    if bool(getattr(storage, "supports_direct_download", False)):
+        bundle_payload["download_url"] = storage.signed_download_url(
+            stored.key,
+            download_filename=bundle_name,
+        )
+        try:
+            bundle_path.unlink(missing_ok=True)
+        except TypeError:
+            if bundle_path.exists():
+                bundle_path.unlink()
+    return bundle_payload
 
 
 def _rejection_reason_labels() -> dict[str, str]:
@@ -9184,6 +9284,7 @@ def build_handler(
             self._matched_route_name = ""
             self._response_status = 0
             self._response_bytes = 0
+            self._object_storage_bytes_shifted = 0
             self._request_error_type = ""
             self._telemetry = new_telemetry()
 
@@ -9235,6 +9336,9 @@ def build_handler(
                 "status": int(getattr(self, "_response_status", 0) or 0),
                 "duration_ms": duration_ms,
                 "response_bytes": int(getattr(self, "_response_bytes", 0) or 0),
+                "object_storage_bytes_shifted": int(
+                    getattr(self, "_object_storage_bytes_shifted", 0) or 0
+                ),
                 "client_disconnected": bool(getattr(self, "_client_disconnected", False)),
             }
             error_type = str(getattr(self, "_request_error_type", "") or "")
@@ -9554,6 +9658,64 @@ def build_handler(
                 self.wfile.write(body)
             except _CLIENT_DISCONNECT_ERRORS as exc:
                 self._handle_client_disconnect(exc)
+
+        def _send_redirect(
+            self,
+            location: str,
+            *,
+            status: int = HTTPStatus.FOUND,
+            object_storage_bytes: int = 0,
+        ) -> None:
+            if getattr(self, "_client_disconnected", False) or getattr(self, "_response_started", False):
+                return
+            target = str(location or "").strip()
+            if not target:
+                raise ValueError("redirect location is required")
+            self._response_started = True
+            self._response_status = int(status)
+            self._response_bytes = 0
+            self._object_storage_bytes_shifted = max(0, int(object_storage_bytes or 0))
+            try:
+                self.send_response(status)
+                self.send_header("Location", target)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.send_header("X-Runr-Storage-Redirect", "object-storage")
+                if self._object_storage_bytes_shifted:
+                    self.send_header("X-Runr-Object-Bytes", str(self._object_storage_bytes_shifted))
+                for key, value in self._cors_headers().items():
+                    self.send_header(key, value)
+                self.end_headers()
+            except _CLIENT_DISCONNECT_ERRORS as exc:
+                self._handle_client_disconnect(exc)
+
+        def _send_portable_download(
+            self,
+            application,
+            *,
+            object_key: str,
+            file_path: str,
+            download_name: str,
+            content_type: str = "",
+            object_size: int | None = None,
+        ) -> None:
+            normalized_key = str(object_key or "").strip()
+            if normalized_key:
+                validate_object_download(
+                    content_type=content_type,
+                    size=object_size,
+                    filename=download_name,
+                )
+                storage = application.object_storage
+                if bool(getattr(storage, "supports_direct_download", False)):
+                    signed_url = storage.signed_download_url(
+                        normalized_key,
+                        download_filename=Path(download_name).name,
+                    )
+                    self._send_redirect(signed_url, object_storage_bytes=object_size or 0)
+                    return
+                file_path = str(materialize_object(storage, normalized_key, filename=download_name))
+            self._send_file(file_path, download_name=download_name)
 
         def _send_bytes(self, body: bytes, *, content_type: str, download_name: str) -> None:
             if getattr(self, "_client_disconnected", False) or getattr(self, "_response_started", False):

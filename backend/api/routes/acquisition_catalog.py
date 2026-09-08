@@ -127,6 +127,8 @@ def _handle_job_action(context: ApiRouteContext) -> bool | None:
             result = context.application.set_personalized_job_state(user_id, posting_id, "applied", reason_code=_text(body.get("reason_code")))
         elif action == "report":
             result = context.application.report_personalized_job(user_id, posting_id, reason_code=_text(body.get("reason_code")), payload=body)
+        elif action == "precompute":
+            result = context.application.enqueue_personalized_job_intelligence(user_id, posting_id)
         elif action == "improve-resume":
             result = context.application.improve_personalized_resume(
                 user_id,

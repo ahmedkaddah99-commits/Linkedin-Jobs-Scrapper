@@ -17,6 +17,7 @@ from backend.tools.discover_company_careers import (
     run_from_args as run_career_discovery_from_args,
 )
 from backend.worker import WorkerService, configure_worker_logging
+from backend.worker.roles import WORKER_ROLES
 
 
 def parse_key_value(items: list[str]) -> dict[str, str]:
@@ -43,6 +44,7 @@ def _runtime_worker_id(
     default_prefix: str,
     runtime_environment: str | None = None,
     host_name: str | None = None,
+    process_id: int | None = None,
 ) -> str:
     requested_worker_id = str(configured_worker_id or "").strip()
     if not requested_worker_id:
@@ -56,6 +58,8 @@ def _runtime_worker_id(
     if not instance_host:
         return requested_worker_id
     instance_suffix = f"_{instance_host}"
+    if process_id is not None and int(process_id) > 0:
+        instance_suffix += f"_{int(process_id)}"
     if requested_worker_id.endswith(instance_suffix):
         return requested_worker_id
     return f"{requested_worker_id}{instance_suffix}"
@@ -153,6 +157,11 @@ def main() -> int:
     process_next_parser.add_argument("--no-auto-retry", action="store_true")
     process_next_parser.add_argument("--worker-id", default="")
     process_next_parser.add_argument("--lease-seconds", type=int, default=60)
+    process_next_parser.add_argument(
+        "--worker-role",
+        choices=WORKER_ROLES,
+        default=os.getenv("RUNR_WORKER_ROLE", "customer"),
+    )
 
     worker_parser = subparsers.add_parser("run-worker", help="Run a lease-aware polling worker service.")
     worker_parser.add_argument("--worker-id", default="")
@@ -160,6 +169,11 @@ def main() -> int:
     worker_parser.add_argument("--sleep-seconds", type=float, default=5.0)
     worker_parser.add_argument("--lease-seconds", type=int, default=60)
     worker_parser.add_argument("--no-auto-retry", action="store_true")
+    worker_parser.add_argument(
+        "--worker-role",
+        choices=WORKER_ROLES,
+        default=os.getenv("RUNR_WORKER_ROLE", "customer"),
+    )
 
     serve_parser = subparsers.add_parser("serve-api", help="Start the minimal JSON API.")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -339,11 +353,16 @@ def main() -> int:
 
     if args.command == "process-next":
         configure_worker_logging(level=args.log_level)
-        worker_id = _runtime_worker_id(args.worker_id, default_prefix="cli_worker")
+        worker_id = _runtime_worker_id(
+            args.worker_id,
+            default_prefix="cli_worker",
+            process_id=os.getpid(),
+        )
         worker = WorkerService(
             application=application,
             worker_id=worker_id,
             lease_seconds=args.lease_seconds,
+            role=args.worker_role,
             logger=logging.getLogger("backend.worker.cli"),
         )
         run = worker.process_next(auto_retry_failed=not args.no_auto_retry)
@@ -357,9 +376,14 @@ def main() -> int:
         configure_worker_logging(level=args.log_level)
         worker = WorkerService(
             application=application,
-            worker_id=_runtime_worker_id(args.worker_id, default_prefix="cli_worker"),
+            worker_id=_runtime_worker_id(
+                args.worker_id,
+                default_prefix="cli_worker",
+                process_id=os.getpid(),
+            ),
             lease_seconds=args.lease_seconds,
             poll_interval_seconds=args.sleep_seconds,
+            role=args.worker_role,
             logger=logging.getLogger("backend.worker.cli"),
         )
         processed = worker.run_loop(

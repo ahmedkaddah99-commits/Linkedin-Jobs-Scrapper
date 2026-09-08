@@ -176,6 +176,7 @@ class PhaseBCatalogTests(unittest.TestCase):
                 "job_id": "source-a",
                 "title": "Operations Analyst",
                 "url": "https://boards.greenhouse.io/n26/jobs/source-a",
+                "apply_link": "https://boards.greenhouse.io/n26/jobs/source-a/apply",
                 "location": "Berlin",
                 "description": "Same role",
             }
@@ -297,7 +298,7 @@ class PhaseBCatalogTests(unittest.TestCase):
                     "canonical_company_name": "Acme",
                     "canonical_target_url": "https://careers.acme.example/b",
                     "request_url": "https://careers.acme.example/b",
-                    "official_employer_hosts": ["careers.acme.example"],
+                    "official_employer_hosts": ["careers.acme.example", "jobs.acme.example"],
                     "enabled": True,
                     "config": {"absence_grace_attempts": 2},
                 },
@@ -338,7 +339,7 @@ class PhaseBCatalogTests(unittest.TestCase):
                 **first_job,
                 "job_id": "acme-b-9",
                 "url": "https://careers.acme.example/b/9",
-                "apply_link": "https://careers.acme.example/b/9/apply",
+                "apply_link": "https://jobs.acme.example/a/1/apply",
             }
             ingest("acme-a-1", targets[0], first_job)
             ingest("acme-b-1", targets[1], second_job)

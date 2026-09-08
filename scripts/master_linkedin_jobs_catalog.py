@@ -3,6 +3,13 @@
 The module deliberately keeps parsing and identity decisions available as pure
 functions.  The command-line runner and network transport are defined below
 those helpers so tests can exercise the trust boundary without network access.
+
+Refresh policy: search/card evidence is checked every source cycle. New jobs or
+changed card evidence fetch detail immediately. Unchanged detail is considered
+durable-fresh for seven days by default; applicant/freshness fields are marked
+stale after 24 hours but retain their last observation timestamp because the
+current guest endpoint has no separate volatile-only detail endpoint. Source
+disappearance is reconciled from the search scan independently of detail reuse.
 """
 
 from __future__ import annotations
@@ -20,8 +27,10 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -42,6 +51,7 @@ COMPANY_MATCH_VERIFIED_ALIAS = "VERIFIED_ALIAS_MATCH"
 COMPANY_MATCH_ALIAS_PENDING = "ALIAS_PENDING_VERIFICATION"
 COMPANY_MATCH_CARD_DETAIL_MISMATCH = "CARD_DETAIL_MISMATCH"
 COMPANY_MATCH_REJECTED = "OWNERSHIP_REJECTED"
+COMPANY_MATCH_AMBIGUOUS = "AMBIGUOUS_OWNERSHIP"
 
 LOCATION_GERMANY_CONFIRMED = "GERMANY_CONFIRMED"
 LOCATION_REMOTE_GERMANY_ELIGIBLE = "REMOTE_GERMANY_ELIGIBLE"
@@ -77,11 +87,15 @@ CATALOG_FIELDS = (
     "last_seen_at",
     "last_successful_company_scan_at",
     "detail_last_refreshed_at",
+    "applicant_count_observed_at",
+    "volatile_fields_status",
+    "detail_refresh_reason",
     "lifecycle_status",
     "absence_count",
     "inactive_reason",
     "inactive_confirmed_at",
     "content_hash",
+    "card_evidence_hash",
     "source_endpoint",
     "transport",
     "search_pagination_start",
@@ -99,6 +113,10 @@ CATALOG_FIELDS = (
 )
 
 COMPLETE_SCAN_STATUSES = {"COMPLETE", "COMPLETE_ZERO_CONFIRMED", "SATURATED_RECOVERED"}
+DEFAULT_DETAIL_ATTEMPT_BUDGET = 3
+DEFAULT_ALIAS_VERIFICATION_ATTEMPT_BUDGET = 3
+DEFAULT_DURABLE_DETAIL_REFRESH_HOURS = 24.0 * 7
+DEFAULT_VOLATILE_DETAIL_REFRESH_HOURS = 24.0
 
 _PLACEHOLDERS = {"", "-", "n/a", "na", "none", "null", "unknown", "nan"}
 _COMPANY_ID_RE = re.compile(r"^[0-9]+$")
@@ -131,6 +149,7 @@ class SourceCompanyGroup:
     source_company_ids: tuple[str, ...]
     source_company_urls: tuple[str, ...]
     primary_slug: str
+    source_company_pairs: tuple[tuple[str, str], ...] = ()
 
     @property
     def primary_company_url(self) -> str:
@@ -144,12 +163,31 @@ class SourceCompanyGroup:
     def source_slugs(self) -> tuple[str, ...]:
         return tuple(slug for slug in (canonical_company_slug(url) for url in self.source_company_urls) if slug)
 
+    @property
+    def source_slug_to_canonical_ids(self) -> dict[str, tuple[str, ...]]:
+        """Map observed source slugs without guessing through a collision."""
+
+        mapping: dict[str, list[str]] = {}
+        pairs = self.source_company_pairs or tuple(zip(self.source_company_urls, self.source_company_ids))
+        for url, company_id in pairs:
+            slug = canonical_company_slug(url)
+            if not slug or _is_placeholder(company_id):
+                continue
+            mapping.setdefault(slug, []).append(company_id)
+        return {slug: tuple(dict.fromkeys(ids)) for slug, ids in mapping.items()}
+
+    def canonical_company_id_for_slug(self, slug: object) -> str:
+        normalized = canonical_company_slug(slug) or _clean(slug).lower()
+        ids = self.source_slug_to_canonical_ids.get(normalized, ())
+        return ids[0] if len(ids) == 1 else ""
+
 
 @dataclass(frozen=True)
 class OwnershipDecision:
     status: str
     canonical_url: str
     reason: str
+    canonical_company_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -174,6 +212,13 @@ class SearchPageResult:
     is_partial: bool = False
     blocked_reason: str = ""
     body_class: str = ""
+
+
+@dataclass(frozen=True)
+class DetailRefreshDecision:
+    required: bool
+    reason: str
+    volatile_fields_stale: bool = False
 
 
 @dataclass(frozen=True)
@@ -211,22 +256,103 @@ class RecoveryPartition:
 
 
 class AdaptiveConcurrency:
-    def __init__(self, initial: int = 10, minimum: int = 1, maximum: int = 20):
+    """Shared account limiter whose value gates actual network requests.
+
+    ``workers`` remains the compatibility-facing adaptive account limit.  The
+    condition below is the important part: changing that value changes who can
+    enter the request path even when caller thread pools already exist.
+    Provider limits can be supplied for a shared limiter used by multiple
+    collectors; all providers still consume the same account-wide budget.
+    """
+
+    def __init__(
+        self,
+        initial: int = 10,
+        minimum: int = 1,
+        maximum: int = 20,
+        *,
+        provider_limits: Mapping[str, int] | None = None,
+    ):
         self.minimum = max(1, int(minimum))
         self.maximum = max(self.minimum, int(maximum))
-        self.workers = min(self.maximum, max(self.minimum, int(initial)))
+        self._workers = min(self.maximum, max(self.minimum, int(initial)))
+        self._provider_limits = {
+            str(provider): max(1, min(self.maximum, int(limit)))
+            for provider, limit in (provider_limits or {}).items()
+        }
         self._healthy_observations = 0
+        self._condition = threading.Condition()
+        self._in_flight = 0
+        self._provider_in_flight: dict[str, int] = {}
+        self._peak_in_flight = 0
 
-    def observe(self, *, status_code: int | None, blocked: bool) -> int:
-        if blocked or status_code == 429 or (status_code is not None and status_code >= 500):
-            self.workers = max(self.minimum, self.workers - 1)
-            self._healthy_observations = 0
-        elif status_code is not None and 200 <= status_code < 400:
-            self._healthy_observations += 1
-            if self._healthy_observations >= 20:
-                self.workers = min(self.maximum, self.workers + 1)
+    @property
+    def workers(self) -> int:
+        with self._condition:
+            return self._workers
+
+    @workers.setter
+    def workers(self, value: int) -> None:
+        with self._condition:
+            self._workers = max(self.minimum, min(self.maximum, int(value)))
+            self._condition.notify_all()
+
+    @property
+    def in_flight(self) -> int:
+        with self._condition:
+            return self._in_flight
+
+    @property
+    def peak_in_flight(self) -> int:
+        with self._condition:
+            return self._peak_in_flight
+
+    def set_provider_limit(self, provider: str, limit: int) -> None:
+        with self._condition:
+            self._provider_limits[str(provider)] = max(1, min(self.maximum, int(limit)))
+            self._condition.notify_all()
+
+    def acquire(self, provider: str = "default") -> None:
+        provider = str(provider or "default")
+        with self._condition:
+            while (
+                self._in_flight >= self._workers
+                or self._provider_in_flight.get(provider, 0)
+                >= self._provider_limits.get(provider, self._workers)
+            ):
+                self._condition.wait()
+            self._in_flight += 1
+            self._provider_in_flight[provider] = self._provider_in_flight.get(provider, 0) + 1
+            self._peak_in_flight = max(self._peak_in_flight, self._in_flight)
+
+    def release(self, provider: str = "default") -> None:
+        provider = str(provider or "default")
+        with self._condition:
+            self._in_flight = max(0, self._in_flight - 1)
+            current = max(0, self._provider_in_flight.get(provider, 0) - 1)
+            if current:
+                self._provider_in_flight[provider] = current
+            else:
+                self._provider_in_flight.pop(provider, None)
+            self._condition.notify_all()
+
+    def observe(self, *, status_code: int | None, blocked: bool, provider: str = "default") -> int:
+        provider = str(provider or "default")
+        with self._condition:
+            if blocked or status_code == 429 or (status_code is not None and status_code >= 500):
+                self._workers = max(self.minimum, self._workers - 1)
+                if provider in self._provider_limits:
+                    self._provider_limits[provider] = max(self.minimum, self._provider_limits[provider] - 1)
                 self._healthy_observations = 0
-        return self.workers
+            elif status_code is not None and 200 <= status_code < 400:
+                self._healthy_observations += 1
+                if self._healthy_observations >= 20:
+                    self._workers = min(self.maximum, self._workers + 1)
+                    if provider in self._provider_limits:
+                        self._provider_limits[provider] = min(self.maximum, self._provider_limits[provider] + 1)
+                    self._healthy_observations = 0
+            self._condition.notify_all()
+            return self._workers
 
 
 @dataclass(frozen=True)
@@ -259,7 +385,8 @@ class RunnerConfig:
     timeout: float = 30.0
     retry_limit: int = 2
     max_requests: int | None = None
-    detail_refresh_hours: float = 24.0
+    detail_refresh_hours: float = DEFAULT_DURABLE_DETAIL_REFRESH_HOURS
+    volatile_refresh_hours: float = DEFAULT_VOLATILE_DETAIL_REFRESH_HOURS
     company_id: str | None = None
     resume_run_id: str | None = None
     fresh: bool = False
@@ -277,6 +404,8 @@ class CompanyRunContext:
     card_partition_by_job_id: dict[str, str] | None = None
     card_partition_value_by_job_id: dict[str, str] | None = None
     observed_job_ids: set[str] | None = None
+    recovery_required: bool = False
+    recovery_partition_statuses: dict[str, str] | None = None
     detail_failures: int = 0
     no_results: bool = False
 
@@ -286,6 +415,7 @@ class CompanyRunContext:
         self.card_partition_by_job_id = self.card_partition_by_job_id or {}
         self.card_partition_value_by_job_id = self.card_partition_value_by_job_id or {}
         self.observed_job_ids = self.observed_job_ids or set()
+        self.recovery_partition_statuses = self.recovery_partition_statuses or {}
 
 
 
@@ -352,6 +482,7 @@ def load_source_company_groups(
     rows_read = 0
     rows_accepted = 0
     rows_rejected = 0
+    numeric_organization_ids: set[str] = set()
     grouped: dict[str, list[SourceCompany]] = {}
     with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -363,10 +494,14 @@ def load_source_company_groups(
             rows_read += 1
             company_id = normalize_company_id(row.get("linkedin_company_id"))
             company_url = canonical_company_url(row.get("linkedin_company_url"))
-            if not _COMPANY_ID_RE.fullmatch(company_id) or not company_url:
+            if not _COMPANY_ID_RE.fullmatch(company_id):
                 rows_rejected += 1
                 continue
             if company_id_filter and company_id != str(company_id_filter):
+                continue
+            numeric_organization_ids.add(company_id)
+            if not company_url:
+                rows_rejected += 1
                 continue
             grouped.setdefault(company_id, []).append(
                 SourceCompany(
@@ -399,12 +534,82 @@ def load_source_company_groups(
             source_company_ids=ids,
             source_company_urls=urls,
             primary_slug=canonical_company_slug(primary_url),
+            source_company_pairs=tuple(
+                (row.linkedin_company_url, row.canonical_company_id)
+                for row in unique_rows
+                if not _is_placeholder(row.canonical_company_id)
+            ),
         )
     return groups, {
         "rows_read": rows_read,
         "rows_accepted": rows_accepted,
         "rows_rejected": rows_rejected,
         "groups": len(groups),
+        "stored_source_groups": len(groups),
+        "unique_numeric_organizations": len(numeric_organization_ids),
+    }
+
+
+def build_input_loader_reconciliation_report(
+    reported_numeric_organization_count: int,
+    loader_stats: Mapping[str, Any],
+    *,
+    excluded_count: int = 0,
+    unprocessed_count: int = 0,
+    historical_count: int = 0,
+    scan_count: int | None = None,
+) -> dict[str, Any]:
+    """Reconcile an input aggregate with loader output without inventing tasks.
+
+    The loader's distinct eligible groups are the current task denominator.
+    Aggregate scan totals are retained as historical context only; they never
+    become synthetic source groups or retry work.
+    """
+
+    reported = max(0, int(reported_numeric_organization_count))
+    stored = max(0, int(loader_stats.get("stored_source_groups", loader_stats.get("groups", 0)) or 0))
+    difference = reported - stored
+    missing = max(0, difference)
+    categories = {
+        "excluded": min(missing, max(0, int(excluded_count))),
+        "unprocessed": min(
+            max(0, missing - min(missing, max(0, int(excluded_count)))),
+            max(0, int(unprocessed_count)),
+        ),
+        "historical": min(
+            max(
+                0,
+                missing
+                - min(missing, max(0, int(excluded_count)))
+                - min(
+                    max(0, missing - min(missing, max(0, int(excluded_count)))),
+                    max(0, int(unprocessed_count)),
+                ),
+            ),
+            max(0, int(historical_count)),
+        ),
+    }
+    categories["unknown"] = max(0, missing - sum(categories.values()))
+    return {
+        "schema_version": "linkedin_input_loader_reconciliation_v1",
+        "reported_numeric_organizations": reported,
+        "stored_source_groups": stored,
+        "difference": difference,
+        "missing_from_current_loader": missing,
+        "delta_classification": categories,
+        "loader_stats": dict(loader_stats),
+        "scan_count": None if scan_count is None else max(0, int(scan_count)),
+        "scan_count_is_current_unique_denominator": False,
+        "synthetic_tasks_created": 0,
+        "status": (
+            "reconciled"
+            if difference == 0
+            else "classified"
+            if difference > 0 and categories["unknown"] == 0
+            else "overrepresented_loader"
+            if difference < 0
+            else "requires_explanation"
+        ),
     }
 
 
@@ -418,13 +623,19 @@ def evaluate_ownership(
         return OwnershipDecision(COMPANY_MATCH_REJECTED, "", "missing_or_invalid_company_url")
     slug = canonical_company_slug(observed_canonical)
     aliases = {canonical_company_slug(alias) or _clean(alias).lower() for alias in verified_aliases}
-    if slug == group.primary_slug:
-        return OwnershipDecision(COMPANY_MATCH_EXACT_PRIMARY, observed_canonical, "primary_slug_match")
-    if slug in group.source_slugs:
-        return OwnershipDecision(COMPANY_MATCH_EXACT_PRIMARY, observed_canonical, "source_mapping_slug_match")
+    source_ids = group.source_slug_to_canonical_ids.get(slug, ())
+    if source_ids:
+        if len(source_ids) != 1:
+            return OwnershipDecision(COMPANY_MATCH_AMBIGUOUS, observed_canonical, "source_slug_maps_to_multiple_canonical_ids")
+        status = COMPANY_MATCH_EXACT_PRIMARY if slug == group.primary_slug else COMPANY_MATCH_EXACT_PRIMARY
+        return OwnershipDecision(status, observed_canonical, "primary_slug_match" if slug == group.primary_slug else "source_mapping_slug_match", source_ids[0])
     if slug in aliases:
-        return OwnershipDecision(COMPANY_MATCH_VERIFIED_ALIAS, observed_canonical, "verified_alias_match")
+        if len(group.source_company_ids) > 1:
+            return OwnershipDecision(COMPANY_MATCH_AMBIGUOUS, observed_canonical, "verified_alias_has_ambiguous_source_ownership")
+        return OwnershipDecision(COMPANY_MATCH_VERIFIED_ALIAS, observed_canonical, "verified_alias_match", group.primary_canonical_company_id)
     if slug:
+        if len(group.source_company_ids) > 1:
+            return OwnershipDecision(COMPANY_MATCH_AMBIGUOUS, observed_canonical, "unverified_slug_has_ambiguous_source_ownership")
         return OwnershipDecision(COMPANY_MATCH_ALIAS_PENDING, observed_canonical, "unverified_company_slug")
     return OwnershipDecision(COMPANY_MATCH_CARD_DETAIL_MISMATCH, observed_canonical, "company_url_mismatch")
 
@@ -462,7 +673,13 @@ def build_search_url(
     return f"{SEARCH_ENDPOINT}?{urlencode(params)}"
 
 
-def classify_http_response(status_code: int, body: str) -> str:
+def classify_http_response(status_code: int, body: str, error: str = "") -> str:
+    if _clean(error):
+        if error == "request_budget_exhausted":
+            return "BUDGET_EXHAUSTED"
+        return "RETRYABLE"
+    if int(status_code) <= 0:
+        return "RETRYABLE"
     if int(status_code) == 429:
         return "RATE_LIMITED"
     if int(status_code) >= 500:
@@ -479,7 +696,11 @@ def classify_http_response(status_code: int, body: str) -> str:
 
 def is_suspicious_empty_body(body: object) -> bool:
     value = str(body or "").strip()
-    return 0 < len(value) < 200 and not _blocked_body(value)
+    if not value or _blocked_body(value):
+        return False
+    if re.search(r"jobs-search-no-results|no jobs found", value, flags=re.IGNORECASE):
+        return False
+    return len(value) < 200
 
 
 def redact_proxy_url(proxy_url: object) -> str:
@@ -542,21 +763,24 @@ def load_webshare_proxies(
     request_url = api_url if "?" in api_url else f"{api_url}?mode=direct&page=1&page_size=100"
     results: list[object] = []
     seen_urls: set[str] = set()
-    while request_url and request_url not in seen_urls:
-        seen_urls.add(request_url)
-        response = session.get(request_url, headers={"Authorization": f"Token {key}"}, timeout=30)
-        if response.status_code != 200:
-            raise ValueError(f"Webshare proxy API returned status {response.status_code}")
-        payload = response.json()
-        page_results = payload.get("results", []) if isinstance(payload, dict) else payload
-        results.extend(page_results or [])
-        next_url = payload.get("next") if isinstance(payload, dict) else ""
-        if next_url:
-            request_url = str(next_url)
-        elif isinstance(payload, dict) and len(results) < int(payload.get("count") or 0):
-            request_url = f"{api_url}?mode=direct&page={len(seen_urls) + 1}&page_size=100"
-        else:
-            request_url = ""
+    try:
+        while request_url and request_url not in seen_urls:
+            seen_urls.add(request_url)
+            response = session.get(request_url, headers={"Authorization": f"Token {key}"}, timeout=30)
+            if response.status_code != 200:
+                raise ValueError(f"Webshare proxy API returned status {response.status_code}")
+            payload = response.json()
+            page_results = payload.get("results", []) if isinstance(payload, dict) else payload
+            results.extend(page_results or [])
+            next_url = payload.get("next") if isinstance(payload, dict) else ""
+            if next_url:
+                request_url = str(next_url)
+            elif isinstance(payload, dict) and len(results) < int(payload.get("count") or 0):
+                request_url = f"{api_url}?mode=direct&page={len(seen_urls) + 1}&page_size=100"
+            else:
+                request_url = ""
+    finally:
+        session.close()
     proxies: list[WebshareProxy] = []
     for item in results or []:
         if not isinstance(item, dict):
@@ -607,6 +831,9 @@ class WebshareTransport:
         max_requests: int | None = None,
         per_proxy_concurrency: int = 1,
         sleep=time.sleep,
+        request_limiter: AdaptiveConcurrency | None = None,
+        provider: str = "linkedin",
+        cooldown_base_seconds: float = 5.0,
     ):
         self.proxies = tuple(proxies)
         if not self.proxies:
@@ -615,19 +842,112 @@ class WebshareTransport:
         self.retry_limit = max(0, int(retry_limit))
         self.max_requests = max_requests
         self.sleep = sleep
+        self.request_limiter = request_limiter or AdaptiveConcurrency(
+            initial=max(1, int(per_proxy_concurrency) * len(self.proxies)),
+            minimum=1,
+            maximum=max(1, int(per_proxy_concurrency) * len(self.proxies)),
+        )
+        self.provider = str(provider or "linkedin")
+        self.cooldown_base_seconds = max(0.1, float(cooldown_base_seconds))
         self._next_proxy = 0
         self._request_count = 0
         self._lock = threading.Lock()
+        self._session_lock = threading.Lock()
+        self._sessions: dict[tuple[int, str], requests.Session] = {}
+        self._proxy_health: dict[str, dict[str, object]] = {
+            proxy.identifier: {
+                "proxy_id": proxy.identifier,
+                "request_count": 0,
+                "success_count": 0,
+                "rate_limited_count": 0,
+                "blocked_count": 0,
+                "consecutive_failure_count": 0,
+                "cooldown_until": "",
+                "last_status_code": 0,
+                "last_error_class": "",
+                "last_request_at": "",
+            }
+            for proxy in self.proxies
+        }
+        self._cooldown_until: dict[str, float] = {proxy.identifier: 0.0 for proxy in self.proxies}
+        self._closed = False
         self._proxy_locks = {proxy.identifier: threading.BoundedSemaphore(max(1, int(per_proxy_concurrency))) for proxy in self.proxies}
 
     def _take_proxy(self) -> WebshareProxy | None:
+        while True:
+            wait_seconds = 0.0
+            with self._lock:
+                if self._closed:
+                    return None
+                if self.max_requests is not None and self._request_count >= self.max_requests:
+                    return None
+                now = time.monotonic()
+                available = [
+                    proxy
+                    for proxy in self.proxies
+                    if self._cooldown_until.get(proxy.identifier, 0.0) <= now
+                ]
+                if available:
+                    proxy = available[self._next_proxy % len(available)]
+                    self._next_proxy += 1
+                    self._request_count += 1
+                    self._proxy_health[proxy.identifier]["request_count"] = int(
+                        self._proxy_health[proxy.identifier]["request_count"]
+                    ) + 1
+                    return proxy
+                wait_seconds = max(0.0, min(self._cooldown_until.values()) - now)
+            if wait_seconds:
+                self.sleep(wait_seconds)
+
+    def _session_for(self, proxy: WebshareProxy) -> requests.Session:
+        key = (threading.get_ident(), proxy.identifier)
+        with self._session_lock:
+            session = self._sessions.get(key)
+            if session is None:
+                session = requests.Session()
+                session.trust_env = False
+                session.headers.update(
+                    {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept": "text/html,application/xhtml+xml",
+                    }
+                )
+                self._sessions[key] = session
+            return session
+
+    def _record_proxy_result(self, proxy: WebshareProxy, response: ResponseEnvelope) -> None:
+        blocked = _blocked_body(response.text)
+        rate_limited = response.status_code == 429
+        failed = bool(response.error) or rate_limited or blocked or response.status_code >= 500
+        now = _utc_now()
         with self._lock:
-            if self.max_requests is not None and self._request_count >= self.max_requests:
-                return None
-            proxy = self.proxies[self._next_proxy % len(self.proxies)]
-            self._next_proxy += 1
-            self._request_count += 1
-            return proxy
+            health = self._proxy_health[proxy.identifier]
+            health["last_status_code"] = int(response.status_code)
+            health["last_error_class"] = _clean(response.error)
+            health["last_request_at"] = now
+            if rate_limited:
+                health["rate_limited_count"] = int(health["rate_limited_count"]) + 1
+            if blocked:
+                health["blocked_count"] = int(health["blocked_count"]) + 1
+            if 200 <= response.status_code < 400 and not blocked and not response.error:
+                health["success_count"] = int(health["success_count"]) + 1
+            if failed:
+                failures = int(health["consecutive_failure_count"]) + 1
+                health["consecutive_failure_count"] = failures
+                cooldown_seconds = min(300.0, self.cooldown_base_seconds * (2 ** (failures - 1)))
+                self._cooldown_until[proxy.identifier] = time.monotonic() + cooldown_seconds
+                health["cooldown_until"] = (
+                    datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)
+                ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            else:
+                health["consecutive_failure_count"] = 0
+                self._cooldown_until[proxy.identifier] = 0.0
+                health["cooldown_until"] = ""
+
+    def proxy_health_snapshot(self) -> tuple[dict[str, object], ...]:
+        with self._lock:
+            return tuple(dict(value) for value in self._proxy_health.values())
 
     def get(self, url: str, *, kind: str) -> ResponseEnvelope:
         last = ResponseEnvelope(0, "", "", 0.0, "request_budget_exhausted")
@@ -637,26 +957,39 @@ class WebshareTransport:
                 return last
             started = time.monotonic()
             with self._proxy_locks[proxy.identifier]:
-                session = requests.Session()
-                session.trust_env = False
-                session.headers.update({
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Accept": "text/html,application/xhtml+xml",
-                })
+                self.request_limiter.acquire(self.provider)
                 try:
-                    response = session.get(url, proxies={"http": proxy.url, "https": proxy.url}, timeout=self.timeout)
-                    elapsed = time.monotonic() - started
-                    last = ResponseEnvelope(response.status_code, response.text, proxy.identifier, elapsed)
-                    should_retry = response.status_code == 429 or response.status_code >= 500 or _blocked_body(response.text)
-                except requests.RequestException:
-                    elapsed = time.monotonic() - started
-                    last = ResponseEnvelope(0, "", proxy.identifier, elapsed, "network_error")
-                    should_retry = True
+                    session = self._session_for(proxy)
+                    try:
+                        response = session.get(url, proxies={"http": proxy.url, "https": proxy.url}, timeout=self.timeout)
+                        elapsed = time.monotonic() - started
+                        last = ResponseEnvelope(response.status_code, response.text, proxy.identifier, elapsed)
+                        should_retry = response.status_code == 429 or response.status_code >= 500 or _blocked_body(response.text)
+                    except requests.RequestException:
+                        elapsed = time.monotonic() - started
+                        last = ResponseEnvelope(0, "", proxy.identifier, elapsed, "network_error")
+                        should_retry = True
+                finally:
+                    self.request_limiter.release(self.provider)
+            self._record_proxy_result(proxy, last)
             if not should_retry or attempt >= self.retry_limit:
                 return last
             self.sleep(min(30.0, 0.5 * (2**attempt)) + 0.1 * (attempt + 1))
         return last
+
+    def close(self) -> None:
+        with self._session_lock:
+            self._closed = True
+            sessions = tuple(self._sessions.values())
+            self._sessions.clear()
+        for session in sessions:
+            session.close()
+
+    def __enter__(self) -> "WebshareTransport":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.close()
 
 
 def _first_text(node, selectors: Iterable[str]) -> str:
@@ -828,11 +1161,14 @@ def evaluate_card_detail_ownership(
         return OwnershipDecision(COMPANY_MATCH_REJECTED, detail.canonical_url or card.canonical_url, "missing_card_or_detail_company_url")
     if card.canonical_url != detail.canonical_url:
         return OwnershipDecision(COMPANY_MATCH_CARD_DETAIL_MISMATCH, detail.canonical_url, "card_detail_company_url_mismatch")
-    if card.status == COMPANY_MATCH_EXACT_PRIMARY and detail.status == COMPANY_MATCH_EXACT_PRIMARY:
-        return OwnershipDecision(COMPANY_MATCH_EXACT_PRIMARY, detail.canonical_url, "card_detail_primary_match")
-    if card.status == COMPANY_MATCH_VERIFIED_ALIAS and detail.status == COMPANY_MATCH_VERIFIED_ALIAS:
-        return OwnershipDecision(COMPANY_MATCH_VERIFIED_ALIAS, detail.canonical_url, "card_detail_verified_alias_match")
-    return OwnershipDecision(COMPANY_MATCH_ALIAS_PENDING, detail.canonical_url, "card_detail_alias_pending_verification")
+    if card.status == COMPANY_MATCH_AMBIGUOUS or detail.status == COMPANY_MATCH_AMBIGUOUS:
+        return OwnershipDecision(COMPANY_MATCH_AMBIGUOUS, detail.canonical_url, "card_or_detail_ownership_is_ambiguous")
+    accepted = {COMPANY_MATCH_EXACT_PRIMARY, COMPANY_MATCH_VERIFIED_ALIAS}
+    if card.status in accepted and detail.status in accepted:
+        if COMPANY_MATCH_VERIFIED_ALIAS in {card.status, detail.status}:
+            return OwnershipDecision(COMPANY_MATCH_VERIFIED_ALIAS, detail.canonical_url, "card_detail_verified_alias_match", card.canonical_company_id or detail.canonical_company_id)
+        return OwnershipDecision(COMPANY_MATCH_EXACT_PRIMARY, detail.canonical_url, "card_detail_primary_match", card.canonical_company_id or detail.canonical_company_id)
+    return OwnershipDecision(COMPANY_MATCH_ALIAS_PENDING, detail.canonical_url, "card_detail_alias_pending_verification", card.canonical_company_id or detail.canonical_company_id)
 
 
 def load_pagination_evidence(path: str | Path, endpoint: str = SEARCH_ENDPOINT) -> PaginationEvidence:
@@ -989,8 +1325,26 @@ def compute_content_hash(fields: Mapping[str, object]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def compute_card_evidence_hash(card: SearchCard, canonical_observed_company_url: object = "") -> str:
+    values = (
+        _clean(card.title),
+        _clean(card.company_name),
+        canonical_company_url(canonical_observed_company_url or card.company_url),
+        _clean(card.location),
+        _clean(card.posted_text),
+        _clean(card.posted_at_estimated),
+    )
+    return hashlib.sha256("\x1f".join(values).encode("utf-8")).hexdigest()
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _retry_due_at(timestamp: str, attempt_count: int) -> str:
+    parsed = _parse_timestamp(timestamp) or datetime.now(timezone.utc)
+    delay_seconds = min(3600, 60 * (2 ** max(0, int(attempt_count) - 1)))
+    return (parsed + timedelta(seconds=delay_seconds)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _json_row(row: Mapping[str, object]) -> dict[str, str]:
@@ -1036,9 +1390,249 @@ def detail_refresh_required(
     return (current - previous).total_seconds() >= float(refresh_hours) * 3600
 
 
+def detail_refresh_decision(
+    previous: Mapping[str, object] | None,
+    card: SearchCard,
+    observed_company_url: object,
+    now: object,
+    *,
+    durable_refresh_hours: float = DEFAULT_DURABLE_DETAIL_REFRESH_HOURS,
+    volatile_refresh_hours: float = DEFAULT_VOLATILE_DETAIL_REFRESH_HOURS,
+) -> DetailRefreshDecision:
+    """Choose detail reuse without treating a daily scan as a full refresh.
+
+    The current endpoint returns durable and volatile fields together. Volatile
+    fields therefore become explicitly stale after their shorter window and are
+    retained with their observation timestamp until the bounded durable refresh.
+    """
+
+    if not previous:
+        return DetailRefreshDecision(True, "new_job")
+    current_card_hash = compute_card_evidence_hash(card, observed_company_url)
+    previous_card_hash = _clean(previous.get("card_evidence_hash"))
+    card_changed = bool(previous_card_hash and previous_card_hash != current_card_hash)
+    if not previous_card_hash:
+        return DetailRefreshDecision(True, "card_evidence_missing")
+    if card_changed:
+        return DetailRefreshDecision(True, "card_changed")
+    refreshed = _parse_timestamp(previous.get("detail_last_refreshed_at"))
+    current = _parse_timestamp(now)
+    if refreshed is None or current is None:
+        return DetailRefreshDecision(True, "missing_refresh_timestamp")
+    age_hours = (current - refreshed).total_seconds() / 3600
+    volatile_observed = _parse_timestamp(previous.get("applicant_count_observed_at")) or refreshed
+    volatile_age_hours = (current - volatile_observed).total_seconds() / 3600
+    volatile_stale = volatile_age_hours >= float(volatile_refresh_hours)
+    if age_hours >= float(durable_refresh_hours):
+        return DetailRefreshDecision(True, "durable_ttl_expired", volatile_stale)
+    return DetailRefreshDecision(False, "volatile_fields_stale_reused" if volatile_stale else "cache_hit_fresh", volatile_stale)
+
+
 def union_job_ids(partitions: Iterable[Iterable[object]]) -> tuple[str, ...]:
     values = {str(value).strip() for partition in partitions for value in partition if str(value).strip()}
     return tuple(sorted(values, key=lambda value: (not value.isdigit(), int(value) if value.isdigit() else value)))
+
+
+class JsonlEventJournal:
+    """Append event records in bounded batches instead of retaining a run list."""
+
+    def __init__(self, path: str | Path, *, batch_size: int = 128):
+        self.path = Path(path)
+        self.batch_size = max(1, int(batch_size))
+        self._handle = None
+        self._pending = 0
+        self.records_written = 0
+
+    def append(self, record: Mapping[str, object]) -> None:
+        if self._handle is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._handle = self.path.open("a", encoding="utf-8", newline="\n")
+        payload = _redact_payload(dict(record))
+        if not isinstance(payload, dict):
+            payload = {"record": payload}
+        payload.setdefault("schema_version", 1)
+        payload.setdefault("record_type", "observation")
+        self._handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+        self._pending += 1
+        self.records_written += 1
+        if self._pending >= self.batch_size:
+            self.flush()
+
+    def flush(self) -> None:
+        if self._handle is None or not self._pending:
+            return
+        self._handle.flush()
+        os.fsync(self._handle.fileno())
+        self._pending = 0
+
+    def close(self) -> None:
+        if self._handle is None:
+            return
+        try:
+            self.flush()
+        finally:
+            self._handle.close()
+            self._handle = None
+
+
+GENERATION_POINTER_NAME = "master_linkedin_jobs_generation.json"
+GENERATION_DIRECTORY_NAME = "generations"
+GENERATION_ARTIFACT_NAMES = (
+    "master_linkedin_jobs.csv",
+    "master_linkedin_jobs.jsonl",
+    "master_linkedin_jobs_metrics.json",
+)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            handle.write(json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        if temporary_name and os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
+def write_catalog_generation_manifest(
+    output_dir: str | Path,
+    *,
+    generation_id: str,
+    run_id: str,
+    input_sha256: str,
+    status: str,
+    run_outcome: str = "",
+    published: bool = False,
+) -> dict[str, object]:
+    """Describe one immutable output generation without changing its files."""
+
+    root = Path(output_dir)
+    generation_dir = root / GENERATION_DIRECTORY_NAME / str(generation_id)
+    generation_dir.mkdir(parents=True, exist_ok=True)
+    artifacts: dict[str, object] = {}
+    for name in GENERATION_ARTIFACT_NAMES:
+        path = generation_dir / name
+        if not path.exists():
+            path.touch()
+        artifacts[name] = {
+            "path": str(path.relative_to(root)).replace(os.sep, "/"),
+            "sha256": _sha256_file(path),
+            "size_bytes": path.stat().st_size,
+        }
+    manifest = {
+        "manifest_schema_version": 1,
+        "generation_id": str(generation_id),
+        "run_id": str(run_id or ""),
+        "input_sha256": str(input_sha256 or ""),
+        "status": str(status or "unknown"),
+        "run_outcome": str(run_outcome or ""),
+        "published": bool(published),
+        "created_at": _utc_now(),
+        "artifacts": artifacts,
+    }
+    _atomic_write_json(generation_dir / "manifest.json", manifest)
+    return manifest
+
+
+def publish_catalog_generation(
+    output_dir: str | Path,
+    *,
+    generation_id: str,
+    run_id: str,
+    input_sha256: str,
+    run_status: str,
+    run_outcome: str,
+) -> dict[str, object]:
+    """Publish a complete generation through one pointer transition.
+
+    The generation directory is immutable after this function returns. Root
+    artifact names are compatibility aliases; readers that need a coherent
+    snapshot must resolve ``master_linkedin_jobs_generation.json`` first.
+    """
+
+    root = Path(output_dir)
+    generation_dir = root / GENERATION_DIRECTORY_NAME / str(generation_id)
+    manifest = write_catalog_generation_manifest(
+        root,
+        generation_id=generation_id,
+        run_id=run_id,
+        input_sha256=input_sha256,
+        status=run_status,
+        run_outcome=run_outcome,
+        published=True,
+    )
+    manifest_path = generation_dir / "manifest.json"
+    manifest_hash = _sha256_file(manifest_path)
+    pointer = {
+        "pointer_schema_version": 1,
+        "generation_id": str(generation_id),
+        "manifest_path": str(manifest_path.relative_to(root)).replace(os.sep, "/"),
+        "manifest_sha256": manifest_hash,
+        "published_at": _utc_now(),
+    }
+    # The pointer is the only publication transition.  Compatibility aliases
+    # are copied from already-complete generation files and never form the
+    # authoritative read path.
+    _atomic_write_json(root / GENERATION_POINTER_NAME, pointer)
+    for name in GENERATION_ARTIFACT_NAMES:
+        source = generation_dir / name
+        target = root / name
+        temporary_name = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                "wb", dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False
+            ) as handle:
+                temporary_name = handle.name
+                with source.open("rb") as source_handle:
+                    shutil.copyfileobj(source_handle, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_name, target)
+        finally:
+            if temporary_name and os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+    return {**manifest, "manifest_sha256": manifest_hash, "manifest_path": pointer["manifest_path"]}
+
+
+def read_current_catalog_generation(output_dir: str | Path) -> dict[str, object] | None:
+    """Read and hash-check the generation selected by the publication pointer."""
+
+    root = Path(output_dir)
+    pointer_path = root / GENERATION_POINTER_NAME
+    if not pointer_path.exists():
+        return None
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    manifest_path = root / str(pointer["manifest_path"])
+    if _sha256_file(manifest_path) != str(pointer.get("manifest_sha256") or ""):
+        raise ValueError("catalog generation pointer hash mismatch")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if str(manifest.get("generation_id") or "") != str(pointer.get("generation_id") or ""):
+        raise ValueError("catalog generation pointer identity mismatch")
+    for item in (manifest.get("artifacts") or {}).values():
+        artifact = root / str(item["path"])
+        if _sha256_file(artifact) != str(item["sha256"]):
+            raise ValueError(f"catalog generation artifact hash mismatch: {artifact.name}")
+    return {"pointer": pointer, "manifest": manifest}
 
 
 class StateStore:
@@ -1054,7 +1648,36 @@ class StateStore:
         self.connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._transaction_state = threading.local()
         self._initialize_schema()
+
+    @contextmanager
+    def _write_transaction(self):
+        """Serialize writes and let nested operations share one commit."""
+
+        with self._lock:
+            depth = int(getattr(self._transaction_state, "depth", 0))
+            if depth:
+                yield
+                return
+            self._transaction_state.depth = 1
+            try:
+                with self.connection:
+                    yield
+            finally:
+                self._transaction_state.depth = 0
+
+    @contextmanager
+    def batch(self):
+        """Commit a small acknowledged batch atomically.
+
+        Callers should keep the scope to local DB mutations only.  If the
+        process fails before the scope exits, SQLite rolls the batch back and
+        the durable scan/detail queue can replay it.
+        """
+
+        with self._write_transaction():
+            yield
 
     def _initialize_schema(self) -> None:
         with self._lock, self.connection:
@@ -1065,7 +1688,8 @@ class StateStore:
                     mode TEXT NOT NULL,
                     input_sha256 TEXT NOT NULL,
                     started_at TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'RUNNING'
+                    status TEXT NOT NULL DEFAULT 'RUNNING',
+                    finished_at TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS source_company_groups (
                     linkedin_company_id TEXT PRIMARY KEY,
@@ -1083,6 +1707,10 @@ class StateStore:
                     first_seen_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
                     verification_method TEXT NOT NULL DEFAULT '',
+                    verification_attempt_count INTEGER NOT NULL DEFAULT 0,
+                    max_verification_attempts INTEGER NOT NULL DEFAULT 3,
+                    next_verification_at TEXT NOT NULL DEFAULT '',
+                    verification_terminal_status TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (linkedin_company_id, slug)
                 );
                 CREATE TABLE IF NOT EXISTS company_scans (
@@ -1144,6 +1772,12 @@ class StateStore:
                     company_scan_id TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'PENDING',
                     next_attempt_at TEXT NOT NULL DEFAULT '',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 3,
+                    last_attempt_at TEXT NOT NULL DEFAULT '',
+                    last_error_class TEXT NOT NULL DEFAULT '',
+                    terminal_status TEXT NOT NULL DEFAULT '',
+                    refresh_reason TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (run_id, linkedin_job_id)
                 );
                 CREATE TABLE IF NOT EXISTS detail_attempts (
@@ -1179,15 +1813,70 @@ class StateStore:
                     success_count INTEGER NOT NULL DEFAULT 0,
                     rate_limited_count INTEGER NOT NULL DEFAULT 0,
                     blocked_count INTEGER NOT NULL DEFAULT 0,
+                    consecutive_failure_count INTEGER NOT NULL DEFAULT 0,
+                    cooldown_until TEXT NOT NULL DEFAULT '',
+                    last_status_code INTEGER NOT NULL DEFAULT 0,
+                    last_error_class TEXT NOT NULL DEFAULT '',
+                    last_request_at TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
                 """
             )
+            self._ensure_column("runs", "finished_at", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("company_slug_aliases", "verification_attempt_count", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column("company_slug_aliases", "max_verification_attempts", "INTEGER NOT NULL DEFAULT 3")
+            self._ensure_column("company_slug_aliases", "next_verification_at", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("company_slug_aliases", "verification_terminal_status", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("detail_queue", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column("detail_queue", "max_attempts", "INTEGER NOT NULL DEFAULT 3")
+            self._ensure_column("detail_queue", "last_attempt_at", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("detail_queue", "last_error_class", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("detail_queue", "terminal_status", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("detail_queue", "refresh_reason", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("proxy_health", "consecutive_failure_count", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column("proxy_health", "cooldown_until", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("proxy_health", "last_status_code", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column("proxy_health", "last_error_class", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("proxy_health", "last_request_at", "TEXT NOT NULL DEFAULT ''")
+            self._migrate_retry_dispositions()
             self._repair_duplicate_company_scans()
             self.connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_company_scans_run_company ON company_scans(run_id, linkedin_company_id)"
             )
             self._backfill_observation_scan_ids()
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        columns = {str(row[1]) for row in self.connection.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _migrate_retry_dispositions(self) -> None:
+        """Give legacy retry rows an explicit bounded disposition on reopen."""
+
+        rows = self.connection.execute(
+            "SELECT run_id, linkedin_job_id, attempt_count, max_attempts, status, next_attempt_at FROM detail_queue WHERE status='RETRY'"
+        ).fetchall()
+        for row in rows:
+            attempts = int(row[2] or 0)
+            if attempts == 0:
+                attempts = int(
+                    self.connection.execute(
+                        "SELECT COUNT(*) FROM detail_attempts WHERE run_id=? AND linkedin_job_id=? AND status NOT IN ('SUCCESS', 'EXCLUDED')",
+                        (str(row[0]), str(row[1])),
+                    ).fetchone()[0]
+                    or 0
+                )
+            max_attempts = max(1, int(row[3] or DEFAULT_DETAIL_ATTEMPT_BUDGET))
+            if attempts >= max_attempts:
+                self.connection.execute(
+                    "UPDATE detail_queue SET attempt_count=?, max_attempts=?, next_attempt_at='', terminal_status='ATTEMPT_BUDGET_EXHAUSTED', status='QUARANTINED' WHERE run_id=? AND linkedin_job_id=?",
+                    (attempts, max_attempts, str(row[0]), str(row[1])),
+                )
+            elif not _clean(row[5]):
+                self.connection.execute(
+                    "UPDATE detail_queue SET attempt_count=?, max_attempts=?, next_attempt_at=? WHERE run_id=? AND linkedin_job_id=?",
+                    (attempts, max_attempts, _utc_now(), str(row[0]), str(row[1])),
+                )
 
     def _repair_duplicate_company_scans(self) -> None:
         duplicates = self.connection.execute(
@@ -1271,14 +1960,21 @@ class StateStore:
         timestamp = started_at or _utc_now()
         with self._lock, self.connection:
             self.connection.execute(
-                "INSERT OR IGNORE INTO runs(run_id, mode, input_sha256, started_at, status) VALUES (?, ?, ?, ?, 'RUNNING')",
+                "INSERT OR IGNORE INTO runs(run_id, mode, input_sha256, started_at, status, finished_at) VALUES (?, ?, ?, ?, 'RUNNING', '')",
                 (run_id, mode, input_sha256, timestamp),
+            )
+            self.connection.execute(
+                "UPDATE runs SET status='RUNNING', finished_at='' WHERE run_id=?",
+                (str(run_id),),
             )
         return run_id
 
-    def finish_run(self, run_id: str, status: str = "FINISHED") -> None:
+    def finish_run(self, run_id: str, status: str = "FINISHED", finished_at: str | None = None) -> None:
         with self._lock, self.connection:
-            self.connection.execute("UPDATE runs SET status=? WHERE run_id=?", (status, str(run_id)))
+            self.connection.execute(
+                "UPDATE runs SET status=?, finished_at=? WHERE run_id=?",
+                (status, finished_at or _utc_now(), str(run_id)),
+            )
 
     def start_company_scan(self, run_id: str, group: SourceCompanyGroup, *, scan_id: str | None = None, started_at: str | None = None) -> str:
         scan_id = scan_id or uuid.uuid4().hex
@@ -1394,11 +2090,16 @@ class StateStore:
         return tuple(SearchCard(**json.loads(row[0])) for row in rows)
 
     def get_detail_queue_entries(self, run_id: str) -> tuple[sqlite3.Row, ...]:
+        now = _utc_now()
         with self._lock:
             return tuple(
                 self.connection.execute(
-                    "SELECT * FROM detail_queue WHERE run_id=? AND status IN ('PENDING', 'RETRY') ORDER BY linkedin_job_id",
-                    (run_id,),
+                    """SELECT * FROM detail_queue
+                       WHERE run_id=? AND (
+                           status='PENDING'
+                           OR (status='RETRY' AND attempt_count < max_attempts AND (next_attempt_at='' OR next_attempt_at<=?))
+                       ) ORDER BY linkedin_job_id""",
+                    (run_id, now),
                 ).fetchall()
             )
 
@@ -1424,9 +2125,58 @@ class StateStore:
             self.connection.execute(
                 """INSERT INTO company_slug_aliases(linkedin_company_id, slug, status, first_seen_at, last_seen_at, verification_method)
                    VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(linkedin_company_id, slug) DO UPDATE SET status=excluded.status, last_seen_at=excluded.last_seen_at, verification_method=excluded.verification_method""",
+                   ON CONFLICT(linkedin_company_id, slug) DO UPDATE SET status=excluded.status, last_seen_at=excluded.last_seen_at, verification_method=excluded.verification_method,
+                       verification_terminal_status=CASE WHEN excluded.status='VERIFIED_ALIAS_MATCH' THEN '' ELSE company_slug_aliases.verification_terminal_status END""",
                 (str(linkedin_company_id), str(slug), status, timestamp, timestamp, verification_method),
             )
+
+    def alias_verification_due(self, linkedin_company_id: str, slug: str, now: str | None = None) -> bool:
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT status, verification_attempt_count, max_verification_attempts, next_verification_at, verification_terminal_status FROM company_slug_aliases WHERE linkedin_company_id=? AND slug=?",
+                (str(linkedin_company_id), str(slug)),
+            ).fetchone()
+        if row is None:
+            return True
+        if row[0] == COMPANY_MATCH_VERIFIED_ALIAS or row[4]:
+            return False
+        return int(row[1] or 0) < max(1, int(row[2] or DEFAULT_ALIAS_VERIFICATION_ATTEMPT_BUDGET)) and (
+            not _clean(row[3]) or _clean(row[3]) <= (now or _utc_now())
+        )
+
+    def begin_alias_verification(self, linkedin_company_id: str, slug: str, *, seen_at: str | None = None) -> bool:
+        timestamp = seen_at or _utc_now()
+        with self._lock, self.connection:
+            row = self.connection.execute(
+                "SELECT verification_attempt_count, max_verification_attempts, status, verification_terminal_status FROM company_slug_aliases WHERE linkedin_company_id=? AND slug=?",
+                (str(linkedin_company_id), str(slug)),
+            ).fetchone()
+            attempts = int(row[0] or 0) if row else 0
+            maximum = max(1, int(row[1] or DEFAULT_ALIAS_VERIFICATION_ATTEMPT_BUDGET)) if row else DEFAULT_ALIAS_VERIFICATION_ATTEMPT_BUDGET
+            if row and (row[2] == COMPANY_MATCH_VERIFIED_ALIAS or row[3] or attempts >= maximum):
+                return False
+            attempts += 1
+            exhausted = attempts >= maximum
+            next_at = "" if exhausted else _retry_due_at(timestamp, attempts)
+            terminal_status = "ATTEMPT_BUDGET_EXHAUSTED" if exhausted else ""
+            self.connection.execute(
+                """INSERT INTO company_slug_aliases(linkedin_company_id, slug, status, first_seen_at, last_seen_at, verification_method, verification_attempt_count, max_verification_attempts, next_verification_at, verification_terminal_status)
+                   VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?)
+                   ON CONFLICT(linkedin_company_id, slug) DO UPDATE SET status=excluded.status, last_seen_at=excluded.last_seen_at, verification_attempt_count=excluded.verification_attempt_count, max_verification_attempts=excluded.max_verification_attempts, next_verification_at=excluded.next_verification_at, verification_terminal_status=excluded.verification_terminal_status""",
+                (str(linkedin_company_id), str(slug), COMPANY_MATCH_ALIAS_PENDING, timestamp, timestamp, attempts, maximum, next_at, terminal_status),
+            )
+        return True
+
+    def alias_verification_counts(self) -> dict[str, int]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT status, verification_terminal_status, COUNT(*) FROM company_slug_aliases GROUP BY status, verification_terminal_status"
+            ).fetchall()
+        counts: dict[str, int] = {}
+        for status, terminal, count in rows:
+            key = str(terminal or status).lower()
+            counts[key] = counts.get(key, 0) + int(count)
+        return counts
 
     def record_exclusion(
         self,
@@ -1442,20 +2192,81 @@ class StateStore:
                 (uuid.uuid4().hex, str(run_id), str(linkedin_company_id), str(linkedin_job_id or ""), reason, json.dumps(dict(observation), ensure_ascii=False), _utc_now()),
             )
 
-    def enqueue_detail(self, run_id: str, company_scan_id: str, linkedin_company_id: str, linkedin_job_id: str) -> bool:
+    def upsert_proxy_health(
+        self,
+        rows: Iterable[Mapping[str, object]],
+        *,
+        updated_at: str | None = None,
+    ) -> int:
+        timestamp = updated_at or _utc_now()
+        values = []
+        for row in rows:
+            proxy_id = _clean(row.get("proxy_id"))
+            if not proxy_id:
+                continue
+            values.append(
+                (
+                    proxy_id,
+                    int(row.get("request_count") or 0),
+                    int(row.get("success_count") or 0),
+                    int(row.get("rate_limited_count") or 0),
+                    int(row.get("blocked_count") or 0),
+                    int(row.get("consecutive_failure_count") or 0),
+                    _clean(row.get("cooldown_until")),
+                    int(row.get("last_status_code") or 0),
+                    _clean(row.get("last_error_class")),
+                    _clean(row.get("last_request_at")),
+                    timestamp,
+                )
+            )
+        if not values:
+            return 0
+        with self._write_transaction():
+            self.connection.executemany(
+                """INSERT INTO proxy_health(
+                       proxy_id, request_count, success_count, rate_limited_count,
+                       blocked_count, consecutive_failure_count, cooldown_until,
+                       last_status_code, last_error_class, last_request_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(proxy_id) DO UPDATE SET
+                       request_count=excluded.request_count,
+                       success_count=excluded.success_count,
+                       rate_limited_count=excluded.rate_limited_count,
+                       blocked_count=excluded.blocked_count,
+                       consecutive_failure_count=excluded.consecutive_failure_count,
+                       cooldown_until=excluded.cooldown_until,
+                       last_status_code=excluded.last_status_code,
+                       last_error_class=excluded.last_error_class,
+                       last_request_at=excluded.last_request_at,
+                       updated_at=excluded.updated_at""",
+                values,
+            )
+        return len(values)
+
+    def enqueue_detail(
+        self,
+        run_id: str,
+        company_scan_id: str,
+        linkedin_company_id: str,
+        linkedin_job_id: str,
+        *,
+        refresh_reason: str = "",
+    ) -> bool:
         with self._lock, self.connection:
             cursor = self.connection.execute(
-                "INSERT OR IGNORE INTO detail_queue(run_id, linkedin_job_id, linkedin_company_id, company_scan_id) VALUES (?, ?, ?, ?)",
-                (run_id, str(linkedin_job_id), linkedin_company_id, company_scan_id),
+                "INSERT OR IGNORE INTO detail_queue(run_id, linkedin_job_id, linkedin_company_id, company_scan_id, refresh_reason) VALUES (?, ?, ?, ?, ?)",
+                (run_id, str(linkedin_job_id), linkedin_company_id, company_scan_id, str(refresh_reason or "")),
             )
             return cursor.rowcount == 1
 
     def pending_detail_job_ids(self, run_id: str | None = None) -> tuple[str, ...]:
-        query = "SELECT DISTINCT linkedin_job_id FROM detail_queue WHERE status='PENDING'"
-        params: tuple[object, ...] = ()
+        now = _utc_now()
+        query = """SELECT DISTINCT linkedin_job_id FROM detail_queue
+                   WHERE (status='PENDING' OR (status='RETRY' AND attempt_count < max_attempts AND (next_attempt_at='' OR next_attempt_at<=?)))"""
+        params: tuple[object, ...] = (now,)
         if run_id:
             query += " AND run_id=?"
-            params = (run_id,)
+            params = (now, run_id)
         with self._lock:
             rows = self.connection.execute(query, params).fetchall()
         return tuple(row[0] for row in rows)
@@ -1470,18 +2281,100 @@ class StateStore:
         detail: Mapping[str, object] | None = None,
         attempt_id: str | None = None,
         attempted_at: str | None = None,
+        max_attempts: int | None = None,
+        next_attempt_at: str | None = None,
     ) -> str:
         attempt_id = attempt_id or uuid.uuid4().hex
-        with self._lock, self.connection:
+        timestamp = attempted_at or _utc_now()
+        with self._write_transaction():
+            queue_row = self.connection.execute(
+                "SELECT attempt_count, max_attempts FROM detail_queue WHERE run_id=? AND linkedin_job_id=?",
+                (str(run_id), str(linkedin_job_id)),
+            ).fetchone()
+            current_attempts = int(queue_row[0] or 0) if queue_row else 0
+            budget = max(1, int(max_attempts or (queue_row[1] if queue_row else DEFAULT_DETAIL_ATTEMPT_BUDGET) or DEFAULT_DETAIL_ATTEMPT_BUDGET))
+            attempt_number = current_attempts + 1 if status not in {"SUCCESS", "EXCLUDED"} else current_attempts
             self.connection.execute(
                 "INSERT INTO detail_attempts(attempt_id, run_id, linkedin_job_id, status, attempted_at, error_class, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (attempt_id, run_id, str(linkedin_job_id), status, attempted_at or _utc_now(), error_class, json.dumps(detail or {})),
+                (attempt_id, run_id, str(linkedin_job_id), status, timestamp, error_class, json.dumps(detail or {})),
+            )
+            if queue_row:
+                if status in {"SUCCESS", "EXCLUDED"}:
+                    queue_status = "DONE"
+                    terminal_status = status
+                    due_at = ""
+                elif attempt_number >= budget:
+                    queue_status = "QUARANTINED"
+                    terminal_status = "ATTEMPT_BUDGET_EXHAUSTED"
+                    due_at = ""
+                else:
+                    queue_status = "RETRY"
+                    terminal_status = ""
+                    due_at = next_attempt_at or _retry_due_at(timestamp, attempt_number)
+                self.connection.execute(
+                    """UPDATE detail_queue SET status=?, next_attempt_at=?, attempt_count=?, max_attempts=?, last_attempt_at=?, last_error_class=?, terminal_status=?
+                       WHERE run_id=? AND linkedin_job_id=?""",
+                    (queue_status, due_at, attempt_number if status not in {"SUCCESS", "EXCLUDED"} else current_attempts, budget, timestamp, error_class, terminal_status, run_id, str(linkedin_job_id)),
+                )
+        return attempt_id
+
+    def detail_queue_counts(self, run_id: str) -> dict[str, int]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT status, COUNT(*) FROM detail_queue WHERE run_id=? GROUP BY status",
+                (str(run_id),),
+            ).fetchall()
+        return {str(status).lower(): int(count) for status, count in rows}
+
+    def record_detail_cache_hit(
+        self,
+        linkedin_company_id: str,
+        linkedin_job_id: str,
+        *,
+        refresh_reason: str,
+        volatile_fields_stale: bool,
+        card_evidence_hash: str = "",
+        run_id: str = "",
+        company_scan_id: str = "",
+        observed_at: str = "",
+    ) -> None:
+        with self._write_transaction():
+            previous = self.connection.execute(
+                "SELECT row_json, run_id, company_scan_id, last_seen_at FROM job_company_observations WHERE linkedin_company_id=? AND linkedin_job_id=?",
+                (str(linkedin_company_id), str(linkedin_job_id)),
+            ).fetchone()
+            if previous is None:
+                return
+            data = json.loads(previous[0])
+            data["detail_refresh_reason"] = str(refresh_reason)
+            data["volatile_fields_status"] = "STALE" if volatile_fields_stale else "FRESH"
+            if card_evidence_hash:
+                data["card_evidence_hash"] = card_evidence_hash
+            if run_id:
+                data["run_id"] = str(run_id)
+            if company_scan_id:
+                data["company_scan_id"] = str(company_scan_id)
+            if observed_at:
+                data["last_seen_at"] = str(observed_at)
+                data["last_successful_company_scan_at"] = str(observed_at)
+            current_run_id = str(run_id or previous[1] or data.get("run_id") or "")
+            current_scan_id = str(company_scan_id or previous[2] or data.get("company_scan_id") or "")
+            current_last_seen = str(observed_at or previous[3] or data.get("last_seen_at") or "")
+            payload = json.dumps(
+                {
+                    **_json_row(data),
+                    **({"company_scan_id": _clean(data.get("company_scan_id", ""))} if data.get("company_scan_id") else {}),
+                },
+                ensure_ascii=False,
             )
             self.connection.execute(
-                "UPDATE detail_queue SET status=? WHERE run_id=? AND linkedin_job_id=?",
-                ("DONE" if status in {"SUCCESS", "EXCLUDED"} else "RETRY", run_id, str(linkedin_job_id)),
+                "UPDATE jobs SET job_json=? WHERE linkedin_job_id=?",
+                (json.dumps(_json_row(data), ensure_ascii=False), str(linkedin_job_id)),
             )
-        return attempt_id
+            self.connection.execute(
+                "UPDATE job_company_observations SET run_id=?, company_scan_id=?, last_seen_at=?, row_json=? WHERE linkedin_company_id=? AND linkedin_job_id=?",
+                (current_run_id, current_scan_id, current_last_seen, payload, str(linkedin_company_id), str(linkedin_job_id)),
+            )
 
     def upsert_catalog_row(self, row: Mapping[str, object]) -> None:
         normalized = _json_row(row)
@@ -1491,7 +2384,7 @@ class StateStore:
             raise ValueError("catalog rows require company and job IDs")
         now = normalized["last_seen_at"] or _utc_now()
         company_scan_id = _clean(row.get("company_scan_id", ""))
-        with self._lock, self.connection:
+        with self._write_transaction():
             previous = self.connection.execute(
                 "SELECT row_json FROM job_company_observations WHERE linkedin_company_id=? AND linkedin_job_id=?",
                 (company_id, job_id),
@@ -1585,7 +2478,7 @@ class StateStore:
                     if count >= 2 and data.get("lifecycle_status") != "inactive":
                         data["lifecycle_status"] = "inactive"
                         data["inactive_reason"] = "absent_from_two_complete_company_scans"
-                        data["inactive_confirmed_at"] = ""
+                        data["inactive_confirmed_at"] = scan_at
                         newly_inactive += 1
                 self.connection.execute(
                     "UPDATE job_company_observations SET row_json=?, last_seen_at=? WHERE linkedin_company_id=? AND linkedin_job_id=?",
@@ -1638,22 +2531,83 @@ class StateStore:
                     ),
                 )
 
+    def audit_legacy_consistency(self) -> dict[str, object]:
+        """Read-only audit of historical scan evidence before expiry is enabled."""
+
+        with self._lock:
+            scans = self.connection.execute(
+                "SELECT company_scan_id, run_id, linkedin_company_id, status, finished_at, observed_job_ids_json FROM company_scans ORDER BY started_at, company_scan_id"
+            ).fetchall()
+            suspicious_pages = int(
+                self.connection.execute("SELECT COUNT(*) FROM search_pages WHERE status='SUSPICIOUS_EMPTY'").fetchone()[0]
+            )
+            retry_rows = self.connection.execute(
+                "SELECT status, next_attempt_at, attempt_count, max_attempts FROM detail_queue WHERE status IN ('RETRY', 'QUARANTINED')"
+            ).fetchall()
+            alias_rows = self.connection.execute(
+                "SELECT status, verification_terminal_status FROM company_slug_aliases"
+            ).fetchall()
+            audit_rows: list[dict[str, object]] = []
+            for scan in scans:
+                scan_id = str(scan[0])
+                pages = self.connection.execute(
+                    "SELECT query_partition_type, page_start, status, job_ids_json FROM search_pages WHERE company_scan_id=? ORDER BY query_partition_type, page_start",
+                    (scan_id,),
+                ).fetchall()
+                page_statuses = [str(page[2]) for page in pages]
+                observed = tuple(json.loads(scan[5] or "[]"))
+                is_zero = str(scan[3]) == "COMPLETE_ZERO_CONFIRMED" and not observed
+                has_suspicious = any(status == "SUSPICIOUS_EMPTY" for status in page_statuses)
+                has_partial = any(status not in {"COMPLETE", "COMPLETE_ZERO_CONFIRMED"} for status in page_statuses)
+                explicit_key = bool(scan_id and str(scan[1]) and str(scan[2]))
+                qualifying_absence = bool(is_zero and explicit_key and pages and not has_suspicious and not has_partial)
+                audit_rows.append(
+                    {
+                        "scan_key": {
+                            "run_id": str(scan[1]),
+                            "company_scan_id": scan_id,
+                            "linkedin_company_id": str(scan[2]),
+                        },
+                        "status": str(scan[3]),
+                        "finished_at": str(scan[4] or ""),
+                        "observed_job_ids": list(observed),
+                        "page_count": len(pages),
+                        "page_statuses": page_statuses,
+                        "qualifying_absence": qualifying_absence,
+                        "revalidation_required": bool(is_zero and not qualifying_absence),
+                    }
+                )
+            return {
+                "read_only": True,
+                "scan_count": len(audit_rows),
+                "zero_scan_count": sum(row["status"] == "COMPLETE_ZERO_CONFIRMED" for row in audit_rows),
+                "suspicious_empty_page_count": suspicious_pages,
+                "qualifying_absence_count": sum(bool(row["qualifying_absence"]) for row in audit_rows),
+                "revalidation_required_zero_scan_count": sum(bool(row["revalidation_required"]) for row in audit_rows),
+                "scans": audit_rows,
+                "detail_retry_count": sum(str(row[0]) == "RETRY" for row in retry_rows),
+                "detail_retry_missing_due_count": sum(str(row[0]) == "RETRY" and not _clean(row[1]) for row in retry_rows),
+                "detail_quarantined_count": sum(str(row[0]) == "QUARANTINED" for row in retry_rows),
+                "alias_pending_count": sum(str(row[0]) == COMPANY_MATCH_ALIAS_PENDING and not str(row[1]) for row in alias_rows),
+                "alias_terminal_count": sum(bool(str(row[1])) for row in alias_rows),
+            }
+
     def export_catalog_csv(self, path: str | Path) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            rows = self.connection.execute(
-                "SELECT row_json FROM job_company_observations ORDER BY linkedin_company_id, linkedin_job_id"
-            ).fetchall()
         temporary_name = ""
         try:
             with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", newline="", dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False) as handle:
                 temporary_name = handle.name
                 writer = csv.DictWriter(handle, fieldnames=CATALOG_FIELDS, extrasaction="ignore")
                 writer.writeheader()
-                for row in rows:
-                    data = json.loads(row[0])
-                    writer.writerow({field: _clean(data.get(field, "")) for field in CATALOG_FIELDS})
+                with self._lock:
+                    cursor = self.connection.execute(
+                        "SELECT row_json FROM job_company_observations ORDER BY linkedin_company_id, linkedin_job_id"
+                    )
+                    for row in cursor:
+                        data = json.loads(row[0])
+                        writer.writerow({field: _clean(data.get(field, "")) for field in CATALOG_FIELDS})
             os.replace(temporary_name, target)
         finally:
             if temporary_name and os.path.exists(temporary_name):
@@ -1745,32 +2699,60 @@ class InterProcessLock:
 
 
 class CatalogRunner:
-    def __init__(self, config: RunnerConfig, *, transport=None, now=_utc_now):
+    def __init__(self, config: RunnerConfig, *, transport=None, request_limiter: AdaptiveConcurrency | None = None, now=_utc_now):
         self.config = config
         self.transport = transport
         self.now = now
         self.store: StateStore | None = None
         self.groups: dict[str, SourceCompanyGroup] = {}
         self.contexts: dict[str, CompanyRunContext] = {}
-        self.events: list[dict[str, object]] = []
-        self.adaptive = AdaptiveConcurrency(config.workers, config.min_workers, config.max_workers)
+        self.events = deque(maxlen=256)
+        self._event_journal: JsonlEventJournal | None = None
+        self._generation_dir: Path | None = None
+        self._alias_lock = threading.Lock()
+        self.adaptive = request_limiter or AdaptiveConcurrency(config.workers, config.min_workers, config.max_workers)
         self.metrics: dict[str, object] = {
             "companies_input": 0,
+            "input_loader_reconciliation": {},
             "companies_selected": 0,
             "companies_completed": 0,
             "companies_partial": 0,
             "companies_failed": 0,
+            "companies_zero_confirmed": 0,
             "requests": 0,
             "proxy_count": 0,
+            "proxy_health_rows": 0,
+            "account_peak_in_flight": 0,
             "valid_cards": 0,
             "malformed_cards": 0,
             "ownership_exclusions": 0,
             "alias_quarantines": 0,
             "detail_successes": 0,
             "detail_failures": 0,
+            "detail_requests": 0,
+            "detail_cache_hits": 0,
+            "detail_avoided_requests": 0,
+            "detail_refresh_requests": 0,
+            "detail_volatile_stale_rows": 0,
+            "detail_refresh_reasons": {},
+            "detail_provider_credits": None,
+            "detail_provider_cost": None,
+            "detail_provider_cost_status": "not_reported_by_transport",
             "jobs_written": 0,
             "inactive_rows": 0,
+            "pending_detail_retries": 0,
+            "quarantined_detail_rows": 0,
+            "suspicious_empty_companies": 0,
+            "recovery_partitions_required": 0,
+            "recovery_partitions_completed": 0,
+            "recovery_partitions_pending": 0,
+            "recovery_partitions_partial": 0,
+            "scan_status_counts": {},
+            "run_status": "RUNNING",
+            "run_outcome": "",
             "run_id": "",
+            "generation_id": "",
+            "generation_manifest_sha256": "",
             "recoverable": True,
         }
         self._metric_lock = threading.Lock()
@@ -1779,14 +2761,72 @@ class CatalogRunner:
         with self._metric_lock:
             self.metrics[key] = int(self.metrics.get(key, 0)) + amount
 
+    def _record_refresh_reason(self, reason: str) -> None:
+        with self._metric_lock:
+            reasons = self.metrics.setdefault("detail_refresh_reasons", {})
+            if isinstance(reasons, dict):
+                reasons[reason] = int(reasons.get(reason, 0)) + 1
+
+    def _capture_detail_provider_usage(self) -> None:
+        credits = getattr(self.transport, "provider_credits_used", getattr(self.transport, "credits_used", None))
+        cost = getattr(self.transport, "provider_cost", getattr(self.transport, "cost", None))
+        if credits is not None:
+            self.metrics["detail_provider_credits"] = credits
+        if cost is not None:
+            self.metrics["detail_provider_cost"] = cost
+        if credits is not None or cost is not None:
+            self.metrics["detail_provider_cost_status"] = "reported_by_transport"
+
+    def _record_event(self, record: Mapping[str, object]) -> None:
+        self.events.append(dict(record))
+        if self._event_journal is not None:
+            self._event_journal.append(record)
+
+    def _persist_proxy_health(self) -> None:
+        if self.store is None or self.transport is None:
+            return
+        snapshot = getattr(self.transport, "proxy_health_snapshot", None)
+        if not callable(snapshot):
+            return
+        self.metrics["proxy_health_rows"] = self.store.upsert_proxy_health(snapshot())
+
+    def _close_transport(self) -> None:
+        close = getattr(self.transport, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                self.metrics["transport_close_error"] = True
+
+    def _update_recovery_metrics(self) -> None:
+        required_recovery = sum(
+            len(self.recovery_partitions)
+            for context in self.contexts.values()
+            if context.recovery_required
+        )
+        completed_recovery = sum(
+            sum(status == "COMPLETE" for status in context.recovery_partition_statuses.values())
+            for context in self.contexts.values()
+        )
+        attempted_recovery = sum(
+            len(context.recovery_partition_statuses)
+            for context in self.contexts.values()
+        )
+        self.metrics["recovery_partitions_required"] = required_recovery
+        self.metrics["recovery_partitions_completed"] = completed_recovery
+        self.metrics["recovery_partitions_pending"] = max(0, required_recovery - attempted_recovery)
+        self.metrics["recovery_partitions_partial"] = max(0, attempted_recovery - completed_recovery)
+
     def _get(self, url: str, *, kind: str) -> ResponseEnvelope:
         response = self.transport.get(url, kind=kind)
         self._increment("requests")
+        if kind == "detail":
+            self._increment("detail_requests")
         if response.status_code == 429:
             self._increment("rate_limited")
         if _blocked_body(response.text):
             self._increment("blocked_responses")
-        self.adaptive.observe(status_code=response.status_code, blocked=_blocked_body(response.text))
+        self.adaptive.observe(status_code=response.status_code, blocked=_blocked_body(response.text), provider="linkedin")
         return response
 
     def _persist_exclusion(self, company_id: str, job_id: str, reason: str, observation: Mapping[str, object]) -> None:
@@ -1794,7 +2834,7 @@ class CatalogRunner:
         run_id = str(self.metrics["run_id"])
         self.store.record_exclusion(run_id, company_id, job_id, reason, observation)
         self._increment("ownership_exclusions")
-        self.events.append(
+        self._record_event(
             {
                 "record_type": "ownership_exclusion",
                 "schema_version": 1,
@@ -1808,31 +2848,53 @@ class CatalogRunner:
     def _queue_card(self, context: CompanyRunContext, card: SearchCard) -> None:
         assert self.store is not None
         decision = evaluate_ownership(card.company_url, context.group, self.store.verified_aliases(context.group.linkedin_company_id))
-        if decision.status == COMPANY_MATCH_REJECTED:
+        if decision.status in {COMPANY_MATCH_REJECTED, COMPANY_MATCH_AMBIGUOUS}:
             self._persist_exclusion(context.group.linkedin_company_id, card.linkedin_job_id, decision.reason, card.__dict__)
             return
+        refresh_reason = "new_job"
         if self.config.mode == "daily" or self.config.resume_run_id:
             try:
                 previous = self.store.get_catalog_row(context.group.linkedin_company_id, card.linkedin_job_id)
             except KeyError:
                 previous = None
             if previous and previous.get("lifecycle_status") != "inactive" and decision.status in {COMPANY_MATCH_EXACT_PRIMARY, COMPANY_MATCH_VERIFIED_ALIAS}:
-                card_changed = any(
-                    (
-                        previous.get("job_title", "") != card.title,
-                        previous.get("location", "") != card.location,
-                        previous.get("observed_company_url", "") != decision.canonical_url,
-                        previous.get("posted_text", "") != card.posted_text,
-                    )
+                refresh = detail_refresh_decision(
+                    previous,
+                    card,
+                    decision.canonical_url,
+                    self.now(),
+                    durable_refresh_hours=self.config.detail_refresh_hours,
+                    volatile_refresh_hours=self.config.volatile_refresh_hours,
                 )
-                if not detail_refresh_required(previous.get("detail_last_refreshed_at", ""), self.now(), self.config.detail_refresh_hours, card_changed=card_changed):
+                refresh_reason = refresh.reason
+                if not refresh.required:
+                    self.store.record_detail_cache_hit(
+                        context.group.linkedin_company_id,
+                        card.linkedin_job_id,
+                        refresh_reason=refresh.reason,
+                        volatile_fields_stale=refresh.volatile_fields_stale,
+                        card_evidence_hash=compute_card_evidence_hash(card, decision.canonical_url),
+                        run_id=str(self.metrics["run_id"]),
+                        company_scan_id=context.scan_id,
+                        observed_at=self.now(),
+                    )
                     context.observed_job_ids.add(card.linkedin_job_id)
+                    self._increment("detail_cache_hits")
+                    self._increment("detail_avoided_requests")
+                    self._record_refresh_reason(refresh.reason)
+                    if refresh.volatile_fields_stale:
+                        self._increment("detail_volatile_stale_rows")
                     return
+            elif previous and previous.get("lifecycle_status") == "inactive":
+                refresh_reason = "reactivated_job"
+        self._increment("detail_refresh_requests")
+        self._record_refresh_reason(refresh_reason)
         self.store.enqueue_detail(
             str(self.metrics["run_id"]),
             context.scan_id,
             context.group.linkedin_company_id,
             card.linkedin_job_id,
+            refresh_reason=refresh_reason,
         )
 
     def _scan_recovery_partition(self, context: CompanyRunContext, partition: RecoveryPartition) -> bool:
@@ -1843,6 +2905,7 @@ class CatalogRunner:
         seen_job_sets: set[tuple[str, ...]] = set()
         complete = False
         suspicious_empty_streak = 0
+        suspicious_empty_seen = False
         try:
             for page_start in range(0, self.pagination.max_start + self.pagination.page_step, self.pagination.page_step):
                 if self.store.successful_page_exists(run_id, context.group.linkedin_company_id, page_start, partition.parameter):
@@ -1857,27 +2920,27 @@ class CatalogRunner:
                     kind="search",
                 )
                 if response.status_code == 400 and page_start >= self.pagination.max_start:
-                    complete = True
+                    complete = not suspicious_empty_seen
                     self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="COMPLETE", job_ids=(), partition_type=partition.parameter, detail={"terminal": "http_400"})
                     break
                 if response.status_code == 200 and is_suspicious_empty_body(response.text):
+                    suspicious_empty_seen = True
                     body_hash = hashlib.sha256(response.text.encode("utf-8", errors="replace")).hexdigest()
                     self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="SUSPICIOUS_EMPTY", job_ids=(), partition_type=partition.parameter, body_hash=body_hash, cards=())
                     suspicious_empty_streak += 1
                     if suspicious_empty_streak >= 2:
-                        complete = True
                         break
                     continue
-                if response.error == "request_budget_exhausted" or classify_http_response(response.status_code, response.text) != "SUCCESS":
+                if response.error or classify_http_response(response.status_code, response.text, response.error) != "SUCCESS":
                     break
                 parsed = parse_search_page(response.text)
                 body_hash = hashlib.sha256(response.text.encode("utf-8", errors="replace")).hexdigest()
                 if not parsed.is_usable or parsed.is_partial:
                     if is_suspicious_empty_body(response.text):
+                        suspicious_empty_seen = True
                         self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="SUSPICIOUS_EMPTY", job_ids=(), partition_type=partition.parameter, body_hash=body_hash, cards=())
                         suspicious_empty_streak += 1
                         if suspicious_empty_streak >= 2:
-                            complete = True
                             break
                         continue
                     self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="PARTIAL", job_ids=tuple(card.linkedin_job_id for card in parsed.cards), partition_type=partition.parameter, body_hash=body_hash, cards=parsed.cards)
@@ -1890,7 +2953,18 @@ class CatalogRunner:
                     break
                 suspicious_empty_streak = 0
                 page_job_ids = tuple(sorted(card.linkedin_job_id for card in parsed.cards))
-                self.store.record_search_page(run_id, context.scan_id, context.group.linkedin_company_id, page_start, status="COMPLETE", job_ids=page_job_ids, partition_type=partition.parameter, body_hash=body_hash, cards=parsed.cards)
+                capped_without_terminal = page_start >= self.pagination.max_start and not parsed.is_no_results
+                self.store.record_search_page(
+                    run_id,
+                    context.scan_id,
+                    context.group.linkedin_company_id,
+                    page_start,
+                    status="PARTIAL" if capped_without_terminal else "COMPLETE",
+                    job_ids=page_job_ids,
+                    partition_type=partition.parameter,
+                    body_hash=body_hash,
+                    cards=parsed.cards,
+                )
                 if not parsed.is_no_results and (body_hash in seen_body_hashes or (page_job_ids and page_job_ids in seen_job_sets)):
                     break
                 seen_body_hashes.add(body_hash)
@@ -1902,11 +2976,16 @@ class CatalogRunner:
                     context.card_partition_by_job_id[card.linkedin_job_id] = partition.parameter
                     context.card_partition_value_by_job_id[card.linkedin_job_id] = partition.value
                     self._queue_card(context, card)
-                if parsed.is_no_results or page_start >= self.pagination.max_start:
-                    complete = True
+                if parsed.is_no_results:
+                    complete = not suspicious_empty_seen
+                    break
+                if capped_without_terminal:
+                    complete = False
                     break
         finally:
-            self.store.finish_query_partition(partition_id, "COMPLETE" if complete else "PARTIAL")
+            partition_status = "COMPLETE" if complete else "PARTIAL"
+            self.store.finish_query_partition(partition_id, partition_status)
+            context.recovery_partition_statuses[f"{partition.parameter}={partition.value}"] = partition_status
         return complete
 
     def _scan_company(self, group: SourceCompanyGroup) -> CompanyRunContext:
@@ -1950,28 +3029,31 @@ class CatalogRunner:
                     continue
                 url = build_search_url(group.linkedin_company_id, start=page_start)
                 response = self._get(url, kind="search")
+                classification = classify_http_response(response.status_code, response.text, response.error)
                 if response.error == "request_budget_exhausted":
                     context.search_status = "BUDGET_EXHAUSTED"
-                    self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status=context.search_status, job_ids=())
+                    self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status=context.search_status, job_ids=(), detail={"classification": classification})
                     break
                 if response.status_code == 200 and is_suspicious_empty_body(response.text):
                     body_hash = hashlib.sha256(response.text.encode("utf-8", errors="replace")).hexdigest()
                     self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status="SUSPICIOUS_EMPTY", job_ids=(), body_hash=body_hash, detail={"body_class": "suspicious_empty"})
+                    context.search_status = "PARTIAL_SUSPICIOUS_EMPTY"
                     suspicious_empty_streak += 1
                     if suspicious_empty_streak >= 2:
-                        context.search_status = "COMPLETE" if candidate_cards else "COMPLETE_ZERO_CONFIRMED"
                         break
                     continue
-                classification = classify_http_response(response.status_code, response.text)
                 if response.status_code == 400 and page_start >= evidence.max_start:
                     context.search_status = "COMPLETE"
                     self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status="COMPLETE", job_ids=(), detail={"terminal": "http_400"})
                     break
                 if classification != "SUCCESS":
+                    retry_status = "PARTIAL_TRANSPORT_FAILURE" if candidate_cards else "FAILED"
                     context.search_status = {
                         "BLOCKED": "BLOCKED",
                         "RATE_LIMITED": "RATE_LIMITED",
-                        "RETRYABLE": "PARTIAL_PAGE_ANOMALY",
+                        "RETRYABLE": retry_status,
+                        "PERMANENT_FAILURE": "FAILED",
+                        "BUDGET_EXHAUSTED": "BUDGET_EXHAUSTED",
                     }.get(classification, "PARTIAL_PAGE_ANOMALY")
                     self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status=context.search_status, job_ids=(), detail={"classification": classification})
                     break
@@ -1980,9 +3062,9 @@ class CatalogRunner:
                 if not parsed.is_usable:
                     if is_suspicious_empty_body(response.text):
                         self.store.record_search_page(run_id, scan_id, group.linkedin_company_id, page_start, status="SUSPICIOUS_EMPTY", job_ids=(), body_hash=body_hash, detail={"body_class": parsed.body_class})
+                        context.search_status = "PARTIAL_SUSPICIOUS_EMPTY"
                         suspicious_empty_streak += 1
                         if suspicious_empty_streak >= 2:
-                            context.search_status = "COMPLETE" if candidate_cards else "COMPLETE_ZERO_CONFIRMED"
                             break
                         continue
                     context.search_status = "PARTIAL_PAGE_ANOMALY"
@@ -2007,41 +3089,43 @@ class CatalogRunner:
                     cards=parsed.cards,
                 )
                 page_job_ids = tuple(sorted(card.linkedin_job_id for card in parsed.cards))
-                if not parsed.is_no_results and (body_hash in seen_body_hashes or (page_job_ids and page_job_ids in seen_job_sets)):
+                if not parsed.is_no_results and not parsed.is_partial and (body_hash in seen_body_hashes or (page_job_ids and page_job_ids in seen_job_sets)):
                     context.search_status = "SATURATED_UNRESOLVED"
                     break
                 seen_body_hashes.add(body_hash)
                 if page_job_ids:
                     seen_job_sets.add(page_job_ids)
-                if parsed.is_no_results:
-                    empty_pages += 1
-                    context.no_results = candidate_cards == 0
-                    if empty_pages >= 2 or page_start >= evidence.max_start:
-                        if context.search_status == "COMPLETE":
-                            context.search_status = "COMPLETE_ZERO_CONFIRMED" if candidate_cards == 0 else "COMPLETE"
-                        break
-                    continue
-                empty_pages = 0
-                candidate_cards = len(context.card_by_job_id)
                 for card in parsed.cards:
                     context.card_by_job_id[card.linkedin_job_id] = card
                     context.card_start_by_job_id[card.linkedin_job_id] = page_start
                     context.card_partition_by_job_id[card.linkedin_job_id] = "base"
                     context.card_partition_value_by_job_id[card.linkedin_job_id] = ""
                     self._queue_card(context, card)
+                candidate_cards = len(context.card_by_job_id)
+                if parsed.is_no_results:
+                    empty_pages += 1
+                    context.no_results = candidate_cards == 0
+                    if empty_pages >= 2 or page_start >= evidence.max_start:
+                        if context.search_status in {"RUNNING", "COMPLETE"}:
+                            context.search_status = "COMPLETE_ZERO_CONFIRMED" if candidate_cards == 0 else "COMPLETE"
+                        break
+                    continue
+                empty_pages = 0
                 if page_start >= evidence.max_start:
-                    context.search_status = "SATURATED_UNRESOLVED"
+                    if context.search_status in {"RUNNING", "COMPLETE"}:
+                        context.search_status = "SATURATED_UNRESOLVED"
                     break
             if context.search_status == "RUNNING":
                 context.search_status = "COMPLETE_ZERO_CONFIRMED" if not candidate_cards else "COMPLETE"
             base_was_saturated = context.search_status == "SATURATED_UNRESOLVED"
             if context.search_status in {"SATURATED_UNRESOLVED", "PARTIAL_PAGE_ANOMALY"} and self.recovery_partitions:
+                context.recovery_required = True
                 recovery_complete = all(self._scan_recovery_partition(context, partition) for partition in self.recovery_partitions)
                 if recovery_complete and base_was_saturated:
                     context.search_status = "SATURATED_RECOVERED"
         except Exception as exc:  # the scan remains resumable and is never treated as empty
             context.search_status = "BLOCKED"
-            self.events.append(
+            self._record_event(
                 {
                     "record_type": "company_scan_error",
                     "schema_version": 1,
@@ -2058,6 +3142,7 @@ class CatalogRunner:
         run_id = str(self.metrics["run_id"])
         company_id = str(entry["linkedin_company_id"])
         job_id = str(entry["linkedin_job_id"])
+        refresh_reason = _clean(entry["refresh_reason"]) or "retry"
         context = next((item for item in self.contexts.values() if item.group.linkedin_company_id == company_id), None)
         if context is None:
             self.store.record_detail_attempt(run_id, job_id, status="FAILED", error_class="missing_company_context")
@@ -2074,7 +3159,7 @@ class CatalogRunner:
             return
         response = self._get(f"{DETAIL_ENDPOINT}/{job_id}", kind="detail")
         if response.error == "request_budget_exhausted" or response.status_code != 200 or _blocked_body(response.text):
-            self.store.record_detail_attempt(run_id, job_id, status="FAILED", error_class=classify_http_response(response.status_code, response.text))
+            self.store.record_detail_attempt(run_id, job_id, status="FAILED", error_class=classify_http_response(response.status_code, response.text, response.error))
             context.detail_failures += 1
             self._increment("detail_failures")
             return
@@ -2083,13 +3168,19 @@ class CatalogRunner:
         decision = evaluate_card_detail_ownership(card.company_url, detail.company_url, context.group, aliases)
         if decision.status == COMPANY_MATCH_ALIAS_PENDING:
             slug = canonical_company_slug(detail.company_url)
-            alias_response = self._get(f"{COMPANY_ENDPOINT}/{slug}", kind="company") if slug else ResponseEnvelope(0, "", "", 0.0, "missing_alias_slug")
-            if alias_response.status_code == 200 and alias_evidence_matches(alias_response.text, company_id):
-                self.store.record_alias(company_id, slug, status=COMPANY_MATCH_VERIFIED_ALIAS, verification_method="company_page_numeric_id", seen_at=self.now())
-                decision = evaluate_card_detail_ownership(card.company_url, detail.company_url, context.group, (slug,))
-            else:
-                self.store.record_alias(company_id, slug, status=COMPANY_MATCH_ALIAS_PENDING, verification_method="company_page_unverified", seen_at=self.now())
-                self._increment("alias_quarantines")
+            with self._alias_lock:
+                aliases = self.store.verified_aliases(company_id)
+                decision = evaluate_card_detail_ownership(card.company_url, detail.company_url, context.group, aliases)
+                if decision.status == COMPANY_MATCH_ALIAS_PENDING and slug and self.store.alias_verification_due(company_id, slug, self.now()) and self.store.begin_alias_verification(company_id, slug, seen_at=self.now()):
+                    alias_response = self._get(f"{COMPANY_ENDPOINT}/{slug}", kind="company")
+                    if alias_response.status_code == 200 and alias_evidence_matches(alias_response.text, company_id):
+                        self.store.record_alias(company_id, slug, status=COMPANY_MATCH_VERIFIED_ALIAS, verification_method="company_page_numeric_id", seen_at=self.now())
+                        decision = evaluate_card_detail_ownership(card.company_url, detail.company_url, context.group, (slug,))
+                    else:
+                        self.store.record_alias(company_id, slug, status=COMPANY_MATCH_ALIAS_PENDING, verification_method="company_page_unverified", seen_at=self.now())
+                        self._increment("alias_quarantines", 1 if not self.store.alias_verification_due(company_id, slug, self.now()) else 0)
+                elif decision.status == COMPANY_MATCH_ALIAS_PENDING:
+                    self._increment("alias_quarantines")
         if decision.status not in {COMPANY_MATCH_EXACT_PRIMARY, COMPANY_MATCH_VERIFIED_ALIAS}:
             self.store.record_detail_attempt(run_id, job_id, status="EXCLUDED", error_class=decision.reason, detail=detail.__dict__)
             self._persist_exclusion(company_id, job_id, decision.reason, {"card": card.__dict__, "detail": detail.__dict__})
@@ -2107,7 +3198,7 @@ class CatalogRunner:
         row = {field: "" for field in CATALOG_FIELDS}
         row.update(
             {
-                "canonical_company_id": context.group.primary_canonical_company_id,
+                "canonical_company_id": decision.canonical_company_id or context.group.primary_canonical_company_id,
                 "linkedin_company_id": company_id,
                 "source_company_name": context.group.source_company_name,
                 "source_company_url": context.group.primary_company_url,
@@ -2134,8 +3225,12 @@ class CatalogRunner:
                 "last_seen_at": observed_at,
                 "last_successful_company_scan_at": observed_at,
                 "detail_last_refreshed_at": observed_at,
+                "applicant_count_observed_at": observed_at,
+                "volatile_fields_status": "FRESH",
+                "detail_refresh_reason": refresh_reason,
                 "lifecycle_status": "active",
                 "absence_count": "0",
+                "card_evidence_hash": compute_card_evidence_hash(card, decision.canonical_url),
                 "content_hash": compute_content_hash(
                     {
                         "job_title": detail.title or card.title,
@@ -2169,12 +3264,13 @@ class CatalogRunner:
                 "company_scan_id": context.scan_id,
             }
         )
-        self.store.upsert_catalog_row(row)
-        self.store.record_detail_attempt(run_id, job_id, status="SUCCESS", detail=detail.__dict__)
+        with self.store.batch():
+            self.store.upsert_catalog_row(row)
+            self.store.record_detail_attempt(run_id, job_id, status="SUCCESS", detail=detail.__dict__)
         context.observed_job_ids.add(job_id)
         self._increment("detail_successes")
         self._increment("jobs_written")
-        self.events.append({"record_type": "job_observation", "schema_version": 1, "run_id": run_id, **row})
+        self._record_event({"record_type": "job_observation", "schema_version": 1, "run_id": run_id, **row})
 
     def run(self) -> dict[str, object]:
         output_dir = Path(self.config.output_dir)
@@ -2192,6 +3288,10 @@ class CatalogRunner:
             raise FileNotFoundError(input_path)
         self.groups, source_stats = load_source_company_groups(input_path, self.config.company_id)
         self.metrics.update({"companies_input": source_stats["groups"], "rows_read": source_stats["rows_read"], "rows_accepted": source_stats["rows_accepted"], "rows_rejected": source_stats["rows_rejected"]})
+        self.metrics["input_loader_reconciliation"] = build_input_loader_reconciliation_report(
+            source_stats["unique_numeric_organizations"],
+            source_stats,
+        )
         self.pagination = load_pagination_evidence(self.config.pagination_report)
         if self.config.filters_report and Path(self.config.filters_report).exists():
             self.recovery_partitions = build_recovery_partitions(self.config.filters_report)
@@ -2206,6 +3306,7 @@ class CatalogRunner:
                 retry_limit=self.config.retry_limit,
                 max_requests=self.config.max_requests,
                 per_proxy_concurrency=self.config.per_proxy_concurrency,
+                request_limiter=self.adaptive,
             )
         else:
             self.metrics["proxy_count"] = len(getattr(self.transport, "proxies", ())) or 1
@@ -2218,13 +3319,22 @@ class CatalogRunner:
             selected = selected[:25]
         self.metrics["companies_selected"] = len(selected)
         if self.config.dry_run or self.config.mode in {"validate", "reconcile"}:
-            if self.config.mode == "reconcile":
-                self.store = StateStore(output_dir / "master_linkedin_jobs_state.db")
-                self.store.export_catalog_csv(output_dir / "master_linkedin_jobs.csv")
-                self.store.close()
-            self.metrics["dry_run"] = bool(self.config.dry_run or self.config.mode == "validate")
-            self._write_metrics(output_dir)
-            return dict(self.metrics)
+            try:
+                if self.config.mode == "reconcile":
+                    self.store = StateStore(output_dir / "master_linkedin_jobs_state.db")
+                    audit = self.store.audit_legacy_consistency()
+                    self.store.export_catalog_csv(output_dir / "master_linkedin_jobs.csv")
+                    (output_dir / "master_linkedin_jobs_legacy_audit.json").write_text(
+                        json.dumps(audit, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    self.metrics["legacy_audit"] = audit
+                    self.store.close()
+                self.metrics["dry_run"] = bool(self.config.dry_run or self.config.mode == "validate")
+                self._write_metrics(output_dir)
+                return dict(self.metrics)
+            finally:
+                self._close_transport()
         if self.config.fresh:
             backup_existing_artifacts(output_dir)
             for name in ("master_linkedin_jobs_state.db", "master_linkedin_jobs.csv", "master_linkedin_jobs.jsonl", "master_linkedin_jobs_metrics.json"):
@@ -2234,6 +3344,12 @@ class CatalogRunner:
         input_hash = hashlib.sha256(input_path.read_bytes()).hexdigest()
         run_id = self.config.resume_run_id or datetime.now(timezone.utc).strftime("run_%Y%m%dT%H%M%S%fZ")
         self.metrics["run_id"] = run_id
+        generation_id = f"generation_{run_id}"
+        generation_dir = output_dir / GENERATION_DIRECTORY_NAME / generation_id
+        generation_dir.mkdir(parents=True, exist_ok=True)
+        self._generation_dir = generation_dir
+        self.metrics["generation_id"] = generation_id
+        self._event_journal = JsonlEventJournal(generation_dir / "master_linkedin_jobs.jsonl")
         self.store = StateStore(output_dir / "master_linkedin_jobs_state.db")
         self.store.start_run(run_id, mode=self.config.mode, input_sha256=input_hash)
         try:
@@ -2256,6 +3372,7 @@ class CatalogRunner:
                     status = "PARTIAL_DETAIL_FAILURES"
                 if status == "RUNNING":
                     status = "BLOCKED"
+                context.search_status = status
                 self.store.finish_company_scan(context.scan_id, status, context.observed_job_ids, self.now())
                 self.store.update_company_scan_status_rows(context.scan_id, status)
                 self._increment(
@@ -2270,30 +3387,96 @@ class CatalogRunner:
                 )
                 if status in COMPLETE_SCAN_STATUSES:
                     self._increment("companies_completed")
-                elif status in {"BLOCKED", "RATE_LIMITED", "BUDGET_EXHAUSTED"}:
+                    if status == "COMPLETE_ZERO_CONFIRMED":
+                        self._increment("companies_zero_confirmed")
+                elif status in {"FAILED", "BLOCKED", "RATE_LIMITED", "BUDGET_EXHAUSTED"}:
                     self._increment("companies_failed")
                 else:
                     self._increment("companies_partial")
-            self.store.export_catalog_csv(output_dir / "master_linkedin_jobs.csv")
-            self.store.append_jsonl_records(output_dir / "master_linkedin_jobs.jsonl", self.events)
+                if status == "PARTIAL_SUSPICIOUS_EMPTY":
+                    self._increment("suspicious_empty_companies")
+                status_counts = self.metrics.setdefault("scan_status_counts", {})
+                if isinstance(status_counts, dict):
+                    status_counts[status] = int(status_counts.get(status, 0)) + 1
+            self._update_recovery_metrics()
+            queue_counts = self.store.detail_queue_counts(run_id)
+            pending_details = queue_counts.get("pending", 0) + queue_counts.get("retry", 0)
+            quarantined_details = queue_counts.get("quarantined", 0)
+            self.metrics["pending_detail_retries"] = pending_details
+            self.metrics["quarantined_detail_rows"] = quarantined_details
+            statuses = [context.search_status for context in self.contexts.values()]
+            failure_statuses = {"FAILED", "BLOCKED", "RATE_LIMITED", "BUDGET_EXHAUSTED"}
+            partial_statuses = set(statuses).difference(COMPLETE_SCAN_STATUSES)
+            if not statuses:
+                run_status = "FINISHED"
+                run_outcome = "COMPLETE"
+            elif all(status == "COMPLETE_ZERO_CONFIRMED" for status in statuses) and not pending_details and not quarantined_details:
+                run_status = "FINISHED_ZERO"
+                run_outcome = "ZERO"
+            elif all(status in failure_statuses for status in statuses):
+                run_status = "FAILED"
+                run_outcome = "FAILURE"
+            elif partial_statuses or pending_details or quarantined_details:
+                run_status = "PARTIAL"
+                run_outcome = "PARTIAL"
+            else:
+                run_status = "FINISHED"
+                run_outcome = "COMPLETE"
+            self.metrics["run_status"] = run_status
+            self.metrics["run_outcome"] = run_outcome
+            self._persist_proxy_health()
+            self.store.export_catalog_csv(generation_dir / "master_linkedin_jobs.csv")
             self.metrics["requests"] = getattr(self.transport, "_request_count", self.metrics["requests"])
-            self.store.finish_run(run_id, "FINISHED")
-            self._write_metrics(output_dir)
-            log_path = output_dir / f"master_linkedin_jobs_{run_id}.log"
+            self.metrics["account_peak_in_flight"] = self.adaptive.peak_in_flight
+            self._capture_detail_provider_usage()
+            self.store.finish_run(run_id, run_status, self.now())
+            if self._event_journal is not None:
+                self._event_journal.close()
+                self._event_journal = None
+            self._write_metrics(generation_dir)
+            published_generation = publish_catalog_generation(
+                output_dir,
+                generation_id=generation_id,
+                run_id=run_id,
+                input_sha256=input_hash,
+                run_status=run_status,
+                run_outcome=run_outcome,
+            )
+            self.metrics["generation_manifest_sha256"] = published_generation["manifest_sha256"]
+            log_path = generation_dir / f"master_linkedin_jobs_{run_id}.log"
             log_path.write_text(json.dumps({key: value for key, value in self.metrics.items() if "password" not in key.lower() and "secret" not in key.lower()}, sort_keys=True) + "\n", encoding="utf-8")
             return dict(self.metrics)
         except BaseException as exc:
             run_status = "INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "FAILED"
-            self.store.finish_run(run_id, run_status)
+            self._persist_proxy_health()
+            self.store.finish_run(run_id, run_status, self.now())
             self.metrics["run_status"] = run_status
+            self.metrics["run_outcome"] = "INTERRUPTED" if run_status == "INTERRUPTED" else "FAILURE"
             self.metrics["error_class"] = type(exc).__name__
+            self._update_recovery_metrics()
+            if self._event_journal is not None:
+                self._event_journal.close()
+                self._event_journal = None
             try:
-                self._write_metrics(output_dir)
+                self._write_metrics(generation_dir)
+                write_catalog_generation_manifest(
+                    output_dir,
+                    generation_id=generation_id,
+                    run_id=run_id,
+                    input_sha256=input_hash,
+                    status=run_status,
+                    run_outcome=str(self.metrics.get("run_outcome") or ""),
+                    published=False,
+                )
             except OSError:
                 pass
             raise
         finally:
+            if self._event_journal is not None:
+                self._event_journal.close()
+                self._event_journal = None
             self.store.close()
+            self._close_transport()
 
     def _write_metrics(self, output_dir: Path) -> None:
         (output_dir / "master_linkedin_jobs_metrics.json").write_text(json.dumps(self.metrics, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -2314,7 +3497,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--retry-limit", type=int, default=2)
     parser.add_argument("--max-requests", type=int, default=0)
-    parser.add_argument("--detail-refresh-hours", type=float, default=24.0)
+    parser.add_argument("--detail-refresh-hours", type=float, default=DEFAULT_DURABLE_DETAIL_REFRESH_HOURS, help="Durable detail refresh window; default is 168 hours")
+    parser.add_argument("--volatile-refresh-hours", type=float, default=DEFAULT_VOLATILE_DETAIL_REFRESH_HOURS, help="Window after which applicant/freshness fields are marked stale")
     parser.add_argument("--company-id")
     parser.add_argument("--resume-run-id")
     parser.add_argument("--max-companies", type=int)
@@ -2339,6 +3523,7 @@ def config_from_args(args: argparse.Namespace) -> RunnerConfig:
         retry_limit=args.retry_limit,
         max_requests=args.max_requests or None,
         detail_refresh_hours=args.detail_refresh_hours,
+        volatile_refresh_hours=args.volatile_refresh_hours,
         company_id=args.company_id,
         resume_run_id=args.resume_run_id,
         fresh=args.fresh,

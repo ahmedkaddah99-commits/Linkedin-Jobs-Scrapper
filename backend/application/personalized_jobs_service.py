@@ -1038,50 +1038,125 @@ class PersonalizedJobsService:
             "improve_resume": {"free_explanations": [], "rewriting_available": False, "tailored_documents_available": False},
         }
 
-    def process_next_intelligence(self) -> dict[str, Any] | None:
+    def process_next_intelligence(
+        self,
+        *,
+        worker_role: str = "customer",
+        worker_id: str = "runr-worker",
+        lease_seconds: int = 300,
+        max_attempts: int = 3,
+    ) -> dict[str, Any] | None:
         """Worker-only entry point; GET paths never call this method."""
         if self.store is None:
             return None
-        queued = self.store.claim_next_intelligence()
+        if _text(worker_role).casefold() != "customer":
+            return None
+        self.store.recover_stale_intelligence(max_attempts=max_attempts)
+        queued = self.store.claim_next_intelligence(
+            worker_role=worker_role,
+            lease_owner=worker_id,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+        )
         if queued is None:
             return None
         cache_id = _text(queued.get("cache_id"))
-        row = self.store.get_published_job_row(_text(queued.get("canonical_job_id")))
-        if row is None:
-            self.store.complete_intelligence(cache_id, state="failed", payload={}, error="job_version_not_found")
-            return {"cache_id": cache_id, "state": "failed"}
+        lease_owner = _text(queued.get("lease_owner"))
+        lease_token = _text(queued.get("lease_token"))
+        attempt_count = int(queued.get("attempt_count") or queued.get("attempts") or 0) or None
+        canonical_job_id = _text(queued.get("canonical_job_id"))
+        user_id = _text(queued.get("user_id"))
         kind = _text(queued.get("intelligence_kind"))
+
+        def finish(*, state: str, payload: Mapping[str, Any], error: str = "") -> dict[str, Any]:
+            return self.store.complete_intelligence(
+                cache_id,
+                state=state,
+                payload=payload,
+                error=error,
+                lease_owner=lease_owner,
+                lease_token=lease_token,
+                attempt_count=attempt_count,
+            )
+
+        def response(completion: Mapping[str, Any], **fields: Any) -> dict[str, Any]:
+            return {
+                "cache_id": cache_id,
+                "state": _text(completion.get("state")) or "failed",
+                "queue_state": _text(completion.get("queue_state")),
+                "accepted": bool(completion.get("accepted")),
+                **fields,
+            }
+
+        row = self.store.get_published_job_row(canonical_job_id)
+        if row is None:
+            return response(finish(state="failed", payload={}, error="job_version_not_found"))
+
+        profile = {}
+        if kind in {"match", "tailored_document"}:
+            preferences = self.get_preferences(user_id)
+            profile = _profile_context(
+                user_id,
+                preferences,
+                getattr(self.repositories, "career_profile_store", None),
+            )
+        expected_key = build_intelligence_cache_key(
+            row,
+            intelligence_kind=kind,
+            user_id=user_id,
+            profile=profile,
+            evaluator_version=_text(queued.get("evaluator_version")),
+            description={"prompt_version": SUMMARY_PROMPT_VERSION}
+            if kind in {"match", "tailored_document"}
+            else None,
+        )
+        identity_fields = (
+            "user_id", "canonical_job_id", "job_version_id", "profile_version_id",
+            "cv_version_id", "evidence_version_id", "evaluator_version", "input_hash",
+            "intelligence_kind",
+        )
+        if any(_text(expected_key.get(field)) != _text(queued.get(field)) for field in identity_fields):
+            if kind == "description":
+                superseding_key = build_intelligence_cache_key(
+                    row,
+                    intelligence_kind="description",
+                    evaluator_version=SUMMARY_PROMPT_VERSION,
+                )
+                self.store.enqueue_intelligence(superseding_key)
+            elif kind in {"match", "tailored_document"}:
+                self.store.enqueue_intelligence(expected_key)
+            completion = finish(state="failed", payload={}, error="stale_input_version")
+            return response(completion, superseded=True, superseding_cache_id=_text(expected_key.get("cache_id")))
+
         try:
             if kind == "description":
                 generated = build_description_intelligence(row)
-                self.store.complete_intelligence(cache_id, state="available", payload=generated)
+                completion = finish(state="available", payload=generated)
                 # Keep the original Phase E description projection populated
                 # for existing readers; generation still happens only here,
                 # in the worker boundary.
-                self.store.save_description_intelligence(
-                    version_id=_text(row.get("current_version_id")),
-                    canonical_job_id=_text(row.get("canonical_job_id")),
-                    content_hash=_text(row.get("content_hash")),
-                    summary=generated.get("summary") or {},
-                    structured_description=generated.get("structured_description") or {},
-                    original_posting=generated.get("original_posting") or {},
-                    provider=_text(generated.get("provider")),
-                    model=_text(generated.get("model")),
-                    prompt_version=_text(generated.get("prompt_version")),
-                )
+                if completion.get("accepted"):
+                    self.store.save_description_intelligence(
+                        version_id=_text(row.get("current_version_id")),
+                        canonical_job_id=_text(row.get("canonical_job_id")),
+                        content_hash=_text(row.get("content_hash")),
+                        summary=generated.get("summary") or {},
+                        structured_description=generated.get("structured_description") or {},
+                        original_posting=generated.get("original_posting") or {},
+                        provider=_text(generated.get("provider")),
+                        model=_text(generated.get("model")),
+                        prompt_version=_text(generated.get("prompt_version")),
+                    )
+                return response(completion)
             elif kind == "match":
-                preferences = self.get_preferences(_text(queued.get("user_id")))
-                profile = _profile_context(_text(queued.get("user_id")), preferences, getattr(self.repositories, "career_profile_store", None))
                 description_key = build_intelligence_cache_key(row, intelligence_kind="description", evaluator_version=SUMMARY_PROMPT_VERSION)
                 description_cache = self.store.get_intelligence_cache(description_key)
                 description = (description_cache or {}).get("payload") if description_cache else None
                 if not isinstance(description, Mapping):
                     description = build_description_intelligence(row)
                 match = build_match_intelligence(row, description, profile)
-                self.store.complete_intelligence(cache_id, state="available", payload={"match_intelligence": match})
+                return response(finish(state="available", payload={"match_intelligence": match}))
             elif kind == "tailored_document":
-                preferences = self.get_preferences(_text(queued.get("user_id")))
-                profile = _profile_context(_text(queued.get("user_id")), preferences, getattr(self.repositories, "career_profile_store", None))
                 description_key = build_intelligence_cache_key(row, intelligence_kind="description", evaluator_version=SUMMARY_PROMPT_VERSION)
                 description_cache = self.store.get_intelligence_cache(description_key)
                 description = (description_cache or {}).get("payload") if description_cache else None
@@ -1089,12 +1164,11 @@ class PersonalizedJobsService:
                     description = build_description_intelligence(row)
                 match = build_match_intelligence(row, description, profile)
                 generated = build_tailored_document(row, profile, match)
-                self.store.complete_intelligence(cache_id, state="available", payload={"generation": generated})
+                return response(finish(state="available", payload={"generation": generated}))
             else:
-                self.store.complete_intelligence(cache_id, state="failed", payload={}, error="unknown_intelligence_kind")
+                return response(finish(state="failed", payload={}, error="unknown_intelligence_kind"))
         except Exception as exc:
-            self.store.complete_intelligence(cache_id, state="failed", payload={}, error=str(exc))
-        return {"cache_id": cache_id, "state": "available" if kind in {"description", "match", "tailored_document"} else "failed"}
+            return response(finish(state="failed", payload={}, error=str(exc)))
 
     @staticmethod
     def _apply_plan_entitlements(match: Mapping[str, Any], plan_id: str) -> dict[str, Any]:

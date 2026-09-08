@@ -1868,6 +1868,56 @@ def _apply_phase_e_async_intelligence_migration(connection: DatabaseConnection) 
     )
 
 
+def _apply_phase_e_intelligence_recovery_migration(connection: DatabaseConnection) -> None:
+    """Add leases and bounded-attempt ownership to async intelligence work."""
+
+    _ensure_table_column(connection, "job_intelligence_queue", "lease_owner", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "job_intelligence_queue", "lease_token", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "job_intelligence_queue", "lease_expires_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "job_intelligence_queue", "max_attempts", "INTEGER NOT NULL DEFAULT 3")
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_job_intelligence_queue_lease
+            ON job_intelligence_queue(state, lease_expires_at, attempts, cache_id);
+        """
+    )
+
+
+def _apply_customer_task_queue_migration(connection: DatabaseConnection) -> None:
+    """Create the durable customer-facing slow-task queue."""
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS customer_tasks (
+            task_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'queued',
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            result_json TEXT NOT NULL DEFAULT '{}',
+            error_code TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+            lease_owner TEXT NOT NULL DEFAULT '',
+            lease_token TEXT NOT NULL DEFAULT '',
+            lease_expires_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT NOT NULL DEFAULT '',
+            UNIQUE(user_id, idempotency_key),
+            CHECK (state IN ('queued', 'running', 'completed', 'failed'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_customer_tasks_claim
+            ON customer_tasks(state, lease_expires_at, created_at);
+        CREATE INDEX IF NOT EXISTS idx_customer_tasks_user_created
+            ON customer_tasks(user_id, created_at DESC);
+        """
+    )
+
+
 def _apply_phase_g_applicant_boundary_migration(connection: DatabaseConnection) -> None:
     """Add explicit apply/provenance columns to the append-only snapshot table."""
 
@@ -3098,6 +3148,27 @@ def _apply_acquisition_analytics_indexes_migration(connection: DatabaseConnectio
     )
 
 
+def _apply_phase_a_scheduler_fencing_migration(connection: DatabaseConnection) -> None:
+    """Add restart-safe scheduler identity, retry, and lease-fencing fields."""
+
+    _ensure_table_column(connection, "acquisition_cycles", "manifest_version", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "acquisition_cycles", "scope_key", "TEXT NOT NULL DEFAULT 'phase_a'")
+    _ensure_table_column(connection, "acquisition_cycles", "lease_token", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "acquisition_tasks", "lease_token", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "acquisition_tasks", "next_attempt_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "acquisition_tasks", "max_attempts", "INTEGER NOT NULL DEFAULT 3")
+    _ensure_table_column(connection, "acquisition_tasks", "last_error_code", "TEXT NOT NULL DEFAULT ''")
+    _ensure_table_column(connection, "acquisition_tasks", "last_error_message", "TEXT NOT NULL DEFAULT ''")
+    connection.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_acquisition_cycles_scope_status
+            ON acquisition_cycles(scope_key, status, lease_expires_at);
+        CREATE INDEX IF NOT EXISTS idx_acquisition_tasks_retry_claim
+            ON acquisition_tasks(cycle_id, status, next_attempt_at, created_at);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration.from_callable(
         "001_runtime_normalization",
@@ -3400,5 +3471,22 @@ MIGRATIONS = (
         "055_acquisition_analytics_indexes",
         "Add timestamp indexes for bounded, read-only acquisition analytics aggregates.",
         _apply_acquisition_analytics_indexes_migration,
+    ),
+    Migration.from_callable(
+        "056_phase_a_scheduler_fencing",
+        "Add manifest/scope identities, lease tokens, retry checkpoints, and scheduler claim indexes.",
+        _apply_phase_a_scheduler_fencing_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "057_phase_e_intelligence_recovery",
+        "Add bounded leases, claim fencing, and stale-work recovery to async intelligence.",
+        _apply_phase_e_intelligence_recovery_migration,
+        dependencies=(_table_columns, _ensure_table_column),
+    ),
+    Migration.from_callable(
+        "058_customer_task_queue",
+        "Create the user-scoped durable queue for slow customer operations.",
+        _apply_customer_task_queue_migration,
     ),
 )

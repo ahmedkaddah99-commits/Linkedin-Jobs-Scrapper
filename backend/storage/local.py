@@ -17,6 +17,8 @@ _OBJECT_DIGEST_HEX_LENGTH = 32
 
 
 class LocalObjectStorage:
+    supports_direct_download = False
+
     def __init__(
         self,
         root: str | Path,
@@ -144,3 +146,27 @@ class LocalObjectStorage:
             query["download"] = safe_filename
         encoded_key = quote(normalized_key, safe="/")
         return f"{self.download_base_url}/{encoded_key}?{urlencode(query)}"
+
+    def verify_signed_download(
+        self,
+        key: str,
+        *,
+        expires_at: str | int,
+        signature: str,
+        download_filename: str = "",
+    ) -> str:
+        """Validate a local signed URL and return its normalized object key."""
+
+        normalized_key, path = self._path_for(key)
+        try:
+            expiry = int(expires_at)
+        except (TypeError, ValueError) as exc:
+            raise ObjectNotFoundError("Signed object URL is invalid.") from exc
+        safe_filename = str(download_filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+        payload = f"{normalized_key}\n{expiry}\n{safe_filename}".encode("utf-8")
+        expected = hmac.new(self.signing_secret, payload, hashlib.sha256).hexdigest()
+        if expiry <= int(self._clock()) or not hmac.compare_digest(expected, str(signature or "")):
+            raise ObjectNotFoundError("Signed object URL is expired or invalid.")
+        if not self._existing_path_for(normalized_key, path).is_file():
+            raise ObjectNotFoundError(f"Object does not exist: {normalized_key}")
+        return normalized_key

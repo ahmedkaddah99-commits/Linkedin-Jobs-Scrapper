@@ -994,8 +994,13 @@ class BackendApplication:
         )
         return result
 
-    def process_next_admin_job_import(self, *, worker_id: str = "runr-worker") -> dict[str, Any] | None:
-        result = self._admin_job_import_service.process_next_import(worker_id=worker_id)
+    def process_next_admin_job_import(
+        self,
+        *,
+        worker_id: str = "runr-worker",
+        worker_role: str = "acquisition",
+    ) -> dict[str, Any] | None:
+        result = self._admin_job_import_service.process_next_import(worker_id=worker_id, worker_role=worker_role)
         if result:
             self._emit_acquisition_audit(
                 "import_processed",
@@ -1629,6 +1634,14 @@ class BackendApplication:
     def recover_acquisition_cycle(self) -> dict[str, Any] | None:
         """Admin-only recovery entry point; no user/workspace run is created."""
 
+        self._emit_acquisition_audit(
+            "manual_recovery_requested",
+            actor="administrator",
+            entity_type="acquisition_cycle",
+            entity_id="",
+            operation_id=utc_now_iso(),
+            payload={"reason": "admin_recovery"},
+        )
         return self._acquisition_scheduler.recover_cycle()
 
     def decide_acquisition_request_recovery(
@@ -1800,8 +1813,101 @@ class BackendApplication:
     def get_personalized_job_detail(self, user_id: str, posting_id: str, *, plan_id: str = DEFAULT_PLAN_ID) -> dict[str, Any] | None:
         return self._personalized_jobs_service.detail(user_id, posting_id, plan_id=plan_id)
 
-    def process_next_personalized_intelligence(self) -> dict[str, Any] | None:
-        return self._personalized_jobs_service.process_next_intelligence()
+    def process_next_personalized_intelligence(
+        self,
+        *,
+        worker_role: str = "customer",
+        worker_id: str = "runr-worker",
+        lease_seconds: int = 300,
+        max_attempts: int = 3,
+    ) -> dict[str, Any] | None:
+        return self._personalized_jobs_service.process_next_intelligence(
+            worker_role=worker_role,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+        )
+
+    def customer_tasks_async_enabled(self) -> bool:
+        from backend.application.customer_tasks import customer_tasks_async_enabled
+
+        return customer_tasks_async_enabled()
+
+    def enqueue_customer_task(
+        self,
+        *,
+        user_id: str,
+        task_type: str,
+        idempotency_key: str,
+        payload: Mapping[str, Any],
+        max_attempts: int = 3,
+    ) -> dict[str, Any]:
+        store = getattr(self.repositories, "personalized_jobs_store", None)
+        if store is None:
+            raise RuntimeError("customer_task_store_unavailable")
+        return store.enqueue_customer_task(
+            user_id=user_id,
+            task_type=task_type,
+            idempotency_key=idempotency_key,
+            payload=payload,
+            max_attempts=max_attempts,
+        )
+
+    def get_customer_task(self, task_id: str, *, user_id: str = "") -> dict[str, Any] | None:
+        store = getattr(self.repositories, "personalized_jobs_store", None)
+        if store is None:
+            return None
+        return store.get_customer_task(task_id, user_id=user_id)
+
+    def process_next_customer_task(
+        self,
+        *,
+        worker_role: str = "customer",
+        worker_id: str = "runr-worker",
+        lease_seconds: int = 300,
+        max_attempts: int = 3,
+    ) -> dict[str, Any] | None:
+        if str(worker_role or "").casefold() != "customer":
+            return None
+        store = getattr(self.repositories, "personalized_jobs_store", None)
+        if store is None:
+            return None
+        store.recover_stale_customer_tasks(max_attempts=max_attempts)
+        task = store.claim_next_customer_task(
+            worker_role=worker_role,
+            lease_owner=worker_id,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+        )
+        if task is None:
+            return None
+        from backend.application.customer_tasks import execute_customer_task
+
+        task_id = str(task.get("task_id") or "")
+        attempt_count = int(task.get("attempt_count") or 0) or None
+        try:
+            result = execute_customer_task(self, task)
+        except Exception as exc:
+            completed = store.complete_customer_task(
+                task_id,
+                state="failed",
+                error_code="customer_task_failed",
+                error_message=str(exc),
+                lease_owner=str(task.get("lease_owner") or worker_id),
+                lease_token=str(task.get("lease_token") or ""),
+                attempt_count=attempt_count,
+                retryable=True,
+            )
+            return {"task": completed, "result": completed.get("result") or {}}
+        completed = store.complete_customer_task(
+            task_id,
+            state="completed",
+            result=result,
+            lease_owner=str(task.get("lease_owner") or worker_id),
+            lease_token=str(task.get("lease_token") or ""),
+            attempt_count=attempt_count,
+        )
+        return {"task": completed, "result": completed.get("result") or {}}
 
     def enqueue_personalized_job_intelligence(self, user_id: str, posting_id: str) -> dict[str, Any]:
         """Worker/precompute entry point; never called by a Jobs or Company GET."""
@@ -3949,6 +4055,7 @@ class BackendApplication:
         host_name: str = "",
         process_id: int = 0,
         lease_seconds: int = 60,
+        metadata: Mapping[str, Any] | None = None,
     ) -> WorkerRecord:
         return self._run_lifecycle_service.renew_worker_lease(
             worker_id=worker_id,
@@ -3957,6 +4064,7 @@ class BackendApplication:
             host_name=host_name,
             process_id=process_id,
             lease_seconds=lease_seconds,
+            metadata=metadata,
         )
 
     def stop_worker(self, worker_id: str) -> WorkerRecord:
@@ -4015,6 +4123,8 @@ class BackendApplication:
         lease_seconds: int = 60,
         recover_stale_workers: bool = True,
         enqueue_scheduled_runs: bool = True,
+        worker_role: str = "customer",
+        worker_metadata: Mapping[str, Any] | None = None,
     ) -> RunRecord | None:
         return self._run_lifecycle_service.claim_next_queued_run(
             worker_id=worker_id,
@@ -4023,6 +4133,8 @@ class BackendApplication:
             lease_seconds=lease_seconds,
             recover_stale_workers=recover_stale_workers,
             enqueue_scheduled_runs=enqueue_scheduled_runs,
+            worker_role=worker_role,
+            worker_metadata=worker_metadata,
         )
 
     def execute_claimed_run(self, run_id: str, *, auto_retry_failed: bool = True) -> RunRecord:

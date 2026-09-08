@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from backend.domain.models import utc_now_iso
+from backend.domain.models import utc_now_iso, utc_plus_seconds
 from backend.repositories.sqlite_core import _SqliteStore
 
 
@@ -41,6 +41,37 @@ def _profile_status(profile: Mapping[str, Any]) -> str:
         if isinstance(item, Mapping) and str(item.get("state") or "") == "known" and item.get("value") not in (None, "", [])
     )
     return "present" if known == len(fields) and known else "incomplete" if known else "absent"
+
+
+def _customer_task_payload(row, *, include_lease: bool = True) -> dict[str, Any]:
+    payload = _decode(row["payload_json"], {})
+    result = _decode(row["result_json"], {})
+    response = {
+        "task_id": str(row["task_id"] or ""),
+        "user_id": str(row["user_id"] or ""),
+        "task_type": str(row["task_type"] or ""),
+        "idempotency_key": str(row["idempotency_key"] or ""),
+        "state": str(row["state"] or ""),
+        "payload": payload if isinstance(payload, dict) else {},
+        "result": result if isinstance(result, dict) else {},
+        "error_code": str(row["error_code"] or ""),
+        "error_message": str(row["error_message"] or ""),
+        "attempt_count": int(row["attempt_count"] or 0),
+        "max_attempts": int(row["max_attempts"] or 0),
+        "created_at": str(row["created_at"] or ""),
+        "updated_at": str(row["updated_at"] or ""),
+        "started_at": str(row["started_at"] or ""),
+        "completed_at": str(row["completed_at"] or ""),
+    }
+    if include_lease:
+        response.update(
+            {
+                "lease_owner": str(row["lease_owner"] or ""),
+                "lease_token": str(row["lease_token"] or ""),
+                "lease_expires_at": str(row["lease_expires_at"] or ""),
+            }
+        )
+    return response
 
 
 class SqlitePersonalizedJobsStore(_SqliteStore):
@@ -496,7 +527,32 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             result.append(item)
         return result
 
+    @staticmethod
+    def _intelligence_result(connection, cache_id: str, *, accepted: bool = False, reason: str = "") -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT c.*, q.state AS queue_state, q.attempts AS attempt_count,
+                   q.lease_owner, q.lease_token, q.lease_expires_at, q.max_attempts
+            FROM job_intelligence_cache c
+            JOIN job_intelligence_queue q ON q.cache_id = c.cache_id
+            WHERE c.cache_id=?
+            """,
+            (str(cache_id),),
+        ).fetchone()
+        if row is None:
+            return {"cache_id": str(cache_id), "state": "missing", "accepted": False, "reason": reason or "missing"}
+        result = _row_payload(row)
+        result["payload"] = _decode(row["payload_json"], {})
+        result["accepted"] = bool(accepted)
+        if reason:
+            result["reason"] = reason
+        return result
+
     def enqueue_intelligence(self, key: Mapping[str, Any]) -> dict[str, Any]:
+        required = ("cache_id", "canonical_job_id", "job_version_id", "evaluator_version", "input_hash", "intelligence_kind")
+        missing = [name for name in required if not str(key.get(name) or "").strip()]
+        if missing:
+            raise ValueError(f"intelligence_key_missing:{','.join(missing)}")
         now = utc_now_iso()
         columns = (
             "cache_id", "user_id", "canonical_job_id", "job_version_id", "profile_version_id",
@@ -523,59 +579,190 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             ).fetchone()
             if row is None:
                 raise RuntimeError("intelligence_cache_insert_failed")
-            connection.execute(
-                """
-                INSERT INTO job_intelligence_queue (cache_id, state, attempts, requested_at)
-                VALUES (?, 'queued', 0, ?)
-                ON CONFLICT(cache_id) DO UPDATE SET
-                    state = CASE WHEN job_intelligence_queue.state = 'completed' THEN job_intelligence_queue.state ELSE 'queued' END,
-                    requested_at = CASE WHEN job_intelligence_queue.state = 'completed' THEN job_intelligence_queue.requested_at ELSE excluded.requested_at END,
-                    last_error = CASE WHEN job_intelligence_queue.state = 'completed' THEN job_intelligence_queue.last_error ELSE '' END
-                """,
-                (str(key.get("cache_id") or ""), now),
-            )
+            cache_id = str(key.get("cache_id") or "")
+            existing_queue = connection.execute(
+                "SELECT state FROM job_intelligence_queue WHERE cache_id=?",
+                (cache_id,),
+            ).fetchone()
+            if existing_queue is None:
+                connection.execute(
+                    "INSERT INTO job_intelligence_queue (cache_id, state, attempts, requested_at, max_attempts) VALUES (?, 'queued', 0, ?, 3)",
+                    (cache_id, now),
+                )
+            elif str(existing_queue["state"] or "") == "processing":
+                pass
+            elif str(existing_queue["state"] or "") == "completed" and str(row["state"] or "") == "available":
+                pass
+            else:
+                connection.execute(
+                    """
+                    UPDATE job_intelligence_queue
+                    SET state='queued', requested_at=?, completed_at='', last_error='',
+                        lease_owner='', lease_token='', lease_expires_at=''
+                    WHERE cache_id=?
+                    """,
+                    (now, cache_id),
+                )
+                connection.execute(
+                    "UPDATE job_intelligence_cache SET state='pending', payload_json='{}', generated_at='', updated_at=? WHERE cache_id=?",
+                    (now, cache_id),
+                )
             return _row_payload(row)
 
         return self._run_transaction(write)
 
-    def claim_next_intelligence(self) -> dict[str, Any] | None:
+    def recover_stale_intelligence(
+        self,
+        *,
+        now: str = "",
+        max_attempts: int = 3,
+    ) -> list[dict[str, Any]]:
+        observed_at = str(now or utc_now_iso())
+        default_max_attempts = max(1, int(max_attempts))
+
+        def write(connection):
+            rows = connection.execute(
+                """
+                SELECT cache_id, attempts, max_attempts
+                FROM job_intelligence_queue
+                WHERE state='processing' AND lease_expires_at!='' AND lease_expires_at<=?
+                ORDER BY lease_expires_at, cache_id
+                """,
+                (observed_at,),
+            ).fetchall()
+            recovered: list[dict[str, Any]] = []
+            for row in rows:
+                cache_id = str(row["cache_id"])
+                attempts = int(row["attempts"] or 0)
+                attempt_limit = max(1, int(row["max_attempts"] or default_max_attempts))
+                if attempts >= attempt_limit:
+                    connection.execute(
+                        """
+                        UPDATE job_intelligence_queue
+                        SET state='completed', completed_at=?, last_error='lease_expired_max_attempts',
+                            lease_owner='', lease_token='', lease_expires_at=''
+                        WHERE cache_id=? AND state='processing' AND attempts=?
+                        """,
+                        (observed_at, cache_id, attempts),
+                    )
+                    connection.execute(
+                        "UPDATE job_intelligence_cache SET state='failed', updated_at=? WHERE cache_id=?",
+                        (observed_at, cache_id),
+                    )
+                    recovered.append({"cache_id": cache_id, "state": "failed", "attempt_count": attempts})
+                else:
+                    connection.execute(
+                        """
+                        UPDATE job_intelligence_queue
+                        SET state='queued', requested_at=?, last_error='lease_expired_requeued',
+                            lease_owner='', lease_token='', lease_expires_at='', completed_at=''
+                        WHERE cache_id=? AND state='processing' AND attempts=?
+                        """,
+                        (observed_at, cache_id, attempts),
+                    )
+                    connection.execute(
+                        "UPDATE job_intelligence_cache SET state='pending', updated_at=? WHERE cache_id=?",
+                        (observed_at, cache_id),
+                    )
+                    recovered.append({"cache_id": cache_id, "state": "queued", "attempt_count": attempts})
+            return recovered
+
+        return self._run_transaction(write)
+
+    def claim_next_intelligence(
+        self,
+        *,
+        worker_role: str = "customer",
+        lease_owner: str = "runr-worker",
+        lease_seconds: int = 300,
+        max_attempts: int = 3,
+    ) -> dict[str, Any] | None:
+        if str(worker_role or "").strip().casefold() != "customer":
+            return None
         now = utc_now_iso()
+        owner = str(lease_owner or "runr-worker").strip() or "runr-worker"
+        lease_token = f"intelligence_lease_{uuid4().hex}"
+        lease_expires_at = utc_plus_seconds(max(1, int(lease_seconds)))
+        attempt_limit = max(1, int(max_attempts))
 
         def write(connection):
             row = connection.execute(
                 """
-                SELECT c.* FROM job_intelligence_cache c
+                SELECT c.*, q.attempts AS current_attempts FROM job_intelligence_cache c
                 JOIN job_intelligence_queue q ON q.cache_id = c.cache_id
-                WHERE q.state = 'queued' AND c.state = 'pending'
+                WHERE q.state = 'queued' AND c.state = 'pending' AND q.attempts < q.max_attempts
                 ORDER BY q.requested_at, q.cache_id LIMIT 1
                 """
             ).fetchone()
             if row is None:
                 return None
             cache_id = str(row["cache_id"])
-            connection.execute(
-                "UPDATE job_intelligence_queue SET state='processing', attempts=attempts+1, claimed_at=? WHERE cache_id=? AND state='queued'",
-                (now, cache_id),
+            next_attempt = int(row["current_attempts"] or 0) + 1
+            updated = connection.execute(
+                "UPDATE job_intelligence_queue SET state='processing', attempts=?, claimed_at=? WHERE cache_id=? AND state='queued' AND attempts<?",
+                (next_attempt, now, cache_id, attempt_limit),
             )
+            if updated.rowcount != 1:
+                return None
+            updated = connection.execute(
+                """
+                UPDATE job_intelligence_queue
+                SET lease_owner=?, lease_token=?, lease_expires_at=?, max_attempts=?
+                WHERE cache_id=? AND state='processing' AND attempts=?
+                """,
+                (owner, lease_token, lease_expires_at, attempt_limit, cache_id, next_attempt),
+            )
+            if updated.rowcount != 1:
+                return None
             connection.execute("UPDATE job_intelligence_cache SET state='processing', updated_at=? WHERE cache_id=?", (now, cache_id))
-            result = _row_payload(row)
-            result["payload"] = _decode(row["payload_json"], {})
-            return result
+            return self._intelligence_result(connection, cache_id, accepted=True)
 
         return self._run_transaction(write)
 
-    def complete_intelligence(self, cache_id: str, *, state: str, payload: Mapping[str, Any], error: str = "") -> None:
+    def complete_intelligence(
+        self,
+        cache_id: str,
+        *,
+        state: str,
+        payload: Mapping[str, Any],
+        error: str = "",
+        lease_owner: str = "",
+        lease_token: str = "",
+        attempt_count: int | None = None,
+    ) -> dict[str, Any]:
         now = utc_now_iso()
-        generated_at = now if state == "available" else ""
-        with self._connect() as connection:
+        normalized_state = str(state or "").strip().casefold()
+        if normalized_state not in {"available", "failed"}:
+            raise ValueError("intelligence_completion_state_must_be_available_or_failed")
+
+        def write(connection):
+            if not str(lease_owner or "").strip() or not str(lease_token or "").strip() or attempt_count is None:
+                return self._intelligence_result(connection, str(cache_id), reason="missing_claim_fence")
+            updated = connection.execute(
+                """
+                UPDATE job_intelligence_queue
+                SET state='completed', completed_at=?, last_error=?, lease_owner='', lease_token='', lease_expires_at=''
+                WHERE cache_id=? AND state='processing' AND lease_owner=? AND lease_token=? AND attempts=?
+                """,
+            (
+                now,
+                str(error or ""),
+                str(cache_id),
+                str(lease_owner),
+                str(lease_token),
+                max(1, int(attempt_count)),
+            ),
+            )
+            if updated.rowcount != 1:
+                return self._intelligence_result(connection, str(cache_id), reason="stale_claim")
+            generated_at = now if normalized_state == "available" else ""
             connection.execute(
                 "UPDATE job_intelligence_cache SET state=?, payload_json=?, updated_at=?, generated_at=? WHERE cache_id=?",
-                (str(state), _json(dict(payload)), now, generated_at, str(cache_id)),
+                (normalized_state, _json(dict(payload)), now, generated_at, str(cache_id)),
             )
-            connection.execute(
-                "UPDATE job_intelligence_queue SET state=?, completed_at=?, last_error=? WHERE cache_id=?",
-                ("completed" if state in {"available", "failed"} else "queued", now if state in {"available", "failed"} else "", str(error or ""), str(cache_id)),
-            )
+            return self._intelligence_result(connection, str(cache_id), accepted=True)
+
+        return self._run_transaction(write)
 
     def list_cached_descriptions(self, version_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
         ids = tuple(dict.fromkeys(str(item) for item in version_ids if str(item).strip()))
@@ -1272,6 +1459,217 @@ class SqlitePersonalizedJobsStore(_SqliteStore):
             WHERE pj.publication_id = ?
               AND c.entity_kind = 'employer'
         """
+
+    def enqueue_customer_task(
+        self,
+        *,
+        user_id: str,
+        task_type: str,
+        idempotency_key: str,
+        payload: Mapping[str, Any],
+        max_attempts: int = 3,
+    ) -> dict[str, Any]:
+        user_id = str(user_id or "").strip()
+        task_type = str(task_type or "").strip()
+        idempotency_key = str(idempotency_key or "").strip()
+        if not user_id or not task_type or not idempotency_key:
+            raise ValueError("user_id, task_type, and idempotency_key are required")
+        now = utc_now_iso()
+        bounded_attempts = max(1, min(5, int(max_attempts or 3)))
+
+        def write(connection):
+            existing = connection.execute(
+                "SELECT * FROM customer_tasks WHERE user_id = ? AND idempotency_key = ?",
+                (user_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                return _customer_task_payload(existing)
+            task_id = f"customer_task_{uuid4().hex}"
+            connection.execute(
+                """
+                INSERT INTO customer_tasks (
+                    task_id, user_id, task_type, idempotency_key, state, payload_json,
+                    attempt_count, max_attempts, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'queued', ?, 0, ?, ?, ?)
+                """,
+                (task_id, user_id, task_type, idempotency_key, _json(dict(payload)), bounded_attempts, now, now),
+            )
+            return _customer_task_payload(
+                connection.execute("SELECT * FROM customer_tasks WHERE task_id = ?", (task_id,)).fetchone()
+            )
+
+        return self._run_transaction(write)
+
+    def get_customer_task(self, task_id: str, *, user_id: str = "") -> dict[str, Any] | None:
+        predicates = ["task_id = ?"]
+        params: list[Any] = [str(task_id or "").strip()]
+        if str(user_id or "").strip():
+            predicates.append("user_id = ?")
+            params.append(str(user_id).strip())
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT * FROM customer_tasks WHERE {' AND '.join(predicates)}",
+                tuple(params),
+            ).fetchone()
+        return _customer_task_payload(row) if row is not None else None
+
+    def recover_stale_customer_tasks(self, *, now: str = "", max_attempts: int = 3) -> list[dict[str, Any]]:
+        now = str(now or utc_now_iso())
+        bounded_attempts = max(1, min(5, int(max_attempts or 3)))
+
+        def recover(connection):
+            stale_rows = connection.execute(
+                """
+                SELECT task_id FROM customer_tasks
+                WHERE state = 'running' AND lease_expires_at != '' AND lease_expires_at <= ?
+                ORDER BY created_at, task_id
+                """,
+                (now,),
+            ).fetchall()
+            for row in stale_rows:
+                current = connection.execute(
+                    "SELECT attempt_count, max_attempts FROM customer_tasks WHERE task_id = ?",
+                    (str(row["task_id"]),),
+                ).fetchone()
+                if current is None:
+                    continue
+                terminal = int(current["attempt_count"] or 0) >= min(
+                    int(current["max_attempts"] or bounded_attempts), bounded_attempts
+                )
+                if terminal:
+                    connection.execute(
+                        """
+                        UPDATE customer_tasks SET state = 'failed', error_code = 'lease_expired',
+                               error_message = 'Customer task lease expired after the retry limit.',
+                               lease_owner = '', lease_token = '', lease_expires_at = '',
+                               completed_at = ?, updated_at = ?
+                        WHERE task_id = ? AND state = 'running'
+                        """,
+                        (now, now, str(row["task_id"])),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE customer_tasks SET state = 'queued', error_code = 'lease_expired',
+                               error_message = 'Customer task lease expired and was requeued.',
+                               lease_owner = '', lease_token = '', lease_expires_at = '', updated_at = ?
+                        WHERE task_id = ? AND state = 'running'
+                        """,
+                        (now, str(row["task_id"])),
+                    )
+            return [
+                _customer_task_payload(item)
+                for item in connection.execute(
+                    "SELECT * FROM customer_tasks WHERE task_id IN ({}) ORDER BY created_at, task_id".format(
+                        ",".join("?" for _ in stale_rows)
+                    ),
+                    tuple(str(row["task_id"]) for row in stale_rows),
+                ).fetchall()
+            ] if stale_rows else []
+
+        return self._run_transaction(recover)
+
+    def claim_next_customer_task(
+        self,
+        *,
+        worker_role: str = "customer",
+        lease_owner: str = "runr-worker",
+        lease_seconds: int = 300,
+        max_attempts: int = 3,
+    ) -> dict[str, Any] | None:
+        if str(worker_role or "").casefold() != "customer":
+            return None
+        now = utc_now_iso()
+        lease_expires_at = utc_plus_seconds(max(1, int(lease_seconds or 300)))
+        bounded_attempts = max(1, min(5, int(max_attempts or 3)))
+
+        def claim(connection):
+            row = connection.execute(
+                """
+                SELECT * FROM customer_tasks
+                WHERE state = 'queued' AND attempt_count < MIN(max_attempts, ?)
+                ORDER BY created_at, task_id LIMIT 1
+                """,
+                (bounded_attempts,),
+            ).fetchone()
+            if row is None:
+                return None
+            task_id = str(row["task_id"])
+            lease_token = uuid4().hex
+            connection.execute(
+                """
+                UPDATE customer_tasks SET state = 'running', attempt_count = attempt_count + 1,
+                    lease_owner = ?, lease_token = ?, lease_expires_at = ?,
+                    started_at = CASE WHEN started_at = '' THEN ? ELSE started_at END,
+                    updated_at = ?
+                WHERE task_id = ? AND state = 'queued'
+                """,
+                (str(lease_owner or "runr-worker"), lease_token, lease_expires_at, now, now, task_id),
+            )
+            claimed = connection.execute("SELECT * FROM customer_tasks WHERE task_id = ?", (task_id,)).fetchone()
+            return _customer_task_payload(claimed)
+
+        return self._run_transaction(claim)
+
+    def complete_customer_task(
+        self,
+        task_id: str,
+        *,
+        state: str,
+        result: Mapping[str, Any] | None = None,
+        error_code: str = "",
+        error_message: str = "",
+        lease_owner: str = "",
+        lease_token: str = "",
+        attempt_count: int | None = None,
+        retryable: bool = False,
+    ) -> dict[str, Any]:
+        now = utc_now_iso()
+        requested_state = "completed" if str(state or "").casefold() == "completed" else "failed"
+        result_payload = dict(result or {})
+
+        def finish(connection):
+            current = connection.execute("SELECT * FROM customer_tasks WHERE task_id = ?", (str(task_id),)).fetchone()
+            if current is None:
+                raise KeyError(f"Customer task '{task_id}' was not found.")
+            predicates = ["task_id = ?", "state = 'running'"]
+            params: list[Any] = [str(task_id)]
+            if lease_owner:
+                predicates.append("lease_owner = ?")
+                params.append(str(lease_owner))
+            if lease_token:
+                predicates.append("lease_token = ?")
+                params.append(str(lease_token))
+            if attempt_count is not None:
+                predicates.append("attempt_count = ?")
+                params.append(int(attempt_count))
+            next_state = requested_state
+            if requested_state == "failed" and retryable and int(current["attempt_count"] or 0) < int(current["max_attempts"] or 1):
+                next_state = "queued"
+            cursor = connection.execute(
+                f"""
+                UPDATE customer_tasks SET state = ?, result_json = ?, error_code = ?, error_message = ?,
+                    lease_owner = '', lease_token = '', lease_expires_at = '',
+                    completed_at = CASE WHEN ? = 'completed' OR ? = 'failed' THEN ? ELSE completed_at END,
+                    updated_at = ?
+                WHERE {' AND '.join(predicates)}
+                """,
+                (
+                    next_state,
+                    _json(result_payload),
+                    str(error_code or ""),
+                    str(error_message or ""),
+                    next_state,
+                    next_state,
+                    now,
+                    now,
+                    *params,
+                ),
+            )
+            updated = connection.execute("SELECT * FROM customer_tasks WHERE task_id = ?", (str(task_id),)).fetchone()
+            return _customer_task_payload(updated)
+
+        return self._run_transaction(finish)
 
 
 __all__ = ["SqlitePersonalizedJobsStore"]

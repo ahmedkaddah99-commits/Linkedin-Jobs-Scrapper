@@ -85,6 +85,32 @@ test("allows a fully qualified request URL to override the configured base", () 
   );
 });
 
+test("does not attach the API bearer token to a signed object URL", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return new Response("pdf", {
+      status: 200,
+      headers: { "Content-Type": "application/pdf" },
+    });
+  };
+
+  try {
+    const blob = await apiRequest(
+      "https://api.example.com/v1",
+      async () => "test-token",
+      "https://downloads.example.com/private/cv.pdf?signature=test",
+      { responseType: "blob" },
+    );
+    assert.equal(blob.size, 3);
+    assert.equal(calls[0].url, "https://downloads.example.com/private/cv.pdf?signature=test");
+    assert.equal(calls[0].options.headers.Authorization, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("redacts request diagnostics paths", () => {
   assert.equal(
     diagnosticPathShape("/runs/run_224f21ab5bc14f92/jobs/by-id/4431179712?debug=1"),

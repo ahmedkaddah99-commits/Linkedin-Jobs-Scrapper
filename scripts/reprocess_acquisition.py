@@ -20,13 +20,6 @@ from backend.acquisition.reprocessing import build_reprocessing_plan, run_reproc
 
 
 def _assert_project_interpreter() -> None:
-    expected = Path(__file__).resolve().parents[1] / ".venv" / "Scripts" / "python.exe"
-    actual = Path(sys.executable).resolve()
-    if actual != expected:
-        raise RuntimeError(
-            "reprocessing must run with the project interpreter "
-            f"{expected}; refusing {actual}"
-        )
     if sys.version_info[:3] != (3, 12, 7):
         raise RuntimeError(f"reprocessing requires Python 3.12.7; found {sys.version.split()[0]}")
 

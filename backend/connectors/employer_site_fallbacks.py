@@ -6,7 +6,8 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping
-from typing import Any
+from contextlib import nullcontext
+from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
@@ -42,10 +43,24 @@ GENERIC_LINK_TEXT = {
     "details",
     "read more",
 }
+CHALLENGE_MARKERS = (
+    "captcha",
+    "cf-chl-",
+    "just a moment",
+    "access denied",
+    "bot verification",
+    "enable javascript and cookies",
+    "security check",
+)
 
 
 def _text(value: Any) -> str:
     return " ".join(str(value or "").split())
+
+
+def _challenge_marker(value: str) -> str:
+    lowered = str(value or "").casefold()
+    return next((marker for marker in CHALLENGE_MARKERS if marker in lowered), "")
 
 
 def _lookup(mapping: Mapping[str, Any], names: Iterable[str]) -> Any:
@@ -295,6 +310,7 @@ def _browser_failure(target_url: str, status: str, error: str) -> dict[str, Any]
         "transport": "browser",
         "requests_made": 0,
         "pages_fetched": 0,
+        "stop_reason": error,
         "error": error,
     }
 
@@ -306,6 +322,8 @@ def fetch_browser_snapshot(
     timeout_seconds: int = 25,
     max_requests: int = 10,
     proxy_url: str = "",
+    request_guard: Callable[[str, str], Any] | None = None,
+    browser_process_guard: Callable[[str], Any] | None = None,
 ) -> dict[str, Any]:
     """Fetch one rendered page and same-origin JSON/XHR responses safely."""
 
@@ -316,6 +334,7 @@ def fetch_browser_snapshot(
     jobs: list[dict[str, Any]] = []
     seen: set[str] = set()
     response_count = 0
+    browser_request_count = 0
 
     def add_jobs(items: Iterable[Mapping[str, Any]]) -> None:
         for job in items:
@@ -324,59 +343,99 @@ def fetch_browser_snapshot(
                 seen.add(identity)
                 jobs.append(dict(job))
 
+    process_guard = browser_process_guard(target_url) if browser_process_guard else nullcontext()
     try:
-        with sync_playwright() as playwright:
-            launch_options: dict[str, Any] = {"headless": True}
-            if proxy_url:
-                launch_options["proxy"] = {"server": proxy_url}
-            browser = playwright.chromium.launch(**launch_options)
-            try:
-                context = browser.new_context()
-                page = context.new_page()
+        with process_guard:
+            with sync_playwright() as playwright:
+                launch_options: dict[str, Any] = {"headless": True}
+                if proxy_url:
+                    launch_options["proxy"] = {"server": proxy_url}
+                browser = playwright.chromium.launch(**launch_options)
+                try:
+                    context = browser.new_context()
+                    page = context.new_page()
 
-                def handle_response(response: Any) -> None:
-                    nonlocal response_count
-                    if response_count >= response_limit:
-                        return
-                    response_url = _text(getattr(response, "url", ""))
-                    if not response_url or not _same_origin_or_subdomain(response_url, target_url):
-                        return
-                    response_type = _text(getattr(getattr(response, "request", None), "resource_type", ""))
-                    headers = getattr(response, "headers", {}) or {}
-                    content_type = (
-                        _text(headers.get("content-type", "")).casefold() if isinstance(headers, Mapping) else ""
-                    )
-                    if response_type not in {"xhr", "fetch"} and "json" not in content_type:
-                        return
-                    response_count += 1
-                    try:
-                        body_reader = getattr(response, "body", None)
-                        if callable(body_reader):
-                            body = body_reader()
-                            if len(body) > MAX_BROWSER_RESPONSE_BYTES:
+                    def handle_route(route: Any) -> None:
+                        nonlocal browser_request_count
+                        request = getattr(route, "request", lambda: None)()
+                        request_url = _text(getattr(request, "url", ""))
+                        request_type = _text(getattr(request, "resource_type", ""))
+                        if request_url.startswith(("http://", "https://")):
+                            if browser_request_count >= response_limit:
+                                route.abort()
                                 return
-                            payload = json.loads(body.decode("utf-8", errors="replace"))
-                        else:
-                            payload = response.json()
-                    except (AttributeError, TypeError, ValueError, OSError):
-                        return
-                    add_jobs(
-                        extract_payload_jobs(
-                            payload,
-                            response_url,
-                            format_name="xhr",
-                            source_endpoint=response_url,
-                        )
-                    )
+                            browser_request_count += 1
+                            if request_guard:
+                                with request_guard(
+                                    request_url,
+                                    "browser_navigation" if request_type == "document" else "browser_request",
+                                ):
+                                    route.continue_()
+                            else:
+                                route.continue_()
+                            return
+                        route.continue_()
 
-                page.on("response", handle_response)
-                page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(min(2_000, max(250, timeout_ms // 4)))
-                rendered_html = page.content()
-                add_jobs(extract_embedded_jobs(rendered_html, target_url))
-                add_jobs(_job_links_from_rendered_html(rendered_html, target_url, max_job_links=max_job_links))
-            finally:
-                browser.close()
+                    def handle_response(response: Any) -> None:
+                        nonlocal response_count
+                        if response_count >= response_limit:
+                            return
+                        response_url = _text(getattr(response, "url", ""))
+                        if not response_url or not _same_origin_or_subdomain(response_url, target_url):
+                            return
+                        response_type = _text(getattr(getattr(response, "request", None), "resource_type", ""))
+                        headers = getattr(response, "headers", {}) or {}
+                        content_type = (
+                            _text(headers.get("content-type", "")).casefold()
+                            if isinstance(headers, Mapping)
+                            else ""
+                        )
+                        if response_type not in {"xhr", "fetch"} and "json" not in content_type:
+                            return
+                        response_count += 1
+                        try:
+                            body_reader = getattr(response, "body", None)
+                            if callable(body_reader):
+                                body = body_reader()
+                                if len(body) > MAX_BROWSER_RESPONSE_BYTES:
+                                    return
+                                payload = json.loads(body.decode("utf-8", errors="replace"))
+                            else:
+                                payload = response.json()
+                        except (AttributeError, TypeError, ValueError, OSError):
+                            return
+                        add_jobs(
+                            extract_payload_jobs(
+                                payload,
+                                response_url,
+                                format_name="xhr",
+                                source_endpoint=response_url,
+                            )
+                        )
+
+                    # Older/offline Playwright doubles may expose response
+                    # events without route interception. Real Playwright
+                    # pages support ``route``; keep the response-only path
+                    # usable for those bounded fixtures.
+                    route = getattr(page, "route", None)
+                    if callable(route):
+                        route("**/*", handle_route)
+                    page.on("response", handle_response)
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    page.wait_for_timeout(min(2_000, max(250, timeout_ms // 4)))
+                    rendered_html = page.content()
+                    challenge = _challenge_marker(rendered_html)
+                    if challenge:
+                        return {
+                            **_browser_failure(target_url, "blocked", challenge),
+                            "rendered_html": rendered_html[:MAX_EMBEDDED_BYTES],
+                            "requests_made": browser_request_count,
+                            "pages_fetched": 1,
+                        }
+                    add_jobs(extract_embedded_jobs(rendered_html, target_url))
+                    add_jobs(_job_links_from_rendered_html(rendered_html, target_url, max_job_links=max_job_links))
+                finally:
+                    browser.close()
     except PlaywrightTimeoutError:
         return _browser_failure(target_url, "browser_failed", "timeout")
     except Exception as exc:  # pragma: no cover - provider/browser-specific failures
@@ -391,7 +450,7 @@ def fetch_browser_snapshot(
         "request_url": target_url,
         "resolved_url": target_url,
         "transport": "browser",
-        "requests_made": response_count + 1,
+        "requests_made": browser_request_count,
         "pages_fetched": 1,
         "rendered_html": rendered_html[:MAX_EMBEDDED_BYTES],
         "raw_content_hash": hashlib.sha256(str(rendered_html).encode("utf-8")).hexdigest(),

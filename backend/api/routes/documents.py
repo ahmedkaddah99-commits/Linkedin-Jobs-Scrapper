@@ -5,6 +5,11 @@ from http import HTTPStatus
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
+from backend.application.customer_tasks import (
+    CUSTOMER_TASK_BULK_EXPORT,
+    customer_task_idempotency_key,
+    public_customer_task,
+)
 from backend.domain.models import TOKEN_SCOPE_ARTIFACTS_READ, TOKEN_SCOPE_ARTIFACTS_WRITE
 from backend.domain.phase0_contracts import CAREER_ASSET_KINDS, CAREER_ASSET_PURPOSES
 from backend.profiles.cv_editor import (
@@ -194,18 +199,33 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                             document,
                             export_anyway=_parse_bool_param(query, "export_anyway"),
                         )
-                        file_path, download_name = _resolve_candidate_asset_download(
+                        object_key, file_path, download_name, content_type, object_size = _candidate_asset_download_descriptor(
                             application,
                             user,
                             segments[2],
                         )
-                        self._send_file(file_path, download_name=download_name)
+                        self._send_portable_download(
+                            application,
+                            object_key=object_key,
+                            file_path=file_path,
+                            download_name=download_name,
+                            content_type=content_type,
+                            object_size=object_size,
+                        )
                         return
 
     if segments[:2] == ["documents", "bulk-exports"] and len(segments) == 4 and segments[3] == "download":
                         user, _ = self._require_scope(TOKEN_SCOPE_ARTIFACTS_READ)
                         bundle_path = _candidate_asset_bundle_dir(user) / f"{segments[2]}.zip"
                         self._send_file(str(bundle_path), download_name=bundle_path.name)
+                        return
+
+    if segments[:2] == ["documents", "bulk-exports"] and len(segments) == 4 and segments[3] == "status":
+                        user, _ = self._require_scope(TOKEN_SCOPE_ARTIFACTS_READ)
+                        task = application.get_customer_task(segments[2], user_id=user.user_id)
+                        if task is None or str(task.get("task_type") or "") != CUSTOMER_TASK_BULK_EXPORT:
+                            raise KeyError(f"Customer bulk export task '{segments[2]}' was not found.")
+                        self._send_json({"task": public_customer_task(task)}, status=HTTPStatus.OK)
                         return
 
     return False
@@ -481,10 +501,39 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
 
     if segments == ["documents", "bulk-export"]:
                         user, _ = self._require_scope(TOKEN_SCOPE_ARTIFACTS_READ)
+                        document_ids = [str(item) for item in payload.get("document_ids") or [] if str(item).strip()]
+                        if not document_ids:
+                            raise ValueError("At least one document is required for bulk export.")
+                        if application.customer_tasks_async_enabled():
+                            for document_id in document_ids:
+                                document = _find_document_entry(application, user, document_id)
+                                _assert_document_export_allowed(
+                                    document,
+                                    export_anyway=bool(payload.get("export_anyway")),
+                                )
+                            task_payload = {
+                                "document_ids": document_ids,
+                                "label": str(payload.get("label") or ""),
+                                "export_anyway": bool(payload.get("export_anyway")),
+                            }
+                            requested_key = str(payload.get("idempotency_key") or payload.get("idempotencyKey") or "").strip()
+                            idempotency_key = requested_key or customer_task_idempotency_key(
+                                user_id=user.user_id,
+                                task_type=CUSTOMER_TASK_BULK_EXPORT,
+                                payload=task_payload,
+                            )
+                            task = application.enqueue_customer_task(
+                                user_id=user.user_id,
+                                task_type=CUSTOMER_TASK_BULK_EXPORT,
+                                idempotency_key=idempotency_key,
+                                payload=task_payload,
+                            )
+                            self._send_json({"task": public_customer_task(task)}, status=HTTPStatus.ACCEPTED)
+                            return
                         bundle = _create_bulk_export_bundle(
                             application,
                             user,
-                            [str(item) for item in payload.get("document_ids") or [] if str(item).strip()],
+                            document_ids,
                             label=str(payload.get("label") or ""),
                             export_anyway=bool(payload.get("export_anyway")),
                         )

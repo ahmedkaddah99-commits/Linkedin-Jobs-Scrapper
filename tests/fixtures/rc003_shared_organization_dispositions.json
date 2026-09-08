@@ -1,0 +1,20 @@
+{
+  "100": {
+    "master_ids": ["master-alpha", "master-alpha-legacy"],
+    "disposition": "same_entity_alias",
+    "reviewer": "identity-review-fixture",
+    "evidence": ["same reviewed official website", "rename retained as alias candidate"]
+  },
+  "101": {
+    "master_ids": ["master-beta", "master-beta-subsidiary"],
+    "disposition": "distinct_related_employers",
+    "reviewer": "identity-review-fixture",
+    "evidence": ["subsidiary website and name reviewed"]
+  },
+  "102": {
+    "master_ids": ["master-unresolved-a", "master-unresolved-b"],
+    "disposition": "unresolved_conflict",
+    "reviewer": "identity-review-fixture",
+    "evidence": ["ownership evidence insufficient"]
+  }
+}

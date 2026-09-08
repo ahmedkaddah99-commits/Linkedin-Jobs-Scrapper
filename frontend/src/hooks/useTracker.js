@@ -27,6 +27,7 @@ export function useTracker() {
   const [updating, setUpdating] = useState("");
   const [integrationBusy, setIntegrationBusy] = useState("");
   const [lastSyncResult, setLastSyncResult] = useState(null);
+  const [syncTask, setSyncTask] = useState(null);
 
   const {
     data: tracker,
@@ -198,6 +199,27 @@ export function useTracker() {
         method: "POST",
         body: { trigger: "manual" },
       });
+      if (result.task) {
+        let task = result.task;
+        setSyncTask(task);
+        if (result.integration) setIntegrationData(result.integration);
+        for (let attempt = 0; attempt < 8 && !["completed", "failed"].includes(task.state); attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, Math.min(8000, 750 * 2 ** attempt)));
+          const status = await request(task.status_url);
+          task = status.task || task;
+          setSyncTask(task);
+        }
+        if (task.state === "failed") {
+          throw new Error(task.error_message || "Email sync failed.");
+        }
+        if (task.state === "completed") {
+          setLastSyncResult(task.result?.result || null);
+          if (task.result?.integration) setIntegrationData(task.result.integration);
+        }
+        const tracker = await request("/tracker?view=board", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS });
+        setTrackerData(tracker);
+        return { ...result, task };
+      }
       const tracker = await request("/tracker?view=board", { timeoutMs: TRACKER_REQUEST_TIMEOUT_MS });
       setLastSyncResult(result.result || null);
       setTrackerData(tracker);
@@ -275,5 +297,6 @@ export function useTracker() {
     approveEmailDetections,
     dismissEmailDetections,
     deleteEmailIntegration,
+    syncTask,
   };
 }

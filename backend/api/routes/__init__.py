@@ -27,6 +27,7 @@ from backend.api.routes.evidence import register_routes as register_evidence_rou
 from backend.api.routes.evidence_library import register_routes as register_evidence_library_routes
 from backend.api.routes.evidence_recommendation import register_routes as register_evidence_recommendation_routes
 from backend.api.routes.source_text_review import register_routes as register_source_text_review_routes
+from backend.api.routes.storage import register_routes as register_storage_routes
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.system import register_routes as register_system_routes
@@ -61,6 +62,7 @@ def build_route_registry() -> RouteRegistry:
     register_evidence_recommendation_routes(registry)
 
     register_source_text_review_routes(registry)
+    register_storage_routes(registry)
     register_career_memory_routes(registry)
     register_evidence_items_routes(registry)
     register_evidence_questions_routes(registry)

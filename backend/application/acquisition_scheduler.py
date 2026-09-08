@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -219,6 +221,19 @@ class PhaseAAcquisitionScheduler:
             target["disabled_reason"] = "" if target_enabled else disabled_reason
         return manifest
 
+    @staticmethod
+    def _manifest_version(manifest: list[Mapping[str, Any]]) -> str:
+        """Hash the effective server-owned source manifest for schedule identity."""
+
+        encoded = json.dumps(
+            [dict(item) for item in manifest],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()[:16]
+
     def _emit(self, event_name: str, **payload: Any) -> None:
         if not callable(self.event_emitter):
             return
@@ -270,8 +285,12 @@ class PhaseAAcquisitionScheduler:
             current = current.replace(tzinfo=timezone.utc)
         current = current.astimezone(timezone.utc)
         scheduled_at = current.isoformat()
-        window_key = f"phase_a:{current.strftime('%Y-%m-%d')}"
         manifest = self._configured_manifest()
+        manifest_version = self._manifest_version(manifest)
+        scope_key = "phase_a:global"
+        window_key = (
+            f"phase_a:{current.strftime('%Y-%m-%d')}:manifest:{manifest_version}:scope:{scope_key}"
+        )
         store.ensure_targets(manifest)
         allow_recheck = _as_bool(self._config("acquisition.phase_a.allow_quarantined_recheck", False))
         targets = []
@@ -294,6 +313,8 @@ class PhaseAAcquisitionScheduler:
             scheduled_at=scheduled_at,
             lease_seconds=self.lease_seconds,
             force=force,
+            manifest_version=manifest_version,
+            scope_key=scope_key,
         )
         if cycle is None:
             self._emit("acquisition_scheduler_noop", reason="window_already_claimed", window_key=window_key)
@@ -313,17 +334,63 @@ class PhaseAAcquisitionScheduler:
         failures = 0
         recovery_required = False
         recovery_reason = ""
+        retry_scheduled = False
+        paused = False
         valid_target_ids: list[str] = []
         while True:
+            if not store.heartbeat_cycle(
+                cycle_id,
+                lease_owner=self.lease_owner,
+                lease_token=str(cycle.get("lease_token") or ""),
+                lease_seconds=self.lease_seconds,
+            ):
+                self._emit("acquisition_cycle_lease_lost", cycle_id=cycle_id)
+                return store.get_cycle_report(cycle_id)
             task = store.claim_next_task(
                 cycle_id=cycle_id,
                 lease_owner=self.lease_owner,
                 lease_seconds=self.lease_seconds,
+                cycle_lease_token=str(cycle.get("lease_token") or ""),
+                max_attempts=3,
             )
             if task is None:
                 break
             target_id = str(task["target_id"])
             target = store.get_target(target_id)
+            task_fence = {
+                "lease_owner": self.lease_owner,
+                "lease_token": str(task.get("lease_token") or ""),
+                "attempt_count": int(task.get("attempt_count") or 0),
+            }
+            if not store.heartbeat_task(
+                str(task["task_id"]),
+                lease_owner=task_fence["lease_owner"],
+                lease_token=task_fence["lease_token"],
+                attempt_count=task_fence["attempt_count"],
+                lease_seconds=self.lease_seconds,
+            ):
+                self._emit("acquisition_task_lease_lost", cycle_id=cycle_id, target_id=target_id)
+                return store.get_cycle_report(cycle_id)
+            if _as_bool(self._phase_a_config("kill_switch")):
+                store.release_task(
+                    str(task["task_id"]),
+                    **task_fence,
+                    delay_seconds=0,
+                    error_code="kill_switch",
+                    error_message="Global acquisition kill switch enabled before dispatch.",
+                )
+                paused = True
+                break
+            if not _as_bool(self._phase_a_config(f"target.{target_id}.enabled")):
+                store.release_task(
+                    str(task["task_id"]),
+                    **task_fence,
+                    delay_seconds=60,
+                    error_code="source_kill_switch",
+                    error_message="Source acquisition switch disabled before dispatch.",
+                )
+                paused = True
+                continue
             if completed >= cycle_request_ceiling:
                 failures += 1
                 scope = _admin_scope_for_target(target)
@@ -344,6 +411,7 @@ class PhaseAAcquisitionScheduler:
                     },
                     error_code="cycle_request_ceiling",
                     error_message="Global Phase A cycle request ceiling reached.",
+                    **task_fence,
                 )
                 self._emit("acquisition_budget_exhausted", cycle_id=cycle_id, target_id=target_id)
                 continue
@@ -370,6 +438,7 @@ class PhaseAAcquisitionScheduler:
                     result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                     error_code="recovery_required",
                     error_message=recovery_reason,
+                    **task_fence,
                 )
                 self._emit("acquisition_recovery_required", cycle_id=cycle_id, target_id=target_id)
                 break
@@ -383,6 +452,7 @@ class PhaseAAcquisitionScheduler:
                     result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                     error_code="uncertain_external_outcome",
                     error_message=recovery_reason,
+                    **task_fence,
                 )
                 self._emit("acquisition_recovery_required", cycle_id=cycle_id, target_id=target_id)
                 break
@@ -394,18 +464,21 @@ class PhaseAAcquisitionScheduler:
                     result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                     error_code="dispatch_blocked",
                     error_message=str(exc)[:500],
+                    **task_fence,
                 )
                 self._emit("acquisition_source_blocked", cycle_id=cycle_id, target_id=target_id)
             except Exception as exc:
-                failures += 1
                 LOGGER.exception("phase_a_target_failed", extra={"target_id": target_id, "cycle_id": cycle_id})
-                store.complete_task(
+                retry = store.retry_task(
                     str(task["task_id"]),
-                    status="failed",
-                    result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
+                    **task_fence,
                     error_code=type(exc).__name__.casefold(),
                     error_message=str(exc)[:500],
                 )
+                if str(retry.get("status") or "") == "retry":
+                    retry_scheduled = True
+                else:
+                    failures += 1
                 self._emit(
                     "acquisition_source_failed", cycle_id=cycle_id, target_id=target_id, reason=type(exc).__name__
                 )
@@ -416,6 +489,8 @@ class PhaseAAcquisitionScheduler:
                 status="recovery_required",
                 error_code="recovery_required",
                 error_message=recovery_reason or "Phase A cycle requires explicit recovery.",
+                lease_owner=self.lease_owner,
+                lease_token=str(cycle.get("lease_token") or ""),
             )
             self._emit(
                 "acquisition_cycle_recovery_required",
@@ -426,7 +501,7 @@ class PhaseAAcquisitionScheduler:
 
         publication_id = ""
         publication_enabled = _as_bool(self._phase_a_config("publication_enabled"))
-        if publication_enabled and valid_target_ids:
+        if publication_enabled and valid_target_ids and not paused and not retry_scheduled:
             try:
                 self._failpoint("during_publication_creation")
                 publication_id = store.publish_valid_snapshot(
@@ -435,6 +510,8 @@ class PhaseAAcquisitionScheduler:
                     origin="scheduled",
                     created_by="system",
                     scheduled_run_id=cycle_id,
+                    lease_owner=self.lease_owner,
+                    lease_token=str(cycle.get("lease_token") or ""),
                 )
             except BaseException as exc:
                 store.complete_cycle(
@@ -449,8 +526,22 @@ class PhaseAAcquisitionScheduler:
                     reason="publication_recovery_required",
                 )
                 raise
-        cycle_status = "degraded" if failures else "completed"
-        store.complete_cycle(cycle_id, status=cycle_status, publication_id=publication_id)
+        cycle_status = "partial" if paused or retry_scheduled else ("degraded" if failures else "completed")
+        store.complete_cycle(
+            cycle_id,
+            status=cycle_status,
+            publication_id=publication_id if cycle_status == "completed" else "",
+            error_code="kill_switch" if paused else ("retry_scheduled" if retry_scheduled else ""),
+            error_message=(
+                "Acquisition paused by kill switch; pending source tasks remain durable."
+                if paused
+                else "One or more transient source failures were scheduled for bounded retry."
+                if retry_scheduled
+                else ""
+            ),
+            lease_owner=self.lease_owner,
+            lease_token=str(cycle.get("lease_token") or ""),
+        )
         self._emit(
             "acquisition_cycle_completed",
             cycle_id=cycle_id,
@@ -468,6 +559,7 @@ class PhaseAAcquisitionScheduler:
     def recover_cycle(self) -> dict[str, Any] | None:
         """Protected admin recovery entry point; kill switch still wins."""
 
+        self._emit("acquisition_manual_recovery_requested", reason="admin_recovery")
         return self.run_due_cycle(force=True)
 
     def run_controlled_import(self, import_payload: Mapping[str, Any], *, worker_id: str = "runr-worker") -> dict[str, Any]:
@@ -525,6 +617,8 @@ class PhaseAAcquisitionScheduler:
             # reclaimed by another writer at the five-minute boundary.
             lease_seconds=max(self.lease_seconds, 1800),
             force=False,
+            manifest_version="admin_import_v1",
+            scope_key=f"admin_import:{import_id}",
         )
         if cycle is None:
             existing = store.list_cycles(limit=100, offset=0)
@@ -549,7 +643,12 @@ class PhaseAAcquisitionScheduler:
         request_ceiling = min(global_request_ceiling, requested_request_ceiling)
         requests_used = 0
         for _ in targets:
-            task = store.claim_next_task(cycle_id=cycle_id, lease_owner=worker_id, lease_seconds=max(self.lease_seconds, 1800))
+            task = store.claim_next_task(
+                cycle_id=cycle_id,
+                lease_owner=worker_id,
+                lease_seconds=max(self.lease_seconds, 1800),
+                cycle_lease_token=str(cycle.get("lease_token") or ""),
+            )
             if task is None:
                 break
             target = store.get_target(str(task["target_id"]))
@@ -576,6 +675,9 @@ class PhaseAAcquisitionScheduler:
                     },
                     error_code=ceiling_reason,
                     error_message="Admin collection request ceiling reached before dispatch.",
+                    lease_owner=worker_id,
+                    lease_token=str(task.get("lease_token") or ""),
+                    attempt_count=int(task.get("attempt_count") or 0),
                 )
                 failures += 1
                 continue
@@ -592,6 +694,9 @@ class PhaseAAcquisitionScheduler:
                     result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                     error_code="recovery_required",
                     error_message=str(exc)[:500],
+                    lease_owner=worker_id,
+                    lease_token=str(task.get("lease_token") or ""),
+                    attempt_count=int(task.get("attempt_count") or 0),
                 )
                 break
             except AcquisitionUncertainOutcomeError as exc:
@@ -602,6 +707,9 @@ class PhaseAAcquisitionScheduler:
                     result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                     error_code="uncertain_external_outcome",
                     error_message=str(exc)[:500],
+                    lease_owner=worker_id,
+                    lease_token=str(task.get("lease_token") or ""),
+                    attempt_count=int(task.get("attempt_count") or 0),
                 )
                 break
             except AcquisitionDispatchBlockedError as exc:
@@ -612,6 +720,9 @@ class PhaseAAcquisitionScheduler:
                     result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                     error_code="dispatch_blocked",
                     error_message=str(exc)[:500],
+                    lease_owner=worker_id,
+                    lease_token=str(task.get("lease_token") or ""),
+                    attempt_count=int(task.get("attempt_count") or 0),
                 )
             except Exception as exc:
                 failures += 1
@@ -621,9 +732,17 @@ class PhaseAAcquisitionScheduler:
                     result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                     error_code=type(exc).__name__.casefold(),
                     error_message=str(exc)[:500],
+                    lease_owner=worker_id,
+                    lease_token=str(task.get("lease_token") or ""),
+                    attempt_count=int(task.get("attempt_count") or 0),
                 )
         status = "degraded" if failures else "completed"
-        store.complete_cycle(cycle_id, status=status)
+        store.complete_cycle(
+            cycle_id,
+            status=status,
+            lease_owner=worker_id,
+            lease_token=str(cycle.get("lease_token") or ""),
+        )
         return store.get_cycle_report(cycle_id)
 
     def validate_target(self, target_id: str, *, validation_key: str = "") -> dict[str, Any]:
@@ -650,26 +769,48 @@ class PhaseAAcquisitionScheduler:
         target["enabled"] = True
         target["publication_enabled"] = False
         target["disabled_reason"] = ""
-        store.ensure_targets([target])
-        target = store.get_target(normalized_target_id)
         now = datetime.now(timezone.utc)
         run_key = str(validation_key or f"{now.isoformat()}:{normalized_target_id}")
+        target["config"] = {
+            **dict(target.get("config") or {}),
+            "phase_b_validation_id": run_key,
+        }
+        store.ensure_targets([target])
+        target = store.get_target(normalized_target_id)
         cycle = store.claim_due_cycle(
             window_key=f"phase_b:{normalized_target_id}:{run_key}",
             lease_owner=self.lease_owner,
             scheduled_at=now.isoformat(),
             lease_seconds=self.lease_seconds,
             force=False,
+            manifest_version="phase_b_v1",
+            scope_key=f"phase_b:{normalized_target_id}",
         )
         if cycle is None:
             return {"status": "already_claimed", "target_id": normalized_target_id}
         cycle_id = str(cycle["cycle_id"])
         store.set_cycle_forecast(cycle_id, requests=1, credits=0)
         store.ensure_cycle_tasks(cycle_id, [target])
-        task = store.claim_next_task(cycle_id=cycle_id, lease_owner=self.lease_owner, lease_seconds=self.lease_seconds)
+        task = store.claim_next_task(
+            cycle_id=cycle_id,
+            lease_owner=self.lease_owner,
+            lease_seconds=self.lease_seconds,
+            cycle_lease_token=str(cycle.get("lease_token") or ""),
+        )
         if task is None:
-            store.complete_cycle(cycle_id, status="failed", error_code="task_claim_failed")
+            store.complete_cycle(
+                cycle_id,
+                status="failed",
+                error_code="task_claim_failed",
+                lease_owner=self.lease_owner,
+                lease_token=str(cycle.get("lease_token") or ""),
+            )
             return store.get_cycle_report(cycle_id)
+        task_fence = {
+            "lease_owner": self.lease_owner,
+            "lease_token": str(task.get("lease_token") or ""),
+            "attempt_count": int(task.get("attempt_count") or 0),
+        }
         try:
             result = self._execute_target(cycle_id=cycle_id, task=task, target=target)
             publication_id = ""
@@ -682,7 +823,13 @@ class PhaseAAcquisitionScheduler:
                     scheduled_run_id=cycle_id,
                 )
             cycle_status = "degraded" if str(result.get("status") or "") in {"failed", "blocked"} else "completed"
-            store.complete_cycle(cycle_id, status=cycle_status, publication_id=publication_id)
+            store.complete_cycle(
+                cycle_id,
+                status=cycle_status,
+                publication_id=publication_id,
+                lease_owner=self.lease_owner,
+                lease_token=str(cycle.get("lease_token") or ""),
+            )
         except AcquisitionRecoveryRequiredError as exc:
             store.complete_task(
                 str(task["task_id"]),
@@ -690,8 +837,9 @@ class PhaseAAcquisitionScheduler:
                 result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                 error_code="recovery_required",
                 error_message=str(exc)[:500],
+                **task_fence,
             )
-            store.complete_cycle(cycle_id, status="recovery_required", error_code="recovery_required", error_message=str(exc)[:500])
+            store.complete_cycle(cycle_id, status="recovery_required", error_code="recovery_required", error_message=str(exc)[:500], lease_owner=self.lease_owner, lease_token=str(cycle.get("lease_token") or ""))
         except AcquisitionUncertainOutcomeError as exc:
             store.complete_task(
                 str(task["task_id"]),
@@ -699,8 +847,9 @@ class PhaseAAcquisitionScheduler:
                 result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                 error_code="uncertain_external_outcome",
                 error_message=str(exc)[:500],
+                **task_fence,
             )
-            store.complete_cycle(cycle_id, status="recovery_required", error_code="uncertain_external_outcome", error_message=str(exc)[:500])
+            store.complete_cycle(cycle_id, status="recovery_required", error_code="uncertain_external_outcome", error_message=str(exc)[:500], lease_owner=self.lease_owner, lease_token=str(cycle.get("lease_token") or ""))
         except AcquisitionDispatchBlockedError as exc:
             store.complete_task(
                 str(task["task_id"]),
@@ -708,8 +857,9 @@ class PhaseAAcquisitionScheduler:
                 result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                 error_code="dispatch_blocked",
                 error_message=str(exc)[:500],
+                **task_fence,
             )
-            store.complete_cycle(cycle_id, status="blocked", error_code="dispatch_blocked", error_message=str(exc)[:500])
+            store.complete_cycle(cycle_id, status="blocked", error_code="dispatch_blocked", error_message=str(exc)[:500], lease_owner=self.lease_owner, lease_token=str(cycle.get("lease_token") or ""))
         except Exception as exc:
             LOGGER.exception("phase_b_target_failed", extra={"target_id": normalized_target_id, "cycle_id": cycle_id})
             store.complete_task(
@@ -718,14 +868,30 @@ class PhaseAAcquisitionScheduler:
                 result={"complete_snapshot": False, "valid_snapshot": False, "credible_evidence": False},
                 error_code=type(exc).__name__.casefold(),
                 error_message=str(exc)[:500],
+                **task_fence,
             )
-            store.complete_cycle(cycle_id, status="failed", error_code=type(exc).__name__.casefold(), error_message=str(exc)[:500])
+            store.complete_cycle(cycle_id, status="failed", error_code=type(exc).__name__.casefold(), error_message=str(exc)[:500], lease_owner=self.lease_owner, lease_token=str(cycle.get("lease_token") or ""))
         return store.get_cycle_report(cycle_id)
 
     def _execute_target(self, *, cycle_id: str, task: Mapping[str, Any], target: Mapping[str, Any]) -> dict[str, Any]:
         store = self.repositories.acquisition_store
         target_id = str(target["target_id"])
         task_id = str(task["task_id"])
+        task_lease_owner = str(task.get("lease_owner") or self.lease_owner)
+        task_lease_token = str(task.get("lease_token") or "")
+        task_attempt_count = int(task.get("attempt_count") or 0)
+        if task_lease_token:
+            store.assert_task_lease(
+                task_id,
+                lease_owner=task_lease_owner,
+                lease_token=task_lease_token,
+                attempt_count=task_attempt_count,
+            )
+        task_fence = {
+            "task_lease_owner": task_lease_owner,
+            "task_lease_token": task_lease_token,
+            "task_attempt_count": task_attempt_count,
+        }
         scope = _admin_scope_for_target(target)
         scope.setdefault("retrieval_mode", "bounded")
         scope.setdefault("max_pages", DEFAULT_MAX_PAGES)
@@ -784,6 +950,7 @@ class PhaseAAcquisitionScheduler:
             credits_estimated=0,
             request_limit=_as_int(target.get("max_direct_requests"), 3),
             credit_limit=min(credit_limits) if credit_limits else 0,
+            **task_fence,
         )
         request_id = str(request["request_id"])
         state_before = str(target.get("maturity_state") or "unproven")
@@ -791,9 +958,14 @@ class PhaseAAcquisitionScheduler:
         request_persisted = False
         try:
             self._failpoint("after_durable_dispatch")
-            request_mode = str(target.get("request_mode") or "direct").casefold()
             target_config = dict(target.get("config") or {})
             admin_import = bool(str(target_config.get("admin_import_id") or "").strip())
+            phase_b_validation = bool(str(target_config.get("phase_b_validation_id") or "").strip())
+            if not admin_import and _as_bool(self._phase_a_config("kill_switch")):
+                raise AcquisitionDispatchBlockedError("global_kill_switch")
+            if not admin_import and not phase_b_validation and not _as_bool(self._phase_a_config(f"target.{target_id}.enabled")):
+                raise AcquisitionDispatchBlockedError("source_kill_switch")
+            request_mode = str(target.get("request_mode") or "direct").casefold()
             if request_mode != "direct" and not (
                 admin_import
                 and (
@@ -820,7 +992,7 @@ class PhaseAAcquisitionScheduler:
                     requester_injected=self.requester is not None and self._requester_is_fixture(),
                     allowed_hosts=allowed_hosts,
                 )
-            store.mark_request_dispatching(request_id)
+            store.mark_request_dispatching(request_id, **task_fence)
             self._failpoint("before_dispatch")
             dispatch_started = True
             started = time.perf_counter()
@@ -1027,14 +1199,25 @@ class PhaseAAcquisitionScheduler:
                 },
                 error_code="" if status == "completed" else status,
                 error_message=str(fetched.get("error") or "")[:500],
+                **task_fence,
             )
             request_persisted = True
+            if task_lease_token:
+                store.assert_task_lease(
+                    task_id,
+                    lease_owner=task_lease_owner,
+                    lease_token=task_lease_token,
+                    attempt_count=task_attempt_count,
+                )
             store.record_job_rejections(
                 request_id=request_id,
                 cycle_id=cycle_id,
                 task_id=task_id,
                 target_id=target_id,
                 rejections=rejections,
+                lease_owner=task_lease_owner,
+                lease_token=task_lease_token,
+                attempt_count=task_attempt_count,
             )
             self._failpoint("during_observation_persistence")
             counts = store.ingest_snapshot(
@@ -1045,6 +1228,9 @@ class PhaseAAcquisitionScheduler:
                 complete_snapshot=complete_snapshot,
                 valid_snapshot=valid_snapshot,
                 closure_safe=closure_safe,
+                lease_owner=task_lease_owner,
+                lease_token=task_lease_token,
+                attempt_count=task_attempt_count,
             )
             counts["rejected"] = int(counts.get("rejected") or 0) + len(rejections)
             reconciliation.update(
@@ -1099,6 +1285,9 @@ class PhaseAAcquisitionScheduler:
                 reason=str(fetched.get("evidence") or status),
                 error_code="" if status == "completed" else status,
                 error_message=str(fetched.get("error") or "")[:500],
+                lease_owner=task_lease_owner,
+                lease_token=task_lease_token,
+                task_attempt_count=task_attempt_count,
             )
             result = {
                 **counts,
@@ -1120,6 +1309,9 @@ class PhaseAAcquisitionScheduler:
                 result=result,
                 error_code="" if status == "completed" else status,
                 error_message=str(fetched.get("error") or "")[:500],
+                lease_owner=task_lease_owner,
+                lease_token=task_lease_token,
+                attempt_count=task_attempt_count,
             )
             return result
         except BaseException as exc:
@@ -1141,6 +1333,7 @@ class PhaseAAcquisitionScheduler:
                         "External acquisition may have occurred before persistence completed; "
                         f"exception_type={uncertainty_type}."
                     ),
+                    **task_fence,
                 )
                 raise AcquisitionUncertainOutcomeError(
                     "External acquisition outcome is uncertain; explicit recovery is required."
@@ -1151,6 +1344,7 @@ class PhaseAAcquisitionScheduler:
                 recovery_state="not_dispatched",
                 error_code="dispatch_blocked",
                 error_message=str(exc)[:500],
+                **task_fence,
             )
             raise AcquisitionDispatchBlockedError("Phase A dispatch was rejected before the external call.") from exc
 

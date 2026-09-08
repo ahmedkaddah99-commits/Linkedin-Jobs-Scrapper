@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -16,9 +17,10 @@ from scripts.master_employer_jobs_catalog import (
     classify_germany,
     collect_company,
     load_employer_companies,
+    main as employer_main,
     run_collection,
 )
-from scripts.build_master_jobs_catalog import build_master_rows, write_master_jobs_csv
+from scripts.build_master_jobs_catalog import build_master_rows, main as combined_main, write_master_jobs_csv
 
 
 def _company() -> EmployerCompany:
@@ -27,6 +29,16 @@ def _company() -> EmployerCompany:
         company_name="Acme GmbH",
         website_url="https://acme.example",
         linkedin_company_url="https://www.linkedin.com/company/acme",
+        source_row_number=2,
+    )
+
+
+def _company_with_id(company_id: str, name: str) -> EmployerCompany:
+    return EmployerCompany(
+        canonical_company_id=company_id,
+        company_name=name,
+        website_url=f"https://{company_id}.example",
+        linkedin_company_url=f"https://www.linkedin.com/company/{company_id}",
         source_row_number=2,
     )
 
@@ -365,6 +377,8 @@ def test_metrics_redact_proxy_configuration_values(tmp_path: Path, monkeypatch: 
 def test_master_projection_script_runs_directly_from_repository_root(tmp_path: Path) -> None:
     linkedin = tmp_path / "linkedin.csv"
     linkedin.write_text("linkedin_job_id,job_title\n42,Senior Analyst\n", encoding="utf-8")
+    employer = tmp_path / "employer.csv"
+    employer.write_text("source_job_id,job_title\nemployer-1,Employer\n", encoding="utf-8")
     output = tmp_path / "master_jobs.csv"
     script = Path(__file__).resolve().parents[1] / "scripts" / "build_master_jobs_catalog.py"
 
@@ -375,9 +389,13 @@ def test_master_projection_script_runs_directly_from_repository_root(tmp_path: P
             "--linkedin-csv",
             str(linkedin),
             "--employer-csv",
-            str(tmp_path / "missing.csv"),
+            str(employer),
             "--output",
             str(output),
+            "--linkedin-generation-id",
+            "linkedin-generation-1",
+            "--employer-generation-id",
+            "employer-generation-1",
         ],
         cwd=script.parents[1],
         capture_output=True,
@@ -720,7 +738,7 @@ def test_collect_company_recovers_career_target_from_rendered_homepage(monkeypat
     assert result.jobs[0]["discovery_method"] == "browser_rendered_discovery"
 
 
-def test_run_collection_flushes_master_projection_after_each_company(
+def test_run_collection_saves_two_company_checkpoints_and_exports_once_after_collection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "companies.csv"
@@ -731,13 +749,10 @@ def test_run_collection_flushes_master_projection_after_each_company(
         encoding="utf-8",
     )
     output_dir = tmp_path / "out"
-    first_flush_seen: list[int] = []
+    events: list[tuple[str, str]] = []
 
     def fake_collect(company: EmployerCompany, _fetcher, _limits: CollectorLimits) -> EmployerCollectionResult:
-        master_path = output_dir / "master_jobs.csv"
-        if company.canonical_company_id == "canonical-two":
-            with master_path.open("r", encoding="utf-8-sig", newline="") as handle:
-                first_flush_seen.append(sum(1 for _ in csv.DictReader(handle)))
+        events.append(("collect", company.canonical_company_id))
         return EmployerCollectionResult(
             company=company,
             jobs=[
@@ -756,9 +771,482 @@ def test_run_collection_flushes_master_projection_after_each_company(
 
     monkeypatch.setattr("scripts.master_employer_jobs_catalog.requests_fetcher", lambda *_: lambda _url: None)
     monkeypatch.setattr("scripts.master_employer_jobs_catalog.collect_company", fake_collect)
+    import scripts.master_employer_jobs_catalog as catalog
 
-    run_collection(input_csv=source, output_dir=output_dir, limit=2, resume=False)
+    real_export = catalog.export_catalogs_from_state
 
-    assert first_flush_seen == [1]
-    with (output_dir / "master_jobs.csv").open("r", encoding="utf-8-sig", newline="") as handle:
+    def tracked_export(*args: object, **kwargs: object) -> dict[str, object]:
+        events.append(("export", "final"))
+        return real_export(*args, **kwargs)
+
+    monkeypatch.setattr(catalog, "export_catalogs_from_state", tracked_export)
+    monkeypatch.setattr(catalog, "_flush_master_projection", lambda *_: pytest.fail("legacy flush must not run"))
+
+    metrics = run_collection(input_csv=source, output_dir=output_dir, limit=2, resume=False)
+
+    assert events == [("collect", "canonical-one"), ("collect", "canonical-two"), ("export", "final")]
+    assert metrics["companies_processed"] == 2
+    assert metrics["companies_skipped_resume"] == 0
+    assert metrics["persisted_jobs"] == 2
+    assert metrics["exported_jobs"] == 2
+    assert metrics["final_export_completed"] is True
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        assert state.job_count() == 2
+        assert [row["canonical_company_id"] for row in state.jobs()] == ["canonical-one", "canonical-two"]
+    finally:
+        state.close()
+    with (output_dir / "master_employer_jobs.csv").open("r", encoding="utf-8-sig", newline="") as handle:
         assert sum(1 for _ in csv.DictReader(handle)) == 2
+    assert not (output_dir / "master_jobs.csv").exists()
+
+
+def test_progress_job_counts_do_not_load_all_state_jobs_after_each_company(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "companies.csv"
+    source.write_text(
+        "canonical_CompanyID,company_name,website_url\n"
+        "canonical-one,One,https://one.example\n"
+        "canonical-two,Two,https://two.example\n",
+        encoding="utf-8",
+    )
+    def fake_collect(company: EmployerCompany, _fetcher, _limits: CollectorLimits) -> EmployerCollectionResult:
+        return EmployerCollectionResult(
+            company=company,
+            jobs=[
+                {
+                    "canonical_company_id": company.canonical_company_id,
+                    "source_job_id": company.canonical_company_id,
+                    "extraction_method": "json_ld",
+                    "source_provider": "generic_employer_site",
+                }
+            ],
+            status="completed",
+        )
+
+    monkeypatch.setattr("scripts.master_employer_jobs_catalog.requests_fetcher", lambda *_: lambda _url: None)
+    monkeypatch.setattr("scripts.master_employer_jobs_catalog.collect_company", fake_collect)
+    monkeypatch.setattr(EmployerState, "jobs", lambda _self: pytest.fail("jobs() must not power progress metrics"))
+
+    metrics = run_collection(input_csv=source, output_dir=tmp_path / "out", limit=2, resume=False)
+
+    assert metrics["persisted_jobs"] == 2
+
+
+def test_resume_metrics_separate_skipped_companies_from_processed_companies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "companies.csv"
+    source.write_text(
+        "canonical_CompanyID,company_name,website_url\n"
+        "canonical-one,One,https://one.example\n"
+        "canonical-two,Two,https://two.example\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "out"
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        state.save(EmployerCollectionResult(company=_company_with_id("canonical-one", "One"), status="completed"))
+    finally:
+        state.close()
+
+    seen: list[str] = []
+
+    def fake_collect(company: EmployerCompany, _fetcher, _limits: CollectorLimits) -> EmployerCollectionResult:
+        seen.append(company.canonical_company_id)
+        return EmployerCollectionResult(company=company, status="no_jobs")
+
+    monkeypatch.setattr("scripts.master_employer_jobs_catalog.requests_fetcher", lambda *_: lambda _url: None)
+    monkeypatch.setattr("scripts.master_employer_jobs_catalog.collect_company", fake_collect)
+
+    metrics = run_collection(input_csv=source, output_dir=output_dir, limit=2, resume=True)
+
+    assert seen == ["canonical-two"]
+    assert metrics["companies_processed"] == 1
+    assert metrics["companies_skipped_resume"] == 1
+
+
+def test_interrupted_collection_keeps_checkpoints_and_existing_snapshots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "companies.csv"
+    source.write_text(
+        "canonical_CompanyID,company_name,website_url\n"
+        "canonical-one,One,https://one.example\n"
+        "canonical-two,Two,https://two.example\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    snapshots = {
+        "master_employer_jobs.csv": "old employer snapshot\n",
+        "master_employer_jobs.jsonl": "old employer jsonl\n",
+        "master_employer_jobs_metrics.json": "{\"old\": true}\n",
+        "master_jobs.csv": "old combined snapshot\n",
+    }
+    for name, content in snapshots.items():
+        (output_dir / name).write_text(content, encoding="utf-8")
+
+    calls = 0
+
+    def interrupted_collect(company: EmployerCompany, _fetcher, _limits: CollectorLimits) -> EmployerCollectionResult:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt()
+        return EmployerCollectionResult(
+            company=company,
+            jobs=[
+                {
+                    "canonical_company_id": company.canonical_company_id,
+                    "source_job_id": "one",
+                    "extraction_method": "json_ld",
+                    "source_provider": "generic_employer_site",
+                }
+            ],
+            status="completed",
+        )
+
+    monkeypatch.setattr("scripts.master_employer_jobs_catalog.requests_fetcher", lambda *_: lambda _url: None)
+    monkeypatch.setattr("scripts.master_employer_jobs_catalog.collect_company", interrupted_collect)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_collection(input_csv=source, output_dir=output_dir, limit=2, resume=False)
+
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        assert state.company_status(_company_with_id("canonical-one", "One")) == "completed"
+    finally:
+        state.close()
+    assert {name: (output_dir / name).read_text(encoding="utf-8") for name in snapshots} == snapshots
+    assert not list(output_dir.glob(".*.tmp"))
+
+
+def test_export_only_uses_authoritative_state_without_network_or_legacy_employer_csv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "out"
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    state_job = {"canonical_company_id": "state-company", "source_type": "employer_site", "source_job_id": "state-job"}
+    try:
+        state.save(EmployerCollectionResult(company=_company_with_id("state-company", "State"), jobs=[state_job], status="completed"))
+    finally:
+        state.close()
+    (output_dir / "master_employer_jobs.csv").write_text(
+        "canonical_company_id,source_job_id\nlegacy-company,legacy-job\n", encoding="utf-8"
+    )
+    (output_dir / "master_jobs.csv").write_text("old combined\n", encoding="utf-8")
+    import scripts.master_employer_jobs_catalog as catalog
+
+    for name in ("_build_network_clients", "load_project_dotenv", "collect_company"):
+        monkeypatch.setattr(catalog, name, lambda *args, _name=name, **kwargs: pytest.fail(f"{_name} must not run"))
+
+    metrics = employer_main(["--export-only", "--output-dir", str(output_dir)])
+
+    assert metrics == 0
+    with (output_dir / "master_employer_jobs.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["source_job_id"] for row in rows] == ["state-job"]
+    assert (output_dir / "master_jobs.csv").read_text(encoding="utf-8") == "old combined\n"
+
+
+def test_export_only_returns_clear_error_for_missing_or_invalid_state(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    assert employer_main(["--export-only", "--output-dir", str(output_dir)]) == 2
+    assert "state database not found" in capsys.readouterr().err
+
+    (output_dir / "master_employer_jobs_state.db").write_text("not sqlite", encoding="utf-8")
+    assert employer_main(["--export-only", "--output-dir", str(output_dir)]) == 2
+    assert "export-only failed" in capsys.readouterr().err
+
+
+def test_export_only_succeeds_with_zero_job_state_and_missing_linkedin_source(
+    tmp_path: Path,
+) -> None:
+    output_dir = tmp_path / "out"
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    state.close()
+
+    assert employer_main(["--export-only", "--output-dir", str(output_dir)]) == 0
+    with (output_dir / "master_employer_jobs.csv").open(encoding="utf-8-sig", newline="") as handle:
+        assert list(csv.DictReader(handle)) == []
+    metrics = json.loads((output_dir / "master_employer_jobs_metrics.json").read_text(encoding="utf-8"))
+    assert metrics["generation_id"].startswith("employer-")
+    assert metrics["exported_jobs"] == 0
+    assert not (output_dir / "master_jobs.csv").exists()
+
+
+def test_export_only_keeps_all_snapshots_when_temporary_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "out"
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        state.save(
+            EmployerCollectionResult(
+                company=_company(),
+                jobs=[
+                    {
+                        "canonical_company_id": "canonical-acme",
+                        "source_type": "employer_site",
+                        "source_job_id": "state-job",
+                        "extraction_method": "json_ld",
+                        "source_provider": "generic_employer_site",
+                    }
+                ],
+                status="completed",
+            )
+        )
+    finally:
+        state.close()
+    (output_dir / "master_linkedin_jobs.csv").write_text(
+        "linkedin_job_id,job_title,source_type\nlinkedin-job,LinkedIn Job,linkedin\n", encoding="utf-8"
+    )
+    snapshots = {
+        "master_employer_jobs.csv": "old employer\n",
+        "master_employer_jobs.jsonl": "old jsonl\n",
+        "master_employer_jobs_metrics.json": "{\"old\": true}\n",
+        "master_jobs.csv": "old combined\n",
+    }
+    for name, content in snapshots.items():
+        (output_dir / name).write_text(content, encoding="utf-8")
+    import scripts.master_employer_jobs_catalog as catalog
+
+    def reject_validation(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("synthetic validation failure")
+
+    monkeypatch.setattr(catalog, "_validate_employer_temps", reject_validation)
+
+    assert employer_main(["--export-only", "--output-dir", str(output_dir)]) == 2
+    assert {name: (output_dir / name).read_text(encoding="utf-8") for name in snapshots} == snapshots
+    assert not list(output_dir.glob(".*.tmp"))
+
+
+def test_employer_export_rolls_back_when_promotion_is_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "out"
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        state.save(EmployerCollectionResult(company=_company(), jobs=[{"source_job_id": "job-1"}], status="completed"))
+    finally:
+        state.close()
+    snapshots = {
+        "master_employer_jobs.csv": "old employer\n",
+        "master_employer_jobs.jsonl": "old jsonl\n",
+        "master_employer_jobs_metrics.json": '{"old": true}\n',
+    }
+    for name, content in snapshots.items():
+        (output_dir / name).write_text(content, encoding="utf-8")
+
+    import scripts.master_employer_jobs_catalog as catalog
+
+    calls = 0
+    real_replace = catalog.os.replace
+
+    def interrupt_on_second_replace(source: object, target: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise KeyboardInterrupt()
+        real_replace(source, target)
+
+    monkeypatch.setattr(catalog.os, "replace", interrupt_on_second_replace)
+    state = EmployerState.open_existing(output_dir / "master_employer_jobs_state.db")
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            catalog.export_catalogs_from_state(state, output_dir, metrics={"persisted_jobs": 1})
+    finally:
+        state.close()
+
+    assert {name: (output_dir / name).read_text(encoding="utf-8") for name in snapshots} == snapshots
+    assert not list(output_dir.glob(".*.tmp"))
+
+
+def test_combined_export_requires_linkedin_input_and_preserves_employer_artifacts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    employer = output_dir / "master_employer_jobs.csv"
+    employer.write_text("source_job_id,job_title,source_type\nemployer-1,Employer,employer_site\n", encoding="utf-8")
+    employer_metrics = output_dir / "master_employer_jobs_metrics.json"
+    employer_metrics.write_text('{"generation_id":"employer-generation-1"}\n', encoding="utf-8")
+
+    assert combined_main(
+        [
+            "--linkedin-csv",
+            str(output_dir / "master_linkedin_jobs.csv"),
+            "--employer-csv",
+            str(employer),
+            "--linkedin-generation-id",
+            "linkedin-generation-1",
+            "--employer-generation-id",
+            "employer-generation-1",
+            "--output",
+            str(output_dir / "master_jobs.csv"),
+        ]
+    ) == 2
+    assert "LinkedIn source CSV not found" in capsys.readouterr().err
+    assert employer.read_text(encoding="utf-8") == "source_job_id,job_title,source_type\nemployer-1,Employer,employer_site\n"
+    assert not (output_dir / "master_jobs.csv").exists()
+
+
+def test_combined_export_rejects_corrupt_linkedin_input_and_missing_generation_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    linkedin = output_dir / "master_linkedin_jobs.csv"
+    linkedin.write_text("not,a,valid,source\n", encoding="utf-8")
+    employer = output_dir / "master_employer_jobs.csv"
+    employer.write_text("source_job_id,job_title,source_type\nemployer-1,Employer,employer_site\n", encoding="utf-8")
+
+    assert combined_main(
+        ["--linkedin-csv", str(linkedin), "--employer-csv", str(employer), "--linkedin-generation-id", "li-1", "--output", str(output_dir / "master_jobs.csv")]
+    ) == 2
+    assert "employer generation ID is required" in capsys.readouterr().err
+
+    assert combined_main(
+        [
+            "--linkedin-csv",
+            str(linkedin),
+            "--employer-csv",
+            str(employer),
+            "--linkedin-generation-id",
+            "li-1",
+            "--employer-generation-id",
+            "emp-1",
+            "--output",
+            str(output_dir / "master_jobs.csv"),
+        ]
+    ) == 2
+    assert "missing an identity field" in capsys.readouterr().err
+
+
+def test_combined_export_streams_sources_and_records_generation_ids(tmp_path: Path) -> None:
+    output_dir = tmp_path / "out"
+    linkedin = output_dir / "master_linkedin_jobs.csv"
+    linkedin.parent.mkdir()
+    linkedin.write_text("linkedin_job_id,job_title,source_type\nli-1,LinkedIn,linkedin\n", encoding="utf-8")
+    employer = output_dir / "master_employer_jobs.csv"
+    employer.write_text("source_job_id,job_title,source_type\nemployer-1,Employer,employer_site\n", encoding="utf-8")
+
+    assert combined_main(
+        [
+            "--linkedin-csv",
+            str(linkedin),
+            "--employer-csv",
+            str(employer),
+            "--linkedin-generation-id",
+            "li-generation-1",
+            "--employer-generation-id",
+            "employer-generation-1",
+            "--output",
+            str(output_dir / "master_jobs.csv"),
+        ]
+    ) == 0
+    with (output_dir / "master_jobs.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["source_job_id"] for row in rows] == ["li-1", "employer-1"]
+    manifest = json.loads((output_dir / "master_jobs_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["inputs"]["linkedin"]["generation_id"] == "li-generation-1"
+    assert manifest["inputs"]["employer"]["generation_id"] == "employer-generation-1"
+
+
+REAL_LINKEDIN_PRODUCER_FIELDS = (
+    "company_scan_status",
+    "detail_last_refreshed_at",
+    "inactive_confirmed_at",
+    "inactive_reason",
+    "location_classification",
+    "location_classification_reason",
+    "ownership_alias_status",
+    "ownership_status",
+    "query_partition_type",
+    "query_partition_value",
+)
+
+
+def test_master_projection_preserves_all_real_linkedin_producer_fields() -> None:
+    from scripts import build_master_jobs_catalog as projection
+
+    source_row = {
+        "source_type": "linkedin",
+        "linkedin_job_id": "linkedin-42",
+        **{field: f"producer-{field}" for field in REAL_LINKEDIN_PRODUCER_FIELDS},
+    }
+
+    rows = projection.build_master_rows([source_row], [])
+
+    assert set(REAL_LINKEDIN_PRODUCER_FIELDS).issubset(projection.MASTER_FIELDS)
+    assert {field: rows[0][field] for field in REAL_LINKEDIN_PRODUCER_FIELDS} == {
+        field: f"producer-{field}" for field in REAL_LINKEDIN_PRODUCER_FIELDS
+    }
+
+
+def test_master_projection_maps_legacy_linkedin_fields_without_losing_source_identity() -> None:
+    from scripts import build_master_jobs_catalog as projection
+
+    rows = projection.build_master_rows(
+        [
+            {
+                "source_type": "linkedin",
+                "linkedin_job_id": "legacy-42",
+                "linkedin_job_url": "https://www.linkedin.com/jobs/view/legacy-42",
+                "apply_url": "https://jobs.example/apply/legacy-42",
+                "description": "Legacy description",
+            }
+        ],
+        [],
+    )
+
+    assert rows[0]["source_job_id"] == "legacy-42"
+    assert rows[0]["apply_url_raw"] == "https://jobs.example/apply/legacy-42"
+    assert rows[0]["apply_url_canonical"] == "https://jobs.example/apply/legacy-42"
+    assert rows[0]["description_text"] == "Legacy description"
+
+
+def test_production_projection_main_uses_incremental_csv_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import inspect
+    from scripts import build_master_jobs_catalog as projection
+
+    linkedin = tmp_path / "linkedin.csv"
+    linkedin.write_text(
+        "linkedin_job_id,job_title,source_type\n"
+        + "\n".join(f"linkedin-{index},Job {index},linkedin" for index in range(5000))
+        + "\n",
+        encoding="utf-8",
+    )
+    employer = tmp_path / "employer.csv"
+    employer.write_text("source_job_id,job_title,source_type\nemployer-1,Employer,employer_site\n", encoding="utf-8")
+    output = tmp_path / "master_jobs.csv"
+
+    assert inspect.isgeneratorfunction(projection.iter_csv_rows)
+    monkeypatch.setattr(projection, "build_master_rows", lambda *_: pytest.fail("large path must not materialize rows"))
+
+    assert (
+        projection.main(
+            [
+                "--linkedin-csv",
+                str(linkedin),
+                "--employer-csv",
+                str(employer),
+                "--output",
+                str(output),
+                "--linkedin-generation-id",
+                "linkedin-generation-1",
+                "--employer-generation-id",
+                "employer-generation-1",
+            ]
+        )
+        == 0
+    )
+    with output.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 5001
+    assert rows[0]["source_job_id"] == "linkedin-0"
+    assert rows[-1]["source_job_id"] == "employer-1"

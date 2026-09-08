@@ -492,10 +492,15 @@ export async function apiRequest(baseUrl, accessTokenOrResolver, path, options =
     signal,
   } = options;
   const resolvedAccessToken = await resolveAccessToken(accessTokenOrResolver);
+  const requestUrl = resolveApiUrl(baseUrl, path);
+  const isFullyQualifiedRequest = /^https?:\/\//i.test(String(path || "").trim());
   const requestHeaders = {
     ...headers,
   };
-  if (resolvedAccessToken) {
+  // Signed object URLs are bearer capabilities already. Do not attach the
+  // Runr API token to an absolute storage URL: it can trigger a cross-origin
+  // preflight and is not accepted by S3/R2 as the object authorization.
+  if (resolvedAccessToken && !isFullyQualifiedRequest) {
     requestHeaders.Authorization = `Bearer ${resolvedAccessToken}`;
   }
   let requestBody = body;
@@ -518,7 +523,7 @@ export async function apiRequest(baseUrl, accessTokenOrResolver, path, options =
   const requestStartedAt = nowMs();
   let responseStatus = 0;
   try {
-    const response = await fetch(resolveApiUrl(baseUrl, path), {
+    const response = await fetch(requestUrl, {
       method,
       headers: requestHeaders,
       body: requestBody,

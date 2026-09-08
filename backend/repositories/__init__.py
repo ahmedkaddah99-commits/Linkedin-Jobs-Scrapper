@@ -50,7 +50,7 @@ from .sqlite_backed import (
     SqliteWorkerStore,
     SqliteWorkspaceRepository,
 )
-from .sqlite_acquisition import SqliteAcquisitionStore
+from .sqlite_acquisition import AcquisitionLeaseLostError, SqliteAcquisitionStore
 from .sqlite_acquisition_audit import SqliteAcquisitionAuditStore
 from .sqlite_personalized_jobs import SqlitePersonalizedJobsStore
 
@@ -84,6 +84,7 @@ __all__ = [
     "SourcePolicyStoreProtocol",
     "SqliteAnalyticsStore",
     "SqliteAcquisitionStore",
+    "AcquisitionLeaseLostError",
     "SqliteAcquisitionAuditStore",
     "SqlitePersonalizedJobsStore",
     "SqliteAuthRepository",

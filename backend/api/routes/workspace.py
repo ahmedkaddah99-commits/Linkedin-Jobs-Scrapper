@@ -308,8 +308,19 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
                             document,
                             export_anyway=_parse_bool_param(query, "export_anyway"),
                         )
-                        file_path, download_name = _resolve_artifact_download(application, segments[1], segments[3])
-                        self._send_file(file_path, download_name=download_name)
+                        object_key, file_path, download_name, content_type, object_size = _artifact_download_descriptor(
+                            application,
+                            segments[1],
+                            segments[3],
+                        )
+                        self._send_portable_download(
+                            application,
+                            object_key=object_key,
+                            file_path=file_path,
+                            download_name=download_name,
+                            content_type=content_type,
+                            object_size=object_size,
+                        )
                         return
 
     if segments[:1] == ["runs"] and len(segments) == 3 and segments[2] == "reviews":
@@ -655,11 +666,13 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                         self._require_scope(TOKEN_SCOPE_WORKER_EXECUTE)
                         worker_id = str(payload.get("worker_id") or "api_worker")
                         lease_seconds = max(5, int(payload.get("lease_seconds") or 60))
+                        worker_role = str(payload.get("worker_role") or "customer").strip().casefold()
                         configure_worker_logging()
                         worker = WorkerService(
                             application=application,
                             worker_id=worker_id,
                             lease_seconds=lease_seconds,
+                            role=worker_role,
                             logger=logging.getLogger("backend.worker.api"),
                         )
                         run = worker.process_next(auto_retry_failed=bool(payload.get("auto_retry_failed", True)))

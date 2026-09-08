@@ -28,6 +28,17 @@ class ApiHandler(Protocol):
 
     def _send_file(self, file_path: str, *, download_name: str = "") -> None: ...
 
+    def _send_portable_download(
+        self,
+        application,
+        *,
+        object_key: str,
+        file_path: str,
+        download_name: str,
+        content_type: str = "",
+        object_size: int | None = None,
+    ) -> None: ...
+
     def _send_bytes(self, body: bytes, *, content_type: str, download_name: str) -> None: ...
 
     def _read_raw_body(self) -> bytes: ...

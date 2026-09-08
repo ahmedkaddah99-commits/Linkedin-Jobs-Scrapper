@@ -3,6 +3,12 @@ from __future__ import annotations
 
 from backend.api.routes.registry import ApiRouteContext, RouteRegistry
 from backend.api.routes.route_support import bind_server_globals
+from backend.application.customer_tasks import (
+    CUSTOMER_TASK_EMAIL_SYNC,
+    customer_task_idempotency_key,
+    public_customer_task,
+)
+from backend.domain.phase0_contracts import normalize_gmail_scan_window
 
 # Tracker, referrals, Gmail, outreach, rejected jobs, and people discovery.
 _SERVER_BIND_RESERVED = {
@@ -312,6 +318,14 @@ def _handle_get(context: ApiRouteContext) -> bool | None:
     if segments == ["tracker", "email-integration"]:
                         user, _ = self._require_identity()
                         self._send_json(_tracker_email_integration_payload(application, user), status=HTTPStatus.OK)
+                        return
+
+    if len(segments) == 4 and segments[:3] == ["tracker", "email-integration", "sync"]:
+                        user, _ = self._require_identity()
+                        task = application.get_customer_task(segments[3], user_id=user.user_id)
+                        if task is None or str(task.get("task_type") or "") != CUSTOMER_TASK_EMAIL_SYNC:
+                            raise KeyError(f"Customer email sync task '{segments[3]}' was not found.")
+                        self._send_json({"task": public_customer_task(task)}, status=HTTPStatus.OK)
                         return
 
     if segments == ["rejected-jobs"]:
@@ -807,6 +821,37 @@ def _handle_post(context: ApiRouteContext) -> bool | None:
                             current_config["scan_window"] = normalize_gmail_scan_window(payload.get("scan_window"))
                         if "max_messages" in payload and payload.get("max_messages") is not None:
                             current_config["max_messages"] = payload.get("max_messages")
+                        if application.customer_tasks_async_enabled():
+                            task_payload = {
+                                "scan_window": str(current_config.get("scan_window") or "last_1_month"),
+                                "max_messages": current_config.get("max_messages") or 25,
+                            }
+                            requested_key = str(payload.get("idempotency_key") or payload.get("idempotencyKey") or "").strip()
+                            idempotency_key = requested_key or customer_task_idempotency_key(
+                                user_id=user.user_id,
+                                task_type=CUSTOMER_TASK_EMAIL_SYNC,
+                                payload={
+                                    **task_payload,
+                                    "provider_id": current_config.get("provider_id") or "",
+                                    "email_address": current_config.get("email_address") or "",
+                                    "last_sync_at": current_config.get("last_sync_at") or "",
+                                },
+                            )
+                            refreshed_user = _persist_tracker_email_config(application, user, current_config)
+                            task = application.enqueue_customer_task(
+                                user_id=user.user_id,
+                                task_type=CUSTOMER_TASK_EMAIL_SYNC,
+                                idempotency_key=idempotency_key,
+                                payload=task_payload,
+                            )
+                            self._send_json(
+                                {
+                                    "task": public_customer_task(task),
+                                    "integration": _tracker_email_integration_payload(application, refreshed_user),
+                                },
+                                status=HTTPStatus.ACCEPTED,
+                            )
+                            return
                         tracker_items = _collect_tracker_entries(application, user)
                         try:
                             updated_config = dict(current_config)

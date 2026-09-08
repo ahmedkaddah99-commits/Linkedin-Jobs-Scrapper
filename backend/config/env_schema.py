@@ -54,6 +54,24 @@ ENV_SCHEMA: dict[str, dict[str, Any]] = {
         "default": ".backend_storage/cache",
         "description": "Ephemeral cache used when cloud objects must be materialized as local files.",
     },
+    "OBJECT_STORAGE_CACHE_MAX_BYTES": {
+        "required": False,
+        "scope": "backend",
+        "default": "536870912",
+        "description": "Maximum disposable local object-cache size before oldest entries are evicted.",
+    },
+    "OBJECT_STORAGE_CACHE_MAX_AGE_SECONDS": {
+        "required": False,
+        "scope": "backend",
+        "default": "86400",
+        "description": "Maximum age for disposable local object-cache entries.",
+    },
+    "OBJECT_STORAGE_MAX_DOWNLOAD_BYTES": {
+        "required": False,
+        "scope": "backend",
+        "default": "104857600",
+        "description": "Maximum approved object download size; oversized objects are rejected before signing.",
+    },
     "LOCAL_OBJECT_STORAGE_BASE_URL": {
         "required": False,
         "scope": "backend",

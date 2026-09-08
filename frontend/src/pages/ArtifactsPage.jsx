@@ -546,7 +546,7 @@ export default function DocumentsPage() {
     }
     setExportState({ exporting: true, message: "", error: "", gate: null });
     try {
-      const bundle = await request("/documents/bulk-export", {
+      const response = await request("/documents/bulk-export", {
         method: "POST",
         body: {
           label: "application_documents",
@@ -554,6 +554,31 @@ export default function DocumentsPage() {
           export_anyway: exportAnyway,
         },
       });
+      let bundle = response;
+      if (response.task) {
+        let task = response.task;
+        setExportState((current) => ({
+          ...current,
+          message: "Export queued. Preparing your download…",
+        }));
+        for (let attempt = 0; attempt < 8 && !["completed", "failed"].includes(task.state); attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, Math.min(8000, 750 * 2 ** attempt)));
+          const status = await request(task.status_url);
+          task = status.task || task;
+        }
+        if (task.state === "failed") {
+          throw new Error(task.error_message || "Unable to export selected documents.");
+        }
+        if (task.state !== "completed") {
+          setExportState((current) => ({
+            ...current,
+            exporting: false,
+            message: "Export is still processing. Refresh this page to check again.",
+          }));
+          return;
+        }
+        bundle = task.result?.bundle || {};
+      }
       const blob = await request(bundle.download_url, { responseType: "blob" });
       triggerDownload(blob, bundle.file_name || "application_documents.zip");
       setExportState({

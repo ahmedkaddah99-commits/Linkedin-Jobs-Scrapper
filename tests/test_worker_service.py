@@ -362,6 +362,8 @@ class WorkerServiceTests(unittest.TestCase):
             lease_seconds=1,
             recover_stale_workers=False,
             enqueue_scheduled_runs=False,
+            worker_role="customer",
+            worker_metadata=worker._worker_metadata(active_task_family="customer"),
         )
         application.heartbeat_worker.assert_not_called()
 
@@ -424,6 +426,7 @@ class WorkerServiceTests(unittest.TestCase):
         worker = WorkerService(
             application=app,
             worker_id="worker_acquisition_kill_switch",
+            role="acquisition",
             poll_interval_seconds=0.01,
             logger=logger,
         )
@@ -452,6 +455,7 @@ class WorkerServiceTests(unittest.TestCase):
         worker = WorkerService(
             application=app,
             worker_id="worker_acquisition_noop",
+            role="acquisition",
             poll_interval_seconds=0.01,
             logger=logger,
         )

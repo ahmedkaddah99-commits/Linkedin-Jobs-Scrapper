@@ -413,6 +413,7 @@ class RunLifecycleService:
         host_name: str = "",
         process_id: int = 0,
         lease_seconds: int = 60,
+        metadata: Mapping[str, Any] | None = None,
     ) -> WorkerRecord:
         expected_attempt_count = max(1, int(run_attempt_count))
         observed = self.repositories.worker_store.get_worker(worker_id)
@@ -431,6 +432,8 @@ class RunLifecycleService:
         renewed.last_heartbeat_at = utc_now_iso()
         renewed.lease_expires_at = utc_plus_seconds(lease_seconds)
         renewed.metadata[RUN_ATTEMPT_METADATA_KEY] = expected_attempt_count
+        if metadata is not None:
+            renewed.metadata.update(dict(metadata))
         if not self.repositories.worker_store.renew_worker_lease_if_owned(
             observed,
             renewed,
@@ -716,7 +719,21 @@ class RunLifecycleService:
         lease_seconds: int = 60,
         recover_stale_workers: bool = True,
         enqueue_scheduled_runs: bool = True,
+        worker_role: str = "customer",
+        worker_metadata: Mapping[str, Any] | None = None,
     ) -> RunRecord | None:
+        if str(worker_role or "").strip().casefold() != "customer":
+            if worker_id:
+                self.heartbeat_worker(
+                    worker_id=worker_id,
+                    status=WORKER_STATUS_IDLE,
+                    current_run_id="",
+                    host_name=host_name,
+                    process_id=process_id,
+                    lease_seconds=lease_seconds,
+                    metadata=worker_metadata,
+                )
+            return None
         if worker_id and recover_stale_workers:
             self.recover_stale_workers()
         if enqueue_scheduled_runs:
@@ -731,6 +748,7 @@ class RunLifecycleService:
                     host_name=host_name,
                     process_id=process_id,
                     lease_seconds=lease_seconds,
+                    metadata=worker_metadata,
                 )
             return None
         if worker_id:
@@ -741,7 +759,10 @@ class RunLifecycleService:
                 host_name=host_name,
                 process_id=process_id,
                 lease_seconds=lease_seconds,
-                metadata={RUN_ATTEMPT_METADATA_KEY: run.attempt_count},
+                metadata={
+                    **dict(worker_metadata or {}),
+                    RUN_ATTEMPT_METADATA_KEY: run.attempt_count,
+                },
             )
         return run
 

@@ -19,10 +19,24 @@ from bs4 import BeautifulSoup
 
 DEFAULT_TIMEOUT_SECONDS = 25
 DEFAULT_MAX_JOB_LINKS = 6
+CHALLENGE_MARKERS = (
+    "captcha",
+    "cf-chl-",
+    "just a moment",
+    "access denied",
+    "bot verification",
+    "enable javascript and cookies",
+    "security check",
+)
 
 
 def _text(value: object) -> str:
     return " ".join(str(value or "").split())
+
+
+def _challenge_marker(value: str) -> str:
+    lowered = str(value or "").casefold()
+    return next((marker for marker in CHALLENGE_MARKERS if marker in lowered), "")
 
 
 def _url(value: object, base_url: str = "") -> str:
@@ -208,16 +222,19 @@ def fetch_generic_snapshot(
         listing_response = _request(request, target_url, timeout_seconds)
         status_code = int(getattr(listing_response, "status_code", 0) or 0)
         if status_code >= 400:
+            challenge = _challenge_marker(str(getattr(listing_response, "text", "") or ""))
+            blocked = bool(challenge or status_code in {403, 429, 451})
             return {
                 "jobs": [],
-                "status": "failed",
+                "status": "blocked" if blocked else "failed",
                 "status_code": status_code,
                 "complete_snapshot": False,
                 "credible_evidence": False,
                 "request_url": target_url,
                 "resolved_url": target_url,
-                "error": f"http_{status_code}",
+                "error": challenge or f"http_{status_code}",
                 "request_log": logs,
+                "stop_reason": "challenge_page" if blocked else "http_error",
             }
         listing_url = str(getattr(listing_response, "url", "") or target_url)
         listing_html = str(getattr(listing_response, "text", "") or "")
@@ -230,6 +247,20 @@ def fetch_generic_snapshot(
                 "transport": str(getattr(listing_response, "transport_used", "direct") or "direct"),
             }
         )
+        challenge = _challenge_marker(listing_html)
+        if challenge:
+            return {
+                "jobs": [],
+                "status": "blocked",
+                "status_code": status_code,
+                "complete_snapshot": False,
+                "credible_evidence": False,
+                "request_url": target_url,
+                "resolved_url": listing_url,
+                "error": challenge,
+                "request_log": logs,
+                "stop_reason": "challenge_page",
+            }
     except (requests.RequestException, OSError, TypeError, ValueError) as exc:
         return {
             "jobs": [],

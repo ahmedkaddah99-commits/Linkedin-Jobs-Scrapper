@@ -51,6 +51,10 @@ from backend.domain.job_identity import canonicalize_url
 from backend.repositories.sqlite_core import _SqliteStore
 
 
+class AcquisitionLeaseLostError(RuntimeError):
+    """Raised when a worker writes after its cycle/task lease was fenced."""
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -79,6 +83,35 @@ def _json_row(row, fields: Iterable[str]) -> dict[str, Any]:
 
 def _bool(value: Any) -> bool:
     return bool(int(value or 0))
+
+
+def _observation_is_newer(candidate: str, previous: str) -> bool:
+    """Return whether an observation may advance a durable projection.
+
+    Source observations remain immutable evidence even when they arrive out of
+    order.  Only a strictly newer timestamp may advance canonical/source-state
+    projections; an equal timestamp is treated as a replay tie and therefore
+    cannot regress the already accepted projection.
+    """
+
+    candidate_value = str(candidate or "").strip()
+    previous_value = str(previous or "").strip()
+    if not previous_value:
+        return bool(candidate_value)
+    if not candidate_value:
+        return False
+    try:
+        candidate_dt = datetime.fromisoformat(candidate_value.replace("Z", "+00:00"))
+        previous_dt = datetime.fromisoformat(previous_value.replace("Z", "+00:00"))
+        if candidate_dt.tzinfo is None:
+            candidate_dt = candidate_dt.replace(tzinfo=timezone.utc)
+        if previous_dt.tzinfo is None:
+            previous_dt = previous_dt.replace(tzinfo=timezone.utc)
+        return candidate_dt > previous_dt
+    except ValueError:
+        # Legacy fixtures may contain non-ISO timestamps.  Their canonical
+        # representation is still ordered deterministically as a fallback.
+        return candidate_value > previous_value
 
 
 def _publication_origin(value: str, *, default: str = "system") -> str:
@@ -202,6 +235,59 @@ def _profile_status_from_payload(profile: Mapping[str, Any] | None) -> str:
     return "present" if known == len(_COMPANY_PROFILE_FIELDS) else "incomplete"
 class SqliteAcquisitionStore(_SqliteStore):
     """Durable repository for system-owned acquisition work and public catalog state."""
+
+    @staticmethod
+    def _assert_cycle_lease_connection(
+        connection,
+        *,
+        cycle_id: str,
+        lease_owner: str,
+        lease_token: str,
+        now: str | None = None,
+    ) -> None:
+        current = str(now or utc_now_iso())
+        row = connection.execute(
+            """
+            SELECT status, lease_owner, lease_token, lease_expires_at
+            FROM acquisition_cycles WHERE cycle_id=?
+            """,
+            (cycle_id,),
+        ).fetchone()
+        if row is None or not (
+            str(row["status"] or "") == "running"
+            and str(row["lease_owner"] or "") == str(lease_owner or "")
+            and str(row["lease_token"] or "") == str(lease_token or "")
+            and str(row["lease_expires_at"] or "") > current
+        ):
+            raise AcquisitionLeaseLostError(f"Acquisition cycle lease lost: {cycle_id}")
+
+    @classmethod
+    def _assert_task_lease_connection(
+        cls,
+        connection,
+        *,
+        task_id: str,
+        lease_owner: str,
+        lease_token: str,
+        attempt_count: int | None = None,
+        now: str | None = None,
+    ) -> None:
+        current = str(now or utc_now_iso())
+        row = connection.execute(
+            """
+            SELECT status, lease_owner, lease_token, lease_expires_at, attempt_count
+            FROM acquisition_tasks WHERE task_id=?
+            """,
+            (task_id,),
+        ).fetchone()
+        if row is None or not (
+            str(row["status"] or "") == "running"
+            and str(row["lease_owner"] or "") == str(lease_owner or "")
+            and str(row["lease_token"] or "") == str(lease_token or "")
+            and str(row["lease_expires_at"] or "") > current
+            and (attempt_count is None or int(row["attempt_count"] or 0) == int(attempt_count))
+        ):
+            raise AcquisitionLeaseLostError(f"Acquisition task lease lost: {task_id}")
 
     def ensure_targets(self, targets: Iterable[Mapping[str, Any]]) -> None:
         now = utc_now_iso()
@@ -354,16 +440,42 @@ class SqliteAcquisitionStore(_SqliteStore):
         scheduled_at: str,
         lease_seconds: int = 300,
         force: bool = False,
+        manifest_version: str = "",
+        scope_key: str = "",
     ) -> dict[str, Any] | None:
         cycle_id = f"acq_cycle_{uuid4().hex}"
         now = utc_now_iso()
         lease_expires = utc_plus_seconds(lease_seconds)
+        lease_token = uuid4().hex
+        raw_scope = str(scope_key or "").strip()
+        # Legacy repository callers intentionally use independent fixture
+        # windows. The production scheduler supplies an explicit scope key;
+        # only those explicit scopes participate in cross-window coalescing.
+        normalized_scope = raw_scope or f"legacy:{window_key}"
+        normalized_manifest = str(manifest_version or "").strip()
 
         def claim(connection):
             existing = connection.execute(
                 "SELECT * FROM acquisition_cycles WHERE window_key = ?",
                 (window_key,),
             ).fetchone()
+            if existing is None:
+                active = connection.execute(
+                    """
+                    SELECT * FROM acquisition_cycles
+                    WHERE scope_key=? AND status IN ('running', 'partial', 'interrupted')
+                    ORDER BY started_at DESC, cycle_id DESC LIMIT 1
+                    """,
+                    (normalized_scope,),
+                ).fetchone()
+                if active is not None and str(active["status"] or "") == "running" and str(active["lease_expires_at"] or "") > now:
+                    return None
+                if active is not None:
+                    existing = active
+                    connection.execute(
+                        "UPDATE acquisition_cycles SET window_key=? WHERE cycle_id=?",
+                        (window_key, str(active["cycle_id"])),
+                    )
             if existing is not None:
                 existing_payload = _dict_row(existing)
                 status = str(existing_payload.get("status") or "")
@@ -372,16 +484,39 @@ class SqliteAcquisitionStore(_SqliteStore):
                     return None
                 if status == "completed" and not force:
                     return None
-                if status in {"recovery_required", "partial", "interrupted"}:
+                if status == "recovery_required" and not force:
                     return None
+                if status in {"partial", "interrupted"} and not force:
+                    pending = connection.execute(
+                        """
+                        SELECT 1 FROM acquisition_tasks
+                        WHERE cycle_id=? AND (
+                            status IN ('pending', 'retry')
+                            OR (status='running' AND lease_expires_at <= ?)
+                        ) LIMIT 1
+                        """,
+                        (str(existing_payload["cycle_id"]), now),
+                    ).fetchone()
+                    if pending is None:
+                        return None
                 connection.execute(
                     """
                     UPDATE acquisition_cycles
-                    SET status='running', lease_owner=?, lease_expires_at=?, started_at=?,
-                        completed_at='', error_code='', error_message='', updated_at=?
+                    SET status='running', lease_owner=?, lease_token=?, lease_expires_at=?,
+                        manifest_version=?, scope_key=?, started_at=?, completed_at='',
+                        error_code='', error_message='', updated_at=?
                     WHERE cycle_id = ?
                     """,
-                    (lease_owner, lease_expires, now, now, existing_payload["cycle_id"]),
+                    (
+                        lease_owner,
+                        lease_token,
+                        lease_expires,
+                        normalized_manifest,
+                        normalized_scope,
+                        now,
+                        now,
+                        existing_payload["cycle_id"],
+                    ),
                 )
                 row = connection.execute(
                     "SELECT * FROM acquisition_cycles WHERE cycle_id = ?",
@@ -391,11 +526,23 @@ class SqliteAcquisitionStore(_SqliteStore):
             connection.execute(
                 """
                 INSERT INTO acquisition_cycles (
-                    cycle_id, window_key, status, lease_owner, lease_expires_at,
-                    scheduled_at, started_at, created_at, updated_at
-                ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)
+                    cycle_id, window_key, status, lease_owner, lease_token, lease_expires_at,
+                    manifest_version, scope_key, scheduled_at, started_at, created_at, updated_at
+                ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (cycle_id, window_key, lease_owner, lease_expires, scheduled_at, now, now, now),
+                (
+                    cycle_id,
+                    window_key,
+                    lease_owner,
+                    lease_token,
+                    lease_expires,
+                    normalized_manifest,
+                    normalized_scope,
+                    scheduled_at,
+                    now,
+                    now,
+                    now,
+                ),
             )
             row = connection.execute("SELECT * FROM acquisition_cycles WHERE cycle_id = ?", (cycle_id,)).fetchone()
             return _dict_row(row)
@@ -430,25 +577,39 @@ class SqliteAcquisitionStore(_SqliteStore):
         cycle_id: str,
         lease_owner: str,
         lease_seconds: int = 300,
+        cycle_lease_token: str = "",
+        max_attempts: int = 3,
     ) -> dict[str, Any] | None:
         now = utc_now_iso()
         lease_expires = utc_plus_seconds(lease_seconds)
+        task_lease_token = uuid4().hex
+        normalized_max_attempts = max(1, int(max_attempts))
 
         def claim(connection):
+            if cycle_lease_token:
+                self._assert_cycle_lease_connection(
+                    connection,
+                    cycle_id=cycle_id,
+                    lease_owner=lease_owner,
+                    lease_token=cycle_lease_token,
+                    now=now,
+                )
             row = connection.execute(
                 """
                 SELECT * FROM acquisition_tasks
                 WHERE cycle_id = ? AND (
-                    status = 'pending' OR (status = 'running' AND lease_expires_at <= ?)
-                )
+                    (status = 'pending' AND (next_attempt_at='' OR next_attempt_at <= ?))
+                    OR (status = 'retry' AND (next_attempt_at='' OR next_attempt_at <= ?))
+                    OR (status = 'running' AND lease_expires_at <= ?)
+                ) AND attempt_count < CASE WHEN max_attempts > 0 THEN max_attempts ELSE ? END
                 ORDER BY CASE target_id
                     WHEN 'n26_greenhouse' THEN 0
                     WHEN 'qonto_lever' THEN 1
                     ELSE 2
-                END, created_at, task_id
+                END, created_at, target_id, task_id
                 LIMIT 1
                 """,
-                (cycle_id, now),
+                (cycle_id, now, now, now, normalized_max_attempts),
             ).fetchone()
             if row is None:
                 return None
@@ -456,16 +617,190 @@ class SqliteAcquisitionStore(_SqliteStore):
             connection.execute(
                 """
                 UPDATE acquisition_tasks
-                SET status='running', attempt_count=attempt_count+1, lease_owner=?,
-                    lease_expires_at=?, started_at=?, updated_at=?
+                SET status='running', attempt_count=attempt_count+1, max_attempts=?, lease_owner=?,
+                    lease_token=?, lease_expires_at=?, started_at=?, completed_at='',
+                    next_attempt_at='', updated_at=?
                 WHERE task_id = ?
                 """,
-                (lease_owner, lease_expires, now, now, task_id),
+                (normalized_max_attempts, lease_owner, task_lease_token, lease_expires, now, now, task_id),
             )
             updated = connection.execute("SELECT * FROM acquisition_tasks WHERE task_id = ?", (task_id,)).fetchone()
             return _dict_row(updated)
 
         return self._run_transaction(claim)
+
+    def heartbeat_cycle(
+        self,
+        cycle_id: str,
+        *,
+        lease_owner: str,
+        lease_token: str,
+        lease_seconds: int = 300,
+    ) -> bool:
+        now = utc_now_iso()
+        lease_expires = utc_plus_seconds(lease_seconds)
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE acquisition_cycles
+                SET lease_expires_at=?, updated_at=?
+                WHERE cycle_id=? AND status='running' AND lease_owner=?
+                  AND lease_token=? AND lease_expires_at > ?
+                """,
+                (lease_expires, now, cycle_id, lease_owner, lease_token, now),
+            )
+            return updated.rowcount == 1
+
+    def heartbeat_task(
+        self,
+        task_id: str,
+        *,
+        lease_owner: str,
+        lease_token: str,
+        attempt_count: int,
+        lease_seconds: int = 300,
+    ) -> bool:
+        now = utc_now_iso()
+        lease_expires = utc_plus_seconds(lease_seconds)
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE acquisition_tasks
+                SET lease_expires_at=?, updated_at=?
+                WHERE task_id=? AND status='running' AND lease_owner=?
+                  AND lease_token=? AND attempt_count=? AND lease_expires_at > ?
+                """,
+                (lease_expires, now, task_id, lease_owner, lease_token, int(attempt_count), now),
+            )
+            return updated.rowcount == 1
+
+    def assert_task_lease(
+        self,
+        task_id: str,
+        *,
+        lease_owner: str,
+        lease_token: str,
+        attempt_count: int | None = None,
+    ) -> None:
+        with self._connect() as connection:
+            self._assert_task_lease_connection(
+                connection,
+                task_id=task_id,
+                lease_owner=lease_owner,
+                lease_token=lease_token,
+                attempt_count=attempt_count,
+            )
+
+    def release_task(
+        self,
+        task_id: str,
+        *,
+        lease_owner: str,
+        lease_token: str,
+        attempt_count: int,
+        delay_seconds: int = 0,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> None:
+        now = utc_now_iso()
+        next_attempt_at = utc_plus_seconds(max(0, int(delay_seconds))) if delay_seconds else now
+        with self._connect() as connection:
+            self._assert_task_lease_connection(
+                connection,
+                task_id=task_id,
+                lease_owner=lease_owner,
+                lease_token=lease_token,
+                attempt_count=attempt_count,
+                now=now,
+            )
+            updated = connection.execute(
+                """
+                UPDATE acquisition_tasks
+                SET status='pending', lease_owner='', lease_token='', lease_expires_at='',
+                    completed_at='', next_attempt_at=?, error_code=?, error_message=?,
+                    last_error_code=?, last_error_message=?, updated_at=?
+                WHERE task_id=? AND status='running' AND lease_owner=?
+                  AND lease_token=? AND attempt_count=?
+                """,
+                (
+                    next_attempt_at,
+                    str(error_code or ""),
+                    str(error_message or "")[:500],
+                    str(error_code or ""),
+                    str(error_message or "")[:500],
+                    now,
+                    task_id,
+                    lease_owner,
+                    lease_token,
+                    int(attempt_count),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise AcquisitionLeaseLostError(f"Acquisition task lease lost: {task_id}")
+
+    def retry_task(
+        self,
+        task_id: str,
+        *,
+        lease_owner: str,
+        lease_token: str,
+        attempt_count: int,
+        error_code: str,
+        error_message: str = "",
+        max_backoff_seconds: int = 3600,
+    ) -> dict[str, Any]:
+        """Checkpoint a transient failure with bounded deterministic backoff."""
+
+        now = utc_now_iso()
+        attempt = max(1, int(attempt_count))
+        base_delay = min(max(1, int(max_backoff_seconds)), 30 * (2 ** max(0, attempt - 1)))
+        jitter = int(hashlib.sha256(f"{task_id}:{attempt}".encode("utf-8")).hexdigest()[:2], 16) % 10
+        with self._connect() as connection:
+            self._assert_task_lease_connection(
+                connection,
+                task_id=task_id,
+                lease_owner=lease_owner,
+                lease_token=lease_token,
+                attempt_count=attempt,
+                now=now,
+            )
+            row = connection.execute(
+                "SELECT max_attempts FROM acquisition_tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
+            max_attempts = max(1, int(row["max_attempts"] or 3)) if row is not None else 3
+            terminal = attempt >= max_attempts
+            status = "failed" if terminal else "retry"
+            next_attempt_at = "" if terminal else utc_plus_seconds(min(int(max_backoff_seconds), base_delay + jitter))
+            updated = connection.execute(
+                """
+                UPDATE acquisition_tasks
+                SET status=?, lease_owner='', lease_token='', lease_expires_at='',
+                    completed_at=CASE WHEN ? THEN ? ELSE '' END,
+                    next_attempt_at=?, error_code=?, error_message=?,
+                    last_error_code=?, last_error_message=?, updated_at=?
+                WHERE task_id=? AND status='running' AND lease_owner=?
+                  AND lease_token=? AND attempt_count=?
+                """,
+                (
+                    status,
+                    int(terminal),
+                    now,
+                    next_attempt_at,
+                    str(error_code or "")[:120],
+                    str(error_message or "")[:500],
+                    str(error_code or "")[:120],
+                    str(error_message or "")[:500],
+                    now,
+                    task_id,
+                    lease_owner,
+                    lease_token,
+                    attempt,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise AcquisitionLeaseLostError(f"Acquisition task lease lost: {task_id}")
+            result = connection.execute("SELECT * FROM acquisition_tasks WHERE task_id=?", (task_id,)).fetchone()
+            return _dict_row(result)
 
     def reserve_request(
         self,
@@ -481,10 +816,22 @@ class SqliteAcquisitionStore(_SqliteStore):
         credits_estimated: int = 0,
         request_limit: int = 0,
         credit_limit: int = 0,
+        task_lease_owner: str = "",
+        task_lease_token: str = "",
+        task_attempt_count: int | None = None,
     ) -> dict[str, Any]:
         now = utc_now_iso()
 
         def reserve(connection):
+            if task_lease_token:
+                self._assert_task_lease_connection(
+                    connection,
+                    task_id=task_id,
+                    lease_owner=task_lease_owner,
+                    lease_token=task_lease_token,
+                    attempt_count=task_attempt_count,
+                    now=now,
+                )
             existing = connection.execute(
                 "SELECT * FROM acquisition_requests WHERE idempotency_key = ?",
                 (idempotency_key,),
@@ -550,11 +897,32 @@ class SqliteAcquisitionStore(_SqliteStore):
 
         return self._run_transaction(reserve)
 
-    def mark_request_dispatching(self, request_id: str) -> None:
+    def mark_request_dispatching(
+        self,
+        request_id: str,
+        *,
+        task_lease_owner: str = "",
+        task_lease_token: str = "",
+        task_attempt_count: int | None = None,
+    ) -> None:
         """Durably mark the exact point at which the external call is about to start."""
 
         now = utc_now_iso()
         with self._connect() as connection:
+            if task_lease_token:
+                row = connection.execute(
+                    "SELECT task_id FROM acquisition_requests WHERE request_id=?", (request_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(f"Acquisition request '{request_id}' not found.")
+                self._assert_task_lease_connection(
+                    connection,
+                    task_id=str(row["task_id"]),
+                    lease_owner=task_lease_owner,
+                    lease_token=task_lease_token,
+                    attempt_count=task_attempt_count,
+                    now=now,
+                )
             updated = connection.execute(
                 """
                 UPDATE acquisition_requests
@@ -581,6 +949,9 @@ class SqliteAcquisitionStore(_SqliteStore):
         error_message: str = "",
         recovery_state: str = "",
         uncertain_external_outcome: bool = False,
+        task_lease_owner: str = "",
+        task_lease_token: str = "",
+        task_attempt_count: int | None = None,
     ) -> None:
         now = utc_now_iso()
 
@@ -590,6 +961,15 @@ class SqliteAcquisitionStore(_SqliteStore):
             ).fetchone()
             if row is None:
                 raise KeyError(f"Acquisition request '{request_id}' not found.")
+            if task_lease_token:
+                self._assert_task_lease_connection(
+                    connection,
+                    task_id=str(row["task_id"]),
+                    lease_owner=task_lease_owner,
+                    lease_token=task_lease_token,
+                    attempt_count=task_attempt_count,
+                    now=now,
+                )
             if str(row["completed_at"] or ""):
                 return
             actual = max(0, int(credits_actual))
@@ -651,6 +1031,9 @@ class SqliteAcquisitionStore(_SqliteStore):
         target_id: str,
         rejections: Iterable[Mapping[str, Any]],
         observed_at: str = "",
+        lease_owner: str = "",
+        lease_token: str = "",
+        attempt_count: int | None = None,
     ) -> None:
         """Persist every source record rejected before canonical ingestion."""
 
@@ -659,6 +1042,14 @@ class SqliteAcquisitionStore(_SqliteStore):
         if not rows:
             return
         with self._connect() as connection:
+            if lease_token:
+                self._assert_task_lease_connection(
+                    connection,
+                    task_id=task_id,
+                    lease_owner=lease_owner,
+                    lease_token=lease_token,
+                    attempt_count=attempt_count,
+                )
             connection.executemany(
                 """
                 INSERT OR IGNORE INTO acquisition_job_rejections (
@@ -882,8 +1273,18 @@ class SqliteAcquisitionStore(_SqliteStore):
         closure_safe: bool | None = None,
         observed_at: str = "",
         snapshot_external_ids: Iterable[str] | None = None,
+        lease_owner: str = "",
+        lease_token: str = "",
+        attempt_count: int | None = None,
     ) -> dict[str, int | bool]:
         now = str(observed_at or utc_now_iso())
+        if lease_token:
+            self.assert_task_lease(
+                task_id,
+                lease_owner=lease_owner,
+                lease_token=lease_token,
+                attempt_count=attempt_count,
+            )
         job_rows = [dict(job) for job in jobs]
         closure_permitted = (
             bool(complete_snapshot and valid_snapshot)
@@ -924,8 +1325,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                     closure_safe=closure_permitted if index == len(batches) - 1 else False,
                     observed_at=observed_at,
                     snapshot_external_ids=all_external_ids if index == len(batches) - 1 else None,
+                    lease_owner=lease_owner,
+                    lease_token=lease_token,
+                    attempt_count=attempt_count,
                 )
-                for key in ("observed", "new", "updated", "unchanged", "closed", "rejected", "duplicates", "applicant_snapshots_blocked"):
+                for key in ("observed", "new", "updated", "unchanged", "stale_ignored", "closed", "rejected", "duplicates", "applicant_snapshots_blocked"):
                     combined[key] += int(result.get(key) or 0)
                 combined["quality_warnings"].extend(result.get("quality_warnings") or [])
             combined["valid_snapshot"] = bool(valid_snapshot)
@@ -967,6 +1371,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "new": 0,
                 "updated": 0,
                 "unchanged": 0,
+                "stale_ignored": 0,
                 "closed": 0,
                 "rejected": 0,
                 "duplicates": 0,
@@ -1082,9 +1487,25 @@ class SqliteAcquisitionStore(_SqliteStore):
                     identity_key=identity_key,
                     identity_signature=identity_signature,
                     original_url=original_url,
+                    source_id=target_id,
+                    application_url=str(job.get("application_url") or "").strip(),
+                    requisition_id=str(
+                        job.get("requisition_id")
+                        or job.get("requisitionId")
+                        or job.get("reference")
+                        or ""
+                    ).strip(),
                 )
                 canonical_was_new = canonical is None
-                reopened_from_closed = bool(canonical is not None and str(canonical["lifecycle_state"] or "") == "closed")
+                canonical_projection_current = bool(
+                    canonical is None
+                    or _observation_is_newer(now, str(canonical["last_verified_at"] or ""))
+                )
+                reopened_from_closed = bool(
+                    canonical_projection_current
+                    and canonical is not None
+                    and str(canonical["lifecycle_state"] or "") == "closed"
+                )
                 if canonical is None:
                     canonical_id = f"canonical_job_{uuid4().hex}"
                     durable_identity_key = self._unique_identity_key(connection, identity_key)
@@ -1117,7 +1538,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                         ),
                     )
                     counts["new"] += 1
-                else:
+                elif canonical_projection_current:
                     canonical_id = str(canonical["canonical_job_id"])
                     previous_hash = self._current_content_hash(connection, canonical_id)
                     payload_hash = self._payload_hash(job)
@@ -1134,6 +1555,9 @@ class SqliteAcquisitionStore(_SqliteStore):
                         """,
                         (title, location, original_url, identity_signature, now, now, now, canonical_id),
                     )
+                else:
+                    canonical_id = str(canonical["canonical_job_id"])
+                    counts["stale_ignored"] += 1
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO canonical_job_url_aliases (
@@ -1142,24 +1566,36 @@ class SqliteAcquisitionStore(_SqliteStore):
                     """,
                     (f"job_alias_{uuid4().hex}", canonical_id, original_url, target_id, now),
                 )
-                connection.execute(
+                existing_external = connection.execute(
                     """
-                    INSERT INTO canonical_job_external_ids (
-                        external_id_id, canonical_job_id, source_id, external_job_id,
-                        first_seen_at, last_seen_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(source_id, external_job_id) DO UPDATE SET
-                        last_seen_at=excluded.last_seen_at
+                    SELECT external_id_id, last_seen_at
+                    FROM canonical_job_external_ids
+                    WHERE source_id=? AND external_job_id=?
                     """,
-                    (
-                        f"external_id_{uuid4().hex}",
-                        canonical_id,
-                        target_id,
-                        external_id,
-                        now,
-                        now,
-                    ),
-                )
+                    (target_id, external_id),
+                ).fetchone()
+                if existing_external is None:
+                    connection.execute(
+                        """
+                        INSERT INTO canonical_job_external_ids (
+                            external_id_id, canonical_job_id, source_id, external_job_id,
+                            first_seen_at, last_seen_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            f"external_id_{uuid4().hex}",
+                            canonical_id,
+                            target_id,
+                            external_id,
+                            now,
+                            now,
+                        ),
+                    )
+                elif _observation_is_newer(now, str(existing_external["last_seen_at"] or "")):
+                    connection.execute(
+                        "UPDATE canonical_job_external_ids SET last_seen_at=? WHERE external_id_id=?",
+                        (now, str(existing_external["external_id_id"])),
+                    )
                 related = connection.execute(
                     """
                     SELECT canonical_job_id, lifecycle_state FROM canonical_jobs
@@ -1268,7 +1704,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                             now,
                         ),
                     )
-                self._upsert_source_state(
+                source_state_current = self._upsert_source_state(
                     connection,
                     target_id=target_id,
                     canonical_job_id=canonical_id,
@@ -1277,6 +1713,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                     observed_at=now,
                     grace_attempts=absence_grace_attempts,
                 )
+                if source_state_current and not canonical_projection_current:
+                    # A late observation can establish a new source-specific
+                    # active state, but it cannot replace the canonical job's
+                    # newer content/version projection.
+                    self._recompute_lifecycle(connection, canonical_id, now=now)
                 # Publication-quality checks are shadow validation only. The
                 # report is persisted with the version so no new quality
                 # rule can block import, scraping, enrichment, or publication.
@@ -1286,56 +1727,57 @@ class SqliteAcquisitionStore(_SqliteStore):
                     source={"target_id": target_id, "source_observation_ids": [observation_id], "external_job_id": external_id},
                     admin={"state": "staged"},
                 )
-                self._ensure_version(
-                    connection,
-                    canonical_id,
-                    title=title,
-                    description=str(job.get("description_text") or job.get("description") or job.get("full_description") or ""),
-                    location=location,
-                    # The version column is the verified direct destination;
-                    # the source/detail fallback remains in payload_json and
-                    # application_destination.user_facing_url.
-                    apply_url=str(job.get("application_url") or ""),
-                    content_hash=payload_hash,
-                    source_observation_id=observation_id,
-                    payload=job,
-                    now=now,
-                    force_new_version=reopened_from_closed,
-                )
-                self._persist_unified_mapping(
-                    connection,
-                    canonical_job_id=canonical_id,
-                    company_id=company_id,
-                    source_observation_id=observation_id,
-                    execution_id=cycle_id,
-                    mapping=job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {},
-                    job=job,
-                    observed_at=now,
-                )
-                applicant_snapshot = normalize_applicant_snapshot(
-                    job,
-                    observed_at=now,
-                    source_ats=str(job.get("source_ats") or ""),
-                    provenance_url=original_url or str(target["provenance_url"] or ""),
-                    first_seen_at=now if canonical_was_new else str(
-                        connection.execute(
-                            "SELECT first_seen_at FROM canonical_jobs WHERE canonical_job_id = ?",
-                            (canonical_id,),
-                        ).fetchone()["first_seen_at"]
-                        or now
-                    ),
-                    last_verified_at=now,
-                )
-                if applicant_snapshot is not None and applicant_gate["approved"]:
-                    self._ensure_applicant_snapshot(
+                if canonical_projection_current:
+                    self._ensure_version(
+                        connection,
+                        canonical_id,
+                        title=title,
+                        description=str(job.get("description_text") or job.get("description") or job.get("full_description") or ""),
+                        location=location,
+                        # The version column is the verified direct destination;
+                        # the source/detail fallback remains in payload_json and
+                        # application_destination.user_facing_url.
+                        apply_url=str(job.get("application_url") or ""),
+                        content_hash=payload_hash,
+                        source_observation_id=observation_id,
+                        payload=job,
+                        now=now,
+                        force_new_version=reopened_from_closed,
+                    )
+                    self._persist_unified_mapping(
                         connection,
                         canonical_job_id=canonical_id,
+                        company_id=company_id,
                         source_observation_id=observation_id,
-                        snapshot=applicant_snapshot,
-                        now=now,
+                        execution_id=cycle_id,
+                        mapping=job.get("unified_mapping") if isinstance(job.get("unified_mapping"), Mapping) else {},
+                        job=job,
+                        observed_at=now,
                     )
-                elif has_applicant_evidence(job):
-                    counts["applicant_snapshots_blocked"] += 1
+                    applicant_snapshot = normalize_applicant_snapshot(
+                        job,
+                        observed_at=now,
+                        source_ats=str(job.get("source_ats") or ""),
+                        provenance_url=original_url or str(target["provenance_url"] or ""),
+                        first_seen_at=now if canonical_was_new else str(
+                            connection.execute(
+                                "SELECT first_seen_at FROM canonical_jobs WHERE canonical_job_id = ?",
+                                (canonical_id,),
+                            ).fetchone()["first_seen_at"]
+                            or now
+                        ),
+                        last_verified_at=now,
+                    )
+                    if applicant_snapshot is not None and applicant_gate["approved"]:
+                        self._ensure_applicant_snapshot(
+                            connection,
+                            canonical_job_id=canonical_id,
+                            source_observation_id=observation_id,
+                            snapshot=applicant_snapshot,
+                            now=now,
+                        )
+                    elif has_applicant_evidence(job):
+                        counts["applicant_snapshots_blocked"] += 1
                 counts["observed"] += 1
                 for warning_code in job.get("quality_warnings") or []:
                     quality_events.append(
@@ -1350,19 +1792,20 @@ class SqliteAcquisitionStore(_SqliteStore):
                         }
                     )
 
-                self._ensure_company_alias(
-                    connection,
-                    company_id,
-                    str(job.get("company") or ""),
-                    source=str(target["target_id"] or ""),
-                    now=now,
-                )
+                if canonical_projection_current:
+                    self._ensure_company_alias(
+                        connection,
+                        company_id,
+                        str(job.get("company") or ""),
+                        source=str(target["target_id"] or ""),
+                        now=now,
+                    )
 
             if complete_snapshot and valid_snapshot and closure_permitted:
                 missing_rows = connection.execute(
                     """
                     SELECT source_state_id, canonical_job_id, external_job_id,
-                           absence_count, grace_attempts
+                           absence_count, grace_attempts, last_checked_at
                     FROM job_source_states
                     WHERE target_id=? AND lifecycle_state IN ('active', 'stale', 'unknown')
                     """,
@@ -1370,6 +1813,10 @@ class SqliteAcquisitionStore(_SqliteStore):
                 ).fetchall()
                 affected: set[str] = set()
                 for missing in missing_rows:
+                    if not _observation_is_newer(now, str(missing["last_checked_at"] or "")):
+                        # A late/duplicate completion cannot apply absence to a
+                        # source state already checked by a newer scan.
+                        continue
                     external_id = str(missing["external_job_id"] or "")
                     if external_id in (all_snapshot_external or seen_source_ids):
                         continue
@@ -1396,12 +1843,14 @@ class SqliteAcquisitionStore(_SqliteStore):
                 # absence.  Never close a posting from an unhealthy source.
                 unknown_rows = connection.execute(
                     """
-                    SELECT DISTINCT canonical_job_id FROM job_source_states
+                    SELECT DISTINCT canonical_job_id, last_checked_at FROM job_source_states
                     WHERE target_id=? AND lifecycle_state IN ('active', 'stale')
                     """,
                     (target_id,),
                 ).fetchall()
                 for row in unknown_rows:
+                    if not _observation_is_newer(now, str(row["last_checked_at"] or "")):
+                        continue
                     connection.execute(
                         """
                         UPDATE job_source_states
@@ -1492,9 +1941,21 @@ class SqliteAcquisitionStore(_SqliteStore):
         error_message: str = "",
         started_at: str = "",
         completed_at: str = "",
+        lease_owner: str = "",
+        lease_token: str = "",
+        task_attempt_count: int | None = None,
     ) -> None:
         started = str(started_at or utc_now_iso())
         with self._connect() as connection:
+            if lease_token:
+                self._assert_task_lease_connection(
+                    connection,
+                    task_id=task_id,
+                    lease_owner=lease_owner,
+                    lease_token=lease_token,
+                    attempt_count=task_attempt_count,
+                    now=utc_now_iso(),
+                )
             connection.execute(
                 """
                 INSERT INTO acquisition_target_attempts (
@@ -1528,20 +1989,48 @@ class SqliteAcquisitionStore(_SqliteStore):
             )
 
     def complete_task(
-        self, task_id: str, *, status: str, result: Mapping[str, Any], error_code: str = "", error_message: str = ""
+        self,
+        task_id: str,
+        *,
+        status: str,
+        result: Mapping[str, Any],
+        error_code: str = "",
+        error_message: str = "",
+        lease_owner: str = "",
+        lease_token: str = "",
+        attempt_count: int | None = None,
     ) -> None:
         now = utc_now_iso()
         with self._connect() as connection:
-            connection.execute(
-                """
+            where = "task_id = ?"
+            where_params: list[Any] = [task_id]
+            if lease_owner or lease_token or attempt_count is not None:
+                if not lease_owner or not lease_token:
+                    raise ValueError("Task fencing requires both lease_owner and lease_token.")
+                self._assert_task_lease_connection(
+                    connection,
+                    task_id=task_id,
+                    lease_owner=lease_owner,
+                    lease_token=lease_token,
+                    attempt_count=attempt_count,
+                    now=now,
+                )
+                where += " AND status='running' AND lease_owner=? AND lease_token=?"
+                where_params.extend([lease_owner, lease_token])
+                if attempt_count is not None:
+                    where += " AND attempt_count=?"
+                    where_params.append(int(attempt_count))
+            updated = connection.execute(
+                f"""
                 UPDATE acquisition_tasks
                 SET status=?, completed_at=?, complete_snapshot=?, valid_snapshot=?, credible_evidence=?,
                     requests_avoided=?, credits_avoided=?, jobs_observed=?, jobs_new=?, jobs_updated=?,
                     jobs_unchanged=?, jobs_closed=?, jobs_rejected=?, jobs_duplicates=?,
                     jobs_published=COALESCE(?, jobs_published),
                     reconciliation_json=?, quality_warnings_json=?, collection_metadata_json=?,
-                    error_code=?, error_message=?, updated_at=?
-                WHERE task_id = ?
+                    error_code=?, error_message=?, last_error_code=?, last_error_message=?,
+                    lease_owner='', lease_token='', lease_expires_at='', updated_at=?
+                WHERE {where}
                 """,
                 (
                     status,
@@ -1573,20 +2062,46 @@ class SqliteAcquisitionStore(_SqliteStore):
                     }),
                     error_code,
                     error_message,
+                    error_code,
+                    error_message,
                     now,
-                    task_id,
+                    *where_params,
                 ),
             )
+            if (lease_owner or lease_token or attempt_count is not None) and updated.rowcount != 1:
+                raise AcquisitionLeaseLostError(f"Acquisition task lease lost: {task_id}")
 
     def complete_cycle(
-        self, cycle_id: str, *, status: str, error_code: str = "", error_message: str = "", publication_id: str = ""
+        self,
+        cycle_id: str,
+        *,
+        status: str,
+        error_code: str = "",
+        error_message: str = "",
+        publication_id: str = "",
+        lease_owner: str = "",
+        lease_token: str = "",
     ) -> None:
         now = utc_now_iso()
         with self._connect() as connection:
-            connection.execute(
-                """
+            where = "cycle_id=?"
+            where_params: list[Any] = [cycle_id]
+            if lease_owner or lease_token:
+                if not lease_owner or not lease_token:
+                    raise ValueError("Cycle fencing requires both lease_owner and lease_token.")
+                self._assert_cycle_lease_connection(
+                    connection,
+                    cycle_id=cycle_id,
+                    lease_owner=lease_owner,
+                    lease_token=lease_token,
+                    now=now,
+                )
+                where += " AND status='running' AND lease_owner=? AND lease_token=?"
+                where_params.extend([lease_owner, lease_token])
+            updated = connection.execute(
+                f"""
                 UPDATE acquisition_cycles
-                SET status=?, lease_owner='', lease_expires_at='', completed_at=?,
+                SET status=?, lease_owner='', lease_token='', lease_expires_at='', completed_at=?,
                     publication_id=?, error_code=?, error_message=?,
                     jobs_observed=(SELECT COALESCE(SUM(jobs_observed),0) FROM acquisition_tasks WHERE cycle_id=?),
                     jobs_new=(SELECT COALESCE(SUM(jobs_new),0) FROM acquisition_tasks WHERE cycle_id=?),
@@ -1596,7 +2111,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     jobs_rejected=(SELECT COALESCE(SUM(jobs_rejected),0) FROM acquisition_tasks WHERE cycle_id=?),
                     jobs_duplicates=(SELECT COALESCE(SUM(jobs_duplicates),0) FROM acquisition_tasks WHERE cycle_id=?),
                     updated_at=?
-                WHERE cycle_id=?
+                WHERE {where}
                 """,
                 (
                     status,
@@ -1612,9 +2127,11 @@ class SqliteAcquisitionStore(_SqliteStore):
                     cycle_id,
                     cycle_id,
                     now,
-                    cycle_id,
+                    *where_params,
                 ),
             )
+            if (lease_owner or lease_token) and updated.rowcount != 1:
+                raise AcquisitionLeaseLostError(f"Acquisition cycle lease lost: {cycle_id}")
 
     def publish_valid_snapshot(
         self,
@@ -1626,6 +2143,8 @@ class SqliteAcquisitionStore(_SqliteStore):
         created_by: str = "system",
         scheduled_run_id: str = "",
         policy_version: str = DEFAULT_PUBLICATION_POLICY_VERSION,
+        lease_owner: str = "",
+        lease_token: str = "",
     ) -> str:
         target_ids = tuple(str(item) for item in valid_target_ids if str(item).strip())
         if not target_ids:
@@ -1640,6 +2159,14 @@ class SqliteAcquisitionStore(_SqliteStore):
         ).strip()
 
         def publish(connection):
+            if lease_token:
+                self._assert_cycle_lease_connection(
+                    connection,
+                    cycle_id=cycle_id,
+                    lease_owner=lease_owner,
+                    lease_token=lease_token,
+                    now=now,
+                )
             existing = connection.execute(
                 "SELECT publication_id FROM acquisition_publications WHERE cycle_id = ? LIMIT 1",
                 (cycle_id,),
@@ -1943,10 +2470,26 @@ class SqliteAcquisitionStore(_SqliteStore):
             normalized_scheduled_run_id = str(scheduled_run_id or "").strip()
             policy = get_publication_policy(policy_version)
             snapshot = _decode(row["snapshot_json"], [])
+            snapshot_rows = snapshot if isinstance(snapshot, list) else []
+            for snapshot_row in snapshot_rows:
+                if not isinstance(snapshot_row, Mapping):
+                    continue
+                expected_version = str(snapshot_row.get("current_version_id") or "")
+                canonical_id = str(snapshot_row.get("canonical_job_id") or "")
+                if not expected_version or not canonical_id:
+                    continue
+                current_version = connection.execute(
+                    "SELECT current_version_id FROM canonical_jobs WHERE canonical_job_id=?",
+                    (canonical_id,),
+                ).fetchone()
+                if current_version is None or str(current_version["current_version_id"] or "") != expected_version:
+                    raise StalePublicationHeadError(
+                        f"Publication candidate '{publication_id}' is stale for canonical job '{canonical_id}'."
+                    )
             preflight = self._build_publication_preflight(
                 connection,
                 previous_publication_id=previous_id,
-                next_snapshot=snapshot if isinstance(snapshot, list) else [],
+                next_snapshot=snapshot_rows,
                 cycle_id=str(row["cycle_id"] or ""),
                 policy_version=policy.version,
             )
@@ -1962,17 +2505,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                     normalized_scheduled_run_id, _json(preflight), policy.version, publication_id,
                 ),
             )
-            if expected_previous_publication_id is None:
-                connection.execute(
-                    """
-                    INSERT INTO acquisition_publication_head (head_id, publication_id, updated_at)
-                    VALUES (1, ?, ?)
-                    ON CONFLICT(head_id) DO UPDATE SET publication_id=excluded.publication_id,
-                        updated_at=excluded.updated_at
-                    """,
-                    (publication_id, now),
-                )
-            elif previous_id:
+            if previous_id:
                 changed = connection.execute(
                     """
                     UPDATE acquisition_publication_head
@@ -2518,7 +3051,14 @@ class SqliteAcquisitionStore(_SqliteStore):
             ).fetchall()
         return [item for row in rows if (item := self._admin_import_payload(row)) is not None]
 
-    def claim_next_job_import(self, *, lease_owner: str = "runr-worker") -> dict[str, Any] | None:
+    def claim_next_job_import(
+        self,
+        *,
+        lease_owner: str = "runr-worker",
+        worker_role: str = "acquisition",
+    ) -> dict[str, Any] | None:
+        if str(worker_role or "").strip().casefold() != "acquisition":
+            return None
         now = utc_now_iso()
 
         def claim(connection):
@@ -5810,12 +6350,20 @@ class SqliteAcquisitionStore(_SqliteStore):
         identity_key: str,
         identity_signature: str,
         original_url: str,
+        source_id: str = "",
+        application_url: str = "",
+        requisition_id: str = "",
     ):
-        """Resolve a source URL or a deterministic active cross-source match.
+        """Resolve a source URL or an evidence-backed active cross-source match.
 
         A closed canonical posting is intentionally excluded from the signature
         lookup so a later matching observation creates a new repost record and
         preserves the closed posting's immutable history.
+
+        The signature is only a candidate key.  It is not sufficient evidence
+        to merge two source observations: titles and locations are commonly
+        reused for distinct openings.  Cross-source signature matching therefore
+        requires a shared direct application URL or requisition identifier.
         """
 
         row = connection.execute(
@@ -5824,11 +6372,38 @@ class SqliteAcquisitionStore(_SqliteStore):
         ).fetchone()
         if row is not None:
             return row
+        evidence_clauses: list[str] = []
+        evidence_params: list[str] = []
+        normalized_application_url = canonicalize_url(str(application_url or ""))
+        if normalized_application_url:
+            evidence_clauses.append(
+                "EXISTS ("
+                "SELECT 1 FROM job_source_observations o "
+                "WHERE o.canonical_job_id=canonical_jobs.canonical_job_id "
+                "AND COALESCE(NULLIF(o.application_url, ''), NULLIF(o.apply_url, ''))=?"
+                ")"
+            )
+            evidence_params.append(normalized_application_url)
+        normalized_requisition_id = " ".join(str(requisition_id or "").casefold().split())
+        if normalized_requisition_id:
+            evidence_clauses.append(
+                "EXISTS ("
+                "SELECT 1 FROM job_source_observations o "
+                "WHERE o.canonical_job_id=canonical_jobs.canonical_job_id "
+                "AND lower(COALESCE(json_extract(o.payload_json, '$.requisition_id'), "
+                "json_extract(o.payload_json, '$.requisitionId'), "
+                "json_extract(o.payload_json, '$.reference'), ''))=?"
+                ")"
+            )
+            evidence_params.append(normalized_requisition_id)
+        if not evidence_clauses:
+            return None
         row = connection.execute(
-            """
+            f"""
             SELECT * FROM canonical_jobs
             WHERE identity_signature=?
               AND lifecycle_state IN ('active', 'stale', 'reposted')
+              AND ({' OR '.join(evidence_clauses)})
             ORDER BY
                 CASE lifecycle_state
                     WHEN 'active' THEN 0
@@ -5839,7 +6414,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 canonical_job_id
             LIMIT 1
             """,
-            (str(identity_signature or ""),),
+            (str(identity_signature or ""), *evidence_params),
         ).fetchone()
         if row is not None:
             return row
@@ -5908,35 +6483,61 @@ class SqliteAcquisitionStore(_SqliteStore):
         cycle_id: str,
         observed_at: str,
         grace_attempts: int,
-    ) -> None:
+    ) -> bool:
+        existing = connection.execute(
+            """
+            SELECT source_state_id, last_seen_at, last_checked_at
+            FROM job_source_states
+            WHERE target_id=? AND external_job_id=?
+            """,
+            (target_id, external_job_id),
+        ).fetchone()
+        if existing is not None and not (
+            _observation_is_newer(observed_at, str(existing["last_seen_at"] or ""))
+            or _observation_is_newer(observed_at, str(existing["last_checked_at"] or ""))
+        ):
+            return False
+        if existing is None:
+            connection.execute(
+                """
+                INSERT INTO job_source_states (
+                    source_state_id, target_id, canonical_job_id, external_job_id,
+                    lifecycle_state, absence_count, grace_attempts, last_seen_at,
+                    last_checked_at, last_cycle_id, updated_at
+                ) VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"source_state_{uuid4().hex}",
+                    target_id,
+                    canonical_job_id,
+                    external_job_id,
+                    max(1, int(grace_attempts)),
+                    observed_at,
+                    observed_at,
+                    cycle_id,
+                    observed_at,
+                ),
+            )
+            return True
         connection.execute(
             """
-            INSERT INTO job_source_states (
-                source_state_id, target_id, canonical_job_id, external_job_id,
-                lifecycle_state, absence_count, grace_attempts, last_seen_at,
-                last_checked_at, last_cycle_id, updated_at
-            ) VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?)
-            ON CONFLICT(target_id, external_job_id) DO UPDATE SET
-                canonical_job_id=excluded.canonical_job_id,
-                lifecycle_state='active', absence_count=0,
-                grace_attempts=excluded.grace_attempts,
-                last_seen_at=excluded.last_seen_at,
-                last_checked_at=excluded.last_checked_at,
-                last_cycle_id=excluded.last_cycle_id,
-                updated_at=excluded.updated_at
+            UPDATE job_source_states
+            SET canonical_job_id=?, lifecycle_state='active', absence_count=0,
+                grace_attempts=?, last_seen_at=?, last_checked_at=?,
+                last_cycle_id=?, updated_at=?
+            WHERE source_state_id=?
             """,
             (
-                f"source_state_{uuid4().hex}",
-                target_id,
                 canonical_job_id,
-                external_job_id,
                 max(1, int(grace_attempts)),
                 observed_at,
                 observed_at,
                 cycle_id,
                 observed_at,
+                str(existing["source_state_id"]),
             ),
         )
+        return True
 
     @staticmethod
     def _recompute_lifecycle(connection, canonical_job_id: str, *, now: str) -> str:
@@ -5954,8 +6555,13 @@ class SqliteAcquisitionStore(_SqliteStore):
         else:
             lifecycle = "unknown"
         connection.execute(
-            "UPDATE canonical_jobs SET lifecycle_state=?, updated_at=? WHERE canonical_job_id=?",
-            (lifecycle, now, canonical_job_id),
+            """
+            UPDATE canonical_jobs
+            SET lifecycle_state=?,
+                updated_at=CASE WHEN updated_at > ? THEN updated_at ELSE ? END
+            WHERE canonical_job_id=?
+            """,
+            (lifecycle, now, now, canonical_job_id),
         )
         return lifecycle
 

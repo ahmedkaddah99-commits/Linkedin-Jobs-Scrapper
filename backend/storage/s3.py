@@ -64,6 +64,8 @@ def _is_missing_object_error(exc: Exception) -> bool:
 
 
 class S3ObjectStorage:
+    supports_direct_download = True
+
     def __init__(
         self,
         *,

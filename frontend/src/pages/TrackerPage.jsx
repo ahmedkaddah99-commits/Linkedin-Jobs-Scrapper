@@ -1227,6 +1227,7 @@ function AddApplicationModal({ onClose, onCreate, busy }) {
 
 function EmailSyncPopover({
   integration,
+  task,
   busy,
   onConnect,
   onSync,
@@ -1292,6 +1293,12 @@ function EmailSyncPopover({
               </Button>
             )}
           </div>
+          {task && task.state !== "completed" ? (
+            <p className="mt-3 text-xs text-[#6e8294]">
+              Email sync: {String(task.state || "queued").replaceAll("_", " ")}.
+              You can close this panel and return later.
+            </p>
+          ) : null}
           {detections.length ? (
             <div className="mt-5 border-t border-[#e1e8ee] pt-4">
               <p className="text-xs font-bold uppercase tracking-[0.1em] text-[#6e8294]">
@@ -1437,6 +1444,7 @@ export default function TrackerPage() {
     updateCard,
     deleteCard,
     emailIntegration,
+    syncTask,
     integrationBusy,
     loadEmailIntegration,
     refreshEmailIntegration,
@@ -1676,6 +1684,7 @@ export default function TrackerPage() {
                 <EmailSyncPopover
                   busy={integrationBusy}
                   integration={emailIntegration}
+                  task={syncTask}
                   onApprove={approveDetection}
                   onClose={() => setEmailOpen(false)}
                   onConnect={connectGoogle}
