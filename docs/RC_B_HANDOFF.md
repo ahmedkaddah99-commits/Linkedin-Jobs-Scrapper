@@ -55,13 +55,17 @@ provider logs, or large datasets are included.
 
 ## Contract details
 
-The chosen primary mechanism is systemd. All service units run as `runr`, use
-protected host settings and bounded CPU/memory/tasks. The acquisition role
-uses `/opt/runr/.env.acquisition` and cannot inherit the customer/API
+The chosen primary mechanism is systemd. API/customer services run as
+`runr`; the acquisition service runs as the separate non-root
+`runr-acquisition` account. All units use protected host settings and bounded
+CPU/memory/tasks. The acquisition role uses
+`/opt/runr/.env.acquisition` and cannot inherit the customer/API
 `/opt/runr/.env`; the frontend reads no environment file. The acquisition
 worker has explicit input/state/export/backup roots and a stable
 `vps_acquisition_worker` identity. The VPS API binds loopback via
-`RUNR_API_HOST=127.0.0.1`; no public scraper API is required.
+`RUNR_API_HOST=127.0.0.1`; no public scraper API is required. Actual
+provider/database permission granularity remains a host-side verification
+item; shared full-scope credentials are a residual risk until verified.
 
 Python is pinned at setup/deploy boundaries to exactly `Python 3.12.7` and
 the venv is invoked as `/opt/runr/.venv/bin/python -m pip`. The shared local
@@ -132,6 +136,6 @@ Leave `.env*`, `/var/lib/runr`, `/srv/runr`, backups, and journald data intact.
 Do not use `git reset`, `git clean`, whole-file rollback, or database restore
 over newer customer writes.
 
-Runtime/evidence commit SHA: `b4f8147fbd4e374af434043d5f78eb74910babfa`.
+Runtime/evidence commit SHA: `e7c70a9b52c1d839ee3df24c63efced106d7d18a`.
 Final handoff commit SHA: record with `git rev-parse HEAD` after this
 documentation-only update.
