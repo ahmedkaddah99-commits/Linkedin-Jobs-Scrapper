@@ -165,17 +165,25 @@ was staged. The target's ignored inventory includes caches, `frontend/node_modul
 assets and the ignored `Jobs-Urls` directory. These remain in their persistent
 target/source locations and are not copied into disposable worktrees.
 
-The authoritative acquisition inputs/state are preserved in the persistent
-source worktree and external evidence locations recorded by
+The authoritative source inputs and available runtime evidence are preserved
+outside the disposable worktrees in the locations recorded by
 `docs/ACQUISITION_RUNTIME_DATA_INVENTORY.md`, including:
 
 - `C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\Company-Urls\...`
-  for source inputs and enrichment evidence;
-- `C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\Jobs-Urls\...`
-  for the approximately 3.48 GB authoritative LinkedIn state, employer state,
-  and historical state;
+  for source inputs and enrichment evidence (confirmed present);
+- `C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.backend_data\...`
+  for persistent local application runtime data (confirmed present, not
+  treated as the authoritative 14-table LinkedIn producer state);
 - `C:\Users\ahmed\Projects_Local\runr-release-evidence\...` for the recorded
-  Turso restore-verification artifact.
+  Turso restore-verification artifact (confirmed present).
+
+The inventory's documented
+`C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\Jobs-Urls\...`
+location for the approximately 3.48 GB LinkedIn state, employer state and
+historical state was not found during this setup. The target checkout's
+`Jobs-Urls` directory contains only `webshare_linkedin_benchmark.py`. This is
+an explicit unresolved restore/data-preservation blocker for RC-024 and any
+acquisition resume; no disposable worktree is being treated as its source.
 
 No active SQLite database was copied during setup. Future copies must stop or
 quiesce the owning writer and use the SQLite Online Backup API or an equivalent
