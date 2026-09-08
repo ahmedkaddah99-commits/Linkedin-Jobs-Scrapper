@@ -19,10 +19,11 @@ acquisition, a production migration, a Render deployment, or a GitHub push.
 
 C was created from the exact S0 launch commit, then fast-forwarded over the
 target's documentation-only manifest commits so an accepted C commit can
-fast-forward the persistent target. A remains clean at the shared launch
-commit. B remains based at the shared launch commit but has visible, uncommitted
-RC-023 runtime files; it has not supplied a clean freeze tip and is not merged
-by this handoff.
+fast-forward the persistent target. A remains based at the shared launch
+commit but has a visible, uncommitted `backend/acquisition/analytics.py` RC-A
+change. B remains based at the shared launch commit but has visible,
+uncommitted RC-023 runtime files. Neither lane has supplied a clean freeze tip,
+and neither is merged by this handoff.
 
 ## RC-022 verification
 
@@ -37,7 +38,9 @@ The focused release/runtime regression was run from this C worktree:
 
 ```powershell
 & 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest -q tests/test_rc022_build_release_contract.py tests/test_database_migrations.py tests/test_acquisition_runtime_manifest.py tests/test_worker_service.py
-# 43 passed, 4 subtests passed in 75.27s
+# initial run: 43 passed, 4 subtests passed in 75.27s
+# final rerun at C tip 27fff6cca858abf0ca3d84496e7aabe781f8f4b5:
+# 43 passed, 4 subtests passed in 38.58s
 ```
 
 The RC-022-only evidence already recorded in
