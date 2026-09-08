@@ -5,6 +5,10 @@ services:
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: ./dist
+    buildFilter:
+      paths:
+        - frontend/**
+        - render.yaml
     autoDeployTrigger: commit
     domains:
       - userunr.com
@@ -18,6 +22,10 @@ services:
           envVarKey: RENDER_EXTERNAL_HOSTNAME
       - key: VITE_CLERK_PUBLISHABLE_KEY
         sync: false
+      - key: RUNR_RELEASE_BRANCH
+        value: deployment/render-turso-r2
+      - key: RUNR_RELEASE_CONTRACT_VERSION
+        value: runr-contract-v1
       # Frontend-only personalized jobs preview; enabled for Runr verification.
       - key: VITE_PERSONALIZED_JOBS_EXPERIENCE
         value: "1"
@@ -39,15 +47,36 @@ services:
     runtime: docker
     plan: starter
     region: frankfurt
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.api
     dockerCommand: ./deploy/start.sh api
     preDeployCommand: ./deploy/start.sh migrate
+    buildFilter:
+      paths:
+        - backend/**
+        - workspace_runner.py
+        - requirements-linux.txt
+        - Dockerfile.api
+        - deploy/start.sh
+        - frontend/package.json
+        - frontend/package-lock.json
+        - frontend/scripts/render-cv-pdf.mjs
+        - frontend/src/lib/cvStudio.js
+        - frontend/src/lib/cvSocialLinks.js
+        - render.yaml
     healthCheckPath: /health/live
     autoDeployTrigger: commit
     maxShutdownDelaySeconds: 60
     envVars:
       - key: RUNR_ENV
         value: production
+      - key: RUNR_RELEASE_BRANCH
+        value: deployment/render-turso-r2
+      - key: RUNR_RELEASE_CONTRACT_VERSION
+        value: runr-contract-v1
+      - key: RUNR_MIGRATION_HEAD
+        value: 058_customer_task_queue
+      - key: RUNR_CUSTOMER_TASKS_ASYNC
+        value: "true"
       - key: RUNR_PRIVATE_TEST_DEPLOYMENT
         value: "false"
       - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
@@ -146,8 +175,22 @@ services:
     runtime: docker
     plan: standard
     region: frankfurt
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./Dockerfile.worker
     dockerCommand: ./deploy/start.sh worker
+    buildFilter:
+      paths:
+        - backend/**
+        - scripts/**
+        - workspace_runner.py
+        - requirements-linux.txt
+        - Dockerfile.worker
+        - deploy/start.sh
+        - frontend/package.json
+        - frontend/package-lock.json
+        - frontend/scripts/render-cv-pdf.mjs
+        - frontend/src/lib/cvStudio.js
+        - frontend/src/lib/cvSocialLinks.js
+        - render.yaml
     autoDeployTrigger: commit
     previews:
       plan: starter
@@ -155,6 +198,14 @@ services:
     envVars:
       - key: RUNR_ENV
         value: production
+      - key: RUNR_RELEASE_BRANCH
+        value: deployment/render-turso-r2
+      - key: RUNR_RELEASE_CONTRACT_VERSION
+        value: runr-contract-v1
+      - key: RUNR_MIGRATION_HEAD
+        value: 058_customer_task_queue
+      - key: RUNR_CUSTOMER_TASKS_ASYNC
+        value: "true"
       - key: RUNR_PRIVATE_TEST_DEPLOYMENT
         value: "false"
       - key: RUNR_ACQUISITION_LIVE_NETWORK_ENABLED
@@ -186,7 +237,13 @@ services:
       - key: RUNR_DATA_DIR
         value: .backend_data
       - key: WORKER_ID
-        value: render_worker
+        value: render_customer_worker
+      - key: WORKER_ROLE
+        value: customer
+      - key: RUNR_WORKER_VERSION
+        value: rc018-v1
+      - key: RUNR_WORKER_CAPACITY_SLOTS
+        value: "1"
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN

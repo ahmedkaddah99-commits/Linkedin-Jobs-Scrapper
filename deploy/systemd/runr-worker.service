@@ -7,7 +7,9 @@ PartOf=runr.target
 Type=simple
 WorkingDirectory=/opt/runr
 EnvironmentFile=/opt/runr/.env
-ExecStart=/opt/runr/.venv/bin/python workspace_runner.py run-worker --worker-id prod_worker
+Environment=WORKER_ROLE=customer
+Environment=WORKER_ID=prod_worker
+ExecStart=/opt/runr/deploy/start.sh worker
 Restart=always
 RestartSec=5
 

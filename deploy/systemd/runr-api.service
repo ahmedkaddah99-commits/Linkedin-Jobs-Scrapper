@@ -7,7 +7,7 @@ PartOf=runr.target
 Type=simple
 WorkingDirectory=/opt/runr
 EnvironmentFile=/opt/runr/.env
-ExecStart=/opt/runr/.venv/bin/python workspace_runner.py serve-api
+ExecStart=/opt/runr/deploy/start.sh api
 Restart=always
 RestartSec=5
 

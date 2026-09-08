@@ -20,6 +20,15 @@ from backend.domain.models import (
     WORKER_STATUS_RUNNING,
     RunRecord,
 )
+from backend.worker.roles import (
+    TASK_FAMILY_ACQUISITION,
+    TASK_FAMILY_CUSTOMER,
+    WORKER_ROLE_ACQUISITION,
+    WORKER_ROLE_CUSTOMER,
+    WORKER_VERSION_DEFAULT,
+    allowed_task_families,
+    normalize_worker_role,
+)
 
 
 def _is_handled_worker_failure(exc: BaseException) -> bool:
@@ -64,7 +73,27 @@ class WorkerService:
     company_enrichment_check_interval_seconds: float = 300.0
     slow_task_warning_seconds: float = 300.0
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("backend.worker.service"))
+    role: str = WORKER_ROLE_CUSTOMER
+    worker_version: str = field(
+        default_factory=lambda: str(os.getenv("RUNR_WORKER_VERSION") or WORKER_VERSION_DEFAULT).strip()
+        or WORKER_VERSION_DEFAULT
+    )
+    capacity_slots: int = field(default_factory=lambda: _positive_int_env("RUNR_WORKER_CAPACITY_SLOTS", 1))
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.role = normalize_worker_role(self.role)
+        self.worker_version = str(self.worker_version or WORKER_VERSION_DEFAULT).strip() or WORKER_VERSION_DEFAULT
+        self.capacity_slots = max(1, int(self.capacity_slots))
+
+    def _worker_metadata(self, *, active_task_family: str = "idle") -> dict[str, Any]:
+        return {
+            "worker_role": self.role,
+            "worker_version": self.worker_version,
+            "capacity_slots": self.capacity_slots,
+            "active_task_family": str(active_task_family or "idle"),
+            "allowed_task_families": allowed_task_families(self.role),
+        }
 
     def _log_extra(
         self,
@@ -78,6 +107,9 @@ class WorkerService:
             "worker_id": self.worker_id,
             "host_name": self.host_name,
             "worker_process_id": self.process_id,
+            "worker_role": self.role,
+            "worker_version": self.worker_version,
+            "capacity_slots": self.capacity_slots,
             "task_name": task_name,
             "lease_seconds": self.lease_seconds,
         }
@@ -160,7 +192,13 @@ class WorkerService:
         else:
             self.logger.error("worker_acquisition_cycle_failed", extra=extra)
 
-    def heartbeat(self, *, status: str = WORKER_STATUS_IDLE, current_run_id: str = ""):
+    def heartbeat(
+        self,
+        *,
+        status: str = WORKER_STATUS_IDLE,
+        current_run_id: str = "",
+        active_task_family: str = "idle",
+    ):
         return self.application.heartbeat_worker(
             worker_id=self.worker_id,
             status=status,
@@ -168,6 +206,7 @@ class WorkerService:
             host_name=self.host_name,
             process_id=self.process_id,
             lease_seconds=self.lease_seconds,
+            metadata=self._worker_metadata(active_task_family=active_task_family),
         )
 
     def renew_run_lease(self, run: RunRecord):
@@ -178,6 +217,7 @@ class WorkerService:
             host_name=self.host_name,
             process_id=self.process_id,
             lease_seconds=self.lease_seconds,
+            metadata=self._worker_metadata(active_task_family=TASK_FAMILY_CUSTOMER),
         )
 
     def stop(self) -> None:
@@ -208,29 +248,69 @@ class WorkerService:
                 ),
             )
 
-        if isinstance(self.application, BackendApplication):
-            admin_import_result = self.application.process_next_admin_job_import(worker_id=self.worker_id)
-            if admin_import_result is not None:
-                self.logger.info(
-                    "worker_admin_job_import_complete",
-                    extra=self._log_extra(
-                        task_name="admin_job_import",
-                        import_id=str((admin_import_result.get("import") or {}).get("import_id") or ""),
-                    ),
-                )
-                return admin_import_result
+        if self.role == WORKER_ROLE_ACQUISITION:
+            if isinstance(self.application, BackendApplication):
+                self.heartbeat(status=WORKER_STATUS_RUNNING, active_task_family=TASK_FAMILY_ACQUISITION)
+                try:
+                    admin_import_result = self.application.process_next_admin_job_import(
+                        worker_id=self.worker_id,
+                        worker_role=self.role,
+                    )
+                finally:
+                    self.heartbeat(status=WORKER_STATUS_IDLE, active_task_family="idle")
+                if admin_import_result is not None:
+                    self.logger.info(
+                        "worker_admin_job_import_complete",
+                        extra=self._log_extra(
+                            task_name="admin_job_import",
+                            import_id=str((admin_import_result.get("import") or {}).get("import_id") or ""),
+                        ),
+                    )
+                    return admin_import_result
+            return None
 
         # Personalized job intelligence has its own durable queue.  It is
         # deliberately processed before run claims so GET requests can only
-        # enqueue pending work and never execute a model inline.
+        # enqueue pending work and never execute a model inline.  Only the
+        # customer role is allowed to claim this queue.
         if isinstance(self.application, BackendApplication):
-            intelligence_result = self.application.process_next_personalized_intelligence()
+            self.heartbeat(status=WORKER_STATUS_RUNNING, active_task_family=TASK_FAMILY_CUSTOMER)
+            try:
+                intelligence_result = self.application.process_next_personalized_intelligence(
+                    worker_role=self.role,
+                    worker_id=self.worker_id,
+                    lease_seconds=max(1, int(self.lease_seconds)),
+                )
+            finally:
+                self.heartbeat(status=WORKER_STATUS_IDLE, active_task_family="idle")
             if intelligence_result is not None:
                 self.logger.info(
                     "worker_intelligence_task_complete",
                     extra=self._log_extra(task_name="personalized_job_intelligence", cache_id=intelligence_result.get("cache_id")),
                 )
                 return intelligence_result
+
+            self.heartbeat(status=WORKER_STATUS_RUNNING, active_task_family=TASK_FAMILY_CUSTOMER)
+            try:
+                customer_task_result = self.application.process_next_customer_task(
+                    worker_role=self.role,
+                    worker_id=self.worker_id,
+                    lease_seconds=max(1, int(self.lease_seconds)),
+                )
+            finally:
+                self.heartbeat(status=WORKER_STATUS_IDLE, active_task_family="idle")
+            if customer_task_result is not None:
+                task = customer_task_result.get("task") if isinstance(customer_task_result, dict) else {}
+                self.logger.info(
+                    "worker_customer_task_complete",
+                    extra=self._log_extra(
+                        task_name=str((task or {}).get("task_type") or "customer_task"),
+                        customer_task_id=str((task or {}).get("task_id") or ""),
+                        customer_task_state=str((task or {}).get("state") or ""),
+                        customer_task_attempt_count=int((task or {}).get("attempt_count") or 0),
+                    ),
+                )
+                return customer_task_result
 
         try:
             claimed_run = self.application.claim_next_queued_run(
@@ -240,6 +320,8 @@ class WorkerService:
                 lease_seconds=self.lease_seconds,
                 recover_stale_workers=False,
                 enqueue_scheduled_runs=enqueue_scheduled_runs,
+                worker_role=self.role,
+                worker_metadata=self._worker_metadata(active_task_family=TASK_FAMILY_CUSTOMER),
             )
         except BaseException as exc:
             if not _is_handled_worker_failure(exc):
@@ -364,11 +446,15 @@ class WorkerService:
         try:
             while not self._stop_event.is_set():
                 now = time.monotonic()
-                if now - last_maintenance_check >= 60.0:
+                if self.role == WORKER_ROLE_ACQUISITION and now - last_maintenance_check >= 60.0:
                     last_maintenance_check = now
                     maintenance_started_at = time.perf_counter()
                     try:
-                        self.application.maybe_run_scheduled_scrapeops_maintenance(source="worker")
+                        self.heartbeat(status=WORKER_STATUS_RUNNING, active_task_family=TASK_FAMILY_ACQUISITION)
+                        try:
+                            self.application.maybe_run_scheduled_scrapeops_maintenance(source="worker")
+                        finally:
+                            self.heartbeat(status=WORKER_STATUS_IDLE, active_task_family="idle")
                     except Exception:
                         self.logger.exception(
                             "worker_scheduled_maintenance_failed",
@@ -401,9 +487,13 @@ class WorkerService:
                 )
                 if should_check_scheduled_runs:
                     last_scheduled_run_check = now
-                    if isinstance(self.application, BackendApplication):
+                    if self.role == WORKER_ROLE_ACQUISITION and isinstance(self.application, BackendApplication):
                         try:
-                            acquisition_result = self.application.run_due_acquisition()
+                            self.heartbeat(status=WORKER_STATUS_RUNNING, active_task_family=TASK_FAMILY_ACQUISITION)
+                            try:
+                                acquisition_result = self.application.run_due_acquisition()
+                            finally:
+                                self.heartbeat(status=WORKER_STATUS_IDLE, active_task_family="idle")
                         except BaseException as exc:
                             if not _is_handled_worker_failure(exc):
                                 raise
@@ -418,14 +508,22 @@ class WorkerService:
                     or now - last_company_enrichment_check
                     >= max(1.0, float(self.company_enrichment_check_interval_seconds))
                 )
-                if should_check_company_enrichment and isinstance(self.application, BackendApplication):
+                if (
+                    should_check_company_enrichment
+                    and self.role == WORKER_ROLE_ACQUISITION
+                    and isinstance(self.application, BackendApplication)
+                ):
                     last_company_enrichment_check = now
                     try:
-                        enrichment_result = self.application.run_due_company_enrichment(
-                            max_companies=_positive_int_env("RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES", 25),
-                            concurrency=_positive_int_env("RUNR_COMPANY_ENRICHMENT_CONCURRENCY", 5),
-                            request_budget=_positive_int_env("RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET", 25),
-                        )
+                        self.heartbeat(status=WORKER_STATUS_RUNNING, active_task_family=TASK_FAMILY_ACQUISITION)
+                        try:
+                            enrichment_result = self.application.run_due_company_enrichment(
+                                max_companies=_positive_int_env("RUNR_COMPANY_ENRICHMENT_MAX_COMPANIES", 25),
+                                concurrency=_positive_int_env("RUNR_COMPANY_ENRICHMENT_CONCURRENCY", 5),
+                                request_budget=_positive_int_env("RUNR_COMPANY_ENRICHMENT_REQUEST_BUDGET", 25),
+                            )
+                        finally:
+                            self.heartbeat(status=WORKER_STATUS_IDLE, active_task_family="idle")
                     except BaseException as exc:
                         if not _is_handled_worker_failure(exc):
                             raise
@@ -444,7 +542,9 @@ class WorkerService:
                 try:
                     run = self.process_next(
                         auto_retry_failed=auto_retry_failed,
-                        enqueue_scheduled_runs=should_check_scheduled_runs,
+                        enqueue_scheduled_runs=(
+                            should_check_scheduled_runs and self.role == WORKER_ROLE_CUSTOMER
+                        ),
                     )
                 except BaseException as exc:
                     if not _is_handled_worker_failure(exc):

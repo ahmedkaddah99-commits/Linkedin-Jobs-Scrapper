@@ -188,11 +188,32 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build production image
+      - name: Build API image
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.api
           push: false
           load: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            RUNR_RELEASE_COMMIT=${{ github.sha }}
+            RUNR_RELEASE_BRANCH=${{ github.ref_name }}
+            RUNR_RELEASE_SERVICE=api
+          tags: runr-api:ci-${{ github.sha }}
+          cache-from: type=gha,scope=runr-api
+          cache-to: type=gha,mode=max,scope=runr-api
+
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.worker
+          push: false
+          load: false
+          build-args: |
+            RUNR_RELEASE_COMMIT=${{ github.sha }}
+            RUNR_RELEASE_BRANCH=${{ github.ref_name }}
+            RUNR_RELEASE_SERVICE=worker
+          tags: runr-worker:ci-${{ github.sha }}
+          cache-from: type=gha,scope=runr-worker
+          cache-to: type=gha,mode=max,scope=runr-worker

@@ -34,8 +34,7 @@ RUN npm --prefix frontend ci \
 
 COPY . .
 
-RUN npm --prefix frontend run build \
-    && chmod +x deploy/start.sh \
+RUN chmod +x deploy/start.sh \
     && useradd --create-home --uid 10001 runr \
     && mkdir -p /app/.backend_data /ms-playwright \
     && chown -R runr:runr /app /ms-playwright

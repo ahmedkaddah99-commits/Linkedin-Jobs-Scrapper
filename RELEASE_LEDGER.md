@@ -223,6 +223,25 @@ were clean at inspection time.
   frontend, and migration checks pass; no speculative Docker/configuration
   change was made.
 
+## RC-022 scoped release contract
+
+- Target branch: `deployment/render-turso-r2`.
+- Scoped commit: this scoped RC-022 commit; Git records the final SHA.
+- Release files: separate `Dockerfile.api` and `Dockerfile.worker`, runtime
+  release metadata, Render build filters, CI API/worker image builds, and the
+  systemd/VPS entrypoints.
+- Compatibility contract: `runr-contract-v1`; migration head recorded as
+  `058_customer_task_queue`.
+- Frontend-only changes rebuild the static frontend without restarting API or
+  workers. Shared backend/renderer/dependency changes rebuild the affected
+  runtime images.
+- Offline verification: RC-022 focused suite `6 passed`; combined RC-001--021
+  regression `255 passed, 8 subtests`; frontend suite `167 passed`; frontend
+  production build passed; Ruff and diff checks passed.
+- Docker image builds and mixed-version staging remain pending because the
+  local Docker Linux daemon was unavailable. No deployment, migration, or
+  provider request was performed for RC-022.
+
 ## Wave 3 deployment hold
 
 - Production branch push completed: `deployment/render-turso-r2` points to
