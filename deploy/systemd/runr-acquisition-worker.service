@@ -1,6 +1,6 @@
 [Unit]
-Description=Runr worker
-After=runr-api.service network-online.target time-sync.target
+Description=Runr acquisition worker
+After=network-online.target time-sync.target
 Wants=network-online.target
 PartOf=runr.target
 
@@ -10,11 +10,15 @@ WorkingDirectory=/opt/runr
 User=runr
 Group=runr
 UMask=0077
-EnvironmentFile=/opt/runr/.env
+EnvironmentFile=/opt/runr/.env.acquisition
 Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
-Environment=RUNR_DATA_DIR=/var/lib/runr/customer-data
-Environment=WORKER_ROLE=customer
-Environment=WORKER_ID=vps_customer_worker
+Environment=RUNR_DATA_DIR=/var/lib/runr/acquisition-data
+Environment=RUNR_ACQUISITION_INPUT_ROOT=/srv/runr/shared/inputs
+Environment=RUNR_ACQUISITION_STATE_ROOT=/srv/runr/state
+Environment=RUNR_ACQUISITION_EXPORT_ROOT=/srv/runr/exports
+Environment=RUNR_ACQUISITION_BACKUP_ROOT=/srv/runr/backups
+Environment=WORKER_ROLE=acquisition
+Environment=WORKER_ID=vps_acquisition_worker
 ExecStart=/opt/runr/deploy/start.sh worker
 Restart=always
 RestartSec=5
@@ -35,5 +39,7 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/runr
+ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports /srv/runr/backups
 
+[Install]
+WantedBy=multi-user.target

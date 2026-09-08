@@ -1,13 +1,38 @@
 [Unit]
 Description=Runr API
-After=network.target
+After=network-online.target time-sync.target
+Wants=network-online.target
 PartOf=runr.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/runr
+User=runr
+Group=runr
+UMask=0077
 EnvironmentFile=/opt/runr/.env
+Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
+Environment=RUNR_DATA_DIR=/var/lib/runr/api-data
+Environment=RUNR_API_HOST=127.0.0.1
 ExecStart=/opt/runr/deploy/start.sh api
 Restart=always
 RestartSec=5
+TimeoutStopSec=60
+CPUAccounting=true
+CPUQuota=200%
+MemoryAccounting=true
+MemoryHigh=3G
+MemoryMax=4G
+TasksMax=256
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/runr
 
