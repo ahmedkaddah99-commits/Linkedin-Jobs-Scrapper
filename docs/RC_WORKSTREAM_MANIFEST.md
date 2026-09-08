@@ -15,7 +15,7 @@ performed by this setup.
 | HEAD at setup | `30ef992b7945ff0998704a550fdc2f893b24476f` |
 | Target divergence after confirmed fetch | `0 ahead / 0 behind` |
 | Common implementation base | `30ef992b7945ff0998704a550fdc2f893b24476f` |
-| Manifest commit | Recorded in the follow-up manifest commit below |
+| Manifest commit / common launch commit | `9cbc6fc1becdf44a82f500dc3c2937b61b9729b3` before this SHA-record amendment |
 
 The target path above is the persistent destination for final integrated code.
 The VS Code target checkout is already on the final integration branch. The
@@ -217,7 +217,8 @@ by this setup.
 
 ## Launch commit record
 
-The manifest is committed on `deployment/render-turso-r2` as a scoped setup
-change. After that commit is created, this section is amended once with the
-resulting full commit SHA. The amended manifest commit is the common launch
-commit that every A/B/C worktree must resolve exactly.
+The first scoped manifest commit was
+`9cbc6fc1becdf44a82f500dc3c2937b61b9729b3`. This SHA-record amendment makes
+the final common launch commit explicit. After the amendment commit is
+created, every A/B/C worktree must resolve that resulting full SHA exactly;
+the first manifest commit is its immediate parent and is retained in history.
