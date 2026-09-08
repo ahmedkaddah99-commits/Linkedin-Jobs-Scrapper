@@ -15,7 +15,7 @@ import json
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -884,8 +884,16 @@ def load_manifest(path: str | Path, *, verify_sidecar: bool = True) -> dict[str,
         raise ValueError("eligibility manifest hash mismatch")
     if verify_sidecar:
         raw_sidecar = payload.get("raw_sidecar") or {}
-        sidecar_path = Path(str(raw_sidecar.get("path") or ""))
-        if not sidecar_path.is_absolute():
+        recorded_sidecar_path = str(raw_sidecar.get("path") or "")
+        sidecar_path = Path(recorded_sidecar_path)
+        # A manifest can be restored on Linux even when its recorded path was
+        # produced on Windows.  pathlib.Path follows the host OS, so a
+        # Windows drive-qualified path is otherwise misclassified as a
+        # relative path and joined to the manifest directory verbatim.
+        recorded_path_is_absolute = sidecar_path.is_absolute() or PureWindowsPath(
+            recorded_sidecar_path
+        ).is_absolute()
+        if not recorded_path_is_absolute:
             sidecar_path = manifest_path.parent / sidecar_path
         elif not sidecar_path.exists():
             # Historical manifests were generated on Windows and may retain

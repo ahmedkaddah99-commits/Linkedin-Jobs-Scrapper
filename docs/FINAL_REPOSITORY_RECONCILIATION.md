@@ -124,5 +124,14 @@ The complete API shard passed `123` tests and retained exactly the two known
 baseline failures: `BackendApiTests.test_tracker_api` and
 `BackendApiTests.test_tracker_ats_detail_returns_persisted_read_only_diagnostics`.
 
-The final cleanup documentation and this focused CI correction are committed
-after the two release commits above.
+The first GitHub Actions run on the reconciled commit also exposed one
+Linux-only portability defect that the required Windows 3.12.7 run could not
+exercise: `tests/test_acquisition_runtime_manifest.py::test_historical_absolute_sidecar_path_can_be_restored_next_to_manifest`
+could not recognize a recorded Windows drive-qualified sidecar path on POSIX.
+The loader now recognizes both host-native and Windows absolute paths before
+falling back to a colocated restored sidecar. The focused manifest file passes
+locally, and the follow-up GitHub Actions verification is recorded in the
+final handoff.
+
+The final cleanup documentation and focused CI corrections are committed after
+the two release commits above.
