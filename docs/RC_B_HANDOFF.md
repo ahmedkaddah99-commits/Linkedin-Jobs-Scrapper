@@ -132,4 +132,6 @@ Leave `.env*`, `/var/lib/runr`, `/srv/runr`, backups, and journald data intact.
 Do not use `git reset`, `git clean`, whole-file rollback, or database restore
 over newer customer writes.
 
-Final B commit SHA: `4cd1a295c3a32e10961ae00c6b64e2d86c0c35f5`.
+Runtime/evidence commit SHA: `b4f8147fbd4e374af434043d5f78eb74910babfa`.
+Final handoff commit SHA: record with `git rev-parse HEAD` after this
+documentation-only update.
