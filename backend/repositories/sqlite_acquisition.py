@@ -1307,6 +1307,7 @@ class SqliteAcquisitionStore(_SqliteStore):
                 "new": 0,
                 "updated": 0,
                 "unchanged": 0,
+                "stale_ignored": 0,
                 "closed": 0,
                 "rejected": 0,
                 "duplicates": 0,

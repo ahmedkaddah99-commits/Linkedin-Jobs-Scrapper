@@ -121,6 +121,7 @@ class ProductCompletionWaveRepositoryTests(unittest.TestCase):
             )
         self.assertEqual(result["observed"], 26)
         self.assertEqual(result["rejected"], 0)
+        self.assertEqual(result["stale_ignored"], 0)
         with self.store._connect() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM job_source_observations WHERE cycle_id=?", ("cycle-batch",)).fetchone()[0], 26)
 
