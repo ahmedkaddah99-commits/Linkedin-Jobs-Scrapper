@@ -15,7 +15,8 @@ performed by this setup.
 | HEAD at setup | `30ef992b7945ff0998704a550fdc2f893b24476f` |
 | Target divergence after confirmed fetch | `0 ahead / 0 behind` |
 | Common implementation base | `30ef992b7945ff0998704a550fdc2f893b24476f` |
-| Manifest commit / common launch commit | `9cbc6fc1becdf44a82f500dc3c2937b61b9729b3` before this SHA-record amendment |
+| Manifest setup commit | `9cbc6fc1becdf44a82f500dc3c2937b61b9729b3` |
+| Common launch commit | `b0f47788c1a5d385ae4c3c770d5cd990f586a626` |
 
 The target path above is the persistent destination for final integrated code.
 The VS Code target checkout is already on the final integration branch. The
@@ -218,7 +219,7 @@ by this setup.
 ## Launch commit record
 
 The first scoped manifest commit was
-`9cbc6fc1becdf44a82f500dc3c2937b61b9729b3`. This SHA-record amendment makes
-the final common launch commit explicit. After the amendment commit is
-created, every A/B/C worktree must resolve that resulting full SHA exactly;
-the first manifest commit is its immediate parent and is retained in history.
+`9cbc6fc1becdf44a82f500dc3c2937b61b9729b3`. The SHA-record amendment
+`b0f47788c1a5d385ae4c3c770d5cd990f586a626` is the common launch commit used
+by all three created worktrees. This final handoff-record commit is
+documentation-only; it must not change the A/B/C launch base.
