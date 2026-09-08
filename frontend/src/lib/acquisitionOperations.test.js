@@ -7,9 +7,11 @@ import {
   buildInspectionPath,
   buildJobsPath,
   getResourceViewState,
+  getCoverageStateLabel,
   getJobsRangeLabel,
   getSourceCollectionState,
   getSourceOperationalState,
+  getWorkerLivenessLabel,
   parseJobFilters,
 } from "./acquisitionOperations.js";
 
@@ -90,6 +92,19 @@ test("source labels are derived from backend status and limits, not connector na
     getSourceCollectionState({ status: "ready" }, {}),
     "Completeness unavailable",
   );
+});
+
+test("RC-025 fixture states remain explicit in frontend labels", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../../tests/fixtures/rc025_operational_dashboard.json", import.meta.url), "utf8"));
+  assert.equal(getCoverageStateLabel({ coverage_state: "partial" }), "Partial");
+  assert.equal(getCoverageStateLabel({ coverage_state: "failed" }), "Failed");
+  assert.equal(getWorkerLivenessLabel({ liveness: "stale" }), "Stale heartbeat");
+  assert.equal(getWorkerLivenessLabel({ liveness: "unknown" }), "Unknown");
+  assert.equal(fixture.expected.unknown_cost_source_id, "failed-unknown-cost");
+  const pageSource = readFileSync(new URL("../pages/AdminAcquisitionAnalyticsPage.jsx", import.meta.url), "utf8");
+  assert.match(pageSource, /Company coverage denominator/);
+  assert.match(pageSource, /Workers by role and version/);
+  assert.match(pageSource, /failed\/deferred work without a result is unknown/);
 });
 
 test("the first-pr frontend page contains no mutation request or unsupported action controls", () => {
