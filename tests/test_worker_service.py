@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import shutil
 import threading
 import time
@@ -971,6 +972,21 @@ class WorkerServiceTests(unittest.TestCase):
         task_complete = next(entry for entry in entries if entry["message"] == "worker_task_complete")
         self.assertEqual(task_complete["status"], "completed")
         self.assertIsInstance(task_complete["duration_ms"], int)
+
+    def test_worker_logging_uses_role_specific_environment_directory(self):
+        log_root = self._workspace_tempdir("worker_service_env_logging")
+        with patch.dict(os.environ, {"RUNR_WORKER_LOG_DIR": str(log_root)}):
+            logger = configure_worker_logging(force=True)
+
+        def _cleanup_worker_logger() -> None:
+            for handler in list(logger.handlers):
+                if getattr(handler, "_runr_worker_handler", False):
+                    logger.removeHandler(handler)
+                    handler.close()
+
+        self.addCleanup(_cleanup_worker_logger)
+        logger.info("worker_env_logging_probe")
+        self.assertTrue((log_root / "worker.log").exists())
 
 
 if __name__ == "__main__":

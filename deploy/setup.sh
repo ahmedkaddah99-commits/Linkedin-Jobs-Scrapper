@@ -45,12 +45,14 @@ fi
 sudo install -d -o runr -g runr -m 0750 \
   /var/lib/runr/api-data \
   /var/lib/runr/customer-data \
-  /var/log/runr
+  /var/log/runr \
+  /var/log/runr/customer
 sudo install -d -o runr-acquisition -g runr-acquisition -m 0750 \
   /var/lib/runr/acquisition-data \
   /srv/runr/state \
   /srv/runr/exports \
   /srv/runr/backups
+sudo install -d -o runr-acquisition -g runr-acquisition -m 0750 /var/log/runr/acquisition
 sudo install -d -o root -g runr-acquisition -m 0750 /srv/runr/shared/inputs
 if [ "$PROJECT_DIR/.env" != "$INSTALL_DIR/.env" ]; then
   sudo install -o root -g runr -m 0640 "$PROJECT_DIR/.env" "$INSTALL_DIR/.env"

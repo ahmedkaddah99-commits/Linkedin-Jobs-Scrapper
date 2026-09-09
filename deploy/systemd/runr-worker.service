@@ -13,6 +13,7 @@ UMask=0077
 EnvironmentFile=/opt/runr/.env
 Environment=RUNR_PYTHON_BIN=/opt/runr/.venv/bin/python
 Environment=RUNR_DATA_DIR=/var/lib/runr/customer-data
+Environment=RUNR_WORKER_LOG_DIR=/var/log/runr/customer
 Environment=WORKER_ROLE=customer
 Environment=WORKER_ID=vps_customer_worker
 ExecStart=/opt/runr/deploy/start.sh worker
@@ -35,5 +36,5 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/runr
+ReadWritePaths=/var/lib/runr /var/log/runr/customer
 

@@ -60,7 +60,12 @@ def test_systemd_units_use_non_root_runtime_and_bounded_resources() -> None:
     assert "CPUQuota=300%" in acquisition
     assert "MemoryHigh=9G" in acquisition
     assert "MemoryMax=12G" in acquisition
-    assert "ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports /srv/runr/backups" in acquisition
+    assert "ReadWritePaths=/var/lib/runr /srv/runr/state /srv/runr/exports /srv/runr/backups /var/log/runr/acquisition" in acquisition
+    assert "Environment=RUNR_WORKER_LOG_DIR=/var/log/runr/acquisition" in acquisition
+
+    customer = _read_unit("runr-worker.service")
+    assert "Environment=RUNR_WORKER_LOG_DIR=/var/log/runr/customer" in customer
+    assert "ReadWritePaths=/var/lib/runr /var/log/runr/customer" in customer
 
 
 def test_runtime_setup_pins_python_and_installs_all_role_units() -> None:
@@ -74,6 +79,8 @@ def test_runtime_setup_pins_python_and_installs_all_role_units() -> None:
     assert 'sudo "$python_bin" -m pip install' in deploy
     assert 'runr-acquisition-worker.service' in setup
     assert 'runr-journald.conf' in setup
+    assert '/var/log/runr/customer' in setup
+    assert '/var/log/runr/acquisition' in setup
     assert 'RUNR_API_HOST:-0.0.0.0' in start
 
 

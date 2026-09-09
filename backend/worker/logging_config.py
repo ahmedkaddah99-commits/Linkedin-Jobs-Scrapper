@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -69,7 +70,7 @@ def _worker_handlers(logger: logging.Logger) -> list[logging.Handler]:
 
 def configure_worker_logging(
     *,
-    log_dir: str | Path = DEFAULT_WORKER_LOG_DIR,
+    log_dir: str | Path | None = None,
     log_file: str = DEFAULT_WORKER_LOG_FILE,
     level: int | str = logging.INFO,
     max_bytes: int = DEFAULT_MAX_BYTES,
@@ -97,7 +98,10 @@ def configure_worker_logging(
     stream_handler.addFilter(RedactingFilter())
     stream_handler._runr_worker_handler = True  # type: ignore[attr-defined]
 
-    log_path = Path(log_dir) / log_file
+    configured_log_dir = log_dir
+    if configured_log_dir is None:
+        configured_log_dir = os.getenv("RUNR_WORKER_LOG_DIR", DEFAULT_WORKER_LOG_DIR)
+    log_path = Path(configured_log_dir) / log_file
     log_path.parent.mkdir(parents=True, exist_ok=True)
     file_handler = RotatingFileHandler(
         log_path,
