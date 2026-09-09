@@ -3,10 +3,12 @@
 ## Final local candidate amendment - 2026-09-09
 
 The current clean C and persistent deployment checkout are both at
-`8ab916c60237ad3a5bf95ed2effd99679a9a848c`. This is a documentation-only
-descendant of the verified producer-repair candidate
+`b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`. This is a documentation-only
+descendant of the previously pinned local candidate
+`8ab916c60237ad3a5bf95ed2effd99679a9a848c`, which is itself a
+documentation-only descendant of the verified producer-repair candidate
 `466541b3ee4a57a89f83c583f5e497b36fccdbe3`; no source, runtime, or migration
-behavior changed after the live diagnostic. The target is 75 commits ahead of
+behavior changed after the live diagnostic. The target is 76 commits ahead of
 `origin/deployment/render-turso-r2` and has not been pushed or deployed.
 
 ## Producer repair integration amendment - 2026-09-09
@@ -16,8 +18,8 @@ sequence. A's final tip is `5c100043d51e616e2de4fb595f362d951d70e30d` with
 implementation `9ac2ab4182c66d1aecdb6150574fdce6012153ca`, merged as
 `a10f3e4c559c8ea05c4d458135f487831797c8a5`. B's final tip is
 `7f03dd89cdb2d1a1d724fb1bc221cfe8e74707fd` with implementation
-`c98603a51c2775512e49ccb2d54a4adbe731ddb7`, merged as the current C tip
-`3882806d44731efe1cafdf12ab11389bf9233b07`.
+`c98603a51c2775512e49ccb2d54a4adbe731ddb7`, merged as the code integration
+tip `3882806d44731efe1cafdf12ab11389bf9233b07`.
 
 Both final tips descend from the earlier integrated code tip
 `5cd2ece533e4e7615a8b6a7b08516014d5b82748`; B branched before C's later

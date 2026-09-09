@@ -7,8 +7,9 @@ Branch: `deployment/render-turso-r2`
 ## Final local candidate amendment - 2026-09-09
 
 The clean persistent target and C integration worktree are at
-`8ab916c60237ad3a5bf95ed2effd99679a9a848c`. This docs-only descendant of
-the staged repair candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3` was
+`b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`. This docs-only descendant of
+the previously pinned local candidate `8ab916c60237ad3a5bf95ed2effd99679a9a848c`
+and staged repair candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3` was
 not pushed or deployed; the frontend release metadata was rebuilt against
 this exact SHA.
 
@@ -114,7 +115,7 @@ R2 object/HEAD/sign/range behavior passed.
 
 Previous documentation-only reconciliation tip: `7c106545c9f98e8cdf391e7c624f88cdce3d76b0`
 
-Current producer-repair candidate: `3882806d44731efe1cafdf12ab11389bf9233b07`
+Current local release candidate: `b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`
 
 This is an in-host integration handoff. No reset, clean, push, deploy,
 production migration, or customer-service mutation was performed. The

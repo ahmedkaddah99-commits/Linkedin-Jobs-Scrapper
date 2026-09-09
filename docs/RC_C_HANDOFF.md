@@ -3,9 +3,11 @@
 ## Final local candidate amendment - 2026-09-09
 
 The final clean local candidate is
-`8ab916c60237ad3a5bf95ed2effd99679a9a848c` in both the C integration
+`b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc` in both the C integration
 worktree and persistent `deployment/render-turso-r2` checkout. It is a
-documentation-only descendant of the staged repair candidate
+documentation-only descendant of the previously pinned local candidate
+`8ab916c60237ad3a5bf95ed2effd99679a9a848c`, which descends from the staged
+repair candidate
 `466541b3ee4a57a89f83c583f5e497b36fccdbe3`; it is not deployed or pushed.
 
 ## Repair-candidate live verification amendment - 2026-09-09
@@ -34,8 +36,8 @@ ancestry-preserving, non-squashed merges. A's final tip
 `9ac2ab4182c66d1aecdb6150574fdce6012153ca`) was merged as
 `a10f3e4c559c8ea05c4d458135f487831797c8a5`. B's final tip
 `7f03dd89cdb2d1a1d724fb1bc221cfe8e74707fd` (implementation
-`c98603a51c2775512e49ccb2d54a4adbe731ddb7`) was then merged as the current
-C tip `3882806d44731efe1cafdf12ab11389bf9233b07`. B branched from
+`c98603a51c2775512e49ccb2d54a4adbe731ddb7`) was then merged as the code
+integration tip `3882806d44731efe1cafdf12ab11389bf9233b07`. B branched from
 `5cd2ece533e4e7615a8b6a7b08516014d5b82748`, before C's later documentation
 commits; no C evidence was discarded.
 
