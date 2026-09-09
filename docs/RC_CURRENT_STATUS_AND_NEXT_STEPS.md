@@ -40,6 +40,16 @@ bucket CORS management remain unavailable. The live Render API/worker and
 frontend revisions remain separate from this local candidate; no deployment
 has been triggered.
 
+The provider check was repeated by key name only: the authoritative env has
+`TURSO_AUTH_TOKEN` and `TURSO_DATABASE_URL`, but no `TURSO_PLATFORM_TOKEN` or
+`TURSO_ORG`; the existing S3/R2, Render and Webshare key names are present.
+The SQL token queried the production database, while the prior organization
+management probe returned HTTP 401. Turso's current API documentation supports
+personal-account or organization database creation when a Platform API bearer
+token, account/organization slug and existing group are available. The exact
+blocker is management credential/namespace scope, not an assumption that the
+Hobby plan prohibits staging.
+
 The bounded pilot LinkedIn state now has a verified off-host SQLite Online
 Backup checkpoint: source
 `/srv/runr/state/rc027-linkedin-6e9a1e9301ffca644aca916aad6fc8827e4a792d/master_linkedin_jobs_state.db`

@@ -55,6 +55,17 @@ external blockers. Render read-only visibility remains API/worker
 `7251ae297c55f7f6a4524181cdafb4648f7fdcde`, with API health HTTP 200; the
 local candidate was not deployed.
 
+The provider check was repeated by key name only: the authoritative env has
+`TURSO_AUTH_TOKEN` and `TURSO_DATABASE_URL`, but no `TURSO_PLATFORM_TOKEN` or
+`TURSO_ORG`; it has the existing S3/R2, Render and Webshare key names. The
+configured Turso token can query the production database, while the prior
+Turso organization-management probe returned HTTP 401. Turso's current API
+documentation describes personal-account or organization database creation,
+but requires a Platform API bearer token, account/organization slug and an
+existing group. The precise blocker is therefore management credential and
+namespace scope; this record does not infer that the Hobby plan itself forbids
+a staging database.
+
 The bounded RC-027 LinkedIn state also has a verified SQLite Online Backup
 checkpoint and restore. Source
 `/srv/runr/state/rc027-linkedin-6e9a1e9301ffca644aca916aad6fc8827e4a792d/master_linkedin_jobs_state.db`
