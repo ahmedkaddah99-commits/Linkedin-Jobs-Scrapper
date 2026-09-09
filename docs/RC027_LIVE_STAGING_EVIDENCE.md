@@ -76,7 +76,7 @@ The installed role contract is:
 | Acquisition state | `/srv/runr/state` | `runr-acquisition:runr-acquisition`, `0750` |
 | Acquisition exports | `/srv/runr/exports` | `runr-acquisition:runr-acquisition`, `0750` |
 | Backup root | `/srv/runr/backups` | `runr-acquisition:runr-acquisition`, `0750` |
-| Candidate evidence | `/srv/runr/rc027-evidence/6e9a1e9301ffca644aca916aad6fc8827e4a792d/` | acquisition-owned, isolated |
+| Candidate evidence (reserved; not created) | `/srv/runr/rc027-evidence/6e9a1e9301ffca644aca916aad6fc8827e4a792d/` | would be acquisition-owned |
 | Customer logs | `/var/log/runr/customer` | `runr:runr`, `0750` |
 | Acquisition logs | `/var/log/runr/acquisition` | `runr-acquisition:runr-acquisition`, `0750` |
 
@@ -89,6 +89,14 @@ read-only shared input area and retained their recorded hashes:
   `72b61f100a0d9edbba315b5f19db589f40cfecd42c19ce3ef95b78b331621873`;
 - raw sidecar SHA-256
   `cda46fee441e2e6e02d52ffe2fc86ae33121c82edc9f0636562367b63cbb5ef7`.
+
+The preserved packet/setup directory actually present on the host is the
+original candidate path
+`/srv/runr/rc027-evidence/d326726acab7fffbbf59e294629b8ef002437566/`; it was
+not used for live traffic. The corrected 6e9 candidate evidence, export and
+app-data paths are reserved but absent because the real pilot did not start.
+The running local rehearsal uses `/var/lib/runr/api-data` and
+`/var/lib/runr/customer-data` instead.
 
 The four frozen companies remain MALZERS, St. Vincenz, NOVENTI and helmag.
 No proposed mappings or unresolved shared organizations were applied.

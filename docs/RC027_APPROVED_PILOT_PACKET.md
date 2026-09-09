@@ -78,6 +78,12 @@ Disposable app data:  /srv/runr/app-data/rc027-6e9a1e93/
 No production database, bucket, prefix, queue, credentials, or schedule may
 be substituted for these identifiers.
 
+The host currently retains the original d326 packet/setup directory for
+preservation. The corrected 6e9 evidence, export and app-data directories are
+reserved names only and were not created because the real pilot did not start;
+the local rehearsal used the separately isolated `/var/lib/runr/api-data` and
+`/var/lib/runr/customer-data` stores.
+
 ## Hard limits and stop conditions
 
 The limits apply cumulatively across both cycles, retries, restart and failure
