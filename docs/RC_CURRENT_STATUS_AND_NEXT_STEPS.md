@@ -40,6 +40,27 @@ bucket CORS management remain unavailable. The live Render API/worker and
 frontend revisions remain separate from this local candidate; no deployment
 has been triggered.
 
+The bounded pilot LinkedIn state now has a verified off-host SQLite Online
+Backup checkpoint: source
+`/srv/runr/state/rc027-linkedin-6e9a1e9301ffca644aca916aad6fc8827e4a792d/master_linkedin_jobs_state.db`
+was `770048` bytes, SHA-256
+`ed94c1cd30095c3544adccabb028072b327885ccaf2e48630d3d4945213a59d5`, and
+integrity `ok`. Checkpoint
+`linkedin-20260909T201035631862Z-e6d35734a371` produced a `770048` byte backup
+with SHA-256
+`d445e6c1a2dfb45d189c3ced3351406f867f49f3264f5375b07f078f26659356`.
+The local checkpoint and validated local/R2 restores are preserved under
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\`;
+the remote keys are under
+`rc027/checkpoints/linkedin/linkedin-20260909T201035631862Z-e6d35734a371/`.
+This proves bounded pilot-state preservation, not historical-state or
+replacement-host acceptance.
+
+The signed-URL CORS probe against origin `https://app.userunr.com` returned
+`GET 206` with no `Access-Control-Allow-*` headers and `OPTIONS 403` with no
+CORS headers. Direct browser download therefore remains blocked; server-side
+R2 object/HEAD/sign/range behavior passed.
+
 Integrated C candidate before this documentation slice: `7dc60e97478b74569ba2f136464918162dd7bbec`
 
 Current target code-correction tip: `16c1215d`

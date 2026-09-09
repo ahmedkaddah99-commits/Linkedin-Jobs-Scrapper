@@ -1,9 +1,37 @@
 # RC-024 acquisition checkpoint and restore runbook
 
-Status: offline implementation and fixture rehearsal complete on B. Actual
-off-host preservation, replacement-host restore, outage/reboot, and historical
-state acceptance remain required before RC-024 is fully verified. RC-026 and
-the benchmark/pilot gates must not use this document as live acceptance.
+Status: the implementation and fixture rehearsal are integrated, and a bounded
+off-host checkpoint/restore was executed for the RC-027 LinkedIn pilot state.
+Replacement-host service resume, outage/reboot acceptance, and restoration of
+the preserved historical state remain required before RC-024 is fully verified.
+RC-026 and the benchmark/pilot gates must not use this document as historical
+state acceptance.
+
+## Verified bounded off-host checkpoint - 2026-09-09
+
+The host source was opened through the repository backup helper as the
+`runr-acquisition` role; the live SQLite file was not copied with its WAL/SHM
+sidecars:
+
+| Item | Verified value |
+| --- | --- |
+| Host | `runr-vps` / `vmd205749` |
+| Source | `/srv/runr/state/rc027-linkedin-6e9a1e9301ffca644aca916aad6fc8827e4a792d/master_linkedin_jobs_state.db` |
+| Source bytes / SHA-256 | `770048` / `ed94c1cd30095c3544adccabb028072b327885ccaf2e48630d3d4945213a59d5` |
+| Source integrity/schema | SQLite `ok`; exact current 14-table LinkedIn schema |
+| Checkpoint | `linkedin-20260909T201035631862Z-e6d35734a371` |
+| Backup bytes / SHA-256 | `770048` / `d445e6c1a2dfb45d189c3ced3351406f867f49f3264f5375b07f078f26659356` |
+| Local persistent checkpoint | `C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\offhost-linkedin\offhost-linkedin-20260909\` |
+| Local restore | `C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\restored-linkedin` |
+| R2 bucket / keys | `runr-prod-artifacts`; `rc027/checkpoints/linkedin/linkedin-20260909T201035631862Z-e6d35734a371/master_linkedin_jobs_state.db` and `.../checkpoint.json` |
+| R2 restore | `C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\restored-from-r2-linkedin`; hash/schema/integrity matched |
+
+The R2 objects were uploaded in database-then-manifest order by
+`preserve_checkpoint_off_host`; the manifest is the remote commit record. The
+receipt records the database and manifest hashes and an upload timestamp of
+`2026-09-09T20:12:12.124516Z`. This is a verified checkpoint of the bounded
+RC-027 host overlay state, not the preserved approximately 3.48 GB historical
+LinkedIn state and not proof of a replacement-host service restart.
 
 ## Contract
 

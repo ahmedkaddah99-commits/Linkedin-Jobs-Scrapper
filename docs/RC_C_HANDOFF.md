@@ -55,6 +55,29 @@ external blockers. Render read-only visibility remains API/worker
 `7251ae297c55f7f6a4524181cdafb4648f7fdcde`, with API health HTTP 200; the
 local candidate was not deployed.
 
+The bounded RC-027 LinkedIn state also has a verified SQLite Online Backup
+checkpoint and restore. Source
+`/srv/runr/state/rc027-linkedin-6e9a1e9301ffca644aca916aad6fc8827e4a792d/master_linkedin_jobs_state.db`
+was `770048` bytes with SHA-256
+`ed94c1cd30095c3544adccabb028072b327885ccaf2e48630d3d4945213a59d5` and
+SQLite integrity `ok`. Checkpoint
+`linkedin-20260909T201035631862Z-e6d35734a371` produced a `770048` byte backup
+with SHA-256
+`d445e6c1a2dfb45d189c3ced3351406f867f49f3264f5375b07f078f26659356`.
+Local and R2 restores were validated in new directories; the persistent local
+checkpoint is under
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\offhost-linkedin\offhost-linkedin-20260909\`,
+and the R2 keys are under
+`rc027/checkpoints/linkedin/linkedin-20260909T201035631862Z-e6d35734a371/`.
+This is pilot-overlay evidence, not acceptance of the preserved historical
+state or replacement-host recovery.
+
+The signed-URL CORS probe is explicitly negative: `GET` with origin
+`https://app.userunr.com` returned `206` without any
+`Access-Control-Allow-*` header, and `OPTIONS` returned `403` without CORS
+headers. Server-side R2 object, HEAD, signing and range behavior passed, but
+browser direct-download behavior is not verified.
+
 Operator walkthrough for the current safe state:
 
 1. Confirm `systemctl is-active runr-api runr-worker runr-frontend` and

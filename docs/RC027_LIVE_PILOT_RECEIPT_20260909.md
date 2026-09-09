@@ -111,7 +111,36 @@ the S3 secret, provider API tokens, or an `Authorization` query parameter.
 This proves object write/read/sign/range behavior for the existing bucket;
 bucket isolation and browser CORS remain unverified because bucket CORS
 management returned `AccessDenied` and no Cloudflare management token is
-configured.
+configured. A direct browser-origin probe against the signed URL with
+`Origin: https://app.userunr.com` returned `GET 206` with no
+`Access-Control-Allow-*` headers; the preflight `OPTIONS` returned `403` with
+no CORS headers. Therefore direct browser download is not accepted, even
+though server-side object/sign/range behavior passed.
+
+## Off-host checkpoint and restore verification
+
+The host LinkedIn state was checkpointed with SQLite Online Backup through
+`scripts/acquisition_state_backup.py` and restored into new directories before
+and after an upload to the explicitly authorized existing production R2 bucket.
+The source was
+`/srv/runr/state/rc027-linkedin-6e9a1e9301ffca644aca916aad6fc8827e4a792d/master_linkedin_jobs_state.db`
+(`770048` bytes, SHA-256
+`ed94c1cd30095c3544adccabb028072b327885ccaf2e48630d3d4945213a59d5`, SQLite
+integrity `ok`). Checkpoint
+`linkedin-20260909T201035631862Z-e6d35734a371` produced a `770048` byte,
+14-table backup with SHA-256
+`d445e6c1a2dfb45d189c3ced3351406f867f49f3264f5375b07f078f26659356`.
+
+The local checkpoint is preserved at
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\offhost-linkedin\offhost-linkedin-20260909\`;
+local restore and R2 restore were both validated at
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\restored-linkedin`
+and
+`C:\Users\ahmed\Projects_Local\runr-acquisition-snapshots\rc027-20260909\restored-from-r2-linkedin`.
+The R2 keys are under
+`rc027/checkpoints/linkedin/linkedin-20260909T201035631862Z-e6d35734a371/`.
+This closes the bounded checkpoint/restore evidence only; it does not restore
+or accept the preserved approximately 3.48 GB historical state.
 
 ## Remaining acceptance blockers
 
