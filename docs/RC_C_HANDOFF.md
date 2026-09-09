@@ -1,5 +1,32 @@
 # RC-C release and integration handoff
 
+## Producer repair integration amendment - 2026-09-09
+
+The supplied final producer tips were verified clean and merged into C with
+ancestry-preserving, non-squashed merges. A's final tip
+`5c100043d51e616e2de4fb595f362d951d70e30d` (implementation
+`9ac2ab4182c66d1aecdb6150574fdce6012153ca`) was merged as
+`a10f3e4c559c8ea05c4d458135f487831797c8a5`. B's final tip
+`7f03dd89cdb2d1a1d724fb1bc221cfe8e74707fd` (implementation
+`c98603a51c2775512e49ccb2d54a4adbe731ddb7`) was then merged as the current
+C tip `3882806d44731efe1cafdf12ab11389bf9233b07`. B branched from
+`5cd2ece533e4e7615a8b6a7b08516014d5b82748`, before C's later documentation
+commits; no C evidence was discarded.
+
+The exact merged backend gate collected 429 tests: **427 passed and 2
+failed**. The failures are unchanged from the untouched target baseline:
+`BackendApiTests.test_tracker_api` expects the legacy motivation-letter ZIP
+filename, and
+`BackendApiTests.test_tracker_ats_detail_returns_persisted_read_only_diagnostics`
+expects two ATS history rows but receives none. Ruff, `compileall` and
+`git diff --check` passed. The persistent target was advanced only after this
+verification.
+
+The target dependency tree passed all **170 frontend tests** and a Vite
+production build stamped with the exact candidate SHA. The C worktree's
+interrupted-install dependency tree produced an environment-only React loader
+failure; it was not used for acceptance. No lockfile changed.
+
 ## Reconciliation amendment - 2026-09-09
 
 The supplied A and B tips were verified clean and integrated sequentially into

@@ -4,6 +4,22 @@ Date: 2026-09-09
 
 Branch: `deployment/render-turso-r2`
 
+## Producer repair integration amendment - 2026-09-09
+
+A final tip `5c100043d51e616e2de4fb595f362d951d70e30d` and implementation
+`9ac2ab4182c66d1aecdb6150574fdce6012153ca` were merged into C as
+`a10f3e4c559c8ea05c4d458135f487831797c8a5`. B final tip
+`7f03dd89cdb2d1a1d724fb1bc221cfe8e74707fd` and implementation
+`c98603a51c2775512e49ccb2d54a4adbe731ddb7` were then merged as
+`3882806d44731efe1cafdf12ab11389bf9233b07`. The target and C worktrees now
+match this clean candidate; A/B repair ancestry is preserved in C.
+
+The exact merged backend suite passed **427/429 tests**. The only two failures
+are the unchanged clean-baseline tracker tests recorded below. Ruff, Python
+compilation and `git diff --check` passed. The target frontend passed **170/170
+tests**, and the Vite production build passed with metadata stamped to
+`3882806d44731efe1cafdf12ab11389bf9233b07`.
+
 ## Reconciliation amendment - 2026-09-09
 
 The clean integrated code baseline is
@@ -14,16 +30,16 @@ owns LinkedIn producer repairs; B owns employer producer repairs; C owns
 shared scheduler, publication, API, configuration, migration, release and
 staging contracts.
 
-The current clean C and persistent-target tip, including the reconciliation
-evidence below, is `628e63afbec4425989467251d77d405d3a7064a7`. A and B remain
-clean at `e28aa5f2e065848679d2302841dbe1bde36be8cd` until they hand off actual
-producer repair commits; no uncommitted lane files were copied.
+The current clean C and persistent-target tip, including the producer repairs
+and reconciliation evidence below, is
+`3882806d44731efe1cafdf12ab11389bf9233b07`. No uncommitted lane files were
+copied.
 
-The combined regression passed **310 tests, 22 subtests** after the RC-029
-fixture was corrected to use the canonical `employer_site` source name. The
-only excluded tests are the two tracker/API failures reproduced unchanged on
-the clean pre-merge target: the bulk-export motivation-letter filename and
-the empty persisted ATS attempt history.
+The earlier 310-test regression was extended after A/B producer repair
+integration to 429 tests. It passed 427 tests; the only failures are the two
+tracker/API failures reproduced unchanged on the clean pre-merge target: the
+bulk-export motivation-letter filename and the empty persisted ATS attempt
+history.
 
 The integrated frontend passed **170 unit tests** and a Vite production build
 with explicit release metadata for the integrated candidate. The lockfile
@@ -76,9 +92,9 @@ The signed-URL CORS probe against origin `https://app.userunr.com` returned
 CORS headers. Direct browser download therefore remains blocked; server-side
 R2 object/HEAD/sign/range behavior passed.
 
-Integrated C candidate before this documentation slice: `7dc60e97478b74569ba2f136464918162dd7bbec`
+Previous documentation-only reconciliation tip: `7c106545c9f98e8cdf391e7c624f88cdce3d76b0`
 
-Current target code-correction tip: `16c1215d`
+Current producer-repair candidate: `3882806d44731efe1cafdf12ab11389bf9233b07`
 
 This is an in-host integration handoff. No reset, clean, push, deploy,
 production migration, or customer-service mutation was performed. The

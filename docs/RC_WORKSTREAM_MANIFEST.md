@@ -1,5 +1,24 @@
 # Runr acquisition workstream manifest
 
+## Producer repair integration amendment - 2026-09-09
+
+The supplied final producer tips were verified clean and merged into C in
+sequence. A's final tip is `5c100043d51e616e2de4fb595f362d951d70e30d` with
+implementation `9ac2ab4182c66d1aecdb6150574fdce6012153ca`, merged as
+`a10f3e4c559c8ea05c4d458135f487831797c8a5`. B's final tip is
+`7f03dd89cdb2d1a1d724fb1bc221cfe8e74707fd` with implementation
+`c98603a51c2775512e49ccb2d54a4adbe731ddb7`, merged as the current C tip
+`3882806d44731efe1cafdf12ab11389bf9233b07`.
+
+Both final tips descend from the earlier integrated code tip
+`5cd2ece533e4e7615a8b6a7b08516014d5b82748`; B branched before C's later
+documentation-only commits. The merges preserve A/B ancestry and C's
+operational evidence. The exact backend gate passed 427 tests with only the
+two unchanged baseline tracker failures; Ruff, compilation and diff checks
+passed. The target frontend passed 170 tests and the Vite build was stamped
+with candidate `3882806d...`. No repair lane consumed new live budget or
+changed VPS state.
+
 ## Current reconciliation amendment — 2026-09-09
 
 The setup-time values below are historical. The current clean reconciliation
