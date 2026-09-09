@@ -14,7 +14,10 @@ const RANGE_OPTIONS = [
 ];
 
 function count(value) {
-  return value === null || value === undefined ? "Unknown" : Number(value).toLocaleString();
+  if (value === null || value === undefined) return "Unknown";
+  if (typeof value === "string" && !value.trim()) return "Unknown";
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toLocaleString() : String(value);
 }
 
 function text(value, fallback = "Unknown") {
