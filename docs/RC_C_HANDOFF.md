@@ -14,6 +14,7 @@ acquisition, a production migration, a Render deployment, or a GitHub push.
 | C accepted release candidate before this documentation amendment | `96869170a4d5e173b08c4fb0868a7c3c5503c32f` |
 | C integration tip after RC-025 merge | `6ab6f31bec0977b6db2435920942a7d885ead66d` |
 | C accepted integrated A/B candidate before this handoff amendment | `0cb1bddab10ab4b572f17df8b5af2aadf38274d5` |
+| C final accepted integrated tip before this handoff amendment | `9d837e2d56930715db1de22f191644531c2c00b8` |
 | Persistent integration target | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview` |
 | Persistent target branch | `deployment/render-turso-r2` |
 | Persistent target before this slice | `9003fabc9fba9e2b7449d03b912d991c4bbdc873` |
@@ -120,19 +121,19 @@ frontend, or run migrations for a worker.
 API command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh api
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=9d837e2d56930715db1de22f191644531c2c00b8 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh api
 ```
 
 Customer worker command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 WORKER_ROLE=customer WORKER_ID=runr-staging-customer-0cb1 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=9d837e2d56930715db1de22f191644531c2c00b8 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=9d837e2d56930715db1de22f191644531c2c00b8 WORKER_ROLE=customer WORKER_ID=runr-staging-customer-9d83 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
 ```
 
 Acquisition worker command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 WORKER_ROLE=acquisition WORKER_ID=runr-staging-acquisition-0cb1 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=9d837e2d56930715db1de22f191644531c2c00b8 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=9d837e2d56930715db1de22f191644531c2c00b8 WORKER_ROLE=acquisition WORKER_ID=runr-staging-acquisition-9d83 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
 ```
 
 `customer` may claim only the customer task family; `acquisition` may claim
@@ -142,7 +143,7 @@ Only the API release owner runs the migration once for an isolated staging
 database or namespace:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue ./deploy/start.sh migrate
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=9d837e2d56930715db1de22f191644531c2c00b8 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue ./deploy/start.sh migrate
 ```
 
 The worker image and worker command must not run migrations. The registry is
@@ -241,8 +242,8 @@ host startup or secret isolation.
 C's focused correction is limited to `deploy/setup.sh`: it fixes the Linux
 directory-command continuation and assigns the acquisition environment file to
 the dedicated acquisition group. No B producer or uncommitted lane file was
-copied. This correction must be included in the next accepted C tip after the
-regression rerun below.
+copied. The correction is included in final accepted tip
+`9d837e2d56930715db1de22f191644531c2c00b8` after the regression rerun.
 
 ## Version compatibility and staging isolation
 
