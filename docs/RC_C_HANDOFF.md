@@ -217,6 +217,13 @@ tip. C will then review the exact diff, merge it sequentially, and rerun the
 combined runtime/release regressions. C does not implement a competing VPS or
 producer fix.
 
+At the final status refresh, B has additional uncommitted FIX-B work in
+`deploy/acquisition-data-manifest.json`, both producer cores, both manifested
+wrappers, and a new `tests/test_rc023_producer_state_paths.py`. Those files
+were inspected only; they were not copied, staged, tested as integrated code,
+or treated as a freeze tip. The manifest edit overlaps C's shared manifest
+correction and will require an inspected semantic merge after B commits.
+
 ## Version compatibility and staging isolation
 
 The compatibility contract is `runr-contract-v1`; metadata is
