@@ -174,6 +174,25 @@ must never be pasted into Git, logs, or chat.
    API and UI verification. Do not put customer OAuth, email, billing or
    document credentials in the acquisition environment.
 
+The specific management access still required is:
+
+- Turso organization/database administration sufficient to create
+  `runr-staging-turso-rc027`, run the migration owner step, and issue a
+  database-scoped staging token that cannot access the production database;
+- Cloudflare account/R2 administration sufficient to create the private
+  staging bucket, apply the listed CORS policy, and issue an access key scoped
+  to that bucket and the immutable candidate prefix only;
+- a source/provider account or approved direct-source decision with visible
+  pricing, quota and billing state sufficient to prove the four-company pilot
+  stays below US$5; and
+- valid Render read/deployment access to inspect the API, worker and frontend
+  service revisions/logs. The present Render key is unauthorized, so the
+  public 503 cannot be diagnosed from this session.
+
+These are access requirements, not permission to expand the company set,
+purchase capacity, upgrade a plan, enable ScrapeOps, or access production
+secrets.
+
 Secure host-side entry must be performed interactively by the operator. The
 following commands preserve the existing files, open them only in the local
 protected editor, and reassert the role permissions; the editor must not be
