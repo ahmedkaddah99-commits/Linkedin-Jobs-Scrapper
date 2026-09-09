@@ -13,6 +13,7 @@ acquisition, a production migration, a Render deployment, or a GitHub push.
 | C starting launch commit | `b0f47788c1a5d385ae4c3c770d5cd990f586a626` |
 | C accepted release candidate before this documentation amendment | `96869170a4d5e173b08c4fb0868a7c3c5503c32f` |
 | C integration tip after RC-025 merge | `6ab6f31bec0977b6db2435920942a7d885ead66d` |
+| C accepted integrated A/B candidate before this handoff amendment | `0cb1bddab10ab4b572f17df8b5af2aadf38274d5` |
 | Persistent integration target | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview` |
 | Persistent target branch | `deployment/render-turso-r2` |
 | Persistent target before this slice | `9003fabc9fba9e2b7449d03b912d991c4bbdc873` |
@@ -20,11 +21,11 @@ acquisition, a production migration, a Render deployment, or a GitHub push.
 
 C was created from the exact S0 launch commit, then fast-forwarded over the
 target's documentation-only manifest commits. A supplied clean tip
-`c5b57777785e98ebfa4b2b0a0a4f466907cb7ee7`; C merged it as
-`6ab6f31bec0977b6db2435920942a7d885ead66d` after its focused regressions
-passed. B supplied clean tip `030f47d6fa440d7db31c7de010acd902cc6e3aaa`,
-but C holds it out of the accepted integration because the runtime safety review
-found issues recorded below. No uncommitted lane files were copied.
+`7403905619c583067436ea09de178707c7aa2bad`; C merged it sequentially as
+`6ca7d2ec4bcf675d9527c2b230569e46ab06c111`. B supplied clean tip
+`3026d7a046fec7853e1ddf65b097c220edee775f`; C merged it sequentially as
+`0cb1bddab10ab4b572f17df8b5af2aadf38274d5`. No uncommitted lane files were
+copied.
 
 ## RC-022 verification
 
@@ -119,19 +120,19 @@ frontend, or run migrations for a worker.
 API command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=temp/rc-c-release-integration RUNR_RELEASE_COMMIT=<candidate-sha> RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh api
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh api
 ```
 
 Customer worker command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=temp/rc-c-release-integration RUNR_RELEASE_COMMIT=<candidate-sha> RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=<candidate-sha> WORKER_ROLE=customer WORKER_ID=runr-staging-customer-<candidate-id> RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 WORKER_ROLE=customer WORKER_ID=runr-staging-customer-0cb1 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
 ```
 
 Acquisition worker command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=temp/rc-c-release-integration RUNR_RELEASE_COMMIT=<candidate-sha> RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=<candidate-sha> WORKER_ROLE=acquisition WORKER_ID=runr-staging-acquisition-<candidate-id> RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 WORKER_ROLE=acquisition WORKER_ID=runr-staging-acquisition-0cb1 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
 ```
 
 `customer` may claim only the customer task family; `acquisition` may claim
@@ -141,7 +142,7 @@ Only the API release owner runs the migration once for an isolated staging
 database or namespace:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=temp/rc-c-release-integration RUNR_RELEASE_COMMIT=<candidate-sha> RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue ./deploy/start.sh migrate
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=0cb1bddab10ab4b572f17df8b5af2aadf38274d5 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue ./deploy/start.sh migrate
 ```
 
 The worker image and worker command must not run migrations. The registry is
@@ -192,37 +193,56 @@ parameter/configuration in the producer wrappers and tests, preserving the
 14-table producer behavior while placing `master_*_jobs_state.db` under the
 role-owned state mount and materializations under exports. An alternative is a
 reviewed state/output co-location contract, but it must then replace the
-current split-root claim. C does not rewrite the producer in this release-only
-slice or silently use a symlink. RC-024 host verification is blocked until the
-owner accepts one option and supplies a committed regression.
+current split-root claim. B's committed state-dir correction accepts this
+option offline. RC-024 host verification remains blocked until the verified
+restore is transferred through the approved backup workflow and exercised on an
+authorized host.
 
-## B runtime safety review and FIX-B boundary
+## B runtime/producer integration and host gate
 
-B's clean tip `030f47d6fa440d7db31c7de010acd902cc6e3aaa` contains the offline
-RC-023 systemd preparation, but it is not merged or accepted by C yet:
+B's clean final tip `3026d7a046fec7853e1ddf65b097c220edee775f` was merged as
+`0cb1bddab10ab4b572f17df8b5af2aadf38274d5`. The integrated producer contract
+now gives both low-level producers and both manifested wrappers an explicit
+`--state-dir` plus `--require-existing-state`; SQLite state remains under
+`/srv/runr/state/linkedin` or `/srv/runr/state/employer`, while generations and
+exports remain under `/srv/runr/exports/{linkedin,employer}`. Missing restored
+state fails before SQLite creation.
 
-- `deploy/setup.sh` installs `.env.acquisition` as `root:runr` mode `0640`,
-  allowing the customer/API `runr` account to read acquisition credentials;
-- `deploy/deploy.sh` restarts `runr.target`, whose `Wants` includes API,
-  customer worker, frontend and acquisition worker, so it is not an
-  acquisition-only start path;
-- the setup script's continued `install` command requires correction before an
-  authorized host run; and
-- the B tip does not yet contain the narrow producer state/export correction:
-  both manifested wrappers still expose only `--output-dir`, while the runtime
-  contract claims separate state and export roots.
+The integrated role ownership is:
 
-FIX-B must correct these interfaces in B's owned files and return a new clean
-tip. C will then review the exact diff, merge it sequentially, and rerun the
-combined runtime/release regressions. C does not implement a competing VPS or
-producer fix.
+- API/customer services: `runr`, `/opt/runr/.env`, API loopback
+  `RUNR_API_HOST=127.0.0.1`;
+- acquisition worker: `runr-acquisition`, `/opt/runr/.env.acquisition`,
+  `WORKER_ROLE=acquisition`, `WORKER_ID=vps_acquisition_worker`;
+- customer worker: `runr`, `/opt/runr/.env`, `WORKER_ROLE=customer`,
+  `WORKER_ID=vps_customer_worker`.
 
-At the final status refresh, B has additional uncommitted FIX-B work in
-`deploy/acquisition-data-manifest.json`, both producer cores, both manifested
-wrappers, and a new `tests/test_rc023_producer_state_paths.py`. Those files
-were inspected only; they were not copied, staged, tested as integrated code,
-or treated as a freeze tip. The manifest edit overlaps C's shared manifest
-correction and will require an inspected semantic merge after B commits.
+The disabled-acquisition settings are explicit in the acquisition environment
+template: `RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=false`,
+`RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY=false`, and
+`RUNR_ACQUISITION_MAX_REQUESTS=0`. These prevent live acquisition requests but
+do not by themselves prevent the acquisition unit from being started.
+
+The Linux/systemd host gate remains unaccepted. WSL Ubuntu systemd 255 was
+available for read-only structural checks: normalized LF shell syntax passed and
+`systemd-analyze verify` exited 0 for all five units. It did not have the
+`/opt/runr` installation, so setup, service restart, closed-port,
+ownership/permission, and synthetic-worker checks were not run. C corrected the
+demonstrated setup defects in the integration tree: the Linux setup heredoc/
+directory command is syntactically valid and `.env.acquisition` is installed
+as `root:runr-acquisition` mode `0640`. The remaining host-gate item is that
+`runr.target` wants API, customer, frontend and acquisition together; the
+disabled settings stop live acquisition requests but do not make that target an
+acquisition-only startup path. The integrated offline tests do not certify
+host startup or secret isolation.
+
+## C integration correction
+
+C's focused correction is limited to `deploy/setup.sh`: it fixes the Linux
+directory-command continuation and assigns the acquisition environment file to
+the dedicated acquisition group. No B producer or uncommitted lane file was
+copied. This correction must be included in the next accepted C tip after the
+regression rerun below.
 
 ## Version compatibility and staging isolation
 
@@ -303,8 +323,8 @@ committed C documentation/integration slice is reversed with a reviewed
 removed only after clean status and commit preservation are verified, without
 `--force`.
 
-Current blockers are the unavailable Docker Linux daemon, pending B FIX-B
-runtime/producer corrections, the unperformed host restore, the producer
-state/output separation decision, and the absence of authorized staging
-namespaces, credentials, R2 CORS, host or live-pilot infrastructure. No
+Current blockers are the unavailable Docker Linux daemon, the unperformed host
+restore/cutover, the full-stack `runr.target` host-start scope, and the absence
+of authorized staging namespaces, credentials, R2 CORS, host or live-pilot
+infrastructure. The producer state/output contract is accepted offline; no
 external infrastructure was created.

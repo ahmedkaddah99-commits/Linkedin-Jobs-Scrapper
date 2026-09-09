@@ -45,7 +45,7 @@ fi
 sudo install -d -o runr -g runr -m 0750 \
   /var/lib/runr/api-data \
   /var/lib/runr/customer-data \
-  /var/log/runr \
+  /var/log/runr
 sudo install -d -o runr-acquisition -g runr-acquisition -m 0750 \
   /var/lib/runr/acquisition-data \
   /srv/runr/state \
@@ -59,9 +59,9 @@ else
   sudo chmod 0640 "$INSTALL_DIR/.env"
 fi
 if [ "$PROJECT_DIR/.env.acquisition" != "$INSTALL_DIR/.env.acquisition" ]; then
-  sudo install -o root -g runr -m 0640 "$PROJECT_DIR/.env.acquisition" "$INSTALL_DIR/.env.acquisition"
+  sudo install -o root -g runr-acquisition -m 0640 "$PROJECT_DIR/.env.acquisition" "$INSTALL_DIR/.env.acquisition"
 else
-  sudo chown root:runr "$INSTALL_DIR/.env.acquisition"
+  sudo chown root:runr-acquisition "$INSTALL_DIR/.env.acquisition"
   sudo chmod 0640 "$INSTALL_DIR/.env.acquisition"
 fi
 
