@@ -187,5 +187,5 @@ over newer customer writes.
 
 Prior runtime/evidence commit SHA: `e7c70a9b52c1d839ee3df24c63efced106d7d18a`.
 Producer state/export correction SHA: `d14332db57c06d2021e4e41c240d8727e5f212da`.
-Final handoff commit SHA: record with `git rev-parse HEAD` after this
-documentation-only update.
+Final handoff tip: this documentation commit; verify its immutable SHA with
+`git rev-parse HEAD` (reported in the final handoff message).
