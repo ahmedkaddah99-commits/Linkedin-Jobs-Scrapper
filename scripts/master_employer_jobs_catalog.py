@@ -258,9 +258,10 @@ class EmployerCompany:
 class RequestAccounting:
     """Thread-safe counters for actual transport attempts and in-flight work."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_attempts: int | None = None) -> None:
         self._lock = threading.Lock()
         self._attempts = 0
+        self._max_attempts = max(0, int(max_attempts)) if max_attempts is not None else None
         self._inflight = 0
         self._peak_inflight = 0
         self._by_kind: dict[str, int] = {}
@@ -270,6 +271,8 @@ class RequestAccounting:
     def start(self, *, kind: str, url: str, transport: str = "direct") -> None:
         origin = (urlsplit(url).hostname or "").casefold() or "unknown"
         with self._lock:
+            if self._max_attempts is not None and self._attempts >= self._max_attempts:
+                raise RequestBudgetExceeded(self._max_attempts)
             self._attempts += 1
             self._inflight += 1
             self._peak_inflight = max(self._peak_inflight, self._inflight)
@@ -295,6 +298,14 @@ class RequestAccounting:
                 "by_transport": by_transport,
                 "by_origin": dict(sorted(self._by_origin.items())),
             }
+
+
+class RequestBudgetExceeded(RuntimeError):
+    """Raised before dispatch when the collector's request budget is spent."""
+
+    def __init__(self, max_attempts: int) -> None:
+        super().__init__(f"request_budget_exhausted:{max_attempts}")
+        self.max_attempts = max_attempts
 
 
 class TransportGate:
@@ -332,11 +343,13 @@ class TransportGate:
         semaphores = (self.account_semaphore, self.http_semaphore, origin)
         for semaphore in semaphores:
             semaphore.acquire()
-        self.accounting.start(kind="http_attempt", url=url, transport=transport)
         try:
-            yield
+            self.accounting.start(kind="http_attempt", url=url, transport=transport)
+            try:
+                yield
+            finally:
+                self.accounting.finish()
         finally:
-            self.accounting.finish()
             for semaphore in reversed(semaphores):
                 semaphore.release()
 
@@ -355,11 +368,13 @@ class TransportGate:
         semaphores = (self.account_semaphore, origin)
         for semaphore in semaphores:
             semaphore.acquire()
-        self.accounting.start(kind=kind, url=url, transport="browser")
         try:
-            yield
+            self.accounting.start(kind=kind, url=url, transport="browser")
+            try:
+                yield
+            finally:
+                self.accounting.finish()
         finally:
-            self.accounting.finish()
             for semaphore in reversed(semaphores):
                 semaphore.release()
 
@@ -1561,6 +1576,7 @@ def run_collection(
     max_pages: int = 20,
     max_browser_requests: int = 10,
     max_targets: int = 25,
+    max_requests: int | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     recheck_budget: int = 25,
     company_concurrency: int = 2,
@@ -1575,7 +1591,8 @@ def run_collection(
     if company_id:
         companies = [company for company in companies if company.canonical_company_id == company_id]
     selected = companies if limit <= 0 else companies[:limit]
-    accounting = RequestAccounting()
+    request_budget = max(0, int(max_requests)) if max_requests is not None else None
+    accounting = RequestAccounting(max_attempts=request_budget)
     metrics: dict[str, Any] = {
         "input": input_stats,
         "selected_companies": len(selected),
@@ -1589,6 +1606,10 @@ def run_collection(
         "rechecks_skipped_budget": 0,
         "recheck_budget": max(0, int(recheck_budget)),
         "request_accounting": accounting.snapshot(),
+        "request_budget": {
+            "max_requests": request_budget,
+            "enforced": request_budget is not None,
+        },
         "concurrency": {
             "company_workers": max(1, min(32, int(company_concurrency))),
             "max_pending": max(1, min(100, int(max_pending))),
@@ -1809,6 +1830,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-pages", type=int, default=20)
     parser.add_argument("--max-browser-requests", type=int, default=10)
     parser.add_argument("--max-targets", type=int, default=25)
+    parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=0,
+        help="Bound total HTTP/browser attempts for this company collection.",
+    )
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument(
         "--recheck-budget",
@@ -1867,6 +1894,7 @@ def main(argv: list[str] | None = None) -> int:
         max_pages=args.max_pages,
         max_browser_requests=args.max_browser_requests,
         max_targets=args.max_targets,
+        max_requests=args.max_requests or None,
         timeout_seconds=args.timeout,
         recheck_budget=args.recheck_budget,
         company_concurrency=args.company_concurrency,

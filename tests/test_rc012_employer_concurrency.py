@@ -9,6 +9,7 @@ from scripts.master_employer_jobs_catalog import (
     EmployerCompany,
     EmployerState,
     RequestAccounting,
+    RequestBudgetExceeded,
     TransportGate,
     run_collection,
 )
@@ -137,6 +138,24 @@ def test_transport_accounting_counts_direct_and_proxy_attempts(monkeypatch) -> N
     assert snapshot["by_transport"] == {"direct": 1, "webshare": 1}
     assert snapshot["by_kind"] == {"http_attempt": 2}
     assert snapshot["peak_inflight"] == 1
+
+
+def test_transport_gate_stops_before_dispatch_when_request_budget_is_spent() -> None:
+    accounting = RequestAccounting(max_attempts=1)
+    gate = TransportGate(accounting=accounting, http_concurrency=1, account_concurrency=1)
+
+    with gate.http_request("https://example.test/first"):
+        pass
+
+    try:
+        with gate.http_request("https://example.test/second"):
+            raise AssertionError("request budget should prevent entering the transport")
+    except RequestBudgetExceeded as exc:
+        assert exc.max_attempts == 1
+
+    snapshot = accounting.snapshot()
+    assert snapshot["total_attempts"] == 1
+    assert snapshot["inflight"] == 0
 
 
 def test_browser_process_gate_is_bounded() -> None:

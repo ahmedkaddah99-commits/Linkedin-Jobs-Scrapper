@@ -40,6 +40,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-pages", type=int, default=20)
     parser.add_argument("--max-browser-requests", type=int, default=10)
     parser.add_argument("--max-targets", type=int, default=25)
+    parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=0,
+        help="Bound total HTTP/browser attempts for this company collection.",
+    )
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dry-run", action="store_true")
@@ -72,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         max_pages=args.max_pages,
         max_browser_requests=args.max_browser_requests,
         max_targets=args.max_targets,
+        max_requests=args.max_requests or None,
         timeout_seconds=args.timeout,
     )
     metrics.update(

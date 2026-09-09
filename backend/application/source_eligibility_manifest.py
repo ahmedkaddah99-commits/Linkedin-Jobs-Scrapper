@@ -890,10 +890,19 @@ def load_manifest(path: str | Path, *, verify_sidecar: bool = True) -> dict[str,
         # produced on Windows.  pathlib.Path follows the host OS, so a
         # Windows drive-qualified path is otherwise misclassified as a
         # relative path and joined to the manifest directory verbatim.
-        recorded_path_is_absolute = sidecar_path.is_absolute() or PureWindowsPath(
-            recorded_sidecar_path
-        ).is_absolute()
-        if not recorded_path_is_absolute:
+        native_absolute = sidecar_path.is_absolute()
+        windows_absolute = PureWindowsPath(recorded_sidecar_path).is_absolute()
+        if not native_absolute and windows_absolute:
+            # On POSIX, pathlib treats a Windows drive-qualified path as a
+            # relative filename. Do not stat that foreign path: a mounted or
+            # permission-protected cwd can raise PermissionError before the
+            # colocated fallback runs.
+            recorded_sidecar_name = PureWindowsPath(recorded_sidecar_path).name
+            colocated = manifest_path.parent / recorded_sidecar_name
+            if not colocated.exists():
+                raise FileNotFoundError(f"raw manifest sidecar is missing: {colocated}")
+            sidecar_path = colocated
+        elif not native_absolute:
             sidecar_path = manifest_path.parent / sidecar_path
         elif not sidecar_path.exists():
             # Historical manifests were generated on Windows and may retain
