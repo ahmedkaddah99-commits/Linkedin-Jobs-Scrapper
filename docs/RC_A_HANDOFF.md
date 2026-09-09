@@ -1,6 +1,6 @@
 # Chat A handoff — RC-025
 
-Status: **verified offline; implementation complete for the bounded read model and local UI/API exercise; live/integrated acceptance pending**.
+Status: **RC-025 FIX-A verified offline; implementation complete for the bounded read model and local UI/API exercise; integrated/live acceptance pending**.
 
 This handoff is for `temp/rc-a-observability-growth` at the reserved worktree
 `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-a-observability-growth`.
@@ -211,6 +211,33 @@ network action was performed. Temporary local servers were stopped after the
 exercise. The isolated fixture database remains under the ignored
 `.backend_test_tmp\rc025_browser` path for recoverable local inspection and
 was not copied into application data.
+
+## RC-025 FIX-A acceptance mapping
+
+FIX-A closes the local frontend verification slice. The statuses below keep
+offline fixture evidence separate from the checks that require C's integrated
+runtime and the later live-source pilot.
+
+| Plan acceptance criterion | Result | Evidence and remaining action |
+| --- | --- | --- |
+| 1. Per-company/source eligibility, attempt/success, completeness, job outcomes, stop reason, freshness and next action | Satisfied offline for the read model/UI contract; integrated verification pending | The fixture page rendered eligibility evidence, scan state, observed/accepted/published/rejected values, stop reason, freshness and next action. The API includes `last_attempt_at` and `last_success_at`. After runtime integration, verify those fields and actual worker/cycle metadata on the dashboard. Live-source completeness/failure evidence belongs to RC-027. |
+| 2. Reconciled totals without double-counting master rows, employers, scan groups and source tasks | Satisfied offline for the bounded read model; integrated counts pending | The page kept the frozen denominator separate from runtime targets and showed the 17,601-row baseline with five fixture targets. Reconcile the corresponding integrated database counts after C's merge. |
+| 3. Frozen baseline, evidence-verified eligibility and review/retry backlogs | Satisfied offline for baseline/read-only behavior; manifest data action pending | The page rendered 17,601 rows, 7,513 existing IDs, 10,088 missing-ID rows and 11,907 unique organizations, with identity/alias/negative-result/due-retry backlogs. Eligibility is verified only from explicit persisted evidence; no manifest or sidecar was applied here. |
+| 4. Queue age/duration, failures/retries, heartbeat age, DB latency, resources and provider throttling by role/version | Satisfied offline for display semantics; actual metadata verification pending | The fixture rendered `0 / 0` failures/retries, queue and duration fields, local DB latency, worker role/version, stale heartbeat and unknown resources. Re-run against the integrated runtime's actual worker/cycle metadata. |
+| 5. Missing-worker, stale-coverage, stuck-task and spend/retention alerts; heartbeat-based Online state | Satisfied offline for covered fixture states; integrated/live verification pending | The fixture exercised stale worker/coverage, stuck-task and spend-limit/unknown-limit states, and stored `running` did not override a stale heartbeat. Confirm missing-worker and retention behavior with the durable metadata available after integration. |
+| 6. Scoped/audited admin recovery actions, normal-user prohibition and redacted logs | Satisfied offline for the RC-025 read-only slice; runtime audit verification remains | The focused backend suite passed 27 tests; authenticated local GET returned 200, unauthenticated/invalid requests returned 401, and the actual page exposed only `Refresh`, with no acquisition mutation control. No live recovery action was invoked. |
+| Plan verification: offline worker, stale task, partial company and unknown-cost fixture states | Satisfied offline | The actual browser page rendered stale `worker-offline`, partial-company counts, and failed-unknown-cost counts as `Unknown` rather than zero, including the bounded review action. |
+
+Post-integration action: after C integrates this immutable tip, verify the
+dashboard against the real local/integrated API data available at that stage,
+including worker heartbeat, cycle/task status, attempt/success timestamps and
+role/version metadata. Record the endpoint, runtime identifiers and observed
+values as integrated evidence; do not substitute the committed fixture.
+
+RC-027 action: collect live-source failure and coverage evidence during the
+authorized RC-027 pilot. That evidence is intentionally deferred and is not a
+prerequisite for closing this local FIX-A verification slice. No production run,
+provider request or live coverage claim is made by this handoff.
 
 ## Baseline and dependency interpretation
 
