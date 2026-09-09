@@ -5,7 +5,11 @@ from copy import deepcopy
 import pytest
 
 from backend.application.expansion_wave_manifest import build_expansion_wave_manifest
-from backend.application.source_eligibility_manifest import SCHEMA_VERSION
+from backend.application.source_eligibility_manifest import (
+    SCHEMA_VERSION,
+    SOURCE_EMPLOYER,
+    SOURCE_LINKEDIN,
+)
 
 
 def _manifest() -> dict:
@@ -13,10 +17,10 @@ def _manifest() -> dict:
     tasks = []
     for index, (company_id, source, pilot, org_id) in enumerate(
         (
-            ("company-b", "employer", True, ""),
-            ("company-b", "linkedin", True, "org-2"),
-            ("company-a", "employer", False, ""),
-            ("company-a", "linkedin", False, "org-1"),
+            ("company-b", SOURCE_EMPLOYER, True, ""),
+            ("company-b", SOURCE_LINKEDIN, True, "org-2"),
+            ("company-a", SOURCE_EMPLOYER, False, ""),
+            ("company-a", SOURCE_LINKEDIN, False, "org-1"),
         ),
         start=2,
     ):
@@ -26,7 +30,7 @@ def _manifest() -> dict:
                 "source_row_number": index,
                 "row_fingerprint": fingerprint,
                 "canonical_company_id": company_id,
-                "source_eligibility": {"employer": True, "linkedin": True},
+                "source_eligibility": {SOURCE_EMPLOYER: True, SOURCE_LINKEDIN: True},
                 "ownership": {"status": "resolved"},
                 "review_required": False,
             }
@@ -97,7 +101,10 @@ def test_wave_cohorts_expose_deferred_source_tasks_without_applying_them():
 
     assert projection["coverage"]["selected_source_tasks"] == 2
     assert projection["coverage"]["deferred_source_tasks"] == 2
-    assert projection["coverage"]["deferred_task_keys"] == ["employer:company-a", "linkedin:company-a"]
+    assert projection["coverage"]["deferred_task_keys"] == [
+        f"{SOURCE_EMPLOYER}:company-a",
+        f"{SOURCE_LINKEDIN}:company-a",
+    ]
     assert all("apply" not in wave for wave in projection["waves"])
 
 
