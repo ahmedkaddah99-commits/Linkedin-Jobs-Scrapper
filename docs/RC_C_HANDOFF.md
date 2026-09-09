@@ -24,6 +24,15 @@ The persistent target checkout was at
 committed. It must be advanced only by verified fast-forward from the
 resulting clean C tip; nothing is pushed or deployed.
 
+Current read-only deployment visibility is separate from the local candidate:
+the target is `c69535f7dc2e3b679508c6716e27b586f519f609`, the remote-tracking
+deployment ref is `30ef992b7945ff0998704a550fdc2f893b24476f`, the VPS runs
+`6e9a1e9301ffca644aca916aad6fc8827e4a792d`, and the public Render frontend
+advertises `7251ae297c55f7f6a4524181cdafb4648f7fdcde`. The public Render API
+health endpoint returned HTTP 503. The Render management API key available to
+this session was rejected, so the actual Render service/deployment revision
+and logs cannot be inspected further without valid management access.
+
 ## RC-027 gate result — 2026-09-09
 
 RC-027 was not executed. The four-company packet is now frozen, but staging

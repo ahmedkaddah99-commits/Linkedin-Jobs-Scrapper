@@ -17,6 +17,26 @@ No LinkedIn or employer request, provider charge, Turso external write, R2
 object, signed download, browser/CORS request, or production migration was
 performed.
 
+## Actual deployed/runtime visibility
+
+Read-only visibility checks on 2026-09-09 found different revisions in the
+available environments:
+
+| Environment | Observed result |
+| --- | --- |
+| Persistent target checkout | `c69535f7dc2e3b679508c6716e27b586f519f609` on `deployment/render-turso-r2` |
+| GitHub remote-tracking deployment ref | `30ef992b7945ff0998704a550fdc2f893b24476f`; local target is 44 commits ahead; no push was made |
+| VPS systemd runtime | `6e9a1e9301ffca644aca916aad6fc8827e4a792d`; API/frontend/customer services active; acquisition inactive/disabled |
+| Public Render frontend | `7251ae297c55f7f6a4524181cdafb4648f7fdcde`, generated `2026-09-08T10:49:58.289Z` |
+| Public Render API | `GET https://runr-api.onrender.com/health/live` returned HTTP 503 |
+| Render management API | The locally present management key was rejected with HTTP 401; deployed service IDs/settings could not be read |
+
+The public frontend revision is not evidence that the current target or VPS
+candidate is deployed. The target must not be pushed until the isolated pilot
+passes, because `render.yaml` uses `autoDeployTrigger: commit` for the API,
+worker and frontend. The public API 503 also requires an authorized Render
+operator to inspect service/deployment logs before any cutover claim.
+
 ## Host and release verification
 
 The first access check used the approved alias and returned `root`:

@@ -13,6 +13,13 @@ runtime rehearsal is now evidenced on the authorized VPS; RC-027's external
 resource/provider and real-source gates remain blocked. The persistent target
 is advanced only after the C evidence commit is complete.
 
+Read-only deployment visibility is split: the VPS runs `6e9a1e93`, the public
+Render frontend advertises `7251ae297c55f7f6a4524181cdafb4648f7fdcde`, and the
+public Render API health endpoint returned HTTP 503. The local target is not
+deployed; its remote-tracking branch is `30ef992b7945ff0998704a550fdc2f893b24476f`
+and the local target is 44 commits ahead. Render management API access returned
+401, so no stronger deployed revision claim is made.
+
 ## Environment and verification result
 
 The repository-mandated interpreter was checked before Python work:
