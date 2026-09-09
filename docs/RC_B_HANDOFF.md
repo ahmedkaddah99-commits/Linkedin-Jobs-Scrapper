@@ -343,6 +343,6 @@ over newer customer writes.
 Prior runtime/evidence commit SHA: `e7c70a9b52c1d839ee3df24c63efced106d7d18a`.
 Producer state/export correction SHA: `d14332db57c06d2021e4e41c240d8727e5f212da`.
 RC-024 implementation/evidence SHA: `6e315b9324e4ba2fb1b2ffbb42592fe55d01c610`.
-RC-026 implementation/evidence SHA: `61d204cea7ef8ddfd9451c40d7dcc158db8d2f7a`.
+RC-026 implementation/evidence SHA: `61d204ce53ab02060514409b6ef7514846d2d133`.
 Final B handoff tip: this documentation commit; verify its immutable SHA with
 `git rev-parse HEAD` and report it with the implementation SHA.
