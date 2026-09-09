@@ -73,7 +73,16 @@ def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
 def _tree_bytes(path: Path) -> int:
     if not path.exists():
         return 0
-    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            # SQLite journals/WAL sidecars can disappear between enumeration
+            # and stat while the benchmark is sampling a live fixture.
+            continue
+    return total
 
 
 def _peak_rss_bytes() -> int | None:
