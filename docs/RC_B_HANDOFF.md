@@ -1,8 +1,10 @@
 # Chat B runtime handoff
 
 Status: RC-023 offline preparation and producer state/export correction are
-complete on B; deployed/full VPS acceptance remains pending C integration and
-INT-1. RC-024, RC-026, and conditional RC-031 remain gated.
+complete on B. The authorized host phase was attempted against INT-1's
+accepted candidate but is access-blocked before mutation; deployed/full VPS
+acceptance remains pending. RC-024, RC-026, and conditional RC-031 remain
+gated.
 
 ## Identity and worktree
 
@@ -156,6 +158,28 @@ The VPS setup, service restart, port check, and synthetic worker command are
 deliberately not listed as passing results: they require an authorized clean
 host and isolated staging state and must be coordinated with C first.
 
+## Host verification attempt
+
+The existing preflight connection was used on 2026-09-09 without repeating
+completed firewall/SSH-hardening work:
+
+| Item | Observation |
+| --- | --- |
+| Candidate requested | INT-1 accepted integrated candidate `3943be1a146600f67c09431f5fdddccdb56e049e` (runtime code-bearing tip `9d837e2d56930715db1de22f191644531c2c00b8`) |
+| Host connection | SSH reached `runradmin@144.91.99.90` using the existing approved key; host `vmd205749` |
+| Host OS | Ubuntu 24.04.4 LTS, kernel `6.8.0-139-generic` |
+| Account | `runradmin`, member of `sudo`; non-interactive `sudo -n -v` failed because a password is required |
+| Root SSH fallback | Existing key rejected for `root@144.91.99.90` (`Permission denied (publickey,password)`) |
+| Installed runtime | `/opt/runr` absent; all checked `/srv/runr/*` mounts, `/var/lib/runr/acquisition-data`, env files, and `/opt/runr/.venv/bin/python` absent |
+| Host revision | None installed; no accepted SHA was deployed |
+| Mutation result | No setup, package install, service change, reboot, mount change, or data transfer performed |
+
+The host is therefore blocked on an approved elevation method: either restore
+the established `runradmin` sudo access/passwordless elevation or authorize a
+working root SSH/admin path. Once supplied, resume the RC-023 host checklist
+at the accepted candidate above; do not redo the offline producer/runtime work
+or completed preflight.
+
 ## Handoff to C
 
 1. Integrate producer state/export correction tip `d14332db57c06d2021e4e41c240d8727e5f212da` and this
@@ -163,10 +187,9 @@ host and isolated staging state and must be coordinated with C first.
    `deploy/acquisition-data-manifest.json` edit by retaining all four explicit
    state roots and restore guards; do not copy the persistent target's dirty
    files.
-2. Reconcile `deploy/start.sh` and the runtime/release contract with C's
-   accepted integration tip before any host verification. Do not perform host
-   mutations from this B worktree.
-3. On an authorized clean host after INT-1, record the provider image/region/price/limits,
+2. The host attempt reached `144.91.99.90` but is blocked by missing sudo/root
+   elevation. Continue only after that access detail is supplied.
+3. On an authorized clean host at INT-1's accepted candidate, record the provider image/region/price/limits,
    create both environment boundaries from secret storage, run setup/deploy,
    verify services and closed ports, and execute one isolated synthetic worker
    task. Record deployed commit separately from this branch.
