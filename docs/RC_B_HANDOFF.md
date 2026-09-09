@@ -24,6 +24,7 @@ remains gated.
 | B working-tree policy | clean target/A/C worktrees preserved; edits only here |
 | B final immutable tip | `8a87df8f7abb02a46fe0249b391ffe75aa415174` |
 | Host candidate measured | `6e9a1e9301ffca644aca916aad6fc8827e4a792d` on `deployment/render-turso-r2` |
+| Latest observed target/C tip | `f9417f2286c4d423bbf16ab15e2c90fe36d3f625`; target and C worktrees clean; B's work began from the earlier accepted `c69535f7...` descendant |
 
 The target currently has unrelated dirty work and a different HEAD. It was not
 edited. No reset, clean, pull, merge, push, deploy, production migration,
