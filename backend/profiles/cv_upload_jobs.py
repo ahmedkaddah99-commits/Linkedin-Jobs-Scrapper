@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -263,6 +264,49 @@ def _complete_run(repositories: BackendRepositories, run: RunRecord) -> RunRecor
     return repositories.run_repository.get(run.id)
 
 
+def _emit_profile_ready_event(
+    repositories: BackendRepositories,
+    *,
+    run: RunRecord,
+    user_id: str,
+    asset_kind: str,
+    logger: logging.Logger,
+) -> None:
+    """Record the backend-confirmed profile-ready boundary without user data."""
+
+    analytics_store = getattr(repositories, "analytics_store", None)
+    emit_event = getattr(analytics_store, "emit_event", None)
+    if not callable(emit_event):
+        return
+    event_id = f"evt_profile_ready_{run.id}"
+    query_rows = getattr(analytics_store, "query_rows", None)
+    if callable(query_rows):
+        try:
+            if query_rows("SELECT 1 AS present FROM analytics_events WHERE event_id = ? LIMIT 1", (event_id,)):
+                return
+        except Exception:
+            # Analytics must not turn an otherwise successful CV processing run
+            # into a failed run when an alternate store lacks this query shape.
+            pass
+    try:
+        emit_event(
+            event_id=event_id,
+            event_name="profile_ready",
+            occurred_at=utc_now_iso(),
+            user_id=user_id,
+            run_id=run.id,
+            source="cv_upload_worker",
+            payload={
+                "asset_kind": str(asset_kind or "unknown").strip() or "unknown",
+                "status": CV_STATUS_READY,
+                "analytics_environment": str(os.getenv("RUNR_ENV") or "development").strip().lower()
+                or "development",
+            },
+        )
+    except Exception:
+        logger.exception("profile_ready_analytics_event_failed", extra={"run_id": run.id, "user_id": user_id})
+
+
 def _fail_or_retry_run(
     repositories: BackendRepositories,
     run: RunRecord,
@@ -304,6 +348,13 @@ def process_cv_upload_run(
         asset = _find_asset(assets, asset_id)
         metadata = dict(asset.get("metadata") or {})
         if str(metadata.get("status") or "") == CV_STATUS_READY and str(metadata.get("source_text") or "").strip():
+            _emit_profile_ready_event(
+                repositories,
+                run=run,
+                user_id=user_id,
+                asset_kind=str(asset.get("asset_kind") or "unknown"),
+                logger=log,
+            )
             return _complete_run(repositories, run)
 
         update_cv_asset_processing_state(
@@ -374,6 +425,13 @@ def process_cv_upload_run(
             refreshed_user.metadata = user_metadata
             refreshed_user.updated_at = _now()
             repositories.auth_repository.upsert_user(refreshed_user)
+        _emit_profile_ready_event(
+            repositories,
+            run=run,
+            user_id=user_id,
+            asset_kind=str(asset.get("asset_kind") or "unknown"),
+            logger=log,
+        )
         return _complete_run(repositories, run)
     except Exception as exc:
         message = str(exc)

@@ -20,6 +20,7 @@ from backend.acquisition.analytics import build_acquisition_analytics, parse_ana
 from backend.application.company_enrichment import CompanyEnrichmentProvider, CompanyEnrichmentService
 from backend.application.personalized_jobs_service import PersonalizedJobsService
 from backend.application.production_rollout import ProductionRolloutService
+from backend.application.product_analytics import load_product_analytics
 from backend.application.contracts import BackendRegistriesProtocol, StageEngineProtocol
 from backend.application.domain_services import IdentityAccessService, WorkspaceCatalogService
 from backend.application.quota import get_usage_snapshot
@@ -2058,6 +2059,12 @@ class BackendApplication:
         try:
             merged_payload = dict(payload or {})
             merged_payload.update(extra_payload)
+            # The backend runtime owns the environment boundary.  A browser
+            # payload may describe a mode, but it must not be able to relabel
+            # production traffic as staging or test traffic.
+            merged_payload["analytics_environment"] = (
+                str(os.getenv("RUNR_ENV") or "development").strip().lower() or "development"
+            )
             analytics_store.emit_event(
                 event_id=f"evt_{uuid4().hex[:16]}",
                 event_name=str(event_name or "").strip(),
@@ -2224,9 +2231,15 @@ class BackendApplication:
                 ORDER BY positive_outcomes DESC, reviewed_jobs DESC
             """,
         }
-        overview = {"generated_at": utc_now_iso()}
+        analytics_now = datetime.now(timezone.utc)
+        overview = {"generated_at": analytics_now.isoformat()}
         for metric_name, sql in queries.items():
             overview[metric_name] = query_rows(sql)
+        overview["product_analytics"] = load_product_analytics(
+            query_rows,
+            now=analytics_now,
+            environment=os.getenv("RUNR_ENV") or "development",
+        )
         return overview
 
     def list_analytics_events(

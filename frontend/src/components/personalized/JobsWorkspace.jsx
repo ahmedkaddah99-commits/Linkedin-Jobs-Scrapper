@@ -351,6 +351,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const [feedAttempt, setFeedAttempt] = useState(0);
   const listBodyRef = useRef(null);
   const loadMoreSentinelRef = useRef(null);
+  const relevantJobEventRef = useRef("");
   const initialFeedRef = useRef(true);
   const skipNextFeedRef = useRef(false);
 
@@ -358,6 +359,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   const jobs = useMemo(() => rawJobs.map(toPersonalizedJobView), [rawJobs]);
   const selectedRawJob = detailJob || rawJobs.find((job) => String(job.canonical_job_id || job.posting_id) === String(selectedJobId)) || (!routeJobId ? rawJobs[0] : null);
   const selectedJob = selectedRawJob ? toPersonalizedJobView(selectedRawJob) : null;
+  const personalizedDataMode = selectedJob?.dataMode || feed?.data_mode || "real";
   const activeFilterCount = countPersonalizedJobFilters(filters);
   const showMobileList = isMobile && !routeJobId;
 
@@ -385,6 +387,12 @@ export default function JobsWorkspace({ initialJobId = "" }) {
         const payload = await request(`/personalized-jobs?${query}`);
         if (active) {
           setFeed(payload || { jobs: [], total: 0 });
+          logPersonalizedEvent("jobs_feed_viewed", {
+            route: "/jobs",
+            jobCount: Array.isArray(payload?.jobs) ? payload.jobs.length : 0,
+            filterCount: countPersonalizedJobFilters(filters),
+            dataMode: payload?.data_mode || "real",
+          });
           if (isInitialFeed && payload?.filters) {
             skipNextFeedRef.current = true;
             setFilters((current) => ({ ...current, ...filtersFromSavedSearch({ filters: payload.filters }) }));
@@ -409,7 +417,17 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     if (!routeJobId && !listJob) return undefined;
     let active = true;
     request(`/personalized-jobs/${encodeURIComponent(selectedJobId)}`)
-      .then((payload) => { if (active) { setDetailJob(payload); setFeedError(""); } })
+      .then((payload) => {
+        if (active) {
+          setDetailJob(payload);
+          setFeedError("");
+          const eventJobId = String(payload?.canonical_job_id || payload?.posting_id || selectedJobId || "").trim();
+          if (eventJobId && relevantJobEventRef.current !== eventJobId) {
+            relevantJobEventRef.current = eventJobId;
+            logPersonalizedEvent("job_relevant_viewed", { route: "/jobs", jobId: eventJobId, dataMode: payload?.data_mode || "real" });
+          }
+        }
+      })
       .catch((error) => { if (active) setFeedError(error?.message || "This job is not available in the shared catalog."); });
     return () => { active = false; };
   }, [isConnected, rawJobs, request, routeJobId, selectedJobId]);
@@ -434,7 +452,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
   function updateFilter(name, value) {
     setFilters((current) => ({ ...current, [name]: value }));
     setFeedback("");
-    logPersonalizedEvent("jobs_filter_changed", { route: "/jobs", filterName: name });
+    logPersonalizedEvent("jobs_filter_changed", { route: "/jobs", filterName: name, dataMode: personalizedDataMode });
   }
 
   function clearFilters() {
@@ -455,7 +473,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       await request(`/personalized-jobs/${encodeURIComponent(job.id)}/save`, { method: nextState === "none" ? "DELETE" : "POST", body: {} });
       setRawUserState(job.id, nextState);
       setFeedback(nextState === "saved" ? `${job.title} saved.` : `${job.title} removed from saved jobs.`);
-      logPersonalizedEvent(nextState === "saved" ? "job_saved" : "job_unsaved", { route: "/jobs", jobId: job.id });
+      logPersonalizedEvent(nextState === "saved" ? "job_saved" : "job_unsaved", { route: "/jobs", jobId: job.id, dataMode: job.dataMode || personalizedDataMode });
     } catch (error) {
       setFeedback(error?.message || "Unable to update this saved job.");
     } finally {
@@ -485,6 +503,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/applied`, { method: "POST", body: {} });
       setRawUserState(selectedJob.id, "applied");
       setFeedback("Marked as applied.");
+      logPersonalizedEvent("application_marked_applied", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode });
     } catch (error) {
       setFeedback(error?.message || "Unable to mark this job as applied.");
     } finally {
@@ -498,6 +517,12 @@ export default function JobsWorkspace({ initialJobId = "" }) {
     try {
       await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/report`, { method: "POST", body: { reason_code: reason } });
       setFeedback("Thanks. Your report was recorded for this job.");
+      logPersonalizedEvent("job_relevance_feedback", {
+        route: "/jobs",
+        jobId: selectedJob.id,
+        feedbackReasonCode: reason,
+        dataMode: personalizedDataMode,
+      });
     } catch (error) {
       setFeedback(error?.message || "Unable to send this report.");
     }
@@ -531,6 +556,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       const result = await request(`/personalized-jobs/${encodeURIComponent(selectedJob.id)}/improve-resume`, { method: "POST", body: { mode: "rewrite" } });
       setImproveResult(result);
       setFeedback("Tailored resume generation has been queued.");
+      logPersonalizedEvent("application_preparation_requested", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode });
     } catch (error) {
       setFeedback(error?.message || "Runr Pro is required to create a tailored resume.");
     } finally {
@@ -577,6 +603,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
       return;
     }
     window.open(selectedJob.applyUrl, "_blank", "noopener,noreferrer");
+    logPersonalizedEvent("apply_link_opened", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode });
     setFeedback("The verified employer application opened in a new tab.");
   }
 
@@ -586,7 +613,7 @@ export default function JobsWorkspace({ initialJobId = "" }) {
 
   const detailContent = selectedJob ? <>
     <div className="jobs-detail-toolbar"><div className="jobs-detail-tabs"><button className={activeTab === "overview" ? "is-active" : ""} onClick={() => setActiveTab("overview")} type="button">Overview</button><button className={activeTab === "company" ? "is-active" : ""} onClick={() => setActiveTab("company")} type="button">Company</button></div><div className="jobs-detail-toolbar__actions"><button className="jobs-back-link jobs-mobile-back" onClick={() => navigate("/jobs")} type="button"><Icon>arrow_back</Icon>Back to jobs</button><button className="jobs-text-link" disabled={busyAction === "applied" || selectedJob.userState === "applied"} onClick={markApplied} type="button">{selectedJob.userState === "applied" ? "Already applied" : "Already applied?"}</button><button className={selectedJob.userState === "saved" ? "jobs-outline-button is-selected" : "jobs-outline-button"} disabled={busyAction === "save"} onClick={() => saveJob(selectedJob)} type="button"><Icon style={selectedJob.userState === "saved" ? { fontVariationSettings: "'FILL' 1" } : undefined}>bookmark</Icon>{selectedJob.userState === "saved" ? "Saved" : "Save"}</button><button className="jobs-primary-button" disabled={!selectedJob.applyUrl} onClick={applyToJob} title={selectedJob.applyUrl ? "Open employer application" : "No verified Apply URL"} type="button"><Icon>bolt</Icon>Apply</button></div></div>
-    <div className="jobs-detail-scroll">{activeTab === "company" ? companyLoading ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading company details</strong></div> : companyError ? <div className="jobs-empty"><Icon>cloud_off</Icon><strong>{companyError}</strong></div> : <CompanyOverview company={companyDetail} job={selectedJob} onOpenNetwork={openNetwork} /> : <JobOverview job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onOpenNetwork={openNetwork} onPrepare={() => setPreparing(true)} onReport={() => setReportOpen(true)} rightPanelTab={rightPanelTab} setRightPanelTab={setRightPanelTab} />}{preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}{improveOpen && selectedJob ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}</div>
+    <div className="jobs-detail-scroll">{activeTab === "company" ? companyLoading ? <div className="jobs-empty"><Icon>progress_activity</Icon><strong>Loading company details</strong></div> : companyError ? <div className="jobs-empty"><Icon>cloud_off</Icon><strong>{companyError}</strong></div> : <CompanyOverview company={companyDetail} job={selectedJob} onOpenNetwork={openNetwork} /> : <JobOverview job={selectedJob} onHide={toggleHide} onImprove={openImproveResume} onOpenNetwork={openNetwork} onPrepare={() => { setPreparing(true); logPersonalizedEvent("application_preparation_opened", { route: "/jobs", jobId: selectedJob.id, dataMode: personalizedDataMode }); }} onReport={() => setReportOpen(true)} rightPanelTab={rightPanelTab} setRightPanelTab={setRightPanelTab} />}{preparing ? <section className="jobs-preparation-panel"><div><span className="jobs-eyebrow">Application preparation</span><h2>Prepare this application with Runr</h2><p>Review the verified job details, then tailor your documents before opening the employer application.</p></div><div className="jobs-preparation-actions"><Link className="jobs-outline-button" to="/documents"><Icon>description</Icon>Documents</Link><Link className="jobs-outline-button" to="/cv-studio"><Icon>edit_note</Icon>CV Studio</Link><button className="jobs-text-link" onClick={() => setPreparing(false)} type="button">Close</button></div></section> : null}{improveOpen && selectedJob ? <ImproveResumeReview busy={improveBusy} job={selectedJob} onClose={() => setImproveOpen(false)} onRewrite={requestRewrite} result={improveResult} /> : null}</div>
   </> : <div className="jobs-empty jobs-empty--detail"><Icon>work_off</Icon><strong>{routeJobId ? "Loading job details" : "Select a job"}</strong><span>{routeJobId ? "Runr is checking the shared catalog." : "Choose a role from the shortlist to see details."}</span></div>;
 
   return <div className="jobs-experience">

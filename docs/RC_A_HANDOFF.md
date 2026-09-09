@@ -1,6 +1,6 @@
-# Chat A handoff — RC-025
+# Historical Chat A handoff — RC-025 (superseded)
 
-Status: **RC-025 FIX-A verified offline; implementation complete for the bounded read model and local UI/API exercise; integrated/live acceptance pending**.
+Status: **Historical RC-025 baseline. The current reconciliation amendment is below and supersedes this status.**
 
 This handoff is for `temp/rc-a-observability-growth` at the reserved worktree
 `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-a-observability-growth`.
@@ -315,3 +315,321 @@ additive `coverage`/`health` fields. Do not reset or whole-file-restore the
 target checkout. The source master and all existing runtime state remain
 unchanged; the browser fixture database is temporary, ignored, and can be
 removed after independently verifying that no local process still uses it.
+# Current reconciliation amendment — RC-025, RC-029 preparation, and RC-030
+
+Date: 2026-09-09
+
+Status at this handoff:
+
+- RC-025: implementation and local UI/API verification complete; integrated
+  operational acceptance remains pending actual acquisition-worker data from
+  RC-027/C. The local Jobs fixture is not acquisition-worker evidence.
+- RC-030: offline implementation complete and verified through the local
+  authenticated API, rendered Jobs page, persisted first-party events, and
+  admin product-analytics view. Production/staging acceptance remains pending
+  deployment of this tip and real event/data verification.
+- RC-029: deterministic wave-manifest preparation complete. Live expansion was
+  not executed because RC-026 capacity evidence and RC-028 Gate A acceptance
+  are not present in the current C handoff. No mapping was applied and no
+  provider was contacted.
+
+The A worktree is
+`C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-a-observability-growth`
+on `temp/rc-a-observability-growth`. It was fast-forwarded from C's accepted
+target tip `f9417f2286c4d423bbf16ab15e2c90fe36d3f625`; the persistent target,
+B worktree, and C worktree were not edited. The implementation commit is
+`bdd58615`; the versioned browser walkthrough is `e728e364`.
+
+## Exact changed files
+
+Implementation and test files:
+
+- `backend/application/product_analytics.py` — bounded, privacy-safe RC-030
+  funnel, retention, feature-usage, latency, failure, environment, and
+  exclusion projection.
+- `backend/application/expansion_wave_manifest.py` — deterministic RC-029
+  employer-grouped wave planner; validates the RC-005 task gate and never
+  applies mappings or performs requests.
+- `backend/application/services.py` — narrow shared integration: authoritative
+  runtime environment tagging for analytics events and additive
+  `product_analytics` output on the existing admin overview.
+- `backend/profiles/cv_upload_jobs.py` — backend-confirmed, idempotent
+  `profile_ready` event after usable CV processing; no CV contents are sent.
+- `scripts/build_rc029_wave_manifests.py` — explicit-cap offline CLI for the
+  wave planner.
+- `frontend/src/lib/analytics.js` — asynchronous first-party event sink and
+  primitive allowlist; Firebase remains the existing optional secondary sink.
+- `frontend/src/lib/personalizedAnalyticsPayload.js` — bounded job/filter/
+  feedback fields.
+- `frontend/src/context/SessionContext.jsx` — first-party sink wiring and
+  explicit local API base support in the browser-test provider.
+- `frontend/src/components/personalized/JobsWorkspace.jsx` — user-visible
+  Jobs events and real/synthetic data-mode propagation; no internal fields are
+  exposed.
+- `frontend/src/components/UpgradeModal.jsx` — removed its duplicate direct
+  analytics POST while preserving the existing event.
+- `frontend/src/pages/AdminEventsPage.jsx` — read-only RC-030 funnel,
+  retention, feature, latency/failure, environment, and exclusion view.
+- `tests/fixtures/rc030_local_jobs_seed.py` — disposable published employer/
+  LinkedIn-shaped Jobs API fixture with viewer and admin tokens.
+- `frontend/scripts/rc030_local_browser_check.mjs` — reproducible local
+  authenticated user/dashboard walkthrough.
+- `tests/test_product_analytics.py`,
+  `frontend/src/lib/analytics.test.js`, and the relevant
+  `tests/test_backend_api.py` assertions.
+- `tests/test_rc029_wave_manifest.py` — deterministic grouping, cohort
+  deferral, integrity, and cap tests.
+
+No producer, migration, release, VPS, Turso, R2, or provider file was changed.
+`backend/application/services.py` is a C-owned shared integration surface;
+Chat C should resolve any overlap rather than replacing newer changes.
+
+## Commands and results
+
+All Python commands used the required interpreter:
+
+`C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe`
+
+```text
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' --version
+Python 3.12.7
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest tests/test_product_analytics.py tests/test_phase_c_personalized_jobs.py tests/test_rc010_first_acquisition_slice.py -q
+8 passed in 7.33s
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest tests/test_source_eligibility_manifest.py tests/test_rc029_wave_manifest.py -q
+10 passed in 3.48s
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest tests/test_product_analytics.py tests/test_backend_api.py -k "product_analytics or cv_upload_is_idempotent_for_same_file_content" -q
+4 passed, 124 deselected in 14.02s
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m ruff check backend/application/expansion_wave_manifest.py scripts/build_rc029_wave_manifests.py tests/test_rc029_wave_manifest.py
+All checks passed!
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m py_compile backend/application/product_analytics.py backend/application/expansion_wave_manifest.py backend/application/services.py backend/profiles/cv_upload_jobs.py scripts/build_rc029_wave_manifests.py
+exit code 0
+```
+
+The focused source-to-user regression suite passed. An earlier broader
+`tests/test_backend_api.py` run reached 125 passed and 3 failures in unrelated
+pre-existing tracker expectations:
+`test_tracker_api` (fixture filename expectation) and
+`test_tracker_ats_detail_returns_persisted_read_only_diagnostics`
+(attempt-history expectation). No tracker code was changed.
+
+Frontend dependency and acceptance checks:
+
+```text
+cd C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-a-observability-growth\frontend
+npm ci
+added 722 packages, audited 723; package-lock.json unchanged
+
+$env:VITE_API_BASE_URL='http://127.0.0.1:8765/v1'
+$env:VITE_E2E_AUTH='1'
+$env:VITE_E2E_ADMIN='1'
+$env:VITE_PERSONALIZED_JOBS_EXPERIENCE='1'
+$env:VITE_PERSONALIZED_JOBS_DATA_MODE='real'
+$env:VITE_REPLACE_LEGACY_JOBS_NAV='1'
+npm run check
+170 passed, 0 failed; ESLint exit code 0; 1148 modules transformed; Vite exit code 0
+
+node --test scripts/production-build.test.mjs
+1 passed, 0 failed
+```
+
+The npm audit summary reported 19 existing dependency advisories (2 low,
+4 moderate, 11 high, 2 critical). No `npm audit fix` or dependency upgrade
+was run.
+
+## RC-025 real-data status
+
+C's current handoff still reports that RC-027 has no real source request,
+Turso/R2 publication, provider charge, R2 upload/download, CORS/browser, or
+authenticated production-like UI publication evidence. Therefore no actual
+acquisition-worker heartbeat, cycle, source outcome, publication, request, or
+cost record was available to verify in this pass. The previously tested
+synthetic customer worker remains distinct from an acquisition worker.
+
+The RC-025 dashboard implementation still preserves unknown and failed
+observations as unknown and derives liveness from heartbeat freshness. It does
+not overwrite `last_success_at` with a failed attempt. After C/B make actual
+runtime metadata available, verify the dashboard at the integrated endpoint
+for worker role/version, heartbeat age, cycle/task identifiers, source
+outcomes, publication ID/state, request/cost records, and attempt versus success
+timestamps. This is a required integrated/live follow-up, not satisfied by
+the fixture.
+
+## RC-030 event contract and evidence
+
+The first-party path is:
+
+`authenticated frontend action -> POST /analytics/events -> analytics_events -> GET /analytics/overview -> /admin/events`
+
+The existing Firebase event call remains available, but the new first-party
+sink is the database-backed source for the admin product view. The sink is
+asynchronous and cannot block or fail a user action.
+
+| Funnel stage | Event/evidence | Classification |
+| --- | --- | --- |
+| Signup | existing `user_signed_up` | backend-confirmed |
+| Usable profile | new idempotent `profile_ready` after CV worker success | backend-confirmed |
+| Relevant job | `job_relevant_viewed` after the detail API succeeds | interaction |
+| Saved | `job_saved` after the save API succeeds | backend-confirmed action result |
+| Prepared application | existing backend `cv_generation_completed` | backend-confirmed |
+| Confirmed outcome | `application_status_updated` only for confirmed status/email evidence | backend-confirmed |
+| Paid conversion | existing `subscription_started` | backend-confirmed |
+
+`apply_link_opened`, `application_preparation_opened`, and
+`application_marked_applied` remain separate interaction signals. Opening an
+employer page or marking a job applied is not treated as confirmed submission.
+`job_relevance_feedback` carries only a controlled reason code.
+
+Projection rules:
+
+- Raw delivery records remain append-only; funnel counts deduplicate users and
+  use the earliest same-environment signup/stage boundary.
+- The query window is 90 days, start-inclusive/end-exclusive. Retention uses
+  signup-week cohorts and exact D7 `[+7d,+8d)` and D30 `[+30d,+31d)` windows;
+  immature denominators render null rather than zero.
+- The backend writes `RUNR_ENV` into the event payload, overriding any client
+  label. The projection separates production, staging, development, local,
+  test, and internal traffic.
+- Test/internal IDs, explicit exclusion flags, and test email domains are
+  excluded from product denominators and counted by reason. No email is
+  returned in the projection.
+- Only allowlisted primitive properties are sent to the first-party sink,
+  strings are capped at 160 characters, and CV contents, document contents,
+  credentials, raw descriptions, and sensitive free text are excluded.
+- No sampling is applied to allowed first-party events. The projection bounds
+  reads to 90 days; physical raw-event deletion remains governed by the
+  existing database policy and is not claimed here.
+- No paid provider, replay tool, or new analytics infrastructure was added;
+  incremental RC-030 provider spend is `$0`. Existing Firebase behavior and
+  the application's legal consent policy remain unchanged. Before production
+  enablement, C must confirm that the existing consent policy permits these
+  authenticated, non-replay product events; this slice does not introduce
+  cookie/replay collection.
+- Latency is bucketed as `<1s`, `1-5s`, `5-20s`, `20s+`, or `unknown`.
+  Failure categories use bounded error/failure codes, never raw messages.
+  The dashboard labels these relationships as associations, not causal
+  claims.
+
+Local API/UI evidence used only
+`C:\Users\ahmed\AppData\Local\Temp\runr-rc030-local-api-20260909-05`.
+The server was started with `RUNR_ENV=development`, SQLite, local object
+storage, `RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=false`, and loopback API/CORS
+settings. The exact versioned walkthrough was:
+
+```text
+cd C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-a-observability-growth\frontend
+$env:RC030_USER_TOKEN='<seed output, not committed>'
+$env:RC030_ADMIN_TOKEN='<seed output, not committed>'
+$env:RC030_UI_URL='http://127.0.0.1:4173'
+$env:RC030_API_URL='http://127.0.0.1:8765/v1'
+node scripts/rc030_local_browser_check.mjs
+```
+
+Result:
+
+```json
+{
+  "user_flow": {
+    "title": "Operations Analyst",
+    "company": "Acme Labs",
+    "filtered_count_visible": true,
+    "saved_feedback_observed": true,
+    "apply_feedback_observed": true,
+    "apply_url_opened": "https://boards.greenhouse.io/acme/jobs/a",
+    "preparation_panel_visible": true,
+    "internal_fields_visible": false
+  },
+  "admin_flow": {
+    "dashboard_visible": true,
+    "funnel_visible": true,
+    "retention_visible": true,
+    "feature_usage_visible": true,
+    "latency_failure_visible": true,
+    "environment_visible": true
+  }
+}
+```
+
+The direct API check returned one Berlin job, `job-a`, company `Acme Labs`,
+verified Apply URL `https://boards.greenhouse.io/acme/jobs/a`, user state
+`saved`, evaluation state `available`, and product schema
+`product_analytics_v1`. Persisted first-party rows from the final run were
+tagged `real` after the data-mode fix. Earlier synthetic rows from prior
+attempts remain in the disposable local database as accounted test history;
+they are not production evidence.
+
+## RC-030 acceptance mapping
+
+| Plan criterion | Result | Evidence / remaining action |
+| --- | --- | --- |
+| Signup → usable profile → relevant job → saved/prepared application → confirmed outcome, separating backend confirmation from clicks | Satisfied offline; production data pending | Pure projection tests, backend profile-ready assertion, local authenticated Jobs flow, and explicit dashboard labels passed. Verify real signup/profile/application-status records after deployment. |
+| Join task IDs, latency bands, versions, failure categories to usage | Satisfied offline | `product_analytics.py` projection and tests cover job/run IDs, duration buckets, versions, failures and later value users. Verify actual acquisition task IDs after RC-027. |
+| Deduplicate and separate internal/staging/production | Satisfied offline | Environment overwrite, exclusion rules, deduplicated funnel, and environment test coverage passed. Verify integrated `RUNR_ENV` and internal-user policy with C. |
+| Document fields, consent, sampling, retention, spend; exclude sensitive content | Satisfied as documented offline contract | Allowlist tests, no-new-provider path, explicit 90-day/read-retention and consent notes above. C must confirm legal consent before production enablement. |
+| Dashboard answers dropoff, return-driving feature, slow-processing effect, and feedback gaps | Satisfied offline | `/admin/events` rendered all product panels and the controlled relevance feedback path. Production event volume and causal interpretation remain unverified. |
+
+## RC-029 preparation and dependency
+
+`backend/application/expansion_wave_manifest.py` validates the RC-005 schema,
+hash presence, canonical-ID integrity, both source task sets, and unique task
+keys. It sorts by canonical company ID and keeps all selected employer and
+LinkedIn tasks for one employer in the same wave. Cohorts are explicit:
+`pilot`, `expansion` (non-pilot source-specific tasks), or `all`.
+
+Each wave records unique employers, canonical IDs, LinkedIn organization
+groups, source tasks, request cap, credit cap, maximum failure rate, queue-age
+threshold, budget/request stop conditions, unclassified-result pause, and
+accepted-result preservation. The CLI requires all cap/threshold values; it
+does not invent capacity from a fixture.
+
+Offline CLI preparation used the sanitized RC-005 fixture:
+
+```text
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' scripts/build_rc029_wave_manifests.py --manifest 'C:\Users\ahmed\AppData\Local\Temp\rc029-wave-cli-20260909-01\source.json' --output 'C:\Users\ahmed\AppData\Local\Temp\rc029-wave-cli-20260909-01\waves.json' --cohort pilot --wave-size 2 --request-cap 40 --credit-cap 70 --max-failure-rate 0.2 --max-queue-age-seconds 900
+{"output": "...\\waves.json", "wave_manifest_hash": "2b80c3663cd5da0fd5f49a076797042d3a553e52e6f660683e5653df78a1081b", "waves": 1}
+```
+
+The generated fixture plan selected 2 source tasks and deferred 6. It was
+never supplied to a collector. To execute, C must first record RC-028 Gate A
+acceptance and provide RC-026 measured capacity/provider limits; then
+operations can run the CLI against the restored RC-005 manifest and record
+partial, failed, unsupported, deferred, accepted, and published outcomes.
+“All companies attempted” must not be reported as “all jobs collected.”
+
+## Handoff to Chat C and RC-032
+
+C should integrate source tips `bdd58615` and `e728e364`, plus this documentation
+commit (the final immutable tip is reported in the completion message), after
+checking the target branch, then reconcile the shared
+`backend/application/services.py` hunk. Run the
+focused Python suites and the correct-flag frontend `npm run check` on the
+integrated result. Do not merge the disposable local database or tokens.
+
+For RC-025, C/B must append actual acquisition-worker dashboard evidence:
+worker IDs/roles/versions, heartbeat timestamps, cycle/task IDs, source
+outcomes, publication ID/state, request and cost records, and explicit
+attempt/last-success values. The synthetic customer-worker evidence must stay
+labelled separately.
+
+For RC-032, this lane contributes two walkthroughs: (1) published employer
+and LinkedIn-shaped records through the authenticated Jobs API/page, including
+filter, company, details, verified Apply URL, save and preparation behavior;
+and (2) the admin Events page showing the RC-030 funnel, retention,
+feature-usage, latency/failure context, environment separation, exclusions,
+and controlled feedback interpretation.
+
+## Targeted rollback
+
+No production data, migration, provider state, deployment, acquisition run, or
+live request was created. Before integration, C can omit
+`bdd58615`/`e728e364`. After integration, use `git revert` on the exact
+immutable commits, checking descendants first; do not reset or restore whole
+files. If only RC-029 preparation must be removed, revert the commit and leave
+the RC-030 commit intact only after checking the dependency order. The
+additive analytics projection has no migration rollback. The disposable local
+fixture database and temporary CLI outputs are recoverable local artifacts and
+must only be removed after confirming no local process uses them.

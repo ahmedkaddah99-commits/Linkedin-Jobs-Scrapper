@@ -3508,6 +3508,10 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(first_status, 202)
         processed = self.app.process_next_queued_run(auto_retry_failed=False)
         self.assertEqual(processed.status, "completed")
+        profile_ready_rows = self.app.repositories.analytics_store.query_rows(
+            "SELECT event_name FROM analytics_events WHERE event_name = 'profile_ready'"
+        )
+        self.assertEqual(len(profile_ready_rows), 1)
 
         second_status, second_payload = self._multipart_request(
             "/cv-upload",
@@ -4517,6 +4521,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertIn("automation_success_rate", overview_payload)
         self.assertIn("applications_per_user", overview_payload)
         self.assertIn("referral_outreach_funnel", overview_payload)
+        self.assertEqual(overview_payload["product_analytics"]["schema_version"], "product_analytics_v1")
         overview_user_row = next(
             (row for row in overview_payload["applications_per_user"] if row["user_id"] == self.user.user_id),
             None,

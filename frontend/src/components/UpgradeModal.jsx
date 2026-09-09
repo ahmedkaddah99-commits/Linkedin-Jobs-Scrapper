@@ -20,7 +20,7 @@ function targetPlanIdForPlan(planId) {
 }
 
 export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) {
-  const { request, user } = useSession();
+  const { request } = useSession();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [promoCode, setPromoCode] = useState("");
@@ -34,19 +34,11 @@ export default function UpgradeModal({ quotaEvent, onClose, currentPage = "" }) 
       plan_id: quotaEvent.plan_id,
       page: currentPage,
     };
-    logEvent("upgrade_prompt_shown", {
-      ...payload,
-      user_id: user?.user_id,
-    });
-    request("/analytics/events", {
-      method: "POST",
-      body: {
-        event_name: "upgrade_prompt_shown",
-        ...payload,
-      },
-    }).catch(() => undefined);
+    // logEvent is persisted through the authenticated first-party sink once
+    // per prompt; the Firebase path remains an optional secondary sink.
+    logEvent("upgrade_prompt_shown", payload);
     return undefined;
-  }, [currentPage, quotaEvent, request, user?.user_id]);
+  }, [currentPage, quotaEvent]);
 
   useEffect(() => {
     if (quotaEvent) {
