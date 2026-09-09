@@ -79,6 +79,31 @@ class EnvironmentConfigTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
+    def test_dotenv_permission_error_is_skipped_for_restricted_runtime_files(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / ".env").write_text("RUNR_RESTRICTED=secret\n", encoding="utf-8")
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("dotenv.dotenv_values", side_effect=PermissionError("restricted")):
+                    load_project_dotenv()
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_dotenv_can_be_disabled_when_systemd_injects_a_role_boundary(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            self._write_layered_env(root)
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(os.environ, {"RUNR_SKIP_PROJECT_DOTENV": "1"}, clear=True):
+                    load_project_dotenv()
+                    self.assertNotIn("RUNR_TEST_LAYER", os.environ)
+            finally:
+                os.chdir(previous_cwd)
+
     def test_local_development_defaults_are_valid(self):
         settings = validate_environment({})
 

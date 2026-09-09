@@ -1,12 +1,16 @@
 # Chat B runtime handoff
 
-Status: RC-023 offline preparation and producer state/export correction are
-complete on B. RC-024 offline implementation and fixture rehearsal are
-complete on B. RC-026 offline benchmark implementation and comparable local
-state evidence are complete on B. The authorized host phase was attempted
-against INT-1's accepted candidate but is access-blocked before mutation;
-deployed/full VPS, off-host backup/restore acceptance, and the authorized
-staging benchmark remain pending. Conditional RC-031 remains gated.
+Status: B completed the authorized VPS-local RC-024 backup/restore rehearsal
+and RC-026 bounded benchmark against the deployed candidate. The host-local
+historical copies, isolated restores, exact-schema validation, single-writer
+fencing, fixture replay, customer replay, disk/RAM/RSS/CPU sampling, and local
+SQLite contention measurements passed. Full RC-024/026 acceptance remains
+pending because the VPS has no approved off-host S3/R2 resources or Turso
+staging access, and the acquisition unit exposed a bootstrap permission defect
+on the current candidate. B fixed that defect in the final tip below; C must
+integrate and deploy it before repeating the acquisition-unit start/restart
+gate. No live provider/browser acquisition was run. Conditional RC-031
+remains gated.
 
 ## Identity and worktree
 
@@ -18,6 +22,9 @@ staging benchmark remain pending. Conditional RC-031 remains gated.
 | B branch | `temp/rc-b-vps-runtime` |
 | S0/common launch SHA | `b0f47788c1a5d385ae4c3c770d5cd990f586a626` |
 | B working-tree policy | clean target/A/C worktrees preserved; edits only here |
+| B final immutable tip | `8a87df8f7abb02a46fe0249b391ffe75aa415174` |
+| Host candidate measured | `6e9a1e9301ffca644aca916aad6fc8827e4a792d` on `deployment/render-turso-r2` |
+| Latest observed target/C tip | `f9417f2286c4d423bbf16ab15e2c90fe36d3f625`; target and C worktrees clean; B's work began from the earlier accepted `c69535f7...` descendant |
 
 The target currently has unrelated dirty work and a different HEAD. It was not
 edited. No reset, clean, pull, merge, push, deploy, production migration,
@@ -27,10 +34,10 @@ host command, provider request, or live request was performed.
 
 | Ticket | Status | Evidence/next gate |
 | --- | --- | --- |
-| RC-023 | Offline preparation plus producer state/export correction complete; full acceptance pending | Runtime contract, acquisition isolation, setup pinning, resource/log controls, separate producer state/export paths, and focused tests. Requires C's accepted integrated SHA plus authorized clean-host setup/restart/port/synthetic-task evidence. |
-| RC-024 | Offline implementation and fixture rehearsal complete; full acceptance pending | `scripts/acquisition_state_backup.py` uses SQLite Online Backup, manifest-last S3/R2 preservation, isolated restore, measured local budget and epoch-fenced single-writer leases. Fixture proof passes; historical source, approved bucket/lifecycle, replacement-host restore/reboot and service-account evidence remain required. |
+| RC-023 | Code correction complete on B; host gate found a candidate bootstrap defect; full acceptance pending | `RUNR_SKIP_PROJECT_DOTENV=1` now protects the acquisition boundary and unreadable dotenv files are skipped. Local tests pass. The deployed `6e9a...` candidate still needs C's integrated tip and a clean acquisition-unit start/restart verification. |
+| RC-024 | VPS-local historical checkpoint/restore rehearsal complete; full acceptance pending | Host re-checkpoints and isolated restores passed for both roles under `runr-acquisition`; single-writer epoch fencing passed. Off-host upload/download, approved lifecycle policy, replacement-host restore, and reboot recovery remain unverified. |
 | RC-025 | A-owned and accepted in C's integrated history; not changed | C records A's `6ab6f31bec0977b6db2435920942a7d885ead66d` integration and the later candidate; B did not modify A's files. |
-| RC-026 | Offline benchmark/evidence complete; full acceptance pending | `docs/RC026_BENCHMARK.md`, `scripts/benchmark_acquisition_full_state.py`, and `tests/test_rc026_benchmark.py`. Both RC-024 historical checkpoint copies, bounded employer matrix, customer warm path, resource metrics, request accounting, and unknown-cost model were measured offline. Production/VPS/Turso/provider capacity remains unverified. |
+| RC-026 | VPS bounded offline benchmark complete; staging/provider acceptance pending | Host report at `/srv/runr/rc024-evidence/rc026-vps-benchmark-20260909/report.json`, sampled report at `/srv/runr/rc024-evidence/rc026-vps-benchmark-sampled2-20260909/report.json`, and local SQLite contention evidence at `/srv/runr/rc024-evidence/rc026-sqlite-contention-20260909`. Provider requests, Turso contention/billing, and acquisition/customer overlap remain unverified. |
 | RC-031 | Conditional, not started | Requires trigger evidence after RC-024/026/028. |
 
 ## Changed files
@@ -260,89 +267,179 @@ git status --short --branch
 # Result before the handoff commit: expected scoped changes only; clean after commit.
 ```
 
-The VPS setup, service restart, port check, and synthetic worker command are
-deliberately not listed as passing results: they require an authorized clean
-host and isolated staging state and must be coordinated with C first.
+The pre-change offline checks above did not claim VPS setup, service restart,
+port, or synthetic-worker acceptance. The authorized host observations and
+the current candidate's acquisition bootstrap failure are recorded below;
+post-integration repetition remains required.
 
-## Host verification attempt
+## VPS verification and deployed-versus-local distinction
 
-The existing preflight connection was used on 2026-09-09 without repeating
-completed firewall/SSH-hardening work:
+The existing approved SSH setup was reused on 2026-09-09. No firewall,
+SSH-hardening, or customer-service setup was repeated. Host observations:
 
 | Item | Observation |
 | --- | --- |
-| Candidate requested | INT-1 accepted integrated candidate `3943be1a146600f67c09431f5fdddccdb56e049e` (runtime code-bearing tip `9d837e2d56930715db1de22f191644531c2c00b8`) |
-| Host connection | SSH reached `runradmin@144.91.99.90` using the existing approved key; host `vmd205749` |
-| Host OS | Ubuntu 24.04.4 LTS, kernel `6.8.0-139-generic` |
-| Account | `runradmin`, member of `sudo`; non-interactive `sudo -n -v` failed because a password is required |
-| Root SSH fallback | Existing key rejected for `root@144.91.99.90` (`Permission denied (publickey,password)`) |
-| Installed runtime | `/opt/runr` absent; all checked `/srv/runr/*` mounts, `/var/lib/runr/acquisition-data`, env files, and `/opt/runr/.venv/bin/python` absent |
-| Host revision | None installed; no accepted SHA was deployed |
-| Mutation result | No setup, package install, service change, reboot, mount change, or data transfer performed |
+| Host | `runr-vps` / `vmd205749`, Ubuntu 24.04.4; `sudo -n whoami` returned `root` |
+| Host release | `/opt/runr/.env`: `RUNR_RELEASE_COMMIT=6e9a1e9301ffca644aca916aad6fc8827e4a792d`, branch `deployment/render-turso-r2` |
+| Host Python | `/opt/runr/.venv/bin/python` and `/opt/python/3.12.7/bin/python3.12` both report Python 3.12.7 |
+| Acquisition account | `runr-acquisition`, non-root; service and benchmark commands ran under that account |
+| Role paths | `/srv/runr/shared/inputs` `root:runr-acquisition` 0750; `/srv/runr/state`, `/srv/runr/exports`, `/srv/runr/backups`, and `/var/log/runr/acquisition` `runr-acquisition:runr-acquisition` 0750 |
+| Live gate | `/opt/runr/.env.acquisition`: `RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=false`, `RUNR_ACQUISITION_MAX_REQUESTS=0` |
+| Service state after rehearsal | acquisition `inactive/dead`, `disabled`; API, frontend, and customer worker `active` |
+| Current host limits | `CPUQuota=300%`, `MemoryHigh=9G`, `MemoryMax=12G`, `TasksMax=512` |
 
-The host is therefore blocked on an approved elevation method: either restore
-the established `runradmin` sudo access/passwordless elevation or authorize a
-working root SSH/admin path. Once supplied, resume the RC-023 host checklist
-at the accepted candidate above; do not redo the offline producer/runtime work
-or completed preflight.
+The host candidate predates B's final correction. A bounded acquisition-unit
+start exposed `PermissionError: [Errno 13] Permission denied: '.env'` while
+the worker was auto-restarting (`ExecMainStatus=1`); B stopped it and confirmed
+the unit remained disabled and customer services remained active. The final B
+tip adds `RUNR_SKIP_PROJECT_DOTENV=1` to the acquisition unit and makes the
+dotenv loader skip an unreadable file. That tip is local-only until C
+integrates/deploys it; the host was not modified with unaccepted code.
+
+## RC-024 VPS-local backup, restore, and ownership evidence
+
+The verified workstation snapshots were copied to the VPS without moving or
+modifying their originals. Destination checkpoint roots are local VPS backup
+storage, not off-host preservation:
+
+| Role | Persistent historical checkpoint | Host validation |
+| --- | --- | --- |
+| Employer | `/srv/runr/backups/rc024-historical-20260909-employer/employer-20260909T085018133133Z-53589d4a53bb` | source SHA `b1eee3b449afd075d9b860f12a5880da6769fcc666473bbfe8f08e7e4cb36737`, checkpoint SHA `4f779500c9cd5fb66342cb36bd2fd236cefb9b9eebb3caf13876fca8b1265aaf`, 2 tables, integrity `ok` |
+| LinkedIn | `/srv/runr/backups/rc024-historical-20260909-linkedin/linkedin-20260909T085116426477Z-4b604df8392a` | source SHA `26b81012177f40949b6b3ede3187860129db9fdaf3392d2195d78ac050244317`, checkpoint SHA `adc5c1ab7ac5b7bdca67cdabd7687fdd29913afae188fab2aba4377a41327525`, exact 14 tables, integrity `ok` |
+
+Host-side SQLite Online Backup re-checkpoints were then created and validated
+as `runr-acquisition`:
+
+- Employer: checkpoint `employer-20260909T144811797243Z-caa39b4cccba` at
+  `/srv/runr/backups/rc024-vps-rehearsal-employer-20260909/employer/...`,
+  83,841,024 bytes, SHA
+  `12fefe3bd5d8a1a47215b6c203bb065f925b8f372f502667110748a2931a4465`,
+  tables `companies/jobs`, `wal_consistent=true`.
+- LinkedIn: checkpoint `linkedin-20260909T150049679427Z-8cba2aca442e` at
+  `/srv/runr/backups/rc024-vps-rehearsal-linkedin-20260909/linkedin/...`,
+  3,479,191,552 bytes, SHA
+  `f2032a13637804492cc8e2faa7770bf974bf6298bf10b60d34aaba7ad8eca4f0`,
+  exact 14 tables, `wal_consistent=true`.
+
+Isolated restores succeeded to the new, acquisition-owned paths
+`/srv/runr/rc024-evidence/restore-employer-20260909` and
+`/srv/runr/rc024-evidence/restore-linkedin-20260909`; restored hashes matched
+their validated checkpoint hashes and both receipts reported
+`require_existing_state=true`. An initial restore to an unwritable sibling of
+`/srv/runr` failed closed; no persistent path was loosened.
+
+The epoch-fenced lease rehearsal at
+`/srv/runr/rc024-evidence/lease-employer-fencing-20260909` observed active-owner
+conflict, renewal, expiry fencing, and epoch advancement 1 to 2. The VPS
+rehearsal did not upload to S3/R2: all required S3/R2 environment names were
+absent, so no external write/download or off-host acceptance is claimed. A
+real reboot was not run because acquisition is intentionally disabled and
+customer services are in place; systemd start/restart recovery remains a
+pending post-integration gate.
+
+## RC-026 VPS benchmark evidence
+
+The bounded command was run from `/tmp` as the acquisition account so the
+current host candidate's unreadable customer dotenv did not interfere with
+the isolated benchmark:
+
+```text
+sudo -n -u runr-acquisition /opt/runr/.venv/bin/python \
+  /opt/runr/scripts/benchmark_acquisition_full_state.py \
+  --output-root /srv/runr/rc024-evidence/rc026-vps-benchmark-20260909 \
+  --linkedin-checkpoint-dir /srv/runr/backups/rc024-vps-rehearsal-linkedin-20260909/linkedin/linkedin-20260909T150049679427Z-8cba2aca442e \
+  --employer-checkpoint-dir /srv/runr/backups/rc024-vps-rehearsal-employer-20260909/employer/employer-20260909T144811797243Z-caa39b4cccba \
+  --customer-jobs 1000 --customer-iterations 30 --company-concurrency 1 2 4
+```
+
+Report: `/srv/runr/rc024-evidence/rc026-vps-benchmark-20260909/report.json`.
+It copied the LinkedIn checkpoint in 8.7278s and streamed 188,206
+observations to a 775,613,386-byte CSV in 71.4389s. Employer copied in
+0.1569s and exported 2,612 jobs to 78,131,906 bytes in 2.2284s with the final
+export completed. Every fixture concurrency value 1/2/4 preserved 5/5 jobs,
+with zero network/request attempts. Customer replay (1,000 jobs, 30
+iterations) recorded Jobs p50/p95 177.67/223.31ms and Company p50/p95
+43.39/53.47ms, with zero network requests.
+
+The process-sampled repeat is at
+`/srv/runr/rc024-evidence/rc026-vps-benchmark-sampled2-20260909/report.json`.
+Host baseline was 6 vCPUs, 12,541,493,248 bytes RAM, 11,752,128,512 bytes
+available, and no swap. Over 97.002s the child used 97.82 CPU seconds
+(100.84% of one core; 16.81% of host total), peak RSS/HWM was 87,609,344
+bytes, minimum available memory was 11,634,204,672 bytes, and the isolated
+tree consumed 4,420,440,064 disk bytes. These are measured VPS observations,
+not a production capacity or cost claim.
+
+The direct local-SQLite contention probe at
+`/srv/runr/rc024-evidence/rc026-sqlite-contention-20260909` committed all
+20/40/80 transactions for 1/2/4 writers, had zero lock errors, and kept one
+concurrent write section. `BEGIN IMMEDIATE` p95/max wait was 0.065/0.088ms
+for one writer, 0.076/180.143ms for two, and 0.083/630.492ms for four.
+This is host-local SQLite only; it is not Turso contention. The evidence
+supports keeping the existing bounded fixture maximum of four and not raising
+production concurrency without provider/Turso/customer-overlap evidence.
+
+## Producer and scraper verification
+
+After C's accepted integration tip and B's correction, the focused suite ran
+with the shared repository interpreter:
+
+```text
+Python 3.12.7
+160 passed, 4 subtests passed in 47.25s
+```
+
+Covered files include both master producers, both manifested wrappers,
+RC-009/010/011/012, RC-016/017 immutable-generation behavior, producer state
+paths, RC-024 checkpoint/restore, RC-026 benchmark, environment loading, and
+VPS runtime contract tests. Ruff passed for the changed Python/config tests.
+No live LinkedIn/employer requests, browser demonstration, provider retry
+sample, Turso request, or customer-facing staging publication was performed.
+The producer acceptance that depends on those resources remains open.
 
 ## Handoff to C
 
-1. Integrate producer state/export correction tip `d14332db57c06d2021e4e41c240d8727e5f212da` and this
-   handoff sequentially into C's release worktree. Resolve the shared
-   `deploy/acquisition-data-manifest.json` edit by retaining all four explicit
-   state roots and restore guards; do not copy the persistent target's dirty
-   files.
-2. The host attempt reached `144.91.99.90` but is blocked by missing sudo/root
-   elevation. Continue only after that access detail is supplied.
-3. On an authorized clean host at INT-1's accepted candidate, record the provider image/region/price/limits,
-   create both environment boundaries from secret storage, run setup/deploy,
-   verify services and closed ports, and execute one isolated synthetic worker
-   task. Record deployed commit separately from this branch.
-4. C must integrate the scoped RC-024 tip and rerun the combined suites. Only
-   after RC-015/016/023 are integrated and the actual backup/restore drill is
-   accepted may RC-024 be marked fully verified.
-5. Integrate the scoped RC-026 benchmark/evidence commits and rerun the
-   combined matrix before staging execution. RC-026 remains fully pending
-   until the authorized staging benchmark measures the real provider/browser
-   workload, customer overlap, Turso billing/contention, and cost scenarios.
-   RC-031 stays conditional and must not be started from this offline result.
-
-## RC-024 rollback and next action
-
-The scoped implementation/evidence commit is
-`6e315b9324e4ba2fb1b2ffbb42592fe55d01c610`. C may integrate that immutable
-tip together with `docs/RC024_BACKUP_RESTORE.md`, this handoff, and
-`tests/test_rc024_backup_restore.py`; B will not amend or rebase it. No
-historical source or generated checkpoint is part of the commit.
-
-If the correction is rejected before deployment, C should revert the scoped
-commit in the integration branch and leave all source/checkpoint directories
-untouched. If a runtime trial has started, first stop or disable the backup or
-acquisition schedule and prevent new shard claims, then retain the newest
-verified checkpoint and its off-host receipt. Restart only the prior compatible
-release after checking its state path and ownership epoch. Do not delete source
-databases, overwrite newer state with an older restore, or remove the external
-snapshot quarantine. Any host unit rollback remains the RC-023 procedure:
-restore the prior unit files, reload systemd and restart the prior compatible
-release while leaving `.env*`, `/srv/runr`, `/var/lib/runr`, backups and
-journald data intact.
-
-This handoff is frozen after the final scoped documentation commit below; B
-will not edit the worktree again until C supplies an accepted integration tip.
+1. Integrate immutable B tip
+   `8a87df8f7abb02a46fe0249b391ffe75aa415174` after the already accepted
+   integration history. It changes only the dotenv loader, acquisition unit,
+   and focused tests; no company-identity or historical database files are
+   included. Keep the shared manifest and existing C edits intact.
+2. Deploy that integrated SHA through the established runtime procedure, then
+   repeat the acquisition-unit start/restart/stop rehearsal from `/opt/runr`.
+   Confirm no `.env` permission error, live networking remains disabled,
+   acquisition is returned to `disabled/inactive`, and API/frontend/customer
+   worker remain active. Record the deployed SHA separately from B's tip.
+3. Supply the approved isolated S3/R2 bucket/prefix and credential boundary,
+   plus any isolated Turso staging resource required for RC-027. Execute
+   database-first/manifest-last upload, remote receipt verification, download,
+   isolated restore, and resume proof. Until then RC-024 is not fully verified.
+4. Integrate the VPS benchmark result before staging execution. Any live
+   pilot must use C's frozen caps, one coordinated run, and no duplicate paid
+   collection; provider/browser and Turso/customer-overlap results remain
+   required for RC-026.
+5. Keep RC-031 conditional on measured thresholds. RC-033 owns cleanup of the
+   VPS evidence roots and any retained source quarantine; do not delete them
+   during integration.
 
 ## Rollback
 
-Rollback only the B commit(s) after checking the target status: stop new
-acquisition claims, disable/remove the B acquisition unit from the host,
-restore the prior unit files and restart the previous compatible release.
-Leave `.env*`, `/var/lib/runr`, `/srv/runr`, backups, and journald data intact.
-Do not use `git reset`, `git clean`, whole-file rollback, or database restore
-over newer customer writes.
+No B correction was deployed to the host, so the deployed runtime remains
+`6e9a1e9301ffca644aca916aad6fc8827e4a792d`. If C rejects the correction,
+revert commit `8a87df8f7abb02a46fe0249b391ffe75aa415174` in the integration
+branch with a normal revert; do not reset or amend B history. If a host trial
+has begun, stop/disable acquisition and prevent new claims before restoring
+the prior accepted unit/release. Leave `.env*`, `/var/lib/runr`, `/srv/runr`,
+backups, journals, and all immutable evidence intact.
+
+For state recovery, validate the selected checkpoint, restore only to a new
+acquisition-owned directory, verify SHA/schema/receipt, and resume with the
+explicit state path. Never overwrite a newer state with an older restore or
+delete the verified source snapshot. B is frozen at the final documentation
+tip below; C may integrate the immutable commits sequentially.
 
 Prior runtime/evidence commit SHA: `e7c70a9b52c1d839ee3df24c63efced106d7d18a`.
 Producer state/export correction SHA: `d14332db57c06d2021e4e41c240d8727e5f212da`.
 RC-024 implementation/evidence SHA: `6e315b9324e4ba2fb1b2ffbb42592fe55d01c610`.
 RC-026 implementation/evidence SHA: `61d204ce53ab02060514409b6ef7514846d2d133`.
-Final B handoff tip: this documentation commit; verify its immutable SHA with
-`git rev-parse HEAD` and report it with the implementation SHA.
+Final B correction SHA: `8a87df8f7abb02a46fe0249b391ffe75aa415174`.
+Final B documentation tip: verify with `git rev-parse HEAD` after this commit.

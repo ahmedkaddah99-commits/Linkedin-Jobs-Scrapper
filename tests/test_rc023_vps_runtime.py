@@ -35,6 +35,7 @@ def test_acquisition_role_has_a_separate_environment_boundary() -> None:
     assert "Group=runr-acquisition" in acquisition
     assert "Environment=WORKER_ROLE=acquisition" in acquisition
     assert "Environment=WORKER_ID=vps_acquisition_worker" in acquisition
+    assert "Environment=RUNR_SKIP_PROJECT_DOTENV=1" in acquisition
     assert "EnvironmentFile=/opt/runr/.env\n" not in acquisition
     assert "CLERK_" not in example
     assert "CREEM_" not in example

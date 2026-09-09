@@ -20,6 +20,7 @@ Environment=RUNR_ACQUISITION_BACKUP_ROOT=/srv/runr/backups
 Environment=RUNR_WORKER_LOG_DIR=/var/log/runr/acquisition
 Environment=WORKER_ROLE=acquisition
 Environment=WORKER_ID=vps_acquisition_worker
+Environment=RUNR_SKIP_PROJECT_DOTENV=1
 ExecStart=/opt/runr/deploy/start.sh worker
 Restart=always
 RestartSec=5
