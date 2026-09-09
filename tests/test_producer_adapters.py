@@ -183,6 +183,7 @@ def test_linkedin_parser_and_durable_state_reach_contract_with_field_preservatio
     assert observation.source == "linkedin"
     assert observation.scan_id == "scan-linkedin"
     assert observation.apply_type == "linkedin_easy_apply"
+    assert observation.apply_url == "https://jobs.acme.example/42/apply"
     assert observation.source_metadata["application"] == {
         "easy_apply_status": "true",
         "applicant_count": "42",
@@ -190,6 +191,9 @@ def test_linkedin_parser_and_durable_state_reach_contract_with_field_preservatio
     assert observation.source_metadata["ownership"]["company_match_status"] == "EXACT_PRIMARY_MATCH"
     assert observation.canonical_employer["source_company_ids"] == ["linkedin-acme"]
     assert observation.source_record["linkedin_job_id"] == "42"
+    assert observation.normalized_mapping["fields"]["employment_type"]["normalized_value"] == "Full-time"
+    assert observation.normalized_mapping["fields"]["workplace_arrangement"]["normalized_value"] == "Hybrid"
+    assert observation.normalized_mapping["fields"]["description"]["state"] == "present"
 
 
 def test_missing_fields_are_unknown_and_zero_job_state_is_empty(tmp_path) -> None:
