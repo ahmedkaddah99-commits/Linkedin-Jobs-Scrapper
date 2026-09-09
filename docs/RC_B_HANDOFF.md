@@ -274,8 +274,28 @@ or completed preflight.
    accepted may RC-024 be marked fully verified. RC-026 waits for A's RC-025
    and all plan dependencies. RC-031 stays conditional.
 
-This handoff is frozen after the final scoped commit below; B will not edit
-the worktree again until C supplies an accepted integration tip.
+## RC-024 rollback and next action
+
+The scoped implementation/evidence commit is
+`6e315b9324e4ba2fb1b2ffbb42592fe55d01c610`. C may integrate that immutable
+tip together with `docs/RC024_BACKUP_RESTORE.md`, this handoff, and
+`tests/test_rc024_backup_restore.py`; B will not amend or rebase it. No
+historical source or generated checkpoint is part of the commit.
+
+If the correction is rejected before deployment, C should revert the scoped
+commit in the integration branch and leave all source/checkpoint directories
+untouched. If a runtime trial has started, first stop or disable the backup or
+acquisition schedule and prevent new shard claims, then retain the newest
+verified checkpoint and its off-host receipt. Restart only the prior compatible
+release after checking its state path and ownership epoch. Do not delete source
+databases, overwrite newer state with an older restore, or remove the external
+snapshot quarantine. Any host unit rollback remains the RC-023 procedure:
+restore the prior unit files, reload systemd and restart the prior compatible
+release while leaving `.env*`, `/srv/runr`, `/var/lib/runr`, backups and
+journald data intact.
+
+This handoff is frozen after the final scoped documentation commit below; B
+will not edit the worktree again until C supplies an accepted integration tip.
 
 ## Rollback
 
@@ -288,5 +308,6 @@ over newer customer writes.
 
 Prior runtime/evidence commit SHA: `e7c70a9b52c1d839ee3df24c63efced106d7d18a`.
 Producer state/export correction SHA: `d14332db57c06d2021e4e41c240d8727e5f212da`.
-Final handoff tip: this documentation commit; verify its immutable SHA with
-`git rev-parse HEAD` (reported in the final handoff message).
+RC-024 implementation/evidence SHA: `6e315b9324e4ba2fb1b2ffbb42592fe55d01c610`.
+Final B handoff tip: this documentation commit; verify its immutable SHA with
+`git rev-parse HEAD` and report it with the implementation SHA.
