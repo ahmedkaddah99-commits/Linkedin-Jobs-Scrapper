@@ -258,6 +258,14 @@ def load_job_seeker_config(path_override: str = "") -> dict:
 
 
 def load_project_dotenv(*, override: bool = False) -> None:
+    if str(os.getenv("RUNR_SKIP_PROJECT_DOTENV") or "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+
     try:
         from dotenv import dotenv_values
     except Exception:
@@ -268,7 +276,11 @@ def load_project_dotenv(*, override: bool = False) -> None:
     for dotenv_path in dotenv_paths:
         if not dotenv_path.exists() or not dotenv_path.is_file():
             continue
-        for name, value in dotenv_values(dotenv_path=dotenv_path).items():
+        try:
+            values = dotenv_values(dotenv_path=dotenv_path)
+        except OSError:
+            continue
+        for name, value in values.items():
             if value is None:
                 continue
             if override or name not in injected_names:
