@@ -8,7 +8,7 @@ import {
   persistConnection,
   resolveApiUrl,
 } from "../lib/api";
-import { identify, logEvent } from "../lib/analytics";
+import { configureFirstPartyEventSink, identify, logEvent } from "../lib/analytics";
 import {
   getSessionRefreshErrorState,
   getSessionRefreshStartStatus,
@@ -16,14 +16,15 @@ import {
 
 const SessionContext = createContext(null);
 const browserTestAdminMode = import.meta.env.VITE_E2E_ADMIN === "1";
+const browserTestApiBaseUrl = getDefaultApiBaseUrl();
 
 export function BrowserTestSessionProvider({ children }) {
   const request = useCallback(
-    (path, options = {}) => apiRequest("/v1", async () => "e2e-token", path, options),
+    (path, options = {}) => apiRequest(browserTestApiBaseUrl, async () => "e2e-token", path, options),
     [],
   );
   const value = useMemo(() => ({
-    apiBaseUrl: "/v1",
+    apiBaseUrl: browserTestApiBaseUrl,
     user: { user_id: "e2e-user", email: "e2e@runr.test", role: browserTestAdminMode ? "admin" : "user" },
     tokenInfo: { source: "browser-test" },
     status: "connected",
@@ -36,8 +37,9 @@ export function BrowserTestSessionProvider({ children }) {
     refreshSession: async () => undefined,
     request,
     getAccessToken: async () => "e2e-token",
-    resolvePath: (path) => resolveApiUrl("/v1", path),
+    resolvePath: (path) => resolveApiUrl(browserTestApiBaseUrl, path),
   }), [request]);
+  useEffect(() => configureFirstPartyEventSink(request), [request]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
@@ -139,6 +141,8 @@ export function SessionProvider({ children }) {
     (path, options = {}) => apiRequest(apiBaseUrl, getAccessToken, path, options),
     [apiBaseUrl, getAccessToken],
   );
+
+  useEffect(() => configureFirstPartyEventSink(request), [request]);
 
   const refreshSession = useCallback(async () => {
     if (!isLoaded) {

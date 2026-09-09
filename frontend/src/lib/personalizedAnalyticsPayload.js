@@ -7,6 +7,9 @@ export function buildPersonalizedEventProperties(context = {}) {
     onboarding_step: context.onboardingStep,
     data_mode: context.dataMode || "synthetic",
   };
+  if (context.jobId !== undefined) properties.job_id = context.jobId;
+  if (context.jobCount !== undefined) properties.job_count = context.jobCount;
+  if (context.filterCount !== undefined) properties.filter_count = context.filterCount;
   if (context.sceneKey !== undefined) properties.scene_key = context.sceneKey;
   if (context.progression !== undefined) properties.progression = context.progression;
   if (context.extractionStatus !== undefined) properties.extraction_status = context.extractionStatus;
@@ -18,5 +21,6 @@ export function buildPersonalizedEventProperties(context = {}) {
   if (context.notificationToModalMs !== undefined) properties.notification_to_modal_ms = context.notificationToModalMs;
   if (context.reducedMotion !== undefined) properties.reduced_motion = context.reducedMotion;
   if (context.offerOutcome !== undefined) properties.offer_outcome = context.offerOutcome;
+  if (context.feedbackReasonCode !== undefined) properties.feedback_reason_code = context.feedbackReasonCode;
   return properties;
 }

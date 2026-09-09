@@ -40,6 +40,98 @@ function formatPayload(payload) {
   }
 }
 
+function metric(value, suffix = "") {
+  if (value === null || value === undefined || value === "") {
+    return "—";
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${numeric}${suffix}` : "Unknown";
+}
+
+function ProductAnalyticsPanel({ data, loading, error }) {
+  if (loading) {
+    return <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft">Loading product analytics...</section>;
+  }
+  if (error) {
+    return <section className="rounded-[1.75rem] border border-error/30 bg-error-container p-6 text-sm text-on-error-container">Product analytics unavailable: {error}</section>;
+  }
+  if (!data) {
+    return <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 text-sm text-on-surface-variant">No product analytics projection is available yet.</section>;
+  }
+
+  const stages = Array.isArray(data.funnel?.stages) ? data.funnel.stages : [];
+  const cohorts = Array.isArray(data.retention?.cohorts) ? data.retention.cohorts : [];
+  const featureUsage = Array.isArray(data.feature_usage) ? data.feature_usage : [];
+  const latencyBands = Array.isArray(data.latency_bands) ? data.latency_bands : [];
+  const failures = Array.isArray(data.failure_categories) ? data.failure_categories : [];
+  const environments = Array.isArray(data.by_environment) ? data.by_environment : [];
+
+  return (
+    <section className="space-y-5 rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-6 shadow-soft" aria-label="Product analytics">
+      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.22em] text-primary">RC-030 product analytics</p>
+          <h2 className="mt-2 font-headline text-2xl font-bold text-on-surface">Customer outcomes</h2>
+          <p className="mt-1 text-sm leading-6 text-on-surface-variant">
+            {data.environment} traffic · {data.window?.days || 90}-day window · signup denominator {metric(data.funnel?.denominator?.unique_users)}
+          </p>
+        </div>
+        <p className="text-xs text-on-surface-variant">Unparseable events: {metric(data.exclusions?.unparseable_events)} · Excluded: {metric(data.exclusions?.excluded_events)}</p>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <article className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4">
+          <h3 className="font-semibold text-on-surface">Funnel</h3>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[34rem] text-left text-sm">
+              <thead className="text-xs uppercase tracking-wider text-on-surface-variant"><tr><th className="py-2 pr-3">Stage</th><th className="py-2 pr-3">Users</th><th className="py-2 pr-3">Conversion</th><th className="py-2">Evidence</th></tr></thead>
+              <tbody className="divide-y divide-outline-variant/10">
+                {stages.map((stage) => <tr key={stage.stage}><td className="py-2 pr-3 font-medium text-on-surface">{stage.stage}</td><td className="py-2 pr-3 text-on-surface-variant">{metric(stage.unique_users)}</td><td className="py-2 pr-3 text-on-surface-variant">{metric(stage.conversion_pct, "%")}</td><td className="py-2 text-on-surface-variant">{stage.backend_confirmed ? "Backend confirmed" : "Interaction"}</td></tr>)}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-on-surface-variant">Saved means the save API completed. Prepared and confirmed outcomes require backend events; opening an employer page and marking a job applied are not confirmed submission.</p>
+        </article>
+
+        <article className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4">
+          <h3 className="font-semibold text-on-surface">Return retention by signup week</h3>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[30rem] text-left text-sm">
+              <thead className="text-xs uppercase tracking-wider text-on-surface-variant"><tr><th className="py-2 pr-3">Cohort</th><th className="py-2 pr-3">Signups</th><th className="py-2 pr-3">D7</th><th className="py-2">D30</th></tr></thead>
+              <tbody className="divide-y divide-outline-variant/10">
+                {cohorts.length ? cohorts.map((cohort) => <tr key={cohort.cohort_week}><td className="py-2 pr-3 font-medium text-on-surface">{cohort.cohort_week}</td><td className="py-2 pr-3 text-on-surface-variant">{metric(cohort.signups)}</td><td className="py-2 pr-3 text-on-surface-variant">{metric(cohort.returned_d7)} / {metric(cohort.eligible_d7)} ({metric(cohort.return_d7_pct, "%")})</td><td className="py-2 text-on-surface-variant">{metric(cohort.returned_d30)} / {metric(cohort.eligible_d30)} ({metric(cohort.return_d30_pct, "%")})</td></tr>) : <tr><td className="py-3 text-on-surface-variant" colSpan={4}>No mature signup cohorts yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4">
+          <h3 className="font-semibold text-on-surface">Feature usage and return signals</h3>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[34rem] text-left text-sm">
+              <thead className="text-xs uppercase tracking-wider text-on-surface-variant"><tr><th className="py-2 pr-3">Feature event</th><th className="py-2 pr-3">Users</th><th className="py-2 pr-3">Events</th><th className="py-2">Jobs / runs</th></tr></thead>
+              <tbody className="divide-y divide-outline-variant/10">
+                {featureUsage.length ? featureUsage.map((feature) => <tr key={feature.event_name}><td className="py-2 pr-3 font-medium text-on-surface">{feature.event_name}</td><td className="py-2 pr-3 text-on-surface-variant">{metric(feature.unique_users)}</td><td className="py-2 pr-3 text-on-surface-variant">{metric(feature.events)}</td><td className="py-2 text-on-surface-variant">{metric(feature.distinct_jobs)} / {metric(feature.distinct_runs)}</td></tr>) : <tr><td className="py-3 text-on-surface-variant" colSpan={4}>No value events yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article className="rounded-2xl border border-outline-variant/15 bg-surface-container-low p-4">
+          <h3 className="font-semibold text-on-surface">Latency and failure context</h3>
+          <div className="mt-3 grid gap-4 md:grid-cols-2">
+            <div><h4 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant">Latency bands</h4><ul className="mt-2 space-y-1 text-sm text-on-surface-variant">{latencyBands.length ? latencyBands.map((band) => <li key={band.band}>{band.band}: {metric(band.events)} events · {metric(band.confirmed_outcome_users_after)} later confirmed</li>) : <li>No latency observations.</li>}</ul></div>
+            <div><h4 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant">Failure categories</h4><ul className="mt-2 space-y-1 text-sm text-on-surface-variant">{failures.length ? failures.map((failure) => <li key={failure.category}>{failure.category}: {metric(failure.events)} events · {metric(failure.later_value_users)} later value users</li>) : <li>No failure observations.</li>}</ul></div>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-on-surface-variant">These are associations, not causal claims. User report reason codes are the feedback path for relevance reasons analytics cannot infer.</p>
+        </article>
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-xs text-on-surface-variant">{environments.map((item) => <span className="rounded-full border border-outline-variant/20 bg-surface px-3 py-1.5" key={item.environment}>{item.environment}: {metric(item.unique_users)} users · {metric(item.events)} events</span>)}</div>
+    </section>
+  );
+}
+
 export default function AdminEventsPage() {
   const { request } = useSession();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -82,6 +174,10 @@ export default function AdminEventsPage() {
   }, [appliedFilters, currentPage]);
 
   const { data, loading, error, refresh } = useApiResource(() => request(requestPath), [request, requestPath]);
+  const { data: overviewData, loading: overviewLoading, error: overviewError, refresh: refreshOverview } = useApiResource(
+    () => request("/analytics/overview"),
+    [request],
+  );
   const events = data?.events || [];
   const meta = data?.meta || { limit: PAGE_SIZE, offset: (currentPage - 1) * PAGE_SIZE, returned: events.length, total: 0 };
   const total = Number(meta.total || 0);
@@ -158,12 +254,14 @@ export default function AdminEventsPage() {
         </div>
         <button
           className="rounded-2xl border border-outline-variant/20 bg-surface-container-low px-4 py-3 text-sm font-medium text-on-surface transition-colors hover:bg-surface-container-high"
-          onClick={() => refresh().catch(() => undefined)}
+          onClick={() => Promise.allSettled([refresh(), refreshOverview()])}
           type="button"
         >
           Refresh
         </button>
       </header>
+
+      <ProductAnalyticsPanel data={overviewData?.product_analytics} error={overviewError} loading={overviewLoading} />
 
       <section className="rounded-[1.75rem] border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-soft">
         <form className="grid gap-4 md:grid-cols-[1.4fr_1.1fr_0.9fr_0.9fr_auto]" onSubmit={applyFilters}>
