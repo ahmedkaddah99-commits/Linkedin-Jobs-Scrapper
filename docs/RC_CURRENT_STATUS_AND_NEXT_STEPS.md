@@ -20,7 +20,8 @@ Render API/worker deploy runs `30ef992b7945ff0998704a550fdc2f893b24476f`, and
 the live frontend advertises `7251ae297c55f7f6a4524181cdafb4648f7fdcde`. The
 public Render API health endpoint returns HTTP 200. The local target is not
 deployed; its remote-tracking branch is `30ef992b7945ff0998704a550fdc2f893b24476f`
-and the local target is 50 commits ahead after this receipt.
+and the local target remains ahead; the exact clean tip is reported by the Git
+handoff.
 
 ## Environment and verification result
 
