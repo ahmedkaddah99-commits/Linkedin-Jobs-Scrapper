@@ -7,8 +7,10 @@ Branch: `deployment/render-turso-r2`
 Integrated C candidate: `6e9a1e9301ffca644aca916aad6fc8827e4a792d`
 
 This is an offline/in-host integration handoff. No reset, clean, push, deploy,
-production migration, browser session, or acquisition/provider request was
-performed. Frozen A/B lane tips were merged sequentially into C. RC-023 host
+production migration, browser session, or acquisition/source request was
+performed. Read-only provider visibility checks were run later for the RC-027
+amendment; they did not create staging resources or write R2 objects. Frozen A/B
+lane tips were merged sequentially into C. RC-023 host
 runtime rehearsal is now evidenced on the authorized VPS; RC-027's external
 resource/provider and real-source gates remain blocked. The persistent target
 is advanced only after the C evidence commit is complete.
@@ -18,7 +20,7 @@ Render API/worker deploy runs `30ef992b7945ff0998704a550fdc2f893b24476f`, and
 the live frontend advertises `7251ae297c55f7f6a4524181cdafb4648f7fdcde`. The
 public Render API health endpoint returns HTTP 200. The local target is not
 deployed; its remote-tracking branch is `30ef992b7945ff0998704a550fdc2f893b24476f`
-and the local target is 46 commits ahead.
+and the local target is 47 commits ahead.
 
 ## Environment and verification result
 

@@ -24,8 +24,8 @@ available environments:
 
 | Environment | Observed result |
 | --- | --- |
-| Persistent target checkout | `f9417f2286c4d423bbf16ab15e2c90fe36d3f625` on `deployment/render-turso-r2` |
-| GitHub remote-tracking deployment ref | `30ef992b7945ff0998704a550fdc2f893b24476f`; local target is 44 commits ahead; no push was made |
+| Persistent target checkout | `6c7a1a9ea7db09e9d94f1a63e2e094e4f02c31cd` on `deployment/render-turso-r2` |
+| GitHub remote-tracking deployment ref | `30ef992b7945ff0998704a550fdc2f893b24476f`; local target is 47 commits ahead; no push was made |
 | VPS systemd runtime | `6e9a1e9301ffca644aca916aad6fc8827e4a792d`; API/frontend/customer services active; acquisition inactive/disabled |
 | Public Render frontend | `7251ae297c55f7f6a4524181cdafb4648f7fdcde`, generated `2026-09-08T10:49:58.289Z` |
 | Public Render API | `GET https://runr-api.onrender.com/health/live` returned HTTP 200 with `{"status":"ok"}` |
@@ -45,16 +45,24 @@ not at the target checkout root. Its values were used only in memory for
 redacted authorization checks. The configured Turso URL identifies the
 production `runr-dev-ahmedkaddah99-commits` database and the configured S3
 bucket is `runr-prod-artifacts`; those credentials were not used for staging
-writes. The Turso database token cannot list/create organizations through the
-Turso management API (HTTP 401), and no Cloudflare account-management token is
-configured, so isolated Turso creation and R2 scoped-key creation remain
-blocked.
+writes. The configured Turso credential returns HTTP 401 for the organization
+management endpoint, but that result identifies it as a database/SQL token; it
+does not prove that the Hobby plan forbids a staging database. Turso's current
+authorization model separates database SQL tokens from organization/group
+Platform API tokens. A separate staging database can be created in an existing
+group with the latter; creating more than one group is the plan-limited
+operation. No organization-scoped or group-scoped Platform token, organization
+slug, or plan/quota response is configured here, so Turso staging creation still
+needs that control-plane check. No Cloudflare account-management token is
+configured, so R2 bucket/key isolation remains unverified; the configured S3
+credential points at the production bucket.
 
-The Webshare account API is authorized. Its active plan reports 100 proxies,
-an active monthly term at `$2.99`, no throttling and renewal enabled. This is
-within the existing pilot ceiling, but no source/proxy request was made. The
-ScrapeOps key is present locally but remains disabled because its permitted
-cost was not established.
+The Webshare account is not blocked. Fresh profile and subscription checks
+returned HTTP 200; the subscription is active, unpaused, unthrottled, renewals
+enabled, and has zero failed-payment events. The plan lookup reports 100 shared
+proxies at `$2.99` monthly. No source/proxy request was made. The ScrapeOps key
+is present locally but remains disabled because its permitted cost was not
+established.
 
 ## Host and release verification
 

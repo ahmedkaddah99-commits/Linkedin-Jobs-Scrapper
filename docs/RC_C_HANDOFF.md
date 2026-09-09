@@ -382,11 +382,13 @@ digests are recorded.
 ## Render deployment status
 
 `render.yaml` declares `autoDeployTrigger: commit` for the frontend, API and
-worker services. A read-only Render API service query was attempted with the
-available `RENDER_API_KEY` and returned HTTP `401 Unauthorized`; therefore the
-current deployed SHA is **unknown**. Local historical reports mention
-`dc19cc05298e7d69e4548793798030d3bc059eac`, but that record was not treated as
-current deployment proof. No deployment was triggered by C.
+worker services. The earlier HTTP `401 Unauthorized` observation is superseded:
+a fresh read-only query with the nested repository `RENDER_API_KEY` returned
+HTTP 200. Current live deploys are API/worker
+`30ef992b7945ff0998704a550fdc2f893b24476f`, frontend
+`7251ae297c55f7f6a4524181cdafb4648f7fdcde`, and the public API health endpoint
+returns HTTP 200. The local target remains undeployed. No deployment was
+triggered by C.
 
 ## Dependency checkpoints and integration procedure
 
