@@ -167,19 +167,19 @@ frontend, or run migrations for a worker.
 API command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=9d837e2d56930715db1de22f191644531c2c00b8 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh api
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=d326726acab7fffbbf59e294629b8ef002437566 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh api
 ```
 
 Customer worker command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=9d837e2d56930715db1de22f191644531c2c00b8 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=9d837e2d56930715db1de22f191644531c2c00b8 WORKER_ROLE=customer WORKER_ID=runr-staging-customer-9d83 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=d326726acab7fffbbf59e294629b8ef002437566 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=d326726acab7fffbbf59e294629b8ef002437566 WORKER_ROLE=customer WORKER_ID=runr-staging-customer-d326 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
 ```
 
 Acquisition worker command:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=9d837e2d56930715db1de22f191644531c2c00b8 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=9d837e2d56930715db1de22f191644531c2c00b8 WORKER_ROLE=acquisition WORKER_ID=runr-staging-acquisition-9d83 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=d326726acab7fffbbf59e294629b8ef002437566 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue RUNR_WORKER_VERSION=d326726acab7fffbbf59e294629b8ef002437566 WORKER_ROLE=acquisition WORKER_ID=runr-staging-acquisition-d326 RUNR_DATA_DIR=/srv/runr/app-data RUNR_STORAGE_BACKEND=sqlite ./deploy/start.sh worker
 ```
 
 `customer` may claim only the customer task family; `acquisition` may claim
@@ -189,7 +189,7 @@ Only the API release owner runs the migration once for an isolated staging
 database or namespace:
 
 ```sh
-RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=9d837e2d56930715db1de22f191644531c2c00b8 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue ./deploy/start.sh migrate
+RUNR_ENV=staging RUNR_RELEASE_BRANCH=deployment/render-turso-r2 RUNR_RELEASE_COMMIT=d326726acab7fffbbf59e294629b8ef002437566 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 RUNR_MIGRATION_HEAD=058_customer_task_queue ./deploy/start.sh migrate
 ```
 
 The worker image and worker command must not run migrations. The registry is
@@ -323,8 +323,8 @@ its separate authorization.
 When Docker is available, build both runtime images from one clean candidate:
 
 ```sh
-docker build --file Dockerfile.api --build-arg RUNR_RELEASE_COMMIT=<candidate-sha> --build-arg RUNR_RELEASE_BRANCH=temp/rc-c-release-integration --build-arg RUNR_RELEASE_SERVICE=api --tag runr-api:<candidate-sha> .
-docker build --file Dockerfile.worker --build-arg RUNR_RELEASE_COMMIT=<candidate-sha> --build-arg RUNR_RELEASE_BRANCH=temp/rc-c-release-integration --build-arg RUNR_RELEASE_SERVICE=worker --tag runr-worker:<candidate-sha> .
+docker build --file Dockerfile.api --build-arg RUNR_RELEASE_COMMIT=d326726acab7fffbbf59e294629b8ef002437566 --build-arg RUNR_RELEASE_BRANCH=deployment/render-turso-r2 --build-arg RUNR_RELEASE_SERVICE=api --tag runr-api:d326726a .
+docker build --file Dockerfile.worker --build-arg RUNR_RELEASE_COMMIT=d326726acab7fffbbf59e294629b8ef002437566 --build-arg RUNR_RELEASE_BRANCH=deployment/render-turso-r2 --build-arg RUNR_RELEASE_SERVICE=worker --tag runr-worker:d326726a .
 ```
 
 The five required synthetic/private mixed-version checks are: previous API and
