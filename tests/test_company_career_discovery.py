@@ -65,6 +65,25 @@ class CompanyCareerDiscoveryTests(unittest.TestCase):
         self.assertEqual(result.ats_type, "lever")
         self.assertGreaterEqual(result.confidence_score, 0.55)
 
+    def test_external_ats_link_stops_lower_value_discovery_probes(self):
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            if url.rstrip("/") == "https://example.com":
+                return FetchResult(
+                    requested_url=url,
+                    final_url=url,
+                    status_code=200,
+                    text='<a href="https://jobs.lever.co/example">Jobs</a>',
+                )
+            raise AssertionError(f"discovery continued after authoritative ATS link: {url}")
+
+        result = discover_career_url(homepage_url="https://example.com", fetch=fetch)
+
+        self.assertEqual(result.primary_career_url, "https://jobs.lever.co/example")
+        self.assertEqual(calls, ["https://example.com/"])
+
     def test_common_path_guess_can_win(self):
         fetch = FakeFetcher(
             {

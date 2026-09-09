@@ -8,6 +8,7 @@ from scripts.master_employer_jobs_catalog import (
     EmployerCollectionResult,
     EmployerCompany,
     EmployerState,
+    RequestBudgetExceeded,
     collect_company,
     load_employer_companies,
     run_collection,
@@ -92,6 +93,102 @@ def test_complete_empty_ats_snapshot_confirms_zero_without_browser_fallback(monk
     assert result.status == "no_jobs"
     assert result.outcome == "confirmed_zero"
     assert result.targets[0]["stop_reason"] == "pagination_complete"
+
+
+def test_complete_authoritative_target_stops_candidate_fanout(monkeypatch) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    first_url = "https://boards.greenhouse.io/company"
+    second_url = "https://company.example/careers"
+    monkeypatch.setattr(
+        catalog,
+        "discover_career_url",
+        lambda **_: SimpleNamespace(
+            primary_career_url=first_url,
+            candidates=[
+                SimpleNamespace(url=first_url, source="ats_signature", ats_type="greenhouse"),
+                SimpleNamespace(url=second_url, source="homepage_link", ats_type=""),
+            ],
+            crawl_status="found",
+        ),
+    )
+    ats_calls: list[str] = []
+
+    def fetch_ats(url, *_, **__):
+        ats_calls.append(url)
+        return {
+            "jobs": [
+                {
+                    "id": 42,
+                    "title": "Platform Engineer",
+                    "absolute_url": "https://boards.greenhouse.io/company/jobs/42",
+                    "content": "Work in Berlin, Germany.",
+                    "location": {"name": "Berlin, Germany"},
+                }
+            ],
+            "status": "completed",
+            "complete_snapshot": True,
+            "pagination_complete": True,
+            "credible_evidence": True,
+            "request_url": "https://boards-api.greenhouse.io/v1/boards/company/jobs?content=true",
+        }
+
+    monkeypatch.setattr(catalog, "fetch_ats_snapshot", fetch_ats)
+    monkeypatch.setattr(
+        catalog,
+        "fetch_generic_snapshot",
+        lambda url, **_: (_ for _ in ()).throw(AssertionError(f"unexpected candidate: {url}")),
+    )
+
+    result = collect_company(_company(), lambda _: (_ for _ in ()).throw(AssertionError()), CollectorLimits(max_targets=2))
+
+    assert ats_calls == [first_url]
+    assert result.outcome == "complete_with_jobs"
+    assert len(result.jobs) == 1
+
+
+def test_request_budget_is_a_partial_outcome_and_is_checkpointed(tmp_path: Path, monkeypatch) -> None:
+    import scripts.master_employer_jobs_catalog as catalog
+
+    source = tmp_path / "companies.csv"
+    source.write_text(
+        "canonical_CompanyID,company_name,website_url\ncompany-1,Company One,https://company.example\n",
+        encoding="utf-8",
+    )
+
+    def budgeted_collect(*_args, **_kwargs):
+        raise RequestBudgetExceeded(8)
+
+    monkeypatch.setattr(catalog, "collect_company", budgeted_collect)
+    output_dir = tmp_path / "out"
+    metrics = run_collection(
+        input_csv=source,
+        output_dir=output_dir,
+        limit=1,
+        resume=False,
+        max_requests=8,
+    )
+
+    assert metrics["company_statuses"] == {"partial": 1}
+    assert metrics["final_export_completed"] is True
+    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    try:
+        result = state.company_payload(_company())
+    finally:
+        state.close()
+    assert result is not None
+    assert result["status"] == "partial"
+    assert result["outcome"] == "partial"
+    assert result["failures"] == [
+        {
+            "stage": "company",
+            "error": "RequestBudgetExceeded",
+            "reason": "request_budget_exhausted",
+            "max_requests": 8,
+        }
+    ]
+    assert result["coverage"]["stop_reason"] == "request_budget_exhausted"
+    assert result["coverage"]["request_budget_exhausted"] is True
 
 
 def test_partial_ats_result_continues_through_browser_fallback(monkeypatch) -> None:

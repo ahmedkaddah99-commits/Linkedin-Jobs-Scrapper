@@ -416,6 +416,10 @@ def guess_common_career_urls(homepage_url: str, fetch: Fetcher) -> list[CareerUr
             )
             if candidate:
                 candidates.append(candidate)
+                # A known ATS host is a source-specific endpoint. Do not spend
+                # the remaining common-path budget probing unrelated paths.
+                if candidate.ats_type:
+                    break
     return candidates
 
 
@@ -620,16 +624,23 @@ def discover_career_url(
         )
 
     all_candidates: list[CareerUrlCandidate] = []
-    all_candidates.extend(guess_common_career_urls(effective_homepage, direct_fetch))
-    all_candidates.extend(
-        extract_career_links_from_html(
-            page_url=effective_homepage,
-            html=homepage_result.text,
-            homepage_url=effective_homepage,
-            source="homepage_link",
-        )
+    homepage_candidates = extract_career_links_from_html(
+        page_url=effective_homepage,
+        html=homepage_result.text,
+        homepage_url=effective_homepage,
+        source="homepage_link",
     )
-    all_candidates.extend(discover_from_sitemaps(effective_homepage, direct_fetch))
+    all_candidates.extend(homepage_candidates)
+
+    # Prefer an ATS link already present in the homepage. It is an
+    # authoritative source-specific endpoint, so common-path and sitemap
+    # probing would only add request cost before the producer verifies it.
+    has_authoritative_ats = any(candidate.ats_type for candidate in homepage_candidates)
+    if not has_authoritative_ats:
+        all_candidates.extend(guess_common_career_urls(effective_homepage, direct_fetch))
+        has_authoritative_ats = any(candidate.ats_type for candidate in all_candidates)
+    if not has_authoritative_ats:
+        all_candidates.extend(discover_from_sitemaps(effective_homepage, direct_fetch))
 
     if not all_candidates and shallow_crawl_pages > 0:
         all_candidates.extend(
