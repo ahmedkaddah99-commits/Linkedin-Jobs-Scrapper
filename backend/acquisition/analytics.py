@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import time
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -19,6 +20,7 @@ from backend.database.connection import database_session
 
 
 ANALYTICS_SCHEMA_VERSION = "acquisition_analytics_v1"
+ACQUISITION_COVERAGE_SCHEMA_VERSION = "acquisition_coverage_v1"
 ANALYTICS_MAX_DAYS = 30
 ANALYTICS_RANGES = {
     "24h": timedelta(hours=24),
@@ -27,6 +29,22 @@ ANALYTICS_RANGES = {
 }
 _UTC = timezone.utc
 _MISSING = object()
+_WORKER_HEARTBEAT_STALE_SECONDS = 120
+_TASK_STUCK_SECONDS = 15 * 60
+
+# These are the frozen input-contract facts from BASELINE_AND_INPUT_CONTRACT.md.
+# They are deliberately not calculated from application rows: application rows
+# are a runtime subset and cannot replace the source master denominator.
+_MASTER_INPUT_BASELINE = {
+    "source_document": "BASELINE_AND_INPUT_CONTRACT.md",
+    "input_path": "Company-Urls/Master-Company-Url/cleaned/Master-Company-Url-canonical_cleaned_linkedin_ids.csv",
+    "input_sha256": "7f416ec6ebbcb936a42061ef0adaa07e4a6c04d2959d0eb579779126682440d9",
+    "master_rows": 17601,
+    "existing_master_ids": 7513,
+    "missing_master_ids": 10088,
+    "unique_linkedin_organization_ids": 11907,
+    "conflicting_organizations": 37,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +339,529 @@ def _source_performance(connection, window: AnalyticsWindow) -> list[dict[str, A
             }
         )
     return result
+
+
+def _explicit_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    normalized = _text(value).casefold()
+    if normalized in {"true", "yes", "1", "enabled", "eligible", "verified"}:
+        return True
+    if normalized in {"false", "no", "0", "disabled", "ineligible", "unverified"}:
+        return False
+    return None
+
+
+def _optional_number(value: Any) -> int | float | None:
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not parsed.is_integer():
+        return parsed
+    return int(parsed)
+
+
+def _stored_datetime(value: Any) -> datetime | None:
+    raw = _text(value)
+    if not raw:
+        return None
+    normalized = raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=parsed.tzinfo or _UTC).astimezone(_UTC)
+
+
+def _age_seconds(value: Any, *, at: datetime) -> int | None:
+    parsed = _stored_datetime(value)
+    if parsed is None:
+        return None
+    return max(0, int((at - parsed).total_seconds()))
+
+
+def _task_coverage_state(task: Mapping[str, Any]) -> str:
+    if not task:
+        return "not_started"
+    status = _text(task.get("status")).casefold()
+    if status in {"failed", "error", "permanent_error"}:
+        return "failed"
+    if status in {"paused", "blocked", "cancelled", "deferred"}:
+        return "deferred"
+    if bool(task.get("complete_snapshot")) and bool(task.get("valid_snapshot")):
+        return "complete"
+    if status in {"partial", "incomplete", "needs_attention", "interrupted"}:
+        return "partial"
+    if status in {"running", "pending", "queued", "retryable", "retryable_error"}:
+        return "running"
+    return "partial"
+
+
+def _config_value(config: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = config.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _coverage_analytics(connection, window: AnalyticsWindow) -> dict[str, Any]:
+    """Build the bounded company/source coverage read model.
+
+    A row is emitted once per durable acquisition target. Runtime counts are
+    never used to replace the frozen source-master denominator, and blocked or
+    failed targets without evidence keep job metrics unknown rather than zero.
+    """
+
+    target_rows = connection.execute(
+        """
+        SELECT target_id, display_name, connector, provider, maturity_state,
+               enabled, quarantined, last_attempt_at, last_success_at,
+               config_json
+        FROM acquisition_targets
+        ORDER BY target_id
+        LIMIT 5000
+        """
+    ).fetchall()
+    task_rows = connection.execute(
+        """
+        SELECT t.*
+        FROM acquisition_tasks t
+        WHERE t.task_id = (
+            SELECT latest.task_id FROM acquisition_tasks latest
+            WHERE latest.target_id=t.target_id
+            ORDER BY latest.updated_at DESC, latest.task_id DESC LIMIT 1
+        )
+        """
+    ).fetchall()
+    latest_tasks = {_text(row["target_id"]): _row_dict(row) for row in task_rows}
+    task_total_row = connection.execute("SELECT COUNT(*) AS count FROM acquisition_tasks").fetchone()
+    source_task_total = int(task_total_row["count"] or 0) if task_total_row else 0
+
+    request_rows = connection.execute(
+        """
+        SELECT target_id, COUNT(*) AS requests,
+               COALESCE(SUM(credits_actual), 0) AS credits_actual,
+               COALESCE(SUM(credits_estimated), 0) AS credits_estimated,
+               SUM(CASE WHEN json_extract(detail_json, '$.cost_known') = 1 THEN 1 ELSE 0 END) AS cost_known
+        FROM acquisition_requests
+        GROUP BY target_id
+        """
+    ).fetchall()
+    requests_by_target = {_text(row["target_id"]): _row_dict(row) for row in request_rows}
+    attempt_rows = connection.execute(
+        """
+        SELECT target_id, COUNT(*) AS attempts,
+               SUM(CASE WHEN LOWER(status) IN ('failed', 'error', 'permanent_error') THEN 1 ELSE 0 END) AS failures,
+               MAX(attempt_number) AS latest_attempt
+        FROM acquisition_target_attempts
+        GROUP BY target_id
+        """
+    ).fetchall()
+    attempts_by_target = {_text(row["target_id"]): _row_dict(row) for row in attempt_rows}
+
+    sources: list[dict[str, Any]] = []
+    organization_groups: set[str] = set()
+    explicit_employers: set[str] = set()
+    evidence_eligible = 0
+    evidence_values_seen = False
+    source_state_counts: dict[str, int] = defaultdict(int)
+    for row in target_rows:
+        target_id = _text(row["target_id"])
+        task = latest_tasks.get(target_id, {})
+        request = requests_by_target.get(target_id, {})
+        attempts = attempts_by_target.get(target_id, {})
+        config = _json(row["config_json"], {})
+        config = config if isinstance(config, Mapping) else {}
+        state = _task_coverage_state(task)
+        source_state_counts[state] += 1
+
+        group_id = _text(_config_value(config, "organization_group_id", "scan_group_id")) or None
+        employer_id = _text(_config_value(config, "employer_id", "canonical_company_id", "organization_id")) or None
+        if group_id:
+            organization_groups.add(group_id)
+        if employer_id:
+            explicit_employers.add(employer_id)
+
+        explicit_evidence = _config_value(config, "evidence_verified_eligible")
+        eligibility_config = config.get("eligibility")
+        if explicit_evidence is None and isinstance(eligibility_config, Mapping):
+            explicit_evidence = _config_value(eligibility_config, "evidence_verified_eligible", "verified")
+        evidence_value = _explicit_bool(explicit_evidence)
+        evidence_values_seen = evidence_values_seen or evidence_value is not None
+        if evidence_value is True:
+            evidence_eligible += 1
+
+        if bool(row["quarantined"]):
+            operational_state = "quarantined"
+        elif not bool(row["enabled"]):
+            operational_state = "disabled"
+        elif _text(row["maturity_state"]).casefold() in {"ready", "approved", "active"}:
+            operational_state = "eligible"
+        else:
+            operational_state = _text(row["maturity_state"]).casefold() or "unknown"
+
+        raw_counts = {
+            key: int(task.get(key) or 0)
+            for key in ("jobs_observed", "jobs_new", "jobs_updated", "jobs_unchanged", "jobs_published", "jobs_rejected")
+        }
+        has_count_evidence = state in {"complete", "partial", "running"} or any(raw_counts.values())
+        counts = {
+            "jobs_observed": raw_counts["jobs_observed"] if has_count_evidence else None,
+            "jobs_accepted": (
+                raw_counts["jobs_new"] + raw_counts["jobs_updated"] + raw_counts["jobs_unchanged"]
+                if has_count_evidence
+                else None
+            ),
+            "jobs_published": raw_counts["jobs_published"] if has_count_evidence else None,
+            "jobs_rejected": raw_counts["jobs_rejected"] if has_count_evidence else None,
+        }
+
+        last_attempt = _text(row["last_attempt_at"]) or _text(task.get("started_at")) or None
+        last_success = _text(row["last_success_at"])
+        if not last_success and state == "complete":
+            last_success = _text(task.get("completed_at"))
+        freshness_limit = _optional_number(
+            _config_value(config, "freshness_max_age_hours", "freshness_sla_hours")
+        )
+        freshness_age = _age_seconds(last_success, at=window.end)
+        if freshness_age is None or freshness_limit is None:
+            freshness_state = "unknown"
+        elif freshness_age <= int(float(freshness_limit) * 3600):
+            freshness_state = "fresh"
+        else:
+            freshness_state = "stale"
+
+        metadata = _json(task.get("collection_metadata_json"), {})
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        stop_reason = _text(metadata.get("stop_reason")) or _text(task.get("error_code")) or None
+        if state == "complete" and not stop_reason:
+            stop_reason = "bounded_snapshot_complete"
+        if state == "deferred" and not stop_reason:
+            stop_reason = "deferred_by_policy_or_operator"
+        if state == "failed" and not stop_reason:
+            stop_reason = "source_task_failed"
+
+        if operational_state == "quarantined":
+            next_action = "Review quarantine before any retry"
+        elif operational_state == "disabled":
+            next_action = "Confirm source enablement with operations"
+        elif state == "failed":
+            next_action = "Review failure evidence before bounded retry"
+        elif state == "deferred":
+            next_action = "Resume only through an authorized admin action"
+        elif state == "partial":
+            next_action = "Inspect partial evidence and schedule bounded retry"
+        elif state == "not_started":
+            next_action = "Schedule the first bounded source task"
+        elif freshness_state == "stale":
+            next_action = "Schedule a freshness retry"
+        else:
+            next_action = "Await the next scheduled cycle"
+
+        request_count = int(request.get("requests") or 0)
+        cost_known = bool(int(request.get("cost_known") or 0)) if request_count else False
+        sources.append(
+            {
+                "source_id": target_id,
+                "name": _text(row["display_name"]) or target_id,
+                "connector": _text(row["connector"]) or None,
+                "provider": _text(row["provider"]) or None,
+                "organization_group_id": group_id,
+                "employer_id": employer_id,
+                "eligibility": {
+                    "operational_state": operational_state,
+                    "evidence_verified": evidence_value,
+                    "definition": "Evidence eligibility is counted only when explicitly persisted by the source manifest/runtime configuration.",
+                },
+                "coverage_state": state,
+                **counts,
+                "stop_reason": stop_reason,
+                "freshness": {
+                    "state": freshness_state,
+                    "last_attempt_at": last_attempt,
+                    "last_success_at": last_success or None,
+                    "age_seconds": freshness_age,
+                    "max_age_hours": freshness_limit,
+                },
+                "next_action": next_action,
+                "retries": {
+                    "attempts": int(attempts.get("attempts") or 0),
+                    "failures": int(attempts.get("failures") or 0),
+                    "latest_attempt": int(attempts.get("latest_attempt") or 0),
+                },
+                "cost": {
+                    "state": "known" if cost_known else "unknown",
+                    "requests": request_count,
+                    "credits_actual": int(request.get("credits_actual") or 0) if cost_known else None,
+                    "credits_estimated": int(request.get("credits_estimated") or 0) if cost_known else None,
+                },
+            }
+        )
+
+    def backlog_count(sql: str, params: tuple[Any, ...] = ()) -> int:
+        row = connection.execute(sql, params).fetchone()
+        return int(row["count"] or 0) if row else 0
+
+    identity_review = backlog_count(
+        "SELECT COUNT(*) AS count FROM company_link_candidates WHERE review_required=1 AND LOWER(decision) IN ('needs_review', 'pending', 'unresolved')"
+    )
+    identity_evidence_review = backlog_count(
+        "SELECT COUNT(*) AS count FROM company_identity_evidence WHERE review_required=1 AND LOWER(link_state) IN ('needs_review', 'pending', 'unresolved')"
+    )
+    alias_review = backlog_count(
+        "SELECT COUNT(*) AS count FROM canonical_company_aliases WHERE LOWER(confidence) IN ('needs_review', 'pending', 'unverified', 'ambiguous')"
+    )
+    due_retry = 0
+    negative_recheck = 0
+    for task in task_rows:
+        due_at = _stored_datetime(task.get("next_attempt_at"))
+        if due_at is None or due_at > window.end:
+            continue
+        if _text(task.get("status")).casefold() not in {"failed", "partial", "needs_attention", "retryable", "retryable_error"}:
+            continue
+        if int(task.get("attempt_count") or 0) >= int(task.get("max_attempts") or 0) > 0:
+            continue
+        due_retry += 1
+        metadata = _json(task.get("collection_metadata_json"), {})
+        if isinstance(metadata, Mapping) and (
+            _explicit_bool(metadata.get("negative_result")) is True
+            or _text(metadata.get("result_kind")).casefold() in {"negative", "no_jobs", "empty_result"}
+        ):
+            negative_recheck += 1
+
+    denominator = {
+        "master_rows": _MASTER_INPUT_BASELINE["master_rows"],
+        "existing_master_ids": _MASTER_INPUT_BASELINE["existing_master_ids"],
+        "missing_master_ids": _MASTER_INPUT_BASELINE["missing_master_ids"],
+        "unique_employer_organizations": _MASTER_INPUT_BASELINE["unique_linkedin_organization_ids"],
+        "organization_scan_groups": len(organization_groups) if organization_groups else None,
+        "source_tasks": source_task_total,
+        "evidence_verified_eligible": evidence_eligible if evidence_values_seen else None,
+        "runtime_explicit_employers": len(explicit_employers) if explicit_employers else None,
+    }
+    return {
+        "schema_version": ACQUISITION_COVERAGE_SCHEMA_VERSION,
+        "baseline": dict(_MASTER_INPUT_BASELINE),
+        "denominators": denominator,
+        "backlogs": {
+            "identity_review": identity_review,
+            "identity_evidence_review": identity_evidence_review,
+            "alias_review": alias_review,
+            "negative_result_recheck": negative_recheck,
+            "due_retry": due_retry,
+        },
+        "totals": {
+            "source_rows": len(sources),
+            "source_rows_returned": len(sources),
+            "source_rows_truncated": len(target_rows) >= 5000,
+            "source_task_states": dict(sorted(source_state_counts.items())),
+            "jobs_observed": sum(row["jobs_observed"] or 0 for row in sources),
+            "jobs_accepted": sum(row["jobs_accepted"] or 0 for row in sources),
+            "jobs_published": sum(row["jobs_published"] or 0 for row in sources),
+            "jobs_rejected": sum(row["jobs_rejected"] or 0 for row in sources),
+            "unknown_job_count_sources": sum(row["jobs_observed"] is None for row in sources),
+        },
+        "definitions": {
+            "master_rows": "Frozen source-master rows from the baseline contract; not a runtime task count.",
+            "unique_employer_organizations": "Unique numeric LinkedIn organization IDs in the frozen input; it does not prove ownership or eligibility.",
+            "organization_scan_groups": "Distinct explicit organization_group_id/scan_group_id values in acquisition target configuration; null means the current runtime did not persist this grouping.",
+            "source_tasks": "All durable acquisition_tasks currently stored; per-source rows use the latest task only.",
+            "jobs_accepted": "jobs_new + jobs_updated + jobs_unchanged from the durable task counters; no version rows are counted separately.",
+            "unknown_jobs": "Blocked, deferred, failed, or unstarted work without an authoritative result is unknown, not zero.",
+            "evidence_verified_eligible": "Explicit eligibility evidence only; missing manifest/configuration is null and never inferred from enabled state.",
+        },
+        "sources": sources,
+    }
+
+
+def _health_analytics(connection, window: AnalyticsWindow, coverage: Mapping[str, Any]) -> dict[str, Any]:
+    """Return role/version-aware health facts without changing durable state."""
+
+    workers: list[dict[str, Any]] = []
+    worker_rows = connection.execute(
+        """
+        SELECT worker_id, status, host_name, process_id, current_run_id,
+               started_at, last_heartbeat_at, lease_expires_at, metadata_json
+        FROM workers
+        ORDER BY worker_id
+        LIMIT 200
+        """
+    ).fetchall()
+    for row in worker_rows:
+        metadata = _json(row["metadata_json"], {})
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        heartbeat_age = _age_seconds(row["last_heartbeat_at"], at=window.end)
+        stale_after = _optional_number(metadata.get("heartbeat_stale_after_seconds")) or _WORKER_HEARTBEAT_STALE_SECONDS
+        if heartbeat_age is None:
+            liveness = "unknown"
+        elif heartbeat_age <= int(stale_after):
+            liveness = "online"
+        else:
+            liveness = "stale"
+        resource_values = metadata.get("resources") if isinstance(metadata.get("resources"), Mapping) else metadata
+        workers.append(
+            {
+                "worker_id": _text(row["worker_id"]),
+                "role": _text(metadata.get("role") or metadata.get("worker_role")) or "unknown",
+                "version": _text(metadata.get("version") or metadata.get("worker_version")) or "unknown",
+                "stored_status": _text(row["status"]) or "unknown",
+                "liveness": liveness,
+                "heartbeat_at": _text(row["last_heartbeat_at"]) or None,
+                "heartbeat_age_seconds": heartbeat_age,
+                "heartbeat_stale_after_seconds": int(stale_after),
+                "current_run_id": _text(row["current_run_id"]) or None,
+                "resources": {
+                    key: _optional_number(resource_values.get(key))
+                    for key in ("disk_free_bytes", "disk_used_bytes", "memory_used_bytes", "memory_limit_bytes")
+                },
+            }
+        )
+
+    run_rows = connection.execute(
+        """
+        SELECT status, created_at, queued_at, started_at, finished_at, attempt_count
+        FROM runs
+        WHERE created_at <= ?
+        """,
+        (window.end_iso,),
+    ).fetchall()
+    queued_ages = []
+    processing_durations = []
+    queue_failures = 0
+    queue_retries = 0
+    active_queue = 0
+    for row in run_rows:
+        status = _text(row["status"]).casefold()
+        if status in {"queued", "pending"}:
+            active_queue += 1
+            age = _age_seconds(_text(row["queued_at"]) or _text(row["created_at"]), at=window.end)
+            if age is not None:
+                queued_ages.append(age)
+        if status in {"failed", "error"}:
+            queue_failures += 1
+        if int(row["attempt_count"] or 0) > 1:
+            queue_retries += 1
+        started = _stored_datetime(row["started_at"])
+        finished = _stored_datetime(row["finished_at"])
+        if started is not None and finished is not None and finished >= started:
+            processing_durations.append(int((finished - started).total_seconds() * 1000))
+
+    db_started = time.perf_counter()
+    connection.execute("SELECT 1").fetchone()
+    db_latency_ms = round((time.perf_counter() - db_started) * 1000, 3)
+
+    task_stuck_before = window.end - timedelta(seconds=_TASK_STUCK_SECONDS)
+    stuck_tasks_row = connection.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM acquisition_tasks
+        WHERE LOWER(status) IN ('running', 'in_progress')
+          AND updated_at <> '' AND updated_at < ?
+        """,
+        (task_stuck_before.isoformat(),),
+    ).fetchone()
+    stuck_tasks = int(stuck_tasks_row["count"] or 0) if stuck_tasks_row else 0
+
+    throttled_rows = connection.execute(
+        """
+        SELECT COALESCE(NULLIF(t.provider, ''), 'unknown') AS provider,
+               COUNT(*) AS throttled_requests
+        FROM acquisition_requests r
+        LEFT JOIN acquisition_targets t ON t.target_id=r.target_id
+        WHERE r.provider_status=429 OR LOWER(r.error_code) LIKE '%thrott%'
+        GROUP BY provider ORDER BY provider
+        """
+    ).fetchall()
+    provider_throttling = [
+        {
+            "provider": _text(row["provider"]) or "unknown",
+            "state": "throttled",
+            "throttled_requests": int(row["throttled_requests"] or 0),
+        }
+        for row in throttled_rows
+    ]
+
+    budget_rows = connection.execute(
+        """
+        SELECT provider_id, configured, enabled, max_requests, max_cost_units,
+               requests_used, cost_units_used, policy_state
+        FROM enrichment_provider_budgets
+        ORDER BY provider_id LIMIT 100
+        """
+    ).fetchall()
+    limits = []
+    for row in budget_rows:
+        max_requests = int(row["max_requests"] or 0)
+        max_cost = float(row["max_cost_units"] or 0)
+        requests_used = int(row["requests_used"] or 0)
+        cost_used = float(row["cost_units_used"] or 0)
+        breached = (max_requests > 0 and requests_used >= max_requests) or (max_cost > 0 and cost_used >= max_cost)
+        limits.append(
+            {
+                "provider": _text(row["provider_id"]),
+                "policy_state": _text(row["policy_state"]) or "unknown",
+                "requests_used": requests_used,
+                "max_requests": max_requests or None,
+                "cost_units_used": cost_used,
+                "max_cost_units": max_cost or None,
+                "state": "limit_reached" if breached else "within_limit" if max_requests or max_cost else "unknown",
+            }
+        )
+
+    alerts: list[dict[str, Any]] = []
+    if not workers:
+        alerts.append({"code": "missing_workers", "severity": "warning", "message": "No durable worker heartbeat is present."})
+    for worker in workers:
+        if worker["liveness"] == "stale":
+            alerts.append({"code": "stale_worker", "severity": "warning", "worker_id": worker["worker_id"], "message": "Worker heartbeat is older than its freshness threshold."})
+    for source in coverage.get("sources", []):
+        if source.get("freshness", {}).get("state") == "stale":
+            alerts.append({"code": "stale_coverage", "severity": "warning", "source_id": source["source_id"], "message": "Source coverage is older than its explicit freshness threshold."})
+    if stuck_tasks:
+        alerts.append({"code": "stuck_tasks", "severity": "warning", "count": stuck_tasks, "message": "Running acquisition tasks have not moved for the bounded stuck-task interval."})
+    for limit in limits:
+        if limit["state"] == "limit_reached":
+            alerts.append({"code": "spend_limit", "severity": "warning", "provider": limit["provider"], "message": "Provider budget usage has reached its configured limit."})
+    for provider in provider_throttling:
+        alerts.append({"code": "provider_throttling", "severity": "warning", **provider, "message": "Provider throttling was observed in durable request records."})
+
+    return {
+        "schema_version": "acquisition_health_v1",
+        "workers": workers,
+        "queue": {
+            "active_count": active_queue,
+            "oldest_queued_age_seconds": max(queued_ages) if queued_ages else None,
+            "processing_duration_ms": {
+                "average": round(sum(processing_durations) / len(processing_durations), 2) if processing_durations else None,
+                "max": max(processing_durations) if processing_durations else None,
+                "sample_count": len(processing_durations),
+            },
+            "failure_count": queue_failures,
+            "retry_count": queue_retries,
+        },
+        "tasks": {"stuck_count": stuck_tasks, "stuck_after_seconds": _TASK_STUCK_SECONDS},
+        "database": {
+            "latency_ms": db_latency_ms,
+            "measurement": "local read-only SELECT 1; this is not a Turso/network latency claim.",
+        },
+        "provider_throttling": provider_throttling,
+        "limits": {
+            "providers": limits,
+            "retention": {"state": "unknown", "note": "The current schema has no durable retention telemetry."},
+        },
+        "resource_contract": {
+            "source": "worker metadata resources when explicitly reported",
+            "fields": ["disk_free_bytes", "disk_used_bytes", "memory_used_bytes", "memory_limit_bytes"],
+            "missing_values": "null means the worker did not report the metric; no host inspection is performed by this read model.",
+        },
+        "alerts": alerts,
+    }
 
 
 def _quality_analytics(connection, window: AnalyticsWindow) -> dict[str, Any]:
@@ -762,6 +1303,7 @@ def build_acquisition_analytics(db_path: str | Path, *, window: AnalyticsWindow)
         enrichment = _enrichment_analytics(connection, window)
         reprocessing = _reprocessing_metrics(connection, window)
         publication = _publication_analytics(connection, window)
+        coverage = _coverage_analytics(connection, window)
         terminal_enrichment_states = {
             key: value
             for key, value in enrichment["state_totals"].items()
@@ -815,6 +1357,8 @@ def build_acquisition_analytics(db_path: str | Path, *, window: AnalyticsWindow)
             "reprocessing": reprocessing,
             "publication": publication,
             "operations": _operations(connection, window),
+            "coverage": coverage,
+            "health": _health_analytics(connection, window, coverage),
         }
 
 
@@ -822,6 +1366,7 @@ __all__ = [
     "ANALYTICS_MAX_DAYS",
     "ANALYTICS_RANGES",
     "ANALYTICS_SCHEMA_VERSION",
+    "ACQUISITION_COVERAGE_SCHEMA_VERSION",
     "AnalyticsWindow",
     "build_acquisition_analytics",
     "parse_analytics_window",

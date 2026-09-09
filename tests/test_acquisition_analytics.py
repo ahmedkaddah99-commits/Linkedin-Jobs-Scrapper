@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -200,6 +201,166 @@ class AcquisitionAnalyticsTests(unittest.TestCase):
         application.get_admin_acquisition_analytics.assert_called_once_with(
             range_key="24h", start="", end="", timezone_name="UTC"
         )
+
+    def test_rc025_coverage_and_health_fixture_preserves_unknown_states(self):
+        fixture_path = Path(__file__).parent / "fixtures" / "rc025_operational_dashboard.json"
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        expected = fixture["expected"]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "analytics.sqlite3"
+            initialize_database(path)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO acquisition_cycles (
+                        cycle_id, window_key, status, scheduled_at, created_at, updated_at
+                    ) VALUES ('cycle-fixture', 'rc025-fixture', 'partial',
+                              '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z', '2026-08-11T23:59:00Z')
+                    """
+                )
+                for target in fixture["targets"]:
+                    connection.execute(
+                        """
+                        INSERT INTO acquisition_targets (
+                            target_id, target_kind, display_name, canonical_target_url,
+                            request_url, connector, provider, policy_version, maturity_state,
+                            enabled, quarantined, last_attempt_at, last_success_at,
+                            config_json, created_at, updated_at
+                        ) VALUES (?, 'official', ?, 'https://example.test/jobs',
+                                  'https://example.test/jobs', ?, ?, 'fixture-v1', ?, ?, ?, ?, ?, ?,
+                                  '2026-08-01T00:00:00Z', '2026-08-11T23:59:00Z')
+                        """,
+                        (
+                            target["target_id"], target["display_name"], target["connector"],
+                            target["provider"], target["maturity_state"], int(target["enabled"]),
+                            int(target["quarantined"]), target["last_attempt_at"], target["last_success_at"],
+                            json.dumps(target["config"]),
+                        ),
+                    )
+                for task in fixture["tasks"]:
+                    connection.execute(
+                        """
+                        INSERT INTO acquisition_tasks (
+                            task_id, cycle_id, target_id, status, attempt_count,
+                            complete_snapshot, valid_snapshot, jobs_observed, jobs_new,
+                            jobs_updated, jobs_unchanged, jobs_published, jobs_rejected,
+                            error_code, created_at, updated_at, completed_at,
+                            next_attempt_at, max_attempts, collection_metadata_json
+                        ) VALUES (?, 'cycle-fixture', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                  '2026-08-01T00:00:00Z', ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            task["task_id"], task["target_id"], task["status"], task["attempt_count"],
+                            int(task["complete_snapshot"]), int(task["valid_snapshot"]), task["jobs_observed"],
+                            task["jobs_new"], task["jobs_updated"], task["jobs_unchanged"],
+                            task["jobs_published"], task["jobs_rejected"], task.get("last_error_code", ""),
+                            task["updated_at"], task["completed_at"], task.get("next_attempt_at", ""),
+                            task["max_attempts"], json.dumps(task["collection_metadata"]),
+                        ),
+                    )
+                for request in fixture["requests"]:
+                    connection.execute(
+                        """
+                        INSERT INTO acquisition_requests (
+                            request_id, idempotency_key, cycle_id, task_id, target_id,
+                            request_url, method, mode, request_kind, status,
+                            credits_estimated, credits_actual, started_at, completed_at,
+                            detail_json, error_code
+                        ) VALUES (?, ?, 'cycle-fixture', ?, ?, 'https://example.test/jobs',
+                                  'GET', 'fixture', 'collection', ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            request["request_id"], request["request_id"], request["task_id"], request["target_id"],
+                            request["status"], request["credits_estimated"], request["credits_actual"],
+                            request["started_at"], request["completed_at"], json.dumps(request["detail"]),
+                            request.get("error_code", ""),
+                        ),
+                    )
+                for worker in fixture["workers"]:
+                    connection.execute(
+                        """
+                        INSERT INTO workers (
+                            worker_id, status, host_name, process_id, current_run_id,
+                            started_at, last_heartbeat_at, metadata_json, payload_json
+                        ) VALUES (?, ?, 'fixture-host', 1, '', '2026-08-01T00:00:00Z', ?, ?, ?)
+                        """,
+                        (
+                            worker["worker_id"], worker["status"], worker["last_heartbeat_at"],
+                            json.dumps(worker["metadata"]), json.dumps(worker),
+                        ),
+                    )
+                budget = fixture["budget"]
+                connection.execute(
+                    """
+                    INSERT INTO enrichment_provider_budgets (
+                        provider_id, configured, enabled, max_requests, max_cost_units,
+                        requests_used, cost_units_used, policy_state, updated_at
+                    ) VALUES (?, 1, 1, ?, ?, ?, ?, ?, '2026-08-11T23:59:00Z')
+                    ON CONFLICT(provider_id) DO UPDATE SET
+                        max_requests=excluded.max_requests,
+                        max_cost_units=excluded.max_cost_units,
+                        requests_used=excluded.requests_used,
+                        cost_units_used=excluded.cost_units_used,
+                        policy_state=excluded.policy_state
+                    """,
+                    (
+                        budget["provider_id"], budget["max_requests"], budget["max_cost_units"],
+                        budget["requests_used"], budget["cost_units_used"], budget["policy_state"],
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO company_link_candidates (
+                        candidate_id, observed_name, decision, review_required, created_at
+                    ) VALUES ('candidate-fixture', 'Fixture Company', 'needs_review', 1, '2026-08-11T00:00:00Z')
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO canonical_company_aliases (
+                        alias_id, company_id, alias_key, confidence, created_at, updated_at
+                    ) VALUES ('alias-fixture', 'employer-1', 'fixture-company', 'unverified',
+                              '2026-08-11T00:00:00Z', '2026-08-11T00:00:00Z')
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            result = build_acquisition_analytics(
+                path,
+                window=parse_analytics_window(
+                    start=fixture["window"]["start"],
+                    end=fixture["window"]["end"],
+                    timezone_name=fixture["window"]["timezone"],
+                ),
+            )
+
+        coverage = result["coverage"]
+        denominator = coverage["denominators"]
+        self.assertEqual(denominator["master_rows"], expected["master_rows"])
+        self.assertEqual(denominator["existing_master_ids"], expected["existing_master_ids"])
+        self.assertEqual(denominator["missing_master_ids"], expected["missing_master_ids"])
+        self.assertEqual(denominator["unique_employer_organizations"], expected["unique_employer_organizations"])
+        self.assertEqual(denominator["organization_scan_groups"], expected["organization_scan_groups"])
+        self.assertEqual(denominator["source_tasks"], expected["source_tasks"])
+        self.assertEqual(denominator["evidence_verified_eligible"], expected["evidence_verified_eligible"])
+        self.assertEqual(coverage["backlogs"]["identity_review"], expected["identity_review"])
+        self.assertEqual(coverage["backlogs"]["alias_review"], expected["alias_review"])
+        self.assertEqual(coverage["backlogs"]["negative_result_recheck"], expected["negative_result_recheck"])
+        self.assertEqual(coverage["backlogs"]["due_retry"], expected["due_retry"])
+        sources = {row["source_id"]: row for row in coverage["sources"]}
+        self.assertEqual(sources[expected["stale_source_id"]]["freshness"]["state"], "stale")
+        self.assertEqual(sources[expected["partial_source_id"]]["coverage_state"], "partial")
+        self.assertEqual(sources[expected["partial_source_id"]]["jobs_rejected"], 1)
+        self.assertIsNone(sources[expected["unknown_cost_source_id"]]["jobs_observed"])
+        self.assertEqual(sources[expected["unknown_cost_source_id"]]["cost"]["state"], "unknown")
+        self.assertEqual(result["health"]["tasks"]["stuck_count"], expected["stuck_tasks"])
+        workers = {row["worker_id"]: row for row in result["health"]["workers"]}
+        self.assertEqual(workers[expected["stale_worker_id"]]["liveness"], "stale")
+        alert_codes = {alert["code"] for alert in result["health"]["alerts"]}
+        self.assertTrue({"stale_worker", "stale_coverage", "stuck_tasks", "spend_limit"}.issubset(alert_codes))
 
 
 if __name__ == "__main__":

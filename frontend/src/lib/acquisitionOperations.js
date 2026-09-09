@@ -145,6 +145,26 @@ export function getResourceViewState({
   return "ready";
 }
 
+export function getCoverageStateLabel(source = {}) {
+  const state = String(source.coverage_state || "").trim().toLowerCase();
+  const labels = {
+    complete: "Complete",
+    partial: "Partial",
+    failed: "Failed",
+    deferred: "Deferred",
+    running: "Running",
+    not_started: "Not started",
+  };
+  return labels[state] || "Unknown";
+}
+
+export function getWorkerLivenessLabel(worker = {}) {
+  const state = String(worker.liveness || "").trim().toLowerCase();
+  if (state === "online") return "Online";
+  if (state === "stale") return "Stale heartbeat";
+  return "Unknown";
+}
+
 export function formatCount(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed.toLocaleString() : "—";
