@@ -3,10 +3,10 @@
 ## Final local candidate amendment - 2026-09-09
 
 The final clean local candidate is
-`b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc` in both the C integration
+`83d508b5e227ebd820588d8d05b849d39f77d7bc` in both the C integration
 worktree and persistent `deployment/render-turso-r2` checkout. It is a
 documentation-only descendant of the previously pinned local candidate
-`8ab916c60237ad3a5bf95ed2effd99679a9a848c`, which descends from the staged
+`b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`, which descends from the staged
 repair candidate
 `466541b3ee4a57a89f83c583f5e497b36fccdbe3`; it is not deployed or pushed.
 

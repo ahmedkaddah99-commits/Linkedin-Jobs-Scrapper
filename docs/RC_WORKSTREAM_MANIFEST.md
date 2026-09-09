@@ -3,12 +3,12 @@
 ## Final local candidate amendment - 2026-09-09
 
 The current clean C and persistent deployment checkout are both at
-`b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`. This is a documentation-only
+`83d508b5e227ebd820588d8d05b849d39f77d7bc`. This is a documentation-only
 descendant of the previously pinned local candidate
-`8ab916c60237ad3a5bf95ed2effd99679a9a848c`, which is itself a
+`b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`, which is itself a
 documentation-only descendant of the verified producer-repair candidate
 `466541b3ee4a57a89f83c583f5e497b36fccdbe3`; no source, runtime, or migration
-behavior changed after the live diagnostic. The target is 76 commits ahead of
+behavior changed after the live diagnostic. The target is 77 commits ahead of
 `origin/deployment/render-turso-r2` and has not been pushed or deployed.
 
 ## Producer repair integration amendment - 2026-09-09

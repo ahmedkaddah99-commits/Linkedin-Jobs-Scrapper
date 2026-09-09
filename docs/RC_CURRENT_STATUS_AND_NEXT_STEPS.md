@@ -7,8 +7,8 @@ Branch: `deployment/render-turso-r2`
 ## Final local candidate amendment - 2026-09-09
 
 The clean persistent target and C integration worktree are at
-`b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`. This docs-only descendant of
-the previously pinned local candidate `8ab916c60237ad3a5bf95ed2effd99679a9a848c`
+`83d508b5e227ebd820588d8d05b849d39f77d7bc`. This docs-only descendant of
+the previously pinned local candidate `b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`
 and staged repair candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3` was
 not pushed or deployed; the frontend release metadata was rebuilt against
 this exact SHA.
@@ -115,7 +115,7 @@ R2 object/HEAD/sign/range behavior passed.
 
 Previous documentation-only reconciliation tip: `7c106545c9f98e8cdf391e7c624f88cdce3d76b0`
 
-Current local release candidate: `b27949ebe2e63eb1ce2a76a267a2e32b2c9221fc`
+Current local release candidate: `83d508b5e227ebd820588d8d05b849d39f77d7bc`
 
 This is an in-host integration handoff. No reset, clean, push, deploy,
 production migration, or customer-service mutation was performed. The
@@ -672,8 +672,8 @@ docs/RC_CURRENT_STATUS_AND_NEXT_STEPS.md
 
 ## Branch versus deployed state
 
-All evidence here describes the dirty local worktree at HEAD plus uncommitted
-changes. It does not describe a deployed Render revision, a deployed VPS
-worker, a live Turso schema, or configured R2 CORS. Those external states are
-pending and must be recorded separately in a release receipt after
-authorization.
+The current local evidence describes the clean candidate recorded at the top of
+this document. It does not claim that this candidate is a deployed Render
+revision or deployed VPS worker, a live Turso schema, or configured R2 CORS.
+Those external states remain separate and are recorded only where observed in
+the live-pilot receipt.
