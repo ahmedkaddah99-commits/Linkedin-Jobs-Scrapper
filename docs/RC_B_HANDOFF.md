@@ -1,7 +1,8 @@
 # Chat B runtime handoff
 
-Status: RC-023 offline preparation ready for C review; not a deployed or fully
-verified VPS acceptance. RC-024, RC-026, and conditional RC-031 remain gated.
+Status: RC-023 offline preparation and producer state/export correction are
+complete on B; deployed/full VPS acceptance remains pending C integration and
+INT-1. RC-024, RC-026, and conditional RC-031 remain gated.
 
 ## Identity and worktree
 
@@ -22,7 +23,7 @@ host command, provider request, or live request was performed.
 
 | Ticket | Status | Evidence/next gate |
 | --- | --- | --- |
-| RC-023 | Offline preparation complete; full acceptance pending | Systemd runtime contract, acquisition isolation, setup pinning, resource/log controls, and focused tests. Requires authorized clean-host setup/restart/port/synthetic-task evidence. |
+| RC-023 | Offline preparation plus producer state/export correction complete; full acceptance pending | Runtime contract, acquisition isolation, setup pinning, resource/log controls, separate producer state/export paths, and focused tests. Requires C's accepted integrated SHA plus authorized clean-host setup/restart/port/synthetic-task evidence. |
 | RC-024 | Not started / gated | Requires RC-015, RC-016, and accepted RC-023; historical state is not copied into this worktree. |
 | RC-025 | A-owned, not changed | Required before RC-026. |
 | RC-026 | Not started / gated | Requires RC-012/014/015/021/024/025 and comparable measured state; no capacity/cost claim made. |
@@ -43,10 +44,16 @@ Runtime code/config:
 - `deploy/setup.sh`
 - `deploy/deploy.sh`
 - `deploy/start.sh`
+- `scripts/master_linkedin_jobs_catalog.py`
+- `scripts/master_employer_jobs_catalog.py`
+- `scripts/run_manifested_linkedin.py`
+- `scripts/run_manifested_employer.py`
+- `deploy/acquisition-data-manifest.json`
 
 Evidence/tests:
 
 - `tests/test_rc023_vps_runtime.py`
+- `tests/test_rc023_producer_state_paths.py`
 - `docs/RC023_VPS_RUNTIME.md`
 - `docs/RC_B_HANDOFF.md`
 
@@ -79,6 +86,28 @@ Python 3.12.7
 Provider machine identity, region, price/VAT/add-ons, quotas, actual RAM/disk
 headroom, Docker availability, and deployed revision are still unknown.
 
+## Producer state/export correction
+
+The four producer entrypoints now accept an optional `--state-dir` (and the
+low-level APIs accept `state_dir=`) while preserving the historical default of
+placing state beside `--output-dir`. `--require-existing-state` is an explicit
+restore guard: it fails before SQLite creation when the required database is
+missing. Employer `--export-only` opens the selected state through the existing
+schema validation and never falls back to an empty database.
+
+With an explicit state root, SQLite databases and any SQLite sidecars remain
+under `/srv/runr/state/{linkedin,employer}`. LinkedIn generations, its
+generation-local JSONL journal, pointer, metrics, and compatibility aliases
+remain under `/srv/runr/exports/linkedin`; employer materializations remain
+under `/srv/runr/exports/employer`. Checkpoint transactions, resume IDs,
+immutable generation publication, and single-final-export behavior were not
+changed. Existing callers that omit `state_dir` retain their prior paths.
+
+The shared `deploy/acquisition-data-manifest.json` runtime commands now carry
+the separate POSIX state and export roots plus `--require-existing-state`.
+This is the exact manifest patch C must integrate with the release candidate;
+the release commit field was not changed by B.
+
 ## Commands and results
 
 Executed from the B worktree:
@@ -94,10 +123,25 @@ Executed from the B worktree:
 # Result: 14 passed in 4.56s
 
 & 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest -q tests/test_rc023_vps_runtime.py tests/test_acquisition_runtime_manifest.py tests/test_rc022_build_release_contract.py tests/test_worker_service.py
-# Result: 42 passed, 4 subtests passed in 40.08s
+# Result: 42 passed, 4 subtests passed in 25.23s
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest -q tests/test_rc023_producer_state_paths.py
+# Result: 9 passed in 4.19s
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest -q tests/test_master_linkedin_jobs_catalog.py tests/test_master_employer_jobs_catalog.py tests/test_source_eligibility_manifest.py tests/test_employer_site_fallbacks.py tests/test_rc011_employer_outcomes.py tests/test_rc012_employer_concurrency.py --deselect tests/test_master_linkedin_jobs_catalog.py::test_shared_limiter_gates_actual_account_and_provider_in_flight_work
+# Result: 120 passed, 1 deselected in 19.49s
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest -q tests/test_master_linkedin_jobs_catalog.py::test_shared_limiter_gates_actual_account_and_provider_in_flight_work
+# Result: 1 passed in 0.97s; timing-sensitive in the larger mixed producer process.
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m ruff check scripts/master_linkedin_jobs_catalog.py scripts/master_employer_jobs_catalog.py scripts/run_manifested_linkedin.py scripts/run_manifested_employer.py tests/test_rc023_producer_state_paths.py
+# Result: All checks passed!
+
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m py_compile scripts/master_linkedin_jobs_catalog.py scripts/master_employer_jobs_catalog.py scripts/run_manifested_linkedin.py scripts/run_manifested_employer.py tests/test_rc023_producer_state_paths.py
+# Result: passed
 ```
 
-Additional offline checks to run before committing this handoff:
+Additional offline checks:
 
 ```powershell
 bash -n deploy/setup.sh deploy/deploy.sh deploy/start.sh
@@ -105,6 +149,7 @@ bash -n deploy/setup.sh deploy/deploy.sh deploy/start.sh
 git diff --check
 # Result: passed
 git status --short --branch
+# Result before the handoff commit: expected scoped changes only; clean after commit.
 ```
 
 The VPS setup, service restart, port check, and synthetic worker command are
@@ -113,11 +158,15 @@ host and isolated staging state and must be coordinated with C first.
 
 ## Handoff to C
 
-1. Review the narrow systemd/runtime patch and integrate it as a scoped patch
-   into C's release worktree; do not copy the persistent target's dirty files.
+1. Integrate producer state/export correction tip `d14332db57c06d2021e4e41c240d8727e5f212da` and this
+   handoff sequentially into C's release worktree. Resolve the shared
+   `deploy/acquisition-data-manifest.json` edit by retaining all four explicit
+   state roots and restore guards; do not copy the persistent target's dirty
+   files.
 2. Reconcile `deploy/start.sh` and the runtime/release contract with C's
-   accepted integration tip before any host verification.
-3. On an authorized clean host, record the provider image/region/price/limits,
+   accepted integration tip before any host verification. Do not perform host
+   mutations from this B worktree.
+3. On an authorized clean host after INT-1, record the provider image/region/price/limits,
    create both environment boundaries from secret storage, run setup/deploy,
    verify services and closed ports, and execute one isolated synthetic worker
    task. Record deployed commit separately from this branch.
@@ -136,6 +185,7 @@ Leave `.env*`, `/var/lib/runr`, `/srv/runr`, backups, and journald data intact.
 Do not use `git reset`, `git clean`, whole-file rollback, or database restore
 over newer customer writes.
 
-Runtime/evidence commit SHA: `e7c70a9b52c1d839ee3df24c63efced106d7d18a`.
+Prior runtime/evidence commit SHA: `e7c70a9b52c1d839ee3df24c63efced106d7d18a`.
+Producer state/export correction SHA: `d14332db57c06d2021e4e41c240d8727e5f212da`.
 Final handoff commit SHA: record with `git rev-parse HEAD` after this
 documentation-only update.
