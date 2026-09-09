@@ -1,15 +1,28 @@
 # RC-027 approved staging pilot packet
 
-Status: frozen selection; staging execution is blocked on host elevation and
-isolated provider/resource credentials. No live request has been made under
-this packet.
+> **Execution amendment — 2026-09-09.** The host/runtime gate was completed
+> on the authorized VPS for an isolated local SQLite staging rehearsal. The
+> verified code candidate is now `6e9a1e9301ffca644aca916aad6fc8827e4a792d`,
+> which includes the demonstrated systemd worker-log-path correction. The
+> persistent deployment checkout remains at its pre-amendment tip until the C
+> worktree evidence is committed and fast-forwarded into it. A synthetic
+> customer run completed, a controlled unknown-stage failure was classified as
+> failed without retry expansion, and the customer worker recovered after a
+> restart. No real-source/provider request, charge, Turso resource, R2 object,
+> signed download, or browser/CORS pilot evidence exists. RC-027 therefore
+> remains incomplete and blocked only at the external staging-credential,
+> resource, and real-source acceptance gates described below.
+
+Status: frozen selection; local host/runtime rehearsal complete; real-source
+staging execution remains blocked on isolated provider/resource credentials.
+No live request has been made under this packet.
 
 ## Candidate and verified input
 
 | Item | Value |
 | --- | --- |
-| Runtime candidate | `d326726acab7fffbbf59e294629b8ef002437566` |
-| Integrated repository tip | `daf00c187116c77b43744efa3d07539db06880ad` |
+| Runtime candidate | `6e9a1e9301ffca644aca916aad6fc8827e4a792d` |
+| C worktree evidence base | `6e9a1e9301ffca644aca916aad6fc8827e4a792d` |
 | Target branch | `deployment/render-turso-r2` |
 | Contract / migration | `runr-contract-v1` / `058_customer_task_queue` |
 | Host | `vmd205749` / `runradmin@144.91.99.90` |
@@ -44,21 +57,22 @@ mapping, enrichment, or ownership review is used.
 
 ## Isolated staging identifiers
 
-These names are reserved for this packet. They were not created because no
-Turso/R2 CLI credentials are configured locally and the VPS has no installed
-Runr runtime or usable non-interactive sudo yet.
+These names remain reserved for this packet. The host runtime is installed and
+verified, but the external Turso/R2 resources were not created because no
+authorized external credentials or dashboard access is configured. The local
+rehearsal therefore uses isolated SQLite/local-object-storage state only.
 
 ```text
 Turso database:       runr-staging-turso-rc027
-R2 bucket/prefix:     runr-staging-rc027 / rc027/d326726acab7fffbbf59e294629b8ef002437566/
+R2 bucket/prefix:     runr-staging-rc027 / rc027/6e9a1e9301ffca644aca916aad6fc8827e4a792d/
 Acquisition queue:    runr-staging-acquisition-queue
 Customer queue:       runr-staging-customer-queue
-Evidence root:        /srv/runr/rc027-evidence/d326726acab7fffbbf59e294629b8ef002437566/
+Evidence root:        /srv/runr/rc027-evidence/6e9a1e9301ffca644aca916aad6fc8827e4a792d/
 Shared inputs:        /srv/runr/shared/inputs/
 LinkedIn state:       /srv/runr/state/linkedin/
 Employer state:        /srv/runr/state/employer/
-Exports:              /srv/runr/exports/rc027/d326726acab7fffbbf59e294629b8ef002437566/
-Disposable app data:  /srv/runr/app-data/rc027-d326726a/
+Exports:              /srv/runr/exports/rc027/6e9a1e9301ffca644aca916aad6fc8827e4a792d/
+Disposable app data:  /srv/runr/app-data/rc027-6e9a1e93/
 ```
 
 No production database, bucket, prefix, queue, credentials, or schedule may
@@ -91,11 +105,11 @@ Every role must advertise the same release and migration values:
 ```sh
 RUNR_ENV=staging \
 RUNR_RELEASE_BRANCH=deployment/render-turso-r2 \
-RUNR_RELEASE_COMMIT=d326726acab7fffbbf59e294629b8ef002437566 \
+RUNR_RELEASE_COMMIT=6e9a1e9301ffca644aca916aad6fc8827e4a792d \
 RUNR_RELEASE_CONTRACT_VERSION=runr-contract-v1 \
 RUNR_MIGRATION_HEAD=058_customer_task_queue \
 RUNR_PRIVATE_TEST_DEPLOYMENT=true \
-RUNR_DATA_DIR=/srv/runr/app-data/rc027-d326726a \
+RUNR_DATA_DIR=/srv/runr/app-data/rc027-6e9a1e93 \
 RUNR_STORAGE_BACKEND=sqlite
 ```
 
@@ -119,16 +133,27 @@ headers/body, and browser CORS behavior under the evidence root above. Disable
 the staging schedules and workers after the evidence capture. RC-006b remains
 outside this packet.
 
-## Current execution blocker
+## Current execution result and blocker
 
-Read-only SSH succeeds, but the host currently has no `/opt/runr`, `/srv/runr`,
-`/var/lib/runr`, Docker/Podman, or Runr systemd units. `runradmin` is in the
-`sudo` group, but `sudo -n -v` is unavailable and no password/root SSH path is
-configured. Local Turso, Wrangler, AWS and R2 credential configuration is also
-absent. No staging resource was created and no live source request was made.
+The authorized `runr-vps` alias and non-interactive sudo were verified. Host
+setup completed on `vmd205749`: Python 3.12.7 is installed at
+`/opt/python/3.12.7/bin/python3.12`; `/opt/runr` contains the candidate;
+migrations 001 through `058_customer_task_queue` are applied to the isolated
+SQLite rehearsal database; API, frontend, and customer worker are active;
+acquisition worker is inactive and disabled; API is loopback-only; frontend is
+on port 3000; UFW remains deny-by-default with SSH allowed; fail2ban and SSH
+hardening remain active. The release metadata, contract, and migration head
+advertise the same candidate.
 
-The smallest required user action is to provide a working approved elevation
-method for `runradmin` on `144.91.99.90` and inject isolated staging Turso/R2
-and source-provider credentials/pricing access through the authorized secret
-store. Provider credentials must remain disabled if their cost cannot be
-bounded under this packet.
+The synthetic customer run `run_996c212f698049d6` completed with one attempt.
+The controlled failure run `run_bc9f72cd89fb43a1` ended `failed` at `1/1`, with
+redacted error logging and no retry expansion. After `runr-worker.service` was
+restarted, it returned active with a new process and current idle heartbeat.
+
+The live pilot is still blocked. The host has no configured `turso`, `wrangler`,
+`aws`, `rclone`, Docker or Podman tooling, and the required Turso/R2/provider
+secret names are not configured in either protected environment file. No
+isolated Turso database, R2 bucket/prefix object, provider price authorization,
+real-source request, signed URL, browser download, or CORS result may be
+claimed. Complete the consolidated external checklist in the RC-C handoff;
+keep acquisition disabled until every item and the budget ledger are verified.

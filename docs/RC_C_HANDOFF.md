@@ -1,5 +1,29 @@
 # RC-C release and integration handoff
 
+## Current RC-027 amendment — 2026-09-09
+
+This amendment supersedes the earlier RC-027 blocker wording below. The
+authorized `runr-vps` access, clean-host setup, systemd runtime, migration
+rehearsal, service health, synthetic customer run, controlled failure fixture,
+and customer-worker restart/recovery have now been verified on `vmd205749`.
+The current runtime candidate is
+`6e9a1e9301ffca644aca916aad6fc8827e4a792d`; the worker-log-path correction is
+included. The detailed record is
+`docs/RC027_LIVE_STAGING_EVIDENCE.md`.
+
+RC-027 is still **incomplete**. No real LinkedIn/employer request, external
+Turso/R2 resource, provider charge, R2 upload, signed download, browser/CORS
+check, or authenticated production-like UI publication was performed. The
+remaining blocker is the consolidated external staging checklist: isolated
+Turso/R2 resources and scopes, protected staging secrets, provider price and
+source-path approval, isolated test identity/origin, and the resulting bounded
+two-cycle pilot evidence. Acquisition remains inactive and disabled.
+
+The persistent target checkout was at
+`e9efc8cb830201c3b100502316c169ebb73fd1ef` before this C amendment is
+committed. It must be advanced only by verified fast-forward from the
+resulting clean C tip; nothing is pushed or deployed.
+
 ## RC-027 gate result — 2026-09-09
 
 RC-027 was not executed. The four-company packet is now frozen, but staging
