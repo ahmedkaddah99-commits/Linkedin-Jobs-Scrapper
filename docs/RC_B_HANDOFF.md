@@ -443,3 +443,139 @@ RC-024 implementation/evidence SHA: `6e315b9324e4ba2fb1b2ffbb42592fe55d01c610`.
 RC-026 implementation/evidence SHA: `61d204ce53ab02060514409b6ef7514846d2d133`.
 Final B correction SHA: `8a87df8f7abb02a46fe0249b391ffe75aa415174`.
 Final B documentation tip: verify with `git rev-parse HEAD` after this commit.
+
+## Employer collector repair follow-up
+
+This follow-up was performed in the reserved worktree
+`C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-b-employer-collector`
+on branch `temp/rc-b-employer-collector`, starting from C's recorded clean
+combined baseline `5cd2ece533e4e7615a8b6a7b08516014d5b82748`. The persistent
+target, C's worktree, and the prior B runtime worktree were not edited. The
+immutable implementation/test tip is:
+
+```text
+c98603a51c2775512e49ccb2d54a4adbe731ddb7
+```
+
+### Acceptance status
+
+| Area | Status | Evidence and boundary |
+| --- | --- | --- |
+| Career-site/ATS discovery | Locally verified | Homepage ATS links now terminate lower-value common-path and sitemap probes; common-path discovery also stops when a known ATS endpoint is found. Existing career-path, external ATS, pagination, detail-field, and fallback tests remain green. |
+| Authoritative endpoint fan-out | Locally verified | A complete ATS/generic snapshot with `complete_with_jobs` or `confirmed_zero` stops candidate processing. Incomplete/blocked/failed snapshots still reach the configured fallbacks. |
+| Request-budget outcome | Locally verified | `RequestBudgetExceeded` is checkpointed as legacy status `partial`, canonical outcome `partial`, with `request_budget_exhausted=true`, max budget, and mandatory recheck metadata. It is no longer persisted as generic `collector_error` or confirmed zero. |
+| Checkpoint/resume/concurrency/export | Regression verified | Existing RC-011/012 tests cover uncertain/blocked/partial non-zero semantics, stalled-company checkpointing, transport accounting, bounded concurrency, restart/recheck policy, SQLite state ownership, atomic outputs, export-only, and one final export. The focused suite passed 105 tests. |
+| Four-company live pilot | Pending C | No live provider/browser requests were made. C must run the accepted integrated tip and record deployed-versus-local SHA and live request accounting. |
+
+### Reproduced pilot causes
+
+The read-only inspection used the persisted employer state and metrics under:
+
+```text
+/srv/runr/state/rc027-employer-6e9a1e9301ffca644aca916aad6fc8827e4a792d/
+/srv/runr/exports/rc027/6e9a1e9301ffca644aca916aad6fc8827e4a792d/
+```
+
+The four cycle-one totals were MALZERS 24, Vincenz 25, NOVENTI 26, and helmag
+25 attempts. The metrics showed direct HTTP only, no browser activity, no
+Webshare fallback, and no complete source snapshot for the four companies.
+The redundant common-path/sitemap discovery sequence was a genuine producer
+inefficiency; the local regression now proves an ATS link uses one homepage
+read and does not continue probing. The exact persisted source responses for
+the three non-MALZERS companies were not available in the state/log copy, so
+their cycle-one partial/source-failed results cannot be attributed more
+specifically than source blocking or incomplete/unsupported source evidence.
+
+Cycle two exhausted the configured eight-request limit for all four companies.
+The persisted company rows all contained:
+
+```text
+failures=[{"stage":"company","error":"RequestBudgetExceeded"}]
+status=collector_error
+outcome=failed
+```
+
+That budget exhaustion was expected bounded recovery, but the generic
+classification was a collector defect. The new outcome preserves the
+historical schema and resume policy while recording `partial` and an explicit
+`request_budget_exhausted` stop reason. The retained MALZERS job row was a
+Softgarden embedded observation with placeholder/demo text; it is not evidence
+of a reliable current employer result or a confirmed zero. Softgarden remains
+a source limitation: discovery identifies it, but the native ATS router does
+not yet provide a Softgarden API connector, so the producer depends on the
+source page/embedded/browser paths.
+
+### Exact files changed
+
+- `backend/connectors/company_career_discovery.py`: stop discovery after an
+  authoritative ATS candidate is found.
+- `scripts/master_employer_jobs_catalog.py`: stop candidate fan-out after a
+  complete authoritative target and classify request-budget exhaustion as a
+  recheckable partial result.
+- `tests/test_company_career_discovery.py`: regression for ATS discovery
+  request minimization.
+- `tests/test_rc011_employer_outcomes.py`: regressions for authoritative
+  candidate stop and budget checkpoint classification.
+- `docs/RC_B_HANDOFF.md`: this follow-up receipt.
+
+No company-identity files, LinkedIn producer files, VPS files, secrets,
+historical databases, exports, or live-source fixtures were changed.
+
+### Commands and results
+
+All Python commands used the approved shared interpreter:
+
+```text
+C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe --version
+Python 3.12.7
+```
+
+Focused verification from the employer worktree:
+
+```text
+C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe -m pytest -q \
+  tests/test_company_career_discovery.py \
+  tests/test_master_employer_jobs_catalog.py \
+  tests/test_employer_site_fallbacks.py \
+  tests/test_rc011_employer_outcomes.py \
+  tests/test_rc012_employer_concurrency.py \
+  tests/test_rc023_producer_state_paths.py \
+  tests/test_producer_adapters.py \
+  tests/test_rc029_wave_manifest.py
+105 passed in 13.94s
+```
+
+Additional checks passed:
+
+```text
+C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe -m py_compile backend/connectors/company_career_discovery.py scripts/master_employer_jobs_catalog.py scripts/run_manifested_employer.py
+C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe -m ruff check backend/connectors/company_career_discovery.py scripts/master_employer_jobs_catalog.py scripts/run_manifested_employer.py tests/test_company_career_discovery.py tests/test_rc011_employer_outcomes.py
+git diff --check
+```
+
+### Smallest C-owned live verification
+
+After integrating `c98603a51c2775512e49ccb2d54a4adbe731ddb7` into the accepted
+combined runtime, C should run one coordinated employer pilot using the
+existing RC-027 company manifest and frozen request cap. Record, per company,
+the deployed SHA, total attempts, transport/fallback/browser counters,
+discovered targets, canonical outcome, and state/export paths. The expected
+bounded result for an exhausted source is `partial` with
+`request_budget_exhausted`, never `collector_error` or `confirmed_zero`.
+For at least one source with a homepage ATS link, verify that the request log
+does not contain the old common-path/sitemap fan-out after the ATS endpoint is
+identified. Keep the acquisition live-network gate and C's request-accounting
+ownership unchanged; do not rerun paid/live collection from this worktree.
+
+If C's integrated pilot demonstrates a new employer defect, return the exact
+receipt, metrics, and source/state copy to this same B workstream. No new
+ticket series is required. Until that occurs, this code correction is frozen
+at `c98603a51c2775512e49ccb2d54a4adbe731ddb7`.
+
+### Follow-up rollback
+
+No host or persistent target mutation was made. To roll back only this repair
+after integration, C should use a normal revert of
+`c98603a51c2775512e49ccb2d54a4adbe731ddb7`; do not reset, amend, or delete
+state/evidence. The prior B runtime, backup, benchmark, and accepted C history
+remain intact.

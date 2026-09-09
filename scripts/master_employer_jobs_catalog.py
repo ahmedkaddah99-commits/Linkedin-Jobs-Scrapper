@@ -1181,6 +1181,12 @@ def collect_company(
             if snapshot.get("error"):
                 result.failures.append({"stage": "source", "url": target_url, "error": _text(snapshot.get("error"))})
 
+        # A complete ATS/generic snapshot is authoritative for this company.
+        # Do not fan out to lower-ranked career links after it has established
+        # complete coverage; fallback remains available for incomplete sources.
+        if target["complete_snapshot"] and target["status"] in {"complete_with_jobs", "confirmed_zero"}:
+            break
+
     _finalize_coverage(result, target_outcomes)
     return result
 
@@ -1547,6 +1553,39 @@ def _collect_company_worker(company: EmployerCompany, limits: CollectorLimits) -
             transport_gate=limits.transport_gate,
         )
         return collect_company(company, fetcher, limits)
+    except RequestBudgetExceeded as exc:
+        # Budget exhaustion is an expected bounded-recovery result, not a
+        # collector crash. Keep it recheckable and never expose it as zero.
+        result = EmployerCollectionResult(
+            company=company,
+            status="partial",
+            outcome="partial",
+            failures=[
+                {
+                    "stage": "company",
+                    "error": type(exc).__name__,
+                    "reason": "request_budget_exhausted",
+                    "max_requests": exc.max_attempts,
+                }
+            ],
+        )
+        _finalize_coverage(result, [])
+        result.status = "partial"
+        result.outcome = "partial"
+        result.coverage.update(
+            {
+                "outcome": "partial",
+                "stop_reason": "request_budget_exhausted",
+                "request_budget_exhausted": True,
+                "request_budget_max": exc.max_attempts,
+                "recheck_policy": {
+                    "recheck_required": True,
+                    "bounded_recovery": True,
+                    "reason": "request_budget_exhausted",
+                },
+            }
+        )
+        return result
     except Exception as exc:  # keep the full population moving after one worker/provider failure
         result = EmployerCollectionResult(
             company=company,
