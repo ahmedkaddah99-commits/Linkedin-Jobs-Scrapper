@@ -24,18 +24,37 @@ available environments:
 
 | Environment | Observed result |
 | --- | --- |
-| Persistent target checkout | `c69535f7dc2e3b679508c6716e27b586f519f609` on `deployment/render-turso-r2` |
+| Persistent target checkout | `f9417f2286c4d423bbf16ab15e2c90fe36d3f625` on `deployment/render-turso-r2` |
 | GitHub remote-tracking deployment ref | `30ef992b7945ff0998704a550fdc2f893b24476f`; local target is 44 commits ahead; no push was made |
 | VPS systemd runtime | `6e9a1e9301ffca644aca916aad6fc8827e4a792d`; API/frontend/customer services active; acquisition inactive/disabled |
 | Public Render frontend | `7251ae297c55f7f6a4524181cdafb4648f7fdcde`, generated `2026-09-08T10:49:58.289Z` |
-| Public Render API | `GET https://runr-api.onrender.com/health/live` returned HTTP 503 |
-| Render management API | The locally present management key was rejected with HTTP 401; deployed service IDs/settings could not be read |
+| Public Render API | `GET https://runr-api.onrender.com/health/live` returned HTTP 200 with `{"status":"ok"}` |
+| Render management API | Authorized read-only via the nested repository env file; live API and worker deploy SHA `30ef992b7945ff0998704a550fdc2f893b24476f`; live frontend deploy SHA `7251ae297c55f7f6a4524181cdafb4648f7fdcde`; `runr-process-next` is suspended |
 
 The public frontend revision is not evidence that the current target or VPS
 candidate is deployed. The target must not be pushed until the isolated pilot
 passes, because `render.yaml` uses `autoDeployTrigger: commit` for the API,
-worker and frontend. The public API 503 also requires an authorized Render
-operator to inspect service/deployment logs before any cutover claim.
+worker and frontend. The live Render API is healthy now, but it is running the
+remote `30ef992b` candidate, not the local target.
+
+## Credential discovery and scope boundary
+
+The configured environment was found at
+`C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\user_config\.env`,
+not at the target checkout root. Its values were used only in memory for
+redacted authorization checks. The configured Turso URL identifies the
+production `runr-dev-ahmedkaddah99-commits` database and the configured S3
+bucket is `runr-prod-artifacts`; those credentials were not used for staging
+writes. The Turso database token cannot list/create organizations through the
+Turso management API (HTTP 401), and no Cloudflare account-management token is
+configured, so isolated Turso creation and R2 scoped-key creation remain
+blocked.
+
+The Webshare account API is authorized. Its active plan reports 100 proxies,
+an active monthly term at `$2.99`, no throttling and renewal enabled. This is
+within the existing pilot ceiling, but no source/proxy request was made. The
+ScrapeOps key is present locally but remains disabled because its permitted
+cost was not established.
 
 ## Host and release verification
 
