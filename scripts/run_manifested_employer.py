@@ -23,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help="directory containing the durable SQLite state; defaults to --output-dir",
+    )
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--full", action="store_true")
     parser.add_argument(
@@ -38,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--require-existing-state",
+        action="store_true",
+        help="fail instead of creating a missing restored state database",
+    )
     return parser
 
 
@@ -46,12 +56,15 @@ def main(argv: list[str] | None = None) -> int:
     pilot_only = not args.include_single_source
     manifest, tasks = require_eligibility_manifest(args.manifest, SOURCE_EMPLOYER, pilot_only=pilot_only)
     output_dir = args.output_dir.resolve()
+    state_dir = args.state_dir.resolve() if args.state_dir is not None else None
     staged_input = output_dir / ".manifest_inputs" / f"{manifest['manifest_id']}-employer.csv"
     staged = materialize_source_input(manifest, SOURCE_EMPLOYER, staged_input, pilot_only=pilot_only)
     metrics = run_collection(
         input_csv=staged_input,
         output_dir=output_dir,
         limit=0 if args.full else args.limit,
+        state_dir=state_dir,
+        require_existing_state=args.require_existing_state,
         company_id=args.company_id,
         dry_run=args.dry_run,
         resume=args.resume,

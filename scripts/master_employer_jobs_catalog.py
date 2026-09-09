@@ -1552,6 +1552,8 @@ def run_collection(
     input_csv: Path,
     output_dir: Path,
     limit: int,
+    state_dir: Path | None = None,
+    require_existing_state: bool = False,
     company_id: str = "",
     dry_run: bool = False,
     resume: bool = True,
@@ -1603,10 +1605,13 @@ def run_collection(
         "output_dir": str(output_dir),
         "dry_run": dry_run,
     }
+    state_path = (Path(state_dir) if state_dir is not None else Path(output_dir)) / "master_employer_jobs_state.db"
+    if require_existing_state and not state_path.is_file():
+        raise FileNotFoundError(f"Employer state database not found: {state_path}")
     if dry_run:
         return metrics
 
-    state = EmployerState(output_dir / "master_employer_jobs_state.db")
+    state = EmployerState(state_path)
     transport_gate = TransportGate(
         accounting=accounting,
         http_concurrency=http_concurrency,
@@ -1764,10 +1769,10 @@ def run_collection(
         state.close()
 
 
-def export_only(output_dir: Path) -> dict[str, Any]:
+def export_only(output_dir: Path, *, state_dir: Path | None = None) -> dict[str, Any]:
     """Export employer artifacts from existing state without scraping or LinkedIn input."""
 
-    state_path = output_dir / "master_employer_jobs_state.db"
+    state_path = (Path(state_dir) if state_dir is not None else Path(output_dir)) / "master_employer_jobs_state.db"
     state = EmployerState.open_existing(state_path)
     try:
         persisted_jobs = state.job_count()
@@ -1793,6 +1798,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-csv", type=Path, default=DEFAULT_INPUT_CSV)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help="directory containing the durable SQLite state; defaults to --output-dir",
+    )
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--company-id", default="")
     parser.add_argument("--max-job-links", type=int, default=25)
@@ -1825,6 +1835,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Regenerate local catalogs from the existing employer state without network access.",
     )
+    parser.add_argument(
+        "--require-existing-state",
+        action="store_true",
+        help="fail instead of creating a missing restored state database",
+    )
     return parser
 
 
@@ -1832,7 +1847,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.export_only:
         try:
-            export_only(args.output_dir)
+            export_only(args.output_dir, state_dir=args.state_dir)
         except (OSError, sqlite3.Error, ValueError, UnicodeError, json.JSONDecodeError) as exc:
             print(f"export-only failed: {exc}", file=sys.stderr)
             return 2
@@ -1843,6 +1858,8 @@ def main(argv: list[str] | None = None) -> int:
         input_csv=args.input_csv,
         output_dir=args.output_dir,
         limit=0 if args.full else args.limit,
+        state_dir=args.state_dir,
+        require_existing_state=args.require_existing_state,
         company_id=args.company_id,
         dry_run=args.dry_run,
         resume=args.resume,
