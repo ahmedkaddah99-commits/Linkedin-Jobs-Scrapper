@@ -1,6 +1,39 @@
 # Runr acquisition workstream manifest
 
-Status: setup manifest for the next offline workstreams; no deployment, live
+## Current reconciliation amendment — 2026-09-09
+
+The setup-time values below are historical. The current clean reconciliation
+has verified and integrated the supplied lane tips without resetting or
+copying uncommitted work:
+
+| Item | Verified current value |
+| --- | --- |
+| Persistent target | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview` |
+| Target branch | `deployment/render-turso-r2` |
+| C integration worktree | `C:\Users\ahmed\Projects_Local\runr-admin-linkedin-preview-rc-c-release-integration` |
+| C branch | `temp/rc-c-release-integration` |
+| A frozen tip | `cac08985ecc3541d1b00f64fcaac28e6cbc2d427` |
+| B frozen tip | `729495d56029508fc064e0ae4687cb5892dd3c38` |
+| B startup-fix ancestor | `8a87df8f7abb02a46fe0249b391ffe75aa415174` |
+| A merge commit in C | `4fed31be0f8d6315fecbd768fd2e69073f82519a` |
+| B merge commit in C | `6d9620d19359770f0b119d2d8654445734bc96b4` |
+| Combined implementation tip before this amendment | `5cd2ece533e4e7615a8b6a7b08516014d5b82748` |
+
+Both lane worktrees were clean at their frozen tips. A and B are now
+required to create their next repair commits from the resulting clean C
+tip, using separate worktrees and captured evidence only. A owns the actual
+LinkedIn producer repair; B owns the employer producer repair. C owns shared
+scheduler, publication, API, configuration, migration, release and staging
+contracts. Neither repair lane may consume the remaining live request budget
+or change VPS state independently.
+
+The RC-029 fixture source-name mismatch found after integration was corrected
+in `5cd2ece533e4e7615a8b6a7b08516014d5b82748`; the canonical contract uses
+`employer_site`, not the shorthand `employer`. The combined regression then
+passed 310 tests with the two independently reproduced tracker/API baseline
+failures excluded.
+
+Historical setup status: setup manifest for the next offline workstreams; no deployment, live
 acquisition, provider request, production migration, or target-branch push was
 performed by this setup.
 
