@@ -45,7 +45,14 @@ def seed(app, *, jobs: int = 1000) -> None:
             }
             apply_url = f"https://jobs.example/benchmark/{index}"
             connection.execute(
-                "INSERT INTO canonical_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                """
+                INSERT INTO canonical_jobs (
+                    canonical_job_id, company_id, identity_key, title, location,
+                    canonical_url, lifecycle_state, first_seen_at, last_seen_at,
+                    last_verified_at, absence_count, current_version_id, created_at,
+                    updated_at, identity_signature
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
                 (job_id, "bench-company", f"url:{job_id}", title, payload["location"], apply_url, "active", now, now, now, 0, version_id, now, now, f"signature:{job_id}"),
             )
             connection.execute(
@@ -53,8 +60,13 @@ def seed(app, *, jobs: int = 1000) -> None:
                 (version_id, job_id, 1, f"hash-{job_id}", title, payload["description"], payload["location"], apply_url, f"obs-{job_id}", json.dumps(payload), now),
             )
         connection.execute(
-            "INSERT INTO acquisition_publications VALUES (?, ?, ?, ?, ?, ?)",
-            ("bench-publication", "bench-cycle", "valid", "[]", now, ""),
+            """
+            INSERT INTO acquisition_publications (
+                publication_id, cycle_id, status, snapshot_json, published_at,
+                valid_until, previous_publication_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("bench-publication", "bench-cycle", "valid", "[]", now, "", ""),
         )
         connection.executemany(
             "INSERT INTO acquisition_publication_jobs VALUES (?, ?)",
