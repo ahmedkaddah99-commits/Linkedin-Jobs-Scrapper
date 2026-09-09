@@ -4,16 +4,21 @@ Date: 2026-09-09
 
 Branch: `deployment/render-turso-r2`
 
-Integrated C candidate: `6e9a1e9301ffca644aca916aad6fc8827e4a792d`
+Integrated C candidate before this documentation slice: `7dc60e97478b74569ba2f136464918162dd7bbec`
 
-This is an offline/in-host integration handoff. No reset, clean, push, deploy,
-production migration, browser session, or acquisition/source request was
-performed. Read-only provider visibility checks were run later for the RC-027
-amendment; they did not create staging resources or write R2 objects. Frozen A/B
-lane tips were merged sequentially into C. RC-023 host
-runtime rehearsal is now evidenced on the authorized VPS; RC-027's external
-resource/provider and real-source gates remain blocked. The persistent target
-is advanced only after the C evidence commit is complete.
+Current target code-correction tip: `16c1215d`
+
+This is an in-host integration handoff. No reset, clean, push, deploy,
+production migration, or customer-service mutation was performed. The
+authorized RC-027 pilot made bounded LinkedIn/employer requests and wrote one
+small immutable receipt to the existing production R2 bucket under a unique
+RC-027 prefix; no production Turso write or existing-object mutation occurred.
+The exact result is in `docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`.
+Frozen A/B lane tips remain integrated sequentially. RC-023 host runtime
+rehearsal and the RC-027 producer/transport execution are evidenced, but RC-027
+acceptance remains blocked by invalid/partial source results, authenticated UI
+publication, CORS and dedicated staging-resource gates. The persistent target
+is advanced only after this C evidence commit is complete.
 
 Read-only deployment visibility is split: the VPS runs `6e9a1e93`, the live
 Render API/worker deploy runs `30ef992b7945ff0998704a550fdc2f893b24476f`, and
@@ -246,7 +251,7 @@ deployment, provider authorization, data approval, and live acceptance.
 | RC-024 | Offline implementation/fixture rehearsal integrated; full acceptance pending | `docs/RC024_BACKUP_RESTORE.md`, `scripts/acquisition_state_backup.py`, `tests/test_rc024_backup_restore.py`; focused tests pass | Off-host receipt, replacement-host restore, reboot/outage and historical state acceptance still require authorized host/storage. |
 | RC-025 | Offline dashboard/read-model slice integrated; live acceptance pending | A handoff and focused dashboard/API evidence integrated; combined tests pass | Verify actual worker/cycle metadata and live dashboard only after runtime/staging exists. |
 | RC-026 | Offline benchmark/cost preparation integrated; full acceptance pending | `docs/RC026_BENCHMARK.md`, benchmark scripts/tests; focused tests pass | VPS capacity, Turso contention/billing, provider retry/cost and authorized staging sample remain unmeasured. |
-| RC-027 | Frozen packet; local runtime rehearsal complete; real-source pilot blocked | `docs/RC027_APPROVED_PILOT_PACKET.md`, `docs/RC027_LIVE_STAGING_EVIDENCE.md`; candidate `6e9a1e93`; four frozen identities/hashes; synthetic success/failure/restart evidence; no live requests | Requires isolated Turso/R2 scopes, protected secrets, provider price/source approval, test identity/origin, then two bounded real cycles with publication, UI, R2 signed-download/CORS and recovery evidence. |
+| RC-027 | Real-source two-cycle producer/transport run complete; acceptance pending | `docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`, `docs/RC027_LIVE_STAGING_EVIDENCE.md`; four frozen IDs; 190/200 measured attempts; partial/failure persistence; no false publication; R2 signed range receipt | Requires valid/closure-safe source results, authenticated UI/publication proof, browser CORS/direct-download proof, recovery/restart drill on the integrated staging app, and isolated Turso/dedicated R2 scope if retained by the release gate. |
 | RC-028 | Not started | Scope only | Requires RC-027 and production authorization; Gate A and Gate B remain separate. |
 | RC-029 | Not started | Scope only | Requires RC-005, RC-026, RC-028 Gate A, and RC-006 only for cohorts needing enrichment. |
 | RC-030 | Not started / optional P2 | Scope only | Can follow RC-022/025; must remain independent of hosting migration success. |

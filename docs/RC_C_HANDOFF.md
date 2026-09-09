@@ -11,18 +11,25 @@ The current runtime candidate is
 included. The detailed record is
 `docs/RC027_LIVE_STAGING_EVIDENCE.md`.
 
-RC-027 is still **incomplete**. No real LinkedIn/employer request, external
-Turso/R2 resource, provider charge, R2 upload, signed download, browser/CORS
-check, or authenticated production-like UI publication was performed. The
-remaining blocker is the consolidated external staging checklist: isolated
-Turso/R2 resources and scopes, protected staging secrets, provider price and
-source-path approval, isolated test identity/origin, and the resulting bounded
-two-cycle pilot evidence. Acquisition remains inactive and disabled.
+RC-027 is still **incomplete**, but the bounded real-source pilot has now run.
+Both collectors executed for the four frozen companies over two cycles on the
+authorized VPS, using 190/200 source/provider/browser attempts. All source
+results were partial or failed, so no snapshot was valid or closure-safe and
+the integrated transport withheld staging/public publication. The exact
+producer and transport receipt is
+`docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`.
 
-The persistent target checkout was at
-`e9efc8cb830201c3b100502316c169ebb73fd1ef` before this C amendment is
-committed. It must be advanced only by verified fast-forward from the
-resulting clean C tip; nothing is pushed or deployed.
+The existing production R2 bucket was used only for one small immutable
+evidence receipt under the unique RC-027 prefix, per the user's explicit
+instruction. Turso production was not written. R2 object/sign/range behavior
+passed; dedicated bucket isolation, CORS, authenticated UI publication and
+valid source acceptance remain pending. Acquisition remains inactive and
+disabled.
+
+The persistent target checkout is clean at the code-correction tip
+`16c1215d` before this documentation amendment is committed. It must be
+advanced only by verified fast-forward from the resulting clean C tip; nothing
+is pushed or deployed.
 
 Current read-only deployment visibility is separate from the local candidate:
 the target is clean on `deployment/render-turso-r2`, the remote-tracking
@@ -34,12 +41,13 @@ API/worker deploy `30ef992b7945ff0998704a550fdc2f893b24476f`, and the public
 Render API health endpoint returns HTTP 200. The local target remains
 undeployed.
 
-## RC-027 gate result — 2026-09-09
+## RC-027 prior offline gate result — superseded by the live-pilot receipt
 
-RC-027 was not executed. The four-company packet is now frozen, but staging
-execution is blocked by host elevation and isolated resource/provider access.
-No live provider, VPS, Turso, R2, Render, browser, acquisition, or publication
-request was made in this pass.
+The earlier offline gate result below is retained as history. It is superseded
+for current status by `docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`; the host and
+Webshare access blockers were cleared for the bounded run, while Turso
+isolation, dedicated R2 scope, browser UI/CORS and valid publication remain
+unmet.
 
 | Item | Verified value |
 | --- | --- |

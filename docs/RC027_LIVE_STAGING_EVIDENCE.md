@@ -9,13 +9,19 @@ Runtime candidate: `6e9a1e9301ffca644aca916aad6fc8827e4a792d`
 ## Result
 
 RC-023's clean-host/systemd portion is evidenced on the authorized VPS. The
-RC-027 real-source pilot is not complete. It is blocked before live traffic by
-the absence of isolated Turso/R2/provider resources and protected credentials,
-not by SSH, sudo, host installation, or the customer-worker runtime.
+RC-027 real-source pilot executed both producer collectors for the four frozen
+companies over two bounded cycles, but remains incomplete because every source
+result was partial or failed. No snapshot was valid or closure-safe, so
+publication was correctly withheld. This is a truthful partial/failure result,
+not a confirmed-zero result. See the exact receipt in
+`docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`.
 
-No LinkedIn or employer request, provider charge, Turso external write, R2
-object, signed download, browser/CORS request, or production migration was
-performed.
+The measured source/provider/browser total was 190 attempts against the
+200-attempt ceiling. No provider purchase, upgrade, top-up, ScrapeOps request,
+production Turso write, production migration, Render deployment, or customer
+worker change was performed. One small immutable evidence receipt was written
+to the explicitly authorized existing production R2 bucket under the unique
+RC-027 candidate prefix; no existing object was overwritten or deleted.
 
 ## Actual deployed/runtime visibility
 
@@ -42,10 +48,11 @@ remote `30ef992b` candidate, not the local target.
 The configured environment was found at
 `C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\user_config\.env`,
 not at the target checkout root. Its values were used only in memory for
-redacted authorization checks. The configured Turso URL identifies the
-production `runr-dev-ahmedkaddah99-commits` database and the configured S3
-bucket is `runr-prod-artifacts`; those credentials were not used for staging
-writes. The configured Turso credential returns HTTP 401 for the organization
+redacted authorization checks, except for the explicitly authorized small R2
+evidence receipt described below. The configured Turso URL identifies the
+production `runr-dev-ahmedkaddah99-commits` database and was not written to.
+The configured S3 bucket is `runr-prod-artifacts`; only the unique RC-027
+receipt prefix was used. The configured Turso credential returns HTTP 401 for the organization
 management endpoint, but that result identifies it as a database/SQL token; it
 does not prove that the Hobby plan forbids a staging database. Turso's current
 authorization model separates database SQL tokens from organization/group
@@ -60,9 +67,9 @@ credential points at the production bucket.
 The Webshare account is not blocked. Fresh profile and subscription checks
 returned HTTP 200; the subscription is active, unpaused, unthrottled, renewals
 enabled, and has zero failed-payment events. The plan lookup reports 100 shared
-proxies at `$2.99` monthly. No source/proxy request was made. The ScrapeOps key
-is present locally but remains disabled because its permitted cost was not
-established.
+proxies at `$2.99` monthly. The two-cycle LinkedIn pilot used the existing
+Webshare subscription; no purchase or plan change was made. The ScrapeOps key
+is present locally but remained disabled.
 
 ## Host and release verification
 
@@ -123,7 +130,7 @@ The installed role contract is:
 | Acquisition state | `/srv/runr/state` | `runr-acquisition:runr-acquisition`, `0750` |
 | Acquisition exports | `/srv/runr/exports` | `runr-acquisition:runr-acquisition`, `0750` |
 | Backup root | `/srv/runr/backups` | `runr-acquisition:runr-acquisition`, `0750` |
-| Candidate evidence (reserved; not created) | `/srv/runr/rc027-evidence/6e9a1e9301ffca644aca916aad6fc8827e4a792d/` | would be acquisition-owned |
+| Candidate evidence | `/srv/runr/rc027-evidence/6e9a1e9301ffca644aca916aad6fc8827e4a792d/` | acquisition-owned; pilot receipt is recorded in Git and R2 |
 | Customer logs | `/var/log/runr/customer` | `runr:runr`, `0750` |
 | Acquisition logs | `/var/log/runr/acquisition` | `runr-acquisition:runr-acquisition`, `0750` |
 
@@ -141,12 +148,39 @@ The preserved packet/setup directory actually present on the host is the
 original candidate path
 `/srv/runr/rc027-evidence/d326726acab7fffbbf59e294629b8ef002437566/`; it was
 not used for live traffic. The corrected 6e9 candidate evidence, export and
-app-data paths are reserved but absent because the real pilot did not start.
-The running local rehearsal uses `/var/lib/runr/api-data` and
-`/var/lib/runr/customer-data` instead.
+app-data paths were created for this bounded pilot. The active customer
+services still use `/var/lib/runr/api-data` and `/var/lib/runr/customer-data`;
+the RC-027 acquisition staging database is separate and was not mounted into
+those services.
 
 The four frozen companies remain MALZERS, St. Vincenz, NOVENTI and helmag.
 No proposed mappings or unresolved shared organizations were applied.
+
+## Real-source pilot paths and transport receipt
+
+For the bounded pilot, acquisition-owned state and exports were created under
+the following immutable candidate paths:
+
+- LinkedIn state: `/srv/runr/state/rc027-linkedin-6e9a1e9301ffca644aca916aad6fc8827e4a792d/`;
+- employer state: `/srv/runr/state/rc027-employer-6e9a1e9301ffca644aca916aad6fc8827e4a792d/`;
+- exports: `/srv/runr/exports/rc027/6e9a1e9301ffca644aca916aad6fc8827e4a792d/cycle-{1,2}/`;
+- integrated staging SQLite: `/srv/runr/app-data/rc027-6e9a1e9301ffca644aca916aad6fc8827e4a792d/acquisition-staging-v2.sqlite3`.
+
+The integrated database has two partial cycles, 16 tasks, 22 source
+observations, 21 canonical jobs and 21 source states. Every task was persisted
+with `valid_snapshot=0` and `closure_safe=0`; incomplete scans were not treated
+as empty and no lifecycle closure was applied. No staging or public publication
+exists, so the API read model correctly reports `freshness=unpublished` and
+zero jobs.
+
+The production R2 receipt is in bucket `runr-prod-artifacts` at
+`rc027/6e9a1e9301ffca644aca916aad6fc8827e4a792d/pilot/rc027-evidence-receipt.json`.
+It was written once, read with `HEAD` 200, and downloaded through a 600-second
+presigned range request with HTTP 206 and matching bytes. The S3 signing access
+key identifier appears in `X-Amz-Credential` as required by the protocol; the
+S3 secret and all provider API tokens were absent from the URL. R2 bucket
+isolation and browser CORS are not certified because bucket CORS management
+returned `AccessDenied`.
 
 ## Offline/runtime lifecycle evidence
 
@@ -162,11 +196,19 @@ These runs are controlled staging fixtures, not real-source acquisition:
 
 The worker journal recorded task start, failure/complete summary, and loop
 restart without exposing the injected exception text. This proves local
-classification and restart behavior only. It does not prove producer
-checkpoints, publication preservation, real-source retries, Turso contention,
-R2 upload/signing, or browser behavior.
+classification and restart behavior. The subsequent real-source producer
+runs prove bounded request accounting, state reuse, retry checkpoints and
+partial/failure persistence; the integrated transport proves invalid snapshots
+do not publish or close jobs. Turso isolation, publication/UI behavior and
+browser CORS remain unproven.
 
-## External staging checklist — one remaining action set
+## External staging checklist — remaining acceptance set
+
+The user explicitly authorized use of production artifacts for this pass. The
+existing production R2 bucket was therefore used only for the receipt key
+above; that exception does not establish bucket/credential isolation. The
+remaining checklist below is still required before treating RC-027 as a
+release candidate.
 
 The following must be completed by an operator with the corresponding
 provider/dashboard authority. Values must be entered directly on the VPS and
