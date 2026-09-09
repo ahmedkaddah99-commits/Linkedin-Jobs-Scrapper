@@ -25,7 +25,7 @@ committed. It must be advanced only by verified fast-forward from the
 resulting clean C tip; nothing is pushed or deployed.
 
 Current read-only deployment visibility is separate from the local candidate:
-the target is `f9417f2286c4d423bbf16ab15e2c90fe36d3f625`, the remote-tracking
+the target is `3570e6c09edc88af77c7423da92a64e0244fa668`, the remote-tracking
 deployment ref is `30ef992b7945ff0998704a550fdc2f893b24476f`, the VPS runs
 `6e9a1e9301ffca644aca916aad6fc8827e4a792d`, and the public Render frontend
 advertises `7251ae297c55f7f6a4524181cdafb4648f7fdcde`. The Render management
