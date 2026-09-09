@@ -1,10 +1,11 @@
 # Chat B runtime handoff
 
 Status: RC-023 offline preparation and producer state/export correction are
+complete on B. RC-024 offline implementation and fixture rehearsal are
 complete on B. The authorized host phase was attempted against INT-1's
-accepted candidate but is access-blocked before mutation; deployed/full VPS
-acceptance remains pending. RC-024, RC-026, and conditional RC-031 remain
-gated.
+accepted candidate but is access-blocked before mutation; deployed/full VPS,
+historical-source and off-host backup/restore acceptance remain pending.
+RC-026 and conditional RC-031 remain gated.
 
 ## Identity and worktree
 
@@ -26,7 +27,7 @@ host command, provider request, or live request was performed.
 | Ticket | Status | Evidence/next gate |
 | --- | --- | --- |
 | RC-023 | Offline preparation plus producer state/export correction complete; full acceptance pending | Runtime contract, acquisition isolation, setup pinning, resource/log controls, separate producer state/export paths, and focused tests. Requires C's accepted integrated SHA plus authorized clean-host setup/restart/port/synthetic-task evidence. |
-| RC-024 | Not started / gated | Requires RC-015, RC-016, and accepted RC-023; historical state is not copied into this worktree. |
+| RC-024 | Offline implementation and fixture rehearsal complete; full acceptance pending | `scripts/acquisition_state_backup.py` uses SQLite Online Backup, manifest-last S3/R2 preservation, isolated restore, measured local budget and epoch-fenced single-writer leases. Fixture proof passes; historical source, approved bucket/lifecycle, replacement-host restore/reboot and service-account evidence remain required. |
 | RC-025 | A-owned, not changed | Required before RC-026. |
 | RC-026 | Not started / gated | Requires RC-012/014/015/021/024/025 and comparable measured state; no capacity/cost claim made. |
 | RC-031 | Conditional, not started | Requires trigger evidence after RC-024/026/028. |
@@ -51,6 +52,7 @@ Runtime code/config:
 - `scripts/run_manifested_linkedin.py`
 - `scripts/run_manifested_employer.py`
 - `deploy/acquisition-data-manifest.json`
+- `scripts/acquisition_state_backup.py`
 
 Evidence/tests:
 
@@ -58,6 +60,8 @@ Evidence/tests:
 - `tests/test_rc023_producer_state_paths.py`
 - `docs/RC023_VPS_RUNTIME.md`
 - `docs/RC_B_HANDOFF.md`
+- `tests/test_rc024_backup_restore.py`
+- `docs/RC024_BACKUP_RESTORE.md`
 
 No secrets, mutable state databases, browser profiles, historical exports,
 provider logs, or large datasets are included.
@@ -109,6 +113,78 @@ The shared `deploy/acquisition-data-manifest.json` runtime commands now carry
 the separate POSIX state and export roots plus `--require-existing-state`.
 This is the exact manifest patch C must integrate with the release candidate;
 the release commit field was not changed by B.
+
+## RC-024 checkpoint implementation and rehearsal
+
+The new `scripts/acquisition_state_backup.py` is deliberately independent of
+the producer modules. It validates the exact 14-table LinkedIn state or the
+two-table employer state, opens the source read-only, performs SQLite Online
+Backup into a temporary file, removes any temporary WAL/SHM sidecars, hashes
+the immutable database and atomically publishes `checkpoint.json`. It records
+release/source version, input manifest ID/hash, cycle/shard/high-water marks,
+schema, backup method/hash/bytes, bounded retention settings and compact
+receipt/identity/absence evidence IDs. Sensitive metadata and browser-profile
+keys are rejected.
+
+Off-host preservation uses the existing S3/R2-compatible environment contract
+(`S3_ENDPOINT_URL`, `S3_*`, `S3_BUCKET`) and streams the database with
+`upload_file`; it is opt-in via `--upload`. The database object is uploaded
+before the manifest object, and the manifest is the remote commit record.
+Retries accept only an identical immutable object. Remote restore verifies the
+manifest object metadata hash, validates the checkpoint database, and restores
+only to a new directory. `SingleWriterLease` uses a shared durable ownership
+ledger, tokens and epochs so an expired/replaced owner fails immediately before
+publication. Local budget and free-space checks pause before unbounded outage
+buffering; pruning is limited to generated checkpoints with an off-host
+receipt.
+
+Fixture evidence is separate from historical/host evidence. The ten tests
+in `tests/test_rc024_backup_restore.py` use synthetic EmployerState,
+synthetic/empty current 14-table StateStore, an in-memory remote and a patched
+employer collector. They passed with the shared interpreter:
+
+```powershell
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' --version
+# Python 3.12.7
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m pytest -q tests\test_rc024_backup_restore.py
+# 10 passed
+& 'C:\Users\ahmed\Projects_Local\job-automation\Linkedin Jobs Scrapper\.venv\Scripts\python.exe' -m ruff check scripts\acquisition_state_backup.py tests\test_rc024_backup_restore.py
+# All checks passed!
+```
+
+The adjacent combined regression command passed 122 tests with the known
+timing-sensitive limiter test deselected. The same limiter test passed alone
+(1 passed in 0.80s); when embedded in the mixed process it once observed a
+peak of 1 instead of 2 and failed, so that transient mixed-process result is
+retained as a limitation rather than attributed to RC-024.
+
+The test suite also proves an actual employer producer resume from a restored
+checkpoint and the no-overwrite/missing-remote/failed-upload boundaries. It
+does not prove a real S3/R2 upload, replacement-VPS restore, reboot recovery,
+host permissions, lifecycle policy, or provider availability. The verified
+external snapshots remain preserved at their recorded source paths and hashes;
+none was moved, deleted, modified, or added to Git during this pass. Generated
+historical checkpoint copies were written only under the disposable temp root
+recorded below.
+
+As a separate historical-source rehearsal, the verified external Employer
+snapshot was backed up read-only to
+`C:\Users\ahmed\AppData\Local\Temp\runr-rc024-historical-20260909` in
+2.17s: 83,841,024 bytes, source SHA-256
+`b1eee3b449afd075d9b860f12a5880da6769fcc666473bbfe8f08e7e4cb36737`, backup
+SHA-256 `4f779500c9cd5fb66342cb36bd2fd236cefb9b9eebb3caf13876fca8b1265aaf`,
+tables `companies`/`jobs`, integrity `ok`. The verified external LinkedIn
+snapshot completed the same operation in 183.67s: 3,479,191,552 bytes,
+source SHA-256
+`26b81012177f40949b6b3ede3187860129db9fdaf3392d2195d78ac050244317`, backup
+SHA-256 `adc5c1ab7ac5b7bdca67cdabd7687fdd29913afae188fab2aba4377a41327525`,
+exact 14 tables, integrity `ok`. Both generated checkpoints were restored to
+the separate `C:\Users\ahmed\AppData\Local\Temp\runr-rc024-historical-restore-20260909`
+root in 117.36s; restored hashes matched. Employer export-only then read 2,612
+jobs and completed the final export in 8.69s. These are local
+historical-source/algorithm results only: no source was moved or deleted, no
+S3/R2 upload was attempted, and no VPS/replacement-host/reboot/service-account
+acceptance is claimed.
 
 ## Commands and results
 
@@ -193,8 +269,10 @@ or completed preflight.
    create both environment boundaries from secret storage, run setup/deploy,
    verify services and closed ports, and execute one isolated synthetic worker
    task. Record deployed commit separately from this branch.
-4. Only after RC-015/016/023 are integrated may B resume RC-024. RC-026 waits
-   for A's RC-025 and all plan dependencies. RC-031 stays conditional.
+4. C must integrate the scoped RC-024 tip and rerun the combined suites. Only
+   after RC-015/016/023 are integrated and the actual backup/restore drill is
+   accepted may RC-024 be marked fully verified. RC-026 waits for A's RC-025
+   and all plan dependencies. RC-031 stays conditional.
 
 This handoff is frozen after the final scoped commit below; B will not edit
 the worktree again until C supplies an accepted integration tip.
