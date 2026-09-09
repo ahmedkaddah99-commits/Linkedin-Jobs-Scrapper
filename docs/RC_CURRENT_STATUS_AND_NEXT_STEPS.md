@@ -1,14 +1,15 @@
 # Current RC status and next steps
 
-Date: 2026-09-07
+Date: 2026-09-09
 
 Branch: `deployment/render-turso-r2`
 
-HEAD: `e7662c63082d605d8ae6de090d3a04a55bba6556`
+Integrated C candidate: `d326726acab7fffbbf59e294629b8ef002437566`
 
-This is an offline integration handoff. No commit, reset, clean, merge, push,
-deploy, production migration, browser session, or acquisition/provider request
-was performed. The working tree was already dirty and was preserved.
+This is an offline integration handoff. No reset, clean, push, deploy,
+production migration, browser session, or acquisition/provider request was
+performed. Frozen A/B lane tips were merged sequentially into C; the C tree is
+clean except while a documented change is being prepared.
 
 ## Environment and verification result
 
@@ -230,10 +231,10 @@ deployment, provider authorization, data approval, and live acceptance.
 | RC-021 | Verified offline/current | Storage tests, selected API tests, frontend signed-URL test, 167 frontend tests, successful production build | R2 CORS, deployed browser behavior, empty-cache host, and external object-store evidence remain pending. |
 | RC-022 | Implemented offline; final acceptance pending | `docs/RC022_BUILD_RELEASE_STAGING.md`, `tests/test_rc022_build_release_contract.py`, separate Dockerfiles, Render filters, CI image jobs; focused suite passed 6/6 | Docker daemon image builds, path-filter execution, and mixed-version isolated staging remain pending. No deploy or RC-006b prerequisite was required. |
 | RC-023 | **First genuinely unfinished ticket**; not started | Offline requirements are defined in the plan | Resource selection, VPS provisioning, clean-host setup, and live port/service checks depend on RC-002/018 and authorization. |
-| RC-024 | Not started | Scope only; existing 3.48 GB state is recorded in the plan | Design may proceed offline; actual checkpoint/restore/ownership drills depend on RC-015/016/023. |
-| RC-025 | Not started | Scope only | Offline dashboard fixtures can proceed after the status contract; live acceptance depends on RC-005/016/018/019. |
-| RC-026 | Not started | Scope only | Wait for RC-012/014/015/021/024/025 and comparable measured state before claiming benchmark/cost evidence. |
-| RC-027 | Not started | Scope only | Requires RC-010--017, RC-019, RC-022--026 and explicit real-source staging authorization. |
+| RC-024 | Offline implementation/fixture rehearsal integrated; full acceptance pending | `docs/RC024_BACKUP_RESTORE.md`, `scripts/acquisition_state_backup.py`, `tests/test_rc024_backup_restore.py`; focused tests pass | Off-host receipt, replacement-host restore, reboot/outage and historical state acceptance still require authorized host/storage. |
+| RC-025 | Offline dashboard/read-model slice integrated; live acceptance pending | A handoff and focused dashboard/API evidence integrated; combined tests pass | Verify actual worker/cycle metadata and live dashboard only after runtime/staging exists. |
+| RC-026 | Offline benchmark/cost preparation integrated; full acceptance pending | `docs/RC026_BENCHMARK.md`, benchmark scripts/tests; focused tests pass | VPS capacity, Turso contention/billing, provider retry/cost and authorized staging sample remain unmeasured. |
+| RC-027 | Blocked at gate; not executed | Candidate `d326726acab7fffbbf59e294629b8ef002437566`; no live requests made | Requires the exact reviewed company packet, numeric request/cost ceilings and stop conditions, isolated Turso/R2, authorized host, and accepted RC-023--026 evidence. |
 | RC-028 | Not started | Scope only | Requires RC-027 and production authorization; Gate A and Gate B remain separate. |
 | RC-029 | Not started | Scope only | Requires RC-005, RC-026, RC-028 Gate A, and RC-006 only for cohorts needing enrichment. |
 | RC-030 | Not started / optional P2 | Scope only | Can follow RC-022/025; must remain independent of hosting migration success. |
