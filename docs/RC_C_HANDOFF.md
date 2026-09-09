@@ -1,5 +1,13 @@
 # RC-C release and integration handoff
 
+## Final local candidate amendment - 2026-09-09
+
+The final clean local candidate is
+`8ab916c60237ad3a5bf95ed2effd99679a9a848c` in both the C integration
+worktree and persistent `deployment/render-turso-r2` checkout. It is a
+documentation-only descendant of the staged repair candidate
+`466541b3ee4a57a89f83c583f5e497b36fccdbe3`; it is not deployed or pushed.
+
 ## Repair-candidate live verification amendment - 2026-09-09
 
 Candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3` was staged in the

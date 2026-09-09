@@ -4,6 +4,14 @@ Date: 2026-09-09
 
 Branch: `deployment/render-turso-r2`
 
+## Final local candidate amendment - 2026-09-09
+
+The clean persistent target and C integration worktree are at
+`8ab916c60237ad3a5bf95ed2effd99679a9a848c`. This docs-only descendant of
+the staged repair candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3` was
+not pushed or deployed; the frontend release metadata was rebuilt against
+this exact SHA.
+
 ## Repair-candidate live verification amendment - 2026-09-09
 
 The final A/B repair candidate `466541b3ee4a57a89f83c583f5e497b36fccdbe3`

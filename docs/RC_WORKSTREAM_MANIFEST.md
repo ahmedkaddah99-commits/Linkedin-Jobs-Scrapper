@@ -1,5 +1,14 @@
 # Runr acquisition workstream manifest
 
+## Final local candidate amendment - 2026-09-09
+
+The current clean C and persistent deployment checkout are both at
+`8ab916c60237ad3a5bf95ed2effd99679a9a848c`. This is a documentation-only
+descendant of the verified producer-repair candidate
+`466541b3ee4a57a89f83c583f5e497b36fccdbe3`; no source, runtime, or migration
+behavior changed after the live diagnostic. The target is 75 commits ahead of
+`origin/deployment/render-turso-r2` and has not been pushed or deployed.
+
 ## Producer repair integration amendment - 2026-09-09
 
 The supplied final producer tips were verified clean and merged into C in
