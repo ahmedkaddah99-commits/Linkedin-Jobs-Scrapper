@@ -4,6 +4,42 @@ Date: 2026-09-09
 
 Branch: `deployment/render-turso-r2`
 
+## Reconciliation amendment - 2026-09-09
+
+The clean integrated code baseline is
+`e28aa5f2e065848679d2302841dbe1bde36be8cd`. A and B were verified at their
+supplied clean tips, merged into C with ancestry preserved, and advanced to
+this same baseline for the next captured-evidence-only producer repairs. A
+owns LinkedIn producer repairs; B owns employer producer repairs; C owns
+shared scheduler, publication, API, configuration, migration, release and
+staging contracts.
+
+The combined regression passed **310 tests, 22 subtests** after the RC-029
+fixture was corrected to use the canonical `employer_site` source name. The
+only excluded tests are the two tracker/API failures reproduced unchanged on
+the clean pre-merge target: the bulk-export motivation-letter filename and
+the empty persisted ATS attempt history.
+
+The integrated frontend passed **170 unit tests** and a Vite production build
+with explicit release metadata for the integrated candidate. The lockfile
+install was attempted with `npm ci --no-audit --no-fund` but stalled on
+Windows before restoring the ESLint binary; no lockfile change was made.
+
+The VPS boundary gate now passes for the disabled acquisition service: its
+unit reads only `/opt/runr/.env.acquisition`, skips project dotenv loading,
+cannot read the customer `.env`, starts and restarts with zero restarts and
+zero source/collector log lines, and remains stopped/disabled after the
+check. The local object/cache roots are role-owned under
+`/var/lib/runr/acquisition-data`; rollback copies are retained under
+`/var/lib/runr/rollback/rc027-boundary-20260909/`.
+
+Production R2 was used only for the explicitly authorized immutable RC-027
+receipt and signed range read. No production Turso write or migration was
+made. Isolated Turso management credentials, dedicated R2 credentials and
+bucket CORS management remain unavailable. The live Render API/worker and
+frontend revisions remain separate from this local candidate; no deployment
+has been triggered.
+
 Integrated C candidate before this documentation slice: `7dc60e97478b74569ba2f136464918162dd7bbec`
 
 Current target code-correction tip: `16c1215d`

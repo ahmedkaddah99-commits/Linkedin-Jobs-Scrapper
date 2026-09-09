@@ -1,5 +1,75 @@
 # RC-C release and integration handoff
 
+## Reconciliation amendment - 2026-09-09
+
+The supplied A and B tips were verified clean and integrated sequentially into
+C. The combined implementation baseline before this amendment is
+`e28aa5f2e065848679d2302841dbe1bde36be8cd`, with A merged as
+`4fed31be0f8d6315fecbd768fd2e69073f82519a` and B merged as
+`6d9620d19359770f0b119d2d8654445734bc96b4`. The RC-029 fixture source-name
+mismatch was corrected in `5cd2ece533e4e7615a8b6a7b08516014d5b82748`.
+Target, C, A and B are clean; A and B are both based on this same baseline
+for their next captured-evidence-only producer repairs.
+
+The merged regression command passed **310 tests, 22 subtests**, with only the
+two independently reproduced pre-existing tracker/API tests excluded. The
+clean target baseline reproduced those two failures exactly:
+
+- `BackendApiTests.test_tracker_api`: expected the generated motivation-letter
+  filename, received `Cover letter.txt`.
+- `BackendApiTests.test_tracker_ats_detail_returns_persisted_read_only_diagnostics`:
+  expected two persisted ATS attempts, received an empty history.
+
+The integrated frontend passed **170 unit tests** and a Vite production build
+with explicit release metadata for `deployment/render-turso-r2` and candidate
+`e28aa5f2`. The locked install attempt `npm ci --no-audit --no-fund` stalled in
+the Windows environment; ESLint's locked binary was therefore unavailable in
+this checkout. The lockfile was not changed.
+
+The VPS acquisition boundary was exercised on `runr-vps` / `vmd205749`:
+
+- `/opt/runr/.env.acquisition` is `root:runr-acquisition`, mode `0640`; the
+  acquisition user can read it, but cannot read `/opt/runr/.env`.
+- The installed unit uses only `/opt/runr/.env.acquisition`, sets
+  `RUNR_SKIP_PROJECT_DOTENV=1`, and keeps `RUNR_ACQUISITION_MAX_REQUESTS=0`,
+  `RUNR_ACQUISITION_LIVE_NETWORK_ENABLED=false` and
+  `RUNR_ENABLE_LIVE_NETWORKING_DISCOVERY=false`.
+- Its local object/cache roots were moved from the protected evidence tree to
+  `/var/lib/runr/acquisition-data/{objects,cache}`. The parent log directory
+  was minimally changed to `0751` so the dedicated log directory remains
+  writable only by `runr-acquisition`.
+- Start, restart and stop were exercised. Start and restart returned success;
+  the service stayed active with `NRestarts=0` and `ExecMainStatus=0`. Journal
+  evidence showed the scheduler kill switch blocked acquisition and zero
+  collector/source lines. The unit was stopped afterward and remains
+  disabled. Rollback copies are under
+  `/var/lib/runr/rollback/rc027-boundary-20260909/`.
+
+Production R2 was used only for the explicitly authorized immutable RC-027
+receipt and its signed range read. The configured Turso URL/token still points
+to the production database and no production SQL write or migration was made.
+No isolated Turso namespace, dedicated R2 credential, or bucket CORS control
+is available in the configured environment, so those gates remain explicit
+external blockers. Render read-only visibility remains API/worker
+`30ef992b7945ff0998704a550fdc2f893b24476f`, frontend
+`7251ae297c55f7f6a4524181cdafb4648f7fdcde`, with API health HTTP 200; the
+local candidate was not deployed.
+
+Operator walkthrough for the current safe state:
+
+1. Confirm `systemctl is-active runr-api runr-worker runr-frontend` and
+   `systemctl is-enabled runr-acquisition-worker`.
+2. Inspect acquisition health and kill-switch decisions with
+   `journalctl -u runr-acquisition-worker` without printing environment values.
+3. Review the manifest and raw sidecar under `/srv/runr/shared/inputs`, then
+   inspect acquisition state, exports and staging SQLite under the candidate
+   paths in `docs/RC027_LIVE_PILOT_RECEIPT_20260909.md`.
+4. Treat partial/failed source results as unknown coverage; do not publish or
+   close postings until both source snapshots are valid and closure-safe.
+5. Use the admin analytics page only with an authenticated staging origin once
+   one is provisioned; its read-only dashboard is not evidence of a live
+   publication until the Jobs page returns the published rows.
+
 ## Current RC-027 amendment — 2026-09-09
 
 This amendment supersedes the earlier RC-027 blocker wording below. The
